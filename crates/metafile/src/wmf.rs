@@ -10,7 +10,7 @@ use crate::geom::{self, ArcKind, P};
 use crate::text::{ETO_CLIPPED, ETO_OPAQUE, Font, MAX_CHARS, decode_bytes};
 use crate::{Error, Frame, MAX_PATH_OPS};
 
-const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
+pub(crate) const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
 const DEFAULT_INCH: f64 = 1440.0;
 /// A placeable WMF plays into a target sized in points; brushes are laid out in 96-dpi pixels.
 const PT_PER_PX: f64 = 72.0 / 96.0;
