@@ -292,13 +292,18 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     }
 
     /// The picked entry's place among the entries that can be picked, shown as its label, so AccessKit steps and sets it.
+    /// A value that names no entry reads as the placeholder the face shows for it.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let stops = step_stops(self.entries);
         let range = 0.0..=stops.len().saturating_sub(1) as f64;
         let held = self.position(cx.value());
+        let placeholder = self.placeholder.as_ref().filter(|_| held.is_none() && cx.value().is_some());
         let numeric = match held.and_then(|held| stops.iter().position(|&stop| stop == held)) {
             Some(at) => Numeric::new(at as f64, range).text(cx.env.resolve(self.entries[stops[at]].label()).as_str()),
-            None => Numeric::empty(range),
+            None => match placeholder {
+                Some(text) => Numeric::empty(range).text(cx.env.resolve(text).as_str()),
+                None => Numeric::empty(range),
+            },
         };
         access.numeric(numeric.step(1.0));
     }
