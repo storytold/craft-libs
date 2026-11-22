@@ -187,9 +187,7 @@ fn binding_text(say: &Say, env: &Env<'_>, b: &Binding, home: Option<&craft_keyma
 fn start_choice(ui: &mut Ui, say: &Say, start: Start) -> Option<Act> {
     let w = say.words();
     let after = SideLabel::new().layout(FieldLayout::After);
-    // PLAN: words.rs has no name for the Start group; shortcuts-w4 owns the word.
-    let name = format!("{} / {}", w.start_current.as_str(), w.start_defaults.as_str());
-    let group = RadioGroup::new(name, Bind::given(start == Start::Defaults)).show(ui, |ui, cx| {
+    let group = RadioGroup::new(w.start.clone(), Bind::given(start == Start::Defaults)).show(ui, |ui, cx| {
         cx.labelled(ui, "current", w.start_current.clone(), after.clone(), Radio::new(false));
         cx.labelled(ui, "defaults", w.start_defaults.clone(), after.clone(), Radio::new(true));
     });
