@@ -1,7 +1,7 @@
 //! The size of a metafile picture without playing its records.
 
 use crate::bytes::Bytes;
-use crate::{Error, emf, f, parse, wmf};
+use crate::{Error, emf, f, parse, parse_pict, pict, wmf};
 
 /// A placeable WMF header is 22 bytes, followed by the 9-word standard header.
 const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
@@ -19,6 +19,10 @@ pub fn size(bytes: &[u8]) -> Result<(f32, f32), Error> {
     if let Some(size) = header_size(Bytes(bytes)) {
         return Ok(size);
     }
+    if pict::is_pict(bytes) {
+        let pic = parse_pict(bytes)?;
+        return Ok((pic.width, pic.height));
+    }
     let pic = parse(bytes)?;
     Ok((pic.width, pic.height))
 }
@@ -31,6 +35,9 @@ pub(crate) fn header_size(b: Bytes) -> Option<(f32, f32)> {
     }
     if wmf::is_wmf(b) && b.u32(0) == Some(PLACEABLE_KEY) {
         return placeable_wmf_size(b);
+    }
+    if let Some(size) = pict::header_size(b.0) {
+        return Some(size);
     }
     None
 }
