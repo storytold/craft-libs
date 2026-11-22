@@ -78,6 +78,10 @@ fn assert_same(got: &[Vec<Pos2>], want: &[Vec<Pos2>], what: &str) {
     assert!(close, "{what}: {got:?} against {want:?}");
 }
 
+/// The outline trial's zoom: no whole number of device pixels per document unit, so the canvas shows the view as it is
+/// set (`pixel_aligned`) and a pan by a fraction of a pixel reaches the outline.
+const ZOOM: f64 = 1.5;
+
 #[trial]
 fn a_selection_outline_keeps_its_shapes_while_its_revision_holds_and_follows_a_whole_pixel_pan() {
     let first = vec![rect_path(Point::new(1980.0, 1980.0), 40.0, 30.0)];
@@ -86,7 +90,7 @@ fn a_selection_outline_keeps_its_shapes_while_its_revision_holds_and_follows_a_w
     let shown = Rc::clone(&state);
     let mut fixture = Fixture::new(move |ui| {
         let state = shown.borrow();
-        let view = CanvasView::new(ui.available_rect_before_wrap(), state.centre, 1.0);
+        let view = CanvasView::new(ui.available_rect_before_wrap(), state.centre, ZOOM);
         let _ = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(view).show(ui, |ui, body| {
             let _ = SelectionOutline::solid("Selected", &state.paths).color(DataColor::new(RED)).revision(state.revision).show_at(ui, body.rect);
         });
@@ -109,9 +113,9 @@ fn a_selection_outline_keeps_its_shapes_while_its_revision_holds_and_follows_a_w
         state.paths = first;
         state.centre.x += 8.0;
     }
-    assert_same(&outline_lines(&mut fixture), &moved(&rebuilt, vec2(-8.0, 0.0)), "a pan by whole pixels moves the kept shapes");
+    assert_same(&outline_lines(&mut fixture), &moved(&rebuilt, vec2(-8.0 * ZOOM as f32, 0.0)), "a pan by whole pixels moves the kept shapes");
 
     // A pan that is not whole device pixels builds again: the first paths, at the panned view.
     state.borrow_mut().centre.x += 0.3;
-    assert_same(&outline_lines(&mut fixture), &moved(&built, vec2(-8.3, 0.0)), "a pan by a fraction rebuilds");
+    assert_same(&outline_lines(&mut fixture), &moved(&built, vec2(-8.3 * ZOOM as f32, 0.0)), "a pan by a fraction rebuilds");
 }
