@@ -332,6 +332,54 @@ fn a_plain_box_commits_an_unknown_typed_name_lists_recents_first_and_again_after
 }
 
 #[trial]
+fn clicking_the_font_field_selects_all_without_opening_dropdown_and_chevron_toggles() {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let (mut fx, _seen) = plain_rig(catalog, "Inter", &["Hack"], vec![], None);
+    let words = FontPickerWords::default();
+    let (recently, all) = (words.recently_used.as_str(), words.all_fonts.as_str());
+
+    // 1. Clicking the text field focuses and selects all text without opening the dropdown popup
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(!present(&fx, recently), "recently used fonts do not open on field click");
+    assert!(!present(&fx, all), "all fonts do not open on field click");
+
+    // 2. Typing in the field opens the dropdown filtered on matches
+    fx.type_text("Ha");
+    fx.settle();
+    assert!(present(&fx, "Hack"), "typing in the field opens the dropdown with matches");
+
+    // Pressing Enter commits the typed family and closes the dropdown
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "committing typed query closes the dropdown");
+
+    // 3. Clicking the dropdown arrow (chevron) toggles the dropdown list open
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    assert!(present(&fx, recently), "recently used fonts show up on chevron click");
+    assert!(present(&fx, all), "all fonts show up on chevron click");
+
+    // 4. Clicking inside the field while already open keeps dropdown open and preserves caret placement
+    let field = fx.by_label("Font family").expect("the family field");
+    fx.click(&field);
+    fx.settle();
+    assert!(present(&fx, all), "dropdown remains open on click inside field");
+
+    // 5. Clicking the chevron button again toggles the dropdown closed
+    let chevron = fx.by_label(words.list.as_str()).expect("the chevron button");
+    fx.click(&chevron);
+    fx.settle();
+    fx.frame(vec![]);
+    fx.settle();
+    assert!(!present(&fx, all), "dropdown closes on chevron click toggle");
+}
+
+#[trial]
 fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_naming_the_face() {
     let words = MissingFontsWords::default();
     let note = format!("{} {}", words.shown_as.fill(&[("family", "Gotham"), ("face", "Inter")]), words.add_font.as_str());

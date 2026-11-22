@@ -741,10 +741,13 @@ impl Component for FontPicker<'_> {
             }
         }
         // A click on the name while the list is closed opens it on every family and selects the name, so typing
-        // replaces it (Photoshop's font field).
+        // replaces it (Photoshop's font field). In Word's plain font picker, clicking selects the name without
+        // auto-opening the popup list so the user can immediately type a replacement family.
         if !list.is_open(cx) && cx.text(&text_key()).is_some_and(|outcome| outcome.clicked) {
             cx.select_all_text();
-            list.open(cx);
+            if self.kind != FontPickerKind::Plain {
+                list.open(cx);
+            }
         }
         if list.is_open(cx) {
             return;
