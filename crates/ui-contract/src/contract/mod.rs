@@ -356,6 +356,12 @@ pub trait Component: Meta + Sized {
     /// Whether the component or its parts can take key focus: `false` skips the stop registration of step 7, except
     /// for the roving group of a body the shape declares.
     const STOPS: bool = true;
+    /// The focus scope a leaf runs in, as `ContainerProps::focus` gives a container's: the leaf's own stop and its
+    /// parts lie inside it, and `FocusPolicy::NONE` (the default) opens none. A scope that restores
+    /// (`FocusPolicy::TAB_LAYER`) makes the stop focus came from its opener, so focus goes back there when the leaf
+    /// goes away with focus inside (a canvas text editor hands it back to the canvas). Containers and collections take
+    /// their scope from their props, not from this.
+    const FOCUS_SCOPE: crate::runtime::focus::FocusPolicy = crate::runtime::focus::FocusPolicy::NONE;
     /// Keys the focused component keeps from egui and the shortcut dispatcher.
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(Self::INPUT);
     /// The keys this instance keeps in its current state. The default is `KEYS`; a component whose key use depends

@@ -5,8 +5,8 @@ use super::hide::{self, PruneKey};
 use crate::contract::Revision;
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Cx, Entry, MemoKey, NoValue, Outcome, Pad, Pointer as _, Props as _, Show as _, ShowContainer as _, Sizing, Tracked,
-    WordSetCx as _,
+    Bind, BindMut, BodyCx, Cx, Entry, MemoKey, MemoProps, MemoView, NoValue, Outbox, Outcome, Pad, Pointer as _, Props as _, Show as _,
+    ShowContainer as _, Sizing, Tracked, WordSetCx as _,
 };
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
@@ -934,17 +934,25 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     }
 
     /// The grip strip on top of a tool rail the host shows itself: the dock's grip marks over a band that drags the
-    /// group, which floats at `size`, the group's size.
+    /// group, which floats at `size`, the group's size. A memoized view ([`rail_grip`]) held to the strip, so a frame
+    /// whose input is elsewhere replays it, as the column bars and the groups' tab rows replay.
     fn rail_grip(&mut self, ui: &mut Ui, anchor: &P, shown: &P, strip: Rect, size: Vec2) {
         let scene = self.scene;
         let label = Label::from(scene.spec(shown).label.as_str().to_owned());
-        let held = GroupGrip::new(DragUnit::Group(anchor.clone()), PanelKey::of(shown))
-            .ticks(true)
-            .movable(scene.permissions(shown).movable)
-            .ghost(label.clone())
-            .label(label)
-            .show_at(ui, strip);
-        if held.drag_started {
+        let mut sent = Vec::new();
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            let props = RailGrip {
+                unit: DragUnit::Group(anchor.clone()),
+                active: PanelKey::of(shown),
+                movable: scene.permissions(shown).movable,
+                label,
+                sent: Outbox::new(&mut sent),
+            };
+            // Keyed by the rail's group: unique among the rails a dock area shows.
+            let _ = MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui);
+        });
+        // The group's size goes on the drag here, outside the view, whose measuring runs see no size.
+        if !sent.is_empty() {
             drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| drag.source = Some(size));
         }
     }
@@ -1579,4 +1587,31 @@ fn window_edit<P: Clone + Eq + Hash>(
 /// Shows `panel`'s body in a group's body. It runs every pass the group shows; the host memoizes inside it.
 fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, panel: &P, ui: &mut Ui, body: &mut BodyCx<'_>) {
     panels.borrow_mut().body(panel, ui, body);
+}
+
+/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to.
+#[derive(MemoProps)]
+struct RailGrip<'a, P> {
+    #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
+    unit: DragUnit<P>,
+    active: PanelKey,
+    movable: bool,
+    label: Label,
+    sent: Outbox<'a, ()>,
+}
+
+/// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
+fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P>, ui: &mut Ui) {
+    let strip = ui.max_rect();
+    let held = GroupGrip::new(props.unit.clone(), props.active)
+        .ticks(true)
+        .movable(props.movable)
+        .ghost(props.label.clone())
+        .label(props.label.clone())
+        .show_at(ui, strip);
+    if held.drag_started {
+        props.sent.send(());
+    }
+    // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
+    ui.expand_to_include_rect(strip);
 }

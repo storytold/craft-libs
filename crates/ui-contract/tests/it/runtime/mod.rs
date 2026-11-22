@@ -8,6 +8,7 @@ pub(crate) mod derived;
 pub(crate) mod elapsed;
 pub(crate) mod env;
 pub(crate) mod fingers;
+pub(crate) mod focus;
 pub(crate) mod frame;
 pub(crate) mod latch;
 pub(crate) mod memory;
