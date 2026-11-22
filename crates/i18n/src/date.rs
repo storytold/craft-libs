@@ -250,6 +250,9 @@ pub enum NameLength {
     Narrow,
     /// `Sat`, `Oct`.
     Abbreviated,
+    /// `Sa`: a weekday's two-letter name, calendar column heads where there is room for two letters. A month takes
+    /// its abbreviation.
+    Short,
     /// `Saturday`, `October`.
     Wide,
 }
@@ -314,12 +317,12 @@ impl Formatter {
     }
 }
 
-/// Standalone month and weekday names, indexed by [`NameLength`] (narrow, abbreviated, wide)
+/// Standalone month and weekday names, indexed by [`NameLength`] (narrow, abbreviated, short, wide)
 /// and then by month (January first) or weekday (Monday first).
 #[derive(Debug)]
 struct Names {
-    months: [[String; 12]; 3],
-    weekdays: [[String; 7]; 3],
+    months: [[String; 12]; 4],
+    weekdays: [[String; 7]; 4],
 }
 
 /// Which field comes first, second and third in a numeric date.
@@ -509,12 +512,13 @@ impl DateFormat {
                     let formatted = names.load_for_pattern(&provider, &pattern).ok()?.format(&at);
                     Some(formatted.try_write_to_string().map_or_else(|(_, text)| text.into_owned(), |text| text.into_owned()))
                 };
-                let months = ["LLLLL", "LLL", "LLLL"].map(|pattern| {
+                let months = ["LLLLL", "LLL", "LLL", "LLLL"].map(|pattern| {
                     std::array::from_fn(|i| name(pattern, CalendarDate { year: 2026, month: i as u8 + 1, day: 1 }).unwrap_or_default())
                 });
-                // 2026-10-26 is a Monday.
-                let weekdays = ["ccccc", "ccc", "cccc"].map(|pattern| {
-                    std::array::from_fn(|i| name(pattern, CalendarDate { year: 2026, month: 10, day: 26 + i as u8 }).unwrap_or_default())
+                // 2026-10-26 is a Monday; the week runs on into November (October has 31 days).
+                let monday = CalendarDate { year: 2026, month: 10, day: 26 };
+                let weekdays = ["ccccc", "ccc", "cccccc", "cccc"].map(|pattern| {
+                    std::array::from_fn(|i| name(pattern, monday.add_days(i as i64)).unwrap_or_default())
                 });
                 Some(Names { months, weekdays })
             })
@@ -776,5 +780,20 @@ mod tests {
         assert_eq!(jan31.add_months(13), CalendarDate::new(2029, 2, 28).unwrap());
         assert_eq!(jan31.add_months(-2), CalendarDate::new(2027, 11, 30).unwrap());
         assert_eq!(saturday.add_days(1), CalendarDate::new(2026, 11, 1).unwrap());
+    }
+
+    // Sunday's name was blank (the table asked for 2026-10-32): every weekday has a name at every length, and the short
+    // length is two letters in English.
+    #[test]
+    fn every_weekday_has_a_name_at_every_length() {
+        let dates = DateFormat::from_tag("en-US");
+        for day in Weekday::ALL {
+            for length in [NameLength::Narrow, NameLength::Abbreviated, NameLength::Short, NameLength::Wide] {
+                assert!(!dates.weekday_name(day, length).is_empty(), "{day:?} {length:?}");
+            }
+        }
+        assert_eq!(dates.weekday_name(Weekday::Sunday, NameLength::Short), "Su");
+        assert_eq!(dates.weekday_name(Weekday::Monday, NameLength::Short), "Mo");
+        assert_eq!(dates.month_name(11, NameLength::Short), "Nov");
     }
 }

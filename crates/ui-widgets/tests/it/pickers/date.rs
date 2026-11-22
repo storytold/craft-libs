@@ -141,3 +141,26 @@ fn a_calendar_page_starts_its_weeks_on_the_day_it_is_given() {
     let (sunday, monday) = (first_cell(Weekday::Sunday), first_cell(Weekday::Monday));
     assert!(sunday < monday, "the 1st is in the first column of a Sunday-first week ({sunday}) and the last of a Monday-first one ({monday})");
 }
+
+/// Today is centred under the page, Clear is offered only while the field holds a date, and the weekday heads are the
+/// two-letter names starting with Sunday's.
+#[craft_ui::testing::trial]
+fn today_is_centred_and_clear_waits_for_a_value() {
+    let mut picked: Option<PickedDate> = None;
+    let mut open = true;
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Pick").show(ui);
+        CalendarPopover::new("Due date", Bind::bound(&mut open), Bind::bound(&mut picked))
+            .opened_by(&opener)
+            .precisions(&[DatePrecision::Day])
+            .first_weekday(Weekday::Sunday)
+            .today(PickedDate::day(2026, 2, 10))
+            .show(ui, |_, _| {});
+    });
+    fixture.room(egui::vec2(600.0, 500.0)).settle();
+    let texts = fixture.texts();
+    let at = |word: &str| texts.iter().find(|run| run.text == word).unwrap_or_else(|| panic!("{word} is painted")).rect.center().x;
+    assert!(texts.iter().all(|run| run.text != "Clear"), "no value, no Clear");
+    let middle = (at("Su") + at("Sa")) / 2.0;
+    assert!((at("Today") - middle).abs() < 6.0, "Today is centred: {} against {middle}", at("Today"));
+}

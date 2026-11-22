@@ -835,7 +835,7 @@ impl Component for Calendar {
         if let Some(row) = geometry.weekdays {
             let first = dates.first_weekday() as usize;
             for column in 0..DAY_COLUMNS {
-                let name = dates.weekday_name(Weekday::ALL[(first + column) % 7], NameLength::Narrow);
+                let name = dates.weekday_name(Weekday::ALL[(first + column) % 7], NameLength::Short);
                 let x = geometry.column(column);
                 centred(Rect::from_min_max(egui::pos2(x.min.x, row.min.y), egui::pos2(x.max.x, row.max.y)), &name, &style.weekday, self.lines[1]);
             }

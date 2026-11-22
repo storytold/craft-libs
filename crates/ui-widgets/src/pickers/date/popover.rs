@@ -4,9 +4,11 @@ use super::super::words::PickerWords;
 use super::{Calendar, CalendarView, DatePrecision, PickedDate, offered};
 use crate::buttons::Link;
 use crate::choice::Segmented;
+use crate::layout_components::Row;
+use crate::layout::RowAlign;
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, Entry, HeaderRegion, Mount, Overlay, POPUP_PAD, Props as _,
-    Remember as _, Role, Show as _, Trigger, WordSetCx as _, clicked,
+    Remember as _, Role, Show as _, ShowContainer as _, Trigger, WordSetCx as _, clicked,
 };
 use crate::popover::PopoverOutput;
 use crate::runtime::env::Label;
@@ -104,7 +106,8 @@ pub(super) fn calendar_body(ui: &mut Ui, body: &mut BodyCx<'_>, at: CalendarAt<'
         view = next;
     }
     let mut pick = page.picked.map(Some);
-    ui.horizontal(|ui| {
+    // Today and Clear are centred under the page, as production's; Clear shows once there is a value to clear.
+    Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
         let at_precision = today.map(|today| match view.precision {
             DatePrecision::Day => today,
             DatePrecision::Month => PickedDate::month(today.year, today.month.unwrap_or(1)),
@@ -116,7 +119,7 @@ pub(super) fn calendar_body(ui: &mut Ui, body: &mut BodyCx<'_>, at: CalendarAt<'
                 pick = Some(Some(today));
             }
         }
-        if clicked(&Link::new(words.date_clear.clone()).enabled(current.is_some()).show(ui)) {
+        if current.is_some() && clicked(&Link::new(words.date_clear.clone()).show(ui)) {
             pick = Some(None);
         }
     });
