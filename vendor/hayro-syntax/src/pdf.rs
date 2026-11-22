@@ -147,7 +147,7 @@ impl Pdf {
     /// Try to read a PDF with a password and document-local stream expansion limits.
     /// The same immutable limits apply during initial xref parsing, repair and later reads.
     pub fn new_with_password_and_limits(data: impl Into<PdfData>, password: &str, limits: DecodeLimits) -> Result<Self, LoadPdfError> {
-        Self::load(data.into(), password, limits, None)
+        Self::load(data.into(), &crate::crypto::Credentials { password: password.as_bytes().to_vec(), external: None }, limits, None)
     }
 
     /// Open with cooperative cancellation, retaining the existing password and decode policies.
@@ -164,7 +164,7 @@ impl Pdf {
         if control.check().is_none() {
             return Err(CancellableLoadError::Cancelled);
         }
-        let result = Self::load(data.into(), password, limits, Some(control.clone()));
+        let result = Self::load(data.into(), &crate::crypto::Credentials { password: password.as_bytes().to_vec(), external: None }, limits, Some(control.clone()));
         if control.check().is_none() {
             Err(CancellableLoadError::Cancelled)
         } else {
@@ -172,8 +172,14 @@ impl Pdf {
         }
     }
 
-    fn load(data: PdfData, password: &str, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, LoadPdfError> {
-        let password = password.as_bytes();
+    /// Open original encrypted bytes with a previously authenticated decryptor and decode limits.
+    pub fn new_with_external_decryptor(
+        data: impl Into<PdfData>, decryptor: Arc<dyn crate::ExternalDecryptor>, limits: DecodeLimits,
+    ) -> Result<Self, LoadPdfError> {
+        Self::load(data.into(), &crate::crypto::Credentials { password: Vec::new(), external: Some(decryptor) }, limits, None)
+    }
+
+    fn load(data: PdfData, credentials: &crate::crypto::Credentials, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, LoadPdfError> {
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
         // PdfCraft patch: (hayro-syntax (43)) a last update cut off before its trailer is read by
         // rebuilding the table from object headers, the latest definition of each object
@@ -183,7 +189,7 @@ impl Pdf {
         // The table the last `startxref` names is read first either way: a wrong password is
         // refused through it, and the rebuilt table must be encrypted exactly when it is, so a
         // rebuild that missed the encryption dictionary is not taken.
-        let root = root_xref_controlled(data.clone(), password, limits, control.clone());
+        let root = root_xref_controlled(data.clone(), credentials, limits, control.clone());
         if let Err(XRefError::Encryption(e)) = root {
             return Err(LoadPdfError::Decryption(e));
         }
@@ -192,7 +198,7 @@ impl Pdf {
         // `pdfcraft-cos` says it under the same conditions.
         let rebuilt_unlinked_update = root.as_ref().is_ok_and(|(_, rebuilt)| *rebuilt);
         if cut_off_update_follows(data.as_ref())
-            && let Some(xref) = fallback_controlled(data.clone(), password, limits, control.clone())
+            && let Some(xref) = fallback_controlled(data.clone(), credentials, limits, control.clone())
                 .filter(|x| root_encrypted.is_none_or(|e| e == x.has_decryptor()))
         {
             let xref = Arc::new(xref);
@@ -214,7 +220,7 @@ impl Pdf {
             Err(e) => match e {
                 XRefError::Unknown => {
                     crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;
-                    crate::xref::fallback_controlled(data.clone(), password, limits, control.clone()).ok_or(LoadPdfError::Invalid)?
+                    fallback_controlled(data.clone(), credentials, limits, control.clone()).ok_or(LoadPdfError::Invalid)?
                 }
                 XRefError::Encryption(e) => return Err(LoadPdfError::Decryption(e)),
             },

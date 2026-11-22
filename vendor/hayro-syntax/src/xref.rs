@@ -1,6 +1,6 @@
 //! Reading and querying the xref table of a PDF file.
 
-use crate::crypto::{DecryptionError, DecryptionTarget, Decryptor, get};
+use crate::crypto::{Credentials, DecryptionError, DecryptionTarget, Decryptor, get};
 use crate::data::Data;
 use crate::metadata::Metadata;
 use crate::object::Name;
@@ -52,12 +52,12 @@ pub(crate) enum XRefError {
 /// Parse the "root" xref from the PDF.
 #[cfg(test)]
 pub(crate) fn root_xref(data: PdfData, password: &[u8], limits: DecodeLimits) -> Result<(XRef, bool), XRefError> {
-    root_xref_controlled(data, password, limits, None)
+    root_xref_controlled(data, &Credentials { password: password.to_vec(), external: None }, limits, None)
 }
 
 /// PdfCraft patch: (hayro-syntax (45)) also whether the table was rebuilt because the newest
 /// section cuts off the page tree (see below).
-pub(crate) fn root_xref_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<(XRef, bool), XRefError> {
+pub(crate) fn root_xref_controlled(data: PdfData, credentials: &Credentials, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<(XRef, bool), XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos_controlled(data.as_ref(), control.as_ref()).ok_or(XRefError::Unknown)?;
     let trailer = populate_xref_controlled(data.as_ref(), xref_pos, &mut xref_map, limits, control.clone()).ok_or(XRefError::Unknown)?;
@@ -68,7 +68,7 @@ pub(crate) fn root_xref_controlled(data: PdfData, password: &[u8], limits: Decod
         .read_with_context::<Dict<'_>>(&ReaderContext::dummy())
         .is_some_and(|newest| prev_offset(data.as_ref(), &newest, &XrefMap::default()).is_some());
 
-    let xref = XRef::new(data.clone(), xref_map, XRefInput::TrailerDictData(trailer), false, password, limits, control)?;
+    let xref = XRef::new(data.clone(), xref_map, XRefInput::TrailerDictData(trailer), false, credentials, limits, control)?;
     // PdfCraft patch: (hayro-syntax (45)) an update whose section has no `/Prev` (ISO 32000-2
     // §7.5.6, §7.5.8.2) cuts off the revisions before it, and with them the page tree its catalog
     // names (the signed files of PDFBOX-2720 and PDFBOX-2942). The table is rebuilt by scanning
@@ -95,15 +95,15 @@ fn more_than_one_startxref(data: &[u8]) -> bool {
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
-pub(crate) fn fallback_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<XRef> {
+pub(crate) fn fallback_controlled(data: PdfData, credentials: &Credentials, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<XRef> {
     crate::cancel::check(control.as_ref())?;
     warn!("xref table was invalid, trying to manually build xref table");
-    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits, control.clone());
+    let (xref_map, xref_input) = fallback_xref_map(&data, credentials, limits, control.clone());
 
     if let Some(xref_input) = xref_input {
         warn!("rebuild xref table with {} entries", xref_map.len());
 
-        XRef::new(data.clone(), xref_map, xref_input, true, password, limits, control).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, credentials, limits, control).ok()
     } else {
         warn!("couldn't find trailer dictionary, failed to rebuild xref table");
 
@@ -170,8 +170,8 @@ where
     r.read_with_context::<T>(&ctx)
 }
 
-fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> (XrefMap, Option<XRefInput<'a>>) {
-    fallback_xref_map_inner(data, ReaderContext::dummy_with_control(limits, control), true, password)
+fn fallback_xref_map<'a>(data: &'a PdfData, credentials: &Credentials, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> (XrefMap, Option<XRefInput<'a>>) {
+    fallback_xref_map_inner(data, ReaderContext::dummy_with_control(limits, control), true, credentials)
 }
 
 
@@ -179,7 +179,7 @@ fn fallback_xref_map_inner<'a>(
     data: &'a PdfData,
     mut dummy_ctx: ReaderContext<'a>,
     recurse: bool,
-    password: &[u8],
+    credentials: &Credentials,
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
     // PdfCraft patch: the generation-0 keys below that stand in for a header with another
@@ -375,12 +375,12 @@ fn fallback_xref_map_inner<'a>(
             xref_map.clone(),
             XRefInput::TrailerDictData(trailer_dict.as_ref().map(|d| d.data()).unwrap()),
             true,
-            password,
+            credentials,
             dummy_ctx.decode_limits(),
             dummy_ctx.control().cloned(),
         ) {
             let ctx = ReaderContext::new(&xref, false);
-            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password);
+            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, credentials);
             xref_map = patched_map;
         }
     }
@@ -419,7 +419,7 @@ impl XRef {
         Some(f(&mut cache))
     }
 
-    fn new(data: PdfData, xref_map: XrefMap, input: XRefInput<'_>, repaired: bool, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, XRefError> {
+    fn new(data: PdfData, xref_map: XrefMap, input: XRefInput<'_>, repaired: bool, credentials: &Credentials, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, XRefError> {
         crate::cancel::check(control.as_ref()).ok_or(XRefError::Unknown)?;
         // This is a bit hacky, but the problem is we can't read the resolved trailer dictionary
         // before we actually created the xref struct. So we first create it using dummy data
@@ -433,7 +433,7 @@ impl XRef {
             has_ocgs: false,
             metadata: Arc::new(Metadata::default()),
             trailer_data,
-            password: password.to_vec(),
+            credentials: credentials.clone(),
             limits,
             control,
             dict_cache: Arc::new(Mutex::new(DictCache::default())),
@@ -453,8 +453,9 @@ impl XRef {
                         .read_with_context::<Dict<'_>>(&ReaderContext::new(&xref, false))
                         .ok_or(XRefError::Unknown)?;
 
-                    get_decryptor(&trailer_dict, password)?
+                    get_decryptor(&trailer_dict, credentials)?
                 }
+                XRefInput::RootRef(_) if credentials.external.is_some() => return Err(XRefError::Encryption(DecryptionError::InvalidEncryption)),
                 XRefInput::RootRef(_) => Decryptor::None,
             }
         };
@@ -682,7 +683,7 @@ impl XRef {
         if crate::cancel::check(self.control()).is_none() {
             return;
         }
-        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password, r.limits, self.control().cloned());
+        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.credentials, r.limits, self.control().cloned());
         locked.xref_map = xref_map;
     }
 
@@ -710,6 +711,11 @@ impl XRef {
     }
 
     #[inline]
+    /// Whether a caller-supplied credential decrypts this xref.
+    pub(crate) fn external_decryption(&self) -> bool {
+        matches!(&self.0, Inner::Some(r) if matches!(r.decryptor.as_ref(), Decryptor::External(_)))
+    }
+
     pub(crate) fn decrypt(
         &self,
         id: ObjectIdentifier,
@@ -1108,7 +1114,7 @@ struct SomeRepr {
     metadata: Arc<Metadata>,
     decryptor: Arc<Decryptor>,
     has_ocgs: bool,
-    password: Vec<u8>,
+    credentials: Credentials,
     limits: DecodeLimits,
     control: Option<crate::cancel::Control>,
     trailer_data: TrailerData,
@@ -1510,7 +1516,13 @@ fn read_xref_table_trailer<'a>(
     reader.read_with_context::<Dict<'_>>(ctx)
 }
 
-fn get_decryptor(trailer_dict: &Dict<'_>, password: &[u8]) -> Result<Decryptor, XRefError> {
+fn get_decryptor(trailer_dict: &Dict<'_>, credentials: &Credentials) -> Result<Decryptor, XRefError> {
+    if let Some(external) = &credentials.external {
+        return match trailer_dict.get::<Dict<'_>>(ENCRYPT).and_then(|dict| dict.get::<Name<'_>>(b"Filter")) {
+            Some(name) if name.as_ref() == b"Adobe.PubSec" => Ok(Decryptor::External(external.clone())),
+            _ => Err(XRefError::Encryption(DecryptionError::InvalidEncryption)),
+        };
+    }
     if let Some(encryption_dict) = trailer_dict.get::<Dict<'_>>(ENCRYPT) {
         let id = if let Some(id) = trailer_dict
             .get::<Array<'_>>(ID)
@@ -1522,7 +1534,7 @@ fn get_decryptor(trailer_dict: &Dict<'_>, password: &[u8]) -> Result<Decryptor, 
             vec![]
         };
 
-        get(&encryption_dict, &id, password).map_err(XRefError::Encryption)
+        get(&encryption_dict, &id, &credentials.password).map_err(XRefError::Encryption)
     } else {
         Ok(Decryptor::None)
     }
