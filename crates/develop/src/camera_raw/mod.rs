@@ -819,6 +819,11 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     });
 }
 
+fn sharpening_detail(detail: f32) -> f32 {
+    let detail = if detail.is_nan() { CameraRaw::default().sharpen_detail } else { detail.clamp(0.0, 100.0) };
+    detail / 100.0
+}
+
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
     // The controls' documented 0..=100 range: raw values drive the filter radii below.
     let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
@@ -859,7 +864,7 @@ fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
             })
         });
         let amt = p.sharpen_amount / 100.0 * 1.2;
-        let det = p.sharpen_detail / 100.0;
+        let det = sharpening_detail(p.sharpen_detail);
         for i in 0..w * h {
             let hp = y[i] - blur[i];
             // Low Detail damps large (halo-producing) differences.
@@ -947,6 +952,18 @@ mod tests {
     /// [`super::per_pixel`] with the default inputs.
     fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
         super::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
+    }
+
+    #[test]
+    fn sharpening_detail_stays_in_range_at_the_shared_entry_point() {
+        for value in [0.0_f32, 25.0, 37.5, 100.0] {
+            assert_eq!(sharpening_detail(value).to_bits(), (value / 100.0).to_bits());
+        }
+        assert_eq!(sharpening_detail(-1.0), 0.0);
+        assert_eq!(sharpening_detail(101.0), 1.0);
+        assert_eq!(sharpening_detail(f32::NAN), sharpening_detail(CameraRaw::default().sharpen_detail));
+        assert_eq!(sharpening_detail(f32::NEG_INFINITY), 0.0);
+        assert_eq!(sharpening_detail(f32::INFINITY), 1.0);
     }
 
     /// #9273: Dehaze clears the haze evenly over a sky, right up to a dark building, instead of
