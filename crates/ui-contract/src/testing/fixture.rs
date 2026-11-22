@@ -677,19 +677,25 @@ impl Fixture {
         self
     }
 
+    /// The primary button going down or up at `pos`, with the modifiers [`Fixture::hold`] keeps.
+    fn primary(&self, pos: Pos2, pressed: bool) -> egui::Event {
+        injected::button(pos, egui::PointerButton::Primary, pressed, self.frames.held())
+    }
+
     /// Press on `target`.
     pub fn press(&mut self, target: &Target) -> &mut Self {
         let at = target.center();
         self.frame(vec![super::pointer::moved(at)]);
-        self.frame(vec![super::pointer::press(at)])
+        self.frame(vec![self.primary(at, true)])
     }
 
     /// Release at the middle of `target`.
     pub fn release(&mut self, target: &Target) -> &mut Self {
-        self.frame(vec![super::pointer::release(target.center())])
+        self.frame(vec![self.primary(target.center(), false)])
     }
 
-    /// Press on `target`, move by `by` in four steps, release.
+    /// Press on `target`, move by `by` in four steps, release. The press and release carry the modifiers
+    /// [`Fixture::hold`] keeps, as do those of every press and release a fixture sends.
     pub fn drag(&mut self, target: &Target, by: Vec2) -> &mut Self {
         self.drag_at(target.center(), by)
     }
@@ -697,11 +703,11 @@ impl Fixture {
     /// A drag from the point `from` by `by`: the same frames as [`Fixture::drag`], for a point that is no target.
     pub fn drag_at(&mut self, from: Pos2, by: Vec2) -> &mut Self {
         self.frame(vec![super::pointer::moved(from)]);
-        self.frame(vec![super::pointer::press(from)]);
+        self.frame(vec![self.primary(from, true)]);
         for step in 1..=4 {
             self.frame(vec![super::pointer::moved(from + by * (step as f32 / 4.0))]);
         }
-        self.frame(vec![super::pointer::release(from + by)]);
+        self.frame(vec![self.primary(from + by, false)]);
         self.frame(Vec::new())
     }
 
@@ -710,7 +716,7 @@ impl Fixture {
     /// it with [`Fixture::release_at`].
     pub fn drag_hold_at(&mut self, from: Pos2, by: Vec2) -> &mut Self {
         self.frame(vec![super::pointer::moved(from)]);
-        self.frame(vec![super::pointer::press(from)]);
+        self.frame(vec![self.primary(from, true)]);
         for step in 1..=4 {
             self.frame(vec![super::pointer::moved(from + by * (step as f32 / 4.0))]);
         }
@@ -719,7 +725,7 @@ impl Fixture {
 
     /// Releases the button at `at`, then a frame with no input.
     pub fn release_at(&mut self, at: Pos2) -> &mut Self {
-        self.frame(vec![super::pointer::release(at)]);
+        self.frame(vec![self.primary(at, false)]);
         self.frame(Vec::new())
     }
 
