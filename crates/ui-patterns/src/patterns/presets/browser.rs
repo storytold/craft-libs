@@ -21,9 +21,9 @@ use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, DropAt, DropKind, DropMark, DropPayload, DropPlace, DropTarget, DropZone, Entry, ListDrag, MemoKey, MemoProps,
-    MemoView, OpenChange, Outbox, Pattern, Props, Rename, ReorderMove, ReorderRule, RowHeight, SelectMode, Show as _, ShowCollection as _,
-    ShowContainer as _, TooltipSpec, request_rename,
+    Bind, BodyCx, CollectionEvent, DropAt, DropKind, DropMark, DropPayload, DropPlace, DropTarget, DropZone, Entry, ListDrag, MemoProps, MemoView,
+    OpenChange, Outbox, Pattern, Props, Rename, ReorderMove, ReorderRule, RowHeight, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    TooltipSpec, request_rename,
 };
 use crate::display::Divider;
 use crate::layout_components::Stack;
@@ -800,7 +800,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                 row_menu,
                 drags,
                 group_heads,
-                host: HostFns { tip: tip_painter.as_ref(), row_items: row_items.as_ref(), drops: &drops },
+                host: (tip_painter.is_some() || row_items.is_some() || !drops.is_empty()).then(|| HostFns {
+                    tip: tip_painter.as_ref(),
+                    row_items: row_items.as_ref(),
+                    drops: &drops,
+                }),
                 empty: empty_text.clone(),
                 sent: Outbox::new(&mut sent),
             };
@@ -861,22 +865,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
 }
 
 /// The host's closures a run of the presets view calls: the tip painter, the row menu's rows and the drop targets.
+#[derive(crate::contract::MemoProps)]
+#[memo_props(every_pass = "a closure reads what it captured, which no key can feed")]
 struct HostFns<'p, 'a, K> {
     tip: Option<&'p TipFn<'a, K>>,
     row_items: Option<&'p RowItems<'a, K>>,
     drops: &'p [PresetDrop<'a, K>],
-}
-
-/// A closure reads what it captured, which no key can feed: a view given one runs in every pass. Without them the view
-/// keys on its plain props alone.
-impl<K> MemoProps for HostFns<'_, '_, K> {
-    fn key(&self, key: &mut MemoKey) {
-        let any = self.tip.is_some() || self.row_items.is_some() || !self.drops.is_empty();
-        key.write(&[u8::from(any)]);
-        if any {
-            key.changes_every_pass();
-        }
-    }
 }
 
 /// Every input of the browser's presets view: the source, the state the toolbar left (the open groups, the search,
@@ -906,7 +900,8 @@ struct ListProps<'p, 'a, K: 'static> {
     row_menu: PresetRowMenu,
     drags: bool,
     group_heads: GroupHeads,
-    host: HostFns<'p, 'a, K>,
+    /// The host's closures; `None` without any, so the view keys on its plain props alone.
+    host: Option<HostFns<'p, 'a, K>>,
     empty: Option<Label>,
     sent: Outbox<'p, ListRun<K>>,
 }
@@ -951,7 +946,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         (*list_id, *view, *zoom, *cell_shape, *tile_size, *columns, *max_rows, *reorder, *drop_zone, *row_menu, *select, *drags, *group_heads);
     let label = label.clone();
     let actions = props.actions;
-    let (tip_painter, row_items, drops) = (props.host.tip, props.host.row_items, props.host.drops);
+    let (tip_painter, row_items, drops) = props.host.as_ref().map_or((None, None, &[][..]), |host| (host.tip, host.row_items, host.drops));
     let reveal = props.reveal.clone();
     let mut held = props.selection.clone();
     let mut menu_target = props.menu_target.clone();

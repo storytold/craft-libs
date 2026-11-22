@@ -391,10 +391,10 @@ const STROKE_SHARE: f32 = 0.2;
 #[derive(craft_ui::contract::MemoProps)]
 struct FontHeightGlyph(FontHeightReference);
 
-static EM_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::EmBox);
-static CAP_HEIGHT: FontHeightGlyph = FontHeightGlyph(FontHeightReference::CapHeight);
-static X_HEIGHT: FontHeightGlyph = FontHeightGlyph(FontHeightReference::XHeight);
-static ICF_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::IcfBox);
+const EM_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::EmBox);
+const CAP_HEIGHT: FontHeightGlyph = FontHeightGlyph(FontHeightReference::CapHeight);
+const X_HEIGHT: FontHeightGlyph = FontHeightGlyph(FontHeightReference::XHeight);
+const ICF_BOX: FontHeightGlyph = FontHeightGlyph(FontHeightReference::IcfBox);
 
 impl Glyph for FontHeightGlyph {
     fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
@@ -408,11 +408,11 @@ impl Glyph for FontHeightGlyph {
         let boxed = |left: f32, top: f32, right: f32, bottom: f32| {
             Shape::closed_line([(left, top), (right, top), (right, bottom), (left, bottom)].map(at).to_vec(), stroke)
         };
-        let line = |from: (f32, f32), to: (f32, f32)| Shape::line_segment([at(from), at(to)], stroke);
+        let segment = |from: (f32, f32), to: (f32, f32)| Shape::line_segment([at(from), at(to)], stroke);
         // A letter between a top guide and the baseline: the guide's height is what the value measures.
-        let guided = |top: f32| vec![line((0.1, top), (0.9, top)), line((0.1, 0.8), (0.9, 0.8)), line((0.5, top), (0.5, 0.8))];
+        let guided = |top: f32| vec![segment((0.1, top), (0.9, top)), segment((0.1, 0.8), (0.9, 0.8)), segment((0.5, top), (0.5, 0.8))];
         let shapes = match self.0 {
-            FontHeightReference::EmBox => vec![boxed(0.1, 0.1, 0.9, 0.9), line((0.1, 0.75), (0.9, 0.75))],
+            FontHeightReference::EmBox => vec![boxed(0.1, 0.1, 0.9, 0.9), segment((0.1, 0.75), (0.9, 0.75))],
             FontHeightReference::CapHeight => guided(0.2),
             FontHeightReference::XHeight => guided(0.45),
             FontHeightReference::IcfBox => vec![boxed(0.2, 0.2, 0.8, 0.8)],

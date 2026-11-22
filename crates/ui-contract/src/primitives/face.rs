@@ -7,9 +7,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// The one host painter a value carries: two faces with one key are the same value.
-#[derive(Clone)]
+#[derive(Clone, crate::contract::MemoProps, craft_ui_macros::PlainData)]
 pub struct FacePaint {
     key: u64,
+    #[memo_props(covered_by = "key", reason = "the key names what the painter paints")]
+    #[plain_data(assume = "a face is replaced, never written: its painter is shared")]
     paint: Arc<dyn Fn(&ContentPainterCx<'_>, Rect) + Send + Sync>,
 }
 
@@ -43,16 +45,6 @@ impl Hash for FacePaint {
         self.key.hash(state);
     }
 }
-
-/// By its key: two faces with one key are the same value.
-impl crate::contract::MemoProps for FacePaint {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        crate::contract::MemoProps::key(&self.key, key);
-    }
-}
-
-/// A face is replaced, never written: its painter is shared and its key names what it paints.
-impl crate::contract::PlainData for FacePaint {}
 
 impl fmt::Debug for FacePaint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
