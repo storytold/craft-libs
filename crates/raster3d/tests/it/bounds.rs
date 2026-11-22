@@ -1212,6 +1212,19 @@ fn metallic_roughness_and_occlusion_strength_outside_0_to_1_are_rejected() {
 }
 
 #[test]
+fn a_light_falloff_other_than_0_to_2_is_rejected() {
+    let mut s = lit_scene((16, 12), 1, false);
+    s.lights[1].falloff = 3;
+    assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(1)));
+    for falloff in 0..=2 {
+        let mut s = lit_scene((16, 12), 1, false);
+        s.lights[1].falloff = falloff;
+        try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+        assert!(try_render(&s, &Limits::default()).is_ok(), "{falloff}");
+    }
+}
+
+#[test]
 fn a_spot_light_with_its_cone_cosines_out_of_order_is_rejected() {
     let mut s = lit_scene((16, 12), 1, false);
     (s.lights[1].cos_inner, s.lights[1].cos_outer) = (-1.0, 0.85);

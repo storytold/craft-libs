@@ -121,7 +121,7 @@ pub struct Light {
     pub cos_inner: f32,
     /// Cosine of a spot light's cone half angle, −1 to 1.
     pub cos_outer: f32,
-    /// 0 none, 1 smooth, 2 inverse square clamped.
+    /// 0 none, 1 smooth, 2 inverse square clamped; another value is an error.
     pub falloff: u32,
     pub radius: f32,
     pub falloff_distance: f32,
@@ -322,6 +322,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
     }
     let ok = |l: &Light| {
         l.kind <= 2
+            && l.falloff <= 2
             && finite(&l.pos)
             && finite(&l.dir)
             && finite(&l.color)

@@ -104,7 +104,7 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   strength, a shadow darkness or an environment
   light's key outside 0 to 1, a negative shadow diffusion or shadow-map radius, a parallel or spot light direction or an environment light direction
   (other than zero) whose length differs from 1 by more than 0.001, a spot light whose inner cone
-  cosine is below its outer one, a light kind
+  cosine is below its outer one, a light kind, light falloff
   or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` also returns
   `ShadowsOnlyOpaque` for a triangle in the opaque range whose material is shadows-only and
   visible, and
