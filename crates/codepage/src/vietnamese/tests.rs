@@ -10,28 +10,24 @@ use super::{
 
 #[test]
 fn test_transcoded_output_is_nfc_composed() {
+    use unicode_normalization::UnicodeNormalization;
+
     let samples = [
-        ("B¶n vÏ chi tiÕt", ".VnTime"),
-        ("MÆT B»NG KÕT CÊU", ".VnTime"),
-        ("TI£U CHUÈN", ".VnTime"),
-        ("B¶n vÏ", ".VnArialH"),
-        ("BAÛN VEÕ CHI TIEÁT", "VNI-Times"),
-        ("Maët baèng keát caáu", "VNI-Helve"),
-        ("Tieâu chuaån kyõ thuaät", "VNI-Aptima"),
-        ("NHOÂM 3003 DAØY 2MM", "VNI-Times"),
+        ("B¶n vÏ chi tiÕt", ".VnTime", "Bản vẽ chi tiết"),
+        ("MÆT B»NG KÕT CÊU", ".VnTime", "MẶT BẰNG KẾT CẤU"),
+        ("TI£U CHUÈN", ".VnTime", "TIÊU CHUẨN"),
+        ("B¶n vÏ", ".VnArialH", "BẢN VẼ"),
+        ("BAÛN VEÕ CHI TIEÁT", "VNI-Times", "BẢN VẼ CHI TIẾT"),
+        ("Maët baèng keát caáu", "VNI-Helve", "Mặt bằng kết cấu"),
+        ("Tieâu chuaån kyõ thuaät", "VNI-Aptima", "Tiêu chuẩn kỹ thuật"),
+        ("NHOÂM 3003 DAØY 2MM", "VNI-Times", "NHÔM 3003 DÀY 2MM"),
     ];
 
-    for (input, hint) in samples {
+    for (input, hint, expected) in samples {
         let out = transcode_vietnamese(input, Some(hint));
-        assert_ne!(out, input, "Must be transcoded");
-        for c in out.chars() {
-            assert!(
-                !matches!(c, '\u{0300}'..='\u{036F}' | '\u{1DC0}'..='\u{1DFF}'),
-                "Transcoded output for {:?} contains combining mark {:?}",
-                input,
-                c
-            );
-        }
+        assert_eq!(out.as_ref(), expected, "Unexpected transcode output for {input:?}");
+        let nfc_oracle: String = out.nfc().collect();
+        assert_eq!(out.as_ref(), nfc_oracle, "Transcoded output for {input:?} must be NFC");
     }
 }
 
@@ -352,7 +348,7 @@ fn test_transcode_explicit_and_validate_normalize() {
     assert_eq!(explicit_vni, "NHÔM 3003");
 
     let clean = validate_and_normalize("Bản vẽ kỹ thuật");
-    assert_eq!(clean, Ok(Cow::Borrowed("Bản vẽ kỹ thuật")));
+    assert!(matches!(clean, Ok(Cow::Borrowed("Bản vẽ kỹ thuật"))));
 
     let legacy = validate_and_normalize("B¶n vÏ chi tiÕt");
     assert_eq!(legacy, Err("TCVN3 (ABC)"));
@@ -365,12 +361,10 @@ fn test_transcode_explicit_and_validate_normalize() {
 fn test_windows1258_decode_and_transcode_explicit() {
     // -------------------------------------------------------------------------
     // WHY: Windows-1258 uses decomposed combining diacritical marks (U+0300..=U+0323).
-    // In Unicode NFC, combining marks are only composed if a canonical precomposed character exists.
-    // Vietnamese consonants never take tone marks, so a sequence like `k` + acute (0xEC)
-    // has no precomposed representation in Latin Extended-A/B and remains `k\u{0301}`.
-    // DANGER: If a naive decoder assumes all combining marks disappear into precomposed NFC,
-    // it will panic or silently discard unpairable diacritics.
-    // CONTRACT: Tier 1 - Contract 1 (Canonical Normalization Limits).
+    // `decode_windows1258` preserves raw combining marks without implicit NFC composition.
+    // The Vietnamese-only composer (`normalize_nfc`) intentionally composes Vietnamese
+    // vowels and leaves non-Vietnamese consonant+mark pairs like `k\u{0301}` untouched,
+    // whereas full CP1258 normalization (`normalize_cp1258_nfc`) composes `k\u{0301}` -> `ḱ` (U+1E31).
     // -------------------------------------------------------------------------
     assert_eq!(LegacyEncoding::Windows1258.display_name(), "Windows-1258");
 
@@ -1071,20 +1065,23 @@ fn test_zero_dep_vietnamese_nfc_composer() {
     // Already-NFC and pure ASCII return Cow::Borrowed (zero alloc)
     assert!(matches!(normalize_nfc("Tiếng Việt"), Cow::Borrowed(_)));
     assert!(matches!(normalize_nfc("Clean ASCII"), Cow::Borrowed(_)));
-    // Non-precomposable sequence (k + acute) stays decomposed and borrowed
+    // `k\u{0301}` is outside the Vietnamese vowel composer (`normalize_nfc`), so it stays borrowed here
+    // (whereas `normalize_cp1258_nfc("k\u{0301}")` composes it to `ḱ`, U+1E31).
     let non_precomposed = "k\u{0301}";
     let res = normalize_nfc(non_precomposed);
     assert!(matches!(res, Cow::Borrowed(_)));
     assert_eq!(res.as_ref(), non_precomposed);
+    assert_eq!(normalize_cp1258_nfc(non_precomposed).as_ref(), "ḱ");
 }
 
 #[test]
 fn test_minor_edge_cases_and_tcvn3_cad_escapes() {
-    // 1. AutoCAD %%c escape must be ignored by byte-path all-caps detection
-    assert_eq!(decode(b"%%c B\xB6N", LegacyEncoding::Tcvn3).expect("CAD %%c + BẢN"), "%%c BẢN");
+    // 1. AutoCAD %%c escape must be ignored by transcoder all-caps inference; pure decode_tcvn3 stays lowercase
+    assert_eq!(transcode_tcvn3("%%c B\u{00B6}N"), "%%c BẢN");
+    assert_eq!(decode(b"%%c B\xB6N", LegacyEncoding::Tcvn3).expect("CAD %%c + BẢN"), "%%c BảN");
 
     // 2. CP1252 fallback bytes (0x80..=0x9F, e.g. 0x9C 'œ') must keep original case in all-caps / Tcvn3H
-    assert_eq!(decode_tcvn3(b"B\x9CN", false, DecodeMode::Practical).expect("TCVN3 all-caps preserves œ"), "BœN");
+    assert_eq!(transcode_tcvn3("B\u{009C}N"), "BœN");
     assert_eq!(super::transcode_tcvn3_h("b\u{009C}n").as_ref(), "BœN");
     assert!(matches!(super::transcode_tcvn3_h("BAN VE"), Cow::Borrowed(_)));
 
@@ -1120,9 +1117,9 @@ fn test_tcvn3_latin1_widened_overlap_and_final_coderabbit_cases() {
         .expect("undecodable VNI coincidence must not override .VnTimeH");
     assert_eq!(decoded, "YẾN ĐẢO 12345678");
 
-    // AutoCAD `%%%` literal percent + `%%d` keeps all-caps inference; unknown `%%x` leaves `x` visible.
-    assert_eq!(decode_tcvn3(b"A%%%%%d \xD2", false, DecodeMode::Practical).unwrap(), "A%%%%%d Ề");
-    assert_eq!(decode_tcvn3(b"A%%x \xD2", false, DecodeMode::Practical).unwrap(), "A%%x ề");
+    // AutoCAD `%%%` literal percent + `%%d` keeps all-caps inference in transcoder; unknown `%%x` leaves `x` visible.
+    assert_eq!(transcode_tcvn3("A%%%%%d \u{00D2}"), "A%%%%%d Ề");
+    assert_eq!(transcode_tcvn3("A%%x \u{00D2}"), "A%%x ề");
 
     // Non-Latin-1 input under `.VnTimeH` stays borrowed.
     let emoji = "Plan 🙂";
@@ -1184,9 +1181,9 @@ fn test_regression_invariants_for_vietnamese_transcoding_and_nfc() {
     assert_eq!(decoded, "YẾN ĐẢO 12345678");
 
     // 6. Why: AutoCAD `%%%` literal percent escapes and valid inline codes (`%%d`)
-    // keep all-caps inference, while CP1252 fallback characters (`0x9C` -> `œ`)
-    // preserve their original case under `.VnTimeH`.
-    assert_eq!(decode_tcvn3(b"A%%%%%d \xD2", false, DecodeMode::Practical).unwrap(), "A%%%%%d Ề");
+    // keep all-caps inference in the transcoder, while CP1252 fallback characters
+    // (`0x9C` -> `œ`) preserve their original case under `.VnTimeH`.
+    assert_eq!(transcode_tcvn3("A%%%%%d \u{00D2}"), "A%%%%%d Ề");
     assert_eq!(super::transcode_tcvn3_h("b\u{009C}n").as_ref(), "BœN");
     // 7. Why (UAX #15 starter retention & precomposed decomposition in CP1258):
     // - Bytes `43 EC F2` (`C` + `\u{0301}` + `\u{0323}`) reorder to `C` + `\u{0323}` +
@@ -1248,21 +1245,21 @@ fn cp1258_nfc_matches_unicode_oracle_exhaustively() {
     // every byte with one mark, and every byte with every mark pair must agree with the
     // independent Unicode NFC oracle. This is what catches boundary cases such as
     // `43 EC F2`, `C9 F2` and `C4 F2` before review does.
+    const UNDEFINED_CP1258: [u8; 9] = [0x81, 0x8A, 0x8D, 0x8E, 0x8F, 0x90, 0x9A, 0x9D, 0x9E];
     const MARKS: [u8; 5] = [0xCC, 0xEC, 0xD2, 0xDE, 0xF2];
     let mut checked = 0_u32;
 
-    for first in 0_u8..=0xFF {
+    for first in (0_u8..=0xFF).filter(|b| !UNDEFINED_CP1258.contains(b)) {
         let single = [first];
-        if let Ok(decoded) = decode_windows1258(&single) {
-            let ours = normalize_cp1258_nfc(&decoded);
-            let oracle: String = decoded.nfc().collect();
-            assert_eq!(ours.as_ref(), oracle, "CP1258 bytes {single:02X?} decoded {decoded:?}");
-            checked += 1;
-        }
+        let decoded = decode_windows1258(&single).expect("every defined CP1258 byte must decode");
+        let ours = normalize_cp1258_nfc(&decoded);
+        let oracle: String = decoded.nfc().collect();
+        assert_eq!(ours.as_ref(), oracle, "CP1258 bytes {single:02X?} decoded {decoded:?}");
+        checked += 1;
 
         for second in MARKS {
             let pair = [first, second];
-            let Ok(decoded) = decode_windows1258(&pair) else { continue };
+            let decoded = decode_windows1258(&pair).expect("defined CP1258 byte + mark must decode");
             let ours = normalize_cp1258_nfc(&decoded);
             let oracle: String = decoded.nfc().collect();
             assert_eq!(ours.as_ref(), oracle, "CP1258 bytes {pair:02X?} decoded {decoded:?}");
@@ -1280,7 +1277,7 @@ fn cp1258_nfc_matches_unicode_oracle_exhaustively() {
     }
 
     // 247 defined bytes x (1 single + 5 single-mark + 25 mark-pair) sequences.
-    assert!(checked > 7_600, "expected the full CP1258 x mark x mark domain, checked {checked}");
+    assert_eq!(checked, 247 * (1 + 5 + 25), "expected the full CP1258 x mark x mark domain, checked {checked}");
 }
 
 #[test]
@@ -1331,4 +1328,44 @@ fn test_linear_normalization_and_scanning_invariants() {
     let out = transcode_vni(emoji);
     assert!(matches!(out, Cow::Borrowed(_)));
     assert_eq!(out, emoji);
+}
+
+#[test]
+fn test_coderabbit_410b6b3_findings() {
+    // 1. Why (detect.rs no-hint candidate validation): `0xCD` is unmapped in TCVN3,
+    // so TCVN3 cannot decode `b"x\xCD I\xD7 I\xD7 a\xF8 1234567890"` even though its raw
+    // composite score is higher; VNI decodes the full payload cleanly and must win.
+    let vni_over_invalid_tcvn = b"x\xCD I\xD7 I\xD7 a\xF8 1234567890";
+    assert_eq!(
+        detect_encoding(vni_over_invalid_tcvn, None),
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::Heuristic }
+    );
+    assert_eq!(decode_text(vni_over_invalid_tcvn, &DecodeOptions::default()).as_deref(), Ok("xÍ I× I× à 1234567890"));
+
+    // 2. Why (detect.rs VNI hint veto): `U\xF4\xF9` (`Uớ`) is valid VNI, so TCVN3
+    // pair-matching must not veto a `VNI-Times` font hint when VNI decodes cleanly in Strict mode.
+    let vni_hinted = b"U\xF4\xF9 123456789012";
+    let vni_meta = EncodingMetadata { font_name: Some("VNI-Times"), codepage_hint: None };
+    assert_eq!(
+        detect_encoding(vni_hinted, Some(&vni_meta)),
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::FontHint }
+    );
+    assert_eq!(decode_text(vni_hinted, &DecodeOptions { metadata: Some(&vni_meta), ..Default::default() }).as_deref(), Ok("Uớ 123456789012"));
+
+    // 3. Why (vni.rs ẳ / Ẳ mapping): `0xFA` ('ú') with `a`/`A` and `0xDA` ('Ú') with `A`
+    // encode `ẳ` / `Ẳ` (breve + hook), while `0xFB` ('û') / `0xDB` ('Û') encode `ả` / `Ả`.
+    assert_eq!(decode_vni(b"a\xFA A\xDA A\xFA a\xFB A\xDB", DecodeMode::Strict).as_deref(), Ok("ẳ Ẳ Ẳ ả Ả"));
+    assert_eq!(decode_vni(b"a\xFA A\xDA A\xFA a\xFB A\xDB", DecodeMode::Practical).as_deref(), Ok("ẳ Ẳ Ẳ ả Ả"));
+    for (chunk_input, expected) in [(b"a\xFA".as_slice(), "ẳ"), (b"A\xDA".as_slice(), "Ẳ")] {
+        let mut dec = VniDecoder::new(DecodeMode::Strict);
+        let mut out = String::new();
+        dec.decode_chunk(&chunk_input[..1], &mut out).expect("chunk 1");
+        dec.decode_chunk(&chunk_input[1..], &mut out).expect("chunk 2");
+        dec.finish(&mut out).expect("finish");
+        assert_eq!(out, expected);
+    }
+
+    // 4. Why (tcvn3.rs pure decode_tcvn3 casing): `decode_tcvn3` with `is_upper = false`
+    // must not infer all-caps from surrounding ASCII letters (`b"PDF: \xAE\xB7"` -> `"PDF: đã"`).
+    assert_eq!(decode_tcvn3(b"PDF: \xAE\xB7", false, DecodeMode::Practical).as_deref(), Ok("PDF: đã"));
 }

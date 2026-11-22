@@ -337,15 +337,8 @@ fn score_vietnamese_encodings(s: &str) -> (bool, bool, usize, usize) {
     (vni_valid, tcvn_valid, vni_score, tcvn_score)
 }
 
-/// Detect the legacy Vietnamese encoding of a string slice with evidence categorization.
-pub fn detect_encoding_from_str(s: &str) -> DetectionResult {
-    // Short-String Invariant: strings shorter than 16 bytes disable statistical heuristics
-    if s.len() < 16 || s.is_ascii() || is_already_unicode_vietnamese(s) {
-        return DetectionResult::Unknown;
-    }
-
-    let (vni_valid, tcvn_valid, vni_score, tcvn_score) = score_vietnamese_encodings(s);
-
+#[inline]
+fn rank_candidates(vni_valid: bool, tcvn_valid: bool, vni_score: usize, tcvn_score: usize) -> DetectionResult {
     match (vni_valid, tcvn_valid) {
         (true, false) => DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::Heuristic },
         (false, true) => DetectionResult::HighConfidence { encoding: LegacyEncoding::Tcvn3, evidence: EncodingEvidence::Heuristic },
@@ -365,8 +358,20 @@ pub fn detect_encoding_from_str(s: &str) -> DetectionResult {
     }
 }
 
-/// Detect the legacy Vietnamese encoding of raw input bytes using metadata hints and content heuristics.
-pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) -> DetectionResult {
+/// Detect the legacy Vietnamese encoding of a string slice with evidence categorization.
+pub fn detect_encoding_from_str(s: &str) -> DetectionResult {
+    // Short-String Invariant: strings shorter than 16 bytes disable statistical heuristics
+    if s.len() < 16 || s.is_ascii() || is_already_unicode_vietnamese(s) {
+        return DetectionResult::Unknown;
+    }
+
+    let (vni_valid, tcvn_valid, vni_score, tcvn_score) = score_vietnamese_encodings(s);
+    rank_candidates(vni_valid, tcvn_valid, vni_score, tcvn_score)
+}
+
+/// Detect the legacy Vietnamese encoding of raw input bytes, validating heuristic candidates
+/// against the full input in `mode`.
+pub(crate) fn detect_encoding_with_mode(input: &[u8], metadata: Option<&EncodingMetadata<'_>>, mode: super::DecodeMode) -> DetectionResult {
     if let Some(meta) = metadata {
         // 1. Explicit legacy font hint (.Vn* / VNI-*) overrides container codepage metadata
         // (e.g. DXF $DWGCODEPAGE=ANSI_1252/1258 or RTF \ansicpg1252/1258 with .VnTime text).
@@ -392,12 +397,14 @@ pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) ->
                         &[LegacyEncoding::Tcvn3, LegacyEncoding::Vni]
                     });
                 }
-                // Why: Symmetric guard for VNI hints — an undecodable TCVN3 coincidence
-                // (e.g. a VNI payload containing 0xCD 'Í', which is unmapped in TCVN3)
-                // must not veto a valid `VNI-*` font hint.
+                // Why: Symmetric guard for VNI hints — only veto `VNI-*` when TCVN3
+                // decodes the full payload in Strict mode AND VNI itself fails Strict
+                // decoding (so TCVN3 pair matching cannot shadow valid VNI composites
+                // such as `b"U\xF4\xF9 ..."`).
                 if enc == LegacyEncoding::Vni
                     && tcvn_valid
                     && !vni_valid
+                    && super::vni::decode_vni(input, super::DecodeMode::Strict).is_err()
                     && super::tcvn3::decode_tcvn3(input, false, super::DecodeMode::Strict).is_ok()
                 {
                     return DetectionResult::Ambiguous(&[LegacyEncoding::Vni, LegacyEncoding::Tcvn3]);
@@ -423,7 +430,22 @@ pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) ->
     }
 
     let latin1_s: String = input.iter().map(|&b| b as char).collect();
-    detect_encoding_from_str(&latin1_s)
+    if is_already_unicode_vietnamese(&latin1_s) {
+        return DetectionResult::Unknown;
+    }
+
+    // Why: Validate each scored candidate against the full byte payload in `mode` before
+    // ranking so an undecodable candidate (e.g. TCVN3 hitting unmapped 0xCD) never beats a
+    // candidate that decodes the entire input cleanly.
+    let (vni_valid, tcvn_valid, vni_score, tcvn_score) = score_vietnamese_encodings(&latin1_s);
+    let vni_decodable = vni_valid && super::vni::decode_vni(input, mode).is_ok();
+    let tcvn_decodable = tcvn_valid && super::tcvn3::decode_tcvn3(input, false, mode).is_ok();
+    rank_candidates(vni_decodable, tcvn_decodable, vni_score, tcvn_score)
+}
+
+/// Detect the legacy Vietnamese encoding of raw input bytes using metadata hints and content heuristics.
+pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) -> DetectionResult {
+    detect_encoding_with_mode(input, metadata, super::DecodeMode::Practical)
 }
 
 /// Detect if a text string has unambiguous characteristic byte signatures of VNI or TCVN3.

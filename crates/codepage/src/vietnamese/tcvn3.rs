@@ -392,9 +392,19 @@ pub(crate) fn match_tcvn3_composite(c1: char, c2: char) -> Option<&'static str> 
 /// Pure decoding of a TCVN3 byte slice into Unicode.
 ///
 /// - If `is_upper` is true, the uppercase table (`TCVN3_UPPER_MAP` / `.VnTimeH`) is applied.
+/// - If `is_upper` is false, high bytes are decoded strictly via `TCVN3_LOWER_MAP` without
+///   inferring all-caps from surrounding ASCII letters.
 /// - If `mode` is `DecodeMode::Strict`, CP1252 punctuation bytes (`0x80..=0x9F`) return `DecodeError::UnmappedByte`.
 /// - If `mode` is `DecodeMode::Practical` (default), CP1252 punctuation and typographic symbols are preserved.
 pub fn decode_tcvn3(input: &[u8], is_upper: bool, mode: DecodeMode) -> Result<Cow<'_, str>, DecodeError> {
+    decode_tcvn3_inner(input, is_upper, false, mode)
+}
+
+pub(super) fn decode_tcvn3_practical_facade(input: &[u8]) -> Result<Cow<'_, str>, DecodeError> {
+    decode_tcvn3_inner(input, false, is_tcvn3_bytes_all_caps(input), DecodeMode::Practical)
+}
+
+fn decode_tcvn3_inner(input: &[u8], is_upper: bool, inferred_all_caps: bool, mode: DecodeMode) -> Result<Cow<'_, str>, DecodeError> {
     let enc = if is_upper { LegacyEncoding::Tcvn3H } else { LegacyEncoding::Tcvn3 };
 
     if input.is_ascii() {
@@ -416,7 +426,7 @@ pub fn decode_tcvn3(input: &[u8], is_upper: bool, mode: DecodeMode) -> Result<Co
     let mut out = String::with_capacity(input.len());
     let mut i = 0;
     let len = input.len();
-    let all_caps = if !is_upper { is_tcvn3_bytes_all_caps(input) } else { false };
+    let all_caps = !is_upper && inferred_all_caps;
 
     while i < len {
         let byte = input[i];
@@ -667,7 +677,7 @@ pub(super) fn transcode_tcvn3_unchecked(s: &str) -> Cow<'_, str> {
 
     let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
     let all_caps = is_tcvn3_bytes_all_caps(&bytes);
-    match decode_tcvn3(&bytes, all_caps, DecodeMode::Practical) {
+    match decode_tcvn3_inner(&bytes, false, all_caps, DecodeMode::Practical) {
         Ok(decoded) => {
             let nfc = super::apply_vietnamese_nfc_cow(decoded);
             if nfc.as_ref() == s { Cow::Borrowed(s) } else { Cow::Owned(nfc.into_owned()) }

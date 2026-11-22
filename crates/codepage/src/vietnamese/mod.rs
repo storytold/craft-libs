@@ -205,8 +205,12 @@ fn transcode_str_inner<'a>(s: &'a str, font_hint: Option<&str>) -> TranscodeResu
 /// unambiguous legacy markers), `s` is preserved unchanged; callers that know the exact source
 /// encoding should call [`transcode_explicit`] instead.
 ///
-/// Returns `Cow::Borrowed(s)` with zero allocations when `s` is unchanged (including pure ASCII
-/// for non-`Tcvn3H` hints and non-Latin-1 inputs; a `Tcvn3H` hint allocates `Cow::Owned` when
+/// NFC normalization applies only when legacy transcoding actually runs; pass-through inputs
+/// (already-Unicode or unrecognized text, including NFD) are returned unchanged as
+/// `Cow::Borrowed(s)`. Call [`normalize_nfc`] directly if you only want NFC normalization.
+///
+/// Returns `Cow::Borrowed(s)` with zero allocations on pass-through (including pure ASCII for
+/// non-`Tcvn3H` hints and non-Latin-1 inputs; a `Tcvn3H` hint allocates `Cow::Owned` when
 /// uppercasing lowercase ASCII).
 pub fn transcode_vietnamese<'a>(s: &'a str, font_hint: Option<&str>) -> Cow<'a, str> {
     transcode_str_inner(s, font_hint).text
@@ -251,16 +255,27 @@ impl Default for DecodeOptions<'_> {
     }
 }
 
+#[inline]
+fn decode_for_facade<'a>(input: &'a [u8], enc: LegacyEncoding, mode: DecodeMode) -> Result<Cow<'a, str>, DecodeError> {
+    if enc == LegacyEncoding::Tcvn3 && mode == DecodeMode::Practical {
+        tcvn3::decode_tcvn3_practical_facade(input)
+    } else {
+        decode_with_mode(input, enc, mode)
+    }
+}
+
 /// Unified decoding facade combining detection, decoding, and canonical NFC normalization.
 ///
 /// Invariants:
 /// - If `force_encoding` is `None` and `input` is valid UTF-8, heuristic transcoding is never executed.
 /// - If `normalize_nfc` is true, output is guaranteed canonical Unicode Normalization Form C.
-/// - Returns `Cow::Borrowed` with zero allocations on pure ASCII or already-canonical UTF-8 inputs.
+/// - On the UTF-8 fast path (`force_encoding == None`), returns `Cow::Borrowed` with zero
+///   allocations for pure ASCII or already-canonical UTF-8 inputs (note that forcing
+///   `LegacyEncoding::Tcvn3H` still allocates `Cow::Owned` when uppercasing lowercase ASCII).
 pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<Cow<'a, str>, DecodeError> {
     // 1. Explicit forced encoding
     if let Some(enc) = options.force_encoding {
-        let decoded = decode_with_mode(input, enc, options.mode)?;
+        let decoded = decode_for_facade(input, enc, options.mode)?;
         if options.normalize_nfc {
             return Ok(apply_nfc_cow_for(decoded, enc));
         }
@@ -281,9 +296,9 @@ pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<C
     };
 
     // 3. Non-UTF8 bytes: detect encoding via content heuristics or metadata
-    let detection = detect_encoding(input, options.metadata);
+    let detection = detect::detect_encoding_with_mode(input, options.metadata, options.mode);
     if let Some(enc) = detection.encoding() {
-        let decoded = decode_with_mode(input, enc, options.mode)?;
+        let decoded = decode_for_facade(input, enc, options.mode)?;
         if options.normalize_nfc {
             return Ok(apply_nfc_cow_for(decoded, enc));
         }
@@ -350,7 +365,8 @@ pub fn transcode_explicit<'a>(text: &'a str, encoding: LegacyEncoding) -> Cow<'a
             // Why: normalizing must depend on the encoding, not on the entry point.
             // Windows-1258 needs the full UAX #15 pipeline (decompose + CCC order +
             // starter-retaining recomposition), exactly as `decode_text` and
-            // `transcode_windows1258` do, so `É` + `U+0323` here also yields `Ẹ\u{0301}`.
+            // `transcode_windows1258` do, so Latin-1 widened `"Éò"` (bytes `C9 F2`)
+            // here also yields `Ẹ\u{0301}`.
             let nfc = apply_nfc_cow_for(decoded, encoding);
             if nfc.as_ref() == text { Cow::Borrowed(text) } else { Cow::Owned(nfc.into_owned()) }
         }
@@ -359,13 +375,19 @@ pub fn transcode_explicit<'a>(text: &'a str, encoding: LegacyEncoding) -> Cow<'a
 }
 
 /// Transcode legacy text to Unicode NFC and return detailed status.
+///
+/// NFC normalization applies only when legacy transcoding runs; pass-through inputs
+/// (already-Unicode or unrecognized text, including NFD) are returned unchanged as
+/// `Cow::Borrowed(s)`. Call [`normalize_nfc`] if you only need NFC normalization.
 pub fn transcode_to_unicode<'a>(s: &'a str, font_hint: Option<&str>) -> TranscodeResult<'a> {
     transcode_str_inner(s, font_hint)
 }
 
 /// One-shot transcode facade returning a tuple for lightweight callers.
 ///
-/// Returns `(normalized_text, detected_encoding_if_any)`.
+/// Returns `(result_text, detected_encoding_if_any)`. NFC normalization applies only when
+/// legacy transcoding runs; pass-through inputs are returned unchanged (use [`normalize_nfc`]
+/// if you only need NFC normalization).
 #[inline]
 pub fn transcode_with_summary<'a>(text: &'a str, font_hint: Option<&str>) -> (Cow<'a, str>, Option<LegacyEncoding>) {
     let result = transcode_to_unicode(text, font_hint);
