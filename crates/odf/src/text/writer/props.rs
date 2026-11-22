@@ -351,7 +351,7 @@ pub(in crate::text) fn odf_border(b: Option<Border>) -> String {
     let style = match b.style {
         BorderStyle::Double | BorderStyle::Triple => "double",
         BorderStyle::Dotted => "dotted",
-        BorderStyle::Dashed => "dashed",
+        BorderStyle::Dashed | BorderStyle::DashSmallGap => "dashed",
         BorderStyle::DotDash => "dot-dash",
         _ => "solid",
     };
@@ -402,6 +402,21 @@ pub(in crate::text) fn generating_style(odt: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_gap_borders_export_as_dashed_odf() {
+        let b = Border { style: BorderStyle::DashSmallGap, width: 1.0, color: Some(Rgb(10, 20, 30)), space: 0.0 };
+        assert_eq!(odf_border(Some(b)), "1pt dashed #0a141e");
+        let attrs = border_attrs(Some(Borders { top: Some(b), ..Default::default() }));
+        assert!(attrs.contains("fo:border-top=\"1pt dashed #0a141e\""), "{attrs}");
+        let mut doc = craft_wordmodel::Document::new();
+        doc.para_mut(craft_wordmodel::StoryRef::Body, &craft_wordmodel::Path::top(0)).unwrap().props.borders =
+            Some(Borders { top: Some(b), ..Default::default() });
+        let bytes = crate::text::export(&doc).unwrap();
+        let reopened = crate::text::import(&bytes).unwrap();
+        let para = reopened.para(craft_wordmodel::StoryRef::Body, &craft_wordmodel::Path::top(0)).unwrap();
+        assert_eq!(para.props.borders.unwrap().top.unwrap().style, BorderStyle::Dashed);
+    }
 
     #[test]
     fn superscript_raised_text_has_one_text_position() {

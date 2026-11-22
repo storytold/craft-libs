@@ -245,6 +245,7 @@ fn style_num(k: Kind) -> Option<u32> {
     }
 }
 
+/// The RTF control word for a border, retaining small-gap dashes as `\brdrdashsm`.
 fn rtf_border_style(s: craft_wordmodel::props::BorderStyle) -> &'static str {
     use craft_wordmodel::props::BorderStyle;
     match s {
@@ -253,6 +254,7 @@ fn rtf_border_style(s: craft_wordmodel::props::BorderStyle) -> &'static str {
         BorderStyle::Double => "\\brdrdb",
         BorderStyle::Dotted => "\\brdrdot",
         BorderStyle::Dashed => "\\brdrdash",
+        BorderStyle::DashSmallGap => "\\brdrdashsm",
         BorderStyle::Thick => "\\brdrth",
         BorderStyle::Triple => "\\brdrtriple",
         BorderStyle::DotDash => "\\brdrdashd",
