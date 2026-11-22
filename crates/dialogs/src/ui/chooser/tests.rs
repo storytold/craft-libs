@@ -223,6 +223,8 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
         for _ in 0..400 {
             fixture.idle(1);
             if fields(&host).get("listed") == Some(&Value::Bool(true)) {
+                // The chooser lays out its listing in the next passes: a click reads where the controls rest.
+                fixture.settle();
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -243,7 +245,7 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     click(&mut fixture, "File name");
     fixture.type_text("novel");
     click(&mut fixture, "Save");
-    assert_eq!(service.take_answer(id), Some(Picked::Paths(vec![dir.join("novel.docx")])), "the policy adds the extension");
+    assert_eq!(service.take_answer(id), Some(Picked::Saved { path: dir.join("novel.docx"), file_type: None }), "the policy adds the extension");
 
     // A forced chooser: `report` is no listed file, so the chooser asks nothing; the policy's `report.docx` is,
     // so the service asks once.
@@ -254,7 +256,7 @@ fn an_unavailable_or_forced_pick_opens_the_chooser_and_settles_its_answer() {
     click(&mut fixture, "Save");
     assert_eq!(service.take_answer(id), None, "the Replace question waits");
     click(&mut fixture, "Replace");
-    assert_eq!(service.take_answer(id), Some(Picked::Paths(vec![dir.join("report.docx")])));
+    assert_eq!(service.take_answer(id), Some(Picked::Saved { path: dir.join("report.docx"), file_type: None }));
 
     // Cancel settles as Cancelled.
     let id = service.pick(PickRequest::open("document").directory(&dir).fallback(true));
