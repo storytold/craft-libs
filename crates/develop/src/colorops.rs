@@ -5,9 +5,40 @@ use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
 use craft_color::srgb_to_linear;
-use craft_color_transform::oklab::{hsv_to_rgb, lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+use craft_color_transform::oklab::{OkLab, lab_to_lch, lch_to_lab};
 use craft_color_transform::{Mat3, REC2020, SRGB};
 use craft_develop_model::{Calibration, DevelopSettings, MAX_POINT_COLORS, MIXER_HUES, PointColor, Treatment, Wheel};
+
+fn oklab_2020() -> &'static OkLab {
+    static M: OnceLock<OkLab> = OnceLock::new();
+    M.get_or_init(|| OkLab::for_space(&REC2020))
+}
+
+#[inline]
+fn oklab_from_2020(rgb: [f32; 3]) -> [f32; 3] {
+    oklab_2020().from_rgb(rgb)
+}
+
+#[inline]
+fn oklab_to_2020(lab: [f32; 3]) -> [f32; 3] {
+    oklab_2020().to_rgb(lab)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let c = v * s;
+    let hp = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r + m, g + m, b + m]
+}
 
 /// Whether `s` renders in black and white (B&W treatment or monochrome profile).
 #[inline]
@@ -25,8 +56,13 @@ pub fn luminance_2020(c: [f32; 3]) -> f32 {
 pub fn oklch_hue_of_srgb_hue(deg: f64) -> f32 {
     let c = hsv_to_rgb(deg as f32, 1.0, 1.0);
     let lin = c.map(srgb_to_linear);
-    let m = SRGB.to_space(&REC2020).apply_f32(lin);
-    lab_to_lch(oklab_from_2020(m))[2]
+    let m = SRGB.to_space(&REC2020).to_f32();
+    let rec = [
+        m[0][0] * lin[0] + m[0][1] * lin[1] + m[0][2] * lin[2],
+        m[1][0] * lin[0] + m[1][1] * lin[1] + m[1][2] * lin[2],
+        m[2][0] * lin[0] + m[2][1] * lin[1] + m[2][2] * lin[2],
+    ];
+    lab_to_lch(oklab_from_2020(rec))[2]
 }
 
 /// OkLCh hue (radians) of each colour-mixer band centre.
