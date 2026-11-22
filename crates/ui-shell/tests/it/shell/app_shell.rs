@@ -7,9 +7,7 @@ use craft_theme::Size;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{
-    Bind, CommandSet, Entry, MemoProps, MemoView, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, Trigger,
-};
+use craft_ui::contract::{Bind, CommandSet, Entry, MemoProps, MemoView, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};

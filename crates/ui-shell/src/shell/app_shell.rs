@@ -802,7 +802,8 @@ impl<'a, S> AppShell<'a, S> {
                         // A slot sized by its content is as large as its content from its outer edge, in the room it
                         // can grow into; any other slot takes its extent and fills its rect.
                         let pane = ShellPane::new(slot.key()).edge(*edge);
-                        let pane = if by_content { pane.at_content_extent(grow_room(slot.key())) } else { pane.extent(extent).at(rect_of(slot.key())) };
+                        let pane =
+                            if by_content { pane.at_content_extent(grow_room(slot.key())) } else { pane.extent(extent).at(rect_of(slot.key())) };
                         // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
                         // the body.
                         let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
