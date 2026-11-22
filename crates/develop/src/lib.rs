@@ -15,10 +15,12 @@ pub mod light_v3;
 #[rustfmt::skip]
 pub mod light_v3_params;
 pub mod local;
+pub mod local_tone;
 pub mod lut;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
 pub mod profiles;
 pub mod raster;
+pub mod sensor;
 pub mod tone;
