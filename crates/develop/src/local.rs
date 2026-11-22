@@ -1,18 +1,24 @@
 //! Scene-linear preparation: white balance + exposure, and the spatial planes the per-pixel stage
 //! needs (edge-aware base layer for highlights/shadows, clarity/texture bands, dehaze veil).
 
-use craft_color_transform::cct::{temp_tint_to_xy, wb_matrix, wb_matrix_checked, xy_to_temp_tint};
-use craft_color_transform::{BRADFORD, Mat3, REC2020, Xy};
+use craft_color_transform::cct::{temp_tint_to_xy, wb_matrix as wb_matrix_checked, xy_to_temp_tint};
+use craft_color_transform::{BRADFORD, Mat3, REC2020, RgbSpace, Xy};
 use craft_develop_model::{DevelopSettings, LocalAdjustments, Mask, Process, WbMode, WbScale};
 use std::sync::Arc;
 
 use crate::colorops::luminance_2020;
-use crate::raster::blur::{gauss_taps, gaussian, gaussian_taps};
+use crate::raster::blur::{gauss_taps, gaussian};
 use crate::raster::{Plane, Rgb32f, par_join, par_rows as for_rows};
 
-#[inline]
-fn transpose(p: &Plane) -> Plane {
-    p.transpose()
+/// Legacy (V1..V9) unchecked Bradford white-balance matrix.
+fn wb_matrix_legacy(space: &RgbSpace, src: Xy) -> Mat3 {
+    let (Some(s_xyz), Some(d_xyz), Some(inv)) = (src.to_xyz(), space.white.to_xyz(), BRADFORD.inverse()) else {
+        return Mat3::IDENTITY;
+    };
+    let (s, d) = (BRADFORD.apply(s_xyz), BRADFORD.apply(d_xyz));
+    let scale = Mat3::diag(d[0] / s[0], d[1] / s[1], d[2] / s[2]);
+    let adapt = inv.mul(&scale).mul(&BRADFORD);
+    space.from_xyz().mul(&adapt).mul(&space.to_xyz())
 }
 
 /// Render quality for spatial planes (`Draft` caps the Highlights/Shadows base radius).
@@ -71,11 +77,11 @@ pub fn wb_matrix_for_with(info: &WbSource, s: &DevelopSettings, rebalance: Optio
         return Some(m.to_f32());
     }
     let checked = checked_wb(s);
-    let set = if checked { wb_matrix_checked(&REC2020, effective_white(info, s)) } else { wb_matrix(&REC2020, effective_white(info, s)) };
+    let set = if checked { wb_matrix_checked(&REC2020, effective_white(info, s)) } else { wb_matrix_legacy(&REC2020, effective_white(info, s)) };
     let shot = if checked {
         wb_matrix_checked(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
     } else {
-        wb_matrix(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
+        wb_matrix_legacy(&REC2020, temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint))
     };
     let m = set.mul(&shot.inverse().unwrap_or(Mat3::IDENTITY));
     // Normalize so neutral luminance is preserved (WB shouldn't change exposure).
@@ -146,8 +152,8 @@ pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<Xy> {
     if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
         return None;
     }
-    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
-    let (old, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let cones = |t: f64, tint: f64| temp_tint_to_xy(t, tint).to_xyz().map(|xyz| BRADFORD.apply(xyz));
+    let (old, reference, shot) = (cones(temp, tint)?, cones(6500.0, 0.0)?, cones(as_shot.0, as_shot.1)?);
     let inverse = BRADFORD.inverse()?;
     let mut new = [0.0; 3];
     for i in 0..3 {
@@ -156,7 +162,7 @@ pub fn legacy_white(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<Xy> {
         }
         new[i] = old[i] * shot[i] / reference[i];
     }
-    let xy = Xy::from_xyz(inverse.apply(new));
+    let xy = Xy::from_xyz(inverse.apply(new))?;
     (xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0).then_some(xy)
 }
 
@@ -190,8 +196,8 @@ pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f6
         // the source's own white: the relative scale's as-shot reference, exactly
         return Some((6500.0, 0.0));
     }
-    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
-    let (target, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let cones = |t: f64, tint: f64| temp_tint_to_xy(t, tint).to_xyz().map(|xyz| BRADFORD.apply(xyz));
+    let (target, reference, shot) = (cones(temp, tint)?, cones(6500.0, 0.0)?, cones(as_shot.0, as_shot.1)?);
     let inverse = BRADFORD.inverse()?;
     let mut old = [0.0; 3];
     for i in 0..3 {
@@ -200,7 +206,7 @@ pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f6
         }
         old[i] = target[i] * reference[i] / shot[i];
     }
-    let xy = Xy::from_xyz(inverse.apply(old));
+    let xy = Xy::from_xyz(inverse.apply(old))?;
     if !(xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0) {
         return None;
     }

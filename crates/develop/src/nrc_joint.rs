@@ -290,41 +290,53 @@ fn path_weight(distance: f32, path: f32) -> f32 {
 /// ambiguous structure uses the isotropic pilot, so noise alone does not protect itself.
 /// Written straight into planes (see `Planes`), one row at a time without branches per pixel.
 fn pilot(original: &Rgb32f, noise: &JointNoise) -> Planes {
-    use rayon::prelude::*;
     let blurred = gaussian(original, 0.8);
     let (w, h) = (original.width, original.height);
     let mut planes = Planes { c: std::array::from_fn(|_| vec![0.0; original.len()]), w };
     let [py, pu, pv] = &mut planes.c;
-    py.par_chunks_mut(w.max(1)).zip(pu.par_chunks_mut(w.max(1))).zip(pv.par_chunks_mut(w.max(1))).enumerate().for_each_init(
-        Vec::new,
-        |out: &mut Vec<[f32; 3]>, (y, ((ry, ru), rv))| {
-            let Some(blur) = blurred.data.get(y * w..(y + 1) * w) else { return };
-            out.clear();
-            out.extend_from_slice(blur);
-            if y > 0
-                && y + 1 < h
-                && let (Some(up), Some(mid), Some(down)) =
-                    (original.data.get((y - 1) * w..y * w), original.data.get(y * w..(y + 1) * w), original.data.get((y + 1) * w..(y + 2) * w))
-            {
-                // columns 1 .. w − 1: the pixel, its left/right (axis 0) and upper/lower (axis 1) neighbours
-                for (((o, win), &u), &d) in out.iter_mut().skip(1).zip(mid.windows(3)).zip(up.iter().skip(1)).zip(down.iter().skip(1)) {
-                    let &[l, p, r] = win else { continue };
-                    let var: [f32; 3] = std::array::from_fn(|i| 9.0 * noise.var(i, p[0]));
-                    let axis = |a: [f32; 3], b: [f32; 3]| {
-                        let m: [f32; 3] = std::array::from_fn(|i| (a[i] + p[i] + b[i]) / 3.0);
-                        let t = |i: usize| ((a[i] - m[i]).powi(2) + (p[i] - m[i]).powi(2) + (b[i] - m[i]).powi(2)) / var[i];
-                        (m, t(0) + t(1) + t(2))
-                    };
-                    let (mh, vh) = axis(l, r);
-                    let (mv, vvar) = axis(u, d);
-                    *o = pilot_pick(*o, mh, vh, mv, vvar);
-                }
+    let process_row = |out: &mut Vec<[f32; 3]>, y: usize, ry: &mut [f32], ru: &mut [f32], rv: &mut [f32]| {
+        let Some(blur) = blurred.data.get(y * w..(y + 1) * w) else { return };
+        out.clear();
+        out.extend_from_slice(blur);
+        if y > 0
+            && y + 1 < h
+            && let (Some(up), Some(mid), Some(down)) =
+                (original.data.get((y - 1) * w..y * w), original.data.get(y * w..(y + 1) * w), original.data.get((y + 1) * w..(y + 2) * w))
+        {
+            // columns 1 .. w − 1: the pixel, its left/right (axis 0) and upper/lower (axis 1) neighbours
+            for (((o, win), &u), &d) in out.iter_mut().skip(1).zip(mid.windows(3)).zip(up.iter().skip(1)).zip(down.iter().skip(1)) {
+                let &[l, p, r] = win else { continue };
+                let var: [f32; 3] = std::array::from_fn(|i| 9.0 * noise.var(i, p[0]));
+                let axis = |a: [f32; 3], b: [f32; 3]| {
+                    let m: [f32; 3] = std::array::from_fn(|i| (a[i] + p[i] + b[i]) / 3.0);
+                    let t = |i: usize| ((a[i] - m[i]).powi(2) + (p[i] - m[i]).powi(2) + (b[i] - m[i]).powi(2)) / var[i];
+                    (m, t(0) + t(1) + t(2))
+                };
+                let (mh, vh) = axis(l, r);
+                let (mv, vvar) = axis(u, d);
+                *o = pilot_pick(*o, mh, vh, mv, vvar);
             }
-            for (((c, y), u), v) in out.iter().zip(ry.iter_mut()).zip(ru.iter_mut()).zip(rv.iter_mut()) {
-                (*y, *u, *v) = (c[0], c[1], c[2]);
-            }
-        },
-    );
+        }
+        for (((c, y), u), v) in out.iter().zip(ry.iter_mut()).zip(ru.iter_mut()).zip(rv.iter_mut()) {
+            (*y, *u, *v) = (c[0], c[1], c[2]);
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        py.par_chunks_mut(w.max(1))
+            .zip(pu.par_chunks_mut(w.max(1)))
+            .zip(pv.par_chunks_mut(w.max(1)))
+            .enumerate()
+            .for_each_init(Vec::new, |out, (y, ((ry, ru), rv))| process_row(out, y, ry, ru, rv));
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut out = Vec::new();
+        for (y, ((ry, ru), rv)) in py.chunks_mut(w.max(1)).zip(pu.chunks_mut(w.max(1))).zip(pv.chunks_mut(w.max(1))).enumerate() {
+            process_row(&mut out, y, ry, ru, rv);
+        }
+    }
     planes
 }
 
@@ -542,39 +554,39 @@ fn speck_share(p: [f32; 3], ring: &[[f32; 3]; 8], rest: impl Iterator<Item = [f3
 /// transformed image (Y, R−Y, B−Y); luminance is never touched. Runs before the guide is built, so a speck
 /// is neither kept by the edge-aware weights nor spread by them.
 fn despeck(img: &mut Rgb32f, noise: &JointNoise, brake: SpeckBrake) {
-    use rayon::prelude::*;
     if brake.share <= 0.0 || img.width < 5 || img.height < 5 {
         return;
     }
     let (w, h) = (img.width, img.height);
     let source = &*img;
-    // few pixels change: collect their new chroma per row from the unchanged image, then write them
-    let changes: Vec<Vec<(usize, [f32; 2])>> = (2..h - 2)
-        .into_par_iter()
-        .map(|y| {
-            let mut changed = Vec::new();
-            let rows: [Option<&[[f32; 3]]>; 5] = std::array::from_fn(|k| source.data.get((y + k - 2) * w..(y + k - 1) * w));
-            let [Some(r0), Some(r1), Some(r2), Some(r3), Some(r4)] = rows else { return changed };
-            for (x, ((((w0, w1), w2), w3), w4)) in
-                r0.windows(5).zip(r1.windows(5)).zip(r2.windows(5)).zip(r3.windows(5)).zip(r4.windows(5)).enumerate()
-            {
-                let (&[a0, a1, a2, a3, a4], &[b0, _, _, _, b4], &[c0, _, p, _, c4], &[d0, _, _, _, d4], &[e0, e1, e2, e3, e4]) = (w0, w1, w2, w3, w4)
-                else {
-                    continue;
-                };
-                // the ring: corners and edge centres of the 5 × 5 square, far enough that a speck spread over
-                // its direct neighbours by demosaicing does not reach them; the rest of the border: with the
-                // ring, every thin line or edge through the pixel crosses at least one of the 16 at any angle
-                let ring = [a0, a2, a4, c0, c4, e0, e2, e4];
-                let rest = [a1, a3, b0, b4, d0, d4, e1, e3];
-                let (k, m) = speck_share(p, &ring, rest.into_iter(), noise, brake);
-                if k > 0.0 {
-                    changed.push((y * w + x + 2, [p[1] + k * (m[1] - p[1]), p[2] + k * (m[2] - p[2])]));
-                }
+    let process_row = |y: usize| {
+        let mut changed = Vec::new();
+        let rows: [Option<&[[f32; 3]]>; 5] = std::array::from_fn(|k| source.data.get((y + k - 2) * w..(y + k - 1) * w));
+        let [Some(r0), Some(r1), Some(r2), Some(r3), Some(r4)] = rows else { return changed };
+        for (x, ((((w0, w1), w2), w3), w4)) in r0.windows(5).zip(r1.windows(5)).zip(r2.windows(5)).zip(r3.windows(5)).zip(r4.windows(5)).enumerate() {
+            let (&[a0, a1, a2, a3, a4], &[b0, _, _, _, b4], &[c0, _, p, _, c4], &[d0, _, _, _, d4], &[e0, e1, e2, e3, e4]) = (w0, w1, w2, w3, w4)
+            else {
+                continue;
+            };
+            // the ring: corners and edge centres of the 5 × 5 square, far enough that a speck spread over
+            // its direct neighbours by demosaicing does not reach them; the rest of the border: with the
+            // ring, every thin line or edge through the pixel crosses at least one of the 16 at any angle
+            let ring = [a0, a2, a4, c0, c4, e0, e2, e4];
+            let rest = [a1, a3, b0, b4, d0, d4, e1, e3];
+            let (k, m) = speck_share(p, &ring, rest.into_iter(), noise, brake);
+            if k > 0.0 {
+                changed.push((y * w + x + 2, [p[1] + k * (m[1] - p[1]), p[2] + k * (m[2] - p[2])]));
             }
-            changed
-        })
-        .collect();
+        }
+        changed
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let changes: Vec<Vec<(usize, [f32; 2])>> = {
+        use rayon::prelude::*;
+        (2..h - 2).into_par_iter().map(process_row).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let changes: Vec<Vec<(usize, [f32; 2])>> = (2..h - 2).map(process_row).collect();
     for (index, uv) in changes.into_iter().flatten() {
         if let Some(o) = img.data.get_mut(index) {
             (o[1], o[2]) = (uv[0], uv[1]);
@@ -663,28 +675,38 @@ fn denoise_with(img: &mut Rgb32f, params: &NrcParams, step: usize, detail: f32, 
             distance_run(a, b, &noise, dv);
         }
     };
+    let init_row = |(dh, dv): &mut (Vec<f32>, Vec<f32>), y: usize, prow: &mut [[f32; 2]], lrow: &mut [[f32; 2]]| {
+        row_distances(y, 1, dh, dv);
+        for (x, (((out, link), &d0), &d1)) in prow.iter_mut().zip(lrow.iter_mut()).zip(dh.iter()).zip(dv.iter()).enumerate() {
+            *link = [0.0; 2];
+            *out = [1.0; 2];
+            if x + 1 < w {
+                link[0] = weight(d0, d0);
+                out[0] = link[0];
+            }
+            if y + 1 < h {
+                link[1] = weight(d1, d1);
+                out[1] = link[1];
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        paths.data.par_chunks_mut(w).zip(links.data.par_chunks_mut(w)).enumerate().for_each_init(
-            || (Vec::new(), Vec::new()),
-            |(dh, dv), (y, (prow, lrow))| {
-                row_distances(y, 1, dh, dv);
-                for (x, (((out, link), &d0), &d1)) in prow.iter_mut().zip(lrow.iter_mut()).zip(dh.iter()).zip(dv.iter()).enumerate() {
-                    *link = [0.0; 2];
-                    *out = [1.0; 2];
-                    if x + 1 < w {
-                        link[0] = weight(d0, d0);
-                        out[0] = link[0];
-                    }
-                    if y + 1 < h {
-                        link[1] = weight(d1, d1);
-                        out[1] = link[1];
-                    }
-                }
-            },
-        );
+        paths
+            .data
+            .par_chunks_mut(w)
+            .zip(links.data.par_chunks_mut(w))
+            .enumerate()
+            .for_each_init(|| (Vec::new(), Vec::new()), |bufs, (y, (prow, lrow))| init_row(bufs, y, prow, lrow));
     }
-    lap("links 1", &mut tt);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut bufs = (Vec::new(), Vec::new());
+        for (y, (prow, lrow)) in paths.data.chunks_mut(w).zip(links.data.chunks_mut(w)).enumerate() {
+            init_row(&mut bufs, y, prow, lrow);
+        }
+    }
     // Scale is independent of the edge decision. K has no role in deciding whether a leaf
     // is noise. Two dyadic sweeps provide broad smoothing with a fixed number of scales.
     let sigma = params.passes.last().map_or(0.0, |p| p.sigma / step as f32);
@@ -696,41 +718,51 @@ fn denoise_with(img: &mut Rgb32f, params: &NrcParams, step: usize, detail: f32, 
             diffuse(&filtered, &mut scratch, &links, delta, true, rate);
             std::mem::swap(&mut filtered, &mut scratch);
         }
-        lap(&format!("scale {delta}"), &mut tt);
         let Some(&(next, _)) = plan.get(k + 1) else { break };
         // In one pass: paths of length 2·delta (from the two adjacent delta-length paths, read from
         // `paths`, written to `scratch`) and the next scale's pair weights from them.
+        let old = &paths;
+        let step_row = |(dh, dv): &mut (Vec<f32>, Vec<f32>), y: usize, prow: &mut [[f32; 2]], lrow: &mut [[f32; 2]]| {
+            row_distances(y, next, dh, dv);
+            let (Some(here), below) = (old.data.get(y * w..(y + 1) * w), old.data.get((y + delta) * w..(y + delta + 1) * w)) else { return };
+            for (x, (((out, link), &d0), &d1)) in prow.iter_mut().zip(lrow.iter_mut()).zip(dh.iter()).zip(dv.iter()).enumerate() {
+                let Some(&p) = here.get(x) else { continue };
+                *out = p;
+                if x + delta < w
+                    && let Some(q) = here.get(x + delta)
+                {
+                    out[0] = out[0].min(q[0]);
+                }
+                if y + delta < h
+                    && let Some(q) = below.and_then(|b| b.get(x))
+                {
+                    out[1] = out[1].min(q[1]);
+                }
+                *link = [0.0; 2];
+                if x + next < w {
+                    link[0] = path_weight(d0, out[0]);
+                }
+                if y + next < h {
+                    link[1] = path_weight(d1, out[1]);
+                }
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
-            let old = &paths;
-            scratch.data.par_chunks_mut(w).zip(links.data.par_chunks_mut(w)).enumerate().for_each_init(
-                || (Vec::new(), Vec::new()),
-                |(dh, dv), (y, (prow, lrow))| {
-                    row_distances(y, next, dh, dv);
-                    let (Some(here), below) = (old.data.get(y * w..(y + 1) * w), old.data.get((y + delta) * w..(y + delta + 1) * w)) else { return };
-                    for (x, (((out, link), &d0), &d1)) in prow.iter_mut().zip(lrow.iter_mut()).zip(dh.iter()).zip(dv.iter()).enumerate() {
-                        let Some(&p) = here.get(x) else { continue };
-                        *out = p;
-                        if x + delta < w
-                            && let Some(q) = here.get(x + delta)
-                        {
-                            out[0] = out[0].min(q[0]);
-                        }
-                        if y + delta < h
-                            && let Some(q) = below.and_then(|b| b.get(x))
-                        {
-                            out[1] = out[1].min(q[1]);
-                        }
-                        *link = [0.0; 2];
-                        if x + next < w {
-                            link[0] = path_weight(d0, out[0]);
-                        }
-                        if y + next < h {
-                            link[1] = path_weight(d1, out[1]);
-                        }
-                    }
-                },
-            );
+            scratch
+                .data
+                .par_chunks_mut(w)
+                .zip(links.data.par_chunks_mut(w))
+                .enumerate()
+                .for_each_init(|| (Vec::new(), Vec::new()), |bufs, (y, (prow, lrow))| step_row(bufs, y, prow, lrow));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut bufs = (Vec::new(), Vec::new());
+            for (y, (prow, lrow)) in scratch.data.chunks_mut(w).zip(links.data.chunks_mut(w)).enumerate() {
+                step_row(&mut bufs, y, prow, lrow);
+            }
         }
         std::mem::swap(&mut paths, &mut scratch);
     }

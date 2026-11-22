@@ -2,7 +2,7 @@
 //! statistics on a proxy).
 
 use craft_color_transform::cct::xy_to_temp_tint;
-use craft_color_transform::{Mat3, REC2020, Xy, bradford};
+use craft_color_transform::{REC2020, Xy, bradford};
 use craft_develop_model::DevelopSettings;
 use serde::Serialize;
 
@@ -174,7 +174,10 @@ pub fn auto_wb_with(src: &Rgb32f, info: &WbSource, neutral_white: Option<&dyn Fn
         Some(white) => white,
         None => {
             let shot = craft_color_transform::cct::temp_tint_to_xy(info.as_shot_temp, info.as_shot_tint);
-            Xy::from_xyz(bradford(REC2020.white, shot).apply(REC2020.to_xyz().apply(avg)))
+            let Some(white) = Xy::from_xyz(bradford(REC2020.white, shot).apply(REC2020.to_xyz().apply(avg))) else {
+                return (info.as_shot_temp, info.as_shot_tint);
+            };
+            white
         }
     };
     let (t, tint) = xy_to_temp_tint(seen);
