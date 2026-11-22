@@ -1,5 +1,5 @@
-//! A link side label reports its click to the control's host and leaves focus alone; a drag on it still scrubs, and a
-//! plain label beside it still focuses its control.
+//! A link side label is a link to assistive technology, reports its click to the control's host and leaves focus alone;
+//! a drag on it still scrubs, and a plain label beside it still focuses its control.
 
 use super::kit::{Dial, Field, Seen};
 use super::{ROW_A, START};
@@ -50,6 +50,11 @@ fn a_link_label_reports_its_click_to_the_host_and_still_scrubs() {
         shown.1.show(ui, "plain", SideLabel::new().scrub(true), ROW_B);
     });
     fixture.settle();
+    let links = fixture.by_role(craft_ui::runtime::access::Role::LINK);
+    assert!(
+        links.len() == 1 && links[0].rect.contains(link.label_at()),
+        "the link label is a link to assistive technology, the plain one is not: {links:?}"
+    );
 
     fixture.click_at(link.label_at());
     assert!(link.linked.get(), "a click on a link label reports to the host");

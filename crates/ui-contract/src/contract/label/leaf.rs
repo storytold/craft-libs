@@ -147,6 +147,8 @@ impl LabelLeaf {
 
 impl Component for LabelLeaf {
     const ROLE: crate::contract::Role = crate::contract::Role::LABEL;
+    // A link label is a link to assistive technology too, not a second name of its control.
+    const ALT_ROLES: &'static [crate::contract::Role] = &[crate::contract::Role::LINK];
     const OVERLAYS: bool = false;
     // The label is no key target: Enter and Space go to its control, which a click on the label focuses.
     const KEYS: crate::runtime::focus::KeyUse =
@@ -266,6 +268,9 @@ impl Component for LabelLeaf {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        if self.link {
+            access.role(crate::contract::Role::LINK);
+        }
         if let Some(words) = &self.words {
             access.name(Name::Text(words.clone()));
         }
