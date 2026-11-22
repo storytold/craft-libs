@@ -1385,14 +1385,10 @@ impl Graph {
         s
     }
 
-    /// Flatten into a self-contained package: embeds bitmaps and the graphs of live links, drops editor-only data. A
-    /// link that is not resolved (see [`Graph::resolve_links`]) is an error: its graphs cannot be embedded.
+    /// Flatten into a self-contained package: embeds bitmaps, drops editor-only data.
     pub fn publish(&self) -> Result<String, Error> {
         self.validate()?;
         let mut g = self.clone();
-        for name in g.links.iter().map(|l| l.name.clone()).collect::<Vec<_>>() {
-            g.break_link(&name).map_err(|m| Error::BadParam(0, m))?;
-        }
         g.comments.clear();
         let mut res = std::mem::take(&mut g.resources);
         let mut seen: HashMap<String, String> = HashMap::new();

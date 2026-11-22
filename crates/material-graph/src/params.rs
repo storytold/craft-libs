@@ -114,6 +114,8 @@ mod tests {
         g.keep_outputs(&["last"]).unwrap();
         assert!(!g.nodes.contains_key(&4), "an output nobody needs is dropped");
         let out = g.evaluate(None).expect("the kept output still has what it reads");
+        // `mid` stays because `last` reads it, so it is evaluated and shows in the result as well
+        assert_eq!(out.keys().collect::<Vec<_>>(), ["last", "mid"]);
         assert_eq!(out["last"].px[0], [1.0, 0.0, 0.0, 1.0]);
     }
 }

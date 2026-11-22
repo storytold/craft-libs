@@ -459,3 +459,33 @@ fn binary(op: B, a: &str, b: &str, n: usize) -> Option<String> {
         B::And | B::Or | B::Xor => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::Graph;
+    use std::collections::BTreeMap;
+
+    /// The pixel shader of a single-precision function made of `body`, if it can be lowered.
+    fn shader(body: &str) -> Option<PixelShader> {
+        let g = Graph::parse_unchecked(&format!("meta kind \"function\"\nmeta float32 \"1\"\n{body}")).unwrap();
+        Prog::compile(&g, &BTreeMap::new()).unwrap().pixel_shader(&FnEnv::new([8.0, 8.0]))
+    }
+
+    /// A float2 is true when one of its lanes is: comparing a `vec2f` with the scalar `0.0` is not valid WGSL.
+    #[test]
+    fn a_vector_is_reduced_to_a_bool_with_any() {
+        let s = shader("node 1 f_pos\nnode 2 f_to_bool a=@1\nnode 3 f_out in=@2\n").expect("a shader for the position test");
+        assert!(s.source.contains("any(") && s.source.contains("!= vec2f(0.0))"), "{}", s.source);
+        let s = shader("node 1 f_pos\nnode 4 f_swizzle a=@1 mask=\"x\"\nnode 2 f_to_bool a=@4\nnode 3 f_out in=@2\n").expect("a shader for the scalar");
+        assert!(!s.source.contains("any("), "a scalar is compared as it is: {}", s.source);
+    }
+
+    /// A linked vector fills several lanes of the vector on the CPU, which `vec2f(r1, 0.5)` in WGSL would not say.
+    #[test]
+    fn a_vector_part_of_a_vector_is_left_to_the_cpu() {
+        assert!(shader("node 1 f_pos\nnode 2 f_vec4 x=@1 y=0.5\nnode 3 f_out in=@2\n").is_none());
+        // scalar parts still lower
+        assert!(shader("node 1 f_pos\nnode 4 f_swizzle a=@1 mask=\"x\"\nnode 2 f_vec4 x=@4 y=0.5\nnode 3 f_out in=@2\n").is_some());
+    }
+}

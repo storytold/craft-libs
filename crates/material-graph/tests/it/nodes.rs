@@ -1175,25 +1175,6 @@ fn an_imported_graph_keeps_the_functions_it_runs() {
 }
 
 #[test]
-fn publish_embeds_the_graphs_of_live_links() {
-    let dir = std::env::temp_dir().join(format!("tc_graph_publish_links_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("pat.tcgraph"), "size 16\nnode 1 perlin scale=4\noutput o 1\n").unwrap();
-    std::fs::write(dir.join("main.tcgraph"), "size 16\nlink pat \"pat.tcgraph\"\nnode 1 subgraph graph=\"pat\"\noutput o 1\n").unwrap();
-    let (g, issues) = Graph::load_file(&dir.join("main.tcgraph")).unwrap();
-    assert!(issues.is_empty(), "{issues:?}");
-    let pkg = g.publish().unwrap();
-    assert!(!pkg.contains("link pat") && pkg.contains("subgraph pat"), "{pkg}");
-    std::fs::remove_file(dir.join("pat.tcgraph")).unwrap();
-    let out = Graph::parse(&pkg).unwrap().evaluate(None).unwrap();
-    assert_eq!(out["o"].px, g.evaluate(None).unwrap()["o"].px, "the package renders without the linked file");
-    // a link that was never resolved has nothing to embed
-    let loose = Graph::parse("size 16\nlink pat \"pat.tcgraph\"\nnode 1 subgraph graph=\"pat\"\noutput o 1\n").unwrap();
-    assert!(loose.publish().is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn extracting_nodes_keeps_the_output_pins_that_are_read() {
     let text = "size 16\nnode 1 color r=0.9 g=0.2 b=0.4\nnode 2 rgba_split in=@1\nnode 3 invert in=@2.g\noutput o 3\n";
     let before = Graph::parse(text).unwrap().evaluate(None).unwrap();
