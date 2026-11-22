@@ -142,6 +142,18 @@ fn hostile_whole_package_encryption_is_refused() {
     assert!(matches!(decrypt(&whole_package(b"just text", "pw", SMALL_COSTS, None), "pw"), Err(CryptError::Unsupported(_))));
     let nested = whole_package(&whole_package(&plain, "pw", SMALL_COSTS, None), "pw", SMALL_COSTS, None);
     assert!(matches!(decrypt(&nested, "pw"), Err(CryptError::Unsupported(_))));
+    // An encrypted entry hidden past the manifest's entry limit is still found.
+    let mut manifest = String::from(r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0">"#);
+    for i in 0..crate::manifest::MAX_ENTRIES {
+        manifest.push_str(&format!(r#"<manifest:file-entry manifest:full-path="f{i}" manifest:media-type=""/>"#));
+    }
+    manifest.push_str(r#"<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"><manifest:encryption-data><manifest:algorithm manifest:algorithm-name="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/></manifest:encryption-data></manifest:file-entry></manifest:manifest>"#);
+    let hidden = zip_of(&[
+        ("mimetype", b"application/vnd.oasis.opendocument.text"),
+        ("META-INF/manifest.xml", manifest.as_bytes()),
+        ("content.xml", &[0u8; 32]),
+    ]);
+    assert!(matches!(decrypt(&whole_package(&hidden, "pw", SMALL_COSTS, None), "pw"), Err(CryptError::Unsupported(_))));
 }
 
 #[test]
