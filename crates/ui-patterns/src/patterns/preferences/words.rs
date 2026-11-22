@@ -8,7 +8,9 @@ craft_ui::words! {
         search_label: "preferences.searchLabel" = "Search settings";
         search_placeholder: "preferences.searchPlaceholder" = "Search";
         clear_search: "preferences.clearSearch" = "Clear search";
-        pages_label: "preferences.pagesLabel" = "Pages";
+        pages_label: "preferences.pagesLabel" = "Settings";
+        match_one: template "preferences.matchOne" = "{n} match";
+        match_other: template "preferences.matchOther" = "{n} matches";
         no_matches: "preferences.noMatches" = "No matching settings";
         empty_page: "preferences.emptyPage" = "These settings aren't available yet.";
         apply: "preferences.apply" = "Apply";

@@ -1,33 +1,22 @@
-//! The contents of the preferences window: a search field over a page list and the shown page.
+//! The contents of the preferences window: a search field with its match count over one scrolling page of cards.
 
 use super::model::{PageSpec, PrefValue, PreferencesModel};
 use super::rows::{RowsOut, ShownRow, reset_button, show_row};
 use super::search::{self, Listed};
 use super::window::PreferencesState;
 use super::words::PreferencesWords;
-use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
-};
-use crate::display::{Divider, Shade, Text};
+use crate::contract::{Bind, Pad, Props as _, Scroll, Show as _, ShowContainer as _};
+use crate::display::{Shade, Text};
 use crate::form::FieldGroup;
 use crate::layout_components::{Row, Stack};
-use crate::list::{List, ListRow, RowInk};
 use crate::notices::{Notice, NoticeLayout};
-use crate::runtime::env::{Label, Units};
+use crate::runtime::env::{Env, Label, Units};
 use crate::sections::Section;
-use crate::style::TypeRole;
+use crate::style::{SurfaceKind, TypeRole};
 use crate::text::TextField;
-use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
 use egui::Ui;
-
-/// One entry of the page list.
-pub(super) struct PageEntry {
-    pub id: String,
-    pub title: Label,
-    pub dimmed: bool,
-}
 
 /// A group of the shown page: its title and the rows the search keeps.
 struct ShownGroup {
@@ -44,24 +33,33 @@ pub(super) struct ShownPage {
     groups: Vec<ShownGroup>,
 }
 
-/// What the host's pages look like under the search: the pages to list and the page to show.
+/// What the host's pages look like under the search: the cards to show, in order, and how many matches the search
+/// found.
 pub(super) struct Snapshot {
-    pub list: Vec<PageEntry>,
-    pub shown: Option<ShownPage>,
+    pub shown: Vec<ShownPage>,
     pub searching: bool,
+    /// The settings the search matched: rows whose text matches, and a listed page that has none counts itself.
+    pub matches: usize,
 }
 
-/// The listed pages of `host` under `matcher`, and the part of the selected page the search keeps (the first listed
-/// page when the search hides the selected one).
-pub(super) fn snapshot<H: PreferencesModel + ?Sized>(host: &H, matcher: &Matcher, selected: &str) -> Snapshot {
+/// The cards of `host` under `matcher`: every listed page, each with the rows the search keeps.
+pub(super) fn snapshot<H: PreferencesModel + ?Sized>(host: &H, matcher: &Matcher) -> Snapshot {
     let pages = host.pages();
     let listed = search::list_pages(&pages, matcher);
-    let list = listed
+    let searching = !matcher.is_empty();
+    let mut matches = 0;
+    let shown = listed
         .iter()
-        .map(|l| PageEntry { id: pages[l.index].id.to_owned(), title: Label::from(pages[l.index].title.to_owned()), dimmed: l.dimmed })
+        .map(|l| {
+            let page = &pages[l.index];
+            if searching {
+                let rows = page.groups.iter().flat_map(|g| &g.rows).filter(|r| r.visible && search::row_matches(matcher, r)).count();
+                matches += rows.max(usize::from(!page.has_content() || l.all_rows && rows == 0));
+            }
+            shown_page(matcher, l, page)
+        })
         .collect();
-    let shown = search::shown_position(&listed, &pages, selected).map(|at| shown_page(matcher, &listed[at], &pages[listed[at].index]));
-    Snapshot { list, shown, searching: !matcher.is_empty() }
+    Snapshot { shown, searching, matches }
 }
 
 fn shown_page(matcher: &Matcher, listed: &Listed, page: &PageSpec<'_>) -> ShownPage {
@@ -86,7 +84,8 @@ fn shown_page(matcher: &Matcher, listed: &Listed, page: &PageSpec<'_>) -> ShownP
 #[derive(Default)]
 pub(super) struct BodyOut {
     pub rows: RowsOut,
-    pub reset: bool,
+    /// The page whose Reset Section was pressed.
+    pub reset: Option<String>,
     pub custom_changed: bool,
 }
 
@@ -96,27 +95,8 @@ impl BodyOut {
     }
 }
 
-/// The page list's rows: one per listed page, keyed by the page id.
-struct Pages<'a>(&'a [PageEntry]);
-
-impl DisplayOrder<String> for Pages<'_> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn key(&self, at: usize) -> String {
-        self.0[at].id.clone()
-    }
-
-    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
-        Some(std::borrow::Cow::Borrowed(self.0[at].title.as_str()))
-    }
-}
-
-impl ItemSource<String> for Pages<'_> {}
-
-/// Shows the search field, the page list and the page. `state.search` and `state.selected` change as the user types
-/// and picks.
+/// Shows the search field with its match count over the cards: one scrolling page, a card per page. `state.search`
+/// changes as the user types; a `state.selected` the page has not scrolled to yet is brought into view once.
 pub(super) fn show_body<H: PreferencesModel + ?Sized>(
     ui: &mut Ui,
     host: &mut H,
@@ -126,49 +106,38 @@ pub(super) fn show_body<H: PreferencesModel + ?Sized>(
     units: &Units,
     out: &mut BodyOut,
 ) {
-    let list_id = ui.scope_id().with("pages");
-    TextField::search(words.search_label.clone(), Bind::bound(&mut state.search))
-        .placeholder(words.search_placeholder.clone())
-        .drives(list_id)
-        .show(ui);
-    let Some(page) = &snap.shown else {
+    Row::new().fill_width().show(ui, |ui, _| {
+        TextField::search(words.search_label.clone(), Bind::bound(&mut state.search)).placeholder(words.search_placeholder.clone()).show(ui);
+        if snap.searching {
+            let env = Env::of(ui);
+            let n = env.format().integer(snap.matches as u64);
+            let text = if snap.matches == 1 { words.match_one.fill(&[("n", &n)]) } else { words.match_other.fill(&[("n", &n)]) };
+            let shade = if snap.matches == 0 { Shade::Faint } else { Shade::Muted };
+            Text::new(text).role(TypeRole::Caption).shade(shade).show(ui);
+        }
+    });
+    if snap.shown.is_empty() {
         Notice::new(Tone::Info, words.no_matches.clone()).layout(NoticeLayout::Centred).show(ui);
         return;
-    };
-    Row::new().fill().show(ui, |ui, _| {
-        let current = Selection::single(page.id.clone());
-        let source = Pages(&snap.list);
-        let listed = List::<String>::new(words.pages_label.clone())
-            .id(list_id)
-            .select(SelectMode::Single)
-            .activate(ActivateOn::Click)
-            .allow_empty(false)
-            .header(false)
-            .sizing(Sizing::Content)
-            .selection(Bind::given(current))
-            .show_items(ui, &source, &mut |key, _| {
-                let entry = snap.list.iter().find(|entry| entry.id == *key);
-                let row = ListRow::new(entry.map_or_else(Label::default, |entry| entry.title.clone()));
-                if entry.is_some_and(|entry| entry.dimmed) { row.ink(RowInk::Dimmed) } else { row }
-            });
-        for event in listed.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
-                && let Some(key) = keys.into_iter().last()
-            {
-                state.selected = key;
+    }
+    // The scroll goes to the page the host named once, when it is first shown or changes.
+    let jump = !state.selected.is_empty() && state.scrolled_to != state.selected && snap.shown.iter().any(|page| page.id == state.selected);
+    Stack::new().fill().scroll(Scroll::vertical()).label(words.pages_label.clone()).show(ui, |ui, _| {
+        for page in &snap.shown {
+            let top = ui.cursor().min;
+            show_card(ui, host, page, snap.searching, words, units, out);
+            if jump && page.id == state.selected {
+                ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(1.0, 1.0)), Some(egui::Align::TOP));
             }
         }
-        Divider::vertical().show(ui);
-        Stack::new()
-            .fill()
-            .scroll(Scroll::vertical())
-            .label(page.title.clone())
-            .show(ui, |ui, _| show_page(ui, host, page, snap.searching, words, units, out));
     });
+    if jump {
+        state.scrolled_to = state.selected.clone();
+    }
 }
 
-/// The page's title, groups, footnote and Reset Section.
-fn show_page<H: PreferencesModel + ?Sized>(
+/// One page as a card: its title, groups, footnote and Reset Section.
+fn show_card<H: PreferencesModel + ?Sized>(
     ui: &mut Ui,
     host: &mut H,
     page: &ShownPage,
@@ -177,32 +146,34 @@ fn show_page<H: PreferencesModel + ?Sized>(
     units: &Units,
     out: &mut BodyOut,
 ) {
-    Text::new(page.title.clone()).role(TypeRole::Title).show(ui);
-    if page.custom {
-        Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_page(ui, &page.id));
-    } else if page.groups.is_empty() && !searching {
-        Notice::new(Tone::Info, words.empty_page.clone()).layout(NoticeLayout::Centred).show(ui);
-    }
-    for (at, group) in page.groups.iter().enumerate() {
-        let mut rows = |ui: &mut Ui| {
-            let name = group.title.clone().unwrap_or_else(|| page.title.clone());
-            FieldGroup::new(name).show(ui, |ui, _| {
-                for row in &group.rows {
-                    show_row(ui, host, row, units, &mut out.rows);
-                }
-            });
-        };
-        match &group.title {
-            Some(title) => {
-                Section::fixed(title.clone()).id_salt(at).show(ui, |ui, _| rows(ui));
-            }
-            None => rows(ui),
+    Stack::new().fill_width().surface(SurfaceKind::Raised).pad(Pad::Regular).label(page.title.clone()).id_salt(page.id.as_str()).show(ui, |ui, _| {
+        Text::new(page.title.clone()).role(TypeRole::Heading).show(ui);
+        if page.custom {
+            Stack::new().show(ui, |ui, _| out.custom_changed |= host.custom_page(ui, &page.id));
+        } else if page.groups.is_empty() && !searching {
+            Notice::new(Tone::Info, words.empty_page.clone()).layout(NoticeLayout::Centred).show(ui);
         }
-    }
-    if let Some(note) = &page.footnote {
-        Text::new(note.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-    }
-    if !searching && (page.custom || !page.groups.is_empty()) && reset_button(ui, words.reset_section.clone()) {
-        out.reset = true;
-    }
+        for (at, group) in page.groups.iter().enumerate() {
+            let mut rows = |ui: &mut Ui| {
+                let name = group.title.clone().unwrap_or_else(|| page.title.clone());
+                FieldGroup::new(name).show(ui, |ui, _| {
+                    for row in &group.rows {
+                        show_row(ui, host, row, units, &mut out.rows);
+                    }
+                });
+            };
+            match &group.title {
+                Some(title) => {
+                    Section::fixed(title.clone()).id_salt(at).show(ui, |ui, _| rows(ui));
+                }
+                None => rows(ui),
+            }
+        }
+        if let Some(note) = &page.footnote {
+            Text::new(note.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        }
+        if !searching && (page.custom || !page.groups.is_empty()) && reset_button(ui, words.reset_section.clone()) {
+            out.reset = Some(page.id.clone());
+        }
+    });
 }

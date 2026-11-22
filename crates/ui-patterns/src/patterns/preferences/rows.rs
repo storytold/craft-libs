@@ -2,7 +2,9 @@
 
 use super::model::{PrefValue, PreferencesModel, RowKind, RowSpec};
 use crate::buttons::Button;
-use crate::choice::{Checkbox, Swatch};
+use crate::choice::{Checkbox, Segmented, Swatch};
+use crate::display::{Shade, Text};
+use crate::style::TypeRole;
 use crate::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::form::{Field, Help};
 use crate::layout_components::{Row, Stack};
@@ -23,6 +25,7 @@ pub(super) struct ShownRow {
     pub label: Label,
     pub help: Option<Label>,
     pub enabled: bool,
+    pub pills: Option<bool>,
     pub kind: Kind,
 }
 
@@ -65,6 +68,7 @@ impl ShownRow {
             label: Label::from(row.label.to_owned()),
             help: row.help.map(|help| Label::from(help.to_owned())),
             enabled: row.enabled,
+            pills: row.pills,
             kind,
         }
     }
@@ -95,6 +99,28 @@ fn counted_option(units: &Units, kind: UnitKind, option: &Entry<String>) -> Entr
     match option.value().map(|id| (id, id.parse::<f64>())) {
         Some((id, Ok(n))) => Entry::new(id.clone(), units.show(kind, n)).enabled(option.is_enabled()),
         _ => option.clone(),
+    }
+}
+
+/// The most options and the most label characters of a choice shown as a segmented control; a longer choice is a
+/// drop-down.
+const SEGMENTS_MAX: usize = 5;
+const SEGMENTS_CHARS: usize = 48;
+
+fn as_segments(options: &[Entry<String>], unit: Option<UnitKind>, pills: Option<bool>) -> bool {
+    let plain = options.iter().all(|option| !option.is_separator());
+    let count = options.len();
+    let chars: usize = options.iter().map(|option| option.label().as_str().chars().count()).sum();
+    match pills {
+        Some(want) => want && plain && count >= 2,
+        None => plain && unit.is_none() && (2..=SEGMENTS_MAX).contains(&count) && chars <= SEGMENTS_CHARS,
+    }
+}
+
+/// The help line under a row: a caption in the muted shade.
+fn help_line(ui: &mut Ui, help: &Option<Label>) {
+    if let Some(help) = help {
+        Text::new(help.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     }
 }
 
@@ -132,14 +158,19 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
                 }
                 None => options,
             };
-            field().show(ui, |ui, _| {
-                next = Select::new(label.clone(), Bind::given(value.clone()), options).show(ui).events.landed().cloned();
+            let segments = as_segments(options, *unit, row.pills);
+            inline(ui, row, |ui| {
+                next = if segments {
+                    Segmented::new(label.clone(), Bind::given(value.clone()), options).show(ui).value().cloned()
+                } else {
+                    Select::new(label.clone(), Bind::given(value.clone()), options).show(ui).events.landed().cloned()
+                };
             });
             record(next.map(PrefValue::Choice));
         }
         Kind::Int { value, range, unit } => {
             let mut next = None;
-            field().show(ui, |ui, _| {
+            inline(ui, row, |ui| {
                 let shown = number(units, label, *value as f64, *unit, 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
                 next = shown.show(ui).edit.events.landed().cloned().flatten();
             });
@@ -147,7 +178,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         }
         Kind::Float { value, range, decimals, step, unit } => {
             let mut next = None;
-            field().show(ui, |ui, _| {
+            inline(ui, row, |ui| {
                 let shown = number(units, label, *value, *unit, usize::from(*decimals))
                     .range(range.clone())
                     .step(step.unwrap_or_else(|| step_for(range, *decimals)));
@@ -157,7 +188,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         }
         Kind::Text(value) => {
             let mut next = None;
-            field().show(ui, |ui, _| {
+            inline(ui, row, |ui| {
                 next = TextField::new(label.clone(), Bind::given(value.clone())).show(ui).events.landed().cloned();
             });
             record(next.map(PrefValue::Text));
@@ -165,12 +196,10 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         Kind::Color(color) => {
             let mut next = None;
             let mut ask = None;
-            field().show(ui, |ui, _| {
-                Row::new().show(ui, |ui, _| {
-                    let swatch = Swatch::new(label.clone(), Srgba::from(*color)).picker(key).id_salt("choose").show(ui);
-                    ask = swatch.pick_color;
-                    next = HexField::hex(label.clone(), Bind::given(*color)).id_salt("hex").show(ui).events.landed().cloned();
-                });
+            inline(ui, row, |ui| {
+                let swatch = Swatch::new(label.clone(), Srgba::from(*color)).picker(key).id_salt("choose").show(ui);
+                ask = swatch.pick_color;
+                next = HexField::hex(label.clone(), Bind::given(*color)).id_salt("hex").show(ui).events.landed().cloned();
             });
             record(next.map(PrefValue::Color));
             if ask.is_some() {
@@ -186,6 +215,20 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
             });
         }
     }
+}
+
+/// One row on a line, as production's cards draw them: the label, then the control, then the help under both.
+fn inline(ui: &mut Ui, row: &ShownRow, control: impl FnOnce(&mut Ui)) {
+    let mut control = Some(control);
+    Stack::new().id_salt(row.key.as_str()).enabled(row.enabled).show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
+            Text::new(row.label.clone()).role(TypeRole::Body).show(ui);
+            if let Some(control) = control.take() {
+                control(ui);
+            }
+        });
+        help_line(ui, &row.help);
+    });
 }
 
 /// The Reset Section button of a page. Returns whether it was pressed.

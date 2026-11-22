@@ -23,9 +23,9 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 /// The size the window opens at until the user resizes it.
-pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0); // design: allow[literal-size/vec2](the window's own opening size in points)
+pub const DEFAULT_SIZE: Vec2 = vec2(640.0, 720.0); // design: allow[literal-size/vec2](the window's own opening size in points)
 /// The least size the window may be resized to.
-pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0); // design: allow[literal-size/vec2](the window's own least size in points)
+pub const MIN_SIZE: Vec2 = vec2(420.0, 320.0); // design: allow[literal-size/vec2](the window's own least size in points)
 
 /// When preferences changes are applied.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,6 +47,8 @@ pub struct PreferencesState {
     pub selected: String,
     /// The text in the search field. Empty lists every page.
     pub search: String,
+    /// The page the view last scrolled to for `selected`, so a page the host names is brought into view once.
+    pub scrolled_to: String,
     /// The message of a failed Apply, shown in the footer until the next edit or Apply.
     pub error: Option<String>,
 }
@@ -218,29 +220,28 @@ impl<'a> PreferencesWindow<'a> {
                 let session = &mut *guard;
                 session.begin(cx);
                 let matcher = Matcher::new(&env.folder(), session.work.search.trim());
-                let snap = body::snapshot(&*session.host, &matcher, &session.work.selected);
+                let snap = body::snapshot(&*session.host, &matcher);
                 let mut out = BodyOut::default();
                 body::show_body(ui, &mut *session.host, &snap, &mut session.work, &words, &units, &mut out);
                 if let Some(request) = out.rows.pick_color.take() {
                     pick_color = Some(request);
                 }
                 let edits = out.edits();
-                if !edits.is_empty() || out.reset || out.custom_changed || out.rows.custom_changed {
+                if !edits.is_empty() || out.reset.is_some() || out.custom_changed || out.rows.custom_changed {
                     session.work.error = None;
                 }
                 for (key, value) in edits {
                     session.host.set(&key, value);
                 }
-                if out.reset
-                    && let Some(page) = &snap.shown
-                {
-                    session.host.reset_page(&page.id);
+                if let Some(page) = &out.reset {
+                    session.host.reset_page(page);
                 }
                 session.host.nested(ui);
                 if mode == PreferencesMode::Live && session.work.error.is_none() && session.host.differs() {
                     session.apply(cx);
                 }
-                session.page = snap.shown.map(|page| page.id);
+                let selected = session.work.selected.clone();
+                session.page = snap.shown.iter().find(|page| page.id == selected).or(snap.shown.first()).map(|page| page.id.clone());
                 session.commit(cx);
             });
 

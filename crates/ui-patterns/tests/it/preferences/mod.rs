@@ -4,3 +4,4 @@
 mod live;
 mod model;
 mod path_setting;
+mod page;

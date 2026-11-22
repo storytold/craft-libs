@@ -122,6 +122,9 @@ pub struct RowSpec<'a> {
     /// The step of a [`RowKind::Float`] row (arrow keys, wheel, drag); without one the step comes from the range and
     /// decimals. Ignored by other kinds.
     pub step: Option<f64>,
+    /// A choice row: `Some(true)` draws its options as a segmented (pill) control, `Some(false)` as a drop-down; by
+    /// default a short choice of up to five options is segmented. Ignored by other kinds.
+    pub pills: Option<bool>,
     /// The control and the value it shows.
     pub kind: RowKind<'a>,
 }
@@ -129,7 +132,7 @@ pub struct RowSpec<'a> {
 impl<'a> RowSpec<'a> {
     /// A visible, enabled row with no keywords or help.
     pub fn new(key: &'a str, label: &'a str, kind: RowKind<'a>) -> Self {
-        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, kind }
+        Self { key, label, keywords: "", help: None, visible: true, enabled: true, step: None, pills: None, kind }
     }
 
     /// Sets extra search text for the row.
@@ -157,6 +160,13 @@ impl<'a> RowSpec<'a> {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Chooses how a [`RowKind::Choice`] row draws its options: `true` as segments, `false` as a drop-down.
+    #[must_use]
+    pub fn pills(mut self, pills: bool) -> Self {
+        self.pills = Some(pills);
         self
     }
 
