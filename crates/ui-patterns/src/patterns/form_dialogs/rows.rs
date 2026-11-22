@@ -534,7 +534,7 @@ impl<'p> Pass<'p> {
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(0.0);
         line.show(ui, |ui| {
-            let mut field = unit_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit).step(step);
+            let mut field = unit_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit, self.shaded).step(step);
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
@@ -560,7 +560,7 @@ impl<'p> Pass<'p> {
         let unit_name = self.words.unit.clone();
         if choices.is_shared() {
             line.show(ui, |ui| {
-                let mut field = number_field(self.units, line.name.clone(), Some(base / factor), *decimals, Some(chosen.kind))
+                let mut field = number_field(self.units, line.name.clone(), Some(base / factor), *decimals, Some(chosen.kind), self.shaded)
                     .step(*step / factor)
                     .id_salt("field");
                 if let Some(range) = range.clone() {
@@ -599,7 +599,7 @@ impl<'p> Pass<'p> {
         let random = line.param.option().randomize();
         line.show(ui, |ui| {
             beside(ui, |ui| {
-                let mut field = number_field(self.units, line.name.clone(), Some(value as f64), WHOLE, line.param.unit).id_salt("field");
+                let mut field = number_field(self.units, line.name.clone(), Some(value as f64), WHOLE, line.param.unit, false).id_salt("field");
                 if let Some(range) = range.clone() {
                     field = field.range(range);
                 }
@@ -785,7 +785,7 @@ impl<'p> Pass<'p> {
         line.show(ui, |ui| {
             beside(ui, |ui| {
                 let dial = AngleDial::new(Bind::given(value)).label(line.name.clone()).range(range.clone()).id_salt("dial").show(ui);
-                let field = number_field(self.units, field_name.clone(), Some(value), decimals, Some(UnitKind::Degrees))
+                let field = number_field(self.units, field_name.clone(), Some(value), decimals, Some(UnitKind::Degrees), false)
                     .range(range.clone())
                     .commit_decimals(decimals as usize)
                     .id_salt("field");
@@ -861,7 +861,7 @@ impl<'p> Pass<'p> {
                                 ("row", (row + 1).to_string().as_str()),
                                 ("column", (column + 1).to_string().as_str()),
                             ]);
-                            let cell = number_field(self.units, Label::from(name), Some(cells[at] as f64), WHOLE, None).id_salt(at);
+                            let cell = number_field(self.units, Label::from(name), Some(cells[at] as f64), WHOLE, None, false).id_salt(at);
                             if let Some(v) = cell.show(ui).edit.value().cloned().flatten() {
                                 next[at] = v.round() as i64;
                             }
@@ -890,7 +890,7 @@ impl<'p> Pass<'p> {
                     _ => point,
                 };
                 for (axis, name) in names.iter().enumerate() {
-                    let field = number_field(self.units, name.clone(), Some(point[axis]), 1, Some(UnitKind::Percent)).range(PERCENT).id_salt(axis);
+                    let field = number_field(self.units, name.clone(), Some(point[axis]), 1, Some(UnitKind::Percent), false).range(PERCENT).id_salt(axis);
                     let shown = field.show(ui);
                     self.alert(shown.out_of_range);
                     if let Some(v) = shown.edit.value().cloned().flatten() {
@@ -963,7 +963,7 @@ impl<'p> Pass<'p> {
                     }
                     None => {}
                 }
-                let field = unit_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit).range(range.clone());
+                let field = unit_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit, self.shaded).range(range.clone());
                 let field = field.id_salt("field").enabled(self.work.number(line.key).is_some());
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
@@ -1038,13 +1038,14 @@ fn beside(ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
 }
 
 /// A number field named `name` that reads and writes `decimals` digits and the spellings of `unit`.
-fn number_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>) -> NumberField<'static> {
-    NumberField::new(name, Bind::given(value)).codec(NumberCodec::new(units.reader(unit), decimals as usize))
+fn number_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>, fixed: bool) -> NumberField<'static> {
+    let codec = NumberCodec::new(units.reader(unit), decimals as usize);
+    NumberField::new(name, Bind::given(value)).codec(if fixed && decimals > 0 { codec.fixed() } else { codec })
 }
 
 /// A [`number_field`] that shows the symbol of its unit after the number (the parameter's `unit`).
-fn unit_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>) -> NumberField<'static> {
-    let field = number_field(units, name, value, decimals, unit);
+fn unit_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>, fixed: bool) -> NumberField<'static> {
+    let field = number_field(units, name, value, decimals, unit, fixed);
     match unit {
         Some(kind) => field.unit_kind(kind),
         None => field,

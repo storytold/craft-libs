@@ -73,3 +73,22 @@ fn the_roots_dialog_layout_is_the_default_of_every_dialog() {
     let (short, long) = (rect_of(&fixture, "Size"), rect_of(&fixture, "Corner radius"));
     assert!(short.min.x + 0.5 < long.min.x, "the root's layout applies: {short:?} {long:?}");
 }
+
+/// A document dialog writes every decimal place a number row asks for ("0.50"); other dialogs trim the zeros.
+#[trial]
+fn a_document_dialog_keeps_the_decimals_of_its_number_rows() {
+    let shown = |layout: ParamLayout| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut fields = DialogFields::new();
+            ParamDialog::new("decimals", "Margins", vec![Param::number("top", "Top", 0.5, 0.01, 2)])
+                .layout(layout)
+                .values(Bind::bound(&mut fields))
+                .show(ui);
+        });
+        fixture.room(vec2(900.0, 700.0));
+        fixture.settle();
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    assert!(shown(ParamLayout::Document).iter().any(|text| text == "0.50"), "the document layout writes both places");
+    assert!(!shown(ParamLayout::Beside).iter().any(|text| text == "0.50"), "the plain layout trims the zero");
+}
