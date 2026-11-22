@@ -326,7 +326,6 @@ fn a_picker_that_stops_showing_with_a_preview_is_reported_once_in_ended_previews
     fx.settle();
     // Past the eviction grace, which ends the picker's shown life.
     fx.advance(1.0);
-    eprintln!("DIAG advanced");
     fx.idle(3);
     let ended = take_output(fx.ctx()).ended_previews;
     assert_eq!(ended.iter().filter(|ended| Some(**ended) == id.get()).count(), 1, "the picker that stopped showing is named once: {ended:?}");
