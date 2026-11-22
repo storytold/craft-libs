@@ -465,9 +465,10 @@ fn a_typed_size_on_a_turned_frame_is_contained_by_its_turned_bounds() {
 
 #[trial]
 fn a_hair_of_an_overshoot_does_not_move_the_typed_frame() {
-    // A px field can hold a float hair past the canvas width - unit conversions move lengths
-    // through pixels, and the result lands at 330.0000000000001 px on a 330 px document. The
-    // typed size is kept to the bit, not snapped to the canvas and not slid.
+    // The rule's float tolerance: a px field can hold a size a hair past the canvas width (the
+    // value below is written by hand for the trial - length conversions move through pixels and
+    // CAN land a hair past an edge, but do not reliably, so the construction is not the point).
+    // The typed size must be kept to the bit: not snapped to the canvas and not slid.
     let mut tool = CropTool::new();
     let doc = CropDocument::new(CropDocKey::new(1), Size::new(330.0, 300.0), 72.0);
     let px = |value: f64| Some((value, UnitKind::Pixels));
@@ -571,6 +572,46 @@ fn reset_after_a_typed_size_returns_the_default_frame() {
         tool.frame().expect("a frame").rect,
         Rect::new(0.0, 50.0, 400.0, 250.0),
         "Reset fits the 2 : 1 ratio to the canvas, unconstrained by the typed size"
+    );
+}
+
+#[trial]
+fn a_mixed_unit_typed_size_drags_hold_the_frame_s_proportions() {
+    // #3003 review round 2: with W and H in different units and a typed Resolution, the drag's
+    // held ratio came from the typed resolution while the frame's geometry came from the
+    // document's - the gesture held proportions the frame never had. W 4 in, H 500 px,
+    // Resolution 300 on a 72 px/in document: the frame is 288 x 500, and so is the ratio.
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0); // 72 px/in
+    let mut settings = sized_fields(Some((4.0, UnitKind::Inches)), Some((500.0, UnitKind::Pixels)));
+    settings.size.resolution = "300".to_owned();
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(
+        (frame.rect.width() - 288.0).abs() < 1e-6 && (frame.rect.height() - 500.0).abs() < 1e-6,
+        "the frame is 4 in and 500 px at the document's 72 px/in: {frame:?}"
+    );
+    let held = settings.ratio_value(&doc, &units()).expect("W x H x Resolution holds a ratio");
+    assert!((held - 288.0 / 500.0).abs() < 1e-6, "the ratio the overlay follows is the frame's, not 1200 / 500: {held}");
+
+    // And the overlay really drags with it: the same mix on the rig's 400 x 300 document
+    // (1 in x 200 px, Resolution 300), a corner drag of the typed frame at (164, 50).
+    let mut rig_settings = sized_fields(Some((1.0, UnitKind::Inches)), Some((200.0, UnitKind::Pixels)));
+    rig_settings.size.resolution = "300".to_owned();
+    let mut rig = Rig::new(rig_settings);
+    {
+        let mut host = rig.host.borrow_mut();
+        let Host { tool, settings, document, .. } = &mut *host;
+        assert!(matches!(tool.refit(settings, document, &units(), false), Some(CropEvent::Frame(_))));
+        let typed = tool.frame().expect("a frame");
+        assert!((typed.rect.width() - 72.0).abs() < 1e-6 && (typed.rect.height() - 200.0).abs() < 1e-6, "1 in x 200 px at 72 px/in: {typed:?}");
+    }
+    rig.drag((164.0, 50.0), (140.0, 30.0));
+    let dragged = rig.frame().expect("the dragged frame");
+    assert!(
+        (dragged.rect.width() / dragged.rect.height() - 72.0 / 200.0).abs() < 1e-6,
+        "the drag holds the frame's 72 : 200 proportions: {dragged:?}"
     );
 }
 

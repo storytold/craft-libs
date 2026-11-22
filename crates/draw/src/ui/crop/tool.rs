@@ -406,7 +406,8 @@ impl CropTool {
             return None;
         }
         let (current, base) = (self.session.frame()?, base?);
-        let next = match settings.frame_size(document, units) {
+        let frame_size = settings.frame_size(document, units);
+        let next = match frame_size {
             // Both W and H typed: the frame takes that document size (converted at the
             // document's resolution) about the centre of the frame the edit began with. The view's
             // zoom only changes how large that document size looks.
@@ -440,9 +441,11 @@ impl CropTool {
                         // Never `None` here: a box the canvas can hold always slides in.
                         typed.within(canvas, false, false).unwrap_or(typed)
                     } else {
-                        // `fitted` keeps the shape and the turn, centred on the canvas; move it to
-                        // the typed frame's centre, then slide it in whole (never `None`: `fitted`'s
-                        // turned bounds already fit the canvas, so the slide only corrects the move).
+                        // `fitted` keeps the shape and the turn, centred on the canvas; its box
+                        // carries `normalized_angle`'s form of the turn - the same turn, its
+                        // canonical number (accepted here). Move it to the typed frame's centre,
+                        // then slide it in whole (never `None`: `fitted`'s turned bounds already
+                        // fit the canvas, so the slide only corrects the move).
                         let fitted = typed.fitted(document.size, base.angle)?;
                         let to_frame = typed.rect.center() - fitted.rect.center();
                         fitted.moved(to_frame).within(canvas, false, false).unwrap_or(fitted)
@@ -457,10 +460,11 @@ impl CropTool {
                 CropBox::new(rect, base.angle)
             }
         };
-        // W x H x Resolution can change the output size even when the frame already fits, so it
-        // makes the frame a pending crop. (The commit's target, with its Resolution; the frame
-        // above converts at the document's resolution.)
-        let sized = settings.target(document, units).is_some();
+        // Key the pending-crop marking on the same rule that sized the frame: a W x H the frame
+        // carries makes the crop pending even when the frame already fits, because the commit
+        // resamples to it. (The commit's `target` may name a different resample, with its
+        // Resolution; the frame's numbers are the ones the user sees.)
+        let sized = frame_size.is_some();
         // The untouched selection frame leaves its state with the first refit, even when it already fits.
         let selection = self.session.from_selection();
         if next == current && !selection && (editing || !sized) {
