@@ -44,6 +44,11 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   (<https://www.unrealengine.com/en-US/blog/physically-based-shading-on-mobile>). Materials take a
   base color, metallic-roughness, normal, occlusion and emissive texture, an alpha mode (opaque,
   mask or blend), and weights for the diffuse lobe, the dielectric reflectance and the ambient light.
+  In mask mode a fragment whose material alpha (the base alpha times the base texture's) is below
+  the cutoff is discarded, and a fragment that passes is drawn with the layer's opacity alone, so
+  at an opacity of 1 it is fully opaque
+  (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#alpha-coverage>). In blend mode the
+  alpha is the material alpha times the opacity.
 - **Textures.** `Scene::texels` holds linear straight RGBA, row-major from the top row, and each
   `TexInfo` gives a texture's offset, size and wrap modes (repeat, clamp or mirror). `sample` is a
   bilinear lookup with texel centers at +0.5.
@@ -56,10 +61,11 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   plane. A spot or point light's maps hold casters at a light-space depth of 0.001 or more, and a
   receiver at that depth or nearer is not shadowed. A spot light's map covers its outer cone's half
   angle plus 0.05 radians, up to 1.45 radians (about 83°), as EffectCraft's does; a receiver
-  outside the map is not shadowed. A masked caster's alpha test applies
-  to the map with the material's cutoff, as in shading. A blended caster drops texels whose alpha is below 0.5. A masked or blended caster without a base
-  texture is tested the same way with its material's alpha, and an opaque-mode caster with its
-  opacity. `shadow_map_size` gives one map texel per
+  outside the map is not shadowed. A masked caster drops texels whose material alpha is below the
+  material's cutoff, as shading does. A blended caster drops texels whose alpha times the opacity
+  is below 0.5. A masked or blended caster without a base texture is tested the same way with its
+  material's alpha. An opaque-mode or masked caster with an opacity below 0.5 casts no shadow.
+  `shadow_map_size` gives one map texel per
   raster pixel (supersampled pixels when `ssaa` is above 1, as EffectCraft sizes them) to a power
   of two from 512 to 4096 (512 for a draft render), and
   `shadow_point_face_size` caps a cube face at 2048. `shadow_sizes` keeps a scene within
@@ -110,12 +116,13 @@ The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resol
 `2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane,
 whose depth-range crossings lie more than 1/4096 of an edge from its inside corner, whose texture
 coordinates on repeated and mirrored axes stay below 2^24, whose shadows-only materials receive
-shadows, whose fragments under discarded opaque pixels stay inside the depth range, whose masked
-and blended casters have a base texture and a cutoff of 0.5, whose opaque-mode casters have an
-opacity of 0.5 or more, and whose casters do not reach within
-1 unit of light-space depth of a spot or point light, every shadow texel, raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit for bit;
-`tests/it/differential.rs` runs a copy of EffectCraft's code on the same scenes. Changes from those
-files:
+shadows, whose fragments under discarded opaque pixels stay inside the depth range, whose blended
+casters have a base texture, whose opaque-mode and masked casters have an opacity of 0.5 or more,
+and whose casters do not reach within
+1 unit of light-space depth of a spot or point light, every shadow texel, raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit for bit
+with the alpha-mask change of storytold/effectcraft#4075 applied;
+`tests/it/differential.rs` runs a copy of EffectCraft's code with that change on the same scenes.
+Changes from those files:
 
 - Scenes, resolve factors and pixels are checked, and sizes, triangles, lights and coverage work
   are bounded, before anything is allocated. EffectCraft panicked on an index or a material
@@ -155,14 +162,20 @@ files:
   a texture coordinate that overflows `f32` when scaled to texels is taken as the largest finite
   one, so the sample stays finite. A channel whose bilinear interpolation between large finite
   texels overflows `f32` is interpolated in `f64`.
-- A masked shadow caster uses the material's alpha cutoff, and a masked or blended caster
-  without a base texture tests its material's alpha as a textured caster tests a texel's. An
-  opaque-mode caster with an opacity below 0.5 casts no shadow. EffectCraft tested every textured
-  caster against 0.5 and drew untextured and opaque-mode casters whole, so a shadow could differ
-  from the visible surface. With a cutoff of 0.5, textured masked and blended casters cast the
-  same shadows as EffectCraft's. Two kinds of caster still differ at that cutoff: an opaque-mode
-  caster with an opacity below 0.5, and an untextured masked or blended caster whose alpha is
-  below 0.5. EffectCraft drew both whole, and here they cast no shadow.
+- A masked fragment that passes its cutoff is drawn with the layer's opacity alone and writes its
+  depth, and the cutoff tests the material's alpha without the opacity. EffectCraft at
+  `2f16feb12f` kept the fragment's alpha below 1, so the clear color showed through a masked
+  surface in the opaque pass; storytold/effectcraft#4075 makes the same change there, and the copy
+  in `tests/it/reference/` carries it.
+- A masked or blended caster without a base texture tests its material's alpha as a textured
+  caster tests a texel's, and an opaque-mode or masked caster with an opacity below 0.5 casts no
+  shadow. EffectCraft at `2f16feb12f` tested every textured caster against 0.5 and drew
+  untextured and opaque-mode casters whole, so a shadow could differ from the visible surface.
+  With storytold/effectcraft#4075, EffectCraft's masked casters use the material's cutoff, and
+  textured casters and untextured masked casters cast the same shadows as here. Two kinds of
+  caster still differ: an opaque-mode or masked caster with an opacity below 0.5, and an
+  untextured blended caster whose alpha times the opacity is below 0.5. EffectCraft draws both,
+  and here they cast no shadow.
 - A spot light whose inner cone cosine is below its outer one is `BadLight`. EffectCraft's lights
   always have the inner cosine at or above the outer one.
 - A material whose metallic, roughness or occlusion strength is outside 0 to 1 is `BadMaterial`.

@@ -418,6 +418,91 @@ fn masked_casters_use_the_material_cutoff_in_shadow_maps() {
     assert_ne!(maps(&mut zero), maps(&mut half));
 }
 
+const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// A blue quad at depth 500 behind two green quads at depth 100 (left and right half), with the
+/// green quads' materials (1 and 2) in mask mode.
+fn masked_pair() -> Scene {
+    let mut s = quad_scene(8, 4, &[([0.0, 0.0, 8.0, 4.0], 500.0, BLUE), ([0.0, 0.0, 4.0, 4.0], 100.0, GREEN), ([4.0, 0.0, 8.0, 4.0], 100.0, GREEN)]);
+    for m in &mut s.materials[1..] {
+        m.alpha_mode = 1;
+    }
+    s
+}
+
+/// One single-texel texture for each value of `alphas`, white with that alpha.
+fn alpha_textures(s: &mut Scene, alphas: &[f32]) {
+    s.texels = alphas.iter().map(|a| [1.0, 1.0, 1.0, *a]).collect();
+    s.textures = (0..alphas.len() as u32).map(|offset| TexInfo { offset, width: 1, height: 1, wrap_u: 0, wrap_v: 0 }).collect();
+}
+
+#[test]
+fn masked_surfaces_cover_fully_where_they_pass_the_cutoff() {
+    // Material alpha 0.6 on the left and 0.4 on the right against the default cutoff of 0.5, first
+    // as the materials' own alpha and then through their base textures.
+    let mut factor = masked_pair();
+    (factor.materials[1].base[3], factor.materials[2].base[3]) = (0.6, 0.4);
+    let mut texel = masked_pair();
+    alpha_textures(&mut texel, &[0.6, 0.4]);
+    (texel.materials[1].tex_base, texel.materials[2].tex_base) = (0, 1);
+    for s in [factor, texel] {
+        let t = try_render(&s, &Limits::default()).unwrap();
+        assert_eq!(t.color[8 + 1], GREEN, "a passing fragment draws the surface fully opaque");
+        assert_eq!(t.depth[8 + 1], 100.0);
+        assert_eq!(t.color[8 + 6], BLUE, "a failing fragment shows the surface behind");
+        assert_eq!(t.depth[8 + 6], 500.0);
+    }
+}
+
+#[test]
+fn the_mask_cutoff_is_inclusive_and_ignores_layer_opacity() {
+    // Material alpha equal to the cutoff passes, a zero cutoff included.
+    let mut s = masked_pair();
+    (s.materials[1].base[3], s.materials[1].alpha_cutoff) = (0.5, 0.5);
+    (s.materials[2].base[3], s.materials[2].alpha_cutoff) = (0.0, 0.0);
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert_eq!(t.color[8 + 1], GREEN);
+    assert_eq!(t.color[8 + 6], GREEN);
+    // At half layer opacity, material alpha 0.6 still passes the 0.5 cutoff, and the surface
+    // fades by the layer opacity alone.
+    let mut s = quad_scene(8, 4, &[([0.0, 0.0, 8.0, 4.0], 500.0, BLUE), ([0.0, 0.0, 8.0, 4.0], 100.0, [0.0, 1.0, 0.0, 0.6])]);
+    (s.materials[1].alpha_mode, s.materials[1].opacity) = (1, 0.5);
+    let c = try_render(&s, &Limits::default()).unwrap().color[8 + 1];
+    assert!([0.0, 0.5, 0.5, 1.0].iter().zip(c).all(|(a, b)| (a - b).abs() < 1e-6), "{c:?}");
+}
+
+#[test]
+fn masked_casters_shadow_where_the_material_alpha_passes_the_cutoff() {
+    let covered = |f: &dyn Fn(&mut Scene)| {
+        let mut s = quad_scene(16, 16, &[([0.0, 0.0, 8.0, 8.0], 100.0, WHITE)]);
+        (s.materials[0].casts_shadows, s.materials[0].alpha_mode) = (true, 1);
+        f(&mut s);
+        s.lights = vec![shadow_light(0)];
+        try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+        s.shadow_texels.iter().filter(|t| t.is_finite()).count()
+    };
+    let full = covered(&|_| {});
+    assert!(full > 0);
+    // Without a texture, the material's own alpha meets the cutoff, and the layer opacity does
+    // not move it. Material alpha 0 passes a cutoff of 0.
+    assert_eq!(covered(&|s| (s.materials[0].base[3], s.materials[0].alpha_cutoff) = (0.6, 0.7)), 0);
+    assert_eq!(covered(&|s| (s.materials[0].base[3], s.materials[0].alpha_cutoff, s.materials[0].opacity) = (0.6, 0.6, 0.5)), full);
+    assert_eq!(covered(&|s| (s.materials[0].base[3], s.materials[0].alpha_cutoff) = (0.0, 0.0)), full);
+    // With a texture, the texel's alpha times the material's meets the cutoff.
+    let textured = |cutoff: f32, opacity: f32| {
+        covered(&|s| {
+            alpha_textures(s, &[0.6]);
+            (s.materials[0].tex_base, s.materials[0].alpha_cutoff, s.materials[0].opacity) = (0, cutoff, opacity);
+        })
+    };
+    assert_eq!(textured(0.7, 1.0), 0);
+    assert_eq!(textured(0.6, 0.5), full);
+    // Below half opacity a masked caster casts nothing, as an opaque-mode caster does.
+    assert_eq!(covered(&|s| s.materials[0].opacity = 0.4), 0);
+    assert_eq!(textured(0.5, 0.4), 0);
+}
+
 #[test]
 fn a_caster_whose_spot_map_corners_overflow_is_rejected() {
     // Only the spot light asks for a map, so the map's view comes from the light alone.

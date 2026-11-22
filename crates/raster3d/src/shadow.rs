@@ -129,20 +129,18 @@ fn map_corners(m: &ShadowMap, poly: &[LightCorner]) -> Vec<MapCorner> {
         .collect()
 }
 
-/// A caster's alpha test: the base texture and the material's base alpha and opacity. A texel
-/// is skipped when its alpha is below `cutoff`, or when `masked` and its alpha is 1e-5 or less,
-/// as shading discards a masked fragment.
+/// A caster's alpha test: the base texture, the material's base alpha and the opacity it is
+/// multiplied by (1 for a masked caster). A texel is skipped when its alpha is below `cutoff`.
 struct AlphaTest<'a> {
     tex: &'a TexInfo,
     base: f32,
     opacity: f32,
     cutoff: f32,
-    masked: bool,
 }
 
 impl AlphaTest<'_> {
     fn discards(&self, a: f32) -> bool {
-        a < self.cutoff || (self.masked && a <= 1e-5)
+        a < self.cutoff
     }
 }
 
@@ -251,25 +249,23 @@ fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
     for &t in casters {
         let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
         let mat = &s.materials[s.vertices[ids[0]].material as usize];
-        // A masked caster takes the material's cutoff, as shading does; a blended one keeps a
-        // cutoff of 0.5.
-        let masked = mat.alpha_mode == 1;
-        let cutoff = if masked { mat.alpha_cutoff } else { 0.5 };
+        // A masked caster tests the material's alpha against its cutoff, as shading does; a
+        // blended one tests its alpha times the opacity against 0.5.
+        let (opacity, cutoff) = if mat.alpha_mode == 1 { (1.0, mat.alpha_cutoff) } else { (mat.opacity, 0.5) };
         let alpha = (mat.alpha_mode != 0 && mat.tex_base >= 0).then(|| AlphaTest {
             tex: &s.textures[mat.tex_base as usize],
             base: mat.base[3],
-            opacity: mat.opacity,
+            opacity,
             cutoff,
-            masked,
         });
         // A masked or blended caster without a base texture has one alpha, tested as a texel's
         // alpha is.
-        let a = mat.base[3] * mat.opacity;
-        if mat.alpha_mode != 0 && mat.tex_base < 0 && (a < cutoff || a <= 1e-5) {
+        if mat.alpha_mode != 0 && mat.tex_base < 0 && mat.base[3] * opacity < cutoff {
             continue;
         }
-        // An opaque-mode caster's alpha is its opacity alone, tested as a blended caster's is.
-        if mat.alpha_mode == 0 && mat.opacity < 0.5 {
+        // An opaque-mode or masked caster draws with its opacity alone, tested as a blended
+        // caster's alpha is.
+        if mat.alpha_mode != 2 && mat.opacity < 0.5 {
             continue;
         }
         let poly = light_poly(s, m, ids);
