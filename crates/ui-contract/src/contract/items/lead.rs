@@ -105,6 +105,16 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         self.pick_by(comp, at, extend, toggle, PickBy::Pointer(Mods::NONE));
     }
 
+    /// A primary click with `mods` held that selects row `at` as `pick_by` does. A plain pick that leaves the selection
+    /// as it was reports `CollectionEvent::Picked`.
+    pub(super) fn click_pick(&mut self, comp: &C, at: usize, extend: bool, toggle: bool, mods: Mods) {
+        let before = self.selection.clone();
+        self.pick_by(comp, at, extend, toggle, PickBy::Pointer(mods));
+        if !(extend || toggle) && self.selection == before && self.holds(at) {
+            self.events.push(CollectionEvent::Picked { key: self.source.key(at), mods });
+        }
+    }
+
     /// A press or key `by` that selects row `at` the way the modifiers say.
     pub(super) fn pick_by(&mut self, comp: &C, at: usize, extend: bool, toggle: bool, by: PickBy) {
         if self.source.section_stop(at) {

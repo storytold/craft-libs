@@ -108,7 +108,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         if self.source.section_stop(at) {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
-                            self.pick(comp, at, false, false);
+                            self.click_pick(comp, at, false, false, craft_keymap::Mods::NONE);
                             if comp.items().activate == ActivateOn::Click {
                                 self.activation_clicks = 1;
                                 self.events.push(CollectionEvent::Activate(key));

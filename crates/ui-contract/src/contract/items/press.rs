@@ -135,6 +135,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if again => {}
                         None if hold => self.drags.collapse = Some(key.clone()),
                         None if keep => {}
+                        None if primary => self.click_pick(comp, at, mods.shift, mods.cmd, mods),
                         None => self.pick_by(comp, at, mods.shift, mods.cmd, PickBy::Pointer(mods)),
                     }
                     self.move_lead(at, LeadSource::Pointer);
@@ -210,7 +211,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
-                    self.pick_by(comp, at, false, false, PickBy::Pointer(mods));
+                    self.click_pick(comp, at, false, false, mods);
                 }
             } else if props.command_click && mods.cmd {
                 self.events.push(CollectionEvent::CommandClick { key: self.source.key(at), mods });
@@ -260,7 +261,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     if Self::select_mode(comp) == SelectMode::Single {
                         self.change_by(SelectionChange::Clear, PickBy::Pointer(mods_now));
                     } else {
-                        self.pick_by(comp, at, false, false, PickBy::Pointer(mods_now));
+                        self.click_pick(comp, at, false, false, mods_now);
                     }
                 }
             }

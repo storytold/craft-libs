@@ -641,6 +641,8 @@ impl EditKind {
 pub enum CollectionKind {
     /// The selection changed.
     Selection,
+    /// A click picked the sole selected item again.
+    Picked,
     /// The lead moved.
     LeadMoved,
     /// The pointer rested on an item.
@@ -686,6 +688,7 @@ impl CollectionKind {
     pub fn of<K, E>(event: &CollectionEvent<K, E>) -> Option<CollectionKind> {
         Some(match event {
             CollectionEvent::Selection { .. } => CollectionKind::Selection,
+            CollectionEvent::Picked { .. } => CollectionKind::Picked,
             CollectionEvent::LeadMoved { .. } => CollectionKind::LeadMoved,
             CollectionEvent::Activate(_) => CollectionKind::Activate,
             CollectionEvent::Rested(_) => CollectionKind::Rested,

@@ -654,6 +654,8 @@ fn seen<K: Clone, E>(events: Vec<CollectionEvent<K, E>>) -> Vec<Seen<K>> {
                 out.push(Seen::Selection(change));
                 out.extend(picked.map(Seen::Select));
             }
+            // A click on the sole selected preset picks it again, as `Select` says.
+            CollectionEvent::Picked { key, .. } => out.push(Seen::Select(key)),
             CollectionEvent::Activate(key) => out.push(Seen::Activate(key)),
             CollectionEvent::Open(change) => out.push(Seen::Open(change)),
             CollectionEvent::ContextMenu(request) => out.push(Seen::Menu(request.key)),

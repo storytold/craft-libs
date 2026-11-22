@@ -156,7 +156,7 @@ fn secondary_click_preset(fixture: &mut Fixture, key: u32) {
 }
 
 #[trial]
-fn multi_selection_ranges_toggles_and_reports_select_only_for_a_plain_pick() {
+fn multi_selection_ranges_toggles_and_reports_select_for_each_plain_pick() {
     for view in [PresetView::List, PresetView::Grid] {
         let (mut fixture, selection, events) = multi_rig(view);
         let items = || {
@@ -168,6 +168,14 @@ fn multi_selection_ranges_toggles_and_reports_select_only_for_a_plain_pick() {
 
         click_preset(&mut fixture, 1, Modifiers::NONE);
         assert_eq!((items(), selects()), (vec![1], 1), "a plain click selects and reports Select in {view:?}");
+        fixture.advance(1.0);
+        click_preset(&mut fixture, 1, Modifiers::ALT);
+        assert_eq!((items(), selects()), (vec![1], 2), "a click on the sole selected preset picks it again in {view:?}");
+        assert!(
+            events.borrow().iter().any(|event| matches!(event, PresetEvent::Select { key: 1, mods, .. } if mods.alt)),
+            "the pick carries its modifiers in {view:?}: {:?}",
+            events.borrow()
+        );
 
         events.borrow_mut().clear();
         click_preset(&mut fixture, 3, Modifiers::SHIFT);

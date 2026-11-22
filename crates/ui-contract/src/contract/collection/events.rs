@@ -214,6 +214,15 @@ pub enum CollectionEvent<K, E> {
         /// The modifiers of the pick; `Mods::NONE` for a key.
         mods: craft_keymap::Mods,
     },
+    /// A click on an item that left the selection as it was: the click selects the item alone and it already was (a
+    /// click without Shift or Cmd/Ctrl on the sole selected item). A host that applies what a click picks (a preset, a
+    /// swatch) applies it again.
+    Picked {
+        /// The item.
+        key: K,
+        /// The modifiers of the click.
+        mods: craft_keymap::Mods,
+    },
     /// The lead moved, by keys or by the pointer.
     LeadMoved {
         /// The item that took the lead.
