@@ -30,6 +30,7 @@ mod geom;
 mod place;
 mod size;
 mod text;
+mod units;
 mod wmf;
 
 #[cfg(feature = "write")]
@@ -44,9 +45,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use canvas::Raw;
 use geom::{Op, P};
+mod eof;
+pub use eof::ends_early;
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
 pub use text::{Font, HAlign, SYMBOL_CHARSET, Text, VAlign};
+pub use units::{EmfDevice, EmfPhysicalSize, UnitFacts, unit_facts};
 
 /// Items kept from one file. Past the cap the parse stops and keeps what it has.
 pub(crate) const MAX_ITEMS: usize = 200_000;
