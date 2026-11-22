@@ -284,13 +284,7 @@ mod tests {
 
     #[test]
     fn binned_phase_budget_preserves_xtrans_pixels_and_clip_masks() {
-        let img = Rgb32f::from_fn(23, 21, |x, y| {
-            if (x, y) == (7, 4) {
-                [1.0; 3]
-            } else {
-                [x as f32 / 64.0, y as f32 / 64.0, (x + y) as f32 / 64.0]
-            }
-        });
+        let img = Rgb32f::from_fn(23, 21, |x, y| if (x, y) == (7, 4) { [1.0; 3] } else { [x as f32 / 64.0, y as f32 / 64.0, (x + y) as f32 / 64.0] });
         let mut raw = raw_from(&mosaic_from_rgb(&img, &Cfa::xtrans()), 0.0, 4096.0);
         raw.active_area = Rect::new(1, 1, 21, 19);
         raw.crop = Rect::new(1, 2, 17, 15);
