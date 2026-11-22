@@ -136,6 +136,9 @@ impl<Id> Session<Id> {
     }
 }
 
+/// The host's footer (`LayersPanel::footer`).
+type FooterFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
+
 /// The Layers panel over the app's [`LayerTree`].
 ///
 /// ```ignore
@@ -191,7 +194,7 @@ pub struct LayersPanel<'a, T: LayerTree> {
     document: Option<u64>,
     look: LayerRowLook,
     drops: Option<Box<dyn HostDrops<T::Id> + 'a>>,
-    footer: Option<Box<dyn FnMut(&mut Ui) + 'a>>,
+    footer: Option<FooterFn<'a>>,
     deletable: bool,
 }
 
@@ -335,14 +338,12 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     }
 
     /// How the rows are drawn; the base's eye and label by default.
-    #[must_use]
     pub fn row_look(mut self, look: LayerRowLook) -> Self {
         self.look = look;
         self
     }
 
     /// The rows take a `P` dragged from outside the list, before, after or into a layer, wherever `accepts` passes.
-    #[must_use]
     pub fn takes_drop<P: Send + Sync + 'static>(mut self, accepts: impl Fn(&P, &T::Id, LayerPosition) -> bool + 'a) -> Self {
         self.drops = Some(Box::new(HostDrop { accepts, payload: PhantomData::<fn() -> P> }));
         self
@@ -350,14 +351,12 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
 
     /// The host's footer, in the panel's footer slot in place of the panel's own buttons: the panel then reports no
     /// `Footer` or `FooterDrop` and never calls `LayerTree::footer`.
-    #[must_use]
     pub fn footer(mut self, footer: impl FnMut(&mut Ui) + 'a) -> Self {
         self.footer = Some(Box::new(footer));
         self
     }
 
     /// Delete or Backspace in the rows reports [`LayersEvent::Delete`]; off by default.
-    #[must_use]
     pub fn deletable(mut self, on: bool) -> Self {
         self.deletable = on;
         self
@@ -478,7 +477,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
                                 .focus_name(find_name)
                                 .show(ui);
                             edited = out.edit.is_some();
-                            events.borrow_mut().extend(out.edit.map(LayersEvent::Filter));
+                            events.borrow_mut().extend(out.edit.map(|edit| LayersEvent::Filter(Box::new(edit))));
                         }
                         None => {
                             let own = &mut stack.memory::<Session<T::Id>>().filter;
