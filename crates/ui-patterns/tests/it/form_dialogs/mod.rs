@@ -6,6 +6,7 @@ mod dialog;
 mod export;
 mod files;
 mod hosted;
+mod long_value;
 mod new_document;
 mod param_tabs;
 mod params;
