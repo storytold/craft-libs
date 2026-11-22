@@ -240,6 +240,17 @@ impl FontsPanel {
             });
             ui.add_space(10.0);
         }
+        if let Some((service, error)) = self.subsets.unreachable().map(|(a, b)| (a.to_owned(), b.to_owned())) {
+            widgets::note(ui, &s, |ui| {
+                ui.label(egui::RichText::new(tl!("Font previews are unavailable")).color(s.p.ink_strong));
+                let text = fmt(
+                    "Can't reach the preview server {server}: {error}. Check the address in Settings → Advanced.",
+                    &[("server", &service), ("error", &error)],
+                );
+                ui.add(egui::Label::new(egui::RichText::new(text).size(12.5).color(s.p.bad)).wrap());
+            });
+            ui.add_space(10.0);
+        }
         match self.tab {
             Tab::Catalogue => {
                 self.download_note(ui, &s);

@@ -410,6 +410,26 @@ impl FontsPanel {
         self.look = look;
     }
 
+    /// Starts the catalogue filtered to sans-serif families and to the language of `language` (a
+    /// tag such as `de` or `pt-BR`; the most spoken language of the index with that ISO 639 code),
+    /// or to English when the index has none for it. A host calls it once, after building the
+    /// panel; the user changes both filters from there.
+    pub fn use_default_filters(&mut self, language: &str) {
+        let Ok(c) = &self.catalogue else { return };
+        let code = language.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+        let best = |code: &str| {
+            c.index
+                .languages()
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| !l.historical && l.id.split('_').next().is_some_and(|id| id.eq_ignore_ascii_case(code)))
+                .max_by_key(|(_, l)| l.population)
+                .map(|(i, _)| i)
+        };
+        self.query.category = Some(Category::SansSerif);
+        self.query.language = best(&code).or_else(|| best("en"));
+    }
+
     /// Whether the panel shows its own "Allow downloads" switch. A host with the switch in its
     /// own settings turns it off; the panel still offers to allow downloads where one is needed.
     pub fn show_downloads_switch(&mut self, show: bool) {

@@ -718,6 +718,31 @@ fn a_family_the_service_cannot_draw_offers_a_session_preview() {
 }
 
 #[test]
+fn an_unreachable_preview_server_shows_a_notice_naming_it() {
+    let service = Arc::new(FakeService::default());
+    *service.failing.lock().unwrap() = true;
+    let (mut h, store) = service_setup("list-previews-unreachable", &service, 8);
+    store.set_previews_enabled(true).unwrap();
+    set_service(&mut h, &store);
+    idle(&mut h);
+    h.run_steps(2);
+    assert!(h.query_by_label("Font previews are unavailable").is_some());
+    assert!(h.query_by_label_contains("http://127.0.0.1:9").is_some(), "the notice names the server");
+    assert!(h.query_by_label_contains("Settings → Advanced").is_some(), "and where to change it");
+}
+
+#[test]
+fn default_filters_are_sans_serif_and_the_system_language() {
+    let (mut h, _) = setup("default-filters", Settings::default());
+    h.state_mut().use_default_filters("ja-JP");
+    h.run_steps(3);
+    assert_eq!(h.state().results(), ["Noto Sans JP"]);
+    h.state_mut().use_default_filters("fr");
+    h.run_steps(3);
+    assert_eq!(h.state().results(), ["Noto Sans JP", "Ubuntu"], "no French in the index: English");
+}
+
+#[test]
 fn a_family_without_a_sample_text_gets_its_rows_subset() {
     let service = Arc::new(FakeService::default());
     let (mut h, store) = service_setup_with("list-previews-no-sample", &service, 8, service_index_with("{}"));

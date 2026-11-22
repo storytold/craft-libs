@@ -81,6 +81,9 @@ pub(crate) struct Subsets {
     detail_waits: bool,
     /// The text setting as last seen, and since when.
     typed: (String, f64),
+    /// The service and the error of its last failed request, until a preview loads from it: the
+    /// page tells the user the server can't be reached instead of showing no previews silently.
+    unreachable: Option<(String, String)>,
     frame: u64,
     now: f64,
 }
@@ -104,6 +107,7 @@ impl Subsets {
             detail_wanted: HashSet::new(),
             detail_waits: false,
             typed: (String::new(), 0.0),
+            unreachable: None,
             frame: 0,
             now: 0.0,
         }
@@ -157,8 +161,14 @@ impl Subsets {
             self.failed.clear();
             self.detail.clear();
             self.sample_missing.clear();
+            self.unreachable = None;
             self.cancel_all();
         }
+    }
+
+    /// The preview server and the error of its last failed request, while none has loaded since.
+    pub(crate) fn unreachable(&self) -> Option<(&str, &str)> {
+        self.unreachable.as_ref().map(|(service, error)| (service.as_str(), error.as_str()))
     }
 
     /// Whether subsets are being fetched.
@@ -185,11 +195,18 @@ impl Subsets {
             self.asked.remove(&preview.key);
             match preview.font {
                 Ok(font) => {
+                    self.unreachable = None;
                     self.failed.remove(&preview.key);
                     self.fonts.insert(preview.key, (Arc::new(font), self.frame));
                 }
                 Err(e) => {
                     log::debug!("preview {}: {e}", preview.key.path());
+                    if let (PreviewError::Failed(message), Some(service)) = (&e, &self.service) {
+                        if self.unreachable.as_ref().is_none_or(|(s, _)| s != service) {
+                            log::warn!("font preview server {service} didn't answer: {message}");
+                        }
+                        self.unreachable = Some((service.clone(), message.clone()));
+                    }
                     if e == PreviewError::NotFound && matches!(preview.key.subset(), Subset::Sample(_)) {
                         self.sample_missing.insert(preview.key);
                     } else {
