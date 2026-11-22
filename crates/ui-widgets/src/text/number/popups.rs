@@ -33,7 +33,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 .selection(Bind::given(selection))
                 .show_items(ui, &source, &mut |at, _| {
                     if rows[*at].is_separator() {
-                        ListRow::spacer()
+                        ListRow::separator()
                     } else if rows[*at].is_heading() {
                         ListRow::new(labels[*at].clone()).heading()
                     } else {

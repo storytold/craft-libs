@@ -2711,6 +2711,7 @@ dependencies = [
  "craft-font-catalog",
  "craft-font-manager",
  "craft-font-store",
+ "craft-fonts-build",
  "craft-host",
  "craft-i18n",
  "craft-theme",
@@ -4457,6 +4458,7 @@ dependencies = [
  "craft-window",
  "eframe",
  "egui",
+ "raw-window-handle",
  "serde",
  "web-time",
 ]

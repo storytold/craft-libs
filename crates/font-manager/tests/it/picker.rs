@@ -475,3 +475,136 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
         "a disabled picker paints its warning icon in text.disabled {text_disabled:?}, not {tints:?}"
     );
 }
+
+/// The library picker's family and settings, as the last pass left them.
+struct Library {
+    family: String,
+    settings: FontPickerSettings,
+}
+
+/// A library list with Hack as a recent family: the shown picker and the catalog of Inter (two styles) and Hack (one).
+fn library_rig() -> (Fixture, Rc<RefCell<Library>>) {
+    let catalog = catalog_of(&[INTER_REGULAR, INTER_SEMIBOLD, epaint_default_fonts::HACK_REGULAR]);
+    let mut settings = FontPickerSettings::default();
+    settings.recent = vec!["Hack".to_owned()];
+    let state = Rc::new(RefCell::new(Library { family: "Inter".to_owned(), settings }));
+    let shown = Rc::clone(&state);
+    let mut filters = FontFilters::default();
+    let mut fx = Fixture::new(move |ui| {
+        let mut state = shown.borrow_mut();
+        let Library { family, settings } = &mut *state;
+        FontPicker::new("Font family", Bind::bound(family), &catalog).settings(Bind::bound(settings)).filters(Bind::bound(&mut filters)).show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    (fx, state)
+}
+
+/// "أبجد هوز", which neither Inter nor Hack draws.
+const ARABIC_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
+
+/// An open library list over Inter and Hack, with Gotham served, `family` current and `text` as the preview text.
+fn sample_rig(family: &'static str, text: &'static str) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let served = vec!["Gotham".to_owned()];
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .served(&served)
+            .preview_text(text)
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// Each row has one sample, the picker's sample text, in its own face; a face that lacks the text's letters shows its
+/// name instead, in its row and in the banner; and a family without a face shows no sample at all, not the text in the interface face.
+#[trial]
+fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
+    let fx = sample_rig("Inter", "Hello");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: Hello")).is_some(), "{family}'s sample is the preview text");
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family} has no sample word");
+    }
+
+    let fx = sample_rig("Gotham", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Gotham").is_some(), "the banner shows the served family");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: {family}")).is_some(), "{family} lacks Arabic: its sample is its name");
+    }
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "no face draws the text: neither the rows nor the banner of a family without a face paint it"
+    );
+
+    let fx = sample_rig("Inter", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Inter").is_some(), "the banner shows Inter");
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "the banner of a face without the text's letters shows what its row shows, not the text"
+    );
+}
+
+/// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
+/// to open (a recent row included), the sample after the name; and a rule, not blank room, ends the recent group.
+#[trial]
+fn family_names_line_up_after_the_star_and_before_the_sample() {
+    let (fx, _) = library_rig();
+    let banner = fx.by_label("Font preview: Inter").expect("the banner names the current family").rect;
+    let names: Vec<egui::Rect> = fx
+        .texts()
+        .iter()
+        .filter(|painted| (painted.text == "Inter" || painted.text == "Hack") && painted.rect.top() >= banner.bottom())
+        .map(|painted| painted.rect)
+        .collect();
+    assert_eq!(names.len(), 3, "Hack in the recent group and in the list, Inter once: {names:?}");
+    assert!(names.iter().all(|rect| (rect.left() - names[0].left()).abs() < 0.5), "the names start at one x: {names:?}");
+    let star = fx.by_label("Favorite Inter").expect("Inter's star").rect;
+    let inter = names.iter().find(|rect| (rect.center().y - star.center().y).abs() < star.height()).expect("Inter's name beside its star");
+    assert!(star.right() <= inter.left(), "the star comes first: {star:?} {inter:?}");
+    let sample =
+        fx.texts().iter().all(|painted| painted.text != "Sample" || painted.rect.top() < banner.bottom() || painted.rect.left() >= inter.right());
+    assert!(sample, "no sample before a name");
+    // The recent group's row is the top one; the rule lies between it and the next name, lower than the room between.
+    let recent = names.iter().map(|rect| rect.bottom()).fold(f32::INFINITY, f32::min);
+    let next = names.iter().map(|rect| rect.top()).filter(|top| *top > recent).fold(f32::INFINITY, f32::min);
+    let rule = fx
+        .shape_bounds()
+        .iter()
+        .any(|shape| shape.top() >= recent && shape.bottom() <= next && shape.height() < (next - recent) && shape.width() > star.width() * 4.0);
+    assert!(rule, "a rule under the recent group");
+}
+
+/// A click on a row's star stars the family without picking it or closing the list.
+#[trial]
+fn a_star_flips_the_favourite_without_picking_or_closing() {
+    let (mut fx, state) = library_rig();
+    let star = fx.by_label("Favorite Hack").expect("Hack's star");
+    fx.click(&star);
+    fx.settle();
+    assert!(fx.by_label("Favorite Inter").is_some(), "the list stays open");
+    let state = state.borrow();
+    assert_eq!(state.settings.favorites, ["Hack"], "Hack is starred");
+    assert_eq!(state.family, "Inter", "the star picks nothing");
+}
+
+/// The class column is a list of options: a class narrows the list, All Classes brings every family back.
+#[trial]
+fn a_class_narrows_the_list_and_all_classes_restores_it() {
+    let (mut fx, _) = library_rig();
+    let monospace = fx.by_label("Monospace").expect("the Monospace class");
+    fx.click(&monospace);
+    fx.settle();
+    assert!(fx.by_label("Favorite Hack").is_some(), "Hack is monospaced");
+    assert!(fx.by_label("Favorite Inter").is_none(), "Inter is not");
+    let all = fx.by_label("All Classes").expect("All Classes");
+    fx.click(&all);
+    fx.settle();
+    assert!(fx.by_label("Favorite Inter").is_some(), "every family is back");
+}
