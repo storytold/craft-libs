@@ -237,6 +237,8 @@ impl Hovered {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Outcome {
     pass: u64,
+    /// The layer in which this outcome was actually resolved, even if an early result is later reused.
+    layer: Option<Layer>,
     pub hover: Hovered,
     /// A shape of the arena lies under the pointer, on top or not.
     pub contains: bool,
@@ -983,7 +985,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             None if others_press => Hovered::default(),
             None => under,
         };
-        let outcome = Outcome { pass: pass_nr, hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, xf };
+        let outcome = Outcome { pass: pass_nr, layer: Some(layer), hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, xf };
         state.outcome = Some(outcome);
         outcome
     });
@@ -1025,6 +1027,25 @@ fn sweep_undrawn(ctx: &Context) {
 
 fn any_press_open(ctx: &Context) -> bool {
     PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
+}
+
+/// Whether an actually captured press in exactly `layer` already ended by Escape in this pass. This observes
+/// the arena's existing outcome after its body ran; it neither delivers a key nor changes the press machine.
+pub(crate) fn escape_cancelled_in_layer(ctx: &Context, layer: Layer) -> bool {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Arenas>::with(ctx, viewport, |arenas| {
+        arenas.by_root.values().any(|state| {
+            state.pass == pass_nr
+                && state.machine.target().is_none()
+                && state.outcome.is_some_and(|outcome| {
+                    outcome.pass == pass_nr
+                        && outcome.layer == Some(layer)
+                        && outcome.target.is_some()
+                        && matches!(outcome.phase, Some(PressPhase::Cancel { reason: craft_behavior::PressCancel::Escape, .. }))
+                })
+        })
+    })
 }
 
 /// The arena's outcome of the running pass, idle when the root has not run yet.
