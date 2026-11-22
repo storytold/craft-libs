@@ -524,7 +524,7 @@ fn sample_rig(family: &'static str, text: &'static str) -> Fixture {
 }
 
 /// Each row has one sample, the picker's sample text, in its own face; a face that lacks the text's letters shows its
-/// name instead; and a family without a face shows no sample at all, not the text in the interface face.
+/// name instead, in its row and in the banner; and a family without a face shows no sample at all, not the text in the interface face.
 #[trial]
 fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
     let fx = sample_rig("Inter", "Hello");
@@ -541,6 +541,13 @@ fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
     assert!(
         fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
         "no face draws the text: neither the rows nor the banner of a family without a face paint it"
+    );
+
+    let fx = sample_rig("Inter", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Inter").is_some(), "the banner shows Inter");
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "the banner of a face without the text's letters shows what its row shows, not the text"
     );
 }
 

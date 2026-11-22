@@ -400,7 +400,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                     face: &info.regular,
                 });
                 let label = words.preview_of.fill(&[("family", shown_name.as_str())]);
-                FontPreviewBanner::new(label, &shown_name, text, face).show(ui);
+                // What the family's row shows: the text, or its name or first glyphs when the face can't draw it.
+                let shown_text = infos.sample_text(catalog, &banner_family, text, &shown_name);
+                FontPreviewBanner::new(label, &shown_name, &shown_text, face).show(ui);
             }
             if let Some(filters) = filters.as_mut() {
                 filter_bar(ui, filters, &mut hide_classes, &words);

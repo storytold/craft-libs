@@ -103,8 +103,8 @@ impl FamilyInfos {
         lock(&self.traits).get(family).and_then(|t| t.as_ref()).and_then(|t| t.class)
     }
 
-    /// What the row's sample says: `sample` when the family's face draws it, else its name, else the first glyphs the
-    /// face has (a symbol face, or a face without the sample's script).
+    /// What a family's sample says, in its row and in the banner: `sample` when the family's face draws it, else its
+    /// name, else the first glyphs the face has (a symbol face, or a face without the sample's script).
     pub(super) fn sample_text(&self, catalog: &Catalog, family: &str, sample: &str, shown: &str) -> String {
         let key = (family.to_owned(), sample.to_owned());
         if let Some(text) = lock(&self.samples).get(&key) {
