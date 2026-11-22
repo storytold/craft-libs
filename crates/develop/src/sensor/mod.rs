@@ -149,7 +149,7 @@ impl RawDevelopExt for RawImage {
 
     fn develop_balanced_masked(&self, method: Method, wb: [f32; 3], clip: f32) -> Result<(Rgb32f, Option<Vec<u8>>)> {
         let n = self.normalized()?;
-        let mask = clip_mask(self, &n, clip);
+        let mask = clip_mask(self, &n, method, clip);
         Ok((develop_full(self, n, method, Some(wb)), mask))
     }
 
@@ -209,7 +209,7 @@ fn balance_gains(wb: [f32; 3]) -> Option<[f32; 3]> {
 
 fn scale_mosaic(n: &mut Normalized, method: Method, gains: [f32; 3]) -> bool {
     let Some(cfa) = n.cfa.as_ref().filter(|_| n.cpp == 1) else { return false };
-    if method == Method::Bilinear || (cfa.is_bayer() && (n.width < 4 || n.height < 4)) {
+    if demosaic::mosaic_method(cfa, n.width, n.height, method) == Method::Bilinear {
         return false;
     }
 
@@ -234,12 +234,12 @@ fn scale_mosaic(n: &mut Normalized, method: Method, gains: [f32; 3]) -> bool {
     true
 }
 
-fn clip_mask(raw: &RawImage, n: &Normalized, clip: f32) -> Option<Vec<u8>> {
+fn clip_mask(raw: &RawImage, n: &Normalized, method: Method, clip: f32) -> Option<Vec<u8>> {
+    use highlight::{CLIPPED_BITS, FROM_CLIPPED_BITS};
+
     // This radius covers samples read directly by the directional interpolators. Estimates
     // that build on interpolated green can depend on samples farther away.
     const REACH: usize = 2;
-    const FROM: [u8; 3] = [highlight::FROM_CLIPPED_R, highlight::FROM_CLIPPED_G, highlight::FROM_CLIPPED_B];
-    const CLIPPED: [u8; 3] = [highlight::CLIPPED_R, highlight::CLIPPED_G, highlight::CLIPPED_B];
 
     let cfa = n.cfa.as_ref().filter(|_| n.cpp == 1)?;
     let (w, h) = (n.width, n.height);
@@ -255,12 +255,17 @@ fn clip_mask(raw: &RawImage, n: &Normalized, clip: f32) -> Option<Vec<u8>> {
     if !has_clip {
         return None;
     }
+    if demosaic::mosaic_method(cfa, w, h, method) == Method::Bilinear {
+        let mosaic = demosaic::Mosaic { w, h, data: &n.data, cfa };
+        return Some(demosaic::bilinear::clip_mask(&mosaic, crop, clip));
+    }
 
     // Collect clipped colours within reach horizontally, then combine those rows for each output pixel.
     let mut rows = vec![0u8; w * h];
     par_rows(&mut rows, w, |y, row| {
         let samples = &n.data[y * w..(y + 1) * w];
-        let clipped: Vec<u8> = samples.iter().enumerate().map(|(x, v)| if is_clipped(v) { FROM[cfa.color_at(x, y) as usize] } else { 0 }).collect();
+        let clipped: Vec<u8> =
+            samples.iter().enumerate().map(|(x, v)| if is_clipped(v) { FROM_CLIPPED_BITS[cfa.color_at(x, y) as usize] } else { 0 }).collect();
         for (x, bits) in row.iter_mut().enumerate() {
             *bits = clipped[x.saturating_sub(REACH)..=(x + REACH).min(w - 1)].iter().fold(0, |a, b| a | b);
         }
@@ -275,10 +280,10 @@ fn clip_mask(raw: &RawImage, n: &Normalized, clip: f32) -> Option<Vec<u8>> {
         for (ox, bits) in out.iter_mut().enumerate() {
             let x = crop.x + ox;
             let colour = cfa.color_at(x, y);
-            let from = *bits & !FROM[colour as usize];
+            let from = *bits & !FROM_CLIPPED_BITS[colour as usize];
             *bits = if is_clipped(&n.data[y * w + x]) {
                 // Keep the interpolated values around a clipped measurement. They can carry thin dark detail.
-                CLIPPED[colour as usize]
+                CLIPPED_BITS[colour as usize]
             } else if from != 0 {
                 from | ((colour + 1) << highlight::MEASURED_SHIFT)
             } else {

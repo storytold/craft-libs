@@ -377,9 +377,12 @@ pub const CLIPPED_B: u8 = 4;
 pub const FROM_CLIPPED_R: u8 = 8;
 pub const FROM_CLIPPED_G: u8 = 16;
 pub const FROM_CLIPPED_B: u8 = 32;
-/// Bits 6 and 7 of a [`reconstruct_masked`] mask entry: the colour the pixel measured itself, plus one (0: not told,
-/// as for binned pixels, which measured none on their own).
+/// Bits 6 and 7 of a directional [`reconstruct_masked`] mask entry: the measured colour plus one.
+/// Binned and bilinear masks leave this field at zero.
 pub const MEASURED_SHIFT: u8 = 6;
+
+pub(super) const CLIPPED_BITS: [u8; 3] = [CLIPPED_R, CLIPPED_G, CLIPPED_B];
+pub(super) const FROM_CLIPPED_BITS: [u8; 3] = [FROM_CLIPPED_R, FROM_CLIPPED_G, FROM_CLIPPED_B];
 
 /// [`reconstruct_with`] for a binned image ([`super::RawDevelopExt::develop_binned_masked`]): its values are block
 /// means, and `mask` (one entry per pixel, bits [`CLIPPED_R`], [`CLIPPED_G`], [`CLIPPED_B`]) says which colours
@@ -387,11 +390,11 @@ pub const MEASURED_SHIFT: u8 = 6;
 /// true value, so one clipped specular sample among many unclipped ones neither escapes reconstruction nor
 /// (as the block's maximum would) lifts the channel to the clip level, which reads as a coloured speckle (#548).
 ///
-/// For a full-size demosaic ([`super::RawDevelopExt::develop_balanced_masked`]), the mask marks the measured colour
-/// and colours interpolated from nearby clipped samples. Below the clip, an interpolated channel marked this
-/// way is unknown. The other interpolated channel may depend on the same clipped samples, so reconstruction
-/// treats it as unknown below the clip too. Reconstruction uses the measured colour and limits brightness
-/// changes near strongly coloured highlights.
+/// For a full-size demosaic ([`super::RawDevelopExt::develop_balanced_masked`]), the mask marks colours
+/// interpolated from clipped samples. Below the clip, an interpolated channel marked this way is unknown.
+/// A directional mask also records the measured colour. In that case, the other interpolated channel may
+/// depend on the same clipped samples, so reconstruction treats it as unknown below the clip too.
+/// Reconstruction uses the known channels and limits brightness changes near strongly coloured highlights.
 ///
 /// A mask of the wrong length is ignored (clipping is then told by the values alone).
 pub fn reconstruct_masked(img: &mut Rgb32f, wb: [f32; 3], clip: f32, white: [f32; 3], mask: &[u8]) -> usize {
@@ -422,8 +425,8 @@ impl Clipping {
 #[inline]
 fn masked(m: u8, p: &[f32; 3], clip: f32) -> Clipping {
     let bit = |b: u8| m & b != 0;
-    let saturated = std::array::from_fn(|c| p[c] >= clip || bit([CLIPPED_R, CLIPPED_G, CLIPPED_B][c]));
-    let mut unknown: [bool; 3] = std::array::from_fn(|c| bit([FROM_CLIPPED_R, FROM_CLIPPED_G, FROM_CLIPPED_B][c]) && !saturated[c]);
+    let saturated = std::array::from_fn(|c| p[c] >= clip || bit(CLIPPED_BITS[c]));
+    let mut unknown: [bool; 3] = std::array::from_fn(|c| bit(FROM_CLIPPED_BITS[c]) && !saturated[c]);
     if let Some(own) = ((m >> MEASURED_SHIFT) as usize).checked_sub(1).filter(|&c| !saturated[c])
         && unknown.iter().any(|&u| u)
     {

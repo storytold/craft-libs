@@ -355,6 +355,32 @@ fn the_clip_mask_marks_the_colours_interpolated_from_clipped_samples() {
     assert!(raw.develop_balanced_masked(Method::Ahd, DAYLIGHT, CLIP).unwrap().1.is_none());
 }
 
+#[test]
+fn bilinear_clip_mask_marks_only_actual_taps() {
+    let cfa = Cfa::bayer("RGGB").unwrap();
+    for (width, method) in [(16, Method::Bilinear), (3, Method::Ahd), (3, Method::Ppg)] {
+        let raw = raw_of(width, 10, &cfa, [1.0; 3], |x, y| if (x, y) == (0, 2) { [1.0; 3] } else { [0.21, 0.15, 0.11] });
+        let (mut image, mask) = raw.develop_balanced_masked(method, [1.0; 3], CLIP).unwrap();
+        let mask = mask.unwrap();
+        let clean = image.get(2, 3);
+        let blue = image.get(1, 2)[2];
+        highlight::reconstruct_masked(&mut image, [1.0; 3], CLIP, [1.0; 3], &mask);
+        assert_eq!(image.get(2, 3), clean, "the clipped red sample is outside these bilinear taps");
+        assert_eq!(mask[3 * width + 2], 0);
+        assert_eq!(mask[2 * width + 1] & highlight::FROM_CLIPPED_R, highlight::FROM_CLIPPED_R);
+        assert_eq!(image.get(1, 2)[2], blue, "blue interpolation uses its own samples");
+    }
+}
+
+#[test]
+fn bilinear_clip_mask_keeps_the_wider_taps_for_sparse_cfas() {
+    let cfa = Cfa { width: 6, height: 1, pattern: vec![0, 1, 1, 1, 2, 1], origin_x: 0, origin_y: 0 };
+    let raw = raw_of(12, 10, &cfa, [1.0; 3], |x, y| if (x, y) == (0, 2) { [1.0; 3] } else { [0.21, 0.15, 0.11] });
+    let (_, mask) = raw.develop_balanced_masked(Method::Bilinear, DAYLIGHT, CLIP).unwrap();
+    let mask = mask.unwrap();
+    assert_ne!(mask[2 * raw.width + 2] & highlight::FROM_CLIPPED_R, 0, "the closest red taps are two columns away");
+}
+
 /// Review of #1328: dark twigs and wires against a clipped sky (every channel clipped around them) keep their level.
 /// A pixel's own CFA sample is measured: a clipped neighbour of the same colour says nothing about it, and the colours
 /// interpolated from clipped samples are unknown, not lower bounds. Taken as lower bounds (with the pixel's own colour
@@ -510,10 +536,16 @@ fn coloured_highlights_keep_their_brightness_at_the_edges() {
                     }
                     n += 1;
                     let ratio = |p: [f32; 3]| lum(p) / lum(t).max(1e-4);
-                    if ratio(out.get(x, y)) < 0.6 {
-                        dark.push((x, y, ratio(out.get(x, y))));
+                    let masked_ratio = ratio(out.get(x, y));
+                    let value_ratio = ratio(by_value.get(x, y));
+                    assert!(
+                        masked_ratio.is_finite() && value_ratio.is_finite(),
+                        "{scene_name} {tint:?} x{level}, {name} at ({x}, {y}): masked ratio {masked_ratio}, by-value ratio {value_ratio}"
+                    );
+                    if masked_ratio < 0.6 {
+                        dark.push((x, y, masked_ratio));
                     }
-                    if ratio(by_value.get(x, y)) < 0.6 {
+                    if value_ratio < 0.6 {
                         dark_by_value += 1;
                     }
                 }
