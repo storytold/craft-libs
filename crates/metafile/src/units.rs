@@ -85,9 +85,7 @@ pub(crate) fn emf_device(b: Bytes<'_>) -> Option<EmfDevice> {
     let positive = |v: i32| u32::try_from(v).ok().filter(|&v| v > 0);
     let pixels = (positive(b.i32(72)?)?, positive(b.i32(76)?)?);
     let physical_size = if emf_fixed_header_size(b)? >= 108
-        && let (Some(w), Some(h)) = (b.u32(100), b.u32(104))
-        && w > 0
-        && h > 0
+        && let (Some(w), Some(h)) = (positive(b.i32(100)?), positive(b.i32(104)?))
     {
         EmfPhysicalSize::Micrometres(w, h)
     } else {
@@ -236,6 +234,12 @@ mod tests {
         let facts = |has_frame, physical_size| Some(UnitFacts::Emf { has_frame, device: Some(EmfDevice { pixels: (800, 600), physical_size }) });
         assert_eq!(unit_facts(&bytes), facts(true, EmfPhysicalSize::Micrometres(200_150, 149_900)));
         assert_eq!(unit_facts(&bytes[..104]), facts(true, EmfPhysicalSize::Millimetres(200, 150)));
+        set(&mut bytes, 100, -1);
+        assert_eq!(unit_facts(&bytes), facts(true, EmfPhysicalSize::Millimetres(200, 150)));
+        set(&mut bytes, 100, 200_150);
+        set(&mut bytes, 104, -1);
+        assert_eq!(unit_facts(&bytes), facts(true, EmfPhysicalSize::Millimetres(200, 150)));
+        set(&mut bytes, 104, 149_900);
         set(&mut bytes, 4, 88);
         set(&mut bytes, 36, 0);
         assert_eq!(unit_facts(&bytes), facts(false, EmfPhysicalSize::Millimetres(200, 150)));
