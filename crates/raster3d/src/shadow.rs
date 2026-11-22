@@ -356,9 +356,16 @@ pub fn shadow_sizes(width: u32, height: u32, draft: bool, kinds: &[u32]) -> Vec<
 ///
 /// Returns [`RenderError::BadShadowInputs`] for a zero size, a radius that is not positive and
 /// finite, a center that is not finite, a direction whose length differs from 1 by more than
-/// 0.001, or inputs whose map would hold a value that is not finite in `f32`.
+/// 0.001, a shadow diffusion that is negative or not finite, or inputs whose map would hold a
+/// value that is not finite in `f32`.
 pub fn try_env_shadow_map(e: EnvInfo, centre: [f64; 3], radius: f64, size: u32) -> Result<ShadowMap, RenderError> {
-    let ok = size > 0 && radius.is_finite() && radius > 0.0 && centre.iter().all(|v| v.is_finite()) && unit(&e.sun) && e.shadow_diffusion.is_finite();
+    let ok = size > 0
+        && radius.is_finite()
+        && radius > 0.0
+        && centre.iter().all(|v| v.is_finite())
+        && unit(&e.sun)
+        && e.shadow_diffusion.is_finite()
+        && e.shadow_diffusion >= 0.0;
     if !ok {
         return Err(RenderError::BadShadowInputs);
     }

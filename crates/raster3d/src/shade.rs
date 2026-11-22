@@ -344,6 +344,13 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     if !reach.is_finite() {
         reach = 1.0;
     }
+    // Every tap of a receiver more than `reach + 1` texels outside the map reads only texels
+    // outside it, so the light is unblocked there. Returning here also keeps the jitter
+    // lattice finite for map coordinates near `f32::MAX`.
+    let (lo, hi) = (-(reach + 1.0), size as f32 + reach + 1.0);
+    if !(u >= lo && u <= hi && v >= lo && v <= hi) {
+        return 1.0;
+    }
     let n = (reach.ceil() as i32 + 1).clamp(5, PCF_MAX_TAPS);
     let step = reach / (n - 1) as f32;
     let half = (n - 1) as f32 * 0.5;

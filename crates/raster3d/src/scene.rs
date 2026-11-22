@@ -131,7 +131,7 @@ pub struct Light {
     pub shadow: i32,
     /// Fraction of the light a full shadow removes, 0 to 1.
     pub shadow_darkness: f32,
-    /// Penumbra widening in output pixels.
+    /// Penumbra widening in output pixels, 0 or more.
     pub shadow_diffusion: f32,
 }
 
@@ -181,7 +181,7 @@ pub struct EnvInfo {
     pub shadow: i32,
     /// Fraction of the occluded light a full shadow removes, 0 to 1.
     pub shadow_darkness: f32,
-    /// Penumbra widening in output pixels.
+    /// Penumbra widening in output pixels, 0 or more.
     pub shadow_diffusion: f32,
 }
 
@@ -330,6 +330,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && (-1.0..=1.0).contains(&l.cos_outer)
             && (l.kind != 1 || l.cos_inner >= l.cos_outer)
             && (0.0..=1.0).contains(&l.shadow_darkness)
+            && l.shadow_diffusion >= 0.0
             && (l.kind == 2 || unit(&l.dir))
     };
     if let Some(i) = s.lights.iter().position(|l| !ok(l)) {
@@ -341,6 +342,7 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
             && finite(&[e.intensity, e.rotation, e.key, e.shadow_darkness, e.shadow_diffusion])
             && (0.0..=1.0).contains(&e.key)
             && (0.0..=1.0).contains(&e.shadow_darkness)
+            && e.shadow_diffusion >= 0.0
             && e.mips > 0
             && e.radiance.checked_add(e.mips).is_some_and(|end| end as usize <= s.textures.len())
             && (e.irradiance as usize) < s.textures.len();

@@ -861,6 +861,29 @@ fn a_discarded_pixel_gives_way_only_to_fragments_inside_the_depth_range() {
 }
 
 #[test]
+fn negative_shadow_diffusion_is_rejected() {
+    for v in [-0.5, -100.0] {
+        let mut s = lit_scene((16, 12), 1, false);
+        s.lights[1].shadow_diffusion = v;
+        assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadLight(1)), "{v}");
+        assert_eq!(try_shadow_maps(&mut s, false, &Limits::default()), Err(RenderError::BadLight(1)), "{v}");
+        let mut s = lit_scene((16, 12), 1, false);
+        s.env.as_mut().unwrap().shadow_diffusion = v;
+        assert_eq!(try_render(&s, &Limits::default()), Err(RenderError::BadEnvironment), "{v}");
+        let e = EnvInfo { sun: [0.0, -1.0, 0.0], ..s.env.unwrap() };
+        assert_eq!(try_env_shadow_map(e, [0.0; 3], 100.0, 512), Err(RenderError::BadShadowInputs), "{v}");
+    }
+    // Zero keeps the minimum penumbra of eight output pixels.
+    let mut s = lit_scene((16, 12), 1, false);
+    s.lights[1].shadow_diffusion = 0.0;
+    s.env.as_mut().unwrap().shadow_diffusion = 0.0;
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    assert!(try_render(&s, &Limits::default()).is_ok());
+    let e = EnvInfo { sun: [0.0, -1.0, 0.0], ..s.env.unwrap() };
+    assert_eq!(try_env_shadow_map(e, [0.0; 3], 100.0, 512).map(|m| m.radius), Ok(8.0));
+}
+
+#[test]
 fn shadow_darkness_and_environment_key_outside_0_to_1_are_rejected() {
     for v in [1.5, -0.25] {
         let mut s = lit_scene((16, 12), 1, false);
@@ -918,6 +941,31 @@ fn a_shadows_only_material_that_receives_no_shadows_draws_nothing() {
     let hidden = render(|mat| mat.visible = false);
     assert_ne!(render(|_| {}), hidden, "the surface draws the shadow it receives");
     assert_eq!(render(|mat| mat.receives_shadows = false), hidden);
+}
+
+#[test]
+fn receivers_far_off_a_shadow_map_with_a_huge_focal_are_unshadowed() {
+    // A parallel light along the view direction, a hidden caster in front and a lit surface
+    // behind it, with the map's view moved about 100 units off the surface and a focal length
+    // that puts the surface's map coordinates near `f32::MAX` (finite at `f32::MAX / 400`,
+    // infinite at `f32::MAX`).
+    let mut s = quad_scene(16, 16, &[([4.0, 4.0, 12.0, 12.0], 100.0, WHITE), ([0.0, 0.0, 16.0, 16.0], 500.0, WHITE)]);
+    s.materials[0] = Material { casts_shadows: true, visible: false, ..Material::default() };
+    s.materials[1] = Material { double_sided: true, ..Material::default() };
+    s.opaque_count = 0;
+    s.lights = vec![shadow_light(0)];
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    let mut unshadowed = s.clone();
+    unshadowed.materials[1].receives_shadows = false;
+    let unshadowed = bits4(&try_render(&unshadowed, &Limits::default()).unwrap().color);
+    assert_ne!(bits4(&try_render(&s, &Limits::default()).unwrap().color), unshadowed, "the caster shadows the surface");
+    for focal in [f32::MAX / 400.0, f32::MAX] {
+        let mut s = s.clone();
+        s.shadows[0].view[0][3] += 100.0;
+        s.shadows[0].focal = focal;
+        let r = try_render(&s, &Limits::default());
+        assert_eq!(r.map(|img| bits4(&img.color)), Ok(unshadowed.clone()), "focal {focal}");
+    }
 }
 
 /// A light of `kind` at the origin along +z that asks for a shadow map.
