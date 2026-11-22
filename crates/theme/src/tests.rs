@@ -17,3 +17,9 @@ fn contrast_moves_keep_greys_neutral() {
         }
     }
 }
+
+#[test]
+fn non_text_contrast_min_matches_theme_values() {
+    assert_eq!(non_text_contrast_min(Contrast::Standard), 3.0);
+    assert_eq!(non_text_contrast_min(Contrast::High), 4.5);
+}

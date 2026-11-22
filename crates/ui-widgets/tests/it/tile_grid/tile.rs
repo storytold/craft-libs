@@ -155,3 +155,109 @@ fn card_tile_icon_zoom_scales_icon() {
     // 1.5 * 22 pt = 33 pt
     assert!(icon_bounds.width() > 22.0 || icon_bounds.height() > 22.0, "icon scaled by zoom factor");
 }
+
+/// Hostile or extreme icon_zoom values (huge, infinity, NaN, negative) are clamped and do not crash or panic.
+#[trial]
+fn card_tile_icon_zoom_hostile_values_handled_safely() {
+    let mut frames = Frames::new();
+    let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+
+    // Test extreme zoom (10000.0) -> capped at picture rect, does not abort
+    let shapes = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Huge Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(10000.0).show(ui);
+        });
+    });
+    let paper_rect = shapes
+        .iter()
+        .find_map(|s| match s {
+            Shape::Rect(r) if r.fill == Color32::WHITE => Some(r.rect),
+            _ => None,
+        })
+        .expect("paper fill exists");
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!(paper_rect.expand(0.5).contains_rect(icon_bounds), "extreme zoom icon is bounded within paper rect: {icon_bounds:?} in {paper_rect:?}");
+
+    // Test capacity overflow candidate (1e9)
+    let _ = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Overflow Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(1e9).show(ui);
+        });
+    });
+
+    // Test NaN and negative zoom on card tile
+    let _ = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("NaN Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(f32::NAN).show(ui);
+        });
+    });
+    let shapes_neg = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Negative Zoom").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(-5.0).show(ui);
+        });
+    });
+    let glyphs_neg: Vec<Rect> = shapes_neg.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs_neg.is_empty(), "negative zoom icon is rendered at default size, not 0x0");
+
+    // Test non-card tile with NaN and negative zoom
+    let _ = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Non-card NaN").icon(craft_behavior::IconId::new("file")).icon_zoom(f32::NAN).show(ui);
+        });
+    });
+    let non_card_neg = frames.frame_shapes(|ui| {
+        in_region(ui, region, |ui| {
+            Tile::new("Non-card Neg").icon(craft_behavior::IconId::new("file")).icon_zoom(-2.0).show(ui);
+        });
+    });
+    let glyphs_non_card: Vec<Rect> = non_card_neg.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs_non_card.is_empty(), "non-card negative zoom renders icon");
+}
+
+/// A flat_thumbnail tile with paper does not paint paper fill or frame, and keeps standard icon zoom.
+#[trial]
+fn flat_thumbnail_with_paper_keeps_standard_icon_and_no_paper_surface() {
+    let mut frames = Frames::new();
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 300.0));
+            in_region(ui, region, |ui| {
+                Tile::new("Flat Preset").card().flat_thumbnail().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).show(ui);
+            });
+        });
+    }
+    // No white paper fill painted
+    assert!(!shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::WHITE)), "no paper fill painted on flat thumbnail");
+    // Standard icon is clamped to tokens.size.icon.lg (22 pt max side)
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    assert!(!glyphs.is_empty(), "icon glyph is painted");
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!(icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0, "icon bounds {icon_bounds:?} <= 22 pt on flat thumbnail");
+}
+
+/// In a narrow room, zoom does not paint the icon outside the paper rect.
+#[trial]
+fn card_tile_in_narrow_room_caps_icon_at_picture_rect() {
+    let mut frames = Frames::new();
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 100.0));
+            in_region(ui, region, |ui| {
+                Tile::new("Narrow").card().paper(Color32::WHITE).icon(craft_behavior::IconId::new("file")).icon_zoom(20.0).show(ui);
+            });
+        });
+    }
+    let paper_rect = shapes
+        .iter()
+        .find_map(|s| match s {
+            Shape::Rect(r) if r.fill == Color32::WHITE => Some(r.rect),
+            _ => None,
+        })
+        .expect("paper fill exists");
+    let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
+    let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
+    assert!(paper_rect.expand(0.5).contains_rect(icon_bounds), "icon {icon_bounds:?} is inside narrow paper {paper_rect:?}");
+}

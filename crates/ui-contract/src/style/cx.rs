@@ -273,6 +273,19 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink for icons and non-text on a user colour: the higher-contrast of `text.normal` and `text.on_strong` on the fill,
+    /// pushed to the non-text contrast it needs (3.0 in standard, 4.5 in high contrast).
+    pub fn icon_ink_on(&self, fill: DataColor) -> StyleColor {
+        let fill = Rgba::from(fill.0);
+        let text = &self.tokens.color.text;
+        let start = if craft_theme::contrast_ratio(text.on_strong, fill) > craft_theme::contrast_ratio(text.normal, fill) {
+            text.on_strong
+        } else {
+            text.normal
+        };
+        self.color(craft_theme::ensure_contrast(start, fill, craft_theme::non_text_contrast_min(self.contrast())))
+    }
+
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
     pub fn focus_look(&self) -> FocusLook {
         FocusLook::new(egui::Stroke::new(self.tokens.stroke.medium, self.color(self.tokens.color.line.focus).egui()), 0.0)

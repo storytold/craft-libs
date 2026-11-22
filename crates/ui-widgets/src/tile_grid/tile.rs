@@ -652,6 +652,16 @@ fn badge_rects(flow: Flow, widths: &[f32], height: f32, sizes: &Sizes, plate: Op
         .collect()
 }
 
+/// Returns `zoom` sanitized if it is finite and positive, or `1.0` if non-finite or `<= 0.0`.
+/// When `zoom` is `None`, falls back to `default`.
+fn clean_zoom(zoom: Option<f32>, default: f32) -> f32 {
+    match zoom {
+        Some(z) if z.is_finite() && z > 0.0 => z,
+        Some(_) => 1.0,
+        None => default,
+    }
+}
+
 impl Component for Tile<'_> {
     const ROLE: Role = Role::LIST_ITEM;
     const OVERLAYS: bool = false;
@@ -749,7 +759,10 @@ impl Component for Tile<'_> {
         // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
         // side, with what the density adds around it. A narrower room shrinks the picture to fit.
         let side = match (&self.icon, cx.proposal) {
-            (Some(_), _) if !self.card => self.icon_zoom.map_or(cx.style.face.side, |zoom| cx.style.face.side * zoom),
+            (Some(_), _) if !self.card => {
+                let zoom = clean_zoom(self.icon_zoom, 1.0);
+                cx.style.face.side * zoom
+            }
             (Some(_) | None, Proposal::Min) => sizes.thumbs[0],
             (Some(_) | None, _) => sizes.thumbs[1],
         };
@@ -897,16 +910,13 @@ impl Component for Tile<'_> {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
             if let Some(face) = face {
-                let zoom = self.icon_zoom.unwrap_or(if self.paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
-                let side = style.face.side * zoom;
+                let zoom = clean_zoom(self.icon_zoom, if !self.flat_thumbnail && self.paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
+                let max_side = picture.width().min(picture.height()).max(0.0);
+                let side = (style.face.side * zoom).min(max_side);
                 let icon = Rect::from_center_size(picture.center(), Vec2::splat(side));
                 let color = match (face.color, self.paper) {
                     (Some(color), _) => color,
-                    (None, Some(paper)) => {
-                        let base = cx.resolve(&style.face.color);
-                        let ink = craft_theme::ensure_contrast(Rgba::from(base.egui()), Rgba::from(paper.0), 3.0);
-                        StyleColor(Color32::from(Srgba::from(ink)))
-                    }
+                    (None, Some(paper)) => ui.with_style(Variant::SECONDARY, |cx| cx.icon_ink_on(paper)),
                     (None, None) => cx.resolve(&style.face.color),
                 };
                 draw.icon(icon, &face.color(color));

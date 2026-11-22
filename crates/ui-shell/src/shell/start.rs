@@ -379,13 +379,7 @@ impl<'p> Page<'p> {
                 let paper = self.paper;
                 move |cx, rect| paint_thumb(cx, rect, thumbnails, source, &key, paper)
             }),
-            None => {
-                let mut tile = tile.icon(IconId::new("file"));
-                if let Some(paper) = self.paper {
-                    tile = tile.paper(paper);
-                }
-                tile
-            }
+            None => tile.icon(IconId::new("file")),
         }
     }
 

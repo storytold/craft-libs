@@ -222,7 +222,7 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
     thumb_size: Option<ThumbSize>,
-    /// Cards are as large as the largest tile measures (an icon tile measures its icon), instead of the zoomed
+    /// Cards are as large as the largest tile measures (a non-card icon tile measures its icon), instead of the zoomed
     /// thumbnail side; `zoom` and `thumb_size` do not apply.
     #[prop(flag)]
     content_cells: bool,
