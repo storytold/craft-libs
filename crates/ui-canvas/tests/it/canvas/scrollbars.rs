@@ -444,3 +444,34 @@ fn a_thumb_dragged_past_the_end_and_back_follows_the_pointer_in_the_same_drag() 
     assert!(back.iter().any(|&x| x < at_end - 1.0), "the drag moves back: past the end {seen:?}, back {back:?}");
     assert!((view.get().center.x - straight).abs() < 1.0, "back where a straight drag puts it: {} vs {straight}", view.get().center.x);
 }
+
+/// A thumb's pressed extent lasts only as long as its press: after the release the bars follow the view again. Here
+/// the view zooms out after a thumb drag, and page presses on the track reach the new end (100 screen points of the
+/// document left in view), as they do when no drag came first. The kept extent used to hold the range at the drag's
+/// zoom (photocraft#16328).
+#[trial]
+fn after_a_thumb_drag_the_bars_follow_a_new_zoom() {
+    let large = Size::new(4000.0, 3000.0);
+    let zoomed_out = |view: CanvasView| CanvasView::new(view.rect, Point::new(large.width / 2.0, large.height / 2.0), 0.25);
+    let page_to_the_end = |fixture: &mut Fixture| {
+        let track = fixture.by_label("Horizontal scroll bar").expect("the track").rect;
+        for _ in 0..40 {
+            fixture.click_at(pos2(track.right() - 3.0, track.center().y));
+            fixture.settle();
+        }
+    };
+    let (mut fixture, view) = centred_scrollbars(large, 1.0, true);
+    view.set(zoomed_out(view.get()));
+    fixture.settle();
+    page_to_the_end(&mut fixture);
+    let fresh = shown_range(&view.get(), Axis::X).0;
+    assert!((fresh - (large.width - 400.0)).abs() < 1.0, "paging reaches the end: the last 400 units stay in view, shows from {fresh}");
+
+    let (mut fixture, view) = centred_scrollbars(large, 1.0, true);
+    drag_thumb(&mut fixture, "Horizontal scroll bar", vec2(40.0, 0.0));
+    view.set(zoomed_out(view.get()));
+    fixture.settle();
+    page_to_the_end(&mut fixture);
+    let first = shown_range(&view.get(), Axis::X).0;
+    assert!((first - fresh).abs() < 1.0, "after a thumb drag paging reaches the same end: shows from {first}, without the drag {fresh}");
+}
