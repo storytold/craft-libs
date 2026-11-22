@@ -687,7 +687,18 @@ fn balance(mut q: [f32; 4], g: [f32; 3]) -> [f32; 4] {
 /// The index of the `q` quantile (0 … 1) among `len` sorted values, as every percentile in the
 /// develop picks it.
 pub fn quantile_rank(len: usize, q: f32) -> usize {
-    (len.saturating_sub(1) as f32 * q).round() as usize
+    let last = len.saturating_sub(1);
+    ((last as f32 * q).round() as usize).min(last)
+}
+
+#[cfg(test)]
+#[test]
+fn quantile_rank_keeps_the_upper_endpoint_inside_the_sample() {
+    // This last index rounds up when cast to f32.
+    let len = 16_777_220;
+    assert_eq!(quantile_rank(len, 1.0), len - 1);
+    assert_eq!(quantile_rank(4, 0.5), 2);
+    assert_eq!(quantile_rank(0, 1.0), 0);
 }
 
 /// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
