@@ -61,7 +61,7 @@ fn about_dialog_icon_links(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     hosted(ui, data, AboutTab::About, || {
         let links = [
             AboutLink::new("Website", "https://example.org").icon(craft_behavior::IconId::new("globe")),
-            AboutLink::new("Source", "https://example.org/source").icon(craft_behavior::IconId::new("code-xml")),
+            AboutLink::new("Source", "https://example.org/source").icon(craft_behavior::IconId::new("file")),
         ];
         HostedAbout::new(info(false).links(links), CREDITS.clone())
     })
