@@ -150,12 +150,13 @@ fn a_host_payload_dropped_onto_and_between_rows_reports_its_place() {
         let origin = ui.max_rect().min;
         in_region(ui, Rect::from_min_size(origin, PANEL), |ui| {
             let out = LayersPanel::new(&target)
+                .document(1)
                 .takes_drop(|_: &ListDrag<LayerRowKey<u32>>, layer: &u32, position| position != LayerPosition::Into || *layer == GROUP)
                 .show(ui);
             sink.borrow_mut().extend(out.events);
         });
         in_region(ui, Rect::from_min_size(origin + Vec2::new(PANEL.x, 0.0), PANEL), |ui| {
-            let _ = LayersPanel::new(&source).show(ui);
+            let _ = LayersPanel::new(&source).document(2).show(ui);
         });
     });
     fixture.room(Vec2::new(PANEL.x * 2.0, PANEL.y));
