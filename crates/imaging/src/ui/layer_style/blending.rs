@@ -24,8 +24,10 @@ pub(super) struct BlendingInput<'a> {
     pub style: &'a LayerStyle,
     /// The Blend If entry shown.
     pub blend_if_channel: usize,
-    /// The document's colour channels.
+    /// The document's colour channels: one Channels check each.
     pub channel_names: &'a [String],
+    /// The Blend If entries' names as the host gives them ([`blend_if_entry_label`]).
+    pub blend_if_names: Option<&'a [String]>,
     /// The blend modes the Blend Mode select offers; a separator entry divides the groups.
     pub blend_modes: &'a [Entry<String>],
 }
@@ -164,8 +166,7 @@ pub(super) fn blending_page(ui: &mut Ui, input: &BlendingInput<'_>) -> BlendingO
         let shown = input.blend_if_channel.min(entries - 1);
         Section::fixed(words.blend_if.clone()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
             FieldGroup::new(words.blend_if.clone()).show(ui, |ui, _| {
-                let names: Vec<Entry<usize>> =
-                    (0..entries).map(|i| Entry::new(i, blend_if_entry_label(i, entries, input.channel_names, &words))).collect();
+                let names: Vec<Entry<usize>> = (0..entries).map(|i| Entry::new(i, blend_if_entry_label(i, entries, input, &words))).collect();
                 Field::new(words.blend_if.clone()).show(ui, |ui, _| {
                     let edit = Select::new(words.blend_if.clone(), Bind::given(shown), &names).show(ui);
                     if let Some(&index) = edit.value() {
@@ -239,10 +240,14 @@ fn advanced_labels(words: &LayerStyleWords) -> [Label; 5] {
     ]
 }
 
-/// The name of Blend If entry `index` when the style has `entries` entries and the document's channels are
-/// `channel_names`: with as many entries as names (a one-channel document) the name itself; otherwise entry 0 is
-/// Gray and entry `i` is name `i − 1`.
-pub(super) fn blend_if_entry_label(index: usize, entries: usize, channel_names: &[String], words: &LayerStyleWords) -> Label {
+/// The name of Blend If entry `index` when the style has `entries` entries: the host's Blend If name `index` when it
+/// gave them, as given. Otherwise from the document's channel names: with as many entries as names (a one-channel
+/// document) the name itself; else entry 0 is Gray and entry `i` is name `i − 1`.
+pub(super) fn blend_if_entry_label(index: usize, entries: usize, input: &BlendingInput<'_>, words: &LayerStyleWords) -> Label {
+    if let Some(names) = input.blend_if_names {
+        return Label::from(names.get(index).cloned().unwrap_or_default());
+    }
+    let channel_names = input.channel_names;
     let name = |i: usize| Label::from(channel_names.get(i).cloned().unwrap_or_default());
     if entries == channel_names.len() {
         name(index)

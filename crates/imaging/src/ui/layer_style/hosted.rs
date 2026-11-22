@@ -152,6 +152,7 @@ pub struct HostedLayerStyle {
     open: bool,
     draft: LayerStyleDraft,
     channel_names: Vec<String>,
+    blend_if_names: Option<Vec<String>>,
     specs: Option<Vec<EffectSpec>>,
     blend_keys: Option<HashMap<String, String>>,
     blend_modes: Vec<Entry<String>>,
@@ -181,6 +182,7 @@ impl HostedLayerStyle {
             open: true,
             draft,
             channel_names,
+            blend_if_names: None,
             specs: None,
             blend_keys: None,
             blend_modes: Vec::new(),
@@ -196,6 +198,13 @@ impl HostedLayerStyle {
             #[cfg(feature = "screen-testing")]
             facts: craft_ui::testing::StoryOutput::default(),
         }
+    }
+
+    /// [`LayerStyleDialog::blend_if_names`].
+    #[must_use]
+    pub fn blend_if_names(mut self, names: Vec<String>) -> Self {
+        self.blend_if_names = Some(names);
+        self
     }
 
     /// [`LayerStyleDialog::specs`].
@@ -329,6 +338,7 @@ impl StackDialog for HostedLayerStyle {
             open,
             draft,
             channel_names,
+            blend_if_names,
             specs,
             blend_keys,
             blend_modes,
@@ -374,6 +384,9 @@ impl StackDialog for HostedLayerStyle {
                     .blend_modes(blend_modes.as_slice())
                     .user_contours(user_contours.as_slice())
                     .gradient_presets(gradient_presets.as_slice());
+                if let Some(names) = blend_if_names.as_deref() {
+                    body = body.blend_if_names(names);
+                }
                 if let Some(patterns) = patterns.as_ref() {
                     body = body.patterns(patterns);
                 }
