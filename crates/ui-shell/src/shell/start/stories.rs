@@ -79,13 +79,16 @@ fn plain_templates() -> Vec<Template> {
     ]
 }
 
+/// An app section a story adds: its title and its body.
+type AppSection<'a> = (&'a str, &'a mut dyn FnMut(&mut Ui));
+
 /// What a story passes besides its lists.
 #[derive(Default)]
 struct Extras<'a> {
     source: Option<&'a FakeThumbSource<ThumbKey>>,
     links: &'a [StartLink],
     drop_hint: Option<&'a str>,
-    section: Option<(&'a str, &'a mut dyn FnMut(&mut Ui))>,
+    section: Option<AppSection<'a>>,
 }
 
 fn screen(

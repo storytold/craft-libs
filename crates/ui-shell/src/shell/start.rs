@@ -162,6 +162,9 @@ impl Outcome for StartOutput {
     }
 }
 
+/// An app's own section of the start screen: its title and its body.
+type AppSection<'a> = (Label, RefCell<&'a mut dyn FnMut(&mut Ui)>);
+
 /// The start screen, shown in a shell's body when no document is open.
 ///
 /// - **Layout.** New and Open (the first Tab stops), then Recent with the view switch and the sort, Pinned Folders
@@ -214,7 +217,7 @@ pub struct StartScreen<'a> {
     #[prop(into)]
     drop_hint: Option<Label>,
     /// One app section, drawn after Recent and Pinned Folders and before Templates.
-    section: Option<(Label, RefCell<&'a mut dyn FnMut(&mut Ui)>)>,
+    section: Option<AppSection<'a>>,
     /// How the page is laid out.
     #[prop]
     layout: StartLayout,
@@ -326,7 +329,6 @@ impl<'a> StartScreen<'a> {
 
     /// One app section titled `title`, drawn as a fixed section after Recent and Pinned Folders and before Templates.
     /// `body` may run more than once in a pass: the rail measures it.
-    #[must_use]
     pub fn section(mut self, title: impl Into<Label>, body: &'a mut dyn FnMut(&mut Ui)) -> Self {
         self.section = Some((title.into(), RefCell::new(body)));
         self

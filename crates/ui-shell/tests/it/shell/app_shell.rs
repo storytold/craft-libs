@@ -749,7 +749,8 @@ fn select_list(ui: &mut Ui) {
 /// status bar is never covered.
 #[trial]
 fn popups_stop_above_the_bottom_slots_in_each_window() {
-    let cases: [(&str, fn(&mut Ui)); 3] = [("Open", button_menu), ("File", menu_bar), ("Pick", select_list)];
+    type Case = (&'static str, fn(&mut Ui));
+    let cases: [Case; 3] = [("Open", button_menu), ("File", menu_bar), ("Pick", select_list)];
     for (opener, body) in cases {
         let (mut fixture, slot) = shell_with_status(body);
         let opener_node = fixture.by_label(opener).unwrap_or_else(|| panic!("the opener {opener:?} shows"));
