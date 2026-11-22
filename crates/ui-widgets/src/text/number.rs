@@ -274,6 +274,15 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// Enter acts in the field itself (it runs a search): the field takes it, and an enclosing dialog's default button
+    /// does not. `EditResponse::submitted` and `submit_mods` tell the submitting Enter, as for
+    /// [`TextField::submits`](crate::text::TextField::submits).
+    #[must_use]
+    pub fn submits(mut self) -> Self {
+        self.options.submits = true;
+        self
+    }
+
     /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
     #[must_use]
     pub(super) fn zoom_typing(mut self) -> Self {

@@ -202,7 +202,7 @@ fn preset_row(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, live:
     }
 }
 
-/// "Optimize to File Size…" and, once opened, its rows; OK (and Enter, which the dialog leaves to it) files the search.
+/// "Optimize to File Size…" and, once opened, its rows; OK, or Enter in the Desired File Size field, files the search.
 /// While the rows are closed, the host's last answer shows as a line while the settings are the ones it found.
 fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: &mut Live, asked: &mut Asked) {
     let Kit { words, units, .. } = *kit;
@@ -219,9 +219,12 @@ fn optimize_rows(ui: &mut Ui, kit: &Kit<'_>, options: &SaveForWebOptions, live: 
         return;
     }
     row(ui, &words.optimize_size, "optimize-size", |ui| {
-        let field = whole(units, words.optimize_size.clone(), live.optimize.desired_k(), DESIRED_K);
-        if let Some(k) = field.show(ui).edit.value().cloned().flatten() {
+        let edit = whole(units, words.optimize_size.clone(), live.optimize.desired_k(), DESIRED_K).submits().show(ui).edit;
+        if let Some(k) = edit.value().cloned().flatten() {
             live.optimize.k = Some(k);
+        }
+        if edit.submitted && edit.submit_mods == craft_keymap::Mods::NONE {
+            asked.optimize_request = Some(live.optimize.request(options));
         }
     });
     let starts = [Entry::new(OptimizeStart::Current, words.start_current.clone()), Entry::new(OptimizeStart::Auto, words.start_auto.clone())];
