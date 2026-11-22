@@ -5,24 +5,36 @@ use craft_material_graph::graph::{self, Graph};
 const RAW_DOC: &str = include_str!("../../docs/format.md");
 
 /// The reference as LF text: a Windows checkout may convert its line endings.
-fn doc() -> String {
-    RAW_DOC.replace("\r\n", "\n")
+fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+/// The first ```text block of the reference.
+fn example(raw: &str) -> String {
+    let doc = lf(raw);
+    let start = doc.find("```text\n").expect("an example") + "```text\n".len();
+    let len = doc.get(start..).and_then(|r| r.find("```")).expect("the example ends");
+    doc[start..start + len].to_string()
 }
 
 #[test]
 fn the_example_renders() {
-    let doc = doc();
-    let start = doc.find("```text\n").expect("an example") + "```text\n".len();
-    let len = doc.get(start..).and_then(|r| r.find("```")).expect("the example ends");
-    let g = Graph::parse(&doc[start..start + len]).expect("the example parses");
+    let g = Graph::parse(&example(RAW_DOC)).expect("the example parses");
     assert_eq!(g.format, graph::FORMAT_VERSION);
     let out = g.evaluate(Some(16)).expect("the example renders");
     assert!(out.contains_key("height"));
 }
 
+/// A Windows checkout has CRLF line endings; the example must read the same there.
+#[test]
+fn the_example_reads_the_same_with_crlf_line_endings() {
+    let crlf = lf(RAW_DOC).replace('\n', "\r\n");
+    assert_eq!(example(&crlf), example(RAW_DOC));
+}
+
 #[test]
 fn every_node_kind_is_listed() {
-    let doc = doc();
+    let doc = lf(RAW_DOC);
     let all = graph::SPECS
         .iter()
         .chain(craft_material_graph::compiled_ops::SPECS)
