@@ -985,7 +985,17 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             None if others_press => Hovered::default(),
             None => under,
         };
-        let outcome = Outcome { pass: pass_nr, layer: Some(layer), hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, xf };
+        let outcome = Outcome {
+            pass: pass_nr,
+            layer: Some(layer),
+            hover,
+            contains,
+            target: step.target,
+            phase: step.phase,
+            dragging,
+            activated: step.activated,
+            xf,
+        };
         state.outcome = Some(outcome);
         outcome
     });

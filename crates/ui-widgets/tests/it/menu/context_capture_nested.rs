@@ -11,8 +11,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 #[derive(Default)]
 struct State {
-    header: Option<Rect>, nested_header: Option<Rect>, checkbox: Option<Rect>, owner: Option<Id>,
-    checked: bool, commits: usize, outer_closes: Vec<CloseReason>, inner_closes: Vec<CloseReason>,
+    header: Option<Rect>,
+    nested_header: Option<Rect>,
+    checkbox: Option<Rect>,
+    owner: Option<Id>,
+    checked: bool,
+    commits: usize,
+    outer_closes: Vec<CloseReason>,
+    inner_closes: Vec<CloseReason>,
 }
 fn secondary_open(fixture: &mut Fixture, at: egui::Pos2) {
     fixture.frame(vec![pointer::moved(at)]);
@@ -28,10 +34,17 @@ fn held_escape_closes_only_the_actual_top_menu_not_its_parent_and_recovers_fresh
         let mut state = held.borrow_mut();
         let live = !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx());
         let header = ui.button("Real outer section header");
-        if live { state.header = Some(header.rect); state.nested_header = None; state.checkbox = None; state.owner = None; }
+        if live {
+            state.header = Some(header.rect);
+            state.nested_header = None;
+            state.checkbox = None;
+            state.owner = None;
+        }
         let outer = Menu::context("Outer section options", &header).id_salt("outer-real-menu").show(ui, |ui, _| {
             let nested = ui.button("Real inner section header");
-            if !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx()) { state.nested_header = Some(nested.rect); }
+            if !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx()) {
+                state.nested_header = Some(nested.rect);
+            }
             let inner = Menu::context("Inner section options", &nested).id_salt("inner-real-menu").show(ui, |ui, _| {
                 let mut value = state.checked;
                 let shown = Checkbox::new(Bind::bound(&mut value)).label("Nested genuine checkbox").id_salt("nested-solo").show(ui);
@@ -42,18 +55,26 @@ fn held_escape_closes_only_the_actual_top_menu_not_its_parent_and_recovers_fresh
                     state.owner = Some(shown.response.id);
                 }
             });
-            if !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx()) && let Some(why) = inner.output.closed {
+            if !ui.is_sizing_pass()
+                && !craft_ui::runtime::measure::active(ui.ctx())
+                && let Some(why) = inner.output.closed
+            {
                 state.inner_closes.push(why);
             }
         });
-        if live && let Some(why) = outer.output.closed { state.outer_closes.push(why); }
+        if live && let Some(why) = outer.output.closed {
+            state.outer_closes.push(why);
+        }
     });
     fixture.motion(MotionMode::Off).settle();
     let header = state.borrow().header.expect("real outer opener").center();
     secondary_open(&mut fixture, header);
     let inner_header = state.borrow().nested_header.expect("actual outer body").center();
     secondary_open(&mut fixture, inner_header);
-    let (owner, at) = { let state = state.borrow(); (state.owner.expect("actual inner Checkbox"), state.checkbox.expect("actual inner body").center()) };
+    let (owner, at) = {
+        let state = state.borrow();
+        (state.owner.expect("actual inner Checkbox"), state.checkbox.expect("actual inner body").center())
+    };
     fixture.frame(vec![pointer::moved(at), pointer::press(at)]);
     assert_eq!(craft_ui::runtime::pointer::with_pass_pointer(fixture.ctx(), |p| p.press_targets.click), Some(owner));
     assert!(fixture.ctx().input(|input| input.pointer.primary_down()));

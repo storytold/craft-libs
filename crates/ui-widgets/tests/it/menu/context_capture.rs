@@ -73,9 +73,7 @@ fn canonical_context_owner_closes_on_one_held_checkbox_escape_without_replay_and
     assert!(fixture.ctx().input(|input| input.pointer.primary_down()));
     assert!(!state.borrow().checked);
     assert_eq!(state.borrow().commits, 0);
-    fixture.frame(vec![Event::Key {
-        key: Key::Escape, physical_key: Some(Key::Escape), pressed: false, repeat: false, modifiers: Modifiers::NONE,
-    }]);
+    fixture.frame(vec![Event::Key { key: Key::Escape, physical_key: Some(Key::Escape), pressed: false, repeat: false, modifiers: Modifiers::NONE }]);
     assert!(state.borrow().checkbox.is_none(), "the genuine SDK owner must close by the original keyup boundary");
     assert_eq!(state.borrow().closes, vec![CloseReason::Escape]);
     fixture.frame(vec![pointer::release(at)]);

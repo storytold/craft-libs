@@ -2,13 +2,20 @@
 use craft_behavior::MotionMode;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::menu::Menu;
-use craft_ui::text::TextField;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, pointer, trial};
+use craft_ui::text::TextField;
 use egui::{Event, Id, Key, Modifiers, Rect};
 use std::cell::RefCell;
 use std::rc::Rc;
-struct State { header: Option<Rect>, field: Option<Rect>, root: Option<Id>, pressed: bool, value: String, commits: usize }
+struct State {
+    header: Option<Rect>,
+    field: Option<Rect>,
+    root: Option<Id>,
+    pressed: bool,
+    value: String,
+    commits: usize,
+}
 #[trial]
 fn a_menu_native_text_press_preserves_draft_escape_without_owner_close_or_blur_commit() {
     let state = Rc::new(RefCell::new(State { header: None, field: None, root: None, pressed: false, value: "seed".to_owned(), commits: 0 }));
@@ -17,7 +24,11 @@ fn a_menu_native_text_press_preserves_draft_escape_without_owner_close_or_blur_c
         let mut state = held.borrow_mut();
         let live = !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx());
         let header = ui.button("Real text editor header");
-        if live { state.header = Some(header.rect); state.field = None; state.pressed = false; }
+        if live {
+            state.header = Some(header.rect);
+            state.field = None;
+            state.pressed = false;
+        }
         Menu::context("Editor options", &header).id_salt("real-text-menu").show(ui, |ui, _| {
             let mut value = state.value.clone();
             let shown = TextField::new("Draft inside Menu", Bind::bound(&mut value)).id_salt("draft-field").show(ui);

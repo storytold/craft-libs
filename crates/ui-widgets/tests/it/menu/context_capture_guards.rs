@@ -1,7 +1,10 @@
 //! Physical layer-host policy controls. The unchanged context_capture test remains the canonical public Menu oracle.
 use craft_behavior::{CancelRule, MotionMode, Sense};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, Props as _, Role, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::{
+    Bind, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, Props as _, Role, Show as _, ShowContainer as _,
+    Trigger,
+};
 use craft_ui::runtime::focus::{FocusPolicy, Initial};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::style::StyleCx;
@@ -23,26 +26,48 @@ struct PolicyLayer {
     props: ContainerProps,
     closed: Option<CloseReason>,
 }
-struct PolicyOut { response: Response, closed: Option<CloseReason> }
+struct PolicyOut {
+    response: Response,
+    closed: Option<CloseReason>,
+}
 impl Outcome for PolicyOut {
     type Value = NoValue;
-    fn response(&self) -> &Response { &self.response }
-    fn unshown(response: Response) -> Option<Self> { Some(Self { response, closed: None }) }
+    fn response(&self) -> &Response {
+        &self.response
+    }
+    fn unshown(response: Response) -> Option<Self> {
+        Some(Self { response, closed: None })
+    }
 }
 impl Component for PolicyLayer {
     const ROLE: Role = Role::GROUP;
     const STOPS: bool = false;
     type Style = PlainStyle;
     type Output = PolicyOut;
-    fn style(_: &StyleCx<'_>, _: PolicyLayerStyleKey) -> PlainStyle { PlainStyle::min(Vec2::new(210.0, 60.0)) }
-    fn sense(&self) -> Sense { Sense::empty() }
-    fn finish(self, cx: Cx<'_, Self>) -> PolicyOut { PolicyOut { response: cx.response.clone(), closed: self.closed } }
+    fn style(_: &StyleCx<'_>, _: PolicyLayerStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(210.0, 60.0))
+    }
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+    fn finish(self, cx: Cx<'_, Self>) -> PolicyOut {
+        PolicyOut { response: cx.response.clone(), closed: self.closed }
+    }
 }
 impl Container for PolicyLayer {
-    fn closed(&mut self, why: CloseReason) { self.closed.get_or_insert(why); }
+    fn closed(&mut self, why: CloseReason) {
+        self.closed.get_or_insert(why);
+    }
 }
 #[derive(Default)]
-struct State { header: Option<Rect>, checkbox: Option<Rect>, owner: Option<Id>, checked: bool, commits: usize, closes: Vec<CloseReason> }
+struct State {
+    header: Option<Rect>,
+    checkbox: Option<Rect>,
+    owner: Option<Id>,
+    checked: bool,
+    commits: usize,
+    closes: Vec<CloseReason>,
+}
 fn open(fixture: &mut Fixture, state: &Rc<RefCell<State>>) {
     let at = state.borrow().header.expect("genuine native header").center();
     fixture.frame(vec![pointer::moved(at)]);
@@ -58,7 +83,11 @@ fn held_escape_guard(policy: FocusPolicy, modal_rank: bool, closes: bool) {
         let mut state = held.borrow_mut();
         let live = !ui.is_sizing_pass() && !craft_ui::runtime::measure::active(ui.ctx());
         let header = ui.button("Real policy header");
-        if live { state.header = Some(header.rect); state.checkbox = None; state.owner = None; }
+        if live {
+            state.header = Some(header.rect);
+            state.checkbox = None;
+            state.owner = None;
+        }
         let overlay = if modal_rank { Overlay::dialog() } else { Overlay::menu() };
         let props = ContainerProps::new().mount(Mount::Layer(overlay.focus(policy).opened_by(&header, Trigger::Context)));
         let output = PolicyLayer { common: Common::new(), props, closed: None }.id_salt("policy-layer").show(ui, |ui, _| {
@@ -71,11 +100,16 @@ fn held_escape_guard(policy: FocusPolicy, modal_rank: bool, closes: bool) {
                 state.owner = Some(shown.response.id);
             }
         });
-        if live && let Some(why) = output.output.closed { state.closes.push(why); }
+        if live && let Some(why) = output.output.closed {
+            state.closes.push(why);
+        }
     });
     fixture.motion(MotionMode::Off).settle();
     open(&mut fixture, &state);
-    let (owner, at) = { let state = state.borrow(); (state.owner.expect("actual response"), state.checkbox.expect("actual child").center()) };
+    let (owner, at) = {
+        let state = state.borrow();
+        (state.owner.expect("actual response"), state.checkbox.expect("actual child").center())
+    };
     fixture.frame(vec![pointer::moved(at), pointer::press(at)]);
     assert_eq!(craft_ui::runtime::pointer::with_pass_pointer(fixture.ctx(), |p| p.press_targets.click), Some(owner));
     assert!(fixture.ctx().input(|input| input.pointer.primary_down()));
@@ -91,19 +125,31 @@ fn held_escape_guard(policy: FocusPolicy, modal_rank: bool, closes: bool) {
     fixture.frame(vec![pointer::release(at)]);
     assert!(!state.borrow().checked, "the cancelled old release does not toggle even when the layer stays open");
     assert_eq!(state.borrow().commits, 0);
-    if closes { open(&mut fixture, &state); }
+    if closes {
+        open(&mut fixture, &state);
+    }
     let fresh = state.borrow().checkbox.expect("the retained or freshly reopened body").center();
     fixture.click_at(fresh);
     assert!(state.borrow().checked, "fresh physical input still works");
     assert_eq!(state.borrow().commits, 1);
 }
 #[trial]
-fn close_menu_observes_its_own_completed_escape_cancel() { held_escape_guard(FocusPolicy::MENU.initial(Initial::Default), false, true); }
+fn close_menu_observes_its_own_completed_escape_cancel() {
+    held_escape_guard(FocusPolicy::MENU.initial(Initial::Default), false, true);
+}
 #[trial]
-fn ignore_menu_cancels_the_child_but_does_not_close_or_replay() { held_escape_guard(FocusPolicy::MENU.initial(Initial::Default).cancel(CancelRule::Ignore), false, false); }
+fn ignore_menu_cancels_the_child_but_does_not_close_or_replay() {
+    held_escape_guard(FocusPolicy::MENU.initial(Initial::Default).cancel(CancelRule::Ignore), false, false);
+}
 #[trial]
-fn clear_then_close_menu_does_not_promote_capture_escape_to_close() { held_escape_guard(FocusPolicy::MENU.initial(Initial::Default).cancel(CancelRule::ClearThenClose), false, false); }
+fn clear_then_close_menu_does_not_promote_capture_escape_to_close() {
+    held_escape_guard(FocusPolicy::MENU.initial(Initial::Default).cancel(CancelRule::ClearThenClose), false, false);
+}
 #[trial]
-fn popup_policy_keeps_existing_capture_priority_and_recovers_fresh() { held_escape_guard(FocusPolicy::POPUP, false, false); }
+fn popup_policy_keeps_existing_capture_priority_and_recovers_fresh() {
+    held_escape_guard(FocusPolicy::POPUP, false, false);
+}
 #[trial]
-fn dialog_policy_keeps_existing_capture_priority_and_recovers_fresh() { held_escape_guard(FocusPolicy::DIALOG, true, false); }
+fn dialog_policy_keeps_existing_capture_priority_and_recovers_fresh() {
+    held_escape_guard(FocusPolicy::DIALOG, true, false);
+}
