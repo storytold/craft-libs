@@ -791,15 +791,17 @@ fn a_queued_space_covers_the_moves_queued_after_it_and_not_those_after_its_relea
     let at = rig.centre();
     let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
     let space = craft_keymap::Key::Space;
+    // Short steps keep every move clear of the edge band, where a resting pointer gets a drag in each pass.
+    let step = BY / 2.0;
     for input in [
         ToolInput::down(PointerButton::Primary, at),
-        ToolInput::moved(at + BY),
+        ToolInput::moved(at + step),
         ToolInput::hold(space),
-        ToolInput::moved(at + BY * 2.0),
-        ToolInput::moved(at + BY * 3.0),
+        ToolInput::moved(at + step * 2.0),
+        ToolInput::moved(at + step * 3.0),
         ToolInput::let_go(space),
-        ToolInput::moved(at + BY * 4.0),
-        ToolInput::up(at + BY * 4.0),
+        ToolInput::moved(at + step * 4.0),
+        ToolInput::up(at + step * 4.0),
     ] {
         ToolHost::inject(&ctx, canvas, input);
     }
@@ -1616,6 +1618,29 @@ fn a_drag_past_the_canvas_edge_scrolls_the_view_and_a_turned_view_scrolls_on_the
         fixture.frame(vec![pointer::release(Pos2::new(canvas.right() + 25.0, start.y))]);
         assert_eq!(tool.borrow().count(Call::Press), 1, "{:?}", tool.borrow().calls);
     }
+}
+
+/// A drag held still in the band inside the canvas edge scrolls the view: a canvas that fills the screen leaves the
+/// pointer no room past its edge. A drag held away from the edge leaves the view.
+#[trial]
+fn a_drag_held_in_the_band_inside_the_canvas_edge_scrolls_the_view() {
+    let (mut fixture, view) = scroll_canvas(Rc::new(RefCell::new(Recorder::default())), 0.0);
+    let canvas = fixture.by_role(Role::CANVAS)[0].rect;
+    let centre = || view.get().expect("the canvas ran").center;
+    let start = canvas.center();
+    fixture.frame(vec![pointer::press(start)]);
+    fixture.frame(vec![pointer::moved(start + Vec2::new(30.0, 0.0))]);
+    let held = centre();
+    fixture.idle(3);
+    assert_eq!(centre(), held, "a drag held away from the edge leaves the view");
+
+    let band = Pos2::new(canvas.right() - 4.0, start.y);
+    fixture.frame(vec![pointer::moved(band)]);
+    let entered = centre();
+    fixture.idle(3);
+    let rested = centre();
+    assert!(rested.x > entered.x && rested.y == entered.y, "resting in the band scrolls toward the edge: {entered:?} -> {rested:?}");
+    fixture.frame(vec![pointer::release(band)]);
 }
 
 /// A canvas whose app reads the window's intents after the tool host, last in its UI: returns the fixture and how many

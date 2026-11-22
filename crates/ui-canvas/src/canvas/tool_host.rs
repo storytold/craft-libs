@@ -23,8 +23,8 @@
 //!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
 //!    arrows toward and away from the reading end.
 //! 6. The tool paints over the canvas and requests its cursor at tool priority, within the view on the canvas's layer.
-//! 7. A drag past the canvas edge ([`CanvasTool::autoscrolls`]), and a hover in the band inside it
-//!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`] and the pass's
+//! 7. A drag ([`CanvasTool::autoscrolls`]) or a hover ([`CanvasTool::autoscrolls_on_hover`]) in the band inside the
+//!    canvas edge or past it reports [`ToolHostResponse::past_edge`] and the pass's
 //!    [`ToolHostResponse::scroll`]; the app moves its view by it with [`Autoscroll::scroll`].
 //!
 //! The host keeps its state under the canvas's id ([`ToolPass::id`]), so two canvases never share a
@@ -270,8 +270,8 @@ pub struct ToolHostResponse {
     pub ignored_press: Option<ToolPointer>,
     /// The key the tool took this pass.
     pub took_key: Option<ToolKey>,
-    /// How far past the edge the pointer is, in screen points: past the canvas edge while a gesture of a tool that
-    /// autoscrolls runs, or into the band inside the view's edge (`size.hit.edge`) while a tool that autoscrolls on
+    /// How far toward the edge the pointer is, in screen points: into the band inside the view's edge
+    /// (`size.hit.edge`) or past it, while a gesture of a tool that autoscrolls runs or a tool that autoscrolls on
     /// hover hovers there.
     pub past_edge: Option<Vec2>,
     /// The autoscroll of this pass, in screen points: the [`Autoscroll`] speed for [`past_edge`](Self::past_edge) over
@@ -1128,15 +1128,26 @@ impl<'a, 't: 'a> Run<'a, 't> {
         })
     }
 
-    /// The one past-edge rule: how far `pos` lies past the canvas edge, for a drag and for a canvas control that asks to
-    /// scroll. An empty canvas (a window shrunk to nothing) has no edge to scroll past.
+    /// Reports [`edge_depth`](Self::edge_depth) at `pos` as the pass's edge overshoot.
     fn scroll_past(&mut self, pos: Pos2) {
-        if self.rect.is_positive() {
-            let past = pos - self.rect.clamp(pos);
-            if past != Vec2::ZERO {
-                self.response.past_edge = Some(past);
-            }
+        if let Some(past) = self.edge_depth(pos) {
+            self.response.past_edge = Some(past);
         }
+    }
+
+    /// The one edge rule, for a drag, a hover of a tool that autoscrolls on hover and a canvas control that asks to
+    /// scroll: how far into the band inside the view's edge (`size.hit.edge`, at most a quarter of the view's shorter
+    /// side) or past it `pos` is, toward the edge. A canvas that fills the screen leaves no room past its edge. The
+    /// view's rect leaves out the rulers; a canvas without a view measures from its own rect, and an empty one (a
+    /// window shrunk to nothing) has no edge.
+    fn edge_depth(&self, pos: Pos2) -> Option<Vec2> {
+        let rect = self.space.map_or(self.rect, |space| space.view.rect);
+        if !rect.is_positive() {
+            return None;
+        }
+        let band = self.env.tokens.size.hit.edge.min(rect.width().min(rect.height()) / 4.0);
+        let past = pos - rect.shrink(band).clamp(pos);
+        (past != Vec2::ZERO).then_some(past)
     }
 
     /// Advances the glide of a momentary Hand that is not the tool of this pass.
@@ -1226,10 +1237,10 @@ impl<'a, 't: 'a> Run<'a, 't> {
         if self.state.gesture.is_none() {
             return;
         }
-        // A pass delivers only the moves it was handed: a rerun pass has none. A held pointer resting past the edge
-        // keeps one drag per pass, since the view scrolls under it.
+        // A pass delivers only the moves it was handed: a rerun pass has none. A held pointer resting in the edge band
+        // or past it keeps one drag per pass, since the view scrolls under it.
         let stirred = pointer::with_pass_pointer(self.ctx, |pass| pass.stirred);
-        if !stirred && pos == self.rect.clamp(pos) {
+        if !stirred && self.edge_depth(pos).is_none() {
             return;
         }
         if !self.every_move(start, press) {
@@ -1335,22 +1346,14 @@ impl<'a, 't: 'a> Run<'a, 't> {
     fn hover(&mut self, pointer: ToolPointer) {
         self.call(Some(pointer), |tool, cx| tool.hover(&pointer, cx));
         self.hovered = true;
-        if let Some(past) = self.hover_edge(pointer.pos) {
-            self.response.past_edge = Some(past);
+        if self.hover_scrolls {
+            self.scroll_past(pointer.pos);
         }
     }
 
-    /// How far into the band inside the view's edge (`size.hit.edge`, at most a quarter of the view's shorter side) a
-    /// hover at `pos` is, toward the edge, for a tool that autoscrolls on hover. The view's rect leaves out the
-    /// rulers; a canvas without a view measures from its own rect.
+    /// The edge depth of a hover at `pos`, for a tool that autoscrolls on hover.
     fn hover_edge(&self, pos: Pos2) -> Option<Vec2> {
-        let rect = self.space.map_or(self.rect, |space| space.view.rect);
-        if !self.hover_scrolls || !rect.is_positive() {
-            return None;
-        }
-        let band = self.env.tokens.size.hit.edge.min(rect.width().min(rect.height()) / 4.0);
-        let past = pos - rect.shrink(band).clamp(pos);
-        (past != Vec2::ZERO).then_some(past)
+        self.edge_depth(pos).filter(|_| self.hover_scrolls)
     }
 
     /// The canvas background's press phase of this pass. A pass carries one phase, so a press that moved or

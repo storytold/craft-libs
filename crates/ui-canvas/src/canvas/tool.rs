@@ -754,8 +754,8 @@ pub trait CanvasTool {
         button == PointerButton::Primary
     }
 
-    /// Whether a drag past the canvas edge asks the app to scroll the view (marquees, lassos, brushes, crop: yes;
-    /// the Hand and Zoom tools: no). Default: `true`.
+    /// Whether a drag into the band inside the canvas edge or past it asks the app to scroll the view (marquees,
+    /// lassos, brushes, crop: yes; the Hand and Zoom tools: no). Default: `true`.
     fn autoscrolls(&self) -> bool {
         true
     }

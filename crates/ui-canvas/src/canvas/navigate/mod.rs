@@ -256,9 +256,9 @@ impl TouchpadGlide {
     }
 }
 
-/// Autoscroll while a tool drag runs past the canvas edge (marquee, lasso, brush, crop), or while a tool that
-/// autoscrolls on hover hovers in the band inside it (a Polygonal Lasso's rubber band): the view scrolls toward the
-/// pointer, faster the further past the edge, and stops at the image's edge (an image that fits is never scrolled
+/// Autoscroll while a tool drag (marquee, lasso, brush, crop), or a hover of a tool that autoscrolls on hover (a
+/// Polygonal Lasso's rubber band), runs in the band inside the canvas edge or past it: the view scrolls toward the
+/// pointer, faster the further toward the edge, and stops at the image's edge (an image that fits is never scrolled
 /// into empty pasteboard). The tool host reports each pass's step in
 /// [`ToolHostResponse::scroll`](crate::canvas::ToolHostResponse); the app runs `Autoscroll::scroll(&mut view, step,
 /// size)` and asks for the next pass while the view moves.
