@@ -23,19 +23,18 @@ use craft_ui::runtime::env::Label;
 use super::banner::FontPreviewBanner;
 use super::rank::{FamilyInfos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, Typing, infos_of, read,
-    ui_language, write,
+    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, SAMPLE_EM, Typing,
+    infos_of, read, ui_language, write,
 };
 use crate::panel::faces::Owner;
 use crate::panel::specimen::{FontSample, SampleFace};
 
-/// The share of a sample band's height the sample's em takes.
-const SAMPLE_EM: f32 = 0.7;
 /// The sample column is this many times as wide as the sample band is high.
 const SAMPLE_WIDTH: f32 = 4.0;
 /// The star column: a favourite's star, on every family row.
 const STAR: ColumnKey = ColumnKey::new("star");
-/// The column of the name, the disclosure, the check and, at its end, the format badge.
+/// The column of the name, the disclosure, the check and, at its end, the format badge: as wide as its widest row, and
+/// at least as wide as the names the field holds.
 const NAME: ColumnKey = ColumnKey::new("name");
 /// The column of the sample in the family's face.
 const SAMPLE: ColumnKey = ColumnKey::new("sample");
@@ -373,7 +372,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     if !plain {
         columns.push(ColumnSpec::toggle(STAR, words.favorites.clone(), ToggleColumn::default()).icon(IconId::new("star")));
     }
-    columns.push(ColumnSpec::new(NAME, words.list.clone(), ColumnWidth::Fixed(cx.style.name_column)));
+    columns.push(ColumnSpec::new(NAME, words.list.clone(), ColumnWidth::Content).at_least(cx.style.name_column));
     if size != ThumbSize::None {
         columns.push(ColumnSpec::new(SAMPLE, words.sample.clone(), ColumnWidth::Fixed(sample_size.side * SAMPLE_WIDTH)));
     }
@@ -425,8 +424,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                         return;
                     }
                     let source = Slots { slots: &slots, row: sample_size.row };
-                    // Names line up past the disclosure column only where a family has styles to open.
-                    let leaves = if (0..source.len()).any(|at| source.has_children(at)) { TreeLeaves::Aligned } else { TreeLeaves::Compact };
+                    // The library list keeps the disclosure column on every row, so names stay put while a query
+                    // narrows the list; the plain list has no styles to open.
+                    let leaves = if plain { TreeLeaves::Compact } else { TreeLeaves::Aligned };
                     let selection =
                         current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, |at| Selection::single(slots[at].key()));
                     let rows = List::<SlotKey>::options(name.clone())

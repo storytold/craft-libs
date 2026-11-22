@@ -375,6 +375,8 @@ const WARNING: PartKey = PartKey::new("missing");
 const WARNING_ICON: &str = "warning";
 /// The popup the chevron and Alt+Down toggle.
 const POPUP: &str = "list";
+/// The share of a sample band's height the sample's em takes, in the list's rows and the preview banner.
+const SAMPLE_EM: f32 = 0.7;
 /// The widest family names in common use, which the field's width is sized by.
 const NAME_SAMPLE: &str = "Source Sans Pro Semibold Condensed";
 
@@ -618,8 +620,7 @@ pub struct FontPickerStyle {
     /// The list's sample height and family row height at each preview size, none first: the thumbnail sides
     /// (`size.thumb.*`) and the height of a list row holding one.
     pub(crate) samples: [Sample; 4],
-    /// The width of the list's name column: [`NAME_SAMPLE`] in a row's text, so the list holds the names the field
-    /// holds.
+    /// The least width of the list's name column: [`NAME_SAMPLE`] in a row's text, the names the field holds.
     pub(crate) name_column: f32,
 }
 

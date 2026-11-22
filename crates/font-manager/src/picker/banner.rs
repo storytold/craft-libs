@@ -14,11 +14,10 @@ use egui::{Color32, Pos2, Rect, Vec2};
 use crate::panel::faces::{self, Shown};
 use crate::panel::specimen::SampleFace;
 
+use super::SAMPLE_EM;
+
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
-
-/// The share of the sample band's height the sample's em takes, as in the list's rows.
-const SAMPLE_EM: f32 = 0.7;
 
 /// The style of the banner: the well's padding, the name line and the sample band.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

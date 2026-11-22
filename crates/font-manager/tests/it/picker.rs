@@ -476,30 +476,36 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
     );
 }
 
+/// The library picker's family and settings, as the last pass left them.
+struct Library {
+    family: String,
+    settings: FontPickerSettings,
+}
+
 /// A library list with Hack as a recent family: the shown picker and the catalog of Inter (two styles) and Hack (one).
-fn library_rig() -> Fixture {
+fn library_rig() -> (Fixture, Rc<RefCell<Library>>) {
     let catalog = catalog_of(&[INTER_REGULAR, INTER_SEMIBOLD, epaint_default_fonts::HACK_REGULAR]);
-    let mut family = "Inter".to_owned();
     let mut settings = FontPickerSettings::default();
     settings.recent = vec!["Hack".to_owned()];
+    let state = Rc::new(RefCell::new(Library { family: "Inter".to_owned(), settings }));
+    let shown = Rc::clone(&state);
     let mut filters = FontFilters::default();
     let mut fx = Fixture::new(move |ui| {
-        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
-            .settings(Bind::bound(&mut settings))
-            .filters(Bind::bound(&mut filters))
-            .show(ui);
+        let mut state = shown.borrow_mut();
+        let Library { family, settings } = &mut *state;
+        FontPicker::new("Font family", Bind::bound(family), &catalog).settings(Bind::bound(settings)).filters(Bind::bound(&mut filters)).show(ui);
     });
     fx.in_room(Room::Window);
     fx.settle();
     open(&mut fx);
-    fx
+    (fx, state)
 }
 
 /// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
 /// to open (a recent row included), the sample after the name; and a rule, not blank room, ends the recent group.
 #[trial]
 fn family_names_line_up_after_the_star_and_before_the_sample() {
-    let fx = library_rig();
+    let (fx, _) = library_rig();
     let banner = fx.by_label("Font preview: Inter").expect("the banner names the current family").rect;
     let names: Vec<egui::Rect> = fx
         .texts()
@@ -515,25 +521,33 @@ fn family_names_line_up_after_the_star_and_before_the_sample() {
     let sample =
         fx.texts().iter().all(|painted| painted.text != "Sample" || painted.rect.top() < banner.bottom() || painted.rect.left() >= inter.right());
     assert!(sample, "no sample before a name");
+    // The recent group's row is the top one; the rule lies between it and the next name, lower than the room between.
     let recent = names.iter().map(|rect| rect.bottom()).fold(f32::INFINITY, f32::min);
-    let rule = fx.shape_bounds().iter().any(|shape| shape.top() >= recent && shape.height() < 2.0 && shape.width() > star.width() * 4.0);
+    let next = names.iter().map(|rect| rect.top()).filter(|top| *top > recent).fold(f32::INFINITY, f32::min);
+    let rule = fx
+        .shape_bounds()
+        .iter()
+        .any(|shape| shape.top() >= recent && shape.bottom() <= next && shape.height() < (next - recent) && shape.width() > star.width() * 4.0);
     assert!(rule, "a rule under the recent group");
 }
 
 /// A click on a row's star stars the family without picking it or closing the list.
 #[trial]
 fn a_star_flips_the_favourite_without_picking_or_closing() {
-    let mut fx = library_rig();
+    let (mut fx, state) = library_rig();
     let star = fx.by_label("Favorite Hack").expect("Hack's star");
     fx.click(&star);
     fx.settle();
     assert!(fx.by_label("Favorite Inter").is_some(), "the list stays open");
+    let state = state.borrow();
+    assert_eq!(state.settings.favorites, ["Hack"], "Hack is starred");
+    assert_eq!(state.family, "Inter", "the star picks nothing");
 }
 
 /// The class column is a list of options: a class narrows the list, All Classes brings every family back.
 #[trial]
 fn a_class_narrows_the_list_and_all_classes_restores_it() {
-    let mut fx = library_rig();
+    let (mut fx, _) = library_rig();
     let monospace = fx.by_label("Monospace").expect("the Monospace class");
     fx.click(&monospace);
     fx.settle();
