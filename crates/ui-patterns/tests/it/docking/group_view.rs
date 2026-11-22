@@ -101,8 +101,8 @@ impl DockPanels<usize> for RailPanels {
 }
 
 /// A tool rail the host shows itself has the dock's grip under its column bar, as the references' toolbar: a strip of
-/// the theme's upright ticks in its grip ink, above the host's view, which keeps the height it measured at; a
-/// drag on the strip moves the rail's group.
+/// the theme's upright ticks in its grip ink, above the host's view, which takes the docked column's room down to its
+/// foot as the references' docked toolbar does; a drag on the strip moves the rail's group.
 #[trial]
 fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {
     let seen = Rc::new(Cell::new(None));
@@ -122,7 +122,10 @@ fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {
     let column = columns.borrow().iter().find(|(panel, _)| *panel == RAIL).map(|(_, rect)| *rect).expect("the rail's column shows");
     let strip = Rect::from_min_max(egui::pos2(view.left(), view.top() - sizes.grip), egui::pos2(view.right(), view.top()));
     assert!(sizes.grip > 0.0 && column.top() < strip.top(), "the strip lies under the column bar: {strip:?} in {column:?}");
-    assert!((view.height() - RAIL_HEIGHT).abs() < 0.5, "the host's view keeps the height it measured at: {view:?}");
+    assert!(
+        (view.bottom() - column.bottom()).abs() < 0.5 && view.height() > RAIL_HEIGHT,
+        "the host's view reaches the docked column's foot (photocraft#16461): {view:?} in {column:?}"
+    );
 
     // The strip's ticks: one mesh inside it of the theme's upright marks.
     let shapes = fixture.frame_shapes();
