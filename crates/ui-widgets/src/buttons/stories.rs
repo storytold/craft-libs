@@ -406,10 +406,10 @@ fn button_chord(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).show(ui).into()
 }
 
-/// A long painted label with the chord: the chord shows while the whole label fits beside it.
+/// A long label with the chord: the chord shows while the whole label fits beside it.
 #[story(Button<'static>, covers = [], drive = Drive::Never, group = "Variants", title = "Chord, long text")]
 fn button_chord_long_text(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).painted("Copy the selected objects to the clipboard").show(ui).into()
+    Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).label("Copy the selected objects to the clipboard").show(ui).into()
 }
 
 /// A room too short for label and chord together: the chord is dropped and the label stays whole.
