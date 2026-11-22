@@ -16,7 +16,7 @@ use crate::runtime::commands::{self, CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::{Env, Label, WordTemplate};
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::Remember as _;
-use crate::runtime::overlay::CloseReason;
+use crate::runtime::overlay::{self, CloseReason};
 use crate::runtime::words::common::CommonWords;
 use crate::style::TypeRole;
 use crate::text::TextField;
@@ -218,13 +218,18 @@ impl<'a> CommandPalette<'a> {
             .show(ui, |ui, cx| {
                 let recent = recent_of(&mut recents, cx);
                 let palette_rect = cx.rect;
+                let opening = overlay::opening(&ctx, cx.resolved.id);
                 // The body decides the footer in the pass it lists; the footer region runs after it.
                 let status = RefCell::new(Status::Quiet);
                 // The field is the stack's header and the status its footer, so the list takes the room left in
-                // the capped box and scrolls inside it. The three regions share the stack's memory.
+                // the capped box and scrolls inside it. The three regions share the stack's memory, which is kept by
+                // its id across a close, so each opening starts a fresh session in the header, the first region.
                 Stack::new()
                     .header(|ui, stack| {
                         let state = stack.memory::<Session>();
+                        if opening {
+                            *state = Session::default();
+                        }
                         TextField::search(words.palette_search.clone(), Bind::bound(&mut state.query))
                             .placeholder(hint.clone())
                             .drives(list_id)
