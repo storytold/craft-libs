@@ -2,6 +2,9 @@
 //! or single files, separated like `PATH`). Tests over real projects are `#[ignore]` and skip when it is not set;
 //! nothing read from those files is ever kept in the repository.
 
+// The module is only built for tests, but its compound `cfg` hides that from clippy's allow-in-tests settings.
+#![allow(clippy::panic)]
+
 use crate::format_names::PROJECT_EXT;
 use std::path::{Path, PathBuf};
 
