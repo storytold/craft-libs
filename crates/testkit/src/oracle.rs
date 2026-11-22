@@ -1351,6 +1351,8 @@ mod tests {
     const TREE_ROLE: &str = "CRAFT_TESTKIT_ORACLE_TREE_ROLE";
     /// The file the grandchild writes its process id to.
     const TREE_MARKER: &str = "CRAFT_TESTKIT_ORACLE_TREE_MARKER";
+    /// The longest a grandchild runs when nothing removes its marker.
+    const ORPHAN_LIFETIME: Duration = Duration::from_secs(600);
 
     /// This test binary run on `oracle::tests::tree_member` alone, with its output inherited.
     fn tree_member_command(role: &str, marker: &Path) -> Command {
@@ -1362,7 +1364,7 @@ mod tests {
     /// Passes at once in a normal run. As `parent` it starts a `grandchild`, which inherits the
     /// parent's standard output and error, waits for the grandchild's marker and then writes to
     /// standard output until a write fails. As `grandchild` it writes its process id to the marker
-    /// and sleeps for 60 seconds.
+    /// and runs until the marker is removed, or for at most [`ORPHAN_LIFETIME`].
     #[test]
     fn tree_member() {
         let (Some(role), Some(marker)) = (std::env::var_os(TREE_ROLE), std::env::var_os(TREE_MARKER)) else {
@@ -1373,7 +1375,11 @@ mod tests {
             let partial = marker.with_extension("partial");
             std::fs::write(&partial, std::process::id().to_string()).unwrap();
             std::fs::rename(&partial, &marker).unwrap();
-            std::thread::sleep(Duration::from_secs(60));
+            // The cap ends a grandchild whose test was itself killed before it could clean up.
+            let started = Instant::now();
+            while marker.exists() && started.elapsed() < ORPHAN_LIFETIME {
+                std::thread::sleep(Duration::from_millis(10));
+            }
             return;
         }
         let mut grandchild = tree_member_command("grandchild", &marker).spawn().unwrap();
@@ -1403,10 +1409,29 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).contains(&format!(",\"{pid}\","))
     }
 
+    /// Kills the process with this id when it is dropped while the test is failing, so a grandchild
+    /// that survived ends. A passing test has shown the process is gone and kills nothing.
+    struct EndOnDrop(u32);
+
+    impl Drop for EndOnDrop {
+        fn drop(&mut self) {
+            if !std::thread::panicking() {
+                return;
+            }
+            let pid = self.0.to_string();
+            #[cfg(unix)]
+            let _ = Command::new("kill").args(["-s", "KILL", &pid]).stderr(Stdio::null()).status();
+            #[cfg(windows)]
+            let _ = Command::new("taskkill").args(["/F", "/PID", &pid]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+
     /// A process the child started holds both pipes when the probe fails. Ending the child's process
     /// group (Unix) or process tree (Windows) ends it too, so both pipe readers finish and the
     /// process is gone. The child passes the output limit only after the grandchild has written its
-    /// marker, so the result does not depend on how fast the processes start.
+    /// marker, so the result does not depend on how fast the processes start. A grandchild that
+    /// survived is killed when the test fails, and removing the scratch folder removes the marker,
+    /// which also ends it.
     #[cfg(any(unix, windows))]
     #[test]
     fn descendant_holding_the_pipes_ends_when_the_probe_fails() {
@@ -1419,6 +1444,7 @@ mod tests {
         let got = run_bounded(tree_member_command("parent", &marker), &exe, limits, &mut seen);
         assert!(matches!(got, Err(OracleError::OutputLimit { .. })), "{got:?}");
         let pid: u32 = std::fs::read_to_string(&marker).expect("the grandchild wrote no marker").trim().parse().unwrap();
+        let _end = EndOnDrop(pid);
         assert!(seen.pipes_closed, "a pipe reader was left blocked on a pipe the grandchild holds");
         assert!(!process_running(pid), "grandchild {pid} is still running");
     }
