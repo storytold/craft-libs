@@ -102,7 +102,8 @@ struct BrdfSurface {
 }
 
 /// Cook–Torrance BRDF × N·L × π for one light, the reflected fraction of the light's
-/// irradiance per channel.
+/// irradiance per channel. A light at or below the surface gives 0, and so does a light straight
+/// opposite the view, which leaves no half vector.
 fn brdf(surface: BrdfSurface, n: [f32; 3], v: [f32; 3], l: [f32; 3]) -> [f32; 3] {
     let BrdfSurface { base, metallic, roughness: rough, specular: spec_k, diffuse: diff_k } = surface;
     let n_l = dot(n, l);
@@ -110,7 +111,11 @@ fn brdf(surface: BrdfSurface, n: [f32; 3], v: [f32; 3], l: [f32; 3]) -> [f32; 3]
         return [0.0; 3];
     }
     let n_v = dot(n, v).max(1e-4);
-    let h = norm(add(v, l));
+    let half = add(v, l);
+    if dot(half, half).sqrt() <= 1e-20 {
+        return [0.0; 3];
+    }
+    let h = norm(half);
     let n_h = dot(n, h).max(0.0);
     let v_h = dot(v, h).max(0.0);
     let r = rough.clamp(0.03, 1.0);
@@ -222,15 +227,22 @@ fn equirect_uv(d: [f32; 3], rot: f32) -> (f32, f32) {
     (u - u.floor(), v)
 }
 
+/// The two radiance levels of a chain of `mips` that `rough` falls between, and the weight of the
+/// second. Both are at most the last level: above 2^24 levels the last index rounds up in `f32`.
+fn mip_levels(rough: f32, mips: u32) -> (u32, u32, f32) {
+    let last = mips.saturating_sub(1);
+    let lv = rough.clamp(0.0, 1.0) * last as f32;
+    let l0 = (lv.floor() as u32).min(last);
+    let l1 = (l0 + 1).min(last);
+    (l0, l1, lv - l0 as f32)
+}
+
 /// Diffuse (irradiance) and roughness-filtered specular radiance of the environment.
 fn env_light(s: &Scene, e: &EnvInfo, n: [f32; 3], r: [f32; 3], rough: f32) -> ([f32; 3], [f32; 3]) {
     let (u, v) = equirect_uv(n, e.rotation);
     let irr = s.textures.get(e.irradiance as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
     let (u, v) = equirect_uv(r, e.rotation);
-    let lv = rough.clamp(0.0, 1.0) * (e.mips.saturating_sub(1)) as f32;
-    let l0 = lv.floor() as u32;
-    let l1 = (l0 + 1).min(e.mips.saturating_sub(1));
-    let f = lv - l0 as f32;
+    let (l0, l1, f) = mip_levels(rough, e.mips);
     let a = s.textures.get((e.radiance + l0) as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
     let b = s.textures.get((e.radiance + l1) as usize).map_or([0.0; 4], |t| sample(t, &s.texels, u, v));
     let spec = [mix(a[0], b[0], f), mix(a[1], b[1], f), mix(a[2], b[2], f)];
@@ -456,7 +468,8 @@ fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f32) -> f32 {
             if dist <= l.radius || (l.radius <= 0.0 && dist <= 1.0) {
                 1.0
             } else {
-                (l.radius.max(1.0) / dist).powi(2)
+                // Capped at 1, so a radius below 1 does not brighten the light past it.
+                (l.radius.max(1.0) / dist).powi(2).min(1.0)
             }
         }
         _ => 1.0,
@@ -617,8 +630,49 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::shadow_coord;
-    use crate::scene::ShadowMap;
+    use super::{BrdfSurface, attenuation, brdf, mip_levels, shadow_coord};
+    use crate::scene::{Light, ShadowMap};
+
+    #[test]
+    fn a_light_straight_opposite_the_view_reflects_nothing() {
+        // A normal-mapped fragment can face a light behind the view direction: v + l is zero, and
+        // there is no half vector to shade the highlight with.
+        let surface = BrdfSurface { base: [1.0; 3], metallic: 0.0, roughness: 0.03, specular: 1.0, diffuse: 1.0 };
+        assert_eq!(brdf(surface, [0.0, 0.0, -1.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]), [0.0; 3]);
+        assert!(brdf(surface, [0.0, 0.0, -1.0], [0.0, 0.0, -1.0], [0.0, 0.0, -1.0])[0] > 0.0);
+    }
+
+    #[test]
+    fn the_radiance_levels_stay_in_a_chain_of_more_than_two_to_the_twenty_fourth() {
+        // The last index, 2^24 + 3, rounds up to 2^24 + 4 in f32.
+        let mips = (1 << 24) + 4;
+        assert_eq!(mip_levels(1.0, mips), (mips - 1, mips - 1, 0.0));
+        assert_eq!(mip_levels(0.5, 5), (2, 3, 0.0));
+        assert_eq!(mip_levels(0.625, 5), (2, 3, 0.5));
+    }
+
+    #[test]
+    fn inverse_square_falloff_does_not_pass_full_intensity_beyond_a_radius_below_1() {
+        let light = |radius: f32| Light {
+            kind: 2,
+            pos: [0.0; 3],
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 1.0,
+            falloff: 2,
+            radius,
+            falloff_distance: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        };
+        let at = |radius: f32, dist: f32| attenuation(&light(radius), [0.0; 3], [0.0, 0.0, 1.0], dist);
+        assert_eq!(at(0.5, 0.5), 1.0);
+        assert_eq!(at(0.5, 0.75), 1.0);
+        assert_eq!(at(0.5, 2.0), 0.25);
+        assert_eq!(at(4.0, 8.0), 0.25);
+    }
 
     #[test]
     fn a_receiver_whose_projection_overflows_f32_is_projected_in_f64() {

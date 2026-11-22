@@ -228,6 +228,50 @@ fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, RenderError> {
     Ok(v)
 }
 
+/// A polygon of at most `N` corners, held inline. A corner pushed past `N` is dropped; callers
+/// size `N` so that cannot happen.
+#[derive(Clone, Copy)]
+struct Poly<T: Copy + Default, const N: usize> {
+    len: usize,
+    corners: [T; N],
+}
+
+impl<T: Copy + Default, const N: usize> Poly<T, N> {
+    fn new() -> Self {
+        Self { len: 0, corners: [T::default(); N] }
+    }
+
+    fn push(&mut self, corner: T) {
+        if let Some(slot) = self.corners.get_mut(self.len) {
+            *slot = corner;
+            self.len += 1;
+        }
+    }
+}
+
+impl<T: Copy + Default, const N: usize> Default for Poly<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Copy + Default, const N: usize> std::ops::Deref for Poly<T, N> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.corners[..self.len]
+    }
+}
+
+impl<T: Copy + Default, const N: usize> FromIterator<T> for Poly<T, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut p = Self::new();
+        for corner in iter {
+            p.push(corner);
+        }
+        p
+    }
+}
+
 /// Runs `f(chunk index, chunk of a, chunk of b)` over `a` and `b` split into chunks of `len`
 /// items, on several threads with the `parallel` feature. `len` is at least 1. Returns the error
 /// of the chunk with the lowest index that fails, so the result is the same either way.

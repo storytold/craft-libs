@@ -4,10 +4,7 @@
 
 use std::f32::consts::PI;
 
-use craft_pbr::{
-    EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, default_environment, ggx_distribution, ggx_distribution_between, hammersley,
-    try_environment_brdf,
-};
+use craft_pbr::{EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, default_environment, ggx_distribution, hammersley, try_environment_brdf};
 
 use crate::reference::effectcraft as ec;
 
@@ -246,43 +243,36 @@ fn the_geometry_term_against_the_gltf_separable_smith_form() {
     assert!(karis < 0.5 * ggx, "{karis} vs {ggx}");
 }
 
-/// A unit vector along `d`, computed in the same steps and order as the crate normalizes
-/// directions: divided by its largest component, then multiplied by the reciprocal length.
-fn crate_unit(d: [f32; 3]) -> [f32; 3] {
-    let big = d[0].abs().max(d[1].abs()).max(d[2].abs());
-    let s = [d[0] / big, d[1] / big, d[2] / big];
-    let r = 1.0 / ((s[0] * s[0]) + (s[1] * s[1]) + (s[2] * s[2])).sqrt();
-    [s[0] * r, s[1] * r, s[2] * r]
-}
-
 /// The light a material reflects from a uniform white sky onto a surface seen at `theta`: the
 /// specular lobe by GGX importance sampling of the half vector, and the diffuse lobe by cosine
 /// sampling of the light.
 fn albedo(m: &Material, theta: f32, steps: u32) -> f64 {
+    use std::f64::consts::PI as PI64;
     let n = [0.0, 0.0, 1.0];
     let v = [theta.sin(), 0.0, theta.cos()];
     let spec_only = m.try_with_weights(m.specular(), 0.0).unwrap();
     let a = m.roughness().max(MIN_DIRECT_ROUGHNESS).powi(2);
+    let (a2, v64) = (f64::from(a) * f64::from(a), v.map(f64::from));
     let (mut spec, mut diff) = (0.0f64, 0.0f64);
     for i in 0..steps {
         let xi = (i as f32 + 0.5) / steps as f32;
         for j in 0..steps {
             let phi = 2.0 * PI * (j as f32 + 0.5) / steps as f32;
-            // Specular: a half vector drawn from D (n·h), a light reflected about it.
-            let ct = ((1.0 - xi) / (1.0 + (a * a - 1.0) * xi)).sqrt();
+            // Specular: a half vector drawn from D (n·h) in f64, a light reflected about it, and
+            // the density of that draw from the same closed form, independent of `try_direct`'s
+            // `D`. In f64 the draw resolves the narrow lobe at the roughness floor.
+            let (x, p) = ((f64::from(i) + 0.5) / f64::from(steps), 2.0 * PI64 * (f64::from(j) + 0.5) / f64::from(steps));
+            let ct = ((1.0 - x) / (1.0 + (a2 - 1.0) * x)).sqrt();
             let st = (1.0 - ct * ct).max(0.0).sqrt();
-            let hv = [st * phi.cos(), st * phi.sin(), ct];
-            let vh = dot(v, hv);
+            let hv = [st * p.cos(), st * p.sin(), ct];
+            let vh = v64[0] * hv[0] + v64[1] * hv[1] + v64[2] * hv[2];
             if vh > 0.0 {
-                let l = [2.0 * vh * hv[0] - v[0], 2.0 * vh * hv[1] - v[1], 2.0 * vh * hv[2] - v[2]];
+                let l = [0, 1, 2].map(|k| 2.0 * vh * hv[k] - v64[k]);
                 if l[2] > 0.0 {
-                    // The density at the half vector `try_direct` finds again from `v` and `l`,
-                    // rounded the same way and with `D` taken from the same vectors.
-                    let (uv, ul) = (crate_unit(v), crate_unit(l));
-                    let h = crate_unit([uv[0] + ul[0], uv[1] + ul[1], uv[2] + ul[2]]);
-                    let d = ggx_distribution_between(n, h, m.roughness().max(MIN_DIRECT_ROUGHNESS)).unwrap();
-                    let pdf = d * h[2] / (4.0 * dot(uv, h));
-                    spec += f64::from(spec_only.try_direct(n, v, l).unwrap()[0] / PI / pdf);
+                    let d = a2 / (PI64 * ((a2 - 1.0) * ct * ct + 1.0).powi(2));
+                    let pdf = d * ct / (4.0 * vh);
+                    let got = spec_only.try_direct(n, v, l.map(|c| c as f32)).unwrap()[0];
+                    spec += f64::from(got) / PI64 / pdf;
                 }
             }
             // Diffuse: a light drawn from n·l / π.

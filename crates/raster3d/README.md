@@ -123,8 +123,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   (a discard flag and a candidate fragment) while its opaque pixels are shaded. Targets, images,
   shadow maps and the working buffers that grow with the raster or the vertex or triangle count
   are reserved fallibly: when a reservation fails, the `try_` function returns `OutOfMemory`. A
-  triangle's clipped polygon, at most nine corners, and the shadow pass's lists of lights and
-  maps, a few entries per light, are allocated as usual. The search for a
+  triangle's clipped polygon is held inline, so clipping allocates nothing. The shadow pass's
+  lists of lights and maps, a few entries per light, are allocated as usual. The search for a
   surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
   once more, so it runs no more coverage tests than the visibility pass.
 - **Features.** `parallel` rasterizes bands of rows, resolves and encodes rows and pixels, and
@@ -175,7 +175,9 @@ lights' outer cones are over 1.40 radians wide, where resolve blocks hold more t
 subsamples, where shadows-only materials do not receive shadows, where fragments under discarded
 opaque pixels leave the depth range, where blended casters have no base texture, where
 opaque-mode and masked casters have an opacity below 0.5, where casters reach within 1 unit of
-light-space depth of a spot or point light, where an encoded color is negative, and where a
+light-space depth of a spot or point light, where an encoded color is negative, where an
+inverse-square light's radius is below 1, where a light lies straight opposite the view, where a
+clip w makes 1/w subnormal, and where a
 texture is sampled between large finite texels of opposite signs. Halfway between red values of
 `3e38` and `−3e38`, for example, the sampler here returns red 0 and EffectCraft's interpolation
 overflows `f32`.
@@ -236,6 +238,16 @@ Changes from those files:
 - A clipped corner whose `1/w` overflows `f32` (a clip transform scaled near `f32`'s smallest
   values) is projected in `f64` instead of dropping its triangle, and a drawn pixel whose camera
   depth overflows is an error.
+- An inverse-square light's attenuation is capped at 1. EffectCraft divided by the larger of the
+  radius and 1, so a light with a radius below 1 grew brighter between its radius and a distance
+  of 1 (about 1.78 at 0.75 for a radius of 0.5).
+- A light straight opposite the view direction, which a normal-mapped fragment can face, gives no
+  direct light, as `craft-pbr`'s `Material::try_direct` does. EffectCraft took a half vector of
+  (0, 0, −1) there and could draw a sharp highlight.
+- A clipped corner whose ndc depth `z × 1/w` rounds outside 0 to 1 (a subnormal `1/w`) takes
+  `z / w` instead, so a triangle on the near plane with a huge w is drawn. The radiance level of
+  the environment light is clamped to the last level of its chain, which `f32` rounding can pass
+  above 2^24 levels.
 - A texture lookup computes its texel offset in `i128`, so `sample` on a texture whose sides
   are near `u32::MAX` reads a missing texel as transparent black.
 - A texture or shadow-map lookup at a coordinate past `i64` saturates instead of overflowing, and

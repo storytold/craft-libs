@@ -9,7 +9,7 @@
 
 use crate::scene::{Scene, Vertex, validate, validate_passes, validate_shadow_refs};
 use crate::shade::{Frag, shade};
-use crate::{Limits, RenderError, filled, for_each_chunk_pair, try_with_capacity};
+use crate::{Limits, Poly, RenderError, filled, for_each_chunk_pair, try_with_capacity};
 
 /// Half-width of the clip guard band in units of clip w: a triangle reaching past
 /// `|x| > GUARD_BAND × w` or `|y| > GUARD_BAND × w` is clipped there before the perspective
@@ -47,6 +47,15 @@ type Corner = ([f32; 4], [f32; 3]);
 /// A screen-space corner: position, ndc z, 1/w and weights.
 type ScreenCorner = ([f64; 2], f32, f32, [f32; 3]);
 
+/// The most corners a clipped triangle can have. Clipping `n` corners against one plane keeps
+/// its `k` inside corners and adds one per change between inside and outside, at most
+/// `k + 2 × min(k, n − k) ≤ 3n / 2` corners even where rounding scatters the inside corners, so
+/// a triangle's six planes give at most 4, 6, 9, 13, 19 and 28.
+const CLIP_MAX: usize = 28;
+
+/// A clipped polygon, held inline so clipping allocates nothing.
+type Clipped<T> = Poly<T, CLIP_MAX>;
+
 #[inline]
 fn mat_mul(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 4] {
     let mut o = [0.0; 4];
@@ -78,7 +87,7 @@ const GUARD_PLANES: [usize; 4] = [2, 3, 4, 5];
 
 /// Clip a polygon against the guard band. A polygon inside the band is returned unchanged;
 /// any other is clipped in `f64`.
-fn clip_guard(poly: Vec<Corner>) -> Vec<Corner> {
+fn clip_guard(poly: Clipped<Corner>) -> Clipped<Corner> {
     if poly.iter().all(|(c, _)| GUARD_PLANES.iter().all(|&plane| plane_distance(&c.map(f64::from), plane) >= 0.0)) {
         return poly;
     }
@@ -104,14 +113,14 @@ pub(crate) fn f32_crossing(da: f32, db: f32) -> (bool, f32) {
 
 /// Clip a polygon against `planes` (see [`plane_distance`]), interpolating in `f64` from the
 /// corner nearer the plane.
-fn clip_f64(poly: &[Corner], planes: &[usize]) -> Vec<Corner> {
-    let mut p: Vec<([f64; 4], [f64; 3])> = poly.iter().map(|(c, w)| (c.map(f64::from), w.map(f64::from))).collect();
+fn clip_f64(poly: &[Corner], planes: &[usize]) -> Clipped<Corner> {
+    let mut p: Clipped<([f64; 4], [f64; 3])> = poly.iter().map(|(c, w)| (c.map(f64::from), w.map(f64::from))).collect();
     for &plane in planes {
         if p.is_empty() {
             break;
         }
         let d = |c: &[f64; 4]| plane_distance(c, plane);
-        let mut out = Vec::with_capacity(p.len() + 2);
+        let mut out = Clipped::new();
         for i in 0..p.len() {
             let (a, b) = (p[i], p[(i + 1) % p.len()]);
             let (da, db) = (d(&a.0), d(&b.0));
@@ -131,14 +140,14 @@ fn clip_f64(poly: &[Corner], planes: &[usize]) -> Vec<Corner> {
 }
 
 /// Clip a polygon (clip coords + original weights) against `0 ≤ z ≤ w`.
-fn clip_poly(poly: Vec<Corner>) -> Vec<Corner> {
+fn clip_poly(poly: Clipped<Corner>) -> Clipped<Corner> {
     let mut p = poly;
     for plane in 0..2 {
         if p.is_empty() {
             break;
         }
         let d = |c: &[f32; 4]| if plane == 0 { c[2] } else { c[3] - c[2] };
-        let mut out = Vec::with_capacity(p.len() + 2);
+        let mut out = Clipped::new();
         for i in 0..p.len() {
             let (a, b) = (p[i], p[(i + 1) % p.len()]);
             let (da, db) = (d(&a.0), d(&b.0));
@@ -166,23 +175,27 @@ fn clip_poly(poly: Vec<Corner>) -> Vec<Corner> {
 
 /// The clipped polygon of triangle `t` (the index of its first index) projected to the screen,
 /// or `None` when nothing of it is left or a corner is not finite.
-fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> {
+fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Clipped<ScreenCorner>> {
     let (w, h) = (s.width as f64, s.height as f64);
     let ids = [s.indices[t] as usize, s.indices[t + 1] as usize, s.indices[t + 2] as usize];
-    let tri = vec![(clip[ids[0]], [1.0, 0.0, 0.0]), (clip[ids[1]], [0.0, 1.0, 0.0]), (clip[ids[2]], [0.0, 0.0, 1.0])];
+    let tri: Clipped<Corner> =
+        [(clip[ids[0]], [1.0, 0.0, 0.0]), (clip[ids[1]], [0.0, 1.0, 0.0]), (clip[ids[2]], [0.0, 0.0, 1.0])].into_iter().collect();
     let finite = |p: &[Corner]| p.iter().all(|(c, wt)| c.iter().chain(wt).all(|v| v.is_finite()));
     // The depth range in f32; when that overflows between far-apart corners, every plane in f64.
-    let poly = clip_poly(tri.clone());
+    let poly = clip_poly(tri);
     let poly = if finite(&poly) { clip_guard(poly) } else { clip_f64(&tri, &ALL_PLANES) };
     if poly.len() < 3 || !finite(&poly) {
         return None;
     }
-    let scr: Vec<ScreenCorner> = poly
+    let scr: Clipped<ScreenCorner> = poly
         .iter()
         .map(|(c, wt)| {
             let iw = 1.0 / c[3];
             let (nx, ny) = (c[0] * iw, c[1] * iw);
-            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], c[2] * iw, iw, *wt)
+            // A subnormal 1/w can carry z × 1/w past the depth range; z / w is then taken directly.
+            let z = c[2] * iw;
+            let z = if (0.0..=1.0).contains(&z) { z } else { c[2] / c[3] };
+            ([(nx as f64 + 1.0) * 0.5 * w, (1.0 - ny as f64) * 0.5 * h], z, iw, *wt)
         })
         .collect();
     let ok = |s: &ScreenCorner| s.0.iter().all(|v| v.is_finite()) && s.1.is_finite() && s.2.is_finite();
@@ -191,11 +204,11 @@ fn project(s: &Scene, clip: &[[f32; 4]], t: usize) -> Option<Vec<ScreenCorner>> 
     }
     // A tiny w overflows 1/w in f32: project in f64, with 1/w scaled by a common factor so the
     // largest is 1 (the interpolation weights use only their ratios).
-    let iw: Vec<f64> = poly.iter().map(|(c, _)| 1.0 / f64::from(c[3])).collect();
+    let iw: Clipped<f64> = poly.iter().map(|(c, _)| 1.0 / f64::from(c[3])).collect();
     let top = iw.iter().fold(0.0f64, |a, &b| a.max(b));
-    let scr: Vec<ScreenCorner> = poly
+    let scr: Clipped<ScreenCorner> = poly
         .iter()
-        .zip(&iw)
+        .zip(iw.iter())
         .map(|((c, wt), &iw)| {
             let (nx, ny) = (f64::from(c[0]) * iw, f64::from(c[1]) * iw);
             ([(nx + 1.0) * 0.5 * w, (1.0 - ny) * 0.5 * h], (f64::from(c[2]) * iw) as f32, (iw / top) as f32, *wt)

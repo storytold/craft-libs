@@ -392,6 +392,18 @@ fn a_clip_transform_with_a_tiny_w_draws_the_same_pixels() {
 }
 
 #[test]
+fn a_triangle_on_the_near_plane_with_a_huge_w_is_drawn() {
+    // w = z = (2^24 − 5) × 2^104: 1/w is subnormal, and z × 1/w rounds above 1. The triangle covers
+    // the center of a 1×1 target.
+    let big = 16_777_211.0 * 2f32.powi(104);
+    let mut s = clip_space_triangle([[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]);
+    (s.width, s.height) = (1, 1);
+    s.clip = [[big, 0.0, 0.0, 0.0], [0.0, big, 0.0, 0.0], [0.0, 0.0, 0.0, big], [0.0, 0.0, 0.0, big]];
+    let t = try_render(&s, &Limits::default()).unwrap();
+    assert_eq!(t.color[0], WHITE);
+}
+
+#[test]
 fn triangles_on_the_far_plane_are_drawn() {
     // Camera depth 1024 maps to ndc z exactly 0, the far end of the depth range.
     let mut s = quad_scene(8, 8, &[([1.0, 1.0, 4.0, 7.0], 1024.0, WHITE), ([4.0, 1.0, 7.0, 7.0], 1024.0, [1.0, 1.0, 1.0, 0.5])]);

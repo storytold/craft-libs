@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use crate::raster::f32_crossing;
 use crate::scene::{EnvInfo, Light, Material, Scene, ShadowMap, TexInfo, unit, validate};
 use crate::shade::sample;
-use crate::{Limits, RenderError, filled, for_each_item, map_collect, try_with_capacity};
+use crate::{Limits, Poly, RenderError, filled, for_each_item, map_collect, try_with_capacity};
 
 /// Hard cap on the shadow depth texels (`f32`) of one scene, about 104 MB. It holds one point
 /// light's full 2048-texel cube (6 × 2048² ≈ 25.2 M texels).
@@ -78,10 +78,13 @@ type LightCorner = ([f32; 3], [f32; 2]);
 /// A corner on the map: (x, y), 1/z (1 for an orthographic map), depth and texture coordinates.
 type MapCorner = ([f64; 2], f32, f32, [f32; 2]);
 
+/// A caster triangle clipped against one plane: at most four corners, held inline.
+type CasterPoly<T> = Poly<T, 4>;
+
 /// Triangle `t`'s corners in `m`'s light space, clipped against the near plane for a
 /// perspective map.
-fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
-    let q: Vec<LightCorner> = ids
+fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> CasterPoly<LightCorner> {
+    let q: CasterPoly<LightCorner> = ids
         .iter()
         .map(|&i| {
             let p = s.vertices[i].pos;
@@ -91,7 +94,7 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
         .collect();
     let mut poly = q;
     if !m.ortho {
-        let mut out = vec![];
+        let mut out = CasterPoly::new();
         for i in 0..poly.len() {
             let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
             let (da, db) = (a.0[2] - NEAR, b.0[2] - NEAR);
@@ -113,7 +116,7 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
 }
 
 /// The light-space polygon on `m`'s texels.
-fn map_corners(m: &ShadowMap, poly: &[LightCorner]) -> Vec<MapCorner> {
+fn map_corners(m: &ShadowMap, poly: &[LightCorner]) -> CasterPoly<MapCorner> {
     let c = m.size as f32 * 0.5;
     // A finite coordinate whose product with the focal length overflows f32 is projected in f64.
     let at = |x: f32, z: f32, fast: f32| {
@@ -261,7 +264,7 @@ fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> 
             }
             let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
             // A caster that casts nothing is not projected, as the rasterizer skips it.
-            let poly = if casts_nothing(&s.materials[s.vertices[ids[0]].material as usize]) { Vec::new() } else { light_poly(s, m, ids) };
+            let poly = if casts_nothing(&s.materials[s.vertices[ids[0]].material as usize]) { CasterPoly::new() } else { light_poly(s, m, ids) };
             let mut cost = 1u64;
             if poly.len() >= 3 {
                 let scr = map_corners(m, &poly);
