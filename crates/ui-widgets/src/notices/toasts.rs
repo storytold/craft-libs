@@ -24,12 +24,8 @@ impl ToastStack {
     /// Shows the queue at a bottom alignment of the body, or its locale's trailing bottom corner when `None`.
     pub fn show_at(ui: &Ui, window: &WindowKey, body: Rect, alignment: Option<Align2>) {
         ToastHost::show_at(ui, window, body, alignment, &mut |ui, toast, salt| {
-            let mut notice = Notice::new(toast.tone, toast.message.clone()).layout(NoticeLayout::Toast).lines(toast.lines.clone()).id_salt(salt);
-            // A toast that leaves by itself and offers no action has no close button, as the old apps' toasts; one the
-            // user must close (no timeout) or that holds actions keeps it.
-            if toast.timeout.is_none() || !toast.actions.is_empty() {
-                notice = notice.dismiss();
-            }
+            let mut notice =
+                Notice::new(toast.tone, toast.message.clone()).layout(NoticeLayout::Toast).lines(toast.lines.clone()).dismiss().id_salt(salt);
             if let Some(title) = &toast.title {
                 notice = notice.title(title.clone());
             }

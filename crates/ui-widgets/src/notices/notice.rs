@@ -836,7 +836,12 @@ impl Component for Notice<'_> {
             }
         }
         if placed.dismiss.is_some() {
-            ui.face(DISMISS, IconButton::new(IconId::new(DISMISS_ICON)).label(words.dismiss.clone()));
+            // A toast's card is the inverse surface: its close glyph takes the card's text colour, not the panel ink.
+            let mut icon = IconSpec::svg(IconId::new(DISMISS_ICON));
+            if self.layout == NoticeLayout::Toast {
+                icon = icon.color(cx.style.message.color.off.rest);
+            }
+            ui.face(DISMISS, IconButton::new(icon).label(words.dismiss.clone()));
         }
         if let (Some(rect), Some(mut spec)) = (placed.icon, self.icon_spec()) {
             if spec.color.is_none() {
