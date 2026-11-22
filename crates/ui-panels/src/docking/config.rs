@@ -77,6 +77,10 @@ pub struct DockConfig {
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
     pub tab_close_buttons: bool,
+    /// A group's header shows the shown panel's title, its count and a close button in place of a tab strip, as a
+    /// single titled panel does; the panels are shown from a rail or a menu instead. Closing follows
+    /// `tab_close_buttons`.
+    pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
@@ -103,6 +107,7 @@ impl Default for DockConfig {
             close_menu_items: true,
             close_button: true,
             tab_close_buttons: false,
+            titled_headers: false,
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
@@ -196,7 +201,14 @@ impl DockConfig {
         self
     }
 
-    /// Wheel selection of tabs on or off.
+    /// Titled group headers on or off.
+    #[must_use]
+    pub fn titled_headers(mut self, on: bool) -> Self {
+        self.titled_headers = on;
+        self
+    }
+
+    /// See [`DockConfig::wheel_selects_tabs`].
     #[must_use]
     pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
         self.wheel_selects_tabs = on;

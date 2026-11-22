@@ -240,6 +240,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The wheel over the tabs shows the next or previous panel, one per wheel notch.
     #[prop(flag)]
     wheel_selects_tabs: bool,
+    /// The header shows the shown panel's title (with its count) and a close button in place of the tab strip, as a
+    /// single titled panel does: the panels are shown from a rail, not by tabs.
+    #[prop(flag)]
+    titled: bool,
     /// The dock whose drop registry the group's spots go to.
     #[prop]
     dock: Option<Id>,
@@ -287,6 +291,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
             movable: true,
             closable: false,
             wheel_selects_tabs: false,
+            titled: false,
             dock: None,
             zones: ZoneRule::Fraction,
             in_window: false,
@@ -477,7 +482,9 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let words = cx.words::<DockWords>();
         let from = PanelKey::of(&self.anchor);
         let started = drop::started(&cx.env);
-        let (panels, active, closable, wheel_selects) = (self.panels, self.active, self.closable, self.wheel_selects_tabs);
+        let (panels, active, closable, wheel_selects, titled) =
+            (self.panels, self.active, self.closable, self.wheel_selects_tabs, self.titled);
+        let close_name = words.close_panel.clone();
         let menu_rows = self.menu.clone();
         let panel_menu = words.panel_menu.clone();
         let mut extra = self.extra.take();
@@ -494,8 +501,29 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
         ui.with_layout(layout, |ui| {
             ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
+            let shown = panels.iter().find(|panel| panel.key == active);
+            if titled {
+                if let Some(panel) = shown {
+                    Text::new(panel.title.clone()).role(TypeRole::Title).show(ui);
+                    if let Some(count) = panel.count {
+                        let count = env.format().integer(u64::try_from(count).unwrap_or(u64::MAX));
+                        Text::new(count).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                    }
+                }
+            }
             if let Some(hook) = extra.as_mut() {
                 hook.run(ui, cx);
+            }
+            if titled {
+                let can_close = closable && shown.is_some_and(|panel| panel.closable);
+                if can_close {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(close_name.clone()).show(ui).clicked() {
+                            reported.closed.push(active);
+                        }
+                    });
+                }
+                return;
             }
             let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
             let closes = |panel: &PanelTitle| closable && panel.closable;

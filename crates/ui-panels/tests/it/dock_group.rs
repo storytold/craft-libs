@@ -64,3 +64,33 @@ fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
     assert_eq!(shown.get(), 1, "the click shows Pages");
     assert!(fixture.by_label("2 replies").is_none(), "Comments' caption goes with it");
 }
+
+// A titled group shows the shown panel's name as a heading with its count and a close button, not a tab strip: the
+// panel's name is not cut to a tab's width, and the close button closes the shown panel.
+#[trial]
+fn a_titled_group_shows_the_panel_title_and_a_close_button_instead_of_tabs() {
+    let closed = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&closed);
+    let panels = vec![
+        PanelTitle::new(PanelKey::new(1), "Accessibility Checker").closable(true),
+        PanelTitle::new(PanelKey::new(2), "Pages"),
+    ];
+    let mut fixture = Fixture::new(move |ui| {
+        let out = DockGroup::new(1usize, &panels, panels[0].key).titled().closable().show_at(
+            ui,
+            Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)),
+            |ui, _| {
+                Button::new("Body button").show(ui);
+            },
+        );
+        if out.output.closed.contains(&panels[0].key) {
+            seen.set(true);
+        }
+    });
+    fixture.settle();
+    assert!(fixture.by_label("Accessibility Checker").is_some(), "the title shows whole");
+    assert!(fixture.by_label("Pages").is_none(), "no tab for the other panel");
+    let Some(close) = fixture.by_label("Close panel") else { panic!("a close button shows") };
+    fixture.click(&close).settle();
+    assert!(closed.get(), "it closes the shown panel");
+}
