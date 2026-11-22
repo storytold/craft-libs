@@ -297,6 +297,11 @@ impl CommandState {
         self.flags.enabled
     }
 
+    /// The checked state [`checked`](Self::checked) set; `None` for a command that is not a toggle or radio.
+    pub fn is_checked(&self) -> Option<bool> {
+        self.flags.checked
+    }
+
     pub(crate) fn is_marked(&self) -> bool {
         self.marked
     }
