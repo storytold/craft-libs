@@ -203,6 +203,14 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.strip = scroll_strip_height(&env.tokens);
         self.row = env.tokens.size.control.md;
         let Some(scroll) = scroll else { return };
+        // A scrolled body of a layer, or in one, starts at the top at every opening of the layer, as at its first.
+        let opening = match props.mount {
+            Mount::Layer(_) => crate::runtime::overlay::appears(&ctx, id, false),
+            _ => crate::runtime::overlay::drawing_parent(&ctx).is_some_and(|layer| crate::runtime::overlay::opening(&ctx, layer)),
+        };
+        if opening && comp.scroll().is_none() {
+            *stage.session::<ScrollState>(sub(id, "scroll")) = ScrollState::default();
+        }
         self.last_extent = stage.session::<ScrollState>(sub(id, "scroll")).extent;
         self.scroll_bound = comp.scroll().is_some();
         let held = match comp.scroll() {
