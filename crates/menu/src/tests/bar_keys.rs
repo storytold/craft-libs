@@ -152,6 +152,21 @@ fn a_second_alt_esc_or_a_click_takes_the_keyboard_off_the_bar_and_f10_focuses_it
     assert_eq!(b.focus(), None, "a click anywhere leaves");
 }
 
+/// Shift+F10 is the keyboard's context-menu key: the bar leaves it, and its press, to the widget
+/// that has the keyboard (#2940). F10 alone still toggles the bar.
+#[test]
+fn shift_f10_is_left_for_the_focused_widgets_context_menu() {
+    let mut b = wide();
+    for pressed in [true, false] {
+        b.events.push(Event::Key { key: Key::F10, physical_key: None, pressed, repeat: false, modifiers: Modifiers::SHIFT });
+    }
+    b.run(3);
+    assert!(b.focus().is_none() && !is_focused(&b.ctx), "Shift+F10 doesn't put the keyboard on the bar");
+    assert!(b.left.contains(&(Key::F10, Modifiers::SHIFT)), "the press reaches what is drawn after the bar");
+    b.key(Key::F10);
+    assert_eq!(b.focus(), Some(0), "F10 alone still focuses the bar");
+}
+
 /// Alt+wheel zooms in many apps, and Alt that went to the desktop (Alt+Tab) is no tap either.
 #[test]
 fn alt_with_a_wheel_scroll_a_lost_focus_or_a_drag_is_no_tap() {
