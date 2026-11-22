@@ -65,9 +65,12 @@ pub(crate) struct SelectDecl {
 }
 
 impl SelectDecl {
-    /// The keys a focused selection part keeps: a read-only text's, with Select All and Copy its only edit commands.
+    /// The keys a focused selection part keeps: a read-only text's, with Select All, Copy and Cut its only edit
+    /// commands. Cut copies, as in a label's selection: the text removes nothing, and the app's Cut never runs on what
+    /// lies behind it.
     pub(crate) fn keys(&self) -> KeyUse {
-        let keys = KeyUse::of(crate::contract::Input::Text).with_edits(EditSet::NONE.with(EditCommand::SelectAll).with(EditCommand::Copy));
+        let edits = EditSet::NONE.with(EditCommand::SelectAll).with(EditCommand::Copy).with(EditCommand::Cut);
+        let keys = KeyUse::of(crate::contract::Input::Text).with_edits(edits);
         if self.multiline { keys.with_keep(KeepKeys::BlockArrows) } else { keys }
     }
 }
@@ -77,7 +80,7 @@ pub(crate) fn selection_id(id: egui::Id, part: PartRef) -> egui::Id {
     sub(id, ("selection", part.key, part.index))
 }
 
-/// Step 8b for selection parts: the focused one takes this pass's Select All and Copy.
+/// Step 8b for selection parts: the focused one takes this pass's Select All, Copy and Cut.
 pub(crate) fn run_selections(core: &mut super::cx::CxCore<'_>, selections: &[SelectDecl]) {
     let ctx = core.ctx.clone();
     let Some(focused) = selections.iter().find(|decl| crate::runtime::egui::focus::has_focus(&ctx, selection_id(core.id, decl.part))) else {

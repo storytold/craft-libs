@@ -400,11 +400,12 @@ fn apply(input: &mut AdapterIn<'_>, state: &mut TextState, text: &mut String, wi
     changed
 }
 
-/// Select All or Copy on the text widget `widget` showing `text`: the edit commands read-only text takes.
+/// Select All or Copy on the text widget `widget` showing `text`: the edit commands read-only text takes. A Cut that
+/// reaches it copies, as read-only text removes nothing.
 pub(crate) fn select_or_copy(ctx: &Context, widget: Id, text: &str, command: EditCommand) {
     match command {
         EditCommand::SelectAll => text_edit::select(ctx, widget, 0, text.chars().count()),
-        EditCommand::Copy => {
+        EditCommand::Copy | EditCommand::Cut => {
             let Some((a, b)) = text_edit::selection(ctx, widget).filter(|(a, b)| a != b) else { return };
             let (lo, hi) = (a.min(b), a.max(b));
             clipboard::copy_text(ctx, text[byte_of(text, lo)..byte_of(text, hi)].to_owned());

@@ -18,7 +18,8 @@ fn stop(fixture: &Fixture) -> Option<Id> {
 }
 
 /// Tab goes from the field before the text to the one after it; a press on the text focuses it, and Select All then
-/// Copy puts the whole text on the clipboard.
+/// Copy puts the whole text on the clipboard. Cut copies it too, as a label's selection does: read-only text removes
+/// nothing, and the Cut is the text's, not the app's.
 #[trial]
 fn tab_passes_over_read_only_text_and_a_press_selects_it_for_copy() {
     let ids = Rc::new([Cell::new(Id::NULL), Cell::new(Id::NULL), Cell::new(Id::NULL)]);
@@ -40,6 +41,8 @@ fn tab_passes_over_read_only_text_and_a_press_selects_it_for_copy() {
     fixture.key(Key::A, Modifiers::COMMAND);
     fixture.frame(vec![Event::Copy]);
     assert_eq!(fixture.copied(), ["/projects/poster.indd"]);
+    fixture.frame(vec![Event::Cut]);
+    assert_eq!(fixture.copied(), ["/projects/poster.indd"], "Cut copies the selected text");
 }
 
 /// Where `text` was painted.
