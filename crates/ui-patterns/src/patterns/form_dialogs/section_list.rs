@@ -18,7 +18,7 @@ pub(crate) mod stories;
 /// What a section list draws under its list, in the list's column.
 type Foot<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
-/// A single-select, click-activated, content-sized list without a header and a vertical divider at the start edge,
+/// A single-select, click-activated, content-sized list at its natural height without a header and a vertical divider at the start edge,
 /// and the body of the shown section in a filling, vertically scrolled stack beside them; the list stays put while the
 /// body scrolls.
 ///
@@ -75,6 +75,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
                     .allow_empty(false)
                     .header(false)
                     .sizing(Sizing::Content)
+                    .natural_height(true)
                     .selection(Bind::given(Selection::single(shown.clone())));
                 if let Some(id) = id {
                     sections = sections.id(id);
