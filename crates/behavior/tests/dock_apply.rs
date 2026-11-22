@@ -474,6 +474,7 @@ fn a_renamed_panel_keeps_its_place_and_a_taken_name_changes_nothing() {
         let swap = |panel: u32| if panel == from { 99 } else { panel };
 
         let mut renamed = base.clone();
+        let (revision, generation) = (renamed.revision(), renamed.generation());
         renamed.rename(&from, 99).unwrap_or_else(|e| panic!("{from}: {e:?}"));
         let panels = |workspace: &Workspace<u32>| workspace.layout().panels().into_iter().copied().collect::<Vec<_>>();
         assert_eq!(panels(&renamed), panels(&base).into_iter().map(swap).collect::<Vec<_>>(), "{from}: the panel keeps its position");
@@ -482,14 +483,15 @@ fn a_renamed_panel_keeps_its_place_and_a_taken_name_changes_nothing() {
         assert_eq!(keys(renamed.floated()), keys(base.floated()).into_iter().map(swap).collect::<Vec<_>>(), "{from}: floated keys");
         assert!(!mentions(&renamed, from) && mentions(&renamed, 99), "{from}: no field holds the old id");
         renamed.validate().unwrap();
-        assert_eq!(renamed.revision(), base.revision(), "{from}: a rename is an edit");
+        assert!(renamed.revision() != revision && renamed.generation() == generation, "{from}: a rename is an edit");
 
         for (source, name, error) in [(40, 99, DockError::MissingPanel), (from, 4, DockError::DuplicatePanel), (from, 52, DockError::DuplicatePanel)]
         {
             let mut refused = base.clone();
+            let revision = refused.revision();
             assert_eq!(refused.rename(&source, name), Err(error), "{from}: {source} to {name}");
             assert_eq!(refused, base, "{from}: a refused rename changes nothing");
-            assert_eq!(refused.revision(), base.revision());
+            assert_eq!(refused.revision(), revision);
         }
     }
 }
@@ -549,6 +551,7 @@ fn every_workspace_mutator_moves_the_revision() {
     moves("set_visible", &|workspace| workspace.set_visible(5, false, None, false, allow).unwrap());
     moves("reconcile", &|workspace| workspace.reconcile(|panel| *panel != 5, allow, &Workspace::new(docked())));
     moves("raise_window_floor", &|workspace| workspace.raise_window_floor(1000));
+    moves("rename", &|workspace| workspace.rename(&5, 99).unwrap());
     moves("forget_hidden", &|workspace| {
         workspace.apply(Action::close(5), false, allow).unwrap();
         let revision = workspace.revision();

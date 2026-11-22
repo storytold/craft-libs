@@ -162,8 +162,8 @@ impl<P> Workspace<P> {
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
-    /// Renames a panel in `layout`, `hidden` and `floated` (keys and anchors), keeping its place; all or nothing,
-    /// and the revision stays. `MissingPanel` when `from` is in none of them, `DuplicatePanel` when `to` is
+    /// Renames a panel in `layout`, `hidden` and `floated` (keys and anchors), keeping its place; all or nothing.
+    /// An edit: it moves the revision and keeps the generation. `MissingPanel` when `from` is in none of them, `DuplicatePanel` when `to` is
     /// already there.
     pub fn rename(&mut self, from: &P, to: P) -> Result<(), DockError> {
         if !self.holds(from) {
@@ -189,7 +189,9 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             rename_in_location(location, &swap);
         }
         proposed.validate()?;
-        *self = proposed;
+        let Workspace { layout, hidden, floated, .. } = proposed;
+        (self.layout, self.hidden, self.floated) = (layout, hidden, floated);
+        self.touch();
         Ok(())
     }
 
