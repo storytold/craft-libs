@@ -198,7 +198,9 @@ fn shape(b: &[u8], sp: Rec) -> Result<(EShape, Option<Emu>)> {
 /// rest are members. Members are mapped into the group's frame (page coordinates).
 fn group(b: &[u8], spgr: Rec, depth: usize, warnings: &mut Vec<String>) -> Result<Option<EShape>> {
     if depth > MAX_DEPTH {
-        warnings.push("Groups nested too deeply were skipped.".into());
+        if warnings.len() < 128 {
+            warnings.push("Groups nested too deeply were skipped.".into());
+        }
         return Ok(None);
     }
     let recs = records(b, spgr.data, spgr.data + spgr.len)?;
@@ -396,5 +398,15 @@ mod tests {
         let v = sh.prop(0x01ff).unwrap();
         assert_eq!(v & 0x0008_0008, 0x0008_0000, "line flag lost: {v:#x}");
         assert_ne!(v & 0x0040_0000, 0);
+    }
+
+    #[test]
+    fn group_depth_warnings_are_capped() {
+        let mut warnings = Vec::new();
+        let rec = Rec { inst: 0, ty: 0, data: 0, len: 0 };
+        for _ in 0..10_000 {
+            assert!(group(&[], rec, MAX_DEPTH + 1, &mut warnings).unwrap().is_none());
+        }
+        assert_eq!(warnings.len(), 128);
     }
 }

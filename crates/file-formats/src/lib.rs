@@ -690,9 +690,11 @@ fn jpeg_frame(bytes: &[u8]) -> JpegFrame {
     }
 }
 
-/// Publisher documents are compound files whose root `Contents` stream starts `E8 AC`. Only the
-/// directory, the file allocation tables and those two bytes are read, whatever the size of the
-/// stream; other compound files (Word, Excel, Outlook) have no such stream.
+/// Publisher documents are compound files whose root `Contents` stream starts `E8 AC`. Opening the
+/// container reads the directory and the allocation tables and copies the root mini stream (bounded
+/// by the file length, not by `Limits::max_stream_size`); the `Contents` stream itself is never
+/// read beyond its first two bytes, whatever its size. Other compound files (Word, Excel, Outlook)
+/// have no such stream.
 #[cfg(feature = "publisher")]
 fn is_publisher(bytes: &[u8]) -> bool {
     const SIGNATURE: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];

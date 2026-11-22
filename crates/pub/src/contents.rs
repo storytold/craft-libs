@@ -48,6 +48,11 @@ impl WorkBudget {
         self.items = self.items.checked_sub(out.len()).ok_or_else(|| PubError::Unsupported("Contents aggregate property limit exceeded".into()))?;
         Ok(out)
     }
+    /// A property's nested list, charged like a top-level one: repeated references to one record must
+    /// not decode its children again for free.
+    fn children<'a>(&mut self, p: crate::read::Prop<'a>) -> Result<Vec<crate::read::Prop<'a>>> {
+        self.properties(p.data)
+    }
 }
 
 fn parse_with_budget(b: &[u8], bytes: usize, items: usize) -> Result<Contents> {
@@ -81,10 +86,10 @@ fn parse_with_budget(b: &[u8], bytes: usize, items: usize) -> Result<Contents> {
                 found_document = true;
                 for v in &p {
                     if v.key == 2 {
-                        order = v.children()?.iter().filter_map(|e| e.number()).collect();
+                        order = budget.children(*v)?.iter().filter_map(|e| e.number()).collect();
                     }
                     if v.key == 0x12 {
-                        let size = v.children()?;
+                        let size = budget.children(*v)?;
                         c.width_emu = number(&size, 1).unwrap_or(0);
                         c.height_emu = number(&size, 2).unwrap_or(0);
                     }
@@ -95,7 +100,7 @@ fn parse_with_budget(b: &[u8], bytes: usize, items: usize) -> Result<Contents> {
                 let mut master = false;
                 for v in &p {
                     if v.key == 2 {
-                        page.shapes = v.children()?.iter().filter_map(|e| e.number()).collect();
+                        page.shapes = budget.children(*v)?.iter().filter_map(|e| e.number()).collect();
                     }
                     if v.key == 0x0e && v.kind == 0xc0 {
                         master = !v.text().is_empty();
@@ -113,8 +118,8 @@ fn parse_with_budget(b: &[u8], bytes: usize, items: usize) -> Result<Contents> {
             }
             0x5c => {
                 for array in p.iter().filter(|v| v.kind == 0xa0) {
-                    for color in array.children()? {
-                        let value = if color.kind == 0x88 { number(&color.children()?, 1).unwrap_or(0) } else { 0 };
+                    for color in budget.children(*array)? {
+                        let value = if color.kind == 0x88 { number(&budget.children(color)?, 1).unwrap_or(0) } else { 0 };
                         if c.palette.len() >= 10_000 {
                             return Err(PubError::Malformed("palette exceeds limit".into()));
                         }
@@ -227,6 +232,26 @@ mod budget_tests {
         let error = parse_with_budget(&b, directory.len() * 2 + fields.len() * 8 + props.len() * 2, usize::MAX).err().unwrap();
         assert!(error.to_string().contains("aggregate parse byte limit"), "{error}");
         let error = parse_with_budget(&b, usize::MAX, 30).err().unwrap();
+        assert!(error.to_string().contains("aggregate property limit"), "{error}");
+    }
+
+    #[test]
+    fn nested_page_lists_are_charged_to_the_aggregate_budget() {
+        // Eight directory entries reference one page record whose shape list holds 50 numbers.
+        let mut b = vec![0; 0x1e];
+        let at = b.len() as u32;
+        let shapes = list(2, 0x90, &[1, 0x20, 5, 0, 0, 0].repeat(50));
+        b.extend(((shapes.len() + 4) as u32).to_le_bytes());
+        b.extend(&shapes);
+        let fields = [vec![2, 0x18, 0x43, 0, 4, 0xb8], at.to_le_bytes().to_vec()].concat();
+        let entry = list(0, 0x88, &fields);
+        let directory = list(3, 0x90, &entry.repeat(8));
+        let trailer = b.len() as u32;
+        b[0x1a..0x1e].copy_from_slice(&trailer.to_le_bytes());
+        b.extend(((directory.len() + 4) as u32).to_le_bytes());
+        b.extend(&directory);
+        // About 40 properties at the top level; the 400 nested numbers are what must exhaust it.
+        let error = parse_with_budget(&b, usize::MAX, 100).err().unwrap();
         assert!(error.to_string().contains("aggregate property limit"), "{error}");
     }
 }

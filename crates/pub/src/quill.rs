@@ -239,6 +239,8 @@ fn sections(b: &[u8]) -> Result<Vec<Section<'_>>> {
     }
     Ok(out)
 }
+/// Formatting pages read per tag across all sections (32 MiB of 512-byte pages).
+const MAX_FORMATTING_PAGES: usize = 65_536;
 fn runs<T>(
     sections: &[Section<'_>],
     tag: &[u8],
@@ -247,8 +249,15 @@ fn runs<T>(
     decode: impl Fn(&[u8]) -> Result<T>,
 ) -> Result<Vec<(Range<usize>, T)>> {
     let mut ends = Vec::new();
+    // Sections may point at one payload many times, and a page that declares no runs adds nothing to `ends`,
+    // so the run limit alone does not bound the work: count every page across all sections.
+    let mut pages = 0usize;
     for section in sections.iter().filter(|s| s.tag == tag) {
         for page in section.data.chunks(512) {
+            pages += 1;
+            if pages > MAX_FORMATTING_PAGES {
+                return Err(PubError::Malformed("too much formatting data".into()));
+            }
             let n = usize::from(u16_at(page, 0)?);
             slice(page, 8, n * 6)?;
             for i in 0..n {
@@ -565,5 +574,15 @@ mod tests {
         let runs = vec![(0..6, 1), (6..13, 2), (13..25, 3)];
         assert_eq!(cut(&runs, &(10..20)), vec![(0..3, 2), (3..10, 3)]);
         assert!(cut(&runs, &(25..25)).is_empty());
+    }
+
+    #[test]
+    fn formatting_pages_are_counted_across_sections_that_share_one_payload() {
+        // Pages that declare no runs add nothing to the run list, so only the page count bounds the work.
+        let payload = vec![0u8; 512 * 1_000];
+        let sections: Vec<Section<'_>> = (0..100).map(|i| Section { tag: b"FDPC", at: i, data: &payload }).collect();
+        let error = runs(&sections, b"FDPC", 0, 10, |_| Ok(())).err().unwrap();
+        assert!(error.to_string().contains("too much formatting data"), "{error}");
+        assert!(runs(&sections[..60], b"FDPC", 0, 10, |_| Ok(())).unwrap().is_empty());
     }
 }
