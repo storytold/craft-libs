@@ -118,8 +118,8 @@ pub fn take_move_item(intents: &mut Intents) -> Option<ItemMove> {
 }
 
 /// The share of a group row's height, at its top and at its bottom, where a drop lands before or after the row; the
-/// middle drops into the group.
-const GROUP_EDGE: f32 = 0.25;
+/// middle drops into the group. A list that takes a payload both between and onto rows splits every row so.
+pub(crate) const GROUP_EDGE: f32 = 0.25;
 
 /// Where a drop in a tree lands: before row `insert` of the display order, inside the group row `parent` (`None` at the
 /// top level).

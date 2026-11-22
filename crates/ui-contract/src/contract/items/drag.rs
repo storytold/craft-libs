@@ -668,20 +668,36 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
+    /// Whether `at` lies over the middle of a row, between the top and bottom shares where a drop lands before or
+    /// after it.
+    fn over_middle(&self, layout: &C::ItemLayout, (rect, offset, rtl): (Rect, ScrollPos, bool), at: Pos2) -> bool {
+        let Some(over) = (at.y >= rect.min.y).then(|| layout.hit(Self::logical(layout, rect, rtl, at), offset)).flatten() else { return false };
+        let row = self.screen(layout, rect, over, offset, rtl);
+        let from_top = if row.height() > 0.0 { (at.y - row.min.y) / row.height() } else { 0.0 };
+        (reorder::GROUP_EDGE..1.0 - reorder::GROUP_EDGE).contains(&from_top)
+    }
+
     /// A drag that did not start in the collection: the first drop kind that takes its payload at the place under the
     /// pointer registers the target and scrolls the rows at their edges; its release reports `Dropped`, and while held
     /// it is the pending drop. A drag no kind takes here scrolls nothing: it is meant for another target. `own` is the
     /// collection's own drag, offered here where its reorder refuses the landing: only `Onto` kinds take it, and the
-    /// rows scrolled already.
+    /// rows scrolled already. Where an `Onto` kind takes the same payload, a `Between` kind leaves it the middle of the
+    /// row, as a tree's reorder leaves a group row's middle to a drop into it: there the drop is onto the row or
+    /// nowhere.
     fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool), own: bool) {
         let xf = self.xf;
         let (rect, _, rtl) = place;
-        for kind in comp.drops() {
+        let drops = comp.drops();
+        for kind in drops {
             if own && !matches!(kind.place(), DropPlace::Onto) {
                 continue;
             }
             let Some((payload, at)) = cx.core.dragging_of(kind.payload()) else { continue };
             let point = xf.map_or(at, |map| map.to_layer(at));
+            let onto_too = || drops.iter().any(|other| matches!(other.place(), DropPlace::Onto) && other.payload() == kind.payload());
+            if matches!(kind.place(), DropPlace::Between) && onto_too() && self.over_middle(layout, place, point) {
+                continue;
+            }
             let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), point).filter(|(at, _)| kind.accepts(&*payload, at)) else {
                 continue;
             };
