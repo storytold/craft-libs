@@ -1,6 +1,6 @@
 //! [`Scalar`]: a typed reading of one fixed-size or string value from the object serialisation.
 
-use super::tag::ValueTag;
+use super::tag::{Payload, ValueTag};
 use std::fmt;
 
 /// One decoded value. Vectors and matrices are kept as their float components.
@@ -47,8 +47,14 @@ fn bit_of_wide(mask: u128) -> u64 {
 }
 
 impl Scalar {
-    /// Decodes a payload as delivered by [`super::Visitor::scalar`]; `None` if the size does not fit the tag.
+    /// Decodes a payload as delivered by [`super::Visitor::scalar`]; `None` if the size does not fit the tag (a fixed-size
+    /// value needs exactly its width).
     pub fn decode(tag: ValueTag, payload: &[u8]) -> Option<Scalar> {
+        if let Payload::Fixed(width) = tag.payload()
+            && payload.len() != width
+        {
+            return None;
+        }
         let u64_le = || payload.try_into().ok().map(u64::from_le_bytes);
         let u32_le = || payload.try_into().ok().map(u32::from_le_bytes);
         Some(match tag {
@@ -134,6 +140,13 @@ mod tests {
         assert_eq!(Scalar::decode(ValueTag::IVec2, &[11, 0, 0, 0, 10, 0, 0, 0]), Some(Scalar::IVec2([11, 10])));
         assert_eq!(Scalar::decode(ValueTag::Uid, &7u64.to_le_bytes()).and_then(|s| s.as_u64()), Some(7));
         assert_eq!(Scalar::decode(ValueTag::Float, &[0, 0]), None);
+        // a fixed-size value needs exactly its width: no shorter vector, no empty matrix, no padded flag
+        assert_eq!(Scalar::decode(ValueTag::Vec4, &[0; 4]), None);
+        assert_eq!(Scalar::decode(ValueTag::Vec3, &[0; 16]), None);
+        assert_eq!(Scalar::decode(ValueTag::Mat4, &[]), None);
+        assert_eq!(Scalar::decode(ValueTag::Mat4, &[0; 64]), Some(Scalar::Floats(vec![0.0; 16])));
+        assert_eq!(Scalar::decode(ValueTag::Bool, &[1, 0]), None);
+        assert_eq!(Scalar::decode(ValueTag::Bool, &[]), None);
         assert_eq!(Scalar::decode(ValueTag::String, b"ab"), Some(Scalar::String("ab".into())));
         assert_eq!(Scalar::decode(ValueTag::Bool, &[0xff]), Some(Scalar::Bool(true)));
         assert_eq!(Scalar::decode(ValueTag::Enum, &[4, 0, 0, 0, 0, 0, 0, 0]), Some(Scalar::Enum(4)));

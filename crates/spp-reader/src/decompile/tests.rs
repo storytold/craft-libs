@@ -182,6 +182,19 @@ fn declared_colours_are_read_from_the_usertag() {
 }
 
 #[test]
+fn a_malformed_declared_colour_is_none_not_a_shifted_one() {
+    // an unreadable field used to be dropped, which moved the later numbers into red, green and blue
+    assert_eq!(super::default_color("defaultcolor=(bad,64,128,255)"), None);
+    assert_eq!(super::default_color("defaultcolor=(,64,128)"), None);
+    // red above 255 (and below 0) is not an 8-bit value
+    assert_eq!(super::default_color("defaultcolor=(256,0,0)"), None);
+    assert_eq!(super::default_color("defaultcolor=(-1,0,0)"), None);
+    assert_eq!(super::default_color("defaultcolor=(NaN,0,0)"), None);
+    // an alpha after the three colour fields is not read, and spaces do not matter
+    assert_eq!(super::default_color("defaultcolor=( 255, 0 ,0, 7)"), Some([1.0, 0.0, 0.0]));
+}
+
+#[test]
 fn the_first_operand_of_a_sequence_runs_only_for_its_sets() {
     use crate::decode::graph_package::compiled::{Instr, Operands};
     let ins = |op, operands| Instr { op, components: 1, ty: 9, operands };

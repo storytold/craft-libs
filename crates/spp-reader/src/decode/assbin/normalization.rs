@@ -41,15 +41,21 @@ impl Normalization {
         let scene = scene_bytes(data)?;
         let blocks = SceneBlocks::split(&scene)?;
         let meta = root_metadata(blocks.root_node)?;
+        Ok(Normalization::from_metadata(&meta))
+    }
+
+    /// The centre and radius entries of the root node's metadata; a centre or radius that is not finite (or a radius
+    /// that is not above zero) gives `None`, as in the mesh metadata, instead of NaN coordinates from [`Self::apply`].
+    fn from_metadata(meta: &[(String, MetaValue)]) -> Option<Normalization> {
         let center = meta.iter().find_map(|(k, v)| match v {
-            MetaValue::Vec3(c) if k == CENTER => Some(*c),
+            MetaValue::Vec3(c) if k == CENTER && c.iter().all(|x| x.is_finite()) => Some(*c),
             _ => None,
         });
         let radius = meta.iter().find_map(|(k, v)| match v {
             MetaValue::Float(r) if k == RADIUS && *r > 0.0 && r.is_finite() => Some(*r),
             _ => None,
         });
-        Ok(center.zip(radius).map(|(center, radius)| Normalization { center, radius }))
+        center.zip(radius).map(|(center, radius)| Normalization { center, radius })
     }
 
     /// A point of the original scene in the file's normalised space.
@@ -145,6 +151,14 @@ mod tests {
         assert_eq!(meta[2], (RADIUS.to_string(), MetaValue::Float(4.0)));
         let n = Normalization { center: [1.0, 2.0, 3.0], radius: 4.0 };
         assert_eq!(n.apply([5.0, 2.0, 3.0]), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_centre_that_is_not_finite_is_not_a_normalisation() {
+        let meta = |centre: [f32; 3]| vec![(CENTER.to_string(), MetaValue::Vec3(centre)), (RADIUS.to_string(), MetaValue::Float(1.0))];
+        assert_eq!(Normalization::from_metadata(&meta([1.0, 2.0, 3.0])), Some(Normalization { center: [1.0, 2.0, 3.0], radius: 1.0 }));
+        assert_eq!(Normalization::from_metadata(&meta([f32::NAN, 0.0, 0.0])), None);
+        assert_eq!(Normalization::from_metadata(&meta([0.0, f32::INFINITY, 0.0])), None);
     }
 
     #[test]

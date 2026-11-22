@@ -592,8 +592,8 @@ fn decode_gradient_map(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<
     for i in 0..n.min(MAX_GRADIENT_KEYS) {
         if node.color {
             let at = keys + if mid { 8 } else { 6 } * i;
-            let byte = |k: u32| f.s.bytes(at + 2 + k, 1).and_then(|b| b.first().copied()).unwrap_or(0);
-            let c = [byte(0), byte(1), byte(2), byte(3)].map(|b| f32::from(b) / U8_FULL);
+            // the four colour bytes are read together: a key that ends early is an error, not a transparent colour
+            let c = f.s.u32(at + 2)?.to_le_bytes().map(|b| f32::from(b) / U8_FULL);
             node.keys.push(GradientKey { position: unit(f.s.u16(at)?), color: c, midpoint: if mid { unit(f.s.u16(at + 6)?) } else { 0.5 } });
         } else {
             let at = keys + if mid { 6 } else { 4 } * i;

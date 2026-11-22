@@ -395,6 +395,15 @@ mod records {
     }
 
     #[test]
+    fn a_colour_key_missing_its_last_byte_is_an_error_not_a_transparent_colour() {
+        let bytes: Vec<u8> = [0x0201_0000u32, 0x8000_0403, 0xff00_00ff].iter().flat_map(|w| w.to_le_bytes()).collect();
+        let rec = NodeRecord { index: 0, offset: 0, end: 1000, opcode: 0x01, variant: 0x88, flags: 0, body: vec![5, 2, 0] };
+        assert!(atomic::decode(&rec, &Section::new(&bytes, 0)).is_ok());
+        // the second key's alpha byte is the last byte of the section: it used to be read as 0
+        assert!(atomic::decode(&rec, &Section::new(&bytes[..bytes.len() - 1], 0)).is_err());
+    }
+
+    #[test]
     fn sampling_a_colour_can_carry_a_filter_like_sampling_a_luminance() {
         // %0 pos, %1 samplecol (2 operands), %2 samplecol with a filter (3), %3 const 1: all four must parse in step
         let mut b = Vec::new();
