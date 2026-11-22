@@ -124,21 +124,29 @@ fn drop_cap_not_repeated_after_page_break() {
 
 #[test]
 fn paragraph_shading_automatic_survives_a_document_round_trip() {
-    use std::sync::Arc;
     use craft_wordmodel::props::ParaProps;
     use craft_wordmodel::styles::{Style, StyleKind};
     use craft_wordmodel::{Block, Document, Paragraph, Rgb};
+    use std::sync::Arc;
 
     let yellow = Rgb(255, 255, 0);
     let blue = Rgb(0, 0, 255);
     let mut doc = Document::new();
     Arc::make_mut(&mut doc.styles).upsert(Style {
-        id: "Shaded".into(), name: "Shaded".into(), kind: StyleKind::Paragraph, based_on: Some("Normal".into()),
-        para: ParaProps { shading: Some(yellow), ..Default::default() }, ..Default::default()
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        kind: StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(yellow), ..Default::default() },
+        ..Default::default()
     });
     Arc::make_mut(&mut doc.styles).upsert(Style {
-        id: "Automatic".into(), name: "Automatic".into(), kind: StyleKind::Paragraph, based_on: Some("Shaded".into()),
-        para: ParaProps { shading_auto: true, ..Default::default() }, ..Default::default()
+        id: "Automatic".into(),
+        name: "Automatic".into(),
+        kind: StyleKind::Paragraph,
+        based_on: Some("Shaded".into()),
+        para: ParaProps { shading_auto: true, ..Default::default() },
+        ..Default::default()
     });
     let values = [
         ParaProps { style: Some("Shaded".into()), ..Default::default() },
@@ -147,11 +155,15 @@ fn paragraph_shading_automatic_survives_a_document_round_trip() {
         ParaProps { style: Some("Shaded".into()), shading: Some(blue), shading_auto: true, ..Default::default() },
         ParaProps::default(),
     ];
-    doc.body = values.into_iter().enumerate().map(|(i, props)| {
-        let mut p = Paragraph::with_text(&format!("paragraph {i}"), Default::default());
-        p.props = props;
-        Arc::new(Block::Para(p))
-    }).collect();
+    doc.body = values
+        .into_iter()
+        .enumerate()
+        .map(|(i, props)| {
+            let mut p = Paragraph::with_text(&format!("paragraph {i}"), Default::default());
+            p.props = props;
+            Arc::new(Block::Para(p))
+        })
+        .collect();
     let flow = craft_flow::from_doc_with(&doc, craft_flow::FlowOpts { paras: true, ..Default::default() });
     let rows = paras(&flow.blocks);
     assert_eq!(rows.len(), 5);
@@ -174,8 +186,8 @@ fn paragraph_shading_automatic_survives_a_document_round_trip() {
 
 #[test]
 fn paragraph_shading_fixed_flow_fill_wins_over_automatic_marker() {
-    use craft_wordmodel::props::ParaProps;
     use craft_wordmodel::Rgb;
+    use craft_wordmodel::props::ParaProps;
     let blue = Rgb(0, 0, 255);
     let flow = Flow {
         blocks: vec![FBlock::Para(Para {

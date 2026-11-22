@@ -14,9 +14,8 @@ fn paragraph(style: &str, shading: &str, text: &str) -> String {
 }
 
 fn package(body: &str, with_theme: bool) -> Vec<u8> {
-    let document = format!(
-        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
-    );
+    let document =
+        format!(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#);
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="document" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let theme_rel = if with_theme {
         r#"<Relationship Id="theme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>"#
@@ -74,7 +73,8 @@ fn automatic_shading_overrides_inherited_color() {
         paragraph("Shaded", r#"<w:shd w:val="nil" w:fill="0000FF"/>"#, "ignored nil"),
         paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="auto"/>"#, "automatic"),
         paragraph("Shaded", r#"<w:shd w:val="clear"/>"#, "default automatic background"),
-    ].concat();
+    ]
+    .concat();
     let doc = craft_docx::read(&package(&body, false)).unwrap();
     let got = fills(&doc);
     assert_eq!(got.len(), 5);
@@ -115,7 +115,8 @@ fn fixed_and_theme_backgrounds_stay_colored() {
         paragraph("Shaded", r#"<w:shd w:val="clear" w:themeFill="accent1" w:fill="ZZZZZZ"/>"#, "theme ignores bad fallback"),
         paragraph("Shaded", r#"<w:shd w:val="clear" w:themeFill="accent1" w:fill="123"/>"#, "theme ignores short fallback"),
         paragraph("Shaded", r#"<w:shd w:val="clear" w:themeFill="accent1" w:fill="auto"/>"#, "theme overrides automatic fallback"),
-    ].concat();
+    ]
+    .concat();
     let doc = craft_docx::read(&package(&body, true)).unwrap();
     let expected = [Some(BLUE), Some(ACCENT), Some(ACCENT), Some(ACCENT), Some(ACCENT), Some(ACCENT)];
     assert_eq!(fills(&doc), expected);
@@ -128,7 +129,8 @@ fn automatic_style_shading_survives_save() {
         paragraph("Automatic", "", "style automatic"),
         paragraph("Automatic", r#"<w:shd w:val="clear" w:fill="0000FF"/>"#, "direct color"),
         paragraph("Automatic", r#"<w:shd w:val="nil"/>"#, "nil leaves style automatic"),
-    ].concat();
+    ]
+    .concat();
     let doc = craft_docx::read(&package(&body, false)).unwrap();
     let expected = [None, Some(BLUE), None];
     assert_eq!(fills(&doc), expected);

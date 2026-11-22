@@ -1598,9 +1598,25 @@ impl Styles {
                 let contextual = chain.iter().find_map(|(_, s)| s.contextual);
                 let shading = chain.iter().find_map(|(_, s)| s.para_shading).or_else(|| {
                     // A parentless kind inherits the default style rather than Standard.
-                    chain.last().filter(|(_, s)| s.parent.is_none() && self.default_shading != self.doc_shading()).map(|_| self.default_shading.flatten())
+                    chain
+                        .last()
+                        .filter(|(_, s)| s.parent.is_none() && self.default_shading != self.doc_shading())
+                        .map(|_| self.default_shading.flatten())
                 });
-                (kind, ParaLook { kind, align, keep_next, fmt, spacing, contextual, shading: shading.flatten(), shading_auto: shading == Some(None), ..Default::default() })
+                (
+                    kind,
+                    ParaLook {
+                        kind,
+                        align,
+                        keep_next,
+                        fmt,
+                        spacing,
+                        contextual,
+                        shading: shading.flatten(),
+                        shading_auto: shading == Some(None),
+                        ..Default::default()
+                    },
+                )
             })
             .collect()
     }
@@ -1659,9 +1675,8 @@ impl Styles {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
         // A parentless style must not take Standard's background when rebased on Normal.
-        let shading = s.para_shading.or_else(|| {
-            (s.parent.is_none() && self.default_shading != self.doc_shading()).then_some(self.default_shading.flatten())
-        });
+        let shading =
+            s.para_shading.or_else(|| (s.parent.is_none() && self.default_shading != self.doc_shading()).then_some(self.default_shading.flatten()));
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),
@@ -1739,7 +1754,12 @@ impl Styles {
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
         let shading = own().find_map(|(_, s)| s.para_shading).or_else(|| {
             // A parentless automatic style also starts at the default style, not Standard.
-            chain.last().filter(|(n, s)| named.is_none() && kind == Kind::Normal && *n != "Standard" && s.parent.is_none() && self.default_shading != self.doc_shading()).map(|_| self.default_shading.flatten())
+            chain
+                .last()
+                .filter(|(n, s)| {
+                    named.is_none() && kind == Kind::Normal && *n != "Standard" && s.parent.is_none() && self.default_shading != self.doc_shading()
+                })
+                .map(|_| self.default_shading.flatten())
         });
         let contextual = own().find_map(|(_, s)| s.contextual);
         let rtl = own().find_map(|(_, s)| s.rtl);

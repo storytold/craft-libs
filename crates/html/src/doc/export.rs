@@ -559,8 +559,8 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
 #[cfg(test)]
 mod paragraph_shading {
     use super::*;
-    use craft_wordmodel::props::ParaProps;
     use craft_wordmodel::Rgb;
+    use craft_wordmodel::props::ParaProps;
 
     fn paragraph(text: &str, kind: Kind, shading: Option<Rgb>, shading_auto: bool) -> FBlock {
         FBlock::Para(Para {

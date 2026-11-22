@@ -124,10 +124,7 @@ fn paragraph_shading_overrides_style_only_when_explicit() {
     ] {
         let spec = RichSpec {
             text: "Shaded paragraph\r",
-            styles: vec![
-                (1, 0x0FFF, "Normal", grpprl(&[(P_SHD, &red)]), Vec::new()),
-                (1, 0, "Automatic", grpprl(&[(P_SHD, &AUTO)]), Vec::new()),
-            ],
+            styles: vec![(1, 0x0FFF, "Normal", grpprl(&[(P_SHD, &red)]), Vec::new()), (1, 0, "Automatic", grpprl(&[(P_SHD, &AUTO)]), Vec::new())],
             fonts: vec!["Times New Roman"],
             chpx_runs: vec![(0, Vec::new())],
             papx_entries: vec![(0, style, direct)],
@@ -167,11 +164,14 @@ fn paragraph_shading_round_trips_without_losing_inheritance() {
         ("Color overrides automatic style", ParaProps { shading: Some(BLUE), ..automatic_style }),
         ("Unspecified", ParaProps::default()),
     ];
-    doc.body = cases.iter().map(|(text, props)| {
-        let mut p = Paragraph::with_text(text, CharProps::default());
-        p.props = props.clone();
-        para_block(p)
-    }).collect();
+    doc.body = cases
+        .iter()
+        .map(|(text, props)| {
+            let mut p = Paragraph::with_text(text, CharProps::default());
+            p.props = props.clone();
+            para_block(p)
+        })
+        .collect();
     let first = read(&write(&doc).expect("write DOC")).expect("import DOC");
     let second = read(&write(&first).expect("save imported DOC")).expect("reopen DOC");
     for round in [&first, &second] {

@@ -254,11 +254,46 @@ impl PropCtx {
     /// paragraph nil is ignored (MS-OI29500 §2.1.553); invalid input is not automatic shading.
     fn paragraph_shading(&self, e: &El) -> Option<(Option<Rgb>, bool)> {
         let val = e.attr("w:val")?;
-        if !matches!(val,
-            "clear" | "solid" | "horzStripe" | "vertStripe" | "reverseDiagStripe" | "diagStripe" | "horzCross" | "diagCross" |
-            "thinHorzStripe" | "thinVertStripe" | "thinReverseDiagStripe" | "thinDiagStripe" | "thinHorzCross" | "thinDiagCross" |
-            "pct5" | "pct10" | "pct12" | "pct15" | "pct20" | "pct25" | "pct30" | "pct35" | "pct37" | "pct40" | "pct45" |
-            "pct50" | "pct55" | "pct60" | "pct62" | "pct65" | "pct70" | "pct75" | "pct80" | "pct85" | "pct87" | "pct90" | "pct95") {
+        if !matches!(
+            val,
+            "clear"
+                | "solid"
+                | "horzStripe"
+                | "vertStripe"
+                | "reverseDiagStripe"
+                | "diagStripe"
+                | "horzCross"
+                | "diagCross"
+                | "thinHorzStripe"
+                | "thinVertStripe"
+                | "thinReverseDiagStripe"
+                | "thinDiagStripe"
+                | "thinHorzCross"
+                | "thinDiagCross"
+                | "pct5"
+                | "pct10"
+                | "pct12"
+                | "pct15"
+                | "pct20"
+                | "pct25"
+                | "pct30"
+                | "pct35"
+                | "pct37"
+                | "pct40"
+                | "pct45"
+                | "pct50"
+                | "pct55"
+                | "pct60"
+                | "pct62"
+                | "pct65"
+                | "pct70"
+                | "pct75"
+                | "pct80"
+                | "pct85"
+                | "pct87"
+                | "pct90"
+                | "pct95"
+        ) {
             return None;
         }
         // A named theme must resolve; a missing theme must not turn a failed lookup into auto.

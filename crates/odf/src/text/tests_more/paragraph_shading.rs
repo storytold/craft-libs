@@ -1,8 +1,8 @@
 //! Original XML and model fixtures for explicit no-fill over a colored paragraph style.
 //! No document or oracle from another application is used (ODF paragraph background semantics).
 
-use crate::text::tests::{NS_T, content_of, export_model, package, styles_of};
 use crate::text::import;
+use crate::text::tests::{NS_T, content_of, export_model, package, styles_of};
 use craft_wordmodel::props::ParaProps;
 use craft_wordmodel::styles::{Style, StyleKind};
 use craft_wordmodel::{Document, Paragraph, Rgb, para_block};
@@ -152,7 +152,8 @@ fn default_and_standard_paragraph_shading_round_trip() {
         assert_eq!((doc.styles.default_para.shading, doc.styles.default_para.shading_auto), expected);
         let bytes = export_model(&doc).unwrap();
         let written = styles_of(&bytes);
-        let default = written.split("<style:default-style style:family=\"paragraph\">").nth(1).unwrap().split("</style:default-style>").next().unwrap();
+        let default =
+            written.split("<style:default-style style:family=\"paragraph\">").nth(1).unwrap().split("</style:default-style>").next().unwrap();
         let value = if standard.is_empty() { "#f1cc45" } else { standard };
         assert!(default.contains(&format!("fo:background-color=\"{value}\"")), "document background must be written: {default}");
         let back = import(&bytes).unwrap();
