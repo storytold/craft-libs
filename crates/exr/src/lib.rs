@@ -20,6 +20,9 @@
 //! - [`stream`]: one flat scan-line part read block by block, for pictures larger than memory.
 //! - [`cryptomatte_samples`]: a file's Cryptomatte layers and their per-pixel (ID, coverage) ranks.
 
+/// Bounded RLE expansion and inverse byte prediction for EXR blocks.
+pub mod scanline;
+
 /// Scanline OpenEXR writer using a caller-supplied linearization table.
 pub mod rgba8;
 /// RFC 1950/1951 compression and bounded inflation for EXR chunks.
