@@ -7,7 +7,7 @@ use craft_ui::contract::{Bind, BodyCx, PlainData, Tracked};
 use craft_ui::docking::{DockConfig, DockGrid, DockPanels, DockSizes, DragUnit, GroupAt, GroupDrag, PanelSpec, PanelSpecs};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, last_pass_runs, pointer, trial};
 use egui::{Rect, Shape, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -143,4 +143,25 @@ fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {
     let unit = drag::active::<GroupDrag<usize>>(fixture.ctx()).map(|drag| drag.unit.clone());
     assert_eq!(unit, Some(DragUnit::Group(RAIL)), "a drag on the grip moves the rail's group");
     fixture.release_at(strip.center() + Vec2::new(200.0, 0.0)).settle();
+}
+
+/// The rail's grip strip is a memoized view: a pointer moving elsewhere in the window replays it, as it replays the
+/// column bars and the tab rows, and runs no grip (photocraft#16333).
+#[trial]
+fn a_tool_rails_grip_strip_replays_while_the_pointer_moves_elsewhere() {
+    let seen = Rc::new(Cell::new(None));
+    let dock = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![RAIL], 0)]).with_steps(1)]);
+    let root = Node::split(Axis::X, SplitSize::FixedFirst(120.0), dock, Node::tabs(vec![1], 0));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let (mut panels, specs) = (RailPanels { seen: seen.clone() }, Tracked::new(RailSpecs));
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = DockArea::new("Rail dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(800.0, 600.0)).settle();
+    let grips =
+        |fixture: &Fixture| last_pass_runs(fixture.ctx()).into_iter().filter(|(ty, _)| ty.contains("GroupGrip<")).map(|(_, runs)| runs).sum::<u32>();
+    for step in 1..=3 {
+        fixture.frame(vec![pointer::moved(egui::pos2(500.0 + step as f32, 300.0))]);
+        assert_eq!(grips(&fixture), 0, "pointer step {step}: the rail's grip replays its last run");
+    }
 }
