@@ -702,7 +702,9 @@ impl<'a> ParamDialog<'a> {
             patterns: &patterns,
             preview_colors: &preview_colors,
             sliders: layout.sliders(),
-            labels: layout.labels(),
+            // A tabbed document dialog (Document Properties) is an aligned form: no colons, one caption column, the
+            // controls filling the rest of the row.
+            labels: if layout == ParamLayout::Document && !tabs.is_empty() { Some(LabelScheme::Inspector) } else { layout.labels() },
             canvas,
             read_only,
         };

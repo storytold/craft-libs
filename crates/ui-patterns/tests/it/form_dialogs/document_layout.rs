@@ -138,3 +138,24 @@ fn a_document_dialog_shows_a_small_picture_with_its_pager_beside_it() {
     let caption = caption(&fixture, "Preview: page 2 of 3");
     assert!(caption.min.x >= pane.max.x, "the pager stands beside the picture: {caption:?} {pane:?}");
 }
+
+/// A tabbed document dialog (Document Properties) is an aligned form: the captions share a column, and the text fields
+/// fill the width to one right edge, as production's does.
+#[trial]
+fn a_tabbed_document_dialog_aligns_its_fields_and_fills_the_width() {
+    use craft_ui::patterns::form_dialogs::{ParamKind, ParamTab};
+    let mut fixture = Fixture::new(|ui| {
+        let mut fields = DialogFields::new();
+        let tabs = vec![ParamTab::new(
+            "Description",
+            vec![Param::new("title", "Title", ParamKind::text("")), Param::new("author", "Author", ParamKind::text("")), Param::new("keywords", "Keywords", ParamKind::text(""))],
+        )];
+        ParamDialog::new("props", "Document Properties", Vec::<Param>::new()).layout(ParamLayout::Document).tabs(tabs).values(Bind::bound(&mut fields)).show(ui);
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    let (title, author, keywords) = (rect_of(&fixture, "Title"), rect_of(&fixture, "Author"), rect_of(&fixture, "Keywords"));
+    assert!((title.min.x - author.min.x).abs() < 0.5 && (author.min.x - keywords.min.x).abs() < 0.5, "the fields start at one column: {title:?} {author:?} {keywords:?}");
+    assert!((title.max.x - author.max.x).abs() < 0.5 && (author.max.x - keywords.max.x).abs() < 0.5, "the fields end at one edge: {title:?} {author:?} {keywords:?}");
+    assert!(title.width() > 300.0, "the fields fill the dialog: {title:?}");
+}
