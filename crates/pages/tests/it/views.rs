@@ -1638,3 +1638,29 @@ fn a_page_fitted_to_the_width_keeps_the_theme_side_margin() {
     assert!((left - side).abs() < 1.0 && (right - side).abs() < 1.0, "side margins {left} and {right}, not the theme's {side}");
     assert!((page.y0 - out.offset.1 - margin).abs() < 1.0, "the first page's margin: {} not {margin}", page.y0 - out.offset.1);
 }
+
+/// L-309: the page view's surround takes the colour the app sets: full screen shows the pages on black, as production.
+#[trial]
+fn the_pasteboard_colour_of_a_page_view_paints_the_surround() {
+    use craft_ui::canvas::PasteboardColor;
+    let paints_black = |colour: Option<PasteboardColor>| {
+        let source = DemoPages::new(2);
+        let mut state = state_with(|s| s.fit = Fit::Width);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut view = PageView::new("Pages", &source, &mut state, PAPER);
+            if let Some(colour) = colour {
+                view = view.pasteboard(colour);
+            }
+            view.show(ui, |_, _| ());
+        });
+        fixture.idle(3);
+        fixture.frame_shapes().iter().any(|shape| match shape {
+            egui::Shape::Rect(r) => r.fill == egui::Color32::BLACK,
+            egui::Shape::Path(p) => p.fill == egui::Color32::BLACK,
+            egui::Shape::Mesh(m) => m.vertices.iter().any(|v| v.color == egui::Color32::BLACK),
+            _ => false,
+        })
+    };
+    assert!(!paints_black(None), "the default surround is the theme's");
+    assert!(paints_black(Some(PasteboardColor::Black)), "a black pasteboard paints black round the pages");
+}

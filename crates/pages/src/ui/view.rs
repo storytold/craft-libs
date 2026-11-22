@@ -26,7 +26,7 @@ use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{CanvasView, NavMove, PressPhase, ZoomLadder};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, ToolPass,
     canvas_space, tool_pass, with_canvas_space,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
@@ -346,6 +346,7 @@ pub struct PageView<'a> {
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
     border: PageBorder,
+    pasteboard: PasteboardColor,
     keep: &'a [usize],
 }
 
@@ -363,8 +364,16 @@ impl<'a> PageView<'a> {
             describer: None,
             paper,
             border: PageBorder::DropShadow,
+            pasteboard: PasteboardColor::Default,
             keep: &[],
         }
+    }
+
+    /// The colour round the pages: the theme's by default; production's full screen view is black.
+    #[must_use]
+    pub fn pasteboard(mut self, colour: PasteboardColor) -> Self {
+        self.pasteboard = colour;
+        self
     }
 
     /// The border round each page; a drop shadow by default, and none with the page gaps off.
@@ -458,7 +467,7 @@ impl<'a> PageView<'a> {
         mut before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>,
         mut body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T),
     ) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper, border, keep } = self;
+        let PageView { label, source, state, options, navigation, bodies, describer, paper, border, pasteboard, keep } = self;
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
@@ -479,6 +488,7 @@ impl<'a> PageView<'a> {
             .navigation(navigation)
             .keys_to_body(true)
             .body_nudges(KeyMoves::NUDGES)
+            .pasteboard(pasteboard)
             .document(frame.document(&geo));
         let mut held = Held::new(Bind::bound(state));
         let mut seen: Option<Seen> = None;
