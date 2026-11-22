@@ -38,7 +38,10 @@ impl Dataset {
 
     /// Size of the whole dataset in bytes.
     pub(crate) fn len(&self) -> Result<u64, Hdf5Error> {
-        self.space.element_count().and_then(|n| n.checked_mul(u64::from(self.element_size))).ok_or_else(|| Hdf5Error::Corrupt("dataset size overflows".into()))
+        self.space
+            .element_count()
+            .and_then(|n| n.checked_mul(u64::from(self.element_size)))
+            .ok_or_else(|| Hdf5Error::Corrupt("dataset size overflows".into()))
     }
 
     /// The first `max_len` bytes (all of them if the dataset is shorter).

@@ -75,7 +75,8 @@ mod tests {
 
     #[test]
     fn splits_names_and_versions_across_classes() {
-        let data = toc(&[("Alg::ResourceImage", &["/AO Map from Mesh Vase?version=abc", "/Moth?version=def.image"]), ("Alg::Other", &["/Unversioned"])]);
+        let data =
+            toc(&[("Alg::ResourceImage", &["/AO Map from Mesh Vase?version=abc", "/Moth?version=def.image"]), ("Alg::Other", &["/Unversioned"])]);
         let entries = ResourceToc::parse(&data).unwrap().entries;
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].name, "AO Map from Mesh Vase");

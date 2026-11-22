@@ -2,8 +2,8 @@
 //! name, …); effect groups are expanded below their line. Effects are listed top → bottom.
 
 use super::blend::{BlendContext, blending_text};
+use craft_spp_reader::model::{FillEffect, PaintEffect, ProjectEffect, ProjectSource};
 use std::fmt::Write;
-use texturecraft_import_reader::model::{FillEffect, PaintEffect, ProjectEffect, ProjectSource};
 
 /// Writes `effects` top → bottom at `indent`; `in_mask` selects which blending entries matter.
 /// Consecutive identical lines (typical for brush work) are written once with a count.

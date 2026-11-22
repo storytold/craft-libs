@@ -61,8 +61,10 @@ fn a_field_the_reader_does_not_know_is_reported_and_flagged() {
 
 #[test]
 fn objects_below_an_effect_report_to_the_effect_and_nested_layers_keep_their_own() {
-    let source =
-        obj("DataSourceUniform", vec![("channelTypes", V::Uid(1)), ("color", V::Vec3([0.5; 3])), ("opacity", V::Float(1.0)), ("newKnob", V::Bool(true))]);
+    let source = obj(
+        "DataSourceUniform",
+        vec![("channelTypes", V::Uid(1)), ("color", V::Vec3([0.5; 3])), ("opacity", V::Float(1.0)), ("newKnob", V::Bool(true))],
+    );
     let inner = layer_with(110, vec![fill(120, vec![source])], vec![]);
     let outer = folder(100, "F", vec![inner]);
     let (doc, report) = build(&single_set(vec![outer]));

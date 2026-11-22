@@ -168,8 +168,12 @@ impl Rewrite<'_> {
         };
         let mut new = self.emit(Instr { operands, ..ins.clone() });
         for d in before.into_iter().rev() {
-            new =
-                self.emit(Instr { op: OP_SEQUENCE, components: ins.components, ty: (ins.ty & VALUE_TYPE_BITS) | KEEP, operands: Operands::Refs(vec![d, new]) });
+            new = self.emit(Instr {
+                op: OP_SEQUENCE,
+                components: ins.components,
+                ty: (ins.ty & VALUE_TYPE_BITS) | KEEP,
+                operands: Operands::Refs(vec![d, new]),
+            });
         }
         self.whole.insert(r, new);
         new

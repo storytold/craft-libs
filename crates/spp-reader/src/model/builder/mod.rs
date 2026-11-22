@@ -59,7 +59,8 @@ impl ModelBuilder {
     }
 
     fn new(tree: &RawTree) -> ModelBuilder {
-        let mut b = ModelBuilder { report: ModelReport::with_totals(&tree.classes), format_version: tree.format_version, settings: Settings::default() };
+        let mut b =
+            ModelBuilder { report: ModelReport::with_totals(&tree.classes), format_version: tree.format_version, settings: Settings::default() };
         b.report.unknown_tags = tree.unknown_tags;
         b
     }

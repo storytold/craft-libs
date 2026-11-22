@@ -69,7 +69,14 @@ fn decode_tile(jp2: &[u8], w: usize, h: usize) -> Result<(u32, u32, Vec<Vec<f32>
 }
 
 /// Decodes all tiles into tightly packed rows of `raw_size` bytes, little endian.
-pub(super) fn decode(payload: &[u8], tiles: usize, width: usize, height: usize, format: &PixelFormat, raw_size: usize) -> Result<Vec<u8>, DecodeError> {
+pub(super) fn decode(
+    payload: &[u8],
+    tiles: usize,
+    width: usize,
+    height: usize,
+    format: &PixelFormat,
+    raw_size: usize,
+) -> Result<Vec<u8>, DecodeError> {
     let Some((channels, sample)) = layout(format) else {
         return Err(invalid(format!("JPEG 2000 tiles in format {}", format.name())));
     };

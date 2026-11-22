@@ -9,8 +9,9 @@ impl ModelBuilder {
     pub(super) fn stroke(&mut self, s: &RawObject) -> ProjectStroke {
         self.seen(s);
         let mut complete = true;
-        let points = self
-            .keys(s.packed("points"), &mut complete, |row| Some(StrokeKey { position: row.floats::<2>("position")?, time: row.f32("time").unwrap_or(0.0) }));
+        let points = self.keys(s.packed("points"), &mut complete, |row| {
+            Some(StrokeKey { position: row.floats::<2>("position")?, time: row.f32("time").unwrap_or(0.0) })
+        });
         let pressure = self.keys(s.packed("pressure"), &mut complete, |row| Some(TimelineKey { time: row.f32("x")?, value: row.f32("value")? }));
         let tilt_keys = s.packed("tilt").map_or(0, PackedList::len);
         let mat4 = |name: &str| -> StoredMat4 {

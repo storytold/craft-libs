@@ -1,6 +1,5 @@
-//! Reads projects of the reference app: the file container, the reference app's records and its layer model, as plain
-//! data any application can translate into its own document. Nothing here knows an importer; ours lives in
-//! `texturecraft-import`.
+//! Reads SPP project containers, records, and layer models as data an application can translate into its own document.
+//! The decoder also reads embedded compiled material graphs and translates them to graph text.
 //!
 //! The crate is layered; each layer only uses the ones above it in this list:
 //! - [`container`]: generic file formats (HDF5, Qt QDataStream, byte cursors). Knows nothing about the reference app.

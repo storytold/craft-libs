@@ -5,7 +5,7 @@
  * v1 object headers, symbol-table groups and v1 B-tree chunk indexes. Dataset bytes follow
  * `pattern(seed, i)` below; the Rust test recomputes them, so keep both in sync.
  *
- * Regenerate (from crates/import/tests/fixtures):
+ * Regenerate (from crates/spp-reader/tests/fixtures):
  *   gcc -O2 -o /tmp/make_fixture make_fixture.c -lhdf5 && /tmp/make_fixture small.h5
  */
 #include <hdf5.h>

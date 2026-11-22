@@ -17,7 +17,8 @@ pub(crate) enum Object {
 impl Object {
     /// Reads and classifies the object whose header is at `addr`.
     pub(crate) fn load(storage: &Storage, addr: Address) -> Result<Self, Hdf5Error> {
-        let messages = object_header::read_messages(storage, addr)?.iter().map(|raw| Message::decode(raw, storage.sizes())).collect::<Result<Vec<_>, _>>()?;
+        let messages =
+            object_header::read_messages(storage, addr)?.iter().map(|raw| Message::decode(raw, storage.sizes())).collect::<Result<Vec<_>, _>>()?;
         Self::classify(messages)
     }
 

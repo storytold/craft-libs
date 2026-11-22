@@ -2,8 +2,8 @@
 //! or single files, separated like `PATH`). Tests over real projects are `#[ignore]` and skip when it is not set;
 //! nothing read from those files is ever kept in the repository.
 
+use craft_spp_reader::format_names::PROJECT_EXT;
 use std::path::{Path, PathBuf};
-use texturecraft_import_reader::format_names::PROJECT_EXT;
 
 /// The environment variable naming the projects.
 #[allow(dead_code)]

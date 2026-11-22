@@ -77,7 +77,14 @@ pub(crate) type Visit<'f> = dyn FnMut(&[u8], Address) -> Result<(), Hdf5Error> +
 /// `key_len` (non-zero) is the encoded key size of this tree kind.
 /// `descend(key)` is asked for every child (inner and leaf) before it is followed; returning false
 /// skips it and everything below. Each node is read at most once, so cycles cannot loop.
-pub(crate) fn walk(storage: &Storage, root: Address, kind: TreeKind, key_len: usize, descend: &mut Descend, visit: &mut Visit) -> Result<(), Hdf5Error> {
+pub(crate) fn walk(
+    storage: &Storage,
+    root: Address,
+    kind: TreeKind,
+    key_len: usize,
+    descend: &mut Descend,
+    visit: &mut Visit,
+) -> Result<(), Hdf5Error> {
     let mut walker = Walker { storage, kind, key_len, seen: HashSet::new(), descend, visit };
     walker.node(root, None)
 }

@@ -103,8 +103,10 @@ mod tests {
                 ("usage", s(Scalar::Enum(1))),
             ],
         );
-        let material =
-            obj("BakingMaterial", vec![("definitions", RawValue::List(vec![RawValue::Object(Box::new(definition))])), ("materialUID", s(Scalar::Uid(5)))]);
+        let material = obj(
+            "BakingMaterial",
+            vec![("definitions", RawValue::List(vec![RawValue::Object(Box::new(definition))])), ("materialUID", s(Scalar::Uid(5)))],
+        );
         let assoc = obj("BakingUsageBakerAssoc", vec![("enabled", s(Scalar::Bool(false))), ("usage", s(Scalar::Enum(1)))]);
         let table = obj("BakingUsageBakerTable", vec![("usageBakerAssoc", RawValue::List(vec![RawValue::Object(Box::new(assoc))]))]);
         let root = obj(

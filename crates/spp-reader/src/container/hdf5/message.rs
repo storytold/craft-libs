@@ -98,9 +98,10 @@ impl Message {
                 r.skip(1)?;
                 Message::FilterPipeline { filters: r.u8()? }
             }
-            SYMBOL_TABLE => {
-                Message::SymbolTable { btree: sizes.required_address(&mut r, "group B-tree")?, heap: sizes.required_address(&mut r, "group local heap")? }
-            }
+            SYMBOL_TABLE => Message::SymbolTable {
+                btree: sizes.required_address(&mut r, "group B-tree")?,
+                heap: sizes.required_address(&mut r, "group local heap")?,
+            },
             LINK_INFO | LINK | GROUP_INFO => Message::NewStyleGroup,
             _ => Message::Other,
         })

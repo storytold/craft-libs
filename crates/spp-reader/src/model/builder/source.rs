@@ -14,7 +14,12 @@ impl ModelBuilder {
         match s.class.as_str() {
             "DataSourceUniform" => {
                 self.seen(s);
-                ProjectSource::Uniform(UniformSource { uid, channels, color: s.vec3("color").unwrap_or([0.0; 3]), opacity: s.f32("opacity").unwrap_or(1.0) })
+                ProjectSource::Uniform(UniformSource {
+                    uid,
+                    channels,
+                    color: s.vec3("color").unwrap_or([0.0; 3]),
+                    opacity: s.f32("opacity").unwrap_or(1.0),
+                })
             }
             "DataSourceBitmap" => {
                 self.seen(s);

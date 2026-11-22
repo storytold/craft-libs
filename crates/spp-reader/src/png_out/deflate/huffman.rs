@@ -31,7 +31,8 @@ pub(super) fn code_lengths(freq: &[u32], limit: u8) -> Vec<u8> {
     // Plain Huffman via a min-heap; nodes 0..used.len() are leaves.
     let leaves = used.len();
     let mut parent = vec![usize::MAX; 2 * leaves - 1];
-    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = used.iter().enumerate().map(|(i, &s)| Reverse((freq.get(s).copied().unwrap_or(0) as u64, i))).collect();
+    let mut heap: BinaryHeap<Reverse<(u64, usize)>> =
+        used.iter().enumerate().map(|(i, &s)| Reverse((freq.get(s).copied().unwrap_or(0) as u64, i))).collect();
     let mut next = leaves;
     while heap.len() > 1 {
         let (Some(Reverse((fa, a))), Some(Reverse((fb, b)))) = (heap.pop(), heap.pop()) else {

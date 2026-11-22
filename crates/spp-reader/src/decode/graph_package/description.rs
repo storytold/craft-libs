@@ -269,7 +269,8 @@ mod tests {
         assert_eq!(d.inputs.iter().map(|i| i.identifier.as_str()).collect::<Vec<_>>(), ["Hue"]);
         // a single graph without outputs is still described
         let one = Description::parse(
-            root_xml(r#"<ROOT asmuid="1"><graphs><graph pkgurl="pkg://h" label="H"><outputs count="0"></outputs></graph></graphs></ROOT>"#).as_bytes(),
+            root_xml(r#"<ROOT asmuid="1"><graphs><graph pkgurl="pkg://h" label="H"><outputs count="0"></outputs></graph></graphs></ROOT>"#)
+                .as_bytes(),
         )
         .unwrap();
         assert_eq!(one.label, "H");

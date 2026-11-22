@@ -42,7 +42,11 @@ impl Display for TextReport<'_> {
         })?;
         section(f, "Texture cache", &r.cache, |f, s| {
             tally(f, &s.formats)?;
-            writeln!(f, "    entries by channel bit: {}", s.channels.rows().iter().map(|(k, n, _)| format!("{k}×{n}")).collect::<Vec<_>>().join("  "))?;
+            writeln!(
+                f,
+                "    entries by channel bit: {}",
+                s.channels.rows().iter().map(|(k, n, _)| format!("{k}×{n}")).collect::<Vec<_>>().join("  ")
+            )?;
             failures(f, "unreadable cache headers", &s.unreadable_headers)?;
             pixels(f, &s.pixels)
         })?;

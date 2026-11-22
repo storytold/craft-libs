@@ -82,7 +82,8 @@ pub fn decompile(desc: &Description, asm: &Assembly, size: usize) -> Decompiled 
         let _ = writeln!(body, "node {} {}", PARAM_IDS + k, input_value(p));
     }
     let images: Vec<String> = desc.inputs.iter().filter(|i| i.ty == INPUT_TYPE_IMAGE).map(|i| i.identifier.clone()).collect();
-    let image_defaults = desc.inputs.iter().filter(|i| i.ty == INPUT_TYPE_IMAGE).map(|i| i.usertag.as_deref().and_then(usertag::default_color)).collect();
+    let image_defaults =
+        desc.inputs.iter().filter(|i| i.ty == INPUT_TYPE_IMAGE).map(|i| i.usertag.as_deref().and_then(usertag::default_color)).collect();
 
     let mut colour_nodes = Vec::new();
     for (i, n) in asm.atomic_nodes().into_iter().enumerate() {
@@ -126,7 +127,8 @@ pub fn decompile(desc: &Description, asm: &Assembly, size: usize) -> Decompiled 
 
     let mut text = format!("format {}\nsize {size}\nmeta compiled \"1\"\nmeta label \"{}\"\n", GRAPH_FORMAT, desc.label.replace(['"', '#'], ""));
     // outputs whose `usertag` declares the working colour space: a host converts them back to a channel's own space
-    let working: Vec<&str> = desc.outputs.iter().filter(|o| o.usertag.as_deref().is_some_and(usertag::working_space)).map(|o| o.identifier.as_str()).collect();
+    let working: Vec<&str> =
+        desc.outputs.iter().filter(|o| o.usertag.as_deref().is_some_and(usertag::working_space)).map(|o| o.identifier.as_str()).collect();
     if !working.is_empty() {
         let _ = writeln!(text, "meta working \"{}\"", working.join(","));
     }
@@ -325,7 +327,8 @@ fn node_line(
 fn start_node(a: &AtomicNode, fns: &mut Functions) {
     fns.rand = functions::RandContext { mode: functions::rand_mode::PARAMETER, seed: a.seed.clone() };
     // the size expression can set variables the node's other expressions read; a fx-map handles that in its program
-    fns.init = if a.kind == Kind::FxMap { Vec::new() } else { a.size.iter().filter(|e| e.instrs.iter().any(|i| i.name() == "set")).cloned().collect() };
+    fns.init =
+        if a.kind == Kind::FxMap { Vec::new() } else { a.size.iter().filter(|e| e.instrs.iter().any(|i| i.name() == "set")).cloned().collect() };
 }
 
 /// The node's operation and parameters, by its kind.
@@ -385,7 +388,9 @@ fn input_node(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
                 l += "color r=0 g=0 b=0";
             }
             None => {
-                let raw = asm.stored_image(a).map(|img| bitmaps::add_raw(cx.embedded, word, img.width as usize, img.height as usize, img.layout, img.samples));
+                let raw = asm
+                    .stored_image(a)
+                    .map(|img| bitmaps::add_raw(cx.embedded, word, img.width as usize, img.height as usize, img.layout, img.samples));
                 match raw {
                     Some(file) => l += &format!("bitmap file=\"{file}\"{gray}"),
                     None => {
@@ -782,7 +787,9 @@ fn fx_map(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
             // expressions run inside the program, in this order: they can set variables later ones read
             let mut init: Vec<(&str, &crate::decode::graph_package::compiled::Expr)> = a.seed.iter().map(|e| ("seed", e)).collect();
             init.extend(a.size.iter().filter(|e| e.as_input().is_none()).map(|e| ("init", e)));
-            for (key, name) in [("background", "p0"), ("roughness", "p1"), ("opacity", "p2"), ("frame", "frame_matrix"), ("frame_offset", "frame_offset")] {
+            for (key, name) in
+                [("background", "p0"), ("roughness", "p1"), ("opacity", "p2"), ("frame", "frame_matrix"), ("frame_offset", "frame_offset")]
+            {
                 if let Some(Value::Expr(e)) = a.param(name) {
                     init.push((key, e));
                 }

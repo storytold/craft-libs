@@ -86,9 +86,10 @@ impl CacheHeader {
     fn check_size(&self) -> Result<(), DecodeError> {
         let expected = self.bytes_per_pixel().and_then(|bpp| (self.width as usize).checked_mul(self.height as usize)?.checked_mul(bpp));
         match expected {
-            Some(expected) if expected != self.raw_size => {
-                Err(DecodeError::invalid(RECORD, format!("bufferSize {} is not {}x{} {}", self.raw_size, self.width, self.height, self.gl_format_name())))
-            }
+            Some(expected) if expected != self.raw_size => Err(DecodeError::invalid(
+                RECORD,
+                format!("bufferSize {} is not {}x{} {}", self.raw_size, self.width, self.height, self.gl_format_name()),
+            )),
             _ => Ok(()),
         }
     }

@@ -1,7 +1,7 @@
 //! Developer tool: looks inside a project file or a graph package, the way the importer sees it.
 //!
 //! ```text
-//! cargo run --release -p texturecraft-import-reader --features dev-tools --example import_inspect -- <command> …
+//! cargo run --release -p craft-spp-reader --features dev-tools --example import_inspect -- <command> …
 //!
 //! tree <project>                               every group and dataset in the file
 //! doc <project> [dataset] [--full]             the document (or another object dataset) as indented text
@@ -17,15 +17,15 @@
 
 mod model_text;
 
+use craft_spp_reader::container::hdf5::EntryKind;
+use craft_spp_reader::decompile::find_and_decompile;
+use craft_spp_reader::format_names::{PACKAGE_EXT, PACKAGE_SUFFIX};
+use craft_spp_reader::inspect::document_dump::LIST_PREVIEW;
+use craft_spp_reader::inspect::{DocumentDump, compiled_graph_dump};
+use craft_spp_reader::project::{ProjectFile, paths};
 use model_text::ModelText;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use texturecraft_import_reader::container::hdf5::EntryKind;
-use texturecraft_import_reader::decompile::find_and_decompile;
-use texturecraft_import_reader::format_names::{PACKAGE_EXT, PACKAGE_SUFFIX};
-use texturecraft_import_reader::inspect::document_dump::LIST_PREVIEW;
-use texturecraft_import_reader::inspect::{DocumentDump, compiled_graph_dump};
-use texturecraft_import_reader::project::{ProjectFile, paths};
 
 const USAGE: &str = "usage: import_inspect tree|doc|model|compiled-graphs|decompile … (see the source header for details)";
 
@@ -41,7 +41,9 @@ fn main() -> ExitCode {
         ["tree", path] => tree(path),
         ["doc", path, rest @ ..] if rest.len() <= 1 => doc(path, rest.first().copied(), has("--full")),
         ["model", path] => model(path),
-        ["compiled-graphs", path, rest @ ..] if rest.len() <= 1 => compiled_graphs(path, rest.first().copied().unwrap_or(""), has("--ir"), has("--stats")),
+        ["compiled-graphs", path, rest @ ..] if rest.len() <= 1 => {
+            compiled_graphs(path, rest.first().copied().unwrap_or(""), has("--ir"), has("--stats"))
+        }
         ["decompile", path, graph, out] => decompile(path, graph, out),
         _ => Err(USAGE.into()),
     };

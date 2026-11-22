@@ -33,8 +33,10 @@ impl AssbinGeometry {
         for instance in &instances {
             *uses.get_mut(instance.mesh as usize).ok_or_else(|| missing_mesh(instance))? += 1;
         }
-        let placed_meshes =
-            instances.iter().map(|instance| meshes.get(instance.mesh as usize).ok_or_else(|| missing_mesh(instance))).collect::<Result<Vec<_>, _>>()?;
+        let placed_meshes = instances
+            .iter()
+            .map(|instance| meshes.get(instance.mesh as usize).ok_or_else(|| missing_mesh(instance)))
+            .collect::<Result<Vec<_>, _>>()?;
         let placed: usize = placed_meshes.iter().map(|mesh| mesh.vertex_count()).sum();
         if placed > MAX_PLACED_VERTICES {
             return Err(DecodeError::invalid(RECORD, format!("{placed} placed vertices is too many")));

@@ -271,8 +271,11 @@ impl Functions {
         let mut warn = Vec::new();
         // node ids: instructions from 2 on, one expression after the other; helpers above them all
         let draws = |x: &Expr| x.instrs.iter().any(|i| i.name() == "rand");
-        let seed =
-            self.rand.seed.as_ref().filter(|_| matches!(self.rand.mode, rand_mode::PIXEL | rand_mode::PARAMETER) && (draws(e) || self.init.iter().any(draws)));
+        let seed = self
+            .rand
+            .seed
+            .as_ref()
+            .filter(|_| matches!(self.rand.mode, rand_mode::PIXEL | rand_mode::PARAMETER) && (draws(e) || self.init.iter().any(draws)));
         let total: usize = self.init.iter().map(|i| i.instrs.len()).sum::<usize>() + e.instrs.len() + seed.map_or(0, |s| s.instrs.len());
         let helper = Cell::new(1000u32.max(total as u32 + 2));
         let next = || {
@@ -617,7 +620,8 @@ impl Builder<'_, '_> {
                 let from = swizzle_source(m, l);
                 let h = self.next_helper();
                 if from < n {
-                    let _ = writeln!(self.out, "node {h} f_swizzle a=@{} mask=\"{}\"", self.id(a), LANES.get(usize::from(from)).copied().unwrap_or("x"));
+                    let _ =
+                        writeln!(self.out, "node {h} f_swizzle a=@{} mask=\"{}\"", self.id(a), LANES.get(usize::from(from)).copied().unwrap_or("x"));
                 } else {
                     let _ = writeln!(self.out, "node {h} f_float v=0");
                 }
@@ -626,7 +630,8 @@ impl Builder<'_, '_> {
             let args: Vec<String> = parts.iter().zip(LANES).map(|(p, l)| format!("{l}=@{p}")).collect();
             return format!("f_vec{} {}", parts.len(), args.join(" "));
         }
-        let mask: String = (0..usize::from(ins.components)).map(|l| LANES.get(usize::from(swizzle_source(m, l as u16))).copied().unwrap_or("x")).collect();
+        let mask: String =
+            (0..usize::from(ins.components)).map(|l| LANES.get(usize::from(swizzle_source(m, l as u16))).copied().unwrap_or("x")).collect();
         format!("f_swizzle a=@{} mask=\"{mask}\"", self.id(a))
     }
 
@@ -728,7 +733,8 @@ impl Builder<'_, '_> {
             } else {
                 for l in 0..n {
                     let h = self.next_helper();
-                    let _ = writeln!(self.out, "node {h} f_swizzle a=@{} mask=\"{}\"", self.id(src), LANES.get(usize::from(l)).copied().unwrap_or("x"));
+                    let _ =
+                        writeln!(self.out, "node {h} f_swizzle a=@{} mask=\"{}\"", self.id(src), LANES.get(usize::from(l)).copied().unwrap_or("x"));
                     parts.push(h);
                 }
             }

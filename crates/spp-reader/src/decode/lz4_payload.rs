@@ -111,7 +111,12 @@ pub(super) fn decompress(record: &'static str, compression: Compression, raw_siz
 
 /// Like [`decompress`], but a block that decodes cleanly to fewer bytes than declared is zero-padded and the
 /// shortfall reported. Corrupt blocks and wrong uncompressed sizes are still errors.
-pub(super) fn decompress_padded(record: &'static str, compression: Compression, raw_size: usize, payload: &[u8]) -> Result<Decompressed, DecodeError> {
+pub(super) fn decompress_padded(
+    record: &'static str,
+    compression: Compression,
+    raw_size: usize,
+    payload: &[u8],
+) -> Result<Decompressed, DecodeError> {
     if raw_size > MAX_RAW_SIZE {
         return Err(DecodeError::invalid(record, format!("raw size {raw_size} exceeds the limit")));
     }

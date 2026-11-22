@@ -113,7 +113,8 @@ impl ImageHeader {
         let width = h.u32("width")?;
         let height = h.u32("height")?;
         let format_value = h.field_value("format")?;
-        let format = PixelFormat::from_variant(format_value).ok_or_else(|| DecodeError::invalid(RECORD, format!("unreadable format {format_value:?}")))?;
+        let format =
+            PixelFormat::from_variant(format_value).ok_or_else(|| DecodeError::invalid(RECORD, format!("unreadable format {format_value:?}")))?;
         let compression = h.compression()?;
         let raw_size = h.raw_size("dataSizeRaw")?;
         let payload_size = match compression {

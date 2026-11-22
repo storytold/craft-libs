@@ -1,7 +1,7 @@
 //! The HDF5 reader against `tests/fixtures/small.h5` (made by `tests/fixtures/make_fixture.c` with libhdf5) and,
 //! optionally, against the real project files named by `TC_IMPORT_CORPUS`.
 
-use texturecraft_import_reader::container::hdf5::{Entry, EntryKind, Hdf5Error, Hdf5File};
+use craft_spp_reader::container::hdf5::{Entry, EntryKind, Hdf5Error, Hdf5File};
 
 use crate::common;
 use std::path::Path;
@@ -145,7 +145,7 @@ fn bytes_in_memory_read_like_the_file() {
 
 #[test]
 fn a_project_from_bytes_needs_its_document() {
-    use texturecraft_import_reader::project::{ProjectError, ProjectFile};
+    use craft_spp_reader::project::{ProjectError, ProjectFile};
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/small.h5");
     let bytes = std::fs::read(&path).unwrap();
     assert!(matches!(ProjectFile::from_bytes(bytes), Err(ProjectError::NotAProjectFile { .. })));

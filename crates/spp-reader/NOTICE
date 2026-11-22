@@ -1,0 +1,13 @@
+craft-spp-reader
+Copyright (c) 2026 ArtCraft Team and the TextureCraft contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option.
+
+Original project reader and compiled graph decompiler by xilefenko, introduced in
+storytold/texturecraft at 3c9e01a7. The extracted source tracks the reader in TextureCraft
+at 22a37c29, with crate names and documentation adapted for the shared library.
+See ATTRIBUTION.md for the source history and the HDF5 fixture provenance.
+
+The PNG encoder in src/png_out was derived from MaterialCraft by PiJellyPin and
+contributors (https://github.com/PiJellyPin/MaterialCraft). It was copied and adapted
+in TextureCraft and is dual licensed under the Apache License 2.0 or the MIT License,
+at your option. The encoder remains private to the reader.

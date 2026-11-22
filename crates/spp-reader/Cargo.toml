@@ -1,6 +1,6 @@
 [package]
-name = "texturecraft-import-reader"
-description = "Reads projects of the reference app: the file container, its records, its layer model and its compiled graphs (decompiled to graph text)"
+name = "craft-spp-reader"
+description = "Reads SPP project containers and decompiles their embedded material graphs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 adler2 = "2"
 crc32fast = "1"
-lz4_flex = { workspace = true }
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode", "safe-encode"] }
 # Unpacks graph packages (7z, LZMA) to read their compiled graphs. Apache-2.0.
 sevenz-rust2 = { version = "0.24", default-features = false }
 # Image resources saved by version 12.2 are JPEG 2000. Pure Rust, Apache-2.0 OR MIT.
@@ -25,7 +25,7 @@ workspace = true
 
 [features]
 # Developer tools in examples/ that read local project files. Off by default, so `cargo test` (the CI gate) does
-# not build them; run one with `cargo run -p texturecraft-import-reader --features dev-tools --example <name> -- ...`.
+# not build them; run one with `cargo run -p craft-spp-reader --features dev-tools --example <name> -- ...`.
 dev-tools = []
 
 [[example]]

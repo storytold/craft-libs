@@ -66,5 +66,9 @@ fn read_matrix(r: &mut ByteReader) -> Result<Transform, DecodeError> {
 }
 
 fn expect_equal(what: &str, declared: usize, stored: usize) -> Result<(), DecodeError> {
-    if declared == stored { Ok(()) } else { Err(DecodeError::invalid(RECORD, format!("node declares {declared} {what} entries but stores {stored}"))) }
+    if declared == stored {
+        Ok(())
+    } else {
+        Err(DecodeError::invalid(RECORD, format!("node declares {declared} {what} entries but stores {stored}")))
+    }
 }

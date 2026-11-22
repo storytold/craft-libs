@@ -73,7 +73,9 @@ impl<'a> Arms<'a> {
                     a.read(first_ref, first);
                     a.read(second_ref, second);
                 }
-                ("sequence", Some(&[skipped, kept])) if !effect.get(usize::from(skipped)).copied().unwrap_or(false) && ins.ty & super::scalar::KEEP == 0 => {
+                ("sequence", Some(&[skipped, kept]))
+                    if !effect.get(usize::from(skipped)).copied().unwrap_or(false) && ins.ty & super::scalar::KEEP == 0 =>
+                {
                     let dead = a.child(here);
                     a.set_arms(i, [dead, NO_PLACE]);
                     a.read(skipped, dead);
@@ -223,7 +225,11 @@ mod tests {
 
     #[test]
     fn read_only_from_one_arm_it_stays_there() {
-        let e = Expr { offset: 0, end: 0, instrs: vec![konst(), truth(), refs(RAND, &[0]), refs(ADD, &[2, 2]), refs(ADD, &[3, 2]), refs(IF, &[1, 0, 4])] };
+        let e = Expr {
+            offset: 0,
+            end: 0,
+            instrs: vec![konst(), truth(), refs(RAND, &[0]), refs(ADD, &[2, 2]), refs(ADD, &[3, 2]), refs(IF, &[1, 0, 4])],
+        };
         assert!(leaving(&e, 5, 1).is_empty());
     }
 
@@ -251,14 +257,22 @@ mod tests {
 
     #[test]
     fn a_reader_nothing_reaches_does_not_count() {
-        let e = Expr { offset: 0, end: 0, instrs: vec![konst(), truth(), refs(RAND, &[0]), refs(ADD, &[2, 0]), refs(ADD, &[2, 2]), refs(IF, &[1, 0, 4])] };
+        let e = Expr {
+            offset: 0,
+            end: 0,
+            instrs: vec![konst(), truth(), refs(RAND, &[0]), refs(ADD, &[2, 0]), refs(ADD, &[2, 2]), refs(IF, &[1, 0, 4])],
+        };
         assert!(leaving(&e, 5, 1).is_empty());
     }
 
     #[test]
     fn a_sequence_that_skips_its_first_operand_still_reads_it() {
         // sequence(%2, if(c, 0, add %2)): the rand belongs to the sequence's place, so it runs
-        let e = Expr { offset: 0, end: 0, instrs: vec![konst(), truth(), refs(RAND, &[0]), refs(ADD, &[2, 0]), refs(IF, &[1, 0, 3]), refs(SEQ, &[2, 4])] };
+        let e = Expr {
+            offset: 0,
+            end: 0,
+            instrs: vec![konst(), truth(), refs(RAND, &[0]), refs(ADD, &[2, 0]), refs(IF, &[1, 0, 3]), refs(SEQ, &[2, 4])],
+        };
         assert_eq!(leaving(&e, 5, 0), vec![2]);
         assert_eq!(leaving(&e, 4, 1), vec![2]);
     }

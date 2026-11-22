@@ -1,10 +1,10 @@
 //! Builds the reference app's model for every project file in `TC_IMPORT_CORPUS` (skipped without it). Every project
 //! must build, keep no object raw, have a layer stack per texture set that reaches the stored layers, and hold no field
-//! the reader's field table (`texturecraft_import_reader::model::fields`) doesn't list: a newer version's fields fail here until each
+//! the reader's field table (`craft_spp_reader::model::fields`) doesn't list: a newer version's fields fail here until each
 //! is classified as read, ignored (with the reason) or unhandled (with its default).
 
-use texturecraft_import_reader::model::StackSummary;
-use texturecraft_import_reader::project::ProjectFile;
+use craft_spp_reader::model::StackSummary;
+use craft_spp_reader::project::ProjectFile;
 
 use crate::common;
 

@@ -147,7 +147,10 @@ mod tests {
         let c = SavedCameras::parse(&file()).unwrap();
         let viewer = c.viewer.unwrap();
         assert_eq!((viewer.label.as_str(), viewer.uid, viewer.projection), ("Default camera", Some(8), CameraProjection::Perspective));
-        assert_eq!((viewer.position, viewer.rotation, viewer.film_size, viewer.focal_length), ([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0], [36.0, 20.25], 50.0));
+        assert_eq!(
+            (viewer.position, viewer.rotation, viewer.film_size, viewer.focal_length),
+            ([1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0], [36.0, 20.25], 50.0)
+        );
         assert_eq!(c.scene.len(), 1);
         assert_eq!(c.scene[0].projection, CameraProjection::Orthographic);
         assert_eq!(c.scene[0].orthographic_height, 2.0);

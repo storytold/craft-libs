@@ -3,12 +3,12 @@
 
 use crate::common;
 
+use craft_spp_reader::decode::image::ImageHeader;
+use craft_spp_reader::decode::resource_toc::ResourceToc;
+use craft_spp_reader::decode::settings::ProjectSettings;
+use craft_spp_reader::decode::texture_cache::CacheHeader;
+use craft_spp_reader::project::{ProjectFile, ResourceKind, paths};
 use std::path::Path;
-use texturecraft_import_reader::decode::image::ImageHeader;
-use texturecraft_import_reader::decode::resource_toc::ResourceToc;
-use texturecraft_import_reader::decode::settings::ProjectSettings;
-use texturecraft_import_reader::decode::texture_cache::CacheHeader;
-use texturecraft_import_reader::project::{ProjectFile, ResourceKind, paths};
 
 /// Enough for every header seen so far (they are under 500 bytes).
 const PREFIX: usize = 4096;

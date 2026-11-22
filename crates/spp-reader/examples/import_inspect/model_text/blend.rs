@@ -3,7 +3,7 @@
 //! like new files' sparse ones.
 
 use super::effects::short_list;
-use texturecraft_import_reader::model::{ChannelBlending, ChannelMask, ProjectBlendMode};
+use craft_spp_reader::model::{ChannelBlending, ChannelMask, ProjectBlendMode};
 
 /// Where the entries sit; decides what counts as a default.
 #[derive(Clone, Copy, PartialEq, Eq)]

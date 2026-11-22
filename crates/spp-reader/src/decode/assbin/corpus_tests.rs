@@ -1,5 +1,5 @@
 //! Checks over real projects, which stay outside the repository (user content).
-//! Run with `TC_IMPORT_CORPUS=<folders or project files> cargo test --release -p texturecraft-import-reader corpus -- --ignored --nocapture`.
+//! Run with `TC_IMPORT_CORPUS=<folders or project files> cargo test --release -p craft-spp-reader corpus -- --ignored --nocapture`.
 
 use super::node::mesh_instances;
 use super::scene::{SceneBlocks, scene_bytes};

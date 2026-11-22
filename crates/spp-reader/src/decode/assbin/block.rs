@@ -13,7 +13,8 @@ const SIZE_FIELD: usize = 8;
 /// Reads one size-prefixed block and returns its content (after the size field).
 pub fn read_block<'a>(r: &mut ByteReader<'a>) -> Result<&'a [u8], DecodeError> {
     let size = r.u64_le().map_err(DecodeError::truncated(RECORD))?;
-    let size = usize::try_from(size).ok().filter(|&s| s >= SIZE_FIELD).ok_or_else(|| DecodeError::invalid(RECORD, format!("bad block size {size}")))?;
+    let size =
+        usize::try_from(size).ok().filter(|&s| s >= SIZE_FIELD).ok_or_else(|| DecodeError::invalid(RECORD, format!("bad block size {size}")))?;
     r.bytes(size - SIZE_FIELD).map_err(DecodeError::truncated(RECORD))
 }
 

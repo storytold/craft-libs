@@ -38,8 +38,10 @@ fn uniform_values_are_kept_per_channel_as_stored() {
 
 #[test]
 fn bitmap_and_procedural_sources_keep_resources_and_tweaks() {
-    let bitmap =
-        obj("DataSourceBitmap", vec![("bitmap", obj("DataBitmap", vec![("urlToBitmapRes", V::Str("/Moth?version=abc"))])), ("channelTypes", V::Uid(2))]);
+    let bitmap = obj(
+        "DataSourceBitmap",
+        vec![("bitmap", obj("DataBitmap", vec![("urlToBitmapRes", V::Str("/Moth?version=abc"))])), ("channelTypes", V::Uid(2))],
+    );
     let tweaks = vec![
         obj("DataTweakFloat3", vec![("identifier", V::Str("color")), ("value", V::Vec3([0.5, 0.25, 0.0]))]),
         obj("DataTweakInt", vec![("identifier", V::Str("$randomseed")), ("value", V::Int(-3))]),
@@ -87,7 +89,12 @@ fn masks_hold_generators_strokes_and_filters() {
     let stroke = obj("DataStroke", vec![("points", V::List(vec![]))]);
     let paint = obj(
         "DataActionPaint",
-        vec![("enabled", V::Bool(true)), ("opacity", V::Float(0.5)), ("sourceColor", V::List(vec![uniform(0, [1.0; 3])])), ("strokes", V::List(vec![stroke]))],
+        vec![
+            ("enabled", V::Bool(true)),
+            ("opacity", V::Float(0.5)),
+            ("sourceColor", V::List(vec![uniform(0, [1.0; 3])])),
+            ("strokes", V::List(vec![stroke])),
+        ],
     );
     let group = obj("DataActionGroup", vec![("enabled", V::Bool(true)), ("subStack", stack("DataStackActions", 50, vec![paint]))]);
     let generator = fill(60, vec![procedural_source(0, format!("resource://generators/mg_dirt?version=1{PACKAGE_SUFFIX}").leak(), vec![])]);
@@ -109,7 +116,8 @@ fn masks_hold_generators_strokes_and_filters() {
 
 #[test]
 fn strokes_are_read_with_points_pressure_and_camera() {
-    let key = |x: f32, t: f32| V::Inline("DataStrokeKey", vec![("position", V::Floats(0x02, vec![x, -x])), ("time", V::Float(t)), ("type", V::Enum(0))]);
+    let key =
+        |x: f32, t: f32| V::Inline("DataStrokeKey", vec![("position", V::Floats(0x02, vec![x, -x])), ("time", V::Float(t)), ("type", V::Enum(0))]);
     let pressure = |t: f32, v: f32| V::Inline("DataTimelineKey", vec![("type", V::Enum(0)), ("value", V::Float(v)), ("x", V::Float(t))]);
     let view: Vec<f32> = (0..16).map(|i| i as f32).collect();
     let stroke = obj(
@@ -191,7 +199,8 @@ fn path_strokes_are_read_as_bezier_splines_in_both_formats() {
             ],
         )
     };
-    let new = path(vec![key(1, [-0.3, 0.0, 0.0], 1.0), key(3, [-0.1, 0.0, 0.0], 0.0), key(2, [0.1, 0.0, 0.0], 0.0), key(1, [0.3, 0.0, 0.0], 1.0)], false);
+    let new =
+        path(vec![key(1, [-0.3, 0.0, 0.0], 1.0), key(3, [-0.1, 0.0, 0.0], 0.0), key(2, [0.1, 0.0, 0.0], 0.0), key(1, [0.3, 0.0, 0.0], 1.0)], false);
     let older = path(vec![old(1, [0.0; 3], 0.5), old(1, [0.0, 1.0, 0.0], 1.0)], true);
     let paint = obj("DataActionPaint", vec![("strokes", V::List(vec![])), ("strokes3D", V::List(vec![new, older]))]);
     let (layer, report) = only_layer(vec![paint], None);

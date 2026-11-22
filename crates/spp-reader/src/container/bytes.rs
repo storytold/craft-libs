@@ -72,14 +72,22 @@ impl<'a> ByteReader<'a> {
 
     /// Next `n` bytes, borrowed from the underlying data.
     pub fn bytes(&mut self, n: usize) -> Result<&'a [u8], OutOfBounds> {
-        let out = self.pos.checked_add(n).and_then(|end| self.data.get(self.pos..end)).ok_or(OutOfBounds { at: self.pos, wanted: n, len: self.data.len() })?;
+        let out = self.pos.checked_add(n).and_then(|end| self.data.get(self.pos..end)).ok_or(OutOfBounds {
+            at: self.pos,
+            wanted: n,
+            len: self.data.len(),
+        })?;
         self.pos += n;
         Ok(out)
     }
 
     /// Next `N` bytes as a fixed-size array.
     pub fn array<const N: usize>(&mut self) -> Result<[u8; N], OutOfBounds> {
-        let out = self.data.get(self.pos..).and_then(<[u8]>::first_chunk::<N>).copied().ok_or(OutOfBounds { at: self.pos, wanted: N, len: self.data.len() })?;
+        let out = self.data.get(self.pos..).and_then(<[u8]>::first_chunk::<N>).copied().ok_or(OutOfBounds {
+            at: self.pos,
+            wanted: N,
+            len: self.data.len(),
+        })?;
         self.pos += N;
         Ok(out)
     }

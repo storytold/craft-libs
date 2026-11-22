@@ -1,10 +1,10 @@
-//! Prints the texture sets and layer tree of a project file: `cargo run -p texturecraft-import-reader --features dev-tools --example layers -- <project file>`.
+//! Prints the texture sets and layer tree of a project file: `cargo run -p craft-spp-reader --features dev-tools --example layers -- <project file>`.
 
+use craft_spp_reader::decode::assbin::AssbinGeometry;
+use craft_spp_reader::model::{LayerKind, ProjectLayer};
+use craft_spp_reader::project::{ProjectFile, paths};
 use std::error::Error;
 use std::path::PathBuf;
-use texturecraft_import_reader::decode::assbin::AssbinGeometry;
-use texturecraft_import_reader::model::{LayerKind, ProjectLayer};
-use texturecraft_import_reader::project::{ProjectFile, paths};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) else {

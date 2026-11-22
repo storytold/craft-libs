@@ -6,9 +6,9 @@ mod blend;
 mod effects;
 
 use blend::{BlendContext, blending_text};
+use craft_spp_reader::model::{LayerKind, ModelReport, ProjectDocument, ProjectLayer, ProjectTextureSet, StackSummary};
 use effects::{effect_lines, short_list};
 use std::fmt::{self, Write};
-use texturecraft_import_reader::model::{LayerKind, ModelReport, ProjectDocument, ProjectLayer, ProjectTextureSet, StackSummary};
 
 pub struct ModelText<'a> {
     pub document: &'a ProjectDocument,
@@ -102,7 +102,7 @@ struct SummaryText<'a>(&'a StackSummary);
 impl fmt::Display for SummaryText<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = self.0;
-        let kinds = |m: &std::collections::BTreeMap<texturecraft_import_reader::model::ContentKind, usize>| {
+        let kinds = |m: &std::collections::BTreeMap<craft_spp_reader::model::ContentKind, usize>| {
             let v: Vec<String> = m.iter().map(|(k, n)| format!("{} {n}", k.name())).collect();
             v.join(", ")
         };

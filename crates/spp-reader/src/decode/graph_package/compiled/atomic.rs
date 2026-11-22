@@ -598,7 +598,11 @@ fn decode_gradient_map(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<
         } else {
             let at = keys + if mid { 6 } else { 4 } * i;
             let v = unit(f.s.u16(at + 2)?);
-            node.keys.push(GradientKey { position: unit(f.s.u16(at)?), color: [v, v, v, 1.0], midpoint: if mid { unit(f.s.u16(at + 4)?) } else { 0.5 } });
+            node.keys.push(GradientKey {
+                position: unit(f.s.u16(at)?),
+                color: [v, v, v, 1.0],
+                midpoint: if mid { unit(f.s.u16(at + 4)?) } else { 0.5 },
+            });
         }
     }
     Ok(())
@@ -691,7 +695,11 @@ fn decode_curve(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<(), Dec
     let float = |at: u32| f.s.u32(at).map(f32::from_bits);
     for i in 0..n.min(MAX_CURVE_KEYS) {
         let at = keys + 4 + CURVE_KEY_STRIDE * i;
-        node.curve.push(CurveKey { point: [float(at)?, float(at + 4)?], left: [float(at + 8)?, float(at + 12)?], right: [float(at + 16)?, float(at + 20)?] });
+        node.curve.push(CurveKey {
+            point: [float(at)?, float(at + 4)?],
+            left: [float(at + 8)?, float(at + 12)?],
+            right: [float(at + 16)?, float(at + 20)?],
+        });
     }
     Ok(())
 }

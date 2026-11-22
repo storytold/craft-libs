@@ -3,7 +3,9 @@
 
 use super::bits::BitWriter;
 use super::huffman::{canonical_codes, code_lengths};
-use super::tables::{CODE_LENGTH_ORDER, DIST_BASE, DIST_EXTRA, END_OF_BLOCK, LENGTH_BASE, LENGTH_EXTRA, dist_code, fixed_literal_lengths, length_code};
+use super::tables::{
+    CODE_LENGTH_ORDER, DIST_BASE, DIST_EXTRA, END_OF_BLOCK, LENGTH_BASE, LENGTH_EXTRA, dist_code, fixed_literal_lengths, length_code,
+};
 
 /// A literal byte (`dist == 0`) or a back-reference of `len` bytes at distance `dist`.
 #[derive(Clone, Copy)]

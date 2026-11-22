@@ -84,7 +84,7 @@ fn deep_nesting_is_bounded() {
 }
 
 /// Real files are user content, so they stay outside the repository.
-/// Run with `TC_IMPORT_CORPUS=<folders or project files> cargo test -p texturecraft-import-reader -- --ignored`: scans each project's document.
+/// Run with `TC_IMPORT_CORPUS=<folders or project files> cargo test -p craft-spp-reader -- --ignored`: scans each project's document.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 #[ignore]

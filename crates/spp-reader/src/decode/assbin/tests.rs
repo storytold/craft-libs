@@ -72,7 +72,7 @@ fn huge_counts_are_rejected() {
 }
 
 /// Real files are user content, so they stay outside the repository.
-/// Run with `TC_IMPORT_CORPUS=<folders or project files> cargo test -p texturecraft-import-reader -- --ignored`: prints each project's scene.
+/// Run with `TC_IMPORT_CORPUS=<folders or project files> cargo test -p craft-spp-reader -- --ignored`: prints each project's scene.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 #[ignore]

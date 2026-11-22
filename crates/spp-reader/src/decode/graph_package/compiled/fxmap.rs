@@ -143,7 +143,8 @@ fn parse(s: &Section<'_>, off: u32, depth: usize, budget: &mut usize) -> Result<
         at += 4;
         Ok(w)
     };
-    let seed_of = |w: u32, inline: bool| -> Result<Seed, DecodeError> { if inline { Ok(Seed::Const(w)) } else { Ok(Seed::Expr(Expr::parse(s, w)?)) } };
+    let seed_of =
+        |w: u32, inline: bool| -> Result<Seed, DecodeError> { if inline { Ok(Seed::Const(w)) } else { Ok(Seed::Expr(Expr::parse(s, w)?)) } };
     match tag & TAG_KIND {
         KIND_ITERATE | KIND_SWITCH => {
             let seed = match (tag & TAG_SEED_INLINE != 0, tag & TAG_SEED_EXPR != 0) {

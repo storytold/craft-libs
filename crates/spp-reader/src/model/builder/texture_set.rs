@@ -56,7 +56,8 @@ impl ModelBuilder {
 
 /// The set's mesh map slots, in the file's order: `additionalMaps`, then `normalMapBitmap`.
 fn mesh_maps(material: &RawObject) -> Vec<MeshMapRef> {
-    let extra = material.objects("additionalMaps").filter_map(|m| Some(MeshMapRef { usage: m.u64("usage"), url: m.string("urlToBitmapRes")?.to_string() }));
+    let extra =
+        material.objects("additionalMaps").filter_map(|m| Some(MeshMapRef { usage: m.u64("usage"), url: m.string("urlToBitmapRes")?.to_string() }));
     let normal = material.object("normalMapBitmap").and_then(|n| Some(MeshMapRef { usage: None, url: n.string("urlToBitmapRes")?.to_string() }));
     extra.chain(normal).collect()
 }
