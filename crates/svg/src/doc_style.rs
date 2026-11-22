@@ -179,10 +179,33 @@ fn css_length_units(property: &str, value: String) -> String {
     out
 }
 
+/// Normalize supported CSS value identifiers without changing opaque payloads or raw attributes.
+fn css_value(property: &str, value: String) -> String {
+    let mut value = css_length_units(property, value);
+    let token = value.trim();
+    let keywords: &[&str] = match property {
+        "display" => &["none"],
+        "visibility" => &["visible", "hidden", "collapse"],
+        "fill-rule" => &["nonzero", "evenodd"],
+        "stroke-linecap" => &["butt", "round", "square"],
+        "stroke-linejoin" => &["miter", "round", "bevel"],
+        "fill" | "stroke" => &["none", "currentColor"],
+        _ => &[],
+    };
+    let start = value.len() - value.trim_start().len();
+    if let Some(keyword) = keywords.iter().find(|keyword| token.eq_ignore_ascii_case(keyword)) {
+        let end = start + token.len();
+        value.replace_range(start..end, keyword);
+    } else if matches!(property, "fill" | "stroke") && token.get(..4).is_some_and(|prefix| prefix.eq_ignore_ascii_case("url(")) {
+        value.replace_range(start..start + 3, "url");
+    }
+    value
+}
+
 /// Collect the declared properties of an element: presentation attributes, then CSS rules
 /// (by specificity and source order, bounded by `charge_css`), then the inline `style` attribute.
-/// Supported numeric length-unit suffixes are normalized only for CSS declarations; raw
-/// presentation attributes retain their existing spelling and length compatibility.
+/// Supported numeric length-unit suffixes and value identifiers are normalized only for
+/// CSS declarations; raw presentation attributes retain their existing spelling and compatibility.
 pub fn declared(n: roxmltree::Node, css: &StyleSheet, charge_css: impl FnMut(usize) -> bool) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for a in n.attributes() {
@@ -193,12 +216,12 @@ pub fn declared(n: roxmltree::Node, css: &StyleSheet, charge_css: impl FnMut(usi
     let mut css_values = HashMap::new();
     css.apply(n.tag_name().name(), n.attribute("id"), n.attribute("class").unwrap_or_default(), &mut css_values, charge_css);
     out.extend(css_values.into_iter().map(|(k, v)| {
-        let v = css_length_units(&k, v);
+        let v = css_value(&k, v);
         (k, v)
     }));
     if let Some(st) = n.attribute("style") {
         for (k, v) in declarations(st) {
-            let v = css_length_units(&k, v);
+            let v = css_value(&k, v);
             out.insert(k, v);
         }
     }
