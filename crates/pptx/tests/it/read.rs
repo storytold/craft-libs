@@ -1,6 +1,6 @@
 //! The reader on small packages written by hand.
 
-mod common;
+use super::common;
 
 use craft_opc::{PackageOut, RelsOut};
 use craft_pptx::{Defaults, Geom, LayoutType, Master, PhType, Plain, Presentation, ShapeKind, Size};
