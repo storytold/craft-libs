@@ -118,6 +118,7 @@ impl GlyphsWords {
 
 /// A grid cell: a character the face maps, or a glyph no character maps (unencoded, positional forms).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GlyphCell {
     /// A character the face maps.
     Char(char),

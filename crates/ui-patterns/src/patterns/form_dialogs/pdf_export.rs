@@ -66,6 +66,7 @@ pub enum PdfExportMode {
 
 /// The name and description a preset editor edits.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PresetDraft {
     /// The preset's name.
     pub name: String,

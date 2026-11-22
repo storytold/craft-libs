@@ -220,6 +220,7 @@ pub enum TableOrder {
 
 /// A table edit and the colours it applies to.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ColorTableEvent {
     /// The edit.
     pub edit: ColorTableEdit,
@@ -229,6 +230,7 @@ pub struct ColorTableEvent {
 
 /// What the host's table says, for the cell marks (web-safe is computed).
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TableMarks {
     /// The locked colours.
     pub locked: Vec<[u8; 3]>,
@@ -247,10 +249,18 @@ pub enum WebDocument {
     Raster,
     /// A vector document: Image Size shows Anti-aliasing, Clip to Artboard and the Artboard select in place of
     /// Resample; an Output row follows Metadata; Slices has no HTML check.
+    #[non_exhaustive]
     Vector {
         /// The artboards' names.
         artboards: Vec<String>,
     },
+}
+
+impl WebDocument {
+    /// A vector document with the artboards `artboards`.
+    pub fn vector(artboards: Vec<String>) -> Self {
+        WebDocument::Vector { artboards }
+    }
 }
 
 /// The search Optimize to File Size… asks the host to run.

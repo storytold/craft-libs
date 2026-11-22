@@ -183,8 +183,9 @@ fn show_palette(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture) {
 }
 
 /// The colour table events the dialog filed since the last call.
-fn table_events(host: &Rc<RefCell<DialogHost>>) -> Vec<ColorTableEvent> {
-    host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::take_table_events).expect("the dialog is open")
+fn table_events(host: &Rc<RefCell<DialogHost>>) -> Vec<(ColorTableEdit, Vec<[u8; 3]>)> {
+    let events = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::take_table_events).expect("the dialog is open");
+    events.into_iter().map(|event: ColorTableEvent| (event.edit, event.colors)).collect()
 }
 
 #[trial]
@@ -237,7 +238,7 @@ fn slices_and_palette_edits_follow_the_settings() {
     assert_eq!(request.key, PALETTE_COLOR_KEY);
     host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
     fixture.idle(4);
-    let shift = ColorTableEvent { edit: ColorTableEdit::Shift([255, 0, 255]), colors: vec![[0, 255, 0]] };
+    let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
     assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour");
 
     let interlaced = fixture.by_label("Interlaced").expect("the Interlaced check box");
@@ -246,7 +247,7 @@ fn slices_and_palette_edits_follow_the_settings() {
     let colors = fixture.by_label("Colors").expect("the Colors field");
     fixture.click(&colors).key(Key::ArrowUp, Modifiers::NONE).idle(4);
     assert_eq!(current(&host).colors, 9, "the colour count changed");
-    let restore = ColorTableEvent { edit: ColorTableEdit::Restore, colors: Vec::new() };
+    let restore = (ColorTableEdit::Restore, Vec::new());
     assert_eq!(table_events(&host), vec![restore], "a colour-count change restores the generated table");
 
     // A preset pick keeps the slices.
@@ -285,10 +286,10 @@ fn table_edits_carry_the_selected_colors() {
     let lock = fixture.by_label("Lock Colors").expect("the Lock button");
     fixture.click(&lock).idle(4);
     let selected = vec![[255, 0, 0], [0, 0, 255]];
-    assert_eq!(table_events(&host), vec![ColorTableEvent { edit: ColorTableEdit::Lock, colors: selected.clone() }]);
+    assert_eq!(table_events(&host), vec![(ColorTableEdit::Lock, selected.clone())]);
     let delete = fixture.by_label("Delete Color").expect("the Delete button");
     fixture.click(&delete).idle(4);
-    assert_eq!(table_events(&host), vec![ColorTableEvent { edit: ColorTableEdit::Delete, colors: selected }]);
+    assert_eq!(table_events(&host), vec![(ColorTableEdit::Delete, selected)]);
 }
 
 #[trial]

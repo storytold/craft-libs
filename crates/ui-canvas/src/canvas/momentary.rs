@@ -40,6 +40,7 @@ pub enum MomentaryCommands {
 
 /// What a held Shift does to the momentary Hand.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MomentaryShift {
     /// Shift changes nothing: the Hand stays the Hand.
     #[default]

@@ -387,6 +387,7 @@ impl craft_ui::contract::Outcome for ShortcutsOutput {
 
 /// The Hold Shortcuts setting the dialog shows and edits.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct HoldSetting {
     /// Whether hold shortcuts are on.
     pub on: bool,
@@ -394,6 +395,13 @@ pub struct HoldSetting {
     pub delay: f64,
     /// The delays the field accepts.
     pub range: RangeInclusive<f64>,
+}
+
+impl HoldSetting {
+    /// Hold shortcuts `on`, holding after `delay` seconds, with the field accepting `range`.
+    pub fn new(on: bool, delay: f64, range: RangeInclusive<f64>) -> Self {
+        HoldSetting { on, delay, range }
+    }
 }
 
 /// The dialog for one pass: what it edits, borrowed, and how it behaves.

@@ -177,7 +177,7 @@ impl Component for ShellRegion {
     fn content_env(&self, _: &Cx<'_, Self>, values: &mut AppValues) {
         if let Some((shell, popups)) = &self.shell {
             shell.put(values);
-            values.set(PopupRegion(*popups));
+            values.set(PopupRegion::new(*popups));
         }
         if let Some(set) = self.mode_set {
             values.set(set);

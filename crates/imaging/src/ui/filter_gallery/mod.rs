@@ -111,6 +111,7 @@ pub enum FilterGalleryEvent {
     PickColor(ColorRequest),
     /// A Browse button was pressed on the layer `layer`: the app opens its file picker and answers with
     /// `set_layer_fields`, which follows the layer if it moved meanwhile.
+    #[non_exhaustive]
     PickPath {
         /// The layer whose parameter asked.
         layer: LayerId,

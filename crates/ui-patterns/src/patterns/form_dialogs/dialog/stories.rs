@@ -142,7 +142,7 @@ fn param_dialog_with_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let built_in = ["soft".to_owned()];
     ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
         .opened(Bind::bound(opener(ui, data)))
-        .presets(ParamPresets { rows: &rows, values: &values, built_in: &built_in })
+        .presets(ParamPresets::new(&rows, &values, &built_in))
         .show(ui)
         .into()
 }

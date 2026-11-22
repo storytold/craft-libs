@@ -17,6 +17,7 @@ use egui::{Color32, CornerRadius, Ui, Vec2};
 
 /// How a channel's value steps and settles: a channel's or the alpha's.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ChannelRule {
     /// The values the channel takes, from its least to its greatest.
     pub range: RangeInclusive<f64>,
@@ -38,6 +39,7 @@ impl ChannelRule {
 
 /// What a channel's number counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChannelUnit {
     /// No unit.
     None,

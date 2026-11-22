@@ -297,6 +297,7 @@ type BelowRowsFn<'a> = Box<dyn Fn(&mut Ui, &DialogFields) + 'a>;
 /// The named presets a [`ParamDialog`] offers above its rows: the preset rows, the values each applies, and the names
 /// the user cannot rename or delete.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct ParamPresets<'a> {
     /// The listed presets, by name.
     pub rows: &'a [PresetRow<String>],
@@ -304,6 +305,13 @@ pub struct ParamPresets<'a> {
     pub values: &'a [(String, DialogFields)],
     /// The names of the built-in presets, which `check_name` refuses.
     pub built_in: &'a [String],
+}
+
+impl<'a> ParamPresets<'a> {
+    /// The presets `rows`, applying `values`, of which `built_in` cannot be renamed or deleted.
+    pub fn new(rows: &'a [PresetRow<String>], values: &'a [(String, DialogFields)], built_in: &'a [String]) -> Self {
+        ParamPresets { rows, values, built_in }
+    }
 }
 
 /// What `ParamDialog::below` draws under the rows.
@@ -1313,7 +1321,7 @@ impl StackDialog for HostedParamDialog {
             dialog = dialog.ok_enabled(false).ok_reason(reason.clone());
         }
         if let Some(presets) = &self.presets {
-            dialog = dialog.presets(ParamPresets { rows: &presets.rows, values: &presets.values, built_in: &presets.built_in });
+            dialog = dialog.presets(ParamPresets::new(&presets.rows, &presets.values, &presets.built_in));
         }
         // The held answer also carries a refusal the host keeps on a dialog without a held OK: its notice shows the reason
         // under the rows, and OK is off meanwhile, so nothing is filed.

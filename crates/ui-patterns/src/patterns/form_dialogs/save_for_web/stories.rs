@@ -150,7 +150,7 @@ fn save_for_web_vector(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = SaveForWebOptions { format: WebFormat::Png24, clip_to_artboard: true, artboard: Some(1), ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
     let ((options, open), options_open_at) = data.value_at("web-vector", (start, true));
-    let document = WebDocument::Vector { artboards: vec!["Artboard 1".to_owned(), "Artboard 2".to_owned()] };
+    let document = WebDocument::vector(vec!["Artboard 1".to_owned(), "Artboard 2".to_owned()]);
     let dialog =
         SaveForWebDialog::new("logo.vcr", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)).document(document);
     with_extras(dialog, flags).show(ui).into()

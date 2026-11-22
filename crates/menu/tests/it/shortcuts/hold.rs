@@ -10,7 +10,7 @@ use super::fixture::{self, Rig};
 
 /// The setting a trial starts from, at a delay inside its range.
 fn setting(on: bool) -> HoldSetting {
-    HoldSetting { on, delay: 0.5, range: 0.2..=2.0 }
+    HoldSetting::new(on, 0.5, 0.2..=2.0)
 }
 
 /// The hold texts the keymap's overrides hold for the command `key`.

@@ -268,10 +268,12 @@ pub enum HarmonyMenuAction {
 
 /// Where a Color Guide cell lies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum GuideCellAt {
     /// The harmony strip's cell at this index.
     Strip(usize),
     /// The variation grid's cell at this row and column.
+    #[non_exhaustive]
     Grid {
         /// The grid row.
         row: usize,
@@ -282,6 +284,7 @@ pub enum GuideCellAt {
 
 /// A Color Guide cell: where it lies and the colour it shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GuideCell {
     /// Where the cell lies.
     pub at: GuideCellAt,

@@ -101,7 +101,7 @@ impl DocumentSettings for StorySettings {
     }
 
     fn preset_card(_preset: &(), _cx: &CardCx<'_, Self>) -> DocumentCard<Self> {
-        DocumentCard::new("Preset".to_owned(), String::new(), StorySettings::default(), CardSource::Preset { artboard: None })
+        DocumentCard::new("Preset".to_owned(), String::new(), StorySettings::default(), CardSource::preset(None))
     }
 
     fn recent_cards(_cx: &CardCx<'_, Self>) -> Vec<DocumentCard<Self>> {

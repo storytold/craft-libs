@@ -91,6 +91,7 @@ impl<S> DocumentCard<S> {
 #[non_exhaustive]
 pub enum CardSource {
     /// A built-in preset; `artboard` is whether it turns Artboards on (`None`: it leaves them).
+    #[non_exhaustive]
     Preset {
         /// Whether the card turns Artboards on.
         artboard: Option<bool>,
@@ -101,6 +102,13 @@ pub enum CardSource {
     Saved(PresetId),
     /// The clipboard's image size.
     Clipboard,
+}
+
+impl CardSource {
+    /// A built-in preset that turns Artboards on or off, or leaves them (`None`).
+    pub fn preset(artboard: Option<bool>) -> Self {
+        CardSource::Preset { artboard }
+    }
 }
 
 /// What a card is built from.

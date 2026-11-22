@@ -67,7 +67,7 @@ fn the_summary_lists_hold_bindings() {
     let mut km = fixture::keymap(Platform::Mac);
     km.set_holds(true);
     km.assign(&CommandRef::from("file.save"), Binding::parse("Hold K").expect("a hold"), Policy::Keep).expect("assigns");
-    let mut rig = Rig::with_holds(km, fixture::options(), HoldSetting { on: true, delay: 0.5, range: 0.2..=2.0 });
+    let mut rig = Rig::with_holds(km, fixture::options(), HoldSetting::new(true, 0.5, 0.2..=2.0));
     let summarize = |rig: &mut Rig| {
         rig.click("Summarize…");
         rig.outcomes()
