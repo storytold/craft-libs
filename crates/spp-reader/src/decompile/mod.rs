@@ -168,7 +168,9 @@ fn value_nodes(asm: &Assembly) -> Vec<ValueNode> {
     out
 }
 
-/// The first graph in `packages` whose name, label or url matches `graph`, decompiled.
+/// The first graph in `packages` whose name, label or url matches `graph`, decompiled. A package that cannot be read is
+/// skipped; a graph whose description cannot be read, or the matching graph if its compiled graph cannot be read, ends
+/// the search with that error.
 pub fn find_and_decompile(packages: &[Vec<u8>], graph: &str, size: usize) -> Result<Option<Decompiled>, crate::decode::DecodeError> {
     use crate::decode::graph_package::GraphPackage;
     for data in packages {

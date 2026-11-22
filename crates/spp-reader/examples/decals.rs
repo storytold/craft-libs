@@ -1,7 +1,7 @@
 //! Prints every polygon fill hit of a project file (layer name, granularity, shape, symmetry):
 //! `cargo run -p craft-spp-reader --features dev-tools --example decals -- <project file>`.
 
-use craft_spp_reader::model::ProjectLayer;
+use craft_spp_reader::model::{ProjectEffect, ProjectLayer};
 use craft_spp_reader::project::ProjectFile;
 use std::error::Error;
 use std::path::PathBuf;
@@ -32,12 +32,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn walk(layers: &[ProjectLayer]) {
     for layer in layers {
-        let text = format!("{layer:?}");
-        if text.contains("DecalHit") {
-            println!("== {} {}", layer.name, text);
+        hits(&layer.name, &layer.content);
+        if let Some(mask) = &layer.mask {
+            hits(&layer.name, &mask.effects);
         }
         if let craft_spp_reader::model::LayerKind::Group(children) = &layer.kind {
             walk(children);
+        }
+    }
+}
+
+/// The polygon fill hits of the effect stack `stack` (and of the effect groups inside), under the name of the layer that owns them.
+fn hits(layer: &str, stack: &[ProjectEffect]) {
+    for effect in stack {
+        match effect {
+            ProjectEffect::PolygonFill(fill) => {
+                println!("== {layer}: {} hits, {} unread", fill.hits.len(), fill.unread);
+                for hit in &fill.hits {
+                    println!("{hit:?}");
+                }
+            }
+            ProjectEffect::Group(group) => hits(layer, &group.effects),
+            _ => {}
         }
     }
 }

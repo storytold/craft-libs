@@ -97,7 +97,9 @@ pub struct ImageHeader {
     pub compression: Compression,
     /// Size of the pixel data after decompression (rows are tightly packed).
     pub raw_size: usize,
-    /// Size of the stored payload that follows the header.
+    /// Size of the stored payload that follows the header. A JPEG 2000 record does not declare one: from
+    /// [`ImageHeader::parse`] this is the number of payload bytes present in the prefix it was given, from
+    /// [`ImageResource::header`] the number of payload bytes in the record.
     pub payload_size: usize,
 }
 
