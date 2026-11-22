@@ -916,12 +916,7 @@ impl Pict {
                 });
             }
             PaintChoice::Tile(tile) => {
-                self.push(Raw::Pattern {
-                    ops,
-                    even_odd,
-                    tile,
-                    region,
-                });
+                self.push(Raw::Pattern { ops, even_odd, tile, region });
             }
         }
     }

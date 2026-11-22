@@ -45,8 +45,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use canvas::Raw;
-use geom::{Op, P};
 pub use eof::ends_early;
+use geom::{Op, P};
 pub use pict::{is_pict, parse as parse_pict};
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
