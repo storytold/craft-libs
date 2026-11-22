@@ -558,8 +558,11 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         picker.picked = Some(family.to_owned());
         picker.picked_style = style.map(str::to_owned);
         end_preview(picker, cx);
-        cx.propose(family.to_owned());
-        cx.commit();
+        // A press on a row can end a typed name first, and that commit may already have set this family.
+        if cx.value().map(String::as_str) != Some(family) {
+            cx.propose(family.to_owned());
+            cx.commit();
+        }
         popup.close(cx);
     }
 }
