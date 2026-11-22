@@ -554,6 +554,21 @@ impl<'a> Draw<'a> {
         self.paint(shape, Some(fill), None);
     }
 
+    /// Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour
+    /// from data as `data_fill` paints it. Feathered pieces would each fade out along the edges they share, so a
+    /// translucent fill would show a seam of what lies beneath along every shared edge; unfeathered triangles meet
+    /// with no gap and no overlap.
+    pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor) {
+        let fill = self.data_color(color);
+        let mut mesh = egui::Mesh::default();
+        for piece in pieces {
+            mesh.append(super::kit::fill_polygon(piece, fill, 0.0));
+        }
+        if !mesh.is_empty() {
+            self.painter.add(Shape::mesh(mesh));
+        }
+    }
+
     /// Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture
     /// is data: a disabled component paints it at `Opacity::DISABLED`, and a `Draw` for an inactive part fills `rect`
     /// with the theme's disabled fill instead, as `data_fill` does.
