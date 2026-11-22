@@ -23,8 +23,10 @@ pub struct LocalTone {
 }
 
 /// Multiply the resampled, not yet white-balanced source `img` by the local tone gain at each
-/// pixel, where `active_uv(x, y)` maps an output pixel `(x, y)` to normalised active-area
-/// coordinates `(ax, ay)` (`None` leaves blank canvas alone).
+/// pixel. For an output pixel `(x, y)`, `active_uv(x, y)` must return normalised (0..=1)
+/// coordinates in the EXIF-oriented developed source, not in the raw active area.
+/// [`SourcePlacement::active`] undoes the source orientation and maps through the crop to
+/// normalised active-area coordinates. Return `None` to leave a blank-canvas pixel unchanged.
 pub fn apply(img: &mut Rgb32f, lt: &LocalTone, active_uv: impl Fn(usize, usize) -> Option<(f64, f64)> + Sync) {
     let Some(eval) = lt.map.evaluator() else { return };
     let w = img.width;

@@ -49,7 +49,12 @@ Differences from LightCraft (ordinary-range output is covered by the baseline fi
   summed-area counts or padded table cannot be represented; patch-area arithmetic no longer overflows
   `i32`. An already-cancelled oversized-patch request returns `Cancelled`, not an unavailable-patch result.
 
-## Not here yet
+## Limits
 
-The rest of the pipeline: the rest of colour, raster, the sensor stage, raw loading and the render stages. No app uses this crate
-yet.
+This crate includes the sensor stage and consumes decoded images from `craft-raw`. Raw loading
+and end-to-end render orchestration remain outside it.
+
+For integer DNGs with a `LinearizationTable` and a nonempty `OpcodeList1`, `craft-raw` returns the
+table unapplied on the decoded image. The shared sensor normalisation and binned preview paths
+do not yet apply that deferred table after `OpcodeList1`. Do not treat their output as fully
+linearised for those inputs.
