@@ -291,8 +291,14 @@ impl Line<'_> {
     /// A scalar field with the parameter's declared unit drawn beside the existing editable text.
     fn scalar_field(&self, units: &Units, value: f64, decimals: u32) -> NumberField<'static> {
         let unit = self.param.unit;
-        let field = number_field(units, self.name.clone(), Some(value), decimals, unit);
-        if let Some(unit) = unit { field.unit_kind(unit) } else { field }
+        let mut field = number_field(units, self.name.clone(), Some(value), decimals, unit);
+        if let Some(unit) = unit {
+            field = field.unit_kind(unit);
+        }
+        if let Some(text) = self.param.unit_label_text() {
+            field = field.unit(text.clone());
+        }
+        field
     }
 
     /// Shows `body` across the form for a full-width row, without a label, or else beside the row's label.
@@ -476,6 +482,9 @@ impl<'p> Pass<'p> {
             if let Some(kind) = line.param.unit {
                 slider = slider.unit_kind(kind);
             }
+            if let Some(text) = line.param.unit_label_text() {
+                slider = slider.unit(text.clone());
+            }
             if layout == SliderFieldLayout::Stacked {
                 slider = slider.id_salt(line.key).enabled(line.enabled);
                 if let Some(tip) = line.param.tooltip_text() {
@@ -499,7 +508,8 @@ impl<'p> Pass<'p> {
         // Match the ordinary range row's number field precision when the caller sets no step.
         let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
         let step = places.map_or(default_step, |places| 10f64.powi(-(places as i32)));
-        let unit = line.param.unit.map(|kind| (kind, self.units.symbol(kind)));
+        let kind = line.param.unit;
+        let symbol: Option<Label> = line.param.unit_label_text().cloned().or_else(|| kind.map(|kind| self.units.symbol(kind).into()));
         line.show(ui, |ui| {
             Row::new().show(ui, |ui, _| {
                 let mut field = NumberField::new(line.name.clone(), Bind::given(Some(value)))
@@ -511,11 +521,14 @@ impl<'p> Pass<'p> {
                 if places.is_some() || default_step != 1.0 {
                     field = field.step(step).snap_typed(places.is_some());
                 }
-                if let Some((kind, _)) = &unit {
-                    field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);
+                if let Some(kind) = kind {
+                    field = field.unit_kind(kind);
+                }
+                if symbol.is_some() {
+                    field = field.unit_placement(UnitPlacement::After);
                 }
                 let shown = field.show(ui);
-                if let Some((_, symbol)) = &unit {
+                if let Some(symbol) = &symbol {
                     Text::new(symbol.clone()).show(ui);
                 }
                 self.alert(shown.out_of_range);

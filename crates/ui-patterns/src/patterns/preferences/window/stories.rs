@@ -17,11 +17,24 @@ struct Values {
     size: i64,
     opacity: f64,
     tint: Rgba,
+    /// The preview cache's limit, in megabytes: a unit no `UnitKind` names.
+    cache: i64,
+    /// The delay before a hover preview, in milliseconds.
+    delay: i64,
 }
 
 impl Default for Values {
     fn default() -> Self {
-        Values { snap: true, language: "en".to_owned(), name: "Poster".to_owned(), size: 24, opacity: 0.5, tint: Rgba([0xff, 0x88, 0x00, 0xff]) }
+        Values {
+            snap: true,
+            language: "en".to_owned(),
+            name: "Poster".to_owned(),
+            size: 24,
+            opacity: 0.5,
+            tint: Rgba([0xff, 0x88, 0x00, 0xff]),
+            cache: 512,
+            delay: 250,
+        }
     }
 }
 
@@ -54,6 +67,8 @@ impl PreferencesModel for Demo {
                     RowSpec::new("canvas.size", "Brush size", RowKind::int(draft.size, 1..=64).counting(UnitKind::Pixels)),
                     RowSpec::new("canvas.opacity", "Opacity", RowKind::float(draft.opacity, 0.0..=1.0, 2)),
                     RowSpec::new("canvas.tint", "Tint", RowKind::Color(draft.tint)),
+                    RowSpec::new("canvas.cache", "Preview cache", RowKind::int(draft.cache, 64..=8192).unit_label("MB")),
+                    RowSpec::new("canvas.delay", "Preview delay", RowKind::int(draft.delay, 0..=2000).counting(UnitKind::Milliseconds)),
                 ],
             )
             .footnote("Canvas settings apply to new documents."),
@@ -69,6 +84,8 @@ impl PreferencesModel for Demo {
             ("canvas.size", PrefValue::Int(size)) => self.draft.size = size,
             ("canvas.opacity", PrefValue::Float(opacity)) => self.draft.opacity = opacity,
             ("canvas.tint", PrefValue::Color(tint)) => self.draft.tint = tint,
+            ("canvas.cache", PrefValue::Int(cache)) => self.draft.cache = cache,
+            ("canvas.delay", PrefValue::Int(delay)) => self.draft.delay = delay,
             _ => {}
         }
     }
@@ -81,7 +98,10 @@ impl PreferencesModel for Demo {
         let defaults = Values::default();
         match page {
             "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
-            "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
+            "canvas" => {
+                (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint);
+                (self.draft.cache, self.draft.delay) = (defaults.cache, defaults.delay);
+            }
             _ => {}
         }
     }
@@ -123,6 +143,13 @@ fn preferences_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
 fn preferences_window_without_matches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let state = PreferencesState { search: "zzz".to_owned(), ..PreferencesState::default() };
+    window(ui, data, state, Demo::default())
+}
+
+/// The Canvas page: number rows with a unit kind's symbol (`px`, `ms`) and with unit text (`MB`) after the field.
+#[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
+fn preferences_window_with_units(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = PreferencesState { selected: "canvas".to_owned(), ..PreferencesState::default() };
     window(ui, data, state, Demo::default())
 }
 

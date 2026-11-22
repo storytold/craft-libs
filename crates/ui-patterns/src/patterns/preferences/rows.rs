@@ -31,8 +31,8 @@ pub(super) enum Kind {
     Bool(bool),
     Choice { value: String, options: Vec<Entry<String>>, unit: Option<UnitKind> },
     Color(Rgba),
-    Int { value: i64, range: RangeInclusive<i64>, unit: Option<UnitKind> },
-    Float { value: f64, range: RangeInclusive<f64>, decimals: u8, step: Option<f64>, unit: Option<UnitKind> },
+    Int { value: i64, range: RangeInclusive<i64>, unit: Option<UnitKind>, unit_label: Option<Label> },
+    Float { value: f64, range: RangeInclusive<f64>, decimals: u8, step: Option<f64>, unit: Option<UnitKind>, unit_label: Option<Label> },
     Text(String),
     Custom,
     CustomRows,
@@ -54,10 +54,17 @@ impl ShownRow {
                     .collect(),
             },
             RowKind::Color(color) => Kind::Color(*color),
-            RowKind::Int { value, range, unit, .. } => Kind::Int { value: *value, range: range.clone(), unit: *unit },
-            RowKind::Float { value, range, decimals, unit, .. } => {
-                Kind::Float { value: *value, range: range.clone(), decimals: *decimals, step: row.step, unit: *unit }
+            RowKind::Int { value, range, unit, unit_label, .. } => {
+                Kind::Int { value: *value, range: range.clone(), unit: *unit, unit_label: unit_label.map(|text| Label::from(text.to_owned())) }
             }
+            RowKind::Float { value, range, decimals, unit, unit_label, .. } => Kind::Float {
+                value: *value,
+                range: range.clone(),
+                decimals: *decimals,
+                step: row.step,
+                unit: *unit,
+                unit_label: unit_label.map(|text| Label::from(text.to_owned())),
+            },
             RowKind::Text(text) => Kind::Text((*text).to_owned()),
             RowKind::Custom => Kind::Custom,
             RowKind::CustomRows => Kind::CustomRows,
@@ -87,8 +94,16 @@ pub(super) fn step_for(range: &RangeInclusive<f64>, decimals: u8) -> f64 {
     if decimals == 0 || range.end() - range.start() >= 10.0 { 1.0 } else { 10f64.powi(-i32::from(decimals)) }
 }
 
-fn number(units: &Units, label: &Label, value: f64, unit: Option<UnitKind>, decimals: usize) -> NumberField<'static> {
-    NumberField::new(label.clone(), Bind::given(Some(value))).codec(NumberCodec::new(units.reader(unit), decimals))
+/// A number field that reads the spellings of `unit` and shows `unit_label`, else the symbol of `unit`, after the number.
+fn number(units: &Units, label: &Label, value: f64, unit: Option<UnitKind>, unit_label: Option<&Label>, decimals: usize) -> NumberField<'static> {
+    let mut field = NumberField::new(label.clone(), Bind::given(Some(value))).codec(NumberCodec::new(units.reader(unit), decimals));
+    if let Some(kind) = unit {
+        field = field.unit_kind(kind);
+    }
+    if let Some(text) = unit_label {
+        field = field.unit(text.clone());
+    }
+    field
 }
 
 /// `option` labelled as its id counted in `kind`; an option whose id is not a number keeps its label.
@@ -138,18 +153,19 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
             });
             record(next.map(PrefValue::Choice));
         }
-        Kind::Int { value, range, unit } => {
+        Kind::Int { value, range, unit, unit_label } => {
             let mut next = None;
             field().show(ui, |ui, _| {
-                let shown = number(units, label, *value as f64, *unit, 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
+                let shown =
+                    number(units, label, *value as f64, *unit, unit_label.as_ref(), 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
                 next = shown.show(ui).edit.events.landed().cloned().flatten();
             });
             record(next.map(|v| PrefValue::Int(v.round() as i64)));
         }
-        Kind::Float { value, range, decimals, step, unit } => {
+        Kind::Float { value, range, decimals, step, unit, unit_label } => {
             let mut next = None;
             field().show(ui, |ui, _| {
-                let shown = number(units, label, *value, *unit, usize::from(*decimals))
+                let shown = number(units, label, *value, *unit, unit_label.as_ref(), usize::from(*decimals))
                     .range(range.clone())
                     .step(step.unwrap_or_else(|| step_for(range, *decimals)));
                 next = shown.show(ui).edit.events.landed().cloned().flatten();

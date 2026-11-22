@@ -29,6 +29,7 @@ craft_ui::words! {
         lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
+        milliseconds: unit "units.milliseconds" = "{n} ms";
         pixels_name: "units.pixelsName" = "Pixels";
         percent_name: "units.percentName" = "Percent";
         degrees_name: "units.degreesName" = "Degrees";
@@ -44,6 +45,7 @@ craft_ui::words! {
         columns_name: "units.columnsName" = "Columns";
         lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
         lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
+        milliseconds_name: "units.millisecondsName" = "Milliseconds";
     }
 }
 
@@ -114,6 +116,8 @@ pub enum UnitKind {
     LinesPerInch,
     /// `{n} lpcm`: a halftone screen's frequency.
     LinesPerCentimetre,
+    /// `{n} ms`: a duration or delay in milliseconds.
+    Milliseconds,
 }
 
 impl UnitKind {
@@ -126,7 +130,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 15] = [
+    const ALL: [UnitKind; 16] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -142,12 +146,13 @@ impl UnitKind {
         UnitKind::Columns,
         UnitKind::LinesPerInch,
         UnitKind::LinesPerCentimetre,
+        UnitKind::Milliseconds,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
     pub const fn decimals(self) -> RangeInclusive<usize> {
         match self {
-            UnitKind::Pixels | UnitKind::Minutes => 0..=0,
+            UnitKind::Pixels | UnitKind::Minutes | UnitKind::Milliseconds => 0..=0,
             UnitKind::Percent | UnitKind::Degrees | UnitKind::Points => 0..=1,
             UnitKind::Times
             | UnitKind::Centimetres
@@ -364,6 +369,7 @@ impl Units {
             UnitKind::Columns => words.columns.as_str(),
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
+            UnitKind::Milliseconds => words.milliseconds.as_str(),
         }
     }
 
@@ -386,6 +392,7 @@ impl Units {
             UnitKind::Columns => &words.columns_name,
             UnitKind::LinesPerInch => &words.lines_per_inch_name,
             UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
+            UnitKind::Milliseconds => &words.milliseconds_name,
         };
         name.clone()
     }

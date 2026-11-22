@@ -189,6 +189,8 @@ pub enum RowKind<'a> {
         range: RangeInclusive<i64>,
         /// What the number counts, shown after the field in the user's language.
         unit: Option<UnitKind>,
+        /// Text shown after the field in place of `unit`'s symbol ([`RowKind::unit_label`]).
+        unit_label: Option<&'a str>,
     },
     /// A number field.
     #[non_exhaustive]
@@ -201,6 +203,8 @@ pub enum RowKind<'a> {
         decimals: u8,
         /// What the number counts, shown after the field in the user's language.
         unit: Option<UnitKind>,
+        /// Text shown after the field in place of `unit`'s symbol ([`RowKind::unit_label`]).
+        unit_label: Option<&'a str>,
     },
     /// A text field.
     Text(&'a str),
@@ -220,12 +224,12 @@ impl<'a> RowKind<'a> {
 
     /// An integer field limited to `range`.
     pub fn int(value: i64, range: RangeInclusive<i64>) -> Self {
-        RowKind::Int { value, range, unit: None }
+        RowKind::Int { value, range, unit: None, unit_label: None }
     }
 
     /// A number field limited to `range`, showing `decimals` decimal places.
     pub fn float(value: f64, range: RangeInclusive<f64>, decimals: u8) -> Self {
-        RowKind::Float { value, range, decimals, unit: None }
+        RowKind::Float { value, range, decimals, unit: None, unit_label: None }
     }
 
     /// What an integer or number field counts, shown after it, or what the ids of a choice count (the choice labels its
@@ -234,6 +238,17 @@ impl<'a> RowKind<'a> {
     pub fn counting(mut self, kind: UnitKind) -> Self {
         if let RowKind::Int { unit, .. } | RowKind::Float { unit, .. } | RowKind::Choice { unit, .. } = &mut self {
             *unit = Some(kind);
+        }
+        self
+    }
+
+    /// Text shown after an integer or number field in place of the symbol of what it [counts](Self::counting), for a
+    /// quantity no [`UnitKind`] names (`kbps`, `MiB`), in the host's language; other kinds ignore it. Typed text is
+    /// still read by the counted unit, or as a plain number without one.
+    #[must_use]
+    pub fn unit_label(mut self, text: &'a str) -> Self {
+        if let RowKind::Int { unit_label, .. } | RowKind::Float { unit_label, .. } = &mut self {
+            *unit_label = Some(text);
         }
         self
     }

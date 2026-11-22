@@ -544,3 +544,36 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
         }
     }
 }
+
+/// Unit text shows after the number of number, int, range and popup range rows, in place of the symbol of a row's unit
+/// kind when it has one, and the kind still reads typed text; a row in milliseconds shows `ms` and reads `250 ms`.
+#[trial]
+fn rows_show_unit_text_and_milliseconds() {
+    let params = vec![
+        Param::number("bitrate", "Bitrate", 6000.0, 50.0, 0).unit_label("kbps"),
+        Param::new("keyframes", "Keyframe interval", ParamKind::int(Some(1), Some(20), 2)).unit_label("s"),
+        Param::new("offset", "Sync offset", ParamKind::number(Some(0.0), Some(20_000.0), 0.0, 1.0, 0)).unit(UnitKind::Milliseconds),
+        Param::new("delay", "Delay", ParamKind::number(Some(0.0), Some(1000.0), 0.0, 1.0, 0)).unit(UnitKind::Milliseconds).unit_label("msec"),
+        Param::new("buffer", "Buffer", ParamKind::range(1.0, 512.0, 64.0, SliderScale::Linear)).unit_label("MiB"),
+        Param::new("size", "Size", ParamKind::range(1.0, 100.0, 10.0, SliderScale::Linear)).popup_slider().unit_label("GiB"),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.room(Vec2::new(1280.0, 800.0)).settle();
+    for unit in ["kbps", "s", "ms", "msec", "MiB", "GiB"] {
+        let painted = fixture.texts().iter().filter(|text| text.text == unit && !text.elided && text.clip.contains_rect(text.rect)).count();
+        assert_eq!(painted, 1, "one visible {unit}");
+    }
+    for (label, typed) in [("Bitrate", "8000"), ("Sync offset", "250 ms"), ("Delay", "120ms")] {
+        let field = fixture.by_label(label).expect("the number field");
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(typed).key(Key::Tab, Modifiers::NONE).settle();
+    }
+    let held = values.borrow();
+    assert_eq!(held.number("bitrate"), Some(8000.0));
+    assert_eq!(held.number("offset"), Some(250.0), "the milliseconds row reads its spelling");
+    assert_eq!(held.number("delay"), Some(120.0), "a row with unit text still reads its kind's spelling");
+}
