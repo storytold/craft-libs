@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use craft_imaging::layer_style::{EffectId, EffectInstance, EffectKind, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams};
 use craft_imaging::ui::adjust::{BrightnessContrast, BrightnessContrastEditor, CurvesPanel, HostedAdjustDialog, ToneChannels, ToneCurves, ToneSpace};
@@ -51,6 +52,51 @@ fn hosted_layer_style_queues_its_asks_and_answers_with_its_style() {
     host.borrow_mut().open(layer_style());
     fixture.idle(10).key(Key::Escape, Modifiers::NONE).idle(4);
     assert_eq!(host.borrow_mut().take::<HostedLayerStyle>(), Some(DialogResult::Cancel), "a reopened dialog cancels at Escape");
+}
+
+#[trial]
+fn layer_style_preview_has_room_for_the_effect_sample() {
+    for pixels_per_point in [1.25, 1.0, 1.5] {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let mut fixture = fixture(&host);
+        fixture.pixels_per_point(pixels_per_point);
+        #[cfg(not(target_arch = "wasm32"))]
+        let snapshot = std::env::var_os("CRAFT_LAYER_STYLE_PREVIEW_PNG").filter(|_| pixels_per_point == 1.25);
+        #[cfg(not(target_arch = "wasm32"))]
+        if snapshot.is_some() {
+            fixture.record_paint();
+        }
+
+        let painted = Arc::new(Mutex::new(None));
+        let capture = Arc::clone(&painted);
+        host.borrow_mut().open(layer_style().preview_thumb(move |cx, rect, _| {
+            *capture.lock().unwrap() = Some((rect, cx.painter.clip_rect()));
+            let sample = egui::Rect::from_center_size(rect.center(), rect.size() * 0.6);
+            cx.painter.rect_filled(sample, sample.width() * 0.12, egui::Color32::from_rgb(183, 54, 48));
+        }));
+        fixture.idle(10);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = snapshot {
+            use egui_kittest::{TestRenderer, wgpu::WgpuTestRenderer};
+            let mut paint = fixture.take_paint().unwrap();
+            let mut renderer = WgpuTestRenderer::new();
+            renderer.handle_delta(&mut paint.textures_delta);
+            renderer.render(fixture.ctx(), &paint).unwrap().save(path).unwrap();
+        }
+
+        let picture = fixture
+            .by_role(Role::IMAGE)
+            .into_iter()
+            .find(|target| fixture.tree().name_of(target.node) == Some("Layer Style"))
+            .expect("the style preview is exposed as an image");
+        let checkbox = fixture.by_label("Preview").expect("the Preview checkbox");
+        let (rect, clip) = painted.lock().unwrap().expect("the dialog paints the preview");
+        assert!(rect.width() >= 48.0, "the preview thumbnail is only {:.1} points wide at {pixels_per_point}x", rect.width());
+        assert!(clip.contains_rect(rect), "the entire thumbnail is visible at {pixels_per_point}x");
+        assert!(picture.rect.contains_rect(rect), "the image node covers the painted thumbnail");
+        assert!(checkbox.rect.bottom() <= picture.rect.top(), "the image sits below the Preview checkbox");
+    }
 }
 
 type Adjust = HostedAdjustDialog<BrightnessContrast, &'static str>;
