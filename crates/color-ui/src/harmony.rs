@@ -172,16 +172,34 @@ impl Harmony {
     // inv-vectorcraft: crates/color/src/harmony.rs:178 `apply`, with the `tones` table at :36–70
     // (`t`, `soft`, `deep`, `hc`) and `contrast` at :72; `keep_model` is not needed (sRGB only).
     pub fn apply(self, base: Srgba) -> Vec<Srgba> {
-        let Hsb { h, s, b: v } = base.to_hsb();
-        std::iter::once(base)
-            .chain(self.tones()[1..].iter().map(|tone| {
+        let Hsb { h, s, b } = base.to_hsb();
+        let rest = self.apply_hsb([h, s, b]).into_iter().skip(1);
+        std::iter::once(base).chain(rest.map(|[h, s, b]| hsb(h, s, b).with_alpha(base.a))).collect()
+    }
+
+    /// The rule's colours as HSB from the base's HSB, the base first: hue in degrees from 0 to
+    /// 360, saturation and brightness from 0 to 1. A grey base keeps its hue, so the colours keep
+    /// their places around a hue wheel.
+    // inv-vectorcraft: crates/color/src/harmony.rs:186 `apply_hsb`.
+    pub fn apply_hsb(self, [h, s, v]: [f32; 3]) -> Vec<[f32; 3]> {
+        self.tones()
+            .iter()
+            .map(|tone| {
                 let b = match tone.bright {
                     Bright::Times(f) => v * f,
                     Bright::Contrast => contrast(v),
                 };
-                hsb(h + tone.turn, (s * tone.sat).clamp(0.0, 1.0), b.clamp(0.0, 1.0)).with_alpha(base.a)
-            }))
+                [(h + tone.turn).rem_euclid(360.0), (s * tone.sat).clamp(0.0, 1.0), b.clamp(0.0, 1.0)]
+            })
             .collect()
+    }
+
+    /// Whether every colour of the rule has a hue of its own (Triad, but not Triad 2 or
+    /// Monochromatic), so that each can sit on a hue ring apart from the others.
+    // inv-vectorcraft: crates/color/src/harmony.rs:201 `hues_differ`.
+    pub fn hues_differ(self) -> bool {
+        let turns: Vec<f32> = self.tones().iter().map(|t| t.turn.rem_euclid(360.0)).collect();
+        turns.iter().enumerate().all(|(i, a)| turns[..i].iter().all(|b| a != b))
     }
 
     fn tones(self) -> &'static [Tone] {
@@ -381,5 +399,40 @@ impl Guide {
             *c = row[centre];
         }
         self
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use craft_ui::testing::trial;
+
+    /// A rule's HSB colours match the colours `apply` gives, and a grey base keeps its hue, so its
+    /// colours turn around the hue ring from it.
+    #[trial]
+    fn hsb_colours_match_and_keep_a_greys_hue() {
+        let base = Srgba::rgb(230.0 / 255.0, 120.0 / 255.0, 40.0 / 255.0);
+        let Hsb { h, s, b } = base.to_hsb();
+        for rule in Harmony::ALL {
+            let hsb = rule.apply_hsb([h, s, b]);
+            let colors = rule.apply(base);
+            assert_eq!(hsb.len(), colors.len(), "{}", rule.id());
+            for (a, c) in hsb.iter().zip(&colors).skip(1) {
+                assert_eq!(Srgba::from_hsb(Hsb { h: a[0], s: a[1], b: a[2] }), *c, "{}", rule.id());
+            }
+        }
+        let grey = Harmony::Triad.apply_hsb([40.0, 0.0, 0.5]);
+        assert_eq!(grey.iter().map(|c| c[0]).collect::<Vec<_>>(), [40.0, 160.0, 280.0]);
+        assert_eq!(Harmony::Analogous.apply_hsb([10.0, 1.0, 1.0])[2][0], 340.0, "hues wrap to 0..360");
+    }
+
+    /// Fifteen rules give every colour its own hue; the six that repeat a hue are left out.
+    #[trial]
+    fn rules_whose_colours_all_have_their_own_hue() {
+        let differ: Vec<Harmony> = Harmony::ALL.into_iter().filter(|h| h.hues_differ()).collect();
+        assert_eq!(differ.len(), 15);
+        for h in [Harmony::Complementary2, Harmony::Monochromatic, Harmony::Shades, Harmony::Triad2, Harmony::Triad3, Harmony::HighContrast2] {
+            assert!(!h.hues_differ(), "{}", h.id());
+        }
     }
 }
