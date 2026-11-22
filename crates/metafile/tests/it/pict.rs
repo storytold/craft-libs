@@ -116,7 +116,7 @@ fn a_bare_picture_and_a_version_1_picture_open() {
     v1.extend([0xA0, 0x00, 0x05, 0x50]);
     v1.extend(rect(20, 20, 30, 30));
     v1.push(0xFF);
-    assert!(!craft_metafile::is_pict(&v1));
+    assert!(craft_metafile::is_pict(&v1));
     let p = parse_pict(&v1).unwrap();
     assert_eq!((p.width, p.height), (60.0, 40.0));
     assert_eq!(p.items.len(), 2);
@@ -396,4 +396,19 @@ fn pict_size_works_from_header() {
     let file = v2([10, 20, 110, 220], &[(0x31, rect(20, 30, 60, 80))]);
     assert_eq!(craft_metafile::size(&file).unwrap(), (200.0, 100.0));
     assert_eq!(craft_metafile::size(&file[512..]).unwrap(), (200.0, 100.0));
+}
+
+#[test]
+fn bare_v1_pict_with_10x10_frame_is_parsed_as_pict() {
+    let mut v1 = vec![0, 0];
+    v1.extend(rect(0, 0, 10, 10));
+    v1.extend([0x11, 0x01, 0x31]);
+    v1.extend(rect(0, 0, 10, 10));
+    v1.push(0xFF);
+    v1.resize(256, 0);
+    assert!(craft_metafile::is_pict(&v1));
+    assert_eq!(craft_metafile::size(&v1).unwrap(), (10.0, 10.0));
+    let pic = craft_metafile::parse(&v1).unwrap();
+    assert_eq!((pic.width, pic.height), (10.0, 10.0));
+    assert_eq!(pic.items.len(), 1);
 }

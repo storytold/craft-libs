@@ -134,10 +134,9 @@ pub(crate) fn header_size(bytes: &[u8]) -> Option<(f32, f32)> {
     (w > 0.0 && h > 0.0).then_some((w, h))
 }
 
-/// Do `bytes` hold a version 2 picture, after a file's application data or on their own? The
-/// version 1 signature is two bytes, too short to tell a file by.
+/// Do `bytes` hold a picture, after a file's application data or on their own?
 pub fn is_pict(bytes: &[u8]) -> bool {
-    find(bytes).is_some_and(|h| h.v2)
+    find(bytes).is_some()
 }
 
 #[derive(Clone, Copy)]
@@ -437,7 +436,7 @@ impl PixMap {
     fn decodable(&self, w: usize) -> bool {
         let need = match self.size {
             1 | 2 | 4 | 8 => (w.saturating_mul(usize::from(self.size))).div_ceil(8),
-            16 if matches!(self.packing(), 0 | 3) => 2 * w,
+            16 if matches!(self.packing(), 0 | 1 | 3) => 2 * w,
             32 if self.packing() == 4 && self.row_bytes >= 8 => {
                 if !matches!(self.cmps, 3 | 4) {
                     return false;
@@ -445,7 +444,7 @@ impl PixMap {
                 w.saturating_mul(usize::from(self.cmps))
             }
             32 if self.packing() == 2 => 3 * w,
-            32 if matches!(self.packing(), 0 | 1) => 4 * w,
+            32 if matches!(self.packing(), 0 | 1) || (self.packing() == 4 && self.row_bytes < 8) => 4 * w,
             _ => return false,
         };
         (need..=need.saturating_add(ROW_SLACK)).contains(&self.row_len(w))
@@ -1017,7 +1016,11 @@ impl Pict {
                 if rects.len() == 1 {
                     let r = rects[0];
                     let inner = Rect::new(r.x0 + half.x, r.y0 + half.y, r.x1 - half.x, r.y1 - half.y);
-                    self.stroke(rects_path(&[inner]), color, SQUARE);
+                    if inner.width() <= 0.0 || inner.height() <= 0.0 {
+                        self.fill(rects_path(&[r]), color, false);
+                    } else {
+                        self.stroke(rects_path(&[inner]), color, SQUARE);
+                    }
                 } else {
                     let outer_rects: Vec<[f64; 4]> = rects.iter().map(|r| [r.x0, r.y0, r.x1, r.y1]).collect();
                     let inner_rects: Vec<[f64; 4]> = rects
@@ -1316,8 +1319,8 @@ impl Pict {
         match qt_image(data) {
             Some((ctype, xf, src, image)) if &ctype == b"jpeg" => match self.jpeg(image) {
                 Some(img) => {
-                    if let Some((img, _)) = crop(img, src) {
-                        self.image_xf(img, xf * Affine::translate(src.origin().to_vec2()), None);
+                    if let Some((img, in_bounds)) = crop(img, src) {
+                        self.image_xf(img, xf * Affine::translate(in_bounds.origin().to_vec2()), None);
                     }
                 }
                 None => self.dropped_images = self.dropped_images.saturating_add(1),
