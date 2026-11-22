@@ -60,6 +60,30 @@ fn summary_card_paints_title_description_and_action() {
     }
 }
 
+/// A summary card's description wraps onto a second line, as production's recommended-tool cards do, instead of being
+/// cut with an ellipsis; the action stays below it.
+#[trial]
+fn a_summary_cards_long_description_wraps_instead_of_eliding() {
+    const DETAIL: &str = "Sticky note \u{b7} Highlight text \u{b7} Underline";
+    let mut frames = Frames::new();
+    let mut shapes = Vec::new();
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            Tile::new("Add comments").icon(craft_behavior::IconId::new("grid")).detail(DETAIL).summary_action("Use now").card().show(ui);
+        });
+    }
+    let text = |wanted: &str| {
+        shapes.iter().find_map(|shape| match shape {
+            Shape::Text(text) if text.galley.job.text.starts_with(wanted) => Some((text.galley.rows.len(), text.visual_bounding_rect())),
+            _ => None,
+        })
+    };
+    let (lines, detail) = text("Sticky note").expect("the description is painted");
+    let (_, action) = text("Use now").expect("the action is painted");
+    assert!(lines >= 2, "the description wraps onto {lines} line(s) instead of being cut");
+    assert!(detail.max.y <= action.min.y + 0.5, "the description {detail:?} stays above the action {action:?}");
+}
+
 #[trial]
 fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlaps() {
     let (_, glyphs, dots) = badges(400.0);

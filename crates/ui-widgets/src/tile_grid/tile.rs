@@ -996,8 +996,13 @@ impl Component for Tile<'_> {
             draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
             if !centered {
                 if let Some(detail) = &self.detail {
-                    let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
-                    let layout = draw.layout(&run, picture.width());
+                    // The description wraps, onto the two lines the card reserves for it, as production's cards do.
+                    let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(Wrap::Wrap);
+                    let mut layout = draw.layout(&run, picture.width());
+                    // More than the two reserved lines would run into the action: cut that description with an ellipsis.
+                    if layout.galley.rows.len() > 2 {
+                        layout = draw.layout(&run.elide(), picture.width());
+                    }
                     draw.galley(egui::pos2(self.text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
                 }
                 let run = TextRun::new(action.as_str()).role(style.detail.role).color(style.range).elide();
