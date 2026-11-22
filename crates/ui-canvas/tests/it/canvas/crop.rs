@@ -804,7 +804,7 @@ fn a_shift_corner_follows_the_diagonal_and_snaps_along_it() {
 }
 
 #[trial]
-fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
+fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag() {
     // The canvas as the bounds, as the Crop tool sets them with Delete Cropped Pixels on.
     let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
     for (what, base) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false))] {
@@ -821,13 +821,34 @@ fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
         let r = rig.rect();
         assert!(r.x1 > canvas.x1 + 1.0 && r.y1 > canvas.y1 + 1.0, "{what}: the corner follows past the canvas: {r:?}");
     }
-    // A classic move still stops at the canvas.
+}
+
+/// photocraft#16404: moving an upright document crop past the canvas takes in the area there, as an edge drag does; a
+/// turned frame's move still stays inside the canvas (#10869).
+#[trial]
+fn a_document_crop_moved_past_its_bounds_takes_in_the_area_there() {
+    let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
+    // Classic Mode moves the frame with the pointer: to the right, past the canvas's right edge.
     let mut setup = Setup::new();
     setup.bounds = Some(canvas);
     let mut rig = Rig::new(CropBox::upright(RECT), setup);
     rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
     let r = rig.rect();
-    assert!(r.x1 <= canvas.x1 + 1e-6 && (r.width() - RECT.width()).abs() < 1e-6, "a move stays inside: {r:?}");
+    assert!(r.x1 > canvas.x1 + 1.0 && (r.width() - RECT.width()).abs() < 1e-6, "classic: the frame moves past the canvas: {r:?}");
+    // Image mode moves the image under the frame: a drag to the right takes the frame past the canvas's left edge.
+    let mut setup = Setup::image(0.0, false);
+    setup.bounds = Some(canvas);
+    let mut rig = Rig::new(CropBox::upright(RECT), setup);
+    rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+    let r = rig.rect();
+    assert!(r.x0 < canvas.x0 - 1.0 && (r.width() - RECT.width()).abs() < 1e-6, "image mode: the frame moves past the canvas: {r:?}");
+    // A turned frame keeps inside the canvas.
+    let mut setup = Setup::new();
+    setup.bounds = Some(canvas);
+    let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
+    rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+    let b = rig.crop().turned_bounds();
+    assert!(b.x1 <= canvas.x1 + 1e-6, "a turned frame's move stays inside: {b:?}");
 }
 
 #[trial]
