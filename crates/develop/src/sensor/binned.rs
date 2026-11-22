@@ -267,16 +267,15 @@ mod tests {
         let mut stored = raw_from(&mosaic, 0.0, 1.0);
         stored.white = vec![65535.0]; // deliberately different from the table maximum
         stored.linearization_table = Some(vec![0, 20, 100, 200]);
-        stored.opcodes.list1.push(Opcode::MapTable {
-            area: Area { top: 0, left: 0, bottom: 4, right: 4, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 },
-            table: vec![0, 2, 2, 3],
-        });
+        let area = Area { top: 0, left: 0, bottom: 4, right: 4, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+        stored.opcodes.list1.push(Opcode::MapTable { area, table: vec![0, 2, 2, 3] });
         let options = DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() };
         let mut dng = craft_raw::write_dng(&stored, &options).unwrap();
         omit_white_level(&mut dng);
         let raw = craft_raw::decode(&dng).unwrap();
         assert_eq!(raw.data, RawData::U16(vec![1; 16]));
         assert!(!raw.linearized);
+        assert_eq!(raw.opcodes.list1, stored.opcodes.list1);
         assert_eq!(raw.linearization_table.as_deref(), Some([0, 20, 100, 200].as_slice()));
         assert_eq!(raw.white, vec![200.0]);
 
@@ -291,6 +290,11 @@ mod tests {
         let mut no_table = raw.clone();
         no_table.linearization_table = None;
         assert!(no_table.normalized().unwrap().data.iter().all(|&v| (v - 0.01).abs() < 1e-6));
+
+        // A List1 opcode can produce a fractional code; 2.75 rounds to 3, not 2.
+        let mut fractional = raw.clone();
+        fractional.opcodes.list1 = vec![Opcode::MapPolynomial { area, coefficients: vec![0.0, 2.75] }];
+        assert_eq!(fractional.normalized().unwrap().data, vec![1.0; 16]);
 
         // A stale table on a float input must not turn linear samples into integer codes.
         let mut floats = raw.clone();
