@@ -1948,6 +1948,10 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
                 if line.is_some() {
                     scoped.first_line = None;
                 }
+                // A leaf wider than a whole line takes the line, never below its least, as in a stack.
+                if wrap {
+                    scoped.shrink = Some(Shrink::Fit);
+                }
             }),
         );
         let inner = if wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };

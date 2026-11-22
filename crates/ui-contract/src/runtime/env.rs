@@ -297,7 +297,7 @@ pub(crate) enum Shrink {
     /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
     /// at the level the row gave it.
     Apply(Id),
-    /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
+    /// A `Stack` body or a wrapping `Row`: each leaf shows at most the room (a whole line), never below its least.
     Fit,
 }
 
@@ -461,9 +461,10 @@ impl Scoped {
         }
     }
 
-    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body,
-    /// whose leaves show at most its room, and as one of the units a shrinking `Row` narrows. In a `Grid` cell, a
-    /// wrapping `Row` or a `Ui` with no body around it a leaf keeps its measured width, and so does the view's content.
+    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body
+    /// and a wrapping `Row`, whose leaves show at most its room (a whole line), and as one of the units a shrinking
+    /// `Row` narrows. In a `Grid` cell or a `Ui` with no body around it a leaf keeps its measured width, and so does the
+    /// view's content.
     pub(crate) const fn view_fits(&self) -> bool {
         matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_) | Shrink::Fit))
     }
