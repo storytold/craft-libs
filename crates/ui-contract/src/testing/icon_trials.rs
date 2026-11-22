@@ -213,6 +213,7 @@ fn an_icon_with_a_fill_keeps_its_colour_under_the_tint() {
     register_app_icons(&FILLED_SET);
     let [r, g, b, a] = FILL_COLOR;
     let fill = Color32::from_rgba_unmultiplied(r, g, b, a);
+    // design: allow[raw-colour/const](white is the tint that leaves colours unchanged: the fill keeps its colour under it too)
     for tint in [Color32::from_rgb(10, 200, 30), Color32::WHITE] {
         assert_eq!(painted(FILLED_NAME, tint), [fill, tint], "the fill keeps its colour and the icon takes the tint");
     }
