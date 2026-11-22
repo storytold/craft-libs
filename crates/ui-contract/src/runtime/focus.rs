@@ -425,11 +425,28 @@ pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<Fo
         if state.stop_ids.contains(&id) {
             return None;
         }
-        let rec = state.stops.get(from..)?.first()?;
-        Some(match rec.stop.part {
-            Some(part) => FocusTarget::Part(rec.stop.id, part),
-            None => FocusTarget::Id(rec.stop.id),
-        })
+        state.stops.get(from..)?.first().map(target_of)
+    })
+}
+
+/// The first stop the running pass registered in `range` (of `stop_count`s) that Tab and a request reach.
+pub(crate) fn first_stop_in(ctx: &Context, range: std::ops::Range<usize>) -> Option<FocusTarget> {
+    with(ctx, |state| state.stops.get(range.start..range.end.min(state.stops.len()))?.iter().find(|rec| !rec.stop.press_only).map(target_of))
+}
+
+/// The request target of the stop `rec`.
+fn target_of(rec: &StopRec) -> FocusTarget {
+    match rec.stop.part {
+        Some(part) => FocusTarget::Part(rec.stop.id, part),
+        None => FocusTarget::Id(rec.stop.id),
+    }
+}
+
+/// Whether focus is on a stop the running pass registered in `range` (of `stop_count`s).
+pub(crate) fn focus_in(ctx: &Context, range: std::ops::Range<usize>) -> bool {
+    let Some(focused) = focused_stop(ctx) else { return false };
+    with(ctx, |state| {
+        state.stops.get(range.start..range.end.min(state.stops.len())).is_some_and(|recs| recs.iter().any(|rec| rec.stop.key() == focused))
     })
 }
 
