@@ -81,6 +81,9 @@ pub enum LabelScheme {
     Form,
     /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
     Inspector,
+    /// A document dialog: a beside label starts at the row's start and ends with a colon, and its control follows it
+    /// at once, at the control's own width. Labels share no column, so each row reads as one line.
+    Inline,
 }
 
 impl crate::runtime::env::EnvValue for LabelScheme {

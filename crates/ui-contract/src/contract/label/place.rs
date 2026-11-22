@@ -105,8 +105,10 @@ pub(super) fn decide(ctx: &egui::Context, env: &Env, input: &LabelIn<'_>, kids: 
     let (column, stack_below) = match input.side.layout {
         FieldLayout::Beside => {
             let own = natural.x;
+            // An inline form shares no label column: each caption is as wide as its own text.
+            let shared = env.values.get::<LabelScheme>() != LabelScheme::Inline;
             let width = crate::layout::ambient_width(ctx, &if glyph { crate::layout::GLYPHS } else { crate::layout::LABELS }, own)
-                .filter(|width| *width > 0.0)
+                .filter(|width| shared && *width > 0.0)
                 .unwrap_or(own);
             (width, width + gap + input.control_min)
         }
