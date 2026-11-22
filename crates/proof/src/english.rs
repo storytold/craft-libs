@@ -62,7 +62,7 @@ const MAX_CANDIDATES: usize = 8;
 /// Where English spelling comes from now ([`crate::english_source`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EnglishSource {
-    /// The English's SCOWL dictionary embedded from craft-i18n at build time.
+    /// An English dictionary embedded at build time (currently SCOWL from craft-i18n).
     Embedded,
     /// An English Hunspell dictionary from the dictionaries folder or the system: its `.dic` file.
     Hunspell(PathBuf),
@@ -289,6 +289,7 @@ pub(crate) fn source(lang: ProofLang) -> EnglishSource {
     match speller(lang) {
         Speller::Hunspell(_, DictionarySource::Files { dic, .. }) => EnglishSource::Hunspell(dic),
         Speller::Hunspell(_, DictionarySource::Memory(pack)) => EnglishSource::MemoryPack(pack.info.locale.clone()),
+        Speller::Hunspell(_, DictionarySource::Embedded { .. }) => EnglishSource::Embedded,
         Speller::Scowl(..) => EnglishSource::Embedded,
         Speller::List => EnglishSource::CoreList,
     }

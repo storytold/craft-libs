@@ -25,6 +25,7 @@ pub(crate) const MAX_FILE: u64 = 64 << 20;
 pub(crate) enum DictionarySource {
     Files { aff: PathBuf, dic: PathBuf },
     Memory(std::sync::Arc<crate::packs::MemoryPack>),
+    Embedded { locale: &'static str, aff: &'static [u8], dic: &'static [u8] },
 }
 
 impl PartialEq for DictionarySource {
@@ -32,16 +33,21 @@ impl PartialEq for DictionarySource {
         match (self, other) {
             (Self::Files { dic: a, .. }, Self::Files { dic: b, .. }) => a == b,
             (Self::Memory(a), Self::Memory(b)) => a.revision == b.revision && a.info.locale == b.info.locale,
+            (Self::Embedded { locale: a, .. }, Self::Embedded { locale: b, .. }) => a == b,
             _ => false,
         }
     }
 }
 
 impl DictionarySource {
+    pub(crate) fn embedded(pack: &crate::packs::EmbeddedPack) -> Self {
+        Self::Embedded { locale: pack.locale, aff: pack.aff, dic: pack.dic }
+    }
+
     pub(crate) fn file(&self) -> Option<PathBuf> {
         match self {
             Self::Files { dic, .. } => Some(dic.clone()),
-            Self::Memory(_) => None,
+            Self::Memory(_) | Self::Embedded { .. } => None,
         }
     }
 
@@ -49,6 +55,7 @@ impl DictionarySource {
         match self {
             Self::Files { dic, .. } => dic.display().to_string(),
             Self::Memory(p) => format!("memory language pack {}", p.info.locale),
+            Self::Embedded { locale, .. } => format!("embedded language pack {locale}"),
         }
     }
 
@@ -56,13 +63,14 @@ impl DictionarySource {
         match self {
             Self::Files { aff, dic } => decode(&read_capped(aff)?, &read_capped(dic)?),
             Self::Memory(p) => decode(p.files.spelling_aff.as_deref().unwrap_or_default(), p.files.spelling_dic.as_deref().unwrap_or_default()),
+            Self::Embedded { aff, dic, .. } => decode(aff, dic),
         }
     }
 
     pub(crate) fn load(&self) -> Result<AffixDict, String> {
         match self {
             Self::Files { aff, dic } => load(aff, dic),
-            Self::Memory(_) => {
+            Self::Memory(_) | Self::Embedded { .. } => {
                 let (aff, dic) = self.decoded()?;
                 AffixDict::from_hunspell(&aff, &dic, &[self.description().as_str()])
             }
@@ -72,7 +80,7 @@ impl DictionarySource {
     pub(crate) fn load_english(&self) -> Result<AffixDict, String> {
         match self {
             Self::Files { aff, dic } => load_english(aff, dic),
-            Self::Memory(_) => {
+            Self::Memory(_) | Self::Embedded { .. } => {
                 let (aff, dic) = self.decoded()?;
                 AffixDict::from_hunspell_english(&aff, &dic, &[self.description().as_str()])
             }
@@ -86,13 +94,14 @@ impl DictionarySource {
                 len(aff).saturating_add(len(dic))
             }
             Self::Memory(p) => p.files.spelling_aff.as_ref().map_or(0, Vec::len) as u64 + p.files.spelling_dic.as_ref().map_or(0, Vec::len) as u64,
+            Self::Embedded { aff, dic, .. } => (aff.len() as u64).saturating_add(dic.len() as u64),
         }
     }
 
     pub(crate) fn note_load<T>(&self, key: &str, result: Result<T, String>) -> Result<T, String> {
         match self {
             Self::Files { dic, .. } => note_load(key, dic, result),
-            Self::Memory(_) => {
+            Self::Memory(_) | Self::Embedded { .. } => {
                 clear_load_error(key);
                 if let Err(error) = &result {
                     MEMORY_LOAD_ERRORS

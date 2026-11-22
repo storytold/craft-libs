@@ -16,6 +16,7 @@ fn files(locale: &str, word: &str) -> PackFiles {
         spelling_aff: Some(AFF.to_vec()),
         spelling_dic: Some(format!("1\n{word}/A\n").into_bytes()),
         hyphenation: Some(b".xep1nuq.".to_vec()),
+        hyphenation_nonstandard: None,
         licences: vec![("COPYING".into(), NOTICE.to_vec())],
     }
 }
@@ -76,6 +77,7 @@ impl Fixture {
             ("spelling.aff", input.spelling_aff.as_ref()),
             ("spelling.dic", input.spelling_dic.as_ref()),
             ("hyphenation.pat", input.hyphenation.as_ref()),
+            ("hyphenation.nonstandard", input.hyphenation_nonstandard.as_ref()),
         ] {
             if let Some(bytes) = bytes {
                 std::fs::write(dir.join(name), bytes).unwrap();
@@ -371,6 +373,7 @@ fn raw_bytes(input: &PackFiles) -> usize {
         + input.spelling_aff.as_ref().map_or(0, Vec::len)
         + input.spelling_dic.as_ref().map_or(0, Vec::len)
         + input.hyphenation.as_ref().map_or(0, Vec::len)
+        + input.hyphenation_nonstandard.as_ref().map_or(0, Vec::len)
         + input.licences.iter().map(|(name, text)| name.len() + text.len()).sum::<usize>()
 }
 
@@ -402,4 +405,40 @@ fn memory_pack_raw_budget_counts_all_inputs_and_is_released() {
     packs::add_from_memory_with_limit_for_test(b, 1024).unwrap();
     assert_eq!(packs::installed().iter().map(|x| x.locale.as_str()).collect::<Vec<_>>(), ["qab"]);
     assert!(crate::has_dictionary(Some("qab")));
+}
+
+/// Original whole-word records: the ordinary point is after "as"; the replacement adds only
+/// the display letter "z" before the hyphen. No language dictionary or pattern corpus is used.
+#[test]
+fn memory_pack_hungarian_replacements_survive_removal() {
+    let mut fixture = Fixture::new();
+    let lang = ProofLang::from_tag(Some("hu"));
+    let limits = hyphen::Limits::default();
+    let input = || {
+        let mut input = files("hu", "asszony");
+        input.spelling_aff = None;
+        input.spelling_dic = None;
+        input.hyphenation = Some(b".as1szony.\n".to_vec());
+        input
+    };
+    // A standard-only memory pack must not borrow embedded replacement rules.
+    fixture.add(input());
+    assert_eq!(hyphen::hyphenate_word_in("asszony", &limits, lang), "as-szony");
+    let mut auxiliary_only = input();
+    auxiliary_only.hyphenation = None;
+    auxiliary_only.hyphenation_nonstandard = Some(b"UTF-8\n.as1szony./sz=,2,1\n".to_vec());
+    fixture.add(auxiliary_only);
+    assert_eq!(hyphen::hyphenate_word_in("asszony", &limits, lang), "asz-szony");
+    let mut replacement = input();
+    replacement.hyphenation_nonstandard = Some(b"UTF-8\n.as1szony./sz=,2,1\n".to_vec());
+    fixture.add(replacement);
+    assert_eq!(hyphen::hyphenate_word_in("asszony", &limits, lang), "asz-szony");
+    eprintln!("memory_pack_hu: memory_verified");
+    assert!(packs::remove_from_memory("hu"));
+    if packs::embedded_locales().contains(&"hu") {
+        assert_eq!(hyphen::hyphenate_word_in("asszony", &limits, lang), "asz-szony", "removal reveals the embedded Hungarian replacement rules");
+        eprintln!("memory_pack_hu: embedded_fallback_verified");
+    } else {
+        eprintln!("memory_pack_hu: embedded_fallback_absent; build with CRAFT_PROOF_EMBED_PACKS=hu and the original tiny pack fixture");
+    }
 }

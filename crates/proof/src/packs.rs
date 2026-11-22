@@ -32,6 +32,40 @@ use crate::patterns::Patterns;
 pub(crate) const SPELLING: &str = "spelling";
 /// A pack's hyphenation patterns.
 const HYPHENATION: &str = "hyphenation.pat";
+const NONSTANDARD: &str = "hyphenation.nonstandard";
+
+/// Data supplied by explicitly selected Language packs at build time (also on WASM).
+pub(crate) struct EmbeddedPack {
+    pub locale: &'static str,
+    pub aff: &'static [u8],
+    pub dic: &'static [u8],
+    pub patterns: &'static str,
+    pub nonstandard: &'static str,
+}
+/// Look up an embedded resource for the requested locale and its fallback.
+pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'static EmbeddedPack> {
+    embedded_in(crate::data::PACKS, names, accepts)
+}
+/// Find an embedded resource in a supplied pack table using locale fallback.
+pub(crate) fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'a EmbeddedPack> {
+    names.iter().filter_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p))).collect()
+}
+
+/// Embedded spelling dictionaries follow installed packs' aliases, then same-language/script regions.
+pub(crate) fn embedded_spelling_in<'a>(table: &'a [EmbeddedPack], names: &[&str]) -> Vec<&'a EmbeddedPack> {
+    let locales = locales_for(names);
+    let mut out = embedded_in(table, &locales, |pack| !pack.dic.is_empty());
+    for pack in table.iter().filter(|pack| !pack.dic.is_empty()) {
+        let primary = pack.locale.split('-').next().unwrap_or_default();
+        if locales.iter().any(|locale| locale.split('-').next() == Some(primary) && same_script(locale, pack.locale))
+            && !out.iter().any(|selected| selected.locale == pack.locale)
+        {
+            out.push(pack);
+        }
+    }
+    out
+}
+
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
 const MAX_HYPHENATION_LOOKUPS: usize = 256;
 /// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
@@ -82,6 +116,8 @@ pub struct PackFiles {
     pub spelling_dic: Option<Vec<u8>>,
     /// UTF-8 TeX/Liang hyphenation patterns.
     pub hyphenation: Option<Vec<u8>>,
+    /// UTF-8 Libhyphen/Huhyphn replacement patterns; standard patterns are an optional fallback.
+    pub hyphenation_nonstandard: Option<Vec<u8>>,
     /// Licence file names (single relative names) and their original text bytes.
     pub licences: Vec<(String, Vec<u8>)>,
 }
@@ -133,10 +169,19 @@ impl PackSource {
         }
     }
 
-    fn patterns(&self) -> Result<Patterns, String> {
+    fn patterns(&self, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
         match self {
-            Self::Disk(dir) => load_patterns(&dir.join(HYPHENATION)),
-            Self::Memory(pack) => patterns_from_bytes(pack.files.hyphenation.as_deref().unwrap_or_default(), &pack.info.locale),
+            Self::Disk(dir) => patterns_from_directory(dir, errors),
+            Self::Memory(pack) => {
+                for (name, bytes) in [(NONSTANDARD, &pack.files.hyphenation_nonstandard), (HYPHENATION, &pack.files.hyphenation)] {
+                    let Some(bytes) = bytes else { continue };
+                    match patterns_from_bytes(bytes, name, name == NONSTANDARD) {
+                        Ok(p) => return Some(p),
+                        Err(error) => errors.push((self.locale(), error)),
+                    }
+                }
+                None
+            }
         }
     }
 }
@@ -263,6 +308,7 @@ fn compact_files(files: PackFiles) -> PackFiles {
         spelling_aff: files.spelling_aff.map(tight),
         spelling_dic: files.spelling_dic.map(tight),
         hyphenation: files.hyphenation.map(tight),
+        hyphenation_nonstandard: files.hyphenation_nonstandard.map(tight),
         licences: licences.into_boxed_slice().into_vec(),
     }
 }
@@ -293,6 +339,9 @@ fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> 
     if let Some(pat) = &files.hyphenation {
         count(HYPHENATION, pat, crate::hunspell::MAX_FILE)?;
     }
+    if let Some(pat) = &files.hyphenation_nonstandard {
+        count(NONSTANDARD, pat, crate::hunspell::MAX_FILE)?;
+    }
     if files.licences.len() > MAX_LICENCE_FILES {
         return Err(format!("more than {MAX_LICENCE_FILES} licence files"));
     }
@@ -317,7 +366,10 @@ fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> 
         }
     }
     if let Some(pat) = &files.hyphenation {
-        patterns_from_bytes(pat, &info.locale)?;
+        patterns_from_bytes(pat, HYPHENATION, false)?;
+    }
+    if let Some(pat) = &files.hyphenation_nonstandard {
+        patterns_from_bytes(pat, NONSTANDARD, true)?;
     }
     let name = info.name.unwrap_or_else(|| info.locale.clone());
     Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: None }, bytes))
@@ -444,7 +496,10 @@ fn scan() -> Arc<Scan> {
     // Disk scanning and memory registration have independent count caps.
     found.packs.retain(|(p, _)| !memory.contains_key(&p.locale));
     for pack in memory.values() {
-        let holds = Holds { spelling: pack.files.spelling_aff.is_some(), hyphenation: pack.files.hyphenation.is_some() };
+        let holds = Holds {
+            spelling: pack.files.spelling_aff.is_some(),
+            hyphenation: pack.files.hyphenation.is_some() || pack.files.hyphenation_nonstandard.is_some(),
+        };
         found.packs.push((pack.info.clone(), holds));
     }
     found.packs.sort_by(|(a, _), (b, _)| a.locale.cmp(&b.locale));
@@ -505,7 +560,7 @@ fn read_pack(path: &Path, folder: &str) -> Result<(InstalledPack, Holds), String
     }
     let holds = Holds {
         spelling: is_regular_file(&path.join(format!("{SPELLING}.aff"))) && is_regular_file(&path.join(format!("{SPELLING}.dic"))),
-        hyphenation: is_regular_file(&path.join(HYPHENATION)),
+        hyphenation: is_regular_file(&path.join(HYPHENATION)) || is_regular_file(&path.join(NONSTANDARD)),
     };
     let name = info.name.unwrap_or_else(|| info.locale.clone());
     Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: Some(path.to_path_buf()) }, holds))
@@ -809,7 +864,10 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        if s.dir.is_none() && s.memory.is_empty() {
+        if s.dir.is_none()
+            && s.memory.is_empty()
+            && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()).is_empty()
+        {
             return None;
         }
         if let Some(p) = s.hyphenation.get(&lang) {
@@ -820,17 +878,14 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let mut errors = Vec::new();
     let mut found = None;
     for source in packs_for(&hyphenation_locales(lang), |h| h.hyphenation) {
-        match source.patterns() {
-            Ok(p) => {
-                found = Some(Arc::new(p));
-                break;
-            }
-            Err(e) => {
-                let locale = source.locale();
-                log::warn!("Language pack {locale}: {e}");
-                errors.push((locale, e));
-            }
+        if let Some(p) = source.patterns(&mut errors) {
+            found = Some(Arc::new(p));
+            break;
         }
+    }
+    if found.is_none() {
+        found = patterns_from_embedded(&embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()), &mut errors)
+            .map(Arc::new);
     }
     let mut s = write();
     if s.changes == changes && !s.hyphenation.contains_key(&lang) {
@@ -846,9 +901,49 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     found
 }
 
+/// Read installed optional replacement patterns, retaining standard fallback and diagnostics.
+fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+    for name in [NONSTANDARD, HYPHENATION] {
+        let path = dir.join(name);
+        if !is_regular_file(&path) {
+            continue;
+        }
+        match load_patterns(&path) {
+            Ok(p) => return Some(p),
+            Err(error) => {
+                let locale = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                log::warn!("Language pack {locale}: {error}");
+                errors.push((locale, error));
+            }
+        }
+    }
+    None
+}
+
+/// Read embedded replacement patterns with the same fallback as installed packs.
+fn patterns_from_embedded(packs: &[&EmbeddedPack], errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+    for pack in packs {
+        for (name, text) in [(NONSTANDARD, pack.nonstandard), (HYPHENATION, pack.patterns)] {
+            if text.is_empty() {
+                continue;
+            }
+            let read = if name == NONSTANDARD { Patterns::from_huhyphn(text) } else { Patterns::parse_checked(text) };
+            match read.and_then(|p| if p.is_empty() { Err("no patterns".into()) } else { Ok(p) }) {
+                Ok(patterns) => return Some(patterns),
+                Err(error) => {
+                    let error = format!("{name}: {error}");
+                    log::warn!("embedded Language pack {}: {error}", pack.locale);
+                    errors.push((pack.locale.to_string(), error));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Estimated memory of `p`.
 fn pattern_bytes(p: &Patterns) -> u64 {
-    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN)
+    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN).saturating_add(p.extra_memory())
 }
 
 /// Remember `lang`'s pack patterns (`bytes` of them): over [`MAX_HYPHENATION_LOOKUPS`] languages
@@ -872,12 +967,12 @@ pub(crate) fn hyphenation_lookups() -> usize {
 /// A pack's `hyphenation.pat` (UTF-8 TeX or plain Liang patterns, at most the dictionary cap).
 fn load_patterns(path: &Path) -> Result<Patterns, String> {
     let bytes = read_capped(path, crate::hunspell::MAX_FILE)?;
-    patterns_from_bytes(&bytes, &path.display().to_string())
+    patterns_from_bytes(&bytes, &path.display().to_string(), path.file_name().is_some_and(|n| n == NONSTANDARD))
 }
 
-fn patterns_from_bytes(bytes: &[u8], label: &str) -> Result<Patterns, String> {
+fn patterns_from_bytes(bytes: &[u8], label: &str, nonstandard: bool) -> Result<Patterns, String> {
     let text = std::str::from_utf8(bytes).map_err(|_| format!("{label}: not UTF-8"))?;
-    let p = Patterns::parse(text);
+    let p = if nonstandard { Patterns::from_huhyphn(text) } else { Patterns::parse_checked(text) }.map_err(|e| format!("{label}: {e}"))?;
     if p.is_empty() {
         return Err(format!("{label}: no patterns"));
     }
@@ -888,6 +983,103 @@ fn patterns_from_bytes(bytes: &[u8], label: &str) -> Result<Patterns, String> {
 mod tests {
     use super::*;
 
+    /// Regression: malformed embedded regional patterns fall back to generic.
+    #[test]
+    fn malformed_embedded_regional_patterns_fall_back_to_generic() {
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "", nonstandard: "UTF-8\nas5szony/sz=,0,1" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "", nonstandard: "UTF-8\nas5szon2y/sz=,2,1" },
+        ];
+        let names = vec!["hu-hu".to_string(), "hu".to_string()];
+        let mut errors = Vec::new();
+        let p = patterns_from_embedded(&embedded_in(&packs, &names, |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()), &mut errors).unwrap();
+        assert_eq!(p.opportunities(&"asszony".chars().collect::<Vec<_>>()).unwrap()[0].suffix.as_ref(), "z");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+    }
+    /// Invalid optional records, including unsupported two-level input, retain the same-pack standard fallback.
+    #[test]
+    fn embedded_nonstandard_failure_keeps_standard_patterns() {
+        for invalid in ["UTF-8\nas5szony/sz=,0,1", "UTF-8\na1b\nNEXTLEVEL\nc1d"] {
+            let packs = [EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: invalid }];
+            let mut errors = Vec::new();
+            let p = patterns_from_embedded(&[&packs[0]], &mut errors).unwrap();
+            assert_eq!(p.points(&['a', 'b']).unwrap(), vec![1]);
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].1.starts_with("hyphenation.nonstandard:"));
+        }
+    }
+    /// Installed NEXTLEVEL files without replacements report the error and retain their standard fallback.
+    #[test]
+    fn installed_two_level_patterns_keep_standard_fallback() {
+        let dir = std::env::temp_dir().join(format!("craft-proof-nextlevel-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NONSTANDARD), "UTF-8\na1b\nNEXTLEVEL\nc1d\n").unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        let mut errors = Vec::new();
+        let patterns = patterns_from_directory(&dir, &mut errors).unwrap();
+        assert_eq!(patterns.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("NEXTLEVEL"), "{:?}", errors);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    /// Regression: embedded fallback skips locales without the requested resource.
+    #[test]
+    fn embedded_fallback_skips_locales_without_the_requested_resource() {
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"aff", dic: b"dic", patterns: "", nonstandard: "" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: "" },
+        ];
+        let names = vec!["hu_HU".to_string(), "hu".to_string()];
+        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()).first().unwrap().locale, "hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu-hu");
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: "" },
+            EmbeddedPack { locale: "hu", aff: b"aff", dic: b"dic", patterns: "", nonstandard: "" },
+        ];
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu");
+    }
+    /// Regression: embedded packs do not have the no data contract.
+    #[test]
+    fn embedded_packs_do_not_have_the_no_data_contract() {
+        #[cfg(craft_proof_no_data)]
+        assert!(crate::data::PACKS.is_empty(), "embedded packs are Language data");
+    }
+    /// Regression: broken nonstandard file retains regular patterns and the error.
+    #[test]
+    fn broken_nonstandard_file_retains_regular_patterns_and_the_error() {
+        let dir = std::env::temp_dir().join(format!("craft-proof-pattern-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NONSTANDARD), "UTF-8\nas5szony/sz=,0,1\n").unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        let mut errors = Vec::new();
+        let p = patterns_from_directory(&dir, &mut errors).unwrap();
+        assert_eq!(p.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+        std::fs::remove_file(dir.join(HYPHENATION)).unwrap();
+        errors.clear();
+        assert!(patterns_from_directory(&dir, &mut errors).is_none());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+        assert!(!errors[0].1.contains("not a regular file"));
+        std::fs::remove_file(dir.join(NONSTANDARD)).unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        errors.clear();
+        assert!(patterns_from_directory(&dir, &mut errors).is_some());
+        assert!(errors.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    /// Regression: malformed pack patterns keep their line number.
+    #[test]
+    fn malformed_pack_patterns_keep_their_line_number() {
+        let path = std::env::temp_dir().join(format!("craft-proof-pattern-error-{}.pat", std::process::id()));
+        std::fs::write(&path, "UTF-8\nas5szony/sz=,0,1\n").unwrap();
+        let error = load_patterns(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert!(error.contains("line 2"), "{error}");
+        assert!(error.contains("invalid start"), "{error}");
+    }
     /// Review follow-up (craft-libs#485): the remembered pack patterns have a memory budget, not
     /// only a count, so 256 languages of large patterns can't each stay in memory.
     #[test]
@@ -999,7 +1191,13 @@ mod tests {
         let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().trim().to_ascii_lowercase();
         let named: Vec<&str> = if embed.is_empty() { vec!["de", "pl", "pt", "it", "ru"] } else { embed.split(',').map(str::trim).collect() };
         for l in embedded_locales() {
-            assert!(l.starts_with("en-") || *l == "ru" || named.iter().any(|e| e == l || *e == "all"), "{l} is embedded");
+            assert!(
+                l.starts_with("en-")
+                    || *l == "ru"
+                    || named.iter().any(|e| e == l || *e == "all")
+                    || crate::data::PACKS.iter().any(|p| p.locale == *l),
+                "{l} is embedded"
+            );
         }
         if cfg!(craft_proof_data) && embed.is_empty() {
             for l in ["de", "pl", "pt", "it"] {

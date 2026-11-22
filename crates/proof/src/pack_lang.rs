@@ -298,10 +298,12 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64, crate::hun
     let names = names(locale);
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let Some(source) = crate::hunspell::source_candidates(&refs).into_iter().next() else {
-        return (Arc::default(), None, 0, None);
+        let (found, diagnostic) = read_embedded_dictionary(crate::data::PACKS, &names);
+        let (dict, file, bytes) = found.unwrap_or_else(|| (Arc::default(), None, 0));
+        return (dict, file, bytes, diagnostic);
     };
     let bytes = source.raw_spelling_bytes().saturating_mul(BYTES_PER_FILE_BYTE).max(1);
-    let loaded = source.load();
+    let loaded = source.load().and_then(|d| if d.is_empty() { Err("dictionary contains no words".into()) } else { Ok(d) });
     let file = source.file();
     let diagnostic = Some((source, loaded.as_ref().map(|_| ()).map_err(Clone::clone)));
     match loaded {
@@ -311,6 +313,32 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64, crate::hun
             (Arc::default(), None, 0, diagnostic)
         }
     }
+}
+
+type EmbeddedDictionary = (Arc<AffixDict>, Option<PathBuf>, u64);
+
+/// Select an embedded dictionary without publishing an unaccepted generation's diagnostic.
+fn read_embedded_dictionary(table: &[crate::packs::EmbeddedPack], names: &[String]) -> (Option<EmbeddedDictionary>, crate::hunspell::LoadDiagnostic) {
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut diagnostic = None;
+    for pack in crate::packs::embedded_spelling_in(table, &refs) {
+        let source = crate::hunspell::DictionarySource::embedded(pack);
+        let read = source.load().and_then(|d| if d.is_empty() { Err("dictionary contains no words".into()) } else { Ok(d) });
+        let bytes = source.raw_spelling_bytes().saturating_mul(BYTES_PER_FILE_BYTE);
+        diagnostic = Some((source, read.as_ref().map(|_| ()).map_err(Clone::clone)));
+        match read {
+            Ok(d) => return (Some((Arc::new(d), None, bytes)), diagnostic),
+            Err(e) => log::warn!("{} spelling: {e}", pack.locale),
+        }
+    }
+    (None, diagnostic)
+}
+
+#[cfg(test)]
+fn embedded_dictionary(table: &[crate::packs::EmbeddedPack], names: &[String], key: &str) -> Option<EmbeddedDictionary> {
+    let (found, diagnostic) = read_embedded_dictionary(table, names);
+    crate::hunspell::publish_load_diagnostic(key, diagnostic);
+    found
 }
 
 /// Is a dictionary for `locale` available (its spelling is checked)?
@@ -370,6 +398,60 @@ mod tests {
 
     fn l(t: &str) -> PackLocale {
         PackLocale::new(t).unwrap()
+    }
+
+    /// An embedded word list can be loaded without affix rules.
+    #[test]
+    fn embedded_spelling_accepts_a_word_list_with_empty_affixes() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n", dic: b"", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu", aff: b"", dic: b"1\nplainword\n", patterns: "", nonstandard: "" },
+        ];
+        let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu-HU")), "test-embedded-empty-affixes").unwrap();
+        assert!(dictionary.check("plainword") && !dictionary.check("wrongword"));
+    }
+
+    /// A generic language request can use a spelling pack for another region.
+    #[test]
+    fn generic_embedded_spelling_tries_a_different_region() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "ro-ro", aff: b"", dic: b"1\nwronglanguage\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu-sk", aff: b"", dic: b"1\nregionalword\n", patterns: "", nonstandard: "" },
+        ];
+        let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu")), "test-same-language-regional").unwrap();
+        assert!(dictionary.check("regionalword") && !dictionary.check("wronglanguage"));
+    }
+
+    /// Regression: malformed embedded regional spelling falls back to generic.
+    #[test]
+    fn malformed_embedded_regional_spelling_falls_back_to_generic() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n\xff", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+        ];
+        let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu-HU")), "test-embedded-fallback").unwrap();
+        assert!(dictionary.check("word"));
+    }
+    /// A wordless regional dictionary falls back without suppressing spelling or suggestions.
+    #[test]
+    fn empty_embedded_regional_spelling_tries_the_generic_pack() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "hu-hu", aff: b"SET UTF-8\n", dic: b"0\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu", aff: b"SET UTF-8\n", dic: b"1\nword\n", patterns: "", nonstandard: "" },
+        ];
+        let key = "test-empty-regional-fallback";
+        let names = names(l("hu-HU"));
+        assert!(embedded_dictionary(&packs[..1], &names, key).is_none());
+        assert!(crate::hunspell::source_load_error(key).unwrap().contains("no words"));
+        let (dictionary, file, bytes) = embedded_dictionary(&packs, &names, key).unwrap();
+        assert!(dictionary.check("word") && !dictionary.check("wrongword"));
+        assert!(file.is_none());
+        assert_eq!(bytes, ((packs[1].aff.len() + packs[1].dic.len()) as u64) * BYTES_PER_FILE_BYTE);
+        assert!(crate::hunspell::load_error(key).is_none());
     }
 
     /// Review follow-up (craft-libs#485): a full list of locales with no dictionary forgets its

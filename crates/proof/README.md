@@ -86,13 +86,14 @@ pub fn packs_dir() -> Option<PathBuf>;                 // ＋
 pub fn installed() -> Vec<InstalledPack>;              // InstalledPack { locale, name, licence, path: Option<PathBuf> }, by locale
 pub fn licence_texts() -> Vec<(String, String)>;       // (title, text): embedded English notices, then each installed pack's licence texts
 pub fn load_errors() -> Vec<(String, String)>;         // ＋ (locale or folder, reason): packs skipped, pattern files that failed
-pub fn embedded_locales() -> &'static [&'static str];  // ＋ locales with embedded upstream data, not our supplements ("en-us", "en-gb", "en-ca", "en-au", "pl", "pt", "it", "de" by default; the four English ones with CRAFT_PROOF_EMBED=en)
+pub fn embedded_locales() -> &'static [&'static str];  // embedded data locales, including explicit CRAFT_PROOF_EMBED_PACKS selections
 
 pub struct PackFiles {
     pub pack_toml: Vec<u8>,
     pub spelling_aff: Option<Vec<u8>>,
     pub spelling_dic: Option<Vec<u8>>,
     pub hyphenation: Option<Vec<u8>>,
+    pub hyphenation_nonstandard: Option<Vec<u8>>,
     pub licences: Vec<(String, Vec<u8>)>,
 }
 pub fn add_from_memory(files: PackFiles) -> Result<InstalledPack, String>;
@@ -142,8 +143,13 @@ Both `set_packs_dir` and `reload` reload every dictionary without a restart and 
 `add_from_memory` accepts the already prepared file bytes, including on WASM; archive verification,
 download and unpacking remain the caller's responsibility. The manifest uses the same lowercase
 locale, licence and safe relative-path rules as a disk pack. Spelling requires both `.aff` and
-`.dic` or neither. The existing encoding decoder, language spelling parsers and UTF-8 Liang-pattern
-parser validate the supplied files before a registration becomes visible.
+`.dic` or neither. The existing encoding decoder, language spelling parsers and pattern parsers
+validate the supplied files before a registration becomes visible. `hyphenation` holds the standard
+UTF-8 patterns; optional `hyphenation_nonstandard` holds UTF-8 Libhyphen/Huhyphn replacement records
+(the prepared `hyphenation.nonstandard` file). Runtime registration accepts valid nonstandard
+records without a standard file; when supplied, standard patterns are an optional fallback.
+Display-letter insertions use the existing `hyphen_opportunities_in` / `hyphenate_word_in` APIs;
+point-only clients omit a break that needs an insertion rather than loading a separate standard file.
 
 ```rust
 use craft_proof::packs::{PackFiles, add_from_memory, remove_from_memory};
@@ -154,6 +160,7 @@ let pack = PackFiles {
     spelling_aff: Some(b"SET UTF-8\n".to_vec()),
     spelling_dic: Some(b"1\nxepnuq\n".to_vec()),
     hyphenation: Some(b".xep1nuq.".to_vec()),
+    hyphenation_nonstandard: None,
     licences: vec![("COPYING".into(), b"Original example data.".to_vec())],
 };
 let installed = add_from_memory(pack).expect("valid prepared files");
@@ -178,13 +185,16 @@ Failure leaves the previous pack and its proofing behavior intact and returns it
 
 Memory and disk packs both appear in `installed()` and `licence_texts()`. `InstalledPack::path` is now
 `Option<PathBuf>`: `Some(real_folder)` for disk, `None` for memory. Callers using the old `PathBuf`
-field or complete struct literals must handle that option. Path-returning dictionary status APIs
-return `None` for memory even when `has_dictionary` is true. English callers matching `EnglishSource`
+field or complete struct literals must handle that option. Complete `PackFiles` literals must
+also supply `hyphenation_nonstandard` (`None` for existing standard-only packs); callers using
+`..PackFiles::default()` retain the absent-file default. Path-returning dictionary status APIs
+return `None` for memory and embedded packs even when `has_dictionary` is true. English callers matching `EnglishSource`
 must also handle `MemoryPack(String)`, whose string is the validated locale, rather than a synthetic
 filesystem path.
 
 Registered memory inputs share a hard **256 MiB raw-input budget**. It counts the manifest,
-`.aff`, `.dic`, patterns, licence payload bytes and licence filename bytes across all entries;
+`.aff`, `.dic`, both standard and nonstandard patterns, licence payload bytes and licence filename
+bytes across all entries;
 replacement and removal release the old entry's accounting. Retained vectors and names do not keep
 spare input capacity outside that accounting. Existing per-file limits still apply: manifest 1 MiB,
 licence 4 MiB per file, and dictionary/pattern 64 MiB per file, with at most 64 licence files per pack.
@@ -202,6 +212,7 @@ locale (`nl`, `pt-br`, `sr-latn`):
 | `pack.toml` | required: `locale` (= the folder name) and `licence` (SPDX) strings; `name` (endonym), `class`, `sources` optional; other keys are ignored |
 | `spelling.aff`, `spelling.dic` | Hunspell pair, any encoding the reader supports (optional) |
 | `hyphenation.pat` | UTF-8 TeX or plain Liang patterns (optional) |
+| `hyphenation.nonstandard` | optional UTF-8 Libhyphen/Huhyphn replacement records; runtime use does not require a standard file |
 | `LICENCES/<file>` | upstream licence texts, shown by `licence_texts()` |
 
 **Lookup order.** Spelling: the dictionaries folder, then an installed pack, then the system's
@@ -294,6 +305,26 @@ cargo check -p craft-proof --target wasm32-unknown-unknown
 ```
 
 CI: `.github/workflows/proof.yml`.
+
+The focused regression `memory_packs_tests::memory_pack_hungarian_replacements_survive_removal`
+uses one original whole-word replacement record. Its four tiny embedding inputs are committed under `tests/data/memory-packs/hu`. It checks a standard-only memory pack, then
+nonstandard-only and both-files registrations producing `asszony` → `asz-szony`. Its embedded fallback
+check needs a build that actually embeds the original tiny Hungarian fixture:
+
+```sh
+CRAFT_PROOF_PACKS_DIR="$(pwd)/crates/proof/tests/data/memory-packs" CRAFT_PROOF_EMBED_PACKS=hu cargo test --locked -p craft-proof --lib --jobs 2 memory_packs_tests::memory_pack_hungarian_replacements_survive_removal -- --test-threads=1 --exact --show-output
+```
+
+The embedding build requires both pattern files: the pack root contains `hu/pack.toml` with
+`class = "Embeddable"`, `hyphenation.pat`, `hyphenation.nonstandard` and `LICENCES/COPYING`.
+This build-only pairing restriction does not apply to runtime registration. Without embedded `hu`, the case still checks
+memory registration and replacement, and reports that the embedded fallback was not checked.
+No-data or English-only results therefore do not establish the Hungarian embedded path.
+The dedicated Hungarian run must show both `memory_pack_hu: memory_verified` and
+`memory_pack_hu: embedded_fallback_verified`; `memory_pack_hu: embedded_fallback_absent`
+does not qualify that run.
+Nonstandard record decoding and selected-pack embedding retain the provider contract from
+[craft-libs#598](https://github.com/storytold/craft-libs/pull/598).
 
 ## Credits
 
