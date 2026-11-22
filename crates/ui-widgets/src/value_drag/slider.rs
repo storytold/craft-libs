@@ -85,6 +85,10 @@ pub struct Slider<'a> {
     /// moves along the track and ignores it.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// Begin a genuine value gesture on the first primary track press and propose its landing in that same pass.
+    /// False preserves click/drag timing. Thumb presses and keyboard, wheel and editor behavior are unchanged.
+    #[prop]
+    propose_on_primary_down: bool,
     /// The value as the caller words it ("50 %"), in place of the slider's own value text: the number in the step's
     /// decimals, or in one decimal without a step. Assistive technology reads it, and so does a viewer that
     /// shows the value beside the slider.
@@ -126,6 +130,7 @@ impl<'a> Slider<'a> {
             thumb: SliderThumb::Round,
             marks: Marks::default(),
             wheel_step: None,
+            propose_on_primary_down: false,
             value_text: None,
             track_face: None,
             trim: None,
@@ -223,7 +228,9 @@ impl Component for Slider<'_> {
         if self.track_face.is_some() {
             cx.part(track::GROOVE, self.face_rect(cx.style, along));
         }
-        cx.part(TRACK, along.area).sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS).value_part().pointer_only("the arrow keys step the value");
+        let sense = Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS;
+        let sense = if self.propose_on_primary_down { sense | Sense::SETS_ON_PRESS } else { sense };
+        cx.part(TRACK, along.area).sense(sense).value_part().pointer_only("the arrow keys step the value");
         cx.part(Self::THUMB, thumb)
             .sense(Sense::DRAG | Sense::TAKE_FOCUS)
             .priority(HitPriority::new(HitLevel::Handle, 0))
@@ -253,7 +260,32 @@ impl Component for Slider<'_> {
         let at = |position: f64| marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)));
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(|| scale.middle());
         let press_at = |cx: &Cx<'_, Self>, x: f32| pick.press(&[along.x(scale.position(current(cx)))], x);
+        if self.propose_on_primary_down {
+            let press = cx.part(TRACK).press;
+            if let Some(start) = press.phase.start().filter(|start| start.button == craft_behavior::PointerButton::Primary) {
+                let absolute = craft_behavior::ValueDrag::absolute(travel.track.clone(), travel.units.clone());
+                if matches!(press.phase, PressPhase::Down { .. }) {
+                    if let Some(position) = absolute.at(start.origin, rtl) {
+                        // Fine/coarse travel continues from this real snapped landing, not the value before the press.
+                        *cx.memory::<Held>() = Held { from: scale.position(at(position)), press: Some(Press::Jump(0)) };
+                    }
+                }
+                let held = cx.memory::<Held>().clone();
+                // The existing shared primitive owns Begin/update/commit and the cancelled-held-release latch.
+                cx.follow_press(TRACK, |pos| {
+                    let next = if matches!(press.phase, PressPhase::Down { .. }) {
+                        absolute.at(pos, rtl)
+                    } else {
+                        held.press.and_then(|press_of| travel.value(press_of, held.from, &press, true))
+                    };
+                    next.map(at)
+                });
+            }
+        }
         for key in [Self::THUMB, TRACK] {
+            if key == TRACK && self.propose_on_primary_down {
+                continue;
+            }
             let press = cx.part(key).press;
             match press.phase {
                 PressPhase::DragStart { start, .. } => {

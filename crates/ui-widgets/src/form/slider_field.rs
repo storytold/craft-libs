@@ -73,6 +73,11 @@ pub struct SliderField<'a> {
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// Begin a genuine value gesture on the first primary track press and propose its landing in that same pass.
+    /// False preserves click/drag timing. Thumb presses and keyboard, wheel and editor behavior are unchanged.
+    #[prop]
+    propose_on_primary_down: bool,
+
     /// What the number counts: the field shows its unit and reads its spellings.
     #[prop]
     unit_kind: Option<UnitKind>,
@@ -140,6 +145,7 @@ impl<'a> SliderField<'a> {
             scale: SliderScale::Linear,
             step: None,
             wheel_step: None,
+            propose_on_primary_down: false,
             unit_kind: None,
             unit: None,
             fill: true,
@@ -155,6 +161,7 @@ impl<'a> SliderField<'a> {
     /// What the children are built from, apart from the binding and the track face.
     fn look(&self) -> Look {
         Look {
+            propose_on_primary_down: self.propose_on_primary_down,
             range: self.range.clone(),
             scale: self.scale,
             step: self.step,
@@ -171,6 +178,7 @@ impl<'a> SliderField<'a> {
 
 /// What a `SliderField` builds its two children from.
 struct Look {
+    propose_on_primary_down: bool,
     range: RangeInclusive<f64>,
     scale: SliderScale,
     step: Option<f64>,
@@ -207,7 +215,7 @@ impl Look {
         if let Some(check) = check {
             bind = bind.check_with(check, BindCheck::validity);
         }
-        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
+        let slider = Slider::new(bind, self.range.clone()).propose_on_primary_down(self.propose_on_primary_down).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,
@@ -348,7 +356,10 @@ impl Component for SliderField<'_> {
             SliderFieldLayout::Inline => ui.child("field", place(field), field_view),
         };
         self.out_of_range = typed.out_of_range.clone();
-        let dragged = ui.child("slider", place(track), look.slider(&name, shown, Some(bind.check_of()), face));
+        let slider = look.slider(&name, shown, Some(bind.check_of()), face);
+        // An inert composite must not arm a hidden first-Down gesture in its child for a later writable release.
+        let slider = if self.propose_on_primary_down { slider.read_only(cx.resolved.read_only) } else { slider };
+        let dragged = ui.child("slider", place(track), slider);
         let start = *self.range.start();
         cx.adopt(&typed, &start, |value, mine| {
             if let Some(value) = value {
