@@ -173,6 +173,18 @@ fn a_press_near_a_point_grabs_it_and_a_press_far_from_it_adds_one() {
     assert_eq!(rig.points().len(), 4, "a press 30 px away adds a point");
 }
 
+/// Where two points are closer than the grab radius, a press nearer the second grabs the second.
+#[trial]
+fn where_grab_areas_overlap_the_nearest_point_is_grabbed() {
+    let per_px = 1.0 / rig(&THREE).scale.x;
+    let points = [[0.0, 0.0], [100.0, 100.0], [100.0 + 8.0 * per_px, 100.0], [255.0, 255.0]];
+    let mut rig = rig(&points);
+    rig.press_near(points[2], vec2(3.0, 0.0));
+    rig.release_near(points[2], vec2(3.0, 0.0));
+    assert_eq!(rig.points().len(), 4);
+    assert_eq!(rig.selected.get(), Some(2));
+}
+
 /// A stationary click that grabs a point outside the plot keeps the point.
 #[trial]
 fn a_click_that_grabs_a_point_outside_the_plot_keeps_it() {
