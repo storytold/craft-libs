@@ -180,6 +180,10 @@ type WheelRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<f64>>>, Rc<Cell<e
 /// A canvas over a large document at zoom 1 below a framework number field and an app's own text field, on `os`: the
 /// fixture, the view it shows, the number and where the app's field is.
 fn wheel_rig(os: Platform) -> WheelRig {
+    wheel_rig_with_scheme(os, WheelScheme::Photoshop)
+}
+
+fn wheel_rig_with_scheme(os: Platform, scheme: WheelScheme) -> WheelRig {
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
     let number = Rc::new(Cell::new(Some(10.0)));
     let app_field = Rc::new(Cell::new(egui::Rect::NOTHING));
@@ -192,7 +196,9 @@ fn wheel_rig(os: Platform) -> WheelRig {
         field_at.set(ui.add(egui::TextEdit::singleline(&mut text)).rect);
         let mut given = shown.get();
         given.rect = ui.available_rect_before_wrap();
-        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |_, _| {});
+        let mut navigation = NavigationOptions::default();
+        navigation.wheel = scheme;
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(navigation).view(given).show(ui, |_, _| {});
         shown.set(canvas.output.view.unwrap_or(given));
     });
     fixture.os(os);
@@ -213,6 +219,49 @@ fn wheel_line(fixture: &mut Fixture, view: &Cell<CanvasView>, dy: f32, modifiers
         modifiers,
         source: egui::MouseWheelSource::Wheel,
     }]);
+}
+
+#[trial]
+fn a_document_wheel_scrolls_body_lines_without_accelerating_touchpad_travel_or_zoom() {
+    use craft_ui::runtime::env::{RootEnv, WheelSpeed};
+
+    for os in [Platform::Windows, Platform::Mac, Platform::Linux] {
+        let mut distances = Vec::new();
+        for scheme in [WheelScheme::Photoshop, WheelScheme::Document] {
+            let (mut fixture, view, _, _) = wheel_rig_with_scheme(os, scheme);
+            let before = view.get();
+            wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
+            let distance = before.to_screen(before.center).y - view.get().to_screen(before.center).y;
+            distances.push(distance);
+
+            fixture.root(RootEnv::default().wheel_speed(WheelSpeed::new(2.0, 1.0)));
+            fixture.settle();
+            let before = view.get();
+            wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
+            let fast = before.to_screen(before.center).y - view.get().to_screen(before.center).y;
+            assert!((fast / distance - 2.0).abs() < 1e-3, "{os:?} {scheme:?}: Fast doubles the scroll distance");
+
+            let before = view.get();
+            fixture.frame(vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -10.0),
+                phase: TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+                source: egui::MouseWheelSource::Trackpad,
+            }]);
+            let travel = before.to_screen(before.center).y - view.get().to_screen(before.center).y;
+            assert!((travel - 10.0).abs() < 1e-3, "{os:?} {scheme:?}: point travel keeps its own speed");
+
+            if scheme == WheelScheme::Document {
+                let before = view.get();
+                let ppp = fixture.ctx().pixels_per_point();
+                let next = ZoomLadder::step(zoom::device(&before, ppp), 1, Size::new(4000.0, 4000.0));
+                wheel_line(&mut fixture, &view, 1.0, Modifiers::COMMAND);
+                assert!((zoom::device(&view.get(), ppp) / next - 1.0).abs() < 1e-6, "{os:?}: one notch still zooms one rung at Fast");
+            }
+        }
+        assert!(distances[1] > 3.0 * distances[0], "{os:?}: a document scrolls several body lines, rather than the creative canvas's short step");
+    }
 }
 
 #[trial]

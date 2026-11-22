@@ -446,7 +446,7 @@ impl<'a> Canvas<'a> {
         let wheeled = wheel.is_some();
         if let Some(wheel) = wheel {
             let os = cx.env.shell().os;
-            if let Some(action) = motion.wheel.read(&wheel, WheelNavigation::LINE, os, &self.navigation) {
+            if let Some(action) = motion.wheel.read(&wheel, self.wheel_notch().points(0.0), os, &self.navigation) {
                 // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in its body
                 // covers it.
                 let at = wheel.at.unwrap_or_else(|| view.rect.center());
@@ -842,7 +842,13 @@ impl Component for Canvas<'_> {
     }
 
     fn wheel_notch(&self) -> WheelNotch {
-        WheelNotch::Points(WheelNavigation::LINE)
+        // Document editors scroll about three body-text lines per notch. The creative canvas's
+        // shorter step made WordCraft's wheel crawl after moving onto the shared canvas.
+        let points = match self.navigation.wheel {
+            WheelScheme::Document => 56.0,
+            _ => WheelNavigation::LINE,
+        };
+        WheelNotch::Points(points)
     }
 
     /// The rulers' strips lie outside the view the body is clipped to.

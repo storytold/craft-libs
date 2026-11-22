@@ -8,7 +8,8 @@ pub enum WheelScheme {
     /// Photoshop's: the wheel scrolls, and Zoom with Scroll Wheel decides what zooms.
     #[default]
     Photoshop,
-    /// A document's: Ctrl/Cmd+wheel zooms by zoom ladder rungs and Shift+wheel scrolls sideways.
+    /// A document's: a wheel notch scrolls about three body-text lines (56 screen points), Ctrl/Cmd+wheel zooms by
+    /// zoom ladder rungs and Shift+wheel scrolls sideways. Point-unit touchpad travel keeps its own distance.
     Document,
 }
 
