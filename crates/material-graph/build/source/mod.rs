@@ -365,7 +365,12 @@ mod tests {
         let folder = std::env::temp_dir().join(format!("craft_material_graph_include_{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("table.bin"), b"data").unwrap();
-        for text in [r#"include_bytes!("table.bin")"#, r#"include_bytes!( "table.bin" )"#, "include_bytes! (\n    \"table.bin\",\n)", r##"include_bytes!(r#"table.bin"#)"##] {
+        for text in [
+            r#"include_bytes!("table.bin")"#,
+            r#"include_bytes!( "table.bin" )"#,
+            "include_bytes! (\n    \"table.bin\",\n)",
+            r##"include_bytes!(r#"table.bin"#)"##,
+        ] {
             assert_eq!(included_files(text, &folder), [("table.bin".to_string(), b"data".to_vec())], "{text}");
         }
         assert!(included_files(r#"include_bytes!("absent.bin")"#, &folder).is_empty());
@@ -383,7 +388,9 @@ mod tests {
     #[test]
     fn an_attribute_on_a_module_changes_what_is_inside() {
         let backend = |first: &str, second: &str| {
-            format!("#[cfg({first})] mod backend {{ pub fn shade() -> f32 {{ 1.0 }} }} #[cfg({second})] mod backend {{ pub fn shade() -> f32 {{ 2.0 }} }}")
+            format!(
+                "#[cfg({first})] mod backend {{ pub fn shade() -> f32 {{ 1.0 }} }} #[cfg({second})] mod backend {{ pub fn shade() -> f32 {{ 2.0 }} }}"
+            )
         };
         let b = |attrs: String| format!("{attrs} fn blur(v: f32) -> f32 {{ v * backend::shade() }} fn sharpen() {{}} fn shared_helper() {{}}");
         let (one, other) = (b(backend("unix", "not(unix)")), b(backend("not(unix)", "unix")));

@@ -2722,11 +2722,8 @@ fn finish_node(g: &Graph, p: Pending, ctx: &Ctx, ext: &[Option<Val>], cache: &mu
         done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     // Results that outlive the evaluation are kept as RGBA in the editor.
-    let full = if cache.persist.is_some() || (key == Key::from(id) && cache.thumbs.is_some()) {
-        Some(t.clone().into_host(id, ctx.ec)?.tex())
-    } else {
-        None
-    };
+    let full =
+        if cache.persist.is_some() || (key == Key::from(id) && cache.thumbs.is_some()) { Some(t.clone().into_host(id, ctx.ec)?.tex()) } else { None };
     let t = match (&full, &cache.persist) {
         (Some(f), Some(_)) => NodeValue::Host(Val::Rgba(f.clone())),
         _ => t,

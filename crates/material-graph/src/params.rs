@@ -58,12 +58,7 @@ impl Graph {
         // an output node another kept output reads from stays too
         let roots: Vec<u32> = self.output_nodes().into_iter().filter(|(_, ident, _)| keep(ident)).map(|(_, _, id)| id).collect();
         let needed = crate::graph::reached(self, &roots);
-        let drop: Vec<u32> = self
-            .nodes
-            .iter()
-            .filter(|(id, n)| n.kind == "output" && !needed.contains(id))
-            .map(|(id, _)| *id)
-            .collect();
+        let drop: Vec<u32> = self.nodes.iter().filter(|(id, n)| n.kind == "output" && !needed.contains(id)).map(|(id, _)| *id).collect();
         for id in drop {
             self.nodes.remove(&id);
         }

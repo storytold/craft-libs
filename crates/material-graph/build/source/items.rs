@@ -219,6 +219,33 @@ impl Parser<'_> {
         }
     }
 
+    /// The `use` declaration at `at` (its attributes start at `start`); the index past it.
+    fn use_declaration(&mut self, start: usize, at: usize) -> usize {
+        let end = past_item(self.tokens, at, false);
+        self.aliases(at, end);
+        if self.has_attributes(start) {
+            // `#[cfg(unix)] use a::shade;` decides which `shade` runs: it counts for every result
+            let tokens = self.tokens;
+            self.loose.extend_from_slice(tokens.get(start..end).unwrap_or(&[]));
+        }
+        end
+    }
+
+    /// The `mod` at `at` (its attributes start at `start`); the index past it. An inline module's items are parsed.
+    fn module(&mut self, start: usize, at: usize) -> usize {
+        let end = past_item(self.tokens, at, true);
+        if end > 0 && self.tokens.get(end - 1).is_some_and(|c| c.is_punct('}')) {
+            let outer = self.scope.len();
+            if self.has_attributes(start) {
+                let tokens = self.tokens;
+                self.scope.extend_from_slice(tokens.get(start..at + 2).unwrap_or(&[]));
+            }
+            self.items(at + 3, end - 1, None, false);
+            self.scope.truncate(outer);
+        }
+        end
+    }
+
     /// The items of a module or `impl` body, from `from` to `to`.
     fn items(&mut self, from: usize, to: usize, owner: Option<&str>, trait_impl: bool) {
         let mut i = from;
@@ -279,26 +306,9 @@ impl Parser<'_> {
                 self.add(start, end, &name, ItemKind::Value, owner, trait_impl);
                 end
             } else if t.is("use") {
-                let end = past_item(self.tokens, i, false);
-                self.aliases(i, end);
-                if self.has_attributes(start) {
-                    // `#[cfg(unix)] use a::shade;` decides which `shade` runs: it counts for every result
-                    let tokens = self.tokens;
-                    self.loose.extend_from_slice(tokens.get(start..end).unwrap_or(&[]));
-                }
-                end
+                self.use_declaration(start, i)
             } else if t.is("mod") {
-                let end = past_item(self.tokens, i, true);
-                if end > 0 && self.tokens.get(end - 1).is_some_and(|c| c.is_punct('}')) {
-                    let outer = self.scope.len();
-                    if self.has_attributes(start) {
-                        let tokens = self.tokens;
-                        self.scope.extend_from_slice(tokens.get(start..i + 2).unwrap_or(&[]));
-                    }
-                    self.items(i + 3, end - 1, None, false);
-                    self.scope.truncate(outer);
-                }
-                end
+                self.module(start, i)
             } else if t.is("trait") {
                 let end = past_item(self.tokens, i, true);
                 self.body_block(start, i, end, &name, ItemKind::Type, false);

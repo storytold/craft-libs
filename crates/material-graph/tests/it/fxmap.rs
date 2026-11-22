@@ -38,7 +38,7 @@ fn switch_blend_and_errors() {
     assert!(t.px[0][0] < 0.1, "index 1 draws the small square only");
     assert!(t.px[32 * 64 + 32][0] > 0.9);
     // missing program and a program without output are errors, each with its own cause
-    let message = |text: &str| Graph::parse(text).unwrap().evaluate(Some(32)).err().expect("the evaluation must fail").to_string();
+    let message = |text: &str| Graph::parse(text).unwrap().evaluate(Some(32)).expect_err("the evaluation must fail").to_string();
     let unknown = message("size 32\nnode 1 fx_map program=\"nope\"\noutput o 1\n");
     assert!(unknown.contains("node 1") && unknown.contains("unknown pattern program 'nope'"), "{unknown}");
     let no_output = message("size 32\nsubgraph s\nmeta kind \"fxmap\"\nnode 1 fxm_marker\nend\nnode 1 fx_map program=\"s\"\noutput o 1\n");

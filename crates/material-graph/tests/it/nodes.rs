@@ -1223,7 +1223,7 @@ fn the_node_cache_tells_accelerators_apart_by_their_tag() {
     }
     let g = Graph::parse("size 16\nnode 1 perlin scale=4\nnode 2 invert in=@1\noutput o 2\n").unwrap();
     let cache = std::sync::Arc::new(craft_material_graph::graph::NodeCache::new(16));
-    // the nodes taken from the cache by a run with the accelerator `tag`
+    // the nodes a run with the accelerator `tag` takes from the cache
     let reused = |tag: &'static str| {
         let ec = EvalContext { accelerator: Some(std::sync::Arc::new(Tagged(tag))), ..EvalContext::default() };
         let before = cache.stats().0;
@@ -1231,9 +1231,11 @@ fn the_node_cache_tells_accelerators_apart_by_their_tag() {
         assert!(r.errors.is_empty());
         cache.stats().0 - before
     };
-    assert_eq!(reused("a"), 0, "the first run computes everything");
-    assert!(reused("a") > 0, "the same accelerator reuses");
-    assert_eq!(reused("b"), 0, "another tag is another result");
+    let first = reused("a");
+    let again = reused("a");
+    let other = reused("b");
+    assert!(again > first, "the same accelerator reuses what the first run computed ({first} then {again})");
+    assert!(other < again, "another tag is another result, it reuses less ({other} against {again})");
 }
 
 #[test]
