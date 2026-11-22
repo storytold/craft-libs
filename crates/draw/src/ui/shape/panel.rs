@@ -68,8 +68,8 @@ pub struct ShapePanelOutput {
 ///   ellipse, polygon or triangle; a rect's "Corner radius" (0 to 150,000, sets all four) then Top Left, Top Right,
 ///   Bottom Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's
 ///   Corner radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a triangle's Corner radius; a
-///   line's Weight (1 to 10,000), and with arrowheads its Start and End check boxes, Width, Length and Concavity
-///   (-50 to 50 %, whole), then the "Set as default" check box ([`arrow_default`](Self::arrow_default)).
+///   line's Weight (0 to 1,000), and with arrowheads its Start and End check boxes, Width (0.1 to 10,000), Length
+///   (0.1 to 50,000) and Concavity (-50 to 50 %, whole), then the "Set as default" check box ([`arrow_default`](Self::arrow_default)).
 /// - A value typed past its field's range is clamped and reported once in [`ShapePanelOutput::out_of_range`].
 /// - A locked layer ([`ShapeAppearance::locked`]) disables the whole panel.
 /// - Keyboard: every field and chip is a Tab stop in reading order; sections fold with their title rows. Right to

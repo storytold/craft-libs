@@ -61,8 +61,10 @@ pub struct Arrowheads {
 }
 
 impl Arrowheads {
-    /// The range of the width and length fields, in document pixels (production and engine units).
-    pub const ARROW_SIZE: RangeInclusive<f64> = 1.0..=4096.0;
+    /// The range of the width field, in document pixels (production and engine units).
+    pub const ARROW_WIDTH: RangeInclusive<f64> = 0.1..=10_000.0;
+    /// The range of the length field, in document pixels (production and engine units).
+    pub const ARROW_LENGTH: RangeInclusive<f64> = 0.1..=50_000.0;
     /// The range of the concavity field, in whole percent.
     pub const ARROW_CONCAVITY: RangeInclusive<f64> = -50.0..=50.0;
 
@@ -81,8 +83,9 @@ impl Default for Arrowheads {
 
 /// The range of a radius field, in document pixels.
 pub const RADIUS_RANGE: RangeInclusive<f64> = 0.0..=150_000.0;
-/// The range of a line weight field, in document pixels.
-pub const LINE_WEIGHT_RANGE: RangeInclusive<f64> = 1.0..=10_000.0;
+/// The range of a line weight field, in document pixels: the options bar's and the Shape panel's. A weight of 0 is a
+/// line only its stroke shows.
+pub const LINE_WEIGHT_RANGE: RangeInclusive<f64> = 0.0..=1000.0;
 
 /// The selected shape layer's live shape, as the Shape section shows it: plain data the app
 /// converts to and from its document. Sizes in document pixels.

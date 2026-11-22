@@ -91,11 +91,11 @@ pub(super) fn arrow_rows(
     edits.extend(start.map(|on| Arrowheads { start: on, ..value }));
     edits.extend(end.map(|on| Arrowheads { end: on, ..value }));
     let (width, alert) =
-        NumberCell::pixels(units, pixels_per_inch, "arrow-width", &words.arrow_width, value.width, Arrowheads::ARROW_SIZE).labelled(ui);
+        NumberCell::pixels(units, pixels_per_inch, "arrow-width", &words.arrow_width, value.width, Arrowheads::ARROW_WIDTH).labelled(ui);
     edits.extend(width.map(|width| Arrowheads { width, ..value }));
     alerts.push(alert);
     let (length, alert) =
-        NumberCell::pixels(units, pixels_per_inch, "arrow-length", &words.arrow_length, value.length, Arrowheads::ARROW_SIZE).labelled(ui);
+        NumberCell::pixels(units, pixels_per_inch, "arrow-length", &words.arrow_length, value.length, Arrowheads::ARROW_LENGTH).labelled(ui);
     edits.extend(length.map(|length| Arrowheads { length, ..value }));
     alerts.push(alert);
     after_length(ui);
