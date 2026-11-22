@@ -253,10 +253,10 @@ fn a_job_window_shows_again_for_the_next_job_after_cancel() {
     let answered = Rc::new(Cell::new(None));
     let (on, got) = (Rc::clone(&drawing), Rc::clone(&answered));
     let mut fixture = Fixture::new(move |ui| {
-        if on.get() {
-            if let Some(answer) = JobProgress::new("Exporting", "Page 1 of 3").show(ui).answer {
-                got.set(Some(answer));
-            }
+        if on.get()
+            && let Some(answer) = JobProgress::new("Exporting", "Page 1 of 3").show(ui).answer
+        {
+            got.set(Some(answer));
         }
     });
     fixture.idle(6);

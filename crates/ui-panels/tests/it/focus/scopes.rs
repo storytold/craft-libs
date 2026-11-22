@@ -1,6 +1,6 @@
 //! Focus scopes: initial focus, restore, trapping, panes, programmatic requests and focus after removal.
 
-use super::{control, focus, focused, id};
+use super::{control, focus, focused};
 use craft_ui::testing::{Frames, trial};
 use egui::Ui;
 use std::cell::Cell;
