@@ -2,6 +2,7 @@
 //! focus trap, placement and size remembered under a `SaveKey`.
 
 use super::frame::{self, DialogOutput, FOOTER, FooterCx, FooterFn, FooterHooks, HEADER, SIDE_BUTTONS};
+use crate::contract::Remember as _;
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
@@ -9,7 +10,8 @@ use crate::contract::{
 };
 use crate::edit::outer::{self, OuterEnd};
 use crate::runtime::access::Access;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, Label};
+use crate::runtime::words::CommonWords;
 use crate::runtime::focus::Initial;
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::{self, Backdrop, CloseReason, Rank};
@@ -82,6 +84,10 @@ pub struct Dialog<'a> {
     title_note: Option<Label>,
     /// The footer stands in a column at the end edge, beside the whole body.
     side: bool,
+    /// While the body reports its fields unchanged ([`Dialog::report_changed`]), a Close button stands in place of the
+    /// OK and Cancel pair.
+    #[prop]
+    close_unchanged: bool,
     closed: Option<CloseReason>,
     picked: Option<usize>,
     /// The body ran in this pass: the header region marks it.
@@ -120,6 +126,7 @@ impl<'a> Dialog<'a> {
             closable: true,
             title_note: None,
             side: false,
+            close_unchanged: false,
             closed: None,
             picked: None,
             body_shown: false,
@@ -273,6 +280,12 @@ impl<'a> Dialog<'a> {
             self.props = self.props.footer(region);
         }
         self
+    }
+
+    /// Reports from the body whether the dialog's fields differ from the ones it opened with; read by a dialog that
+    /// [`close_unchanged`](Dialog::close_unchanged).
+    pub fn report_changed(cx: &mut BodyCx<'_>, changed: bool) {
+        cx.memory::<Reported>().unchanged = !changed;
     }
 
     /// The footer region: in the end region's column, else across the foot.
@@ -475,15 +488,30 @@ impl Container for Dialog<'_> {
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
+        // An unchanged dialog has nothing to accept: one Close button answers as the Cancel button would.
+        let cancel_at = self.buttons.iter().position(|button| button.role() == DialogRole::Cancel);
+        let has_accept = self.buttons.iter().any(|button| button.role() == DialogRole::Accept);
+        let close = cancel_at.filter(|_| self.close_unchanged && has_accept && cx.memory::<Reported>().unchanged);
+        let closing;
+        let buttons = if close.is_some() {
+            let label = Env::of(ui).words::<CommonWords>().close.clone();
+            closing = [FooterButton::new(label, DialogRole::Cancel)];
+            &closing[..]
+        } else {
+            &self.buttons[..]
+        };
         frame::footer_in(
             ui,
             cx,
             &mut self.footer,
-            &self.buttons,
+            buttons,
             self.enter,
             frame::FooterHost { picked: &mut self.picked, guard: &mut self.guard, on_pick: &mut self.on_pick, settle: &mut self.settle },
             self.side,
         );
+        if let (Some(at), Some(0)) = (close, self.picked) {
+            self.picked = Some(at);
+        }
     }
 
     fn closed(&mut self, why: CloseReason) {
@@ -507,4 +535,10 @@ impl<'a> FooterHooks<'a> for Dialog<'a> {
     fn close_guard<T: FnMut(&FooterButton, &mut BodyCx<'_>) -> bool + 'a>(self, allows: T) -> Self {
         Dialog::close_guard(self, allows)
     }
+}
+
+/// What the body reported about its fields in this pass.
+#[derive(Clone, Copy, Default)]
+struct Reported {
+    unchanged: bool,
 }

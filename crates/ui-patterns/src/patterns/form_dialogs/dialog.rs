@@ -354,6 +354,9 @@ pub struct ParamDialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
+    /// While no value differs from the one the dialog opened with, a Close button stands in place of OK and Cancel.
+    #[prop]
+    close_unchanged: bool,
     /// Whether the dialog has the Preview check box: the host previews its values while the box is on.
     #[prop]
     previews: bool,
@@ -467,6 +470,7 @@ impl<'a> ParamDialog<'a> {
             reset_to: None,
             layout: None,
             closable: true,
+            close_unchanged: false,
             previews: false,
             preview_on: None,
             preview: None,
@@ -581,6 +585,7 @@ impl<'a> ParamDialog<'a> {
             reset_to,
             layout,
             closable,
+            close_unchanged,
             previews,
             preview_on,
             preview,
@@ -627,6 +632,7 @@ impl<'a> ParamDialog<'a> {
             // The tab strip is a collection in the body, as a browse list is.
             .collection_body(collection_body || tabbed)
             .closable(closable)
+            .close_unchanged(close_unchanged)
             .accept_stays_open(hold)
             .answers(answers);
         if let Some(reset_to) = reset_to {
@@ -949,6 +955,7 @@ impl ResetFooter {
     /// differ from the opening ones (Reset is enabled then) and whether OK can be pressed.
     pub fn report(cx: &mut BodyCx<'_>, changed: bool, ok: bool) {
         *cx.memory::<Footing>() = Footing { changed, ok: Some(ok) };
+        Dialog::report_changed(cx, changed);
     }
 
     /// Which button `DialogOutput::picked` names, for the buttons of this footer.

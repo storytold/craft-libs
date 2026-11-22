@@ -92,3 +92,21 @@ fn a_document_dialog_keeps_the_decimals_of_its_number_rows() {
     assert!(shown(ParamLayout::Document).iter().any(|text| text == "0.50"), "the document layout writes both places");
     assert!(!shown(ParamLayout::Beside).iter().any(|text| text == "0.50"), "the plain layout trims the zero");
 }
+
+/// A dialog that closes when unchanged shows Close in place of OK and Cancel until a value differs from the opening one.
+#[trial]
+fn an_unchanged_dialog_shows_close_until_a_field_changes() {
+    let fields = std::rc::Rc::new(std::cell::RefCell::new(DialogFields::new()));
+    let shared = fields.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let rows = vec![Param::number("size", "Size", 1.0, 1.0, 0)];
+        let mut fields = shared.borrow_mut();
+        ParamDialog::new("close", "Properties", rows).close_unchanged(true).values(Bind::bound(&mut *fields)).show(ui);
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    assert!(fixture.by_label("OK").is_none() && fixture.by_label("Cancel").is_none(), "unchanged: no OK or Cancel");
+    fields.borrow_mut().set("size", 5.0_f64);
+    fixture.settle();
+    assert!(fixture.by_label("OK").is_some() && fixture.by_label("Cancel").is_some(), "after an edit: OK and Cancel");
+}

@@ -69,6 +69,35 @@ fn a_footer_button_closes_the_dialog_by_its_role() {
 }
 
 #[trial]
+fn a_dialog_with_unchanged_fields_shows_close_in_place_of_ok_and_cancel() {
+    let run = |changed: bool| {
+        let seen = Rc::new(Cell::new((None, None)));
+        let sink = seen.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut open = true;
+            let shown = Dialog::new("Properties")
+                .opened(Bind::bound(&mut open))
+                .close_unchanged(true)
+                .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+                .show(ui, |_, cx| Dialog::report_changed(cx, changed));
+            if shown.output.closed.is_some() {
+                sink.set((shown.output.closed, shown.output.picked));
+            }
+        });
+        fixture.idle(30);
+        // The title row's close action carries the same name; the footer's button is the last of them.
+        let closes: Vec<_> = fixture.by_role(Role::BUTTON).into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("Close")).collect();
+        let labels = (fixture.by_label("OK").is_some(), fixture.by_label("Cancel").is_some(), closes.len() > 1);
+        if let Some(close) = closes.last().filter(|_| !changed) {
+            fixture.click(close);
+        }
+        (labels, seen.get())
+    };
+    assert_eq!(run(false), ((false, false, true), (Some(CloseReason::Requested), Some(1))), "unchanged: Close, which answers as the Cancel button");
+    assert_eq!(run(true).0, (true, true, false), "changed: OK and Cancel");
+}
+
+#[trial]
 fn a_blocking_overlays_buttons_keep_their_place_after_it_settled() {
     let mut fixture = Fixture::new(|ui| {
         let mut open = true;

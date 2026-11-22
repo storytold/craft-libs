@@ -178,6 +178,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     history: bool,
     collection_body: bool,
     closable: bool,
+    close_unchanged: bool,
     accept_stays_open: bool,
     enter_confirms: bool,
     side_buttons: bool,
@@ -210,6 +211,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             history: false,
             collection_body: false,
             closable: true,
+            close_unchanged: false,
             accept_stays_open: false,
             enter_confirms: true,
             side_buttons: false,
@@ -288,6 +290,14 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
     /// Whether the title row has a close action.
     pub fn closable(mut self, on: bool) -> Self {
         self.closable = on;
+        self
+    }
+
+    /// While no value differs from the one the dialog opened with, a Close button stands in place of OK and Cancel (as
+    /// a Properties dialog does); the first edit brings them back.
+    #[must_use]
+    pub fn close_unchanged(mut self, on: bool) -> Self {
+        self.close_unchanged = on;
         self
     }
 
@@ -382,6 +392,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             history,
             collection_body,
             closable,
+            close_unchanged,
             accept_stays_open,
             enter_confirms,
             side_buttons,
@@ -425,6 +436,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         };
         let mut dialog = Dialog::new(title)
             .closable(closable)
+            .close_unchanged(close_unchanged)
             .close_on_enter(ok_enabled && enter_confirms)
             .outer_gesture(outer_gesture)
             .side_buttons(side_buttons);
