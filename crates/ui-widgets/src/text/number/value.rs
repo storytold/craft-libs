@@ -180,6 +180,7 @@ impl<V: NumberValue> Outcome for NumberOutput<V> {
 
     #[cfg(feature = "testing")]
     fn story_facts(&self) -> crate::testing::StoryOutput {
-        self.edit.story_facts()
+        let facts = self.edit.story_facts();
+        crate::testing::StoryOutput { clicked: facts.clicked || self.link, ..facts }
     }
 }

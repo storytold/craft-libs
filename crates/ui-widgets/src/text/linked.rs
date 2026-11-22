@@ -113,7 +113,8 @@ impl<const N: usize> Outcome for LinkedOutput<N> {
 
     #[cfg(feature = "testing")]
     fn story_facts(&self) -> crate::testing::StoryOutput {
-        self.edit.story_facts()
+        let facts = self.edit.story_facts();
+        crate::testing::StoryOutput { clicked: facts.clicked || self.caption_link.is_some(), ..facts }
     }
 }
 
