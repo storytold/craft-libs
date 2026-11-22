@@ -56,9 +56,10 @@ fn deflate_egui_fonts(out: &Path) {
         ("NotoEmoji-Regular", epaint_default_fonts::NOTO_EMOJI_REGULAR),
         ("emoji-icon-font", epaint_default_fonts::EMOJI_ICON),
     ];
-    // The suite's interface face (Inter, subset to Latin, Greek and Cyrillic; fonts/inter/OFL.txt).
+    // The suite's interface face (Inter, subset to Latin, Greek and Cyrillic; fonts/inter/OFL.txt), and the macOS
+    // key symbols (InterKeys, cut from the same Inter release; fonts/inter/README.md).
     println!("cargo::rerun-if-changed=fonts/inter");
-    let inter: Vec<(&str, Vec<u8>)> = ["Inter-Regular", "Inter-SemiBold"]
+    let inter: Vec<(&str, Vec<u8>)> = ["Inter-Regular", "Inter-SemiBold", "InterKeys-Regular", "InterKeys-SemiBold"]
         .into_iter()
         .map(|name| (name, std::fs::read(format!("fonts/inter/{name}.ttf")).unwrap_or_else(|e| panic!("fonts/inter/{name}.ttf: {e}"))))
         .collect();

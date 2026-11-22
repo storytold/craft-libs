@@ -12,8 +12,9 @@ macro_rules! deflated {
     };
 }
 
-/// The names of the suite's interface faces among the default faces.
-pub(super) const SUITE_FACES: [&str; 2] = ["Inter-Regular", "Inter-SemiBold"];
+/// The names of the suite's interface faces among the default faces: Inter and its key symbols, which an app's own
+/// faces replace together.
+pub(super) const SUITE_FACES: [&str; 4] = ["Inter-Regular", "Inter-SemiBold", "InterKeys-Regular", "InterKeys-SemiBold"];
 
 static HACK: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Hack-Regular")));
 static EGUI_ICONS: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("egui-icons")));
@@ -22,6 +23,8 @@ static NOTO_EMOJI: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("NotoE
 static EMOJI_ICON_FONT: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("emoji-icon-font")));
 static INTER_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Inter-Regular")));
 static INTER_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Inter-SemiBold")));
+static INTER_KEYS_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("InterKeys-Regular")));
+static INTER_KEYS_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("InterKeys-SemiBold")));
 
 /// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.
 const MAX_INFLATED_BYTES: u64 = 16 << 20;
@@ -43,9 +46,12 @@ fn inflate(deflated: &[u8]) -> Vec<u8> {
 /// crate's build script makes the copies from `fonts/inter` and `epaint_default_fonts`.
 pub fn deflated_default_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::empty();
-    let faces: [(&str, &'static [u8], f32); 5] = [
+    let faces: [(&str, &'static [u8], f32); 7] = [
         ("Inter-Regular", INTER_REGULAR.as_slice(), 1.0),
         ("Inter-SemiBold", INTER_SEMIBOLD.as_slice(), 1.0),
+        // The macOS key symbols (⌘ ⌥ ⌃ ⇧ ⌫ ⌦ ⏎ ↩ ⎋ ⇥ ⇪), in Inter's own design: behind Inter, and in the monospace family.
+        ("InterKeys-Regular", INTER_KEYS_REGULAR.as_slice(), 1.0),
+        ("InterKeys-SemiBold", INTER_KEYS_SEMIBOLD.as_slice(), 1.0),
         ("Hack", HACK.as_slice(), 1.0),
         ("Ubuntu-Light", UBUNTU_LIGHT.as_slice(), 1.0),
         // The handful of icons in `egui::special_emojis`, which no platform font has.
@@ -61,9 +67,9 @@ pub fn deflated_default_definitions() -> FontDefinitions {
     }
     let stack = |names: &[&str]| -> Vec<String> { names.iter().filter(|n| fonts.font_data.contains_key(**n)).map(|n| (*n).to_owned()).collect() };
     // egui 0.37's family order: egui-icons last, as a fallback.
-    let monospace = stack(&["Hack", "Ubuntu-Light", "egui-icons"]);
-    let proportional = stack(&["Inter-Regular", "Ubuntu-Light", "egui-icons"]);
-    let semibold = stack(&["Inter-SemiBold", "Ubuntu-Light", "egui-icons"]);
+    let monospace = stack(&["Hack", "Ubuntu-Light", "InterKeys-Regular", "egui-icons"]);
+    let proportional = stack(&["Inter-Regular", "InterKeys-Regular", "Ubuntu-Light", "egui-icons"]);
+    let semibold = stack(&["Inter-SemiBold", "InterKeys-SemiBold", "Ubuntu-Light", "egui-icons"]);
     fonts.families.insert(FontFamily::Monospace, monospace);
     fonts.families.insert(FontFamily::Proportional, proportional);
     fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), semibold);
