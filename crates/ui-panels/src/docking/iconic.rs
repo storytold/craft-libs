@@ -563,7 +563,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         }
         let style = &cx.style;
         for (_, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
-            style.grip.paint(ui, strip.center());
+            style.grip.paint_in(ui, *strip);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
         // edges are the window's.

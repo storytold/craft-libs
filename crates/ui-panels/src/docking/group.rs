@@ -63,21 +63,31 @@ impl GripMarks {
         }
     }
 
+    /// Paints the row in the grip strip `strip`: centred across it, and [`GRIP_ABOVE`] below its middle, so the strip
+    /// keeps that much more room above the marks than below them.
+    pub(super) fn paint_in(&self, ui: &PaintUi<'_>, strip: Rect) {
+        self.paint(ui, strip.center() + Vec2::new(0.0, GRIP_ABOVE / 2.0));
+    }
+
     /// Paints the row centred on `centre`.
-    pub(super) fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
+    fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
         let GripShape { count, width, gap, .. } = self.shape;
         let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(width) };
         ui.draw().grip_ticks(&look, centre, count.max(1), gap, self.height());
     }
 }
 
+/// The room a grip strip keeps above its marks beyond `space.gap.tight`, in points, in every theme: the marks stand a
+/// little below the strip's middle, clear of the column bar or icon group above (photocraft#16426).
+const GRIP_ABOVE: f32 = 2.0;
+
 /// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
-/// tall enough that the theme's marks keep `space.gap.tight` above and below them, so they never touch the strip's
-/// edge (photocraft#16426).
+/// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
+/// they never touch the strip's edge (photocraft#16426).
 pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
     let GripShape { mark, length, width, .. } = tokens.shape.grip;
     let marks = if mark == GripMark::Ticks { length } else { width };
-    tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight)
+    tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
 }
 
 /// What a group grip reports: its response, the second press of a double click and whether it started a group
@@ -162,7 +172,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if self.ticks {
-            cx.style.marks.paint(ui, cx.rect.center());
+            cx.style.marks.paint_in(ui, cx.rect);
         }
     }
 

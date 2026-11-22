@@ -464,7 +464,10 @@ pub(crate) fn assert_grip_ticks(
     assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < 0.01), "{what}: {} points apart: {ticks:?}", shape.gap);
     let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
     assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
-    assert!((run.center().y - strip.center().y).abs() <= 0.5, "{what}: centred in the strip's height: {run:?} in {strip:?}");
+    assert!(
+        (run.center().y - (strip.center().y + 1.0)).abs() <= 0.5,
+        "{what}: a point below the strip's middle, keeping 2 points more above: {run:?} in {strip:?}"
+    );
     let [r, g, b, a] = grip.0;
     assert_eq!(ink, egui::Color32::from_rgba_unmultiplied(r, g, b, a), "{what}: the ticks are in the theme's line.grip {grip:?}");
     assert_ne!(grip.0[..3], panel.0[..3], "{what}: the grip ink {grip:?} stands apart from the panel {panel:?}");
@@ -497,8 +500,8 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
         let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
         assert!(
-            run.top() - strip.top() >= tight - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
-            "group {group}: the marks keep space.gap.tight ({tight}) off the strip's edges: {run:?} in {strip:?}"
+            run.top() - strip.top() >= tight + 2.0 - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
+            "group {group}: the marks keep space.gap.tight ({tight}) and 2 points more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
         );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
