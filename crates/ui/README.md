@@ -648,8 +648,10 @@ let opening = |e: &egui::Event| {
 // offered as the opening key.
 if !ring.is_open(ctx) && !ctx.text_edit_focused() && ctx.input(|i| i.events.iter().any(opening)) {
     ctx.input_mut(|i| i.events.retain(|e| !opening(e)));
-    // The ring ignores the key's repeats and acts on its release.
-    ring.open_held_key(ctx, ctx.pointer_latest_pos().unwrap_or_default(), shortcut.logical_key);
+    // The ring ignores the key's repeats and acts on its release. Like `opening`, it reads only a
+    // press with exactly the shortcut's modifiers as the opening press, so a plain Space earlier
+    // in the pass is not taken for a Ctrl+Space binding.
+    ring.open_held_key(ctx, ctx.pointer_latest_pos().unwrap_or_default(), shortcut);
 }
 if let Some(RadialEvent::Picked(id)) = ring.show(ctx, &items, &labels) {
     run_command(&id); // one undo step, like a menu pick

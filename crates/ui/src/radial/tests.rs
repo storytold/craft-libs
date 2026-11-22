@@ -2,7 +2,7 @@
 //! events in an 800 by 600 pt window.
 
 use egui::accesskit::Role as AkRole;
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
+use egui::{Event, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 
 use super::*;
@@ -593,7 +593,7 @@ fn an_arrow_that_opens_the_ring_is_not_picked_on_release() {
         |ui, app: &mut App| {
             // Opened on any press, its repeats included, and not consumed.
             if ui.input(|i| i.key_pressed(Key::ArrowRight)) {
-                menu().open_held_key(ui.ctx(), MIDDLE, Key::ArrowRight);
+                menu().open_held_key(ui.ctx(), MIDDLE, KeyboardShortcut::new(Modifiers::NONE, Key::ArrowRight));
             }
             if let Some(event) = menu().show(ui.ctx(), &app.items, &RadialLabels::default()) {
                 app.events.push(event);
@@ -647,7 +647,7 @@ fn opened_by(opener: Key) -> Harness<'static, App> {
                 |i: &egui::InputState| i.events.iter().any(|e| matches!(e, Event::Key { key, pressed: true, repeat: false, .. } if *key == opener));
             if !menu().is_open(ui.ctx()) && ui.input(fresh) {
                 ui.input_mut(|i| i.consume_key(Modifiers::NONE, opener));
-                menu().open_held_key(ui.ctx(), MIDDLE, opener);
+                menu().open_held_key(ui.ctx(), MIDDLE, KeyboardShortcut::new(Modifiers::NONE, opener));
             }
             if let Some(event) = menu().show(ui.ctx(), &app.items, &RadialLabels::default()) {
                 app.events.push(event);
@@ -1620,7 +1620,7 @@ fn keys_before_the_opening_press_in_its_pass_still_reach_the_panels() {
             let fresh = |i: &egui::InputState| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
             if !menu().is_open(ui.ctx()) && ui.input(fresh) {
                 ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space));
-                menu().open_held_key(ui.ctx(), MIDDLE, Key::Space);
+                menu().open_held_key(ui.ctx(), MIDDLE, KeyboardShortcut::new(Modifiers::NONE, Key::Space));
             }
             if let Some(event) = menu().show(ui.ctx(), &app.items, &RadialLabels::default()) {
                 app.events.push(event);
@@ -1667,6 +1667,77 @@ fn a_key_equal_to_one_before_the_opening_press_and_one_after_counts_as_after() {
     assert_eq!(processed_before(&raw, &[press(Key::Z)], 1), 0);
     assert_eq!(processed_before(&raw, &[press(Key::Z), press(Key::Z)], 1), 1);
     assert_eq!(processed_before(&raw, &raw, 2), 2);
+}
+
+/// A window whose ring opens on Ctrl+Space, taken as the README shows. `later_keys` counts the
+/// presses of Delete a panel drawn after the ring saw.
+fn opened_by_ctrl_space() -> Harness<'static, App> {
+    let shortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::Space);
+    let opening = move |e: &Event| {
+        matches!(e, Event::Key { key, pressed: true, repeat: false, modifiers, .. }
+            if *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers))
+    };
+    Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        move |ui, app: &mut App| {
+            if !menu().is_open(ui.ctx()) && ui.input(|i| i.events.iter().any(opening)) {
+                ui.input_mut(|i| i.events.retain(|e| !opening(e)));
+                menu().open_held_key(ui.ctx(), MIDDLE, shortcut);
+            }
+            if let Some(event) = menu().show(ui.ctx(), &app.items, &RadialLabels::default()) {
+                app.events.push(event);
+            }
+            let delete = |e: &&Event| matches!(e, Event::Key { key: Key::Delete, pressed: true, .. });
+            app.later_keys += ui.input(|i| i.events.iter().filter(delete).count() + i.raw.events.iter().filter(delete).count());
+        },
+        app(items(8)),
+    )
+}
+
+fn key_event(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
+    Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }
+}
+
+#[test]
+fn a_press_of_the_opening_key_without_its_modifiers_before_the_shortcut_is_not_the_opening_press() {
+    let key = key_event;
+    // A plain Space and a Ctrl+Shift+Space before Ctrl+Space in the pass that opens the ring: the
+    // Delete between them came before the ring existed.
+    let mut h = opened_by_ctrl_space();
+    for e in [
+        key(Key::Space, true, Modifiers::NONE),
+        key(Key::Space, false, Modifiers::NONE),
+        key(Key::Space, true, Modifiers::CTRL | Modifiers::SHIFT),
+        key(Key::Space, false, Modifiers::CTRL | Modifiers::SHIFT),
+        key(Key::Delete, true, Modifiers::NONE),
+        key(Key::Space, true, Modifiers::CTRL),
+    ] {
+        h.input_mut().events.push(e);
+    }
+    h.step();
+    assert!(menu().is_open(&h.ctx));
+    assert_eq!(h.state().later_keys, 2, "the Delete before Ctrl+Space, in both lists");
+}
+
+#[test]
+fn a_press_of_the_opening_key_without_its_modifiers_after_the_shortcut_is_not_the_opening_press() {
+    let key = key_event;
+    // A plain Space after Ctrl+Space: the flick is aimed from where the pointer was at Ctrl+Space,
+    // and Space going up after Ctrl+Space ends the hold.
+    let mut h = opened_by_ctrl_space();
+    h.input_mut().events.push(Event::PointerMoved(MIDDLE));
+    h.step();
+    for e in [
+        key(Key::Space, true, Modifiers::CTRL),
+        Event::PointerMoved(MIDDLE + vec2(0.0, RADIUS * 3.0)),
+        key(Key::Space, false, Modifiers::CTRL),
+        key(Key::Space, true, Modifiers::NONE),
+    ] {
+        h.input_mut().events.push(e);
+    }
+    h.step();
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("lock".into())], "the flick down from Ctrl+Space picks Lock");
+    assert!(!menu().is_open(&h.ctx));
 }
 
 #[test]

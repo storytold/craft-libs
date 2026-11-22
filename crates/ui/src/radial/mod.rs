@@ -23,8 +23,8 @@
 use std::f32::consts::{PI, TAU};
 
 use egui::{
-    Align2, Area, Context, Event, EventFilter, FocusDirection, FontId, Id, ImageSource, Key, Modifiers, Order, Pos2, Rect, Response, Role, Sense,
-    TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, vec2,
+    Align2, Area, Context, Event, EventFilter, FocusDirection, FontId, Id, ImageSource, Key, KeyboardShortcut, Modifiers, Order, Pos2, Rect,
+    Response, Role, Sense, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, vec2,
 };
 
 #[cfg(test)]
@@ -299,6 +299,13 @@ fn arrow_step(e: &Event, at: usize, hold: Option<(Key, usize)>) -> Option<ArrowS
     }
 }
 
+/// `e` is a fresh press of `shortcut`: its key, not a repeat, with exactly its modifiers as
+/// [`Modifiers::matches_exact`] reads them.
+fn is_shortcut_press(e: &Event, shortcut: KeyboardShortcut) -> bool {
+    matches!(e, Event::Key { key, pressed: true, repeat: false, modifiers, .. }
+        if *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers))
+}
+
 /// The angle of `direction` in radians clockwise from straight up, in `0..TAU`.
 fn angle_of(direction: Vec2) -> f32 {
     let angle = direction.x.atan2(-direction.y);
@@ -447,9 +454,10 @@ struct State {
     at: Pos2,
     /// The opening key is still down: releasing it over an item picks that item.
     held: bool,
-    /// The key that opened the ring, if the app named one. While `held`, its repeats are
-    /// ignored, and its release ends the hold.
-    opener: Option<Key>,
+    /// The shortcut that opened the ring, if the app named one. In the opening pass, only a press
+    /// of its key with exactly its modifiers is an opening press. While `held`, the key's repeats are
+    /// ignored, and its release, with any modifiers, ends the hold.
+    opener: Option<KeyboardShortcut>,
     /// The pointer button whose press in the opening pass held the ring open, if one did. A
     /// release reported by the app picks from where that button went up in the same pass.
     button: Option<egui::PointerButton>,
@@ -615,26 +623,28 @@ impl RadialMenu {
         self.open_with(ctx, at, held, None);
     }
 
-    /// Opens the ring around `at` from `key`, which is still down. Until it goes up, the ring
-    /// ignores its repeats, and its release does what [`Self::release`] does.
-    pub fn open_held_key(&self, ctx: &Context, at: Pos2, key: Key) {
-        self.open_with(ctx, at, true, Some(key));
+    /// Opens the ring around `at` from a fresh press of `shortcut` with exactly its modifiers,
+    /// whose key is still down. In this pass the ring reads only such a press as the opening press,
+    /// as [`Modifiers::matches_exact`] reads them, so open it on the same test. Until the key goes
+    /// up, the ring ignores its repeats, and its release does what [`Self::release`] does.
+    pub fn open_held_key(&self, ctx: &Context, at: Pos2, shortcut: KeyboardShortcut) {
+        self.open_with(ctx, at, true, Some(shortcut));
     }
 
-    fn open_with(&self, ctx: &Context, at: Pos2, held: bool, opener: Option<Key>) {
+    fn open_with(&self, ctx: &Context, at: Pos2, held: bool, opener: Option<KeyboardShortcut>) {
         if self.is_open(ctx) {
             return;
         }
         let restore = ctx.memory(|m| m.focused()).filter(|id| !self.owns(*id));
         let pass_start = self.pass_start_pointer(ctx);
         let mut button = None;
-        // With a named key, the gesture starts where the pointer was at that key's press in this
-        // pass: its last move before the press, or where it was when the pass began. A held ring
-        // opened by [`Self::open`] starts at the press, among the buttons pressed in this pass
-        // that are still down, nearest `at`, or else where the pointer is.
+        // With a named shortcut, the gesture starts where the pointer was at its last press in
+        // this pass: the pointer's last move before the press, or where it was when the pass
+        // began. A held ring opened by [`Self::open`] starts at the press, among the buttons
+        // pressed in this pass that are still down, nearest `at`, or else where the pointer is.
         let pointer_at_open = match opener {
-            Some(key) => ctx.input(|i| {
-                let press = i.raw.events.iter().rposition(|e| matches!(e, Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
+            Some(shortcut) => ctx.input(|i| {
+                let press = i.raw.events.iter().rposition(|e| is_shortcut_press(e, shortcut));
                 let before = press.map_or(&[][..], |at| &i.raw.events[..at]);
                 let moved = before.iter().rev().find_map(|e| match e {
                     Event::PointerMoved(p) | Event::PointerButton { pos: p, .. } => Some(Some(*p)),
@@ -798,14 +808,14 @@ impl RadialMenu {
         // The widgets an assistive technology may still act on while the ring is open.
         let ring_nodes: Vec<egui::accesskit::NodeId> = stops.iter().map(Id::accesskit_id).collect();
         let opening_pass = ctx.cumulative_pass_nr() == state.opened_pass;
-        // In the opening pass, the first and the last press of the key or button that opened the
-        // ring, among the raw events. Input before the first came before the ring existed: the
-        // ring does not read it and leaves it for the app. The hold starts at the last. Input
-        // between two such presses goes to the ring, since the ring cannot tell which press the
-        // app opened it on.
+        // In the opening pass, the first and the last press of the shortcut or button that opened
+        // the ring, among the raw events. A press of the shortcut's key with other modifiers is
+        // not one of them. Input before the first came before the ring existed: the ring does not
+        // read it and leaves it for the app. The hold starts at the last. Input between two such
+        // presses goes to the ring, since the ring cannot tell which press the app opened it on.
         let open_presses = ctx.input(|i| {
             let is_open_press = |e: &Event| match (state.opener, state.button) {
-                (Some(key), _) => matches!(e, Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key),
+                (Some(shortcut), _) => is_shortcut_press(e, shortcut),
                 (None, Some(button)) => matches!(e, Event::PointerButton { button: b, pressed: true, .. } if *b == button),
                 (None, None) => false,
             };
@@ -838,7 +848,7 @@ impl RadialMenu {
         }
         // The opening key's hold, and where it ends among this pass's events: at a release of that
         // key, but in the opening pass only one after the press that opened the ring.
-        let hold_key = state.opener.filter(|_| state.held);
+        let hold_key = state.opener.map(|shortcut| shortcut.logical_key).filter(|_| state.held);
         let mut hold_ends = None;
         // Where the pointer was when the opening key went up: its last move before the release,
         // or where it was at the end of the last pass. `None` when the app reported the release.
