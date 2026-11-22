@@ -106,6 +106,18 @@ impl DictionarySource {
     }
 }
 
+/// A load's diagnostic is published only after its cache accepts that load.
+pub(crate) type LoadDiagnostic = Option<(DictionarySource, Result<(), String>)>;
+
+pub(crate) fn publish_load_diagnostic(key: &str, diagnostic: LoadDiagnostic) {
+    match diagnostic {
+        Some((source, result)) => {
+            let _ = source.note_load(key, result);
+        }
+        None => clear_load_error(key),
+    }
+}
+
 /// Source-aware errors are strings; the existing public file-error API never invents a path.
 static MEMORY_LOAD_ERRORS: RwLock<Vec<(String, String)>> = RwLock::new(Vec::new());
 
@@ -162,6 +174,16 @@ pub(crate) fn dictionary_dir_for_test() -> Option<PathBuf> {
     EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
+#[cfg(test)]
+static ISOLATED_SEARCH_FOR_TEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Restrict a fixture to the explicitly selected dictionary folder. Callers hold
+/// `crate::hold_dictionary_tests` and restore the returned setting before reloading.
+#[cfg(test)]
+pub(crate) fn set_isolated_search_for_test(isolated: bool) -> bool {
+    ISOLATED_SEARCH_FOR_TEST.swap(isolated, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
 /// IDs are per dictionary — Polish is `dict-pl`, Brazilian Portuguese `dict-pt-BR` — so both
 /// the primary-language folder and the dashed full name are tried.
@@ -190,6 +212,10 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut system: Vec<PathBuf> = Vec::new();
     if let Some(d) = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
         dirs.push(d);
+    }
+    #[cfg(test)]
+    if ISOLATED_SEARCH_FOR_TEST.load(std::sync::atomic::Ordering::Relaxed) {
+        return (dirs, system);
     }
     if cfg!(target_arch = "wasm32") {
         return (dirs, system);

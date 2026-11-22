@@ -163,10 +163,12 @@ assert!(remove_from_memory("qaa"));
 
 A registration atomically replaces the memory entry for its locale. A memory entry overrides the
 same-locale disk pack **as a whole**: spelling or patterns missing from it are not borrowed from that
-disk pack. Other locale/script fallback rules stay the same. The dictionaries folder still wins for
-spelling. English keeps its existing order: its user dictionary folder first, embedded SCOWL when
-present, then the installed-pack tier before system dictionaries and the core list. A memory pack
-and a disk pack occupy that same installed tier; a memory English pack does not bypass SCOWL.
+disk pack. Other locale/script fallback rules stay the same. For each candidate locale, the
+spelling order is dictionaries folder, installed pack, then system dictionaries. English's own
+user-folder candidates precede its embedded SCOWL dictionary; a memory pack does not bypass SCOWL.
+Without SCOWL, Australian English tries every en-AU candidate, including system dictionaries,
+before trying en-GB as a fallback. A British memory pack therefore does not outrank an Australian
+system dictionary. Memory and disk packs share the installed tier for the same candidate locale.
 
 `remove_from_memory` removes only the registered entry and reveals any same-locale disk pack.
 Unknown removal returns `false`. `reload` and `set_packs_dir`, including `set_packs_dir(None)`, retain
@@ -186,8 +188,11 @@ Registered memory inputs share a hard **256 MiB raw-input budget**. It counts th
 replacement and removal release the old entry's accounting. Retained vectors and names do not keep
 spare input capacity outside that accounting. Existing per-file limits still apply: manifest 1 MiB,
 licence 4 MiB per file, and dictionary/pattern 64 MiB per file, with at most 64 licence files per pack.
-This raw-input limit is separate from the existing estimated compiled-dictionary and pattern-cache
-budgets, their eviction/pinning rules and in-flight values. It is not a total process-memory/RSS bound.
+The disk scan and memory registrations have independent limits of 1,024 packs each, not a combined
+1,024-pack cap. Registering a memory pack does not evict unrelated disk packs. The same-locale
+whole-pack override described above still applies. The 256 MiB raw-input cap covers memory entries,
+separately from the existing estimated compiled-dictionary and pattern-cache budgets, their
+eviction/pinning rules and in-flight values. It is not a total process-memory/RSS bound.
 
 Layout of `<packs folder>/<locale>/` (the archive root), the folder named by the lowercase BCP 47
 locale (`nl`, `pt-br`, `sr-latn`):
@@ -237,16 +242,17 @@ English spelling uses the first of these that is there; `english_source(lang)` s
    between two lower-case words of three letters or more, after every one-word candidate, and no
    name or abbreviation (`Col`) for a lower-case word. With SCOWL embedded the system locations aren't
    searched.
-3. **Installed English pack:** this tier is used when the English has no embedded SCOWL. A same-locale memory entry replaces its disk pack; existing dialect selection is retained and the dictionaries folder still takes priority.
-4. **System Hunspell:** the English's own pair in the system locations. Never another English's:
-   an `en_US` dictionary would mark British spellings, so en-GB and en-CA without their own use
-   the built-in list, which has both spellings. Each name is looked for in every folder before the
-   next name; a file that can't be read is skipped for the next name or folder, up to the first eight
-   candidates (the rest aren't tried); one file is read once for every English that uses it. `COMPOUNDRULE`, `ONLYINCOMPOUND` and `COMPOUNDMIN`
-   (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`…) is ignored for
-   English rather than refused; `OCONV` writes suggestions as the dictionary says (`don’t`), as for
-   every language. None on the web.
-5. **Built-in list:** `data/en-words.dic`, the whole Moby word list (about 165,000 words, 344 KB
+3. **Without embedded SCOWL:** each candidate locale is searched in dictionaries-folder,
+   installed-pack (same-locale memory before disk), then system order. Australian English first
+   tries all en-AU candidates, including its system dictionaries, and only then tries en-GB as a
+   fallback. Thus an Australian system dictionary can precede a British memory pack. American,
+   British and Canadian English do not borrow another English's dictionary: without their own
+   they use the built-in list, which has both spellings. Files that cannot be read are skipped,
+   up to the first eight candidates; a shared file is read only once. `COMPOUNDRULE`, `ONLYINCOMPOUND`
+   and `COMPOUNDMIN` (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`.) is
+   ignored for English rather than refused, and `OCONV` writes suggestions as the dictionary says
+   (`don't`), as for every language. System locations are not searched on the web.
+4. **Built-in list:** `data/en-words.dic`, the whole Moby word list (about 165,000 words, 344 KB
    compressed, words only) built into the crate, with `data/en-extra.txt` (WordCraft's supplement
    of modern words, a copy of craft-i18n's) and the inflection rules. A word it doesn't know is
    misspelled. Suggestions are the words one edit away (swap, missing, added or changed letter),

@@ -308,7 +308,10 @@ fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> 
     if let (Some(aff), Some(dic)) = (&files.spelling_aff, &files.spelling_dic) {
         let (a, d) = crate::hunspell::decode(aff, dic)?;
         if info.locale.split('-').next() == Some("en") {
-            crate::affix::AffixDict::from_hunspell_english(&a, &d, &[])?;
+            let dict = crate::affix::AffixDict::from_hunspell_english(&a, &d, &[])?;
+            if dict.is_empty() {
+                return Err(format!("{}: no words", info.locale));
+            }
         } else {
             crate::affix::AffixDict::from_hunspell(&a, &d, &[])?;
         }
@@ -438,8 +441,8 @@ fn scan() -> Arc<Scan> {
     };
     let mut found = dir.as_deref().map(scan_dir).unwrap_or_default();
     // Explicit memory registration replaces a whole disk pack, never mixes its individual files.
+    // Disk scanning and memory registration have independent count caps.
     found.packs.retain(|(p, _)| !memory.contains_key(&p.locale));
-    found.packs.truncate(MAX_PACKS - memory.len());
     for pack in memory.values() {
         let holds = Holds { spelling: pack.files.spelling_aff.is_some(), hyphenation: pack.files.hyphenation.is_some() };
         found.packs.push((pack.info.clone(), holds));

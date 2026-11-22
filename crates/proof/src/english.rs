@@ -191,6 +191,9 @@ fn keep(state: &RwLock<State>, i: usize, reloads: u64, loaded: Loaded, note: imp
             _ => loaded,
         };
     }
+    if let Some(Some(found)) = s.slots.get(i) {
+        return found.clone();
+    }
     note();
     let loaded = loaded.map(|(d, dic)| {
         // Another English may have read the same file meanwhile: share its copy.
@@ -751,6 +754,10 @@ mod tests {
         let now = state.read().unwrap().reloads;
         let a = keep(&state, slot(ProofLang::En), now, Some((dict(), file.clone())), || noted.set(true)).unwrap();
         assert!(noted.get());
+        noted.set(false);
+        let losing = keep(&state, slot(ProofLang::En), now, None, || noted.set(true)).unwrap();
+        assert!(Arc::ptr_eq(&a.0, &losing.0), "the accepted dictionary wins over a later completion");
+        assert!(!noted.get(), "a losing load cannot change the accepted load's diagnostic");
         let b = keep(&state, slot(ProofLang::EnGb), now, Some((dict(), file.clone())), || {}).unwrap();
         assert!(Arc::ptr_eq(&a.0, &b.0), "one copy of a file for every English that reads it");
         assert!(already_read(&state, &file).is_some());

@@ -122,35 +122,42 @@ impl<D: Dictionary> DictSlot<D> {
             }
             s.reloads
         };
-        self.keep(reloads, Arc::new(self.load_installed()))
+        let (loaded, diagnostic) = self.load_installed();
+        self.keep(reloads, Arc::new(loaded), || crate::hunspell::publish_load_diagnostic(self.name(), diagnostic))
     }
 
     /// Keep a dictionary loaded after `reloads` reloads. If the folder was reloaded since, the
     /// load may have read the old folder: it serves this one check and the next one loads again.
-    fn keep(&self, reloads: u64, loaded: Arc<D>) -> Arc<D> {
+    fn keep(&self, reloads: u64, loaded: Arc<D>, note: impl FnOnce()) -> Arc<D> {
         let mut s = self.write();
         if s.reloads != reloads {
             return s.dict.clone().unwrap_or(loaded);
         }
-        // Another thread (or an install) may have filled it meanwhile: that one wins.
+        // Another thread (or an install) may have filled it meanwhile: that one wins,
+        // including its diagnostic.
+        if let Some(found) = &s.dict {
+            return found.clone();
+        }
+        note();
         s.dict.get_or_insert(loaded).clone()
     }
 
-    fn load_installed(&self) -> D {
+    fn load_installed(&self) -> (D, crate::hunspell::LoadDiagnostic) {
         let name = self.name();
         let Some(source) = crate::hunspell::source_candidates(self.names).into_iter().next() else {
-            crate::hunspell::clear_load_error(name);
             log::info!("{} spelling: no Hunspell {name} dictionary installed", self.english);
-            return D::default();
+            return (D::default(), None);
         };
         let loaded = match &source {
             crate::hunspell::DictionarySource::Files { aff, dic } => D::load(aff, dic),
             crate::hunspell::DictionarySource::Memory(_) => source.decoded().and_then(|(aff, dic)| D::parse(&aff, &dic)),
         };
-        source.note_load(name, loaded).unwrap_or_else(|e| {
+        let diagnostic = Some((source, loaded.as_ref().map(|_| ()).map_err(Clone::clone)));
+        let dict = loaded.unwrap_or_else(|e| {
             log::warn!("{} spelling: {e}", self.english);
             D::default()
-        })
+        });
+        (dict, diagnostic)
     }
 
     /// Use this dictionary from now on (Hunspell `.aff` and `.dic` text, decoded to UTF-8), for
@@ -213,10 +220,54 @@ mod tests {
         let slot: DictSlot<AffixDict> = DictSlot::new(&["zz_SLOT_RELOAD_TEST"], "Test");
         let before = slot.read().reloads;
         slot.reload();
-        let _ = slot.keep(before, Arc::new(AffixDict::default()));
+        let _ = slot.keep(before, Arc::new(AffixDict::default()), || {});
         assert!(slot.read().dict.is_none(), "the next check loads from the new folder");
         let now = slot.read().reloads;
-        let _ = slot.keep(now, Arc::new(AffixDict::default()));
+        let _ = slot.keep(now, Arc::new(AffixDict::default()), || {});
         assert!(slot.read().dict.is_some(), "a load since the reload is kept");
+    }
+
+    /// Rejected in-flight loads cannot erase an accepted newer load's error.
+    #[test]
+    fn memory_pack_load_errors_belong_to_the_accepted_slot_result() {
+        crate::hold_dictionary_tests();
+        let slot: DictSlot<AffixDict> = DictSlot::new(&["zz_MEMORY_PACK_DIAGNOSTIC_TEST"], "Test");
+        let source = crate::hunspell::DictionarySource::Files {
+            aff: PathBuf::from("memory-pack-diagnostic.aff"),
+            dic: PathBuf::from("memory-pack-diagnostic.dic"),
+        }; // Diagnostic labels only: this interleaving control performs no file reads.
+        let diagnostic = |error: Option<&str>| Some((source.clone(), error.map_or(Ok(()), |e| Err(e.to_string()))));
+        let note = |value| crate::hunspell::publish_load_diagnostic(slot.name(), value);
+        let empty = || Arc::new(AffixDict::default());
+        let before = slot.read().reloads;
+        slot.reload();
+        let now = slot.read().reloads;
+        slot.keep(now, empty(), || note(diagnostic(Some("current load failed"))));
+        assert!(crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"));
+        slot.keep(before, empty(), || note(None));
+        assert!(
+            crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"),
+            "a stale missing load cannot clear it"
+        );
+        slot.keep(now, empty(), || note(diagnostic(None)));
+        assert!(
+            crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"),
+            "a losing success cannot clear it"
+        );
+        slot.keep(now, empty(), || note(diagnostic(Some("losing load failed"))));
+        assert!(
+            crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"),
+            "a losing error cannot replace it"
+        );
+        slot.reload();
+        let now = slot.read().reloads;
+        let word = Arc::new(AffixDict::from_hunspell("", "1\nacceptedword\n", &[]).unwrap());
+        assert!(slot.keep(now, word, || note(diagnostic(None))).check("acceptedword"));
+        assert!(crate::hunspell::source_load_error(slot.name()).is_none(), "an accepted success clears the error");
+        slot.reload();
+        let now = slot.read().reloads;
+        crate::hunspell::publish_load_diagnostic(slot.name(), diagnostic(Some("previous load failed")));
+        slot.keep(now, empty(), || note(None));
+        assert!(crate::hunspell::source_load_error(slot.name()).is_none(), "an accepted missing result clears the error");
     }
 }

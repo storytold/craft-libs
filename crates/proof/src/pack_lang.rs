@@ -265,12 +265,13 @@ fn get_with_scripts(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, Arc
         }
         c.reloads
     };
-    let (dict, file, bytes) = load(locale);
+    let (dict, file, bytes, diagnostic) = load(locale);
     let scripts = scripts(&dict);
     let mut c = CACHE.write().unwrap_or_else(PoisonError::into_inner);
     if c.reloads != reloads || c.loaded.iter().any(|l| l.locale == locale) || c.missing.contains(&locale) {
         return (dict, file, scripts);
     }
+    crate::hunspell::publish_load_diagnostic(names(locale).first().map_or("", String::as_str), diagnostic);
     if dict.is_empty() {
         remember_missing(&mut c.missing, locale);
         return (dict, file, scripts);
@@ -293,20 +294,21 @@ fn get_with_scripts(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, Arc
 }
 
 /// Load `locale`'s dictionary, with its estimated memory.
-fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
+fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64, crate::hunspell::LoadDiagnostic) {
     let names = names(locale);
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let key = names.first().map_or("", String::as_str);
     let Some(source) = crate::hunspell::source_candidates(&refs).into_iter().next() else {
-        crate::hunspell::clear_load_error(key);
-        return (Arc::default(), None, 0);
+        return (Arc::default(), None, 0, None);
     };
     let bytes = source.raw_spelling_bytes().saturating_mul(BYTES_PER_FILE_BYTE).max(1);
-    match source.note_load(key, source.load()) {
-        Ok(d) => (Arc::new(d), source.file(), bytes),
+    let loaded = source.load();
+    let file = source.file();
+    let diagnostic = Some((source, loaded.as_ref().map(|_| ()).map_err(Clone::clone)));
+    match loaded {
+        Ok(d) => (Arc::new(d), file, bytes, diagnostic),
         Err(e) => {
             log::warn!("{locale} spelling: {e}");
-            (Arc::default(), None, 0)
+            (Arc::default(), None, 0, diagnostic)
         }
     }
 }

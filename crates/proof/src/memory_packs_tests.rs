@@ -27,6 +27,7 @@ struct Fixture {
     disk_packs: PathBuf,
     old_dictionaries: Option<PathBuf>,
     old_packs: Option<PathBuf>,
+    old_isolated: bool,
     locales: Vec<String>,
 }
 
@@ -39,16 +40,17 @@ impl Fixture {
         std::fs::create_dir(&root).unwrap();
         let dictionaries = root.join("dictionaries");
         let disk_packs = root.join("packs");
-        std::fs::create_dir(&dictionaries).unwrap();
-        std::fs::create_dir(&disk_packs).unwrap();
         let out = Self {
             root,
             dictionaries,
             disk_packs,
             old_dictionaries: crate::hunspell::dictionary_dir_for_test(),
             old_packs: packs::packs_dir(),
+            old_isolated: crate::hunspell::set_isolated_search_for_test(true),
             locales: Vec::new(),
         };
+        std::fs::create_dir(&out.dictionaries).unwrap();
+        std::fs::create_dir(&out.disk_packs).unwrap();
         crate::set_dictionaries_folder(Some(out.dictionaries.clone()));
         packs::set_packs_dir(Some(out.disk_packs.clone()));
         out
@@ -88,6 +90,7 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        crate::hunspell::set_isolated_search_for_test(self.old_isolated);
         for locale in &self.locales {
             packs::remove_from_memory(locale);
         }
@@ -344,6 +347,23 @@ fn memory_pack_failed_registration_preserves_the_previous_pack() {
         assert!(crate::is_correct_in("xepnuq", lang), "old loaded dictionary remains: {label}");
         assert!(!crate::is_correct_in("vornel", lang), "failed replacement was not published: {label}");
     }
+    // A syntactically valid but wordless English pair must not replace a working pack.
+    f.add(files("en-us", "xepnuq"));
+    let english_before = observe(ProofLang::En, "xepnuq", "xepnuqs", "xepnqu");
+    let source_before = crate::english_source(ProofLang::En);
+    let installed_before = packs::installed();
+    let licences_before = packs::licence_texts();
+    let errors_before = packs::load_errors();
+    let generation = crate::dictionary_generation();
+    let mut empty = files("en-us", "vornel");
+    empty.spelling_dic = Some(b"0\n".to_vec());
+    assert!(packs::add_from_memory(empty).is_err(), "an empty English dictionary is not a valid replacement");
+    assert_eq!(crate::dictionary_generation(), generation);
+    assert_eq!(packs::installed(), installed_before);
+    assert_eq!(packs::licence_texts(), licences_before);
+    assert_eq!(packs::load_errors(), errors_before);
+    assert_eq!(crate::english_source(ProofLang::En), source_before);
+    assert_eq!(observe(ProofLang::En, "xepnuq", "xepnuqs", "xepnqu"), english_before, "the loaded English source is unchanged");
 }
 
 fn raw_bytes(input: &PackFiles) -> usize {

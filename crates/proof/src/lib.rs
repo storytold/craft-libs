@@ -377,12 +377,13 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
     hunspell::source_load_error(language(lang)?.slot.name())
 }
 
-/// Where the spelling of an English `lang` comes from now (`None` for other languages), in this
-/// order: a Hunspell dictionary of its own (`en_US`, `en_GB`, `en_CA`) in the dictionaries
-/// folder, then embedded SCOWL when present. Without embedded SCOWL, installed Language packs
-/// (including registered memory packs) precede system Hunspell and the built-in Moby list.
-/// Another English's dictionary is never used. Reads the
-/// Hunspell dictionary once (it is cached afterwards).
+/// Where the spelling of an English `lang` comes from now (`None` for other languages).
+/// Its own dictionaries-folder sources precede its embedded SCOWL dictionary. Without SCOWL,
+/// each candidate locale is tried in dictionaries-folder, installed-pack (memory before disk)
+/// and system order, before the built-in Moby list. Australian English exhausts its en-AU
+/// candidates, including system dictionaries, before trying en-GB as a fallback; an Australian
+/// system dictionary can therefore precede a British memory pack. The other Englishes do not
+/// borrow another dialect's dictionary. Reads the dictionary once (it is cached afterwards).
 pub fn english_source(lang: ProofLang) -> Option<EnglishSource> {
     lang.is_english().then(|| english::source(lang))
 }
@@ -2672,6 +2673,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn english_reads_scowl() {
+        crate::hold_dictionary_tests();
         for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
             let d = scowl::dict(l).unwrap_or_else(|| panic!("{l:?}: {:?}", scowl::load_error(l)));
             assert!(d.len() > 40_000, "{l:?}: {} stems", d.len());
@@ -2710,6 +2712,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn english_suggestions_skip_junk_splits_and_names() {
+        crate::hold_dictionary_tests();
         for (w, l) in [
             ("colour", ProofLang::En),
             ("theatr", ProofLang::En),
@@ -2737,6 +2740,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn dialect_policy_widens_scowl() {
+        crate::hold_dictionary_tests();
         let gb = scowl::dict(ProofLang::EnGb).unwrap();
         let us = scowl::dict(ProofLang::En).unwrap();
         assert!(!gb.check("organize") && gb.check("organise") && !us.check("judgement"), "SCOWL alone is stricter");
@@ -2752,6 +2756,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn scowl_dialects_dont_cross() {
+        crate::hold_dictionary_tests();
         let langs = [
             (ProofLang::En, crate::data::EN_US_SPELLING),
             (ProofLang::EnGb, crate::data::EN_GB_SPELLING),
@@ -2797,6 +2802,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn british_ize_needs_a_real_ize_word() {
+        crate::hold_dictionary_tests();
         let wrong = [
             "wize", "rize", "noize", "dizease", "advize", "rizing", "praize", "raize", "poize", "wizer", "surprize", "arize", "revize", "devize",
             "mizer", "concize", "precize", "exercize", "chaize",
