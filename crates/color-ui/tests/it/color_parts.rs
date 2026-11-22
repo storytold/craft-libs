@@ -516,3 +516,54 @@ fn color_hud_picks_at_an_injected_move() {
     fixture.run_injected().idle(2);
     assert_eq!(count(|event| matches!(event, EditEvent::Commit { .. })), 1, "the injected release commits");
 }
+
+/// A drag on a brightness disc whose host keeps 8-bit colours runs to its release: the host's colour, read back, is
+/// what the drag made of the colour before, not an outside change that cancels it.
+#[trial]
+fn a_brightness_disc_drag_the_host_applies_in_8_bit_colours_runs_to_its_release() {
+    let eight_bit = |color: Srgba| {
+        let [r, g, b, _] = color.to_rgba().0;
+        Srgba::rgb(f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0)
+    };
+    let colours = Rc::new(RefCell::new(vec![eight_bit(Srgba::rgb(0.9, 0.3, 0.2)), Srgba::rgb(0.2, 0.5, 0.8)]));
+    let (updates, ends) = (Rc::new(Cell::new(0)), Rc::new(RefCell::new(Vec::new())));
+    let (shown, u, e) = (colours.clone(), updates.clone(), ends.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let markers = shown.borrow().clone();
+        let out = ColorDisc::new("Harmony", &markers, Bind::kept()).radius(DiscRadius::Brightness).show(ui);
+        for event in out.edit.events.iter() {
+            let moved = match event {
+                EditEvent::Update { value, .. } => {
+                    u.set(u.get() + 1);
+                    value
+                }
+                EditEvent::Commit { after, .. } => {
+                    e.borrow_mut().push(None);
+                    after
+                }
+                EditEvent::Cancel { reason, .. } => {
+                    e.borrow_mut().push(Some(*reason));
+                    continue;
+                }
+                _ => continue,
+            };
+            let mut all = shown.borrow_mut();
+            let v = HsbModel.from_srgb(all[moved.marker]).values;
+            let hsb = [moved.hue, v[1], moved.radial * 100.0];
+            all[moved.marker] = eight_bit(HsbModel.to_srgb(&ModelValues::new("hsb", &hsb).values));
+        }
+    });
+    fixture.room(vec2(320.0, 240.0));
+    fixture.settle();
+    let from = fixture.by_label("Color 1").expect("the first marker").center();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    let steps = 20;
+    for step in 1..=steps {
+        fixture.frame(vec![craft_ui::testing::pointer::moved(from - vec2(3.0 * step as f32, 0.0))]);
+    }
+    fixture.frame(vec![craft_ui::testing::pointer::release(from - vec2(3.0 * steps as f32, 0.0))]);
+    fixture.settle();
+    assert!(updates.get() >= steps / 2, "the drag updated as it moved: {}", updates.get());
+    assert_eq!(*ends.borrow(), [None], "the drag commits, never cancelled");
+}

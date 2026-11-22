@@ -269,11 +269,7 @@ impl<'a> ColorDisc<'a> {
 
     /// Marker `index` as the host's colour places it: hue, saturation and brightness (0 to 1).
     fn hsb(&self, index: usize) -> [f32; 3] {
-        let values = self.markers.get(index).map_or([0.0; 3], |color| {
-            let v = HsbModel.from_srgb(*color).values;
-            [finite(v[0]), finite(v[1]), finite(v[2])]
-        });
-        [values[0], values[1] / 100.0, values[2] / 100.0]
+        self.markers.get(index).map_or([0.0; 3], |color| hsb_of(*color))
     }
 
     /// Marker `index` where the host has it: the radial channel is the one the radius shows.
@@ -286,10 +282,10 @@ impl<'a> ColorDisc<'a> {
         DiscMove::new(index, hue, radial)
     }
 
-    /// The HSB values (degrees, percents) `moved` stands for: its radial channel on the radius's axis, the other
-    /// channel the host's.
-    fn values_of(&self, moved: &DiscMove) -> [f32; 3] {
-        let [_, saturation, brightness] = self.hsb(moved.marker);
+    /// The HSB values (degrees, percents) `moved` makes of `color`: its radial channel on the radius's axis, the other
+    /// channel `color`'s.
+    fn values_on(&self, color: Srgba, moved: &DiscMove) -> [f32; 3] {
+        let [_, saturation, brightness] = hsb_of(color);
         match self.radius {
             DiscRadius::Saturation => [moved.hue, moved.radial * 100.0, brightness * 100.0],
             DiscRadius::Brightness => [moved.hue, saturation * 100.0, moved.radial * 100.0],
@@ -397,12 +393,16 @@ impl Component for ColorDisc<'_> {
         let grabbed = cx.memory::<Grab>().marker;
         self.grabbed = grabbed;
         let running = cx.gesture().is_some();
-        // A colour of the host's that changed and is not what the drag reported is an outside change.
+        // A colour of the host's that changed and is not what the drag reported makes of the colour before is an
+        // outside change. The channel the radius does not show comes from the colour before, as the host's own
+        // change keeps it: read back from an 8-bit colour, saturation drifts.
         if running && let Some(marker) = grabbed.filter(|marker| *marker < self.markers.len()) {
             let last = cx.memory::<Grab>().last.replace(self.markers[marker]);
-            if let Some(moved) = cx.value().filter(|moved| moved.marker == marker) {
-                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &self.values_of(moved)).values);
-                if last.is_some_and(|last| last != self.markers[marker]) && !echo.same_rgb8(self.markers[marker]) {
+            if let Some(moved) = cx.value().filter(|moved| moved.marker == marker)
+                && let Some(last) = last.filter(|last| *last != self.markers[marker])
+            {
+                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &self.values_on(last, moved)).values);
+                if !echo.same_rgb8(self.markers[marker]) {
                     cx.cancel(CancelReason::HostChanged);
                 }
             }
@@ -562,6 +562,12 @@ fn moved_to(base: DiscMove, center: Pos2, radius: f32, pos: Pos2) -> DiscMove {
         }
     }
     out
+}
+
+/// Hue, saturation and brightness (0 to 1) of `color`.
+fn hsb_of(color: Srgba) -> [f32; 3] {
+    let v = HsbModel.from_srgb(color).values;
+    [finite(v[0]), finite(v[1]) / 100.0, finite(v[2]) / 100.0]
 }
 
 /// The index of the least of `distances` that is within `reach`.
