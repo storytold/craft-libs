@@ -346,13 +346,44 @@ fn the_clip_mask_marks_the_colours_interpolated_from_clipped_samples() {
     assert_eq!(at(10, 8), highlight::CLIPPED_R, "the saturated red site");
     assert_eq!(at(4, 4), highlight::FROM_CLIPPED_G | (1 << highlight::MEASURED_SHIFT), "red beside saturated green");
     assert_eq!(at(11, 8), highlight::FROM_CLIPPED_R | (2 << highlight::MEASURED_SHIFT), "green beside saturated red");
-    assert_eq!(at(5, 6), 0, "an unclipped green site near the clipped green site");
+    assert_ne!(at(5, 6) & highlight::FROM_CLIPPED_G, 0, "clipped green can affect the other channels at this green site");
     assert_eq!(at(2, 8), 0, "a site away from both clipped samples");
     // An unclipped mosaic or an OpcodeList3 needs no mask.
     let clean = raw_of(w, h, &cfa, [1.0; 3], |_, _| [0.3; 3]);
     assert!(clean.develop_balanced_masked(Method::Ahd, DAYLIGHT, CLIP).unwrap().1.is_none());
     raw.opcodes.list3.push(Opcode::FixVignetteRadial { k: [0.0; 5], center: [0.5, 0.5] });
     assert!(raw.develop_balanced_masked(Method::Ahd, DAYLIGHT, CLIP).unwrap().1.is_none());
+}
+
+#[test]
+fn ppg_clip_mask_marks_same_colour_dependencies() {
+    let cfa = Cfa::bayer("RGGB").unwrap();
+    let wb = [1.0; 3];
+    let mut raw = raw_of(16, 12, &cfa, wb, |x, y| {
+        let level = match (x, y) {
+            (5, 4) | (6, 3) => 0.26,
+            (7, 4) => 0.35,
+            (8, 4) => 0.4,
+            (6, 5) => 0.49,
+            _ => 0.3,
+        };
+        [level; 3]
+    });
+    let clean = raw.develop(Method::Ppg).unwrap().get(6, 4);
+    if let RawData::F32(samples) = &mut raw.data {
+        samples[4 * raw.width + 4] = 1.0;
+    }
+    let (mut image, mask) = raw.develop_balanced_masked(Method::Ppg, wb, CLIP).unwrap();
+    let changed = image.get(6, 4);
+    assert!(changed[1] > clean[1] && changed.iter().all(|&v| v < CLIP));
+    let mask = mask.unwrap();
+    let entry = mask[4 * image.width + 6];
+    assert_ne!(entry & highlight::FROM_CLIPPED_R, 0, "the clipped red sample changed interpolated green");
+    assert_eq!(entry >> highlight::MEASURED_SHIFT, cfa.color_at(6, 4) + 1);
+    assert_eq!(mask[4 * image.width + 10], 0, "no clipped sample is within reach");
+    highlight::reconstruct_masked(&mut image, wb, CLIP, wb, &mask);
+    assert_eq!(image.get(6, 4)[0], clean[0], "reconstruction keeps measured red");
+    assert_ne!(image.get(6, 4)[1], changed[1], "reconstruction can use measured red to rebuild green");
 }
 
 #[test]

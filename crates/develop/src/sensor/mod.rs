@@ -299,15 +299,13 @@ fn clip_mask(raw: &RawImage, n: &Normalized, method: Method, clip: f32) -> Optio
         for (ox, bits) in out.iter_mut().enumerate() {
             let x = crop.x + ox;
             let colour = cfa.color_at(x, y);
-            let from = *bits & !FROM_CLIPPED_BITS[colour as usize];
-            *bits = if is_clipped(&n.data[y * w + x]) {
+            if is_clipped(&n.data[y * w + x]) {
                 // Keep the interpolated values around a clipped measurement. They can carry thin dark detail.
-                CLIPPED_BITS[colour as usize]
-            } else if from != 0 {
-                from | ((colour + 1) << highlight::MEASURED_SHIFT)
-            } else {
-                0
-            };
+                *bits = CLIPPED_BITS[colour as usize];
+            } else if *bits != 0 {
+                // A same-colour sample can affect the other channels through the green estimates.
+                *bits |= (colour + 1) << highlight::MEASURED_SHIFT;
+            }
         }
     });
     Some(mask)
