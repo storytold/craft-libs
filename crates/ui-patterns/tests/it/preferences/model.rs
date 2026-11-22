@@ -273,7 +273,8 @@ impl CustomSettings<MemoryPrefs> for TurnOff {
 fn a_removed_draft_value_applies_as_no_value() {
     let saved = MemoryPrefs { memory: Memory { percent: Some(70) } };
     let mut doc = SettingsDocument::new(saved).expect("serializes").custom(TurnOff);
-    let _ = egui::Context::default().run_ui(egui::RawInput::default(), |ui| doc.nested(ui));
+    let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| doc.nested(ui));
+    output.textures_delta.clear();
     doc.apply().expect("the draft fits the struct");
     let edits = doc.take_applied_edits().expect("applied");
     assert_eq!(edits, vec![("memory.percent".to_owned(), None)]);
