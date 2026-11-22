@@ -69,7 +69,7 @@ fn limits_are_respected() {
 }
 
 #[test]
-fn language_names_and_codes() {
+fn feature_config_language_names_and_codes() {
     for name in ["English", "English: USA", "english", "$ID/English: UK", "en", "en_US", "en-GB", "EN", "en-Latn-US"] {
         assert_eq!(Lang::for_language(name), Some(Lang::English), "{name}");
     }
@@ -108,7 +108,7 @@ fn language_names_and_codes() {
 
 #[cfg(feature = "all-languages")]
 #[test]
-fn every_language_is_available() {
+fn feature_config_every_language_is_available() {
     for &(name, code) in LANGUAGES {
         if code == *b"sk" && !cfg!(feature = "slovak-gpl") {
             continue;
@@ -122,7 +122,7 @@ fn every_language_is_available() {
 /// mark or next to a joiner.
 #[cfg(feature = "hindi")]
 #[test]
-fn indic_word_limits_span_viramas() {
+fn feature_config_indic_word_limits_span_viramas() {
     let hi = Lang::for_language("hi").unwrap();
     // न म स ् क ा र: unrestricted points before म, स and र; only स has two letters on each side.
     assert_eq!(word_breaks_in("नमस्कार", hi).0, vec![3, 6, 18]);
@@ -150,7 +150,7 @@ fn all_languages_leaves_out_the_gpl_slovak_patterns() {
 
 #[cfg(feature = "spanish")]
 #[test]
-fn spanish_uses_the_bezos_patterns() {
+fn feature_config_spanish_uses_the_bezos_patterns() {
     let es = Lang::for_language("Spanish").unwrap();
     assert_eq!(es, Lang::for_language("es_ES").unwrap());
     let h = |w: &str| {
@@ -175,7 +175,7 @@ fn spanish_uses_the_bezos_patterns() {
 /// next to the apostrophe.
 #[cfg(feature = "french")]
 #[test]
-fn french_elisions_keep_their_breaks() {
+fn feature_config_french_elisions_keep_their_breaks() {
     let fr = Lang::for_language("French").unwrap();
     let h = |w: &str| {
         let pts = hyphen_points_in(w, &Limits::default(), fr);

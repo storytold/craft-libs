@@ -661,7 +661,7 @@ fn long_orientation_reads_and_rewrites_in_both_byte_orders() {
 /// `probe_size` reads the size `decode` returns from the header alone, for every format it
 /// covers, and a file cut short inside its header is refused rather than given a size.
 #[test]
-fn probe_size_matches_decode() {
+fn feature_config_probe_size_matches_decode() {
     let img = synth(7, 5, ChannelLayout::Rgb, SampleType::U8, 3, 0.0);
     let probed = [
         Format::Png,

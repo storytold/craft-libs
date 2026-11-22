@@ -27,7 +27,7 @@ fn starts(text: &str, options: &Options) -> Vec<char> {
 }
 
 #[test]
-fn kinsoku_keeps_closing_marks_off_line_starts_and_opening_ones_off_line_ends() {
+fn feature_config_kinsoku_keeps_closing_marks_off_line_starts_and_opening_ones_off_line_ends() {
     for (a, b) in
         [('字', '。'), ('弧', '」'), ('」', '、'), ('ャ', 'ー'), ('カ', 'ッ'), ('「', 'か'), ('（', '雅'), ('字', '〞'), ('１', '％'), ('＄', '１')]
     {
@@ -45,7 +45,7 @@ fn kinsoku_keeps_closing_marks_off_line_starts_and_opening_ones_off_line_ends() 
 /// Soft kinsoku lets 々, ー and small kana (JLREQ cl-09's 々, cl-10, cl-11) start a line and keeps
 /// the rest of the set (half-width forms aren't in those classes); None allows any break.
 #[test]
-fn soft_kinsoku_lets_small_kana_and_the_prolonged_sound_mark_start_a_line() {
+fn feature_config_soft_kinsoku_lets_small_kana_and_the_prolonged_sound_mark_start_a_line() {
     for (a, b) in [('ャ', 'ー'), ('カ', 'ッ'), ('時', '々'), ('ト', 'ㇰ'), ('か', 'ゃ')] {
         assert!(!kinsoku_allows(a, Some(b), Kinsoku::Hard), "{a}{b}");
         assert!(kinsoku_allows(a, Some(b), Kinsoku::Soft), "{a}{b}");
@@ -57,7 +57,7 @@ fn soft_kinsoku_lets_small_kana_and_the_prolonged_sound_mark_start_a_line() {
 }
 
 #[test]
-fn no_break_puts_a_closing_mark_at_a_line_start_or_an_opening_one_at_a_line_end() {
+fn feature_config_no_break_puts_a_closing_mark_at_a_line_start_or_an_opening_one_at_a_line_end() {
     let text = "あいうえお。かきくけ「こさしすせそ」";
     let breaks = offsets(text, &Options::default());
     assert!(breaks.len() > 10, "{breaks:?}");
@@ -71,7 +71,7 @@ fn no_break_puts_a_closing_mark_at_a_line_start_or_an_opening_one_at_a_line_end(
 /// あカッ breaks before ッ with Soft and None (a small kana may start a line) and not with Hard; a
 /// full stop never starts a line, Soft or not.
 #[test]
-fn kinsoku_mode_decides_whether_a_small_kana_may_start_a_line() {
+fn feature_config_kinsoku_mode_decides_whether_a_small_kana_may_start_a_line() {
     assert_eq!(starts("あカッ", &opts(Kinsoku::Hard)), ['カ']);
     assert_eq!(starts("あカッ", &opts(Kinsoku::Soft)), ['カ', 'ッ']);
     assert_eq!(starts("あカッ", &opts(Kinsoku::None)), ['カ', 'ッ']);
@@ -80,7 +80,7 @@ fn kinsoku_mode_decides_whether_a_small_kana_may_start_a_line() {
 }
 
 #[test]
-fn kinsoku_adjusts_uax14_next_to_east_asian_text_only() {
+fn feature_config_kinsoku_adjusts_uax14_next_to_east_asian_text_only() {
     let ja = "日本語、「漢字」。テスト";
     let on = starts(ja, &opts(Kinsoku::Hard));
     for c in ['、', '」', '。', '漢'] {
@@ -99,7 +99,7 @@ fn kinsoku_adjusts_uax14_next_to_east_asian_text_only() {
 }
 
 #[test]
-fn breaks_are_byte_offsets_and_newlines_are_mandatory() {
+fn feature_config_breaks_are_byte_offsets_and_newlines_are_mandatory() {
     let b = line_breaks("a b\nc", &Options::default());
     let got: Vec<(usize, bool)> = b.iter().map(|b| (b.offset, b.mandatory)).collect();
     assert_eq!(got, [(2, false), (4, true), (5, true)]);
@@ -111,7 +111,7 @@ fn breaks_are_byte_offsets_and_newlines_are_mandatory() {
 /// The East Asian breaks that None and Soft add to UAX #14 never split a cluster: not after a
 /// joiner, not before a combining mark or variation selector.
 #[test]
-fn no_kinsoku_mode_breaks_inside_a_cluster() {
+fn feature_config_no_kinsoku_mode_breaks_inside_a_cluster() {
     for k in [Kinsoku::None, Kinsoku::Soft, Kinsoku::Hard] {
         let o = opts(k);
         assert_eq!(pieces("日本\u{200D}語", &o), ["日", "本\u{200D}語"], "{k:?}");
@@ -122,7 +122,7 @@ fn no_kinsoku_mode_breaks_inside_a_cluster() {
 }
 
 #[test]
-fn korean_words_break_at_spaces_only() {
+fn feature_config_korean_words_break_at_spaces_only() {
     let text = "한국어 문장(文章)입니다";
     assert_eq!(pieces(text, &Options::default()), ["한", "국", "어 ", "문", "장", "(文", "章)", "입", "니", "다"]);
     let words = Options { korean_words: true, ..Options::default() };
@@ -131,7 +131,7 @@ fn korean_words_break_at_spaces_only() {
 
 #[cfg(not(feature = "thai"))]
 #[test]
-fn thai_without_its_feature_breaks_as_uax14() {
+fn feature_config_thai_without_its_feature_breaks_as_uax14() {
     assert_eq!(pieces("ภาษาไทยภาษาไทย ไทย", &Options::default()), ["ภาษาไทยภาษาไทย ", "ไทย"]);
 }
 
@@ -173,19 +173,19 @@ fn assert_word_breaks(words: &[&str], min: usize) {
 
 #[cfg(feature = "thai")]
 #[test]
-fn thai_breaks_between_words() {
+fn feature_config_thai_breaks_between_words() {
     assert_word_breaks(&["Thai: ", "ภาษา", "ไทย", "เป็น", "ภาษา", "ราชการ", "ของ", "ประเทศ", "ไทย."], 6);
 }
 
 #[cfg(feature = "lao")]
 #[test]
-fn lao_breaks_between_words() {
+fn feature_config_lao_breaks_between_words() {
     assert_word_breaks(&["ພາສາ", "ລາວ", "ເປັນ", "ພາສາ", "ລາດ", "ຊະ", "ການ", "ຂອງ", "ປະເທດ", "ລາວ"], 5);
 }
 
 #[cfg(feature = "khmer")]
 #[test]
-fn khmer_breaks_between_words() {
+fn feature_config_khmer_breaks_between_words() {
     assert_word_breaks(&["ភាសា", "ខ្មែរ", "ជា", "ភាសា", "ផ្លូវ", "ការ", "នៃ", "ប្រទេស", "កម្ពុជា"], 5);
 }
 
@@ -193,7 +193,7 @@ fn khmer_breaks_between_words() {
 /// (မြန်|မာ): the expected breaks are the syllable boundaries.
 #[cfg(feature = "burmese")]
 #[test]
-fn burmese_breaks_between_syllables() {
+fn feature_config_burmese_breaks_between_syllables() {
     let syllables = ["မြန်", "မာ", "ဘာ", "သာ", "စ", "ကား", "သည်", "မြန်", "မာ", "နိုင်", "ငံ", "၏", "ရုံး", "သုံး", "ဘာ", "သာ", "စ", "ကား", "ဖြစ်", "သည်"];
     assert_word_breaks(&syllables, 5);
 }
@@ -201,7 +201,7 @@ fn burmese_breaks_between_syllables() {
 /// Chinese full-width punctuation: no line starts with a closing mark, none ends with an opening
 /// one.
 #[test]
-fn chinese_kinsoku_keeps_punctuation_with_its_text() {
+fn feature_config_chinese_kinsoku_keeps_punctuation_with_its_text() {
     let text = "他说：“《红楼梦》是一部小说，（很长）。”";
     let o = Options::for_language(Some("zh-Hans"));
     let breaks = offsets(text, &o);
@@ -215,7 +215,7 @@ fn chinese_kinsoku_keeps_punctuation_with_its_text() {
 }
 
 #[test]
-fn language_picks_korean_words() {
+fn feature_config_language_picks_korean_words() {
     for tag in ["ko", "ko-KR", "KO_kr"] {
         assert!(Options::for_language(Some(tag)).korean_words, "{tag}");
     }
@@ -227,7 +227,7 @@ fn language_picks_korean_words() {
 /// Emergency breaks fall between grapheme clusters: never inside an emoji ZWJ sequence, a flag, a
 /// skin-tone modifier or a letter with its combining marks.
 #[test]
-fn emergency_breaks_keep_grapheme_clusters_whole() {
+fn feature_config_emergency_breaks_keep_grapheme_clusters_whole() {
     let family = "👨\u{200D}👩\u{200D}👧\u{200D}👦";
     let text = format!("ab{family}e\u{301}🇯🇵👍🏽");
     let breaks = emergency_breaks(&text, 0..text.len());
