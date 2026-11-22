@@ -109,3 +109,14 @@ sections (10,000), revision authors (10,000), fonts (4,096).
 `doc` keeps its own tokenizing loop, which has rules the shared `Tokens` does not (`\bin` data
 and fallback characters inside picture data, the destinations a `\uN` fallback is skipped in).
 Moving it onto `Tokens` is a follow-up.
+
+## Per-section headers and footers
+
+The word-model exporter emits all six header/footer destinations using the body
+writer's resource tables. Omitted destinations retain link-to-previous semantics;
+explicit empty groups clear a story. The document-wide facing-page setting is
+read and written separately from stored even-page stories. Controls in
+`tests/section_stories.rs` cover multiple sections, story formatting/tables,
+explicitly empty/linked stories and document/story-local facing-page controls.
+This ports [WordCraft #4593](https://github.com/storytold/wordcraft/pull/4593).
+No new native Word or broad corpus qualification is claimed.

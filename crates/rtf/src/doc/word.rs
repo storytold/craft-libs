@@ -15,6 +15,40 @@ impl Reader {
         }
     }
 
+    /// Initialize state for the destination before its contents are read.
+    fn enter_destination(&mut self, d: Dest) {
+        match d {
+            Dest::Bookmark => {
+                self.bkmk = Some((self.depth(), String::new()));
+            }
+            Dest::Pict => {
+                self.pict_depth = Some(self.depth());
+                self.pict_defshp = false;
+                self.pict_after_shape = self.pict_follows_shape();
+                self.pict_hex.clear();
+                self.pict_half = None;
+                self.pict_kind = 0;
+                self.pict_w = None;
+                self.pict_h = None;
+                self.pict_sx = 0.0;
+                self.pict_sy = 0.0;
+                self.pict_nat = (0, 0);
+                self.pict_mm = 0;
+            }
+            Dest::FldInst if self.st.field.is_none() => self.start_field(),
+            // Old character formatting holds the properties that changed (Word) or, after a
+            // `\plain`, all of them; old paragraph formatting is complete from `\pard`.
+            Dest::OldProps(false) => {
+                self.st.old_words.clear();
+                self.st.old_rev = (None, None);
+            }
+            Dest::OldProps(true) => self.word("pard", None, false, false),
+            _ => {}
+        }
+        self.st.dest = d;
+    }
+
+    /// Apply a control word in its destination, keeping document settings out of stories.
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
@@ -37,37 +71,8 @@ impl Reader {
         if self.start_note_word(w) {
             return;
         }
-        let dest = self.destination_for_word(w);
-        if let Some(d) = dest {
-            match d {
-                Dest::Bookmark => {
-                    self.bkmk = Some((self.depth(), String::new()));
-                }
-                Dest::Pict => {
-                    self.pict_depth = Some(self.depth());
-                    self.pict_defshp = false;
-                    self.pict_after_shape = self.pict_follows_shape();
-                    self.pict_hex.clear();
-                    self.pict_half = None;
-                    self.pict_kind = 0;
-                    self.pict_w = None;
-                    self.pict_h = None;
-                    self.pict_sx = 0.0;
-                    self.pict_sy = 0.0;
-                    self.pict_nat = (0, 0);
-                    self.pict_mm = 0;
-                }
-                Dest::FldInst if self.st.field.is_none() => self.start_field(),
-                // Old character formatting holds the properties that changed (Word) or, after a
-                // `\plain`, all of them; old paragraph formatting is complete from `\pard`.
-                Dest::OldProps(false) => {
-                    self.st.old_words.clear();
-                    self.st.old_rev = (None, None);
-                }
-                Dest::OldProps(true) => self.word("pard", None, false, false),
-                _ => {}
-            }
-            self.st.dest = d;
+        if let Some(dest) = self.destination_for_word(w) {
+            self.enter_destination(dest);
             return;
         }
         if self.skip_ignorable_destination(w, starred, first_in_group) {
@@ -77,6 +82,7 @@ impl Reader {
             return;
         }
         match w {
+            "facingp" if self.st.dest == Dest::Body && self.hf.is_none() && !self.st.intbl => self.even_odd_headers = on,
             "par" => self.end_para_mark(),
             "sect" => self.end_section(),
             "cell" => self.end_cell(),
