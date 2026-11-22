@@ -22,12 +22,13 @@ const UP: PartKey = PartKey::new("step_up");
 fn field(enabled: bool, read_only: bool) -> (Fixture, Rc<Cell<f64>>) {
     let value = Rc::new(Cell::new(START));
     let shown = value.clone();
-    let mut fixture = Fixture::new(move |ui| {
+    let mut fixture = Fixture::hosted(move |ui| {
         let out =
             NumberField::new(LABEL, Bind::given(Some(shown.get()))).step_arrows(StepArrows::Leading).enabled(enabled).read_only(read_only).show(ui);
         if let Some(Some(next)) = out.edit.events.landed().copied() {
             shown.set(next);
         }
+        Some(out.edit.into())
     });
     fixture.probe_purity();
     fixture.settle();

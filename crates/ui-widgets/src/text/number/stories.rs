@@ -7,7 +7,7 @@ use crate::form::{Field, FieldGroup};
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, LengthUnits, Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
-use craft_behavior::{HoldRepeat, Mixed, NumberCodec, Reader};
+use craft_behavior::{Mixed, NumberCodec, Reader};
 use craft_theme::ControlSize;
 use egui::{Key, Modifiers, Ui};
 
@@ -143,14 +143,14 @@ fn number_field_step_arrows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", data.bind("arrows", Some(SIZE))).step_arrows(StepArrows::Leading).show(ui).edit.into()
 }
 
-/// Presses the up arrow and holds it past the repeat delay.
+/// Presses the up arrow and keeps it down, short of the repeat delay: one step, then the held arrow. The repeat is
+/// the step-arrow trial's: every repeated step is an edit of its own, and a drive ends its edit once.
 fn hold_up(fixture: &mut Fixture) {
     fixture.settle();
     let at = fixture.root_id().and_then(|root| fixture.part_rect(root, STEP_UP)).map(|rect| rect.center());
     if let Some(at) = at {
         fixture.frame(vec![pointer::moved(at)]);
         fixture.frame(vec![pointer::press(at)]);
-        fixture.advance(HoldRepeat::DELAY);
         fixture.idle(2);
     }
 }
