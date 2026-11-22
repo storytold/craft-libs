@@ -64,7 +64,8 @@ mod tests {
     fn every_finite_half_round_trips() {
         for h in 0..=u16::MAX {
             let f = f16_to_f32(h);
-            if f.is_nan() {
+            if h & 0x7c00 == 0x7c00 && h & 0x3ff != 0 {
+                assert!(f.is_nan(), "half bits {h:#06x} must decode to NaN");
                 assert!(f32_to_f16(f) & 0x7c00 == 0x7c00 && f32_to_f16(f) & 0x3ff != 0);
             } else {
                 assert_eq!(f32_to_f16(f), h, "half bits {h:#06x} -> {f}");

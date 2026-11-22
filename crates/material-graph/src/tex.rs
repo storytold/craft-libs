@@ -328,7 +328,10 @@ impl Tex {
         for (c, o) in o.iter_mut().enumerate() {
             let lo = n.iter().map(|p| get(p, c)).fold(f32::MAX, f32::min);
             let hi = n.iter().map(|p| get(p, c)).fold(f32::MIN, f32::max);
-            *o = o.clamp(lo, hi);
+            // A channel that is NaN in all four texels has no bounds (the folds keep MAX and MIN): leave it as is.
+            if lo <= hi {
+                *o = o.clamp(lo, hi);
+            }
         }
         o
     }
@@ -414,6 +417,14 @@ mod fast_path_tests {
         for x in edges() {
             assert_eq!(floor64(x).to_bits(), x.floor().to_bits(), "{x:e}");
         }
+    }
+
+    #[test]
+    fn cubic_sampling_a_nan_channel_does_not_panic() {
+        let t = Tex::solid(1, 1, [f32::NAN, 0.5, 0.5, 1.0]);
+        let o = t.sample_cubic(0.3, 0.7);
+        assert!(o[0].is_nan());
+        assert_eq!(o[1], 0.5);
     }
 
     #[test]
