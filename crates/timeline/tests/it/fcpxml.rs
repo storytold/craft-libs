@@ -647,11 +647,15 @@ fn optional_report_limit_bounds_fcpxml_export_diagnostics_without_changing_outpu
 // Original metadata-only resources: A first cuts off M64, then B rebuilds M63/M64 at a
 // shallower depth. C repeats that same cache hit, without another reason to rebuild it.
 fn deferred_audio_document(m62: &str, leaf_extra: &str, audio_only_chain: bool) -> String {
+    deferred_audio_document_at(62, m62, leaf_extra, audio_only_chain)
+}
+
+fn deferred_audio_document_at(custom_index: usize, custom_spine: &str, leaf_extra: &str, audio_only_chain: bool) -> String {
     let selection = if audio_only_chain { r#" srcEnable="audio""# } else { "" };
     let mut resources = String::new();
     for i in 0..64 {
-        let spine = if i == 62 && !m62.is_empty() {
-            m62.to_string()
+        let spine = if i == custom_index && !custom_spine.is_empty() {
+            custom_spine.to_string()
         } else {
             format!(r#"<ref-clip ref="m{}" name="Next" duration="20s"{selection}/>"#, i + 1)
         };
@@ -762,12 +766,14 @@ fn deferred_audio_keeps_selection_adjustments_and_overlap_lanes() {
       <ref-clip ref="m63" name="Video only" offset="6s" duration="2s" srcEnable="video"/>
       <ref-clip ref="m63" name="Explicit all" offset="8s" duration="2s" srcEnable="all"/>
     "#;
-    let xml = deferred_audio_document(refs, "", false);
+    // Leave room for the connected children under the unchanged XML-depth cap. The direct
+    // M61 → M63 edge still reaches M64's storyline at depth128, deferring audio until B rebuilds it.
+    let xml = deferred_audio_document_at(61, refs, "", false);
     let mut report = Report::default();
     let opts = craft_timeline::ImportOptions { catalog: &AudioCatalog, ..iopts(None) };
     let imp = craft_timeline::fcpxml::import(&xml, &opts, &mut report).unwrap();
     assert!(report.mentions("nested too deeply"), "{report}");
-    let (_, seq) = deferred_audio_sequence(&imp.project, "M62");
+    let (_, seq) = deferred_audio_sequence(&imp.project, "M61");
     let videos = seq.video_tracks.iter().flat_map(|t| &t.items).collect::<Vec<_>>();
     let audios = seq.audio_tracks.iter().flat_map(|t| &t.items).collect::<Vec<_>>();
     assert!(videos.iter().all(|i| !matches!(i.name.as_str(), "Audio only" | "Negative lane" | "Existing sound")));
