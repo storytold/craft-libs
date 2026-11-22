@@ -328,7 +328,13 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
         }
         // A text box's content, without notes, comments or boxes of its own.
         // A drawing shape, text box or group (pictures have their own place below).
-        InlineObject::Shape { .. } | InlineObject::Group { .. } if opts.boxes => vec![drawing_inline(doc, o, opts, 0, (1.0, 1.0))?],
+        InlineObject::Shape { .. } | InlineObject::Group { .. } if opts.boxes => {
+            let mut inline = drawing_inline(doc, o, opts, 0, (1.0, 1.0))?;
+            if let Inline::Shape { link, .. } | Inline::Group { link, .. } = &mut inline {
+                *link = f.link.as_deref().map(str::to_string);
+            }
+            vec![inline]
+        }
         InlineObject::FieldStart { instr, .. } if opts.fields => vec![Inline::FieldStart(instr.clone())],
         InlineObject::FieldEnd if opts.fields => vec![Inline::FieldEnd],
         // Where a bookmark ends, so it covers its text (Word's `_GoBack` is the last edit's spot).
@@ -400,12 +406,13 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 }),
             };
             let path = frame.or_else(|| freeform.clone()).filter(|_| kind == ShapeKind::Freeform);
-            Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
+            Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path, link: None })
         }
         InlineObject::Image { media, w, h, alt, float, ole, crop, .. } => {
             let data = doc.media.get(media)?;
             let alt = if o.is_decorative() { "" } else { alt.as_str() };
             Some(Inline::Image(Img {
+                link: None,
                 data: data.clone(),
                 ext: media_ext(media, data),
                 w: w * sx,
@@ -425,10 +432,15 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             let members: Vec<Member> = children
                 .iter()
                 .filter_map(|c| {
-                    drawing_inline(doc, &c.obj, opts, depth + 1, inner).map(|inline| Member { x: c.x * inner.0, y: c.y * inner.1, inline })
+                    drawing_inline(doc, &c.obj, opts, depth + 1, inner).map(|inline| Member {
+                        link: c.link.as_deref().and_then(super::kept_link).map(|s| s.to_string()),
+                        x: c.x * inner.0,
+                        y: c.y * inner.1,
+                        inline,
+                    })
                 })
                 .collect();
-            (!members.is_empty()).then(|| Inline::Group { w: w * sx, h: h * sy, float: kept_float(float), members })
+            (!members.is_empty()).then(|| Inline::Group { w: w * sx, h: h * sy, float: kept_float(float), members, link: None })
         }
         _ => None,
     }
@@ -621,6 +633,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     let alt = if o.is_decorative() { "" } else { alt.as_str() };
                     match doc.media.get(media) {
                         Some(data) => out.inlines.push(Inline::Image(Img {
+                            link: f.link.as_deref().map(str::to_string),
                             data: data.clone(),
                             ext: media_ext(media, data),
                             w: *w,
@@ -791,8 +804,9 @@ fn graphic_group(
                     line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                     ..plain.clone()
                 };
-                let inline = Inline::Shape { kind: *kind, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None };
-                Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline })
+                let inline =
+                    Inline::Shape { kind: *kind, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None, link: None };
+                Some(Member { link: None, x: rect[0] * sx, y: rect[1] * sy, inline })
             }
             GraphicItem::Text { rect, text, size, color, bold, align, font, .. } if finite(rect) && !text.trim().is_empty() => {
                 let size = if size.is_finite() { size.clamp(1.0, 400.0) } else { 11.0 };
@@ -812,6 +826,7 @@ fn graphic_group(
                     ..Para::default()
                 };
                 let inline = Inline::Shape {
+                    link: None,
                     kind: ShapeKind::Rectangle,
                     w: bw,
                     h: bh,
@@ -820,11 +835,12 @@ fn graphic_group(
                     look: plain.clone(),
                     path: None,
                 };
-                Some(Member { x: rect[0] * sx, y, inline })
+                Some(Member { link: None, x: rect[0] * sx, y, inline })
             }
             GraphicItem::Image { rect, media } if finite(rect) => {
                 let data = doc.media.get(media)?;
                 let img = Img {
+                    link: None,
                     data: data.clone(),
                     ext: media_ext(media, data),
                     w: rect[2] * sx,
@@ -834,7 +850,7 @@ fn graphic_group(
                     object: None,
                     crop: [0.0; 4],
                 };
-                Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline: Inline::Image(img) })
+                Some(Member { link: None, x: rect[0] * sx, y: rect[1] * sy, inline: Inline::Image(img) })
             }
             _ => None,
         })
@@ -844,9 +860,9 @@ fn graphic_group(
     }
     // A group is as big as its members together (ODF 1.3 §10.3.15): an invisible rectangle the
     // size of the graphic keeps the room around its drawing.
-    let frame = Inline::Shape { kind: ShapeKind::Rectangle, w, h, float: None, blocks: Vec::new(), look: plain, path: None };
-    let all = std::iter::once(Member { x: 0.0, y: 0.0, inline: frame }).chain(members).collect();
-    Some(Inline::Group { w, h, float: kept_float(float), members: all })
+    let frame = Inline::Shape { kind: ShapeKind::Rectangle, w, h, float: None, blocks: Vec::new(), look: plain, path: None, link: None };
+    let all = std::iter::once(Member { link: None, x: 0.0, y: 0.0, inline: frame }).chain(members).collect();
+    Some(Inline::Group { w, h, float: kept_float(float), members: all, link: None })
 }
 
 /// The mark formatting of `out`, the last piece of `p`, when it holds no text (its height, its
@@ -1163,6 +1179,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 picture: c.props.picture.as_deref().filter(|_| tracked.paras).and_then(|p| {
                     let data = doc.media.get(&p.media)?;
                     let img = Img {
+                        link: None,
                         data: data.clone(),
                         ext: media_ext(&p.media, data),
                         w: p.size[0],

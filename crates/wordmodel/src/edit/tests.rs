@@ -452,11 +452,16 @@ fn pasted_box_copies_count_the_objects_they_copy() {
     assert!((1..64).contains(&added), "{added}");
     assert!(copied <= MAX_PASTED_BOX_BYTES, "{copied}");
     // Nested group members and equations count too.
-    let member = |obj| crate::para::GroupChild { x: 0.0, y: 0.0, obj };
+    let member = |obj| crate::para::GroupChild { link: None, x: 0.0, y: 0.0, obj };
     let deep = InlineObject::Opaque { format: String::new(), xml: "y".repeat(5000), text: String::new() };
     let inner = InlineObject::Group { w: 1.0, h: 1.0, float: Default::default(), ch_w: 1.0, ch_h: 1.0, children: vec![member(deep)], canvas: None };
     let outer = InlineObject::Group { w: 1.0, h: 1.0, float: Default::default(), ch_w: 1.0, ch_h: 1.0, children: vec![member(inner)], canvas: None };
     assert!(object_cost(&outer) >= 5000);
+    let mut linked = outer.clone();
+    if let InlineObject::Group { children, .. } = &mut linked {
+        children[0].link = Some("https://example.com/member/".repeat(40));
+    }
+    assert!(object_cost(&linked) >= object_cost(&outer) + "https://example.com/member/".len() * 40);
     let eq = InlineObject::Equation {
         linear: String::new(),
         display: false,

@@ -230,6 +230,10 @@ fn vml_objects_keep_their_own_hyperlinks() {
                     check_images(doc, &child.obj, original_png, out);
                 }
             }
+            InlineObject::Shape { kind, w, h, .. } => {
+                assert_eq!(*kind, craft_wordmodel::para::ShapeKind::Rectangle);
+                assert!((*w - 5.0).abs() < 0.001 && (*h - 7.0).abs() < 0.001);
+            }
             other => panic!("the original picture fixture produced another object: {other:?}"),
         }
     }
@@ -238,13 +242,56 @@ fn vml_objects_keep_their_own_hyperlinks() {
         paragraph.object_offsets().into_iter().map(|off| paragraph.props_of_char(off).link.clone()).collect()
     }
 
+    fn model_links(doc: &Document) -> Vec<(Vec<usize>, Option<String>)> {
+        fn member_links(object: &InlineObject, path: &[usize], out: &mut Vec<(Vec<usize>, Option<String>)>) {
+            if let InlineObject::Group { children, .. } = object {
+                for (i, child) in children.iter().enumerate() {
+                    let mut path = path.to_vec();
+                    path.push(i);
+                    out.push((path.clone(), child.link.clone()));
+                    member_links(&child.obj, &path, out);
+                }
+            }
+        }
+        let paragraph = doc.body[1].as_para().unwrap();
+        let mut out = Vec::new();
+        for (i, off) in paragraph.object_offsets().into_iter().enumerate() {
+            out.push((vec![i], paragraph.props_of_char(off).link.clone()));
+            member_links(paragraph.object_at(off).unwrap(), &[i], &mut out);
+        }
+        out
+    }
+    fn xml_link(nv: Option<&craft_xml::El>, rels: &craft_xml::El) -> Option<String> {
+        let id = nv?.child("a:hlinkClick")?.attr("r:id")?;
+        let rel = rels.children("Relationship").find(|r| r.attr("Id") == Some(id)).expect("every click must name a saved relationship");
+        assert_eq!(rel.attr("Type"), Some("http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"));
+        assert_eq!(rel.attr("TargetMode"), Some("External"));
+        Some(rel.attr("Target").expect("the click target").to_string())
+    }
+    fn saved_member_links(group: &craft_xml::El, path: &[usize], rels: &craft_xml::El, out: &mut Vec<(Vec<usize>, Option<String>)>) {
+        for (i, child) in group.elements().filter(|e| matches!(e.name.as_str(), "pic:pic" | "wps:wsp" | "wpg:grpSp")).enumerate() {
+            let mut path = path.to_vec();
+            path.push(i);
+            let nv = match child.name.as_str() {
+                "pic:pic" => child.child("pic:nvPicPr").and_then(|p| p.child("pic:cNvPr")),
+                "wps:wsp" => child.child("wps:cNvPr"),
+                _ => child.child("wpg:cNvPr"),
+            };
+            out.push((path.clone(), xml_link(nv, rels)));
+            if child.name == "wpg:grpSp" {
+                saved_member_links(child, &path, rels, out);
+            }
+        }
+    }
+
     let vml = r##"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml">
 <v:shape id="TopFirst" style="width:24pt;height:12pt" alt="first" href="https://example.com/TopFirst"><v:imagedata r:id="rIdPic"/></v:shape>
 <v:shape id="Unlinked" style="width:16pt;height:8pt" alt="unlinked"><v:imagedata r:id="rIdPic"/></v:shape>
 <v:shape id="TopLast" style="width:12pt;height:6pt" alt="last" href="https://example.com/TopLast"><v:imagedata r:id="rIdPic"/></v:shape>
 <v:group id="Outer" style="width:40pt;height:20pt" coordsize="40,20" href="https://example.com/Outer">
 <v:shape id="Child" style="left:3pt;top:4pt;width:6pt;height:4pt" alt="child" href="https://example.com/Child"><v:imagedata r:id="rIdPic"/></v:shape>
-<v:group id="Nested" style="left:20pt;top:5pt;width:10pt;height:10pt" coordsize="10,10" href="https://example.com/Nested">
+<v:rect id="ChildShape" style="left:12pt;top:2pt;width:5pt;height:7pt" fillcolor="#123456" href="https://example.com/Shape"/>
+<v:group id="Nested" style="left:20pt;top:5pt;width:10pt;height:10pt;rotation:30;flip:x" coordsize="10,10" href="https://example.com/Nested">
 <v:shape id="Fragment" style="left:1pt;top:2pt;width:2pt;height:3pt" alt="fragment" href="#Spot"><v:imagedata r:id="rIdPic"/></v:shape>
 </v:group></v:group></w:pict></w:r></w:p>"##;
     // A known DrawingML link is a positive control in the same package, with the
@@ -297,6 +344,7 @@ fn vml_objects_keep_their_own_hyperlinks() {
         ("last", "https://example.com/TopLast"),
         ("outer group", "https://example.com/Outer"),
         ("group child", "https://example.com/Child"),
+        ("group shape", "https://example.com/Shape"),
         ("nested group", "https://example.com/Nested"),
         ("fragment data", "#Spot"),
     ] {
@@ -304,5 +352,210 @@ fn vml_objects_keep_their_own_hyperlinks() {
             lost.push(format!("saved {label} target: {target}"));
         }
     }
+    let expected: Vec<_> = [
+        (vec![0], Some("https://example.com/TopFirst")),
+        (vec![1], None),
+        (vec![2], Some("https://example.com/TopLast")),
+        (vec![3], Some("https://example.com/Outer")),
+        (vec![3, 0], Some("https://example.com/Child")),
+        (vec![3, 1], Some("https://example.com/Shape")),
+        (vec![3, 2], Some("https://example.com/Nested")),
+        (vec![3, 2, 0], Some("#Spot")),
+    ]
+    .into_iter()
+    .map(|(path, link)| (path, link.map(str::to_string)))
+    .collect();
+    for current in [&doc, &reopened] {
+        assert_eq!(model_links(current), expected, "each target must remain on its own object path");
+        let InlineObject::Group { children, .. } = &current.body[1].as_para().unwrap().objects[3] else { panic!() };
+        assert_eq!(children.len(), 3);
+        assert!((children[0].x - 3.0).abs() < 0.001 && (children[0].y - 4.0).abs() < 0.001);
+        assert!((children[2].x - 20.0).abs() < 0.001 && (children[2].y - 5.0).abs() < 0.001);
+        let InlineObject::Group { children, float, ch_w, ch_h, .. } = &children[2].obj else { panic!("the linked nested group must remain a group") };
+        assert_eq!((*ch_w, *ch_h), (10.0, 10.0));
+        assert_eq!(float.spin(), craft_wordmodel::geom::Spin::new(30.0, true, false));
+        assert_eq!(children.len(), 1);
+        assert!((children[0].x - 1.0).abs() < 0.001 && (children[0].y - 2.0).abs() < 0.001);
+    }
+    let xml = craft_xml::parse(part(&saved, "word/document.xml").as_bytes()).unwrap();
+    let relationships = craft_xml::parse(rels.as_bytes()).unwrap();
+    let paragraph = xml.child("w:body").unwrap().children("w:p").nth(1).unwrap();
+    let mut xml_links = Vec::new();
+    for (i, drawing) in paragraph.find_all("w:drawing").enumerate() {
+        let frame = drawing.child("wp:inline").or_else(|| drawing.child("wp:anchor")).unwrap();
+        xml_links.push((vec![i], xml_link(frame.child("wp:docPr"), &relationships)));
+        if let Some(group) = frame.child("a:graphic").and_then(|g| g.child("a:graphicData")).and_then(|d| d.child("wpg:wgp")) {
+            saved_member_links(group, &[i], &relationships, &mut xml_links);
+        }
+    }
+    assert_eq!(xml_links, expected, "saved cNvPr/docPr clicks must name the target at the same path");
     assert!(lost.is_empty(), "VML object hyperlinks were lost: {lost:?}");
+}
+
+#[test]
+fn vml_hyperlink_templates_and_outer_runs_keep_their_scope() {
+    let cases = [
+        (r##"type="#Linked""##, "", Some("https://example.com/Template")),
+        (r##"type="#Linked" href="https://example.com/Direct""##, "", Some("https://example.com/Direct")),
+        (r##"type="#Linked" href="   ""##, "", None),
+        (r#"href="  https://example.com/Trimmed  ""#, "", Some("https://example.com/Trimmed")),
+        ("", r#"o:href="https://example.com/ImageSource" r:href="rIdWeb""#, None),
+    ];
+    let mut shapes = String::new();
+    for (attributes, image_attributes, _) in cases {
+        shapes
+            .push_str(&format!(r#"<v:shape style="width:24pt;height:12pt" {attributes}><v:imagedata r:id="rIdPic" {image_attributes}/></v:shape>"#,));
+    }
+    let body = format!(
+        r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:shapetype id="Linked" href="  https://example.com/Template  "/>{shapes}</w:pict></w:r></w:p><w:p><w:hyperlink r:id="rIdRun"><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:group style="width:24pt;height:12pt" coordsize="24,12" href="https://example.com/Group"><v:shape style="width:24pt;height:12pt" href="https://example.com/Child"><v:imagedata r:id="rIdPic"/></v:shape></v:group></w:pict></w:r></w:hyperlink></w:p>"#,
+    );
+    let doc = craft_docx::read(&package(&body)).unwrap();
+    let saved = craft_docx::write(&doc).unwrap();
+    let reopened = craft_docx::read(&saved).unwrap();
+    let expected: Vec<_> = cases.into_iter().map(|(_, _, link)| link.map(str::to_string)).collect();
+    for current in [&doc, &reopened] {
+        assert_eq!(picture_links(current), expected, "presence-aware template/direct href precedence");
+        let paragraph = current.body[1].as_para().unwrap();
+        assert_eq!(paragraph.objects.len(), 1);
+        assert_eq!(paragraph.props_of_char(paragraph.object_offsets()[0]).link.as_deref(), Some("https://example.com/run"));
+        let InlineObject::Group { children, .. } = &paragraph.objects[0] else { panic!() };
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].link.as_deref(), Some("https://example.com/Child"), "the run overrides the group, not its child");
+    }
+}
+
+fn replacing_picture_part(bytes: &[u8], name: &str, replacement: &str) -> Vec<u8> {
+    let mut input = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..input.len() {
+        let mut file = input.by_index(i).unwrap();
+        let entry = file.name().unwrap().to_string();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data).unwrap();
+        if entry == name {
+            data = replacement.as_bytes().to_vec();
+        }
+        output.start_file(entry, zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&data).unwrap();
+    }
+    output.finish().unwrap().into_inner()
+}
+
+#[test]
+fn group_picture_links_require_their_own_external_hyperlink_relationship() {
+    let body = r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:group style="width:24pt;height:12pt" coordsize="24,12"><v:shape style="width:24pt;height:12pt" href="https://example.com/Child"><v:imagedata r:id="rIdPic"/></v:shape></v:group></w:pict></w:r></w:p>"#;
+    let doc = craft_docx::read(&package(body)).unwrap();
+    let saved = craft_docx::write(&doc).unwrap();
+    let xml = part(&saved, "word/document.xml");
+    let rels = part(&saved, "word/_rels/document.xml.rels");
+    let tree = craft_xml::parse(xml.as_bytes()).unwrap();
+    let nv = tree.find("pic:pic").unwrap().child("pic:nvPicPr").unwrap().child("pic:cNvPr").unwrap();
+    let click = nv.child("a:hlinkClick").expect("the valid child's click must be on its cNvPr");
+    let id = click.attr("r:id").unwrap();
+    let original_png = png();
+    let check = |bytes: &[u8], expected: Option<&str>| {
+        let doc = craft_docx::read(bytes).unwrap();
+        let paragraph = doc.body[0].as_para().unwrap();
+        assert_eq!(paragraph.objects.len(), 1);
+        assert_eq!(paragraph.props_of_char(0).link, None, "an unlinked group must not borrow its child's link");
+        let InlineObject::Group { children, .. } = &paragraph.objects[0] else { panic!() };
+        assert_eq!(children.len(), 1);
+        let InlineObject::Image { media, w, h, .. } = &children[0].obj else { panic!() };
+        assert_eq!(doc.media.get(media).unwrap().as_slice(), original_png.as_slice());
+        assert!((*w - 24.0).abs() < 0.001 && (*h - 12.0).abs() < 0.001);
+        assert_eq!(children[0].link.as_deref(), expected);
+    };
+    check(&saved, Some("https://example.com/Child"));
+    let type_name = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    for modified in [
+        rels.replace(type_name, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"),
+        rels.replace(" TargetMode=\"External\"", ""),
+        rels.replace("Target=\"https://example.com/Child\"", "Target=\"   \""),
+    ] {
+        assert_ne!(modified, rels);
+        check(&replacing_picture_part(&saved, "word/_rels/document.xml.rels", &modified), None);
+    }
+    let missing = xml.replace(&format!(r#"r:id="{id}""#), r#"r:id="rIdAbsent""#);
+    assert_ne!(missing, xml);
+    check(&replacing_picture_part(&saved, "word/document.xml", &missing), None);
+    // A click in an unrelated extension is not the picture's nonvisual properties.
+    let mut unrelated = tree.clone();
+    let picture = unrelated
+        .child_mut("w:body")
+        .unwrap()
+        .child_mut("w:p")
+        .unwrap()
+        .child_mut("w:r")
+        .unwrap()
+        .child_mut("w:drawing")
+        .unwrap()
+        .child_mut("wp:inline")
+        .unwrap()
+        .child_mut("a:graphic")
+        .unwrap()
+        .child_mut("a:graphicData")
+        .unwrap()
+        .child_mut("wpg:wgp")
+        .unwrap()
+        .child_mut("pic:pic")
+        .unwrap();
+    picture.child_mut("pic:nvPicPr").unwrap().child_mut("pic:cNvPr").unwrap().children.clear();
+    let extension = craft_xml::parse(format!(r#"<a:extLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:ext uri="urn:original-test:unrelated"><a:hlinkClick r:id="{id}"/></a:ext></a:extLst>"#).as_bytes()).unwrap();
+    picture.child_mut("pic:spPr").unwrap().push(extension);
+    check(&replacing_picture_part(&saved, "word/document.xml", &unrelated.to_xml()), None);
+}
+
+#[test]
+fn linked_groups_share_one_retained_member_budget() {
+    fn count(object: &InlineObject) -> usize {
+        match object {
+            InlineObject::Group { children, .. } => children.iter().map(|c| 1 + count(&c.obj)).sum(),
+            _ => 0,
+        }
+    }
+    fn input(per_group: usize) -> Vec<u8> {
+        let leaf = r#"<v:shape style="width:1pt;height:1pt"><v:imagedata r:id="rIdPic"/></v:shape>"#.repeat(per_group);
+        package(&format!(
+            r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:group style="width:24pt;height:12pt" coordsize="24,12"><v:group style="width:12pt;height:12pt" coordsize="12,12" href="https://example.com/Left">{leaf}</v:group><v:group style="left:12pt;width:12pt;height:12pt" coordsize="12,12" href="https://example.com/Right">{leaf}</v:group></v:group></w:pict></w:r></w:p>"#,
+        ))
+    }
+    let small = craft_docx::read(&input(1)).unwrap();
+    assert_eq!(count(&small.body[0].as_para().unwrap().objects[0]), 4, "two linked groups and two picture leaves");
+    let saved_small = craft_docx::write(&small).unwrap();
+    let reopened_small = craft_docx::read(&saved_small).unwrap();
+    assert_eq!(count(&reopened_small.body[0].as_para().unwrap().objects[0]), 4);
+    let max = craft_wordmodel::para::MAX_GROUP_CHILDREN;
+    assert_eq!(max, 1000, "this original fixture is bounded to the existing limit plus two nodes");
+    let large = craft_docx::read(&input(500)).unwrap();
+    assert_eq!(count(&large.body[0].as_para().unwrap().objects[0]), max, "VML must count linked nodes and leaves together");
+    // Independently construct the same 1002-node DrawingML input from our small
+    // original save, so the VML reader's own bound cannot hide a DML budget regression.
+    let mut xml = craft_xml::parse(part(&saved_small, "word/document.xml").as_bytes()).unwrap();
+    let group = xml
+        .child_mut("w:body")
+        .unwrap()
+        .child_mut("w:p")
+        .unwrap()
+        .child_mut("w:r")
+        .unwrap()
+        .child_mut("w:drawing")
+        .unwrap()
+        .child_mut("wp:inline")
+        .unwrap()
+        .child_mut("a:graphic")
+        .unwrap()
+        .child_mut("a:graphicData")
+        .unwrap()
+        .child_mut("wpg:wgp")
+        .unwrap();
+    for child in group.elements_mut().filter(|e| e.name == "wpg:grpSp") {
+        let picture = child.child("pic:pic").unwrap().clone();
+        child.children.retain(|n| !matches!(n, craft_xml::Node::El(e) if e.name == "pic:pic"));
+        for _ in 0..500 {
+            child.push(picture.clone());
+        }
+    }
+    let dml = replacing_picture_part(&saved_small, "word/document.xml", &xml.to_xml());
+    let doc = craft_docx::read(&dml).unwrap();
+    assert_eq!(count(&doc.body[0].as_para().unwrap().objects[0]), max, "DrawingML must share the same root-wide bound");
 }

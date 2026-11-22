@@ -218,6 +218,9 @@ pub struct GroupChild {
     pub x: f32,
     pub y: f32,
     pub obj: InlineObject,
+    /// This member's own hyperlink target, independent of its group's target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 /// Most members a group keeps (hostile files).
@@ -434,5 +437,23 @@ impl InlineObject {
             InlineObject::Opaque { text, .. } => text,
             _ => "",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GroupChild;
+
+    #[test]
+    fn vml_hyperlinks_keep_legacy_group_child_json_compatible() {
+        let old = r#"{"x":2.0,"y":3.0,"obj":{"type":"image","media":"picture","w":4.0,"h":5.0}}"#;
+        let child: GroupChild = serde_json::from_str(old).unwrap();
+        assert!(child.link.is_none());
+        let value = serde_json::to_value(&child).unwrap();
+        assert!(value.get("link").is_none(), "unlinked children keep the old JSON shape");
+        let mut linked = child;
+        linked.link = Some("https://example.com/member#place".into());
+        let back: GroupChild = serde_json::from_str(&serde_json::to_string(&linked).unwrap()).unwrap();
+        assert_eq!(back, linked, "both the target and the original object survive");
     }
 }

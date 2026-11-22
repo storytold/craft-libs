@@ -121,3 +121,78 @@ fn drop_cap_not_repeated_after_page_break() {
     assert_eq!(paras[1].extra.as_ref().and_then(|x| x.drop_cap_distance), None);
     assert_eq!(paras[1].extra.as_ref().and_then(|x| x.shading), Some(craft_wordmodel::Rgb(255, 0, 0)));
 }
+
+#[test]
+fn vml_hyperlinks_survive_flow_for_roots_and_nested_members() {
+    use craft_flow::{BoxLook, FlowOpts, Member, from_doc_with};
+    use craft_wordmodel::{Block, CharProps, para::ShapeKind};
+
+    let image = |target: Option<&str>| {
+        let mut img = make_img(PNG.to_vec(), Some(12.0), Some(8.0), "original tiny picture").unwrap();
+        img.link = target.map(str::to_string);
+        img.crop = [0.125, 0.25, 0.0, 0.0];
+        Inline::Image(img)
+    };
+    let nested = Inline::Group {
+        w: 10.0,
+        h: 10.0,
+        float: None,
+        link: None,
+        members: vec![Member { x: 2.0, y: 1.0, inline: image(None), link: Some("#nested-place".into()) }],
+    };
+    let group = Inline::Group {
+        w: 40.0,
+        h: 30.0,
+        float: None,
+        link: Some("https://example.com/group".into()),
+        members: vec![
+            Member { x: 1.0, y: 2.0, inline: image(None), link: Some("https://example.com/child".into()) },
+            Member { x: 8.0, y: 3.0, inline: nested, link: Some("https://example.com/nested-group".into()) },
+            Member { x: 4.0, y: 5.0, inline: image(None), link: None },
+        ],
+    };
+    let shape = Inline::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 9.0,
+        h: 6.0,
+        float: None,
+        blocks: Vec::new(),
+        look: BoxLook::default(),
+        path: None,
+        link: Some("https://example.com/shape".into()),
+    };
+    let mut paragraph = para(Kind::Normal, vec![group, image(Some("https://example.com/picture")), shape, image(None)]);
+    paragraph.mark = Some(Box::new(CharProps { link: Some("https://example.com/not-the-object".into()), ..Default::default() }));
+    let flow = Flow { blocks: vec![FBlock::Para(paragraph)], ..Default::default() };
+    let doc = to_doc(&flow);
+    let Block::Para(p) = &*doc.body[0] else { panic!("drawing paragraph") };
+    assert_eq!(
+        p.runs.iter().map(|r| r.props.link.as_deref()).collect::<Vec<_>>(),
+        [Some("https://example.com/group"), Some("https://example.com/picture"), Some("https://example.com/shape"), None],
+        "each root's target comes from that object, not the paragraph mark"
+    );
+    let craft_wordmodel::para::InlineObject::Group { children, .. } = &p.objects[0] else { panic!("group") };
+    assert_eq!(children[0].link.as_deref(), Some("https://example.com/child"));
+    assert_eq!(children[1].link.as_deref(), Some("https://example.com/nested-group"));
+    assert!(children[2].link.is_none());
+    let back = from_doc_with(&doc, FlowOpts { boxes: true, paras: true, ..Default::default() });
+    let got = paras(&back.blocks);
+    let [Inline::Group { link, members, .. }, Inline::Image(picture), Inline::Shape { link: shape_link, .. }, Inline::Image(unlinked)] =
+        got[0].inlines.as_slice()
+    else {
+        panic!("all four drawings survive")
+    };
+    assert_eq!(link.as_deref(), Some("https://example.com/group"));
+    assert_eq!(picture.link.as_deref(), Some("https://example.com/picture"));
+    assert_eq!(shape_link.as_deref(), Some("https://example.com/shape"));
+    assert!(unlinked.link.is_none());
+    assert_eq!(picture.data.as_slice(), PNG);
+    assert_eq!((picture.w, picture.h, picture.crop), (12.0, 8.0, [0.125, 0.25, 0.0, 0.0]));
+    assert_eq!((members[0].x, members[0].y), (1.0, 2.0));
+    assert_eq!(members[0].link.as_deref(), Some("https://example.com/child"));
+    assert_eq!(members[1].link.as_deref(), Some("https://example.com/nested-group"));
+    assert!(members[2].link.is_none());
+    let Inline::Group { link: own, members: inner, .. } = &members[1].inline else { panic!("nested group") };
+    assert!(own.is_none(), "the nested group's target is carried by its Member, not duplicated on descendants");
+    assert_eq!(inner[0].link.as_deref(), Some("#nested-place"));
+}

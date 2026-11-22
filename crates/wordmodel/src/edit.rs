@@ -258,7 +258,8 @@ fn object_cost(o: &InlineObject) -> usize {
             }
             InlineObject::Group { float: f, children, .. } => {
                 todo.extend(children.iter().map(|c| &c.obj));
-                children.len().saturating_mul(std::mem::size_of::<crate::para::GroupChild>()).saturating_add(float(f))
+                let links = children.iter().filter_map(|c| c.link.as_ref()).fold(0usize, |n, link| n.saturating_add(link.len()));
+                children.len().saturating_mul(std::mem::size_of::<crate::para::GroupChild>()).saturating_add(links).saturating_add(float(f))
             }
             InlineObject::Field { instr, result, form, .. } => instr.len().saturating_add(result.len()).saturating_add(form.len()),
             InlineObject::FieldStart { instr, .. } => instr.len(),

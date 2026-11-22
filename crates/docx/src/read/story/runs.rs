@@ -262,17 +262,17 @@ impl Reader<'_> {
                 }
             }
             "w:pict" => {
-                if let Some(o) = self.read_signature_line(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_signature_line(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 } else {
-                    for o in self.read_vml_all(sc, k, rels) {
-                        self.emit_obj(sc, pb, o, props);
+                    for (o, link) in self.read_vml_all(sc, k, rels) {
+                        self.emit_linked_obj(sc, pb, o, props, link);
                     }
                 }
             }
             "w:object" => {
-                if let Some(o) = self.read_object(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_object(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 }
             }
             "w:contentPart" => {
