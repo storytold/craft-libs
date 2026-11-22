@@ -304,6 +304,8 @@ fn a_picker_that_stops_showing_with_a_preview_is_reported_once_in_ended_previews
             let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).show(ui);
             at.set(Some(out.edit.response.id));
         }
+        // Evicted memory drops in the next component's run, so the window keeps showing one.
+        craft_ui::display::Text::new("Size").show(ui);
     });
     fx.in_room(Room::Window);
     fx.settle();
@@ -322,6 +324,9 @@ fn a_picker_that_stops_showing_with_a_preview_is_reported_once_in_ended_previews
     hover_hack(&mut fx);
     shown.set(false);
     fx.settle();
+    // Past the eviction grace, which ends the picker's shown life.
+    fx.advance(1.0);
+    eprintln!("DIAG advanced");
     fx.idle(3);
     let ended = take_output(fx.ctx()).ended_previews;
     assert_eq!(ended.iter().filter(|ended| Some(**ended) == id.get()).count(), 1, "the picker that stopped showing is named once: {ended:?}");
