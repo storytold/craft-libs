@@ -123,10 +123,12 @@ fn open_list(fixture: &mut Fixture) {
     fixture.settle();
 }
 
+/// The library list: Hack starred and recent, so the recent group and its rule head the list; Inter has two styles
+/// to open and its name lines up with the one-style families'.
 #[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_open_with_filters(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = FontPickerSettings { favorites: vec!["Hack".to_owned()], ..FontPickerSettings::default() };
-    show_picker(ui, data, demo("Hack", settings, FontFilters { favorites: true, ..FontFilters::default() }))
+    let settings = FontPickerSettings { favorites: vec!["Hack".to_owned()], recent: vec!["Hack".to_owned()], ..FontPickerSettings::default() };
+    show_with(ui, data, demo("Inter", settings, FontFilters::default()), &styled_catalog(), &Extras::default())
 }
 
 /// Opens the list and expands Inter through its row's expand request: focus stays in the field, whose caret keeps
