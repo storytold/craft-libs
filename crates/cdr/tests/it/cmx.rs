@@ -676,6 +676,35 @@ fn after_stray_bytes_a_page_is_not_read_when_a_list_cuts_short_the_page_both_wal
     assert_eq!(d.pages.last().unwrap().layers[0].objects.len(), 1);
 }
 
+#[test]
+fn after_stray_bytes_a_page_a_list_cuts_short_only_without_the_recovery_is_judged_as_recovered() {
+    // Stray bytes, then letters whose length ends on the header of a list at the end of the page
+    // after them. The list ends after the header of the next page, so the walk from the letters
+    // reads that page without its body, and the walk from the page inside the letters reads the
+    // whole page. Only the recovery reads that whole page, and it ends inside an instruction, so the
+    // reader leaves it out.
+    let (name, q) = ["Q", "Qa"]
+        .iter()
+        .map(|n| {
+            let carried = long_instr(-1, &[b"LIST".as_slice(), &12u32.to_le_bytes(), b"pgls"].concat());
+            (*n, [begin_page(None), begin_layer(n, None), square(&attrs(Some(1), None, false), 0, 0, 1000), end_layer(), carried].concat())
+        })
+        .find(|(_, body)| body.len() % 2 == 0)
+        .unwrap();
+    let r = page(&[begin_page(None), begin_layer("R", None), square(&attrs(Some(1), None, false), 0, 0, 2000), end_layer(), vec![1, 0]]);
+    let mut b = vec![1u8; 2];
+    b.extend(b"abcd");
+    b.extend((q.len() as u32 - 4).to_le_bytes());
+    b.extend(chunk(b"page", &q));
+    b.extend(r);
+    let mut children = vec![cont(b'4', 1e-7)];
+    children.extend(tables());
+    children.push(b);
+    let d = read_checked(&riff(&children), Limits::default()).unwrap();
+    let names: Vec<&str> = d.pages.iter().filter_map(|p| p.layers.first()).map(|l| l.name.as_str()).collect();
+    assert_eq!(names, [name]);
+}
+
 /// A page that fills with color 1, then, inside a list, letters spelling `page` whose length runs
 /// past the list and that hold another page and a color table of one red entry, then `after`.
 fn page_and_recovered_red(after: &[Vec<u8>]) -> Vec<u8> {

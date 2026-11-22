@@ -388,7 +388,7 @@ fn step(b: &[u8], pos: usize, end: usize) -> Option<(usize, Option<usize>)> {
 }
 
 /// Where the chunks start that the walk from an inner page `alt` reads and the walk from the first
-/// chunk id `first` does not, when the two walks meet at a place both pass (a position inside the
+/// chunk id `first` does not read with the same body, when the two walks meet at a place both pass (a position inside the
 /// same lists) or both end, and `alt` reads at least what `first` reads until then (R53). The page
 /// `alt` starts at reads with objects and without damage in its instructions. Each chunk the reader
 /// uses that `first` reads before that point, `alt` reads too, with the same body, unless it is a
@@ -410,7 +410,7 @@ fn rejoins(b: &[u8], first: &Walk, alt: &Walk, budget: &Budget, left: &mut usize
             return None;
         }
     }
-    Some(taken.into_iter().map(|(q, _)| q).filter(|q| !kept.iter().any(|&(k, _)| k == *q)).collect())
+    Some(taken.into_iter().filter(|q| !kept.contains(q)).map(|(q, _)| q).collect())
 }
 
 /// Whether the page chunk at `at` reads with objects, and whether its instructions read with
