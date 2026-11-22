@@ -38,6 +38,7 @@ use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContaine
 use craft_ui::primitives::EditorPurpose;
 use craft_ui::primitives::textures::ThumbSource;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::EditSet;
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::DataColor;
 use egui::{Rect, Ui, Vec2, pos2};
@@ -338,6 +339,7 @@ pub struct PageView<'a> {
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
     editor: Option<EditorPurpose>,
+    inactive_edits: EditSet,
     snap: Option<PageSnap>,
     tool_regions: Vec<PageRegion>,
     rulers: bool,
@@ -362,6 +364,7 @@ impl<'a> PageView<'a> {
             describer: None,
             paper,
             editor: None,
+            inactive_edits: EditSet::NONE,
             snap: None,
             tool_regions: Vec::new(),
             rulers: false,
@@ -401,6 +404,13 @@ impl<'a> PageView<'a> {
     #[must_use]
     pub fn editor(mut self, purpose: EditorPurpose) -> Self {
         self.editor = Some(purpose);
+        self
+    }
+
+    /// Edit commands the view's editor part cannot act on right now, forwarded to [`Canvas::inactive_edits`].
+    #[must_use]
+    pub fn inactive_edits(mut self, inactive: EditSet) -> Self {
+        self.inactive_edits = inactive;
         self
     }
 
@@ -455,7 +465,22 @@ impl<'a> PageView<'a> {
     }
 
     fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper, editor, snap, tool_regions, rulers, reach } = self;
+        let PageView {
+            label,
+            source,
+            state,
+            options,
+            navigation,
+            bodies,
+            describer,
+            paper,
+            editor,
+            inactive_edits,
+            snap,
+            tool_regions,
+            rulers,
+            reach,
+        } = self;
 
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
@@ -485,7 +510,7 @@ impl<'a> PageView<'a> {
         let regions: Vec<ToolRegion> = tool_regions.iter().filter_map(|region| placed_region(region, &geo, &frame)).collect();
         let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(regions);
         if let Some(purpose) = editor {
-            canvas = canvas.editor(purpose);
+            canvas = canvas.editor(purpose).inactive_edits(inactive_edits);
         }
         if let Some(snap) = &snap {
             canvas = canvas.snap(placed_snap(snap, &geo, &frame));
