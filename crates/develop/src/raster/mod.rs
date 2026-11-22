@@ -219,6 +219,22 @@ impl<T: Copy + Default> Image<T> {
     }
 }
 
+// Keep the sqrt-spaced 14-bit lookup from LightCraft's raster conversion. The uniform
+// craft-color byte lookup makes different quantization choices for some near-black inputs.
+#[inline]
+fn encode_raster_srgb8(v: f32) -> u8 {
+    const LAST: usize = (1 << 14) - 1;
+    static LUT: std::sync::OnceLock<[u8; LAST + 1]> = std::sync::OnceLock::new();
+    let lut = LUT.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let t = i as f32 / LAST as f32;
+            (craft_color::linear_to_srgb(t * t) * 255.0 + 0.5) as u8
+        })
+    });
+    let i = (v.clamp(0.0, 1.0).sqrt() * LAST as f32 + 0.5) as usize;
+    lut[i.min(LAST)]
+}
+
 impl Rgb32f {
     /// Bilinear sample at continuous pixel coordinates (pixel centres at +0.5).
     #[inline]
@@ -250,8 +266,7 @@ impl Rgb32f {
 
     /// Encode to 8-bit sRGB from linear sRGB values (no gamut conversion).
     pub fn to_srgb8(&self) -> Rgba8 {
-        use craft_color::linear_to_srgb_u8;
-        self.map(|p| [linear_to_srgb_u8(p[0]), linear_to_srgb_u8(p[1]), linear_to_srgb_u8(p[2]), 255])
+        self.map(|p| [encode_raster_srgb8(p[0]), encode_raster_srgb8(p[1]), encode_raster_srgb8(p[2]), 255])
     }
 }
 
@@ -367,6 +382,14 @@ mod tests {
         assert_eq!(img.sample_bilinear(1.5, 2.5), [1.0, 2.0, 1.0]);
         let m = img.sample_bilinear(1.0, 1.5);
         assert!((m[0] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn raster_srgb8_keeps_lightcraft_float_quantization() {
+        // Referenced to LightCraft's sqrt-domain conversion, not the 8-bit decode grid.
+        let samples = [[0.00013, 0.00016, 0.0005], [0.003_130_8, 0.18, 0.5], [-0.1, 1.0, 1.1]];
+        let img = Rgb32f::from_fn(samples.len(), 1, |x, _| samples[x]);
+        assert_eq!(img.to_srgb8().data, [[0, 1, 2, 255], [10, 118, 188, 255], [0, 255, 255, 255]]);
     }
 
     #[test]
