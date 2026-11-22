@@ -166,10 +166,16 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
         .mappings()
         .filter(|(_, glyph)| inked(*glyph))
         .filter_map(|(cp, _)| char::from_u32(cp))
-        .filter(|c| !c.is_whitespace() && !c.is_control())
+        .filter(|c| !c.is_whitespace() && !c.is_control() && !is_private_use(*c))
         .take(6)
         .collect();
     Some(Samples { latin: first, arabic: None })
+}
+
+/// Whether `c` is in a private-use area: an icon a font's maker mapped there (a patched Nerd Font
+/// starts its character map with them), not a character a sample should stand for.
+fn is_private_use(c: char) -> bool {
+    matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD)
 }
 
 /// Whether a glyph of `font` has an outline, which is all the sample painter draws: a TrueType glyph with contours, or
