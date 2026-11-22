@@ -638,7 +638,7 @@ pub fn plan(set: &ForeignSet, keymap: &Keymap, options: &ImportOptions) -> Impor
             let reason = match found {
                 Found::Many => UnmatchedReason::Ambiguous,
                 _ if no_equivalent => UnmatchedReason::NoEquivalent,
-                _ if matches!(index.find(&entry, !entry.is_tool, &BTreeMap::new()), Found::One(..)) => UnmatchedReason::Tool,
+                _ if matches!(index.find(entry, !entry.is_tool, &BTreeMap::new()), Found::One(..)) => UnmatchedReason::Tool,
                 _ => UnmatchedReason::NoMatch,
             };
             if options.suggest && !matches!(reason, UnmatchedReason::Tool | UnmatchedReason::NoEquivalent) {

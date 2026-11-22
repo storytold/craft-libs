@@ -282,11 +282,9 @@ fn tools_sharing_a_chord_show_it_as_the_lookup_runs_them() {
     assert_eq!(km.shown_chord(&CommandRef::with_params("tool.move", serde_json::json!({}))), Some(chord("V")));
 }
 
-/// A hold is `Hold X` in text and serde, only a chord that types a character can be held, holds clash only with holds,
-/// and while holds are off they stay in the overrides but leave every reader.
+/// A hold is `Hold X` in text, serde and display.
 #[test]
-fn hold_bindings_parse_clash_only_with_holds_and_hide_while_off() {
-    use craft_keymap::AssignError;
+fn hold_triggers_read_and_write_as_hold_and_the_chord() {
     for &key in Key::ALL {
         let hold = Trigger::hold(Chord::plain(key));
         let text = format!("Hold {}", key.name());
@@ -298,15 +296,24 @@ fn hold_bindings_parse_clash_only_with_holds_and_hide_while_off() {
     for text in ["Hold", "Hold A B", "Hold Hold A"] {
         assert!(Trigger::parse(text).is_err(), "{text}");
     }
+}
 
+/// `edit.b` holds H (and presses F5); `app.hold` and the Timeline's `timeline.hold` both hold J. Holds start off.
+fn hold_keymap() -> Keymap {
     let catalog =
         vec![app("edit.a", &["Cmd+K"]), app("edit.b", &[]), app("edit.c", &[]), app("app.hold", &[]), in_scope("timeline.hold", "Timeline", &[])];
     let mut o = Overrides::new();
     o.insert("edit.b", vec!["Hold H".into(), "F5".into()]);
     o.insert("app.hold", vec!["Hold J".into()]);
     o.insert("timeline.hold", vec!["Hold J".into()]);
-    let mut km = Keymap::new(catalog, scopes(), Platform::Mac).with_overrides(o);
+    Keymap::new(catalog, scopes(), Platform::Mac).with_overrides(o)
+}
 
+/// While holds are off they stay in the overrides, through edits made without seeing them, but leave every reader;
+/// turning holds on brings them back with one rebuild.
+#[test]
+fn hold_bindings_hide_while_off_and_survive_edits() {
+    let mut km = hold_keymap();
     assert!(!km.holds());
     assert_eq!(km.bindings(&cmd("edit.b")), vec![b("F5")]);
     assert_eq!(km.hold_of(&chord("H"), &Active::NONE), None);
@@ -334,7 +341,14 @@ fn hold_bindings_parse_clash_only_with_holds_and_hide_while_off() {
     assert_eq!(km.shown_chord(&cmd("edit.b")), None, "only single presses are shown");
     assert_eq!(km.hold_of(&chord("J"), &Active::NONE), Some(cmd("app.hold")));
     assert_eq!(km.hold_of(&chord("J"), &Active::panel("Timeline")), Some(cmd("timeline.hold")));
+}
 
+/// Holds clash only with holds, and only a chord that types a character can be held.
+#[test]
+fn hold_bindings_clash_only_with_holds() {
+    use craft_keymap::AssignError;
+    let mut km = hold_keymap();
+    km.set_holds(true);
     let hold = |text: &str| Binding::new(Trigger::hold(chord(text)));
     assert!(matches!(km.assign(&cmd("edit.c"), hold("H"), Policy::Refuse), Err(AssignError::Taken(_))), "two holds on one chord clash");
     km.assign(&cmd("edit.c"), b("H"), Policy::Refuse).expect("a single press on a held chord does not clash");
