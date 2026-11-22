@@ -21,7 +21,6 @@
 
 use craft_behavior::PointerButton;
 use craft_keymap::{Key, Mods};
-use craft_ui::runtime::egui::access::AccessTree;
 use craft_ui::runtime::windows::{Released, WindowHost};
 use egui::{Pos2, Vec2, ViewportId, pos2, vec2};
 use serde_json::Value;
@@ -95,18 +94,10 @@ impl At {
 
     /// The screen point, through `map` for a document point; [`NO_DOCUMENT`] when the map has none, and
     /// [`OFF_SCREEN`] when it maps beyond [`MAX_SCREEN_POINT`]; a point that is not finite is [`NOT_FINITE`]. A control
-    /// point is its rect's centre plus the offset: [`access::NO_TREE`] without a tree, [`access::NO_PLACE`] for a
-    /// control with no area.
-    pub fn resolve(&self, map: DocumentMap<'_>, tree: Option<&AccessTree>) -> Result<Pos2, String> {
+    /// point is the centre of the rect `controls` gives it plus the offset, or the error `controls` gives.
+    pub fn resolve(&self, map: DocumentMap<'_>, controls: access::ControlMap<'_>) -> Result<Pos2, String> {
         match self {
-            Self::Control { target, offset } => {
-                let tree = tree.ok_or_else(|| access::NO_TREE.to_owned())?;
-                let rect = tree
-                    .bounds_of(target.find(tree)?)
-                    .filter(|rect| rect.is_finite() && rect.width() > 0.0 && rect.height() > 0.0)
-                    .ok_or_else(|| access::NO_PLACE.to_owned())?;
-                Ok(rect.center() + *offset)
-            }
+            Self::Control { target, offset } => Ok(controls(target)?.center() + *offset),
             Self::Screen(at) if at.x.is_finite() && at.y.is_finite() => Ok(*at),
             Self::Screen(_) => Err(NOT_FINITE.to_owned()),
             Self::Document(at, _) if !(at.x.is_finite() && at.y.is_finite()) => Err(NOT_FINITE.to_owned()),
@@ -118,9 +109,9 @@ impl At {
         }
     }
 
-    /// [`At::resolve`] against the access tree the host kept for `viewport`.
+    /// [`At::resolve`] against the controls of the access tree the host kept for `viewport`.
     fn place(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<Pos2, String> {
-        self.resolve(map, host.access_tree(viewport).as_deref())
+        self.resolve(map, &|target| target.rect(host, viewport))
     }
 }
 

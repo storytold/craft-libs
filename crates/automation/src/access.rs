@@ -7,7 +7,7 @@ use craft_behavior::Mixed;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::egui::access::{AccessTree, NodeKey, name};
 use craft_ui::runtime::windows::WindowHost;
-use egui::ViewportId;
+use egui::{Rect, ViewportId};
 use serde_json::{Map, Value, json};
 
 use crate::protocol::Params;
@@ -26,6 +26,9 @@ pub const NO_PLACE: &str = "the control has no place on the screen";
 
 /// The largest `index` a target takes.
 pub const MAX_INDEX: usize = 1024;
+
+/// The place of a control a target names: its rect in screen points, or the error why it has none.
+pub type ControlMap<'a> = &'a dyn Fn(&Target) -> Result<Rect, String>;
 
 /// A control named by `{name, role?, within?, index?}`.
 ///
@@ -128,6 +131,15 @@ impl Target {
             (None, [only]) => Ok(*only),
             (None, found) => Err(format!("{AMBIGUOUS} ({}): add `role`, `within` or `index`", found.len())),
         }
+    }
+
+    /// The rect of this target's control in the tree the host kept for `viewport`: [`NO_TREE`] before the first,
+    /// [`NO_PLACE`] for a control with no area.
+    pub fn rect(&self, host: &WindowHost, viewport: ViewportId) -> Result<Rect, String> {
+        let tree = host.access_tree(viewport).ok_or_else(|| NO_TREE.to_owned())?;
+        tree.bounds_of(self.find(&tree)?)
+            .filter(|rect| rect.is_finite() && rect.width() > 0.0 && rect.height() > 0.0)
+            .ok_or_else(|| NO_PLACE.to_owned())
     }
 }
 

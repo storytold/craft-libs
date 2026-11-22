@@ -5,6 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use craft_automation::access::NO_TREE;
 use craft_automation::synthetic::{At, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
@@ -415,12 +416,13 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 /// A NaN or infinite point of a request is an error at the request, in either coordinate space, not a panic in the pass.
 #[trial]
 fn a_point_that_is_not_finite_is_refused() {
+    let no_controls = &|_: &_| Err(NO_TREE.to_owned());
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0), 0)] {
-            assert_eq!(at.resolve(&|_, p| Some(p), None), Err(NOT_FINITE.to_owned()), "{at:?}");
+            assert_eq!(at.resolve(&|_, p| Some(p), no_controls), Err(NOT_FINITE.to_owned()), "{at:?}");
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None, None), Ok(pos2(3.0, 4.0)));
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None, no_controls), Ok(pos2(3.0, 4.0)));
 }
 
 /// `ui.wheel` in lines queues whole notches in the line unit, clamped; without `unit` the turn is in points; an
