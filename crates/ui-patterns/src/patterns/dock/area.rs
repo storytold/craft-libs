@@ -934,9 +934,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // Keyed by the rail's group: unique among the rails a dock area shows.
             let _ = MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui);
         });
-        // The group's size goes on the drag here, outside the view, whose measuring runs see no size.
+        // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
+        // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
         if !sent.is_empty() {
-            drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| drag.source = Some(size));
+            let press = ui.input(|i| i.pointer.press_origin());
+            drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
+                drag.source = Some(size);
+                drag.press = press;
+            });
         }
     }
 

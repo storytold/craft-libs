@@ -601,6 +601,10 @@ pub struct GroupDrag<P> {
     pub strip: Option<Vec2>,
     /// The panel the unit shows, for the drag's preview.
     pub active: PanelKey,
+    /// Where the press that started the drag was, for a drag that moves a floating window it is the whole of (a
+    /// floating tool rail by its grip): the window moves by the pointer's travel from here, so the point grabbed stays
+    /// under the pointer. `None` elsewhere.
+    pub press: Option<egui::Pos2>,
     /// The arrangement the drag started on, when it started in a dock area.
     pub(crate) started: Option<super::drop::Arrangement>,
 }

@@ -167,7 +167,8 @@ fn a_tool_rails_grip_strip_replays_while_the_pointer_moves_elsewhere() {
 }
 
 /// A tool rail floating in a window of its own is moved by its grip strip, as its title row moves it: a drag on the
-/// grip released over empty room puts the window under the pointer (photocraft#16426). Before, the drag tried to float
+/// grip released over empty room moves the window by the pointer's travel, the point grabbed staying under the pointer
+/// (photocraft#16426). Before, the drag tried to float
 /// the group again, which the model refuses for a floating group, and the window stayed.
 #[trial]
 fn a_floating_tool_rails_grip_moves_its_window() {
@@ -196,7 +197,10 @@ fn a_floating_tool_rails_grip_moves_its_window() {
     let to = grip + Vec2::new(-200.0, 150.0);
     fixture.release_at(to).settle();
     let after = layout.borrow().as_ref().and_then(|l| l.floating.first().map(|w| w.rect)).expect("the rail still floats");
-    assert!(after.min.x < before.min.x - 100.0 && after.min.y > before.min.y + 100.0, "the window moved with the drag: {before:?} -> {after:?}");
-    assert!(after.contains(to), "the window lies under the release: {after:?} at {to:?}");
+    let travel = to - grip;
+    assert!(
+        (after.min - (before.min + travel)).length() < 0.5 && (after.size() - before.size()).length() < 0.5,
+        "the window moved by the pointer's travel {travel:?}, keeping the grabbed point under it: {before:?} -> {after:?}"
+    );
     assert_eq!(layout.borrow().as_ref().map(|l| l.floating.len()), Some(1), "still one floating window");
 }

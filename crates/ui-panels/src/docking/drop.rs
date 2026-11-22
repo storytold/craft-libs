@@ -54,6 +54,11 @@ pub trait DockDrag<P> {
     fn strip(&self) -> Option<Vec2> {
         None
     }
+    /// Where the press that started the drag was, when a drop that moves a floating window keeps the grabbed point
+    /// under the pointer; `None` puts the window's title row under it.
+    fn press(&self) -> Option<Pos2> {
+        None
+    }
 }
 
 impl<P: Clone + Eq + Hash> DockDrag<P> for PanelDrag {
@@ -77,6 +82,10 @@ impl<P: Clone> DockDrag<P> for GroupDrag<P> {
 
     fn strip(&self) -> Option<Vec2> {
         self.strip
+    }
+
+    fn press(&self) -> Option<Pos2> {
+        self.press
     }
 }
 
@@ -330,7 +339,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         let unit = drag.unit(self.layout)?;
         let window = matches!(unit, DragUnit::Window(_));
         if pointer::mods(self.ctx).cmd {
-            return if window { None } else { self.float(&unit, at, drag.source(), drag.strip()) };
+            return if window { None } else { self.float(&unit, at, drag.source(), drag.strip(), drag.press()) };
         }
         if window && !self.title_bar_docks {
             return None;
@@ -353,7 +362,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         if window || !self.float_on_empty {
             return None;
         }
-        self.float(&unit, at, drag.source(), drag.strip())
+        self.float(&unit, at, drag.source(), drag.strip(), drag.press())
     }
 
     /// The rect the panels of `unit` take in `after`, the layout once dropped on `spot`; `None` without `placing` or
@@ -373,12 +382,19 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
     ///
     /// A unit that is the whole of a floating window already (a floating tool rail dragged by its grip,
     /// photocraft#16426) moves that window under `at`: it is floating, so floating it again would be refused.
-    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>, strip: Option<Vec2>) -> Option<DockDropped<P>> {
+    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>, strip: Option<Vec2>, press: Option<Pos2>) -> Option<DockDropped<P>> {
         let space = self.space?;
         if let Some(window) = self.layout.floating.iter().find(|window| window.contains(unit.lead()))
             && window.panels().all(|panel| moving_panels(self.layout, unit).contains(panel))
         {
-            let rect = under_pointer(space, at, space.size_of(unit, source).min(space.area.size()));
+            // The point grabbed stays under the pointer, inside the float area; without the press, the title row.
+            let rect = match press {
+                Some(press) => {
+                    let moved = window.rect.translate(at - press);
+                    Rect::from_min_size(moved.min.min(space.area.max - moved.size()).max(space.area.min), moved.size())
+                }
+                None => under_pointer(space, at, space.size_of(unit, source).min(space.area.size())),
+            };
             let moved = Action::move_floating(unit.lead().clone(), rect);
             // A move keeps the arrangement (`takes` asks for a change of it): the model need only take the action.
             let taken = self.layout.clone().apply_with_permissions(moved.clone(), self.permissions).is_ok();
@@ -464,7 +480,7 @@ where
 {
     let preview = name.map_or(DragPreview::None, DragPreview::Named);
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source, strip: None, started }, preview);
+    cx.start_drag(GroupDrag { unit, active, source, strip: None, press: None, started }, preview);
 }
 
 /// Starts the drag of `unit` out of a collapsed column, from its icons of size `strip`, whose shown panel is
@@ -476,7 +492,7 @@ where
     C: Component,
 {
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::Named(label));
+    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), press: None, started }, DragPreview::Named(label));
 }
 
 /// Ends a running tab or group drag that started on `shown`'s dock under another generation: another arrangement
