@@ -41,6 +41,15 @@ pub struct Normalized {
     pub cfa: Option<Cfa>,
 }
 
+// DNG 1.7.1, chapters 5 and 7: the integer lookup follows OpcodeList1 and precedes
+// black/white normalization. The decoder has normally applied it already.
+fn deferred_linearization_table(raw: &RawImage) -> Option<&[u16]> {
+    if raw.linearized || !matches!(raw.data, RawData::U16(_)) {
+        return None;
+    }
+    raw.linearization_table.as_deref().filter(|table| !table.is_empty())
+}
+
 /// Sensor development operations on [`craft_raw::RawImage`].
 pub trait RawDevelopExt {
     fn validate(&self) -> Result<()>;
@@ -97,9 +106,19 @@ impl RawDevelopExt for RawImage {
             opcodes::apply_list(&self.opcodes.list1, &mut v, self.width, self.height, cpp, self.cfa.as_ref(), 65535.0);
             Some(v)
         };
-        let src = |i: usize| match &stage1 {
-            Some(v) => v[i],
-            None => self.data.get(i),
+        let table = deferred_linearization_table(self);
+        let src = |i: usize| {
+            let code = stage1.as_ref().map_or_else(|| self.data.get(i), |v| v[i]);
+            if let Some(table) = table
+                && code.is_finite()
+            {
+                // The LUT is indexed by unsigned integer codes. List1's scratch buffer
+                // uses floats, so round to the nearest code at the lookup boundary.
+                let index = usize::from(code.round() as u16).min(table.len() - 1);
+                f32::from(table[index])
+            } else {
+                code
+            }
         };
         let scale: Vec<f32> = (0..cpp)
             .map(|s| {
