@@ -349,14 +349,16 @@ pub(crate) fn reload_dictionaries() {
 }
 
 /// The `.dic` file a [`ProofLang::Pack`] language's (or German's or Bulgarian's) spelling is read from now (the dictionaries
-/// folder, an installed Language pack or the system's); `None` when it has none (unchecked) or
-/// `lang` isn't a pack language. Reads the dictionary once (it is cached afterwards).
+/// folder, a disk Language pack or the system's). `None` can also mean a memory-backed dictionary;
+/// use [`missing_dictionary`] to check availability. It is also `None` when `lang` isn't a pack
+/// language. Reads the dictionary once (it is cached afterwards).
 pub fn pack_dictionary_file(lang: ProofLang) -> Option<std::path::PathBuf> {
     pack_lang::dictionary_file(lang.spelling_locale()?)
 }
 
-/// Each language that reads an installed Hunspell dictionary, with the `.dic` file found for it
-/// now (`None`: not installed, so the language has no spelling marks).
+/// Each language that reads an installed Hunspell dictionary, with its current `.dic` file.
+/// A memory-backed dictionary has no file and reports `None`, as does an absent dictionary;
+/// use [`missing_dictionary`] to distinguish availability.
 pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> {
     LANGUAGES.iter().map(|l| (l.lang, l.slot.installed_path())).collect()
 }
@@ -372,20 +374,22 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
     if let Some(l) = lang.spelling_locale() {
         return pack_lang::load_error(l);
     }
-    hunspell::load_error(language(lang)?.slot.name()).map(|(_, reason)| reason)
+    hunspell::source_load_error(language(lang)?.slot.name())
 }
 
 /// Where the spelling of an English `lang` comes from now (`None` for other languages), in this
 /// order: a Hunspell dictionary of its own (`en_US`, `en_GB`, `en_CA`) in the dictionaries
-/// folder, the SCOWL dictionary embedded at build time, one of its own on the system, else the
-/// Moby word list built into the crate. Another English's dictionary is never used. Reads the
+/// folder, then embedded SCOWL when present. Without embedded SCOWL, installed Language packs
+/// (including registered memory packs) precede system Hunspell and the built-in Moby list.
+/// Another English's dictionary is never used. Reads the
 /// Hunspell dictionary once (it is cached afterwards).
 pub fn english_source(lang: ProofLang) -> Option<EnglishSource> {
     lang.is_english().then(|| english::source(lang))
 }
 
 /// A number that changes whenever a word is added to or removed from the user dictionary, the
-/// dictionaries folder changes, or the Language packs do ([`packs::set_packs_dir`]).
+/// dictionaries folder changes, or disk or memory Language packs change ([`packs::set_packs_dir`],
+/// [`packs::add_from_memory`], [`packs::remove_from_memory`]).
 pub fn dictionary_generation() -> u64 {
     DICTIONARY_GENERATION.load(Ordering::Relaxed)
 }
@@ -620,7 +624,8 @@ pub fn missing_dictionary(lang: Option<&str>) -> Option<&'static str> {
 /// The Hunspell name, `.dic` file and reason of a dictionary that is installed for this language
 /// but couldn't be read (unsupported `SET` encoding, too large, a parse error). `None` when it
 /// loaded, or when no file exists (then [`missing_dictionary`] names it). Reads the dictionary
-/// once (it is cached afterwards).
+/// once (it is cached afterwards). Invalid memory-pack bytes are reported directly by
+/// [`packs::add_from_memory`] before registration; this getter reports filesystem candidates only.
 pub fn unreadable_dictionary(lang: Option<&str>) -> Option<(&'static str, std::path::PathBuf, String)> {
     let lang = ProofLang::from_tag(lang);
     let name = dictionary_needed(lang, dictionary_loaded(lang)?)?;
@@ -1195,6 +1200,9 @@ pub(crate) fn hold_dictionary_tests() {
 mod no_data;
 
 #[cfg(test)]
+mod memory_packs_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn missing_dictionary_is_named_only_for_hunspell_languages_without_one() {
@@ -1598,7 +1606,7 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(
             installed[0],
-            packs::InstalledPack { locale: "hr".into(), name: "Hrvatski (test)".into(), licence: "MIT".into(), path: pack.clone() }
+            packs::InstalledPack { locale: "hr".into(), name: "Hrvatski (test)".into(), licence: "MIT".into(), path: Some(pack.clone()) }
         );
         assert!(packs::load_errors().is_empty(), "{:?}", packs::load_errors());
         assert!(is_correct_in("zzpaket", ProofLang::Hr) && is_correct_in("kuća", ProofLang::Hr), "the pack's dictionary");

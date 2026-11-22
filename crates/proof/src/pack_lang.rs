@@ -297,14 +297,13 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     let names = names(locale);
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let key = names.first().map_or("", String::as_str);
-    let Some((aff, dic)) = crate::hunspell::find(&refs) else {
+    let Some(source) = crate::hunspell::source_candidates(&refs).into_iter().next() else {
         crate::hunspell::clear_load_error(key);
         return (Arc::default(), None, 0);
     };
-    let size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
-    let bytes = size(&aff).saturating_add(size(&dic)).saturating_mul(BYTES_PER_FILE_BYTE).max(1);
-    match crate::hunspell::note_load(key, &dic, crate::hunspell::load(&aff, &dic)) {
-        Ok(d) => (Arc::new(d), Some(dic), bytes),
+    let bytes = source.raw_spelling_bytes().saturating_mul(BYTES_PER_FILE_BYTE).max(1);
+    match source.note_load(key, source.load()) {
+        Ok(d) => (Arc::new(d), source.file(), bytes),
         Err(e) => {
             log::warn!("{locale} spelling: {e}");
             (Arc::default(), None, 0)
@@ -325,7 +324,7 @@ pub(crate) fn dictionary_file(locale: PackLocale) -> Option<PathBuf> {
 
 /// Why `locale`'s dictionary failed to load, if it did.
 pub(crate) fn load_error(locale: PackLocale) -> Option<String> {
-    crate::hunspell::load_error(names(locale).first()?).map(|(_, e)| e)
+    crate::hunspell::source_load_error(names(locale).first()?)
 }
 
 /// Is `word` right in `locale`? Every word is when there is no dictionary.

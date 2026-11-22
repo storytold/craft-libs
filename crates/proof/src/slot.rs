@@ -138,12 +138,16 @@ impl<D: Dictionary> DictSlot<D> {
 
     fn load_installed(&self) -> D {
         let name = self.name();
-        let Some((aff, dic)) = crate::hunspell::find(self.names) else {
+        let Some(source) = crate::hunspell::source_candidates(self.names).into_iter().next() else {
             crate::hunspell::clear_load_error(name);
             log::info!("{} spelling: no Hunspell {name} dictionary installed", self.english);
             return D::default();
         };
-        crate::hunspell::note_load(name, &dic, D::load(&aff, &dic)).unwrap_or_else(|e| {
+        let loaded = match &source {
+            crate::hunspell::DictionarySource::Files { aff, dic } => D::load(aff, dic),
+            crate::hunspell::DictionarySource::Memory(_) => source.decoded().and_then(|(aff, dic)| D::parse(&aff, &dic)),
+        };
+        source.note_load(name, loaded).unwrap_or_else(|e| {
             log::warn!("{} spelling: {e}", self.english);
             D::default()
         })
@@ -175,7 +179,7 @@ impl<D: Dictionary> DictSlot<D> {
         if self.read().in_memory {
             return None;
         }
-        crate::hunspell::find(self.names).map(|(_, dic)| dic)
+        crate::hunspell::source_candidates(self.names).into_iter().next().and_then(|s| s.file())
     }
 
     /// Is a dictionary available (spelling is checked)?
