@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 type Dialogs = Rc<RefCell<DialogHost>>;
-type Checked = Result<Option<Release>, String>;
+type Checked = Result<Option<Release>, craft_update::CheckError>;
 
 fn newer() -> Release {
     Release { tag: "v9.0.0".into(), version: craft_update::parse_version("9.0.0"), ..Release::default() }
@@ -71,6 +71,19 @@ fn a_check_exposes_the_release_it_found_and_an_up_to_date_one_exposes_none() {
     current.check_now();
     current.settle_for_tests(&ctx);
     assert!(current.available().is_none());
+}
+
+#[trial]
+fn a_rate_limited_check_is_its_own_status_so_the_app_can_translate_it() {
+    let ctx = ctx();
+    let mut u = updater(Err(craft_update::CheckError::RateLimited));
+    u.check_now();
+    u.settle_for_tests(&ctx);
+    assert_eq!(u.status(), &Status::RateLimited);
+    let mut other = updater(Err("offline".into()));
+    other.check_now();
+    other.settle_for_tests(&ctx);
+    assert_eq!(other.status(), &Status::Failed("offline".into()), "any other reason stays data");
 }
 
 #[trial]
