@@ -215,15 +215,27 @@ pub fn new_token() -> Option<String> {
     Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// One line without its newline, or `None` at the end of the stream. A client that sends
-/// gigabytes with no newline would otherwise make this thread allocate until the process is
-/// killed, so the line is refused as soon as it passes `max`.
+/// One line without its newline (and a `\r` before it), or `None` at the end of the stream. A
+/// line of more than `max` bytes, not counting its `\r\n` or `\n`, is refused with `InvalidData`.
+/// A client that sends gigabytes with no newline would otherwise make this thread allocate until
+/// the process is killed, so a line with no newline yet is refused once it holds more than
+/// `max + 1` bytes. A read interrupted by a signal is tried again, and a read that times out (the
+/// token deadline) fails with `TimedOut`.
 fn read_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<Vec<u8>>> {
+    let too_long = || std::io::Error::new(std::io::ErrorKind::InvalidData, format!("request line longer than {max} bytes; closing the connection"));
     let mut line = Vec::new();
     loop {
         let (done, used) = {
-            let available = r.fill_buf()?;
+            let available = match r.fill_buf() {
+                Ok(available) => available,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(std::io::ErrorKind::TimedOut.into()),
+                Err(e) => return Err(e),
+            };
             if available.is_empty() {
+                if line.len() > max {
+                    return Err(too_long());
+                }
                 return Ok((!line.is_empty()).then_some(line));
             }
             match available.iter().position(|b| *b == b'\n') {
@@ -239,10 +251,17 @@ fn read_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<Vec<u8>
         };
         r.consume(used);
         if done {
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            if line.len() > max {
+                return Err(too_long());
+            }
             return Ok(Some(line));
         }
-        if line.len() > max {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "request too large"));
+        // One byte past `max` may be the `\r` of a `\r\n` whose `\n` has not arrived yet.
+        if line.len() > max.saturating_add(1) {
+            return Err(too_long());
         }
     }
 }
@@ -1335,7 +1354,73 @@ mod tests {
         let mut r = BufReader::new(flood.as_slice());
         let e = read_line(&mut r, MAX_LINE).unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
-        assert!(e.to_string().contains("request too large"), "{e}");
+        assert!(e.to_string().contains(&format!("longer than {MAX_LINE} bytes")), "{e}");
+    }
+
+    /// The cap is exact: a line of `max` bytes is read, and one byte more is refused even when its
+    /// newline arrives in the same read as the rest of it. The `\r\n` or `\n` after the line does
+    /// not count toward the cap.
+    #[test]
+    fn the_cap_holds_for_a_line_read_at_once() {
+        for end in [&b"\n"[..], &b"\r\n"[..]] {
+            let mut fits = vec![b'A'; 1000];
+            fits.extend_from_slice(end);
+            assert_eq!(read_line(&mut BufReader::new(fits.as_slice()), 1000).unwrap().unwrap().len(), 1000);
+            let mut over = vec![b'A'; 1001];
+            over.extend_from_slice(end);
+            let e = read_line(&mut BufReader::new(over.as_slice()), 1000).unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        }
+    }
+
+    /// The cap holds when the line arrives a few bytes at a time, and at the end of the stream:
+    /// a `\r\n` split across two reads does not count toward it, and a last line of one byte
+    /// more than the cap with no newline is refused.
+    #[test]
+    fn the_cap_holds_across_reads() {
+        let mut fits = vec![b'A'; 1000];
+        fits.extend_from_slice(b"\r\n");
+        assert_eq!(read_line(&mut BufReader::with_capacity(7, fits.as_slice()), 1000).unwrap().unwrap().len(), 1000);
+        let last = vec![b'A'; 1001];
+        let e = read_line(&mut BufReader::with_capacity(7, last.as_slice()), 1000).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// A read interrupted by a signal is tried again instead of ending the connection, and a
+    /// `\r` before the newline is not part of the line.
+    #[test]
+    fn interrupted_reads_are_retried() {
+        struct Interrupting(Vec<&'static [u8]>);
+        impl std::io::Read for Interrupting {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0.is_empty() {
+                    return Ok(0);
+                }
+                let chunk = self.0.remove(0);
+                if chunk.is_empty() {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                buf[..chunk.len()].copy_from_slice(chunk);
+                Ok(chunk.len())
+            }
+        }
+        let mut r = BufReader::new(Interrupting(vec![b"", b"{\"a\"", b"", b":1}\r\n"]));
+        assert_eq!(read_line(&mut r, MAX_LINE).unwrap().unwrap(), b"{\"a\":1}");
+        assert!(read_line(&mut r, MAX_LINE).unwrap().is_none());
+    }
+
+    /// A read that times out before the token is shown fails with `TimedOut`, which closes the
+    /// connection without a reply.
+    #[test]
+    fn timed_out_reads_report_timed_out() {
+        struct Slow;
+        impl std::io::Read for Slow {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
+        }
+        let e = read_line(&mut BufReader::new(Slow), MAX_LINE).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
     }
 
     /// Ordinary framing: lines split on newlines, blank lines kept, no trailing newline needed.
