@@ -142,11 +142,12 @@ fn a_drag_held_at_a_scroll_bodys_edge_scrolls_it_once_per_frame() {
                 blocks(ui, 40);
             });
         });
-        // The table ends where the panel's view does, so the pointer at the panel's end is in both bands.
+        // The table's rows end just inside the panel's view, with more blocks below, so the pointer at the panel's
+        // end is past the table's rows and in the band of a panel that can still scroll.
         in_region(ui, Rect::from_min_size(two, PANEL), |ui| {
             Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("two").show(ui, |ui, _| {
                 lines[1].set(ui.next_widget_position().y);
-                blocks(ui, 5);
+                blocks(ui, 4);
                 table_in(ui, "inner", reorderable().max_rows(5), &source, &inner);
                 blocks(ui, 30);
             });
