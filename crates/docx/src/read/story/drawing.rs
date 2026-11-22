@@ -159,8 +159,15 @@ impl Reader<'_> {
             return None;
         }
         let fallback = ac.child("mc:Fallback");
-        let preview = fallback.and_then(|f| f.child("w:pict")).and_then(|p| self.read_vml(sc, p, rels));
-        let Some(mut object) = self.read_drawing(sc, drawing, rels) else {
+        let native = self.read_drawing(sc, drawing, rels);
+        // A lower-priority preview must not spend the native target's budget.
+        let native_link = native.as_ref().and_then(|_| {
+            self.drawing_link(drawing, rels).or_else(|| fallback.and_then(|f| f.child("w:drawing")).and_then(|d| self.drawing_link(d, rels)))
+        });
+        let preview = fallback
+            .and_then(|f| f.child("w:pict"))
+            .and_then(|p| if native.is_some() { self.read_vml_preview(sc, p, rels) } else { self.read_vml(sc, p, rels) });
+        let Some(mut object) = native else {
             return preview.map(|(object, target)| (object, target.and_then(|target| self.keep_drawing_link(target))));
         };
         let (preview, preview_link) = preview.map(|(object, link)| (Some(object), link)).unwrap_or_default();
@@ -178,10 +185,7 @@ impl Reader<'_> {
                 // A malformed or over-budget fallback must not discard a valid native part.
             }
         }
-        let link = self
-            .drawing_link(drawing, rels)
-            .or_else(|| fallback.and_then(|f| f.child("w:drawing")).and_then(|d| self.drawing_link(d, rels)))
-            .or_else(|| preview_link.and_then(|target| self.keep_drawing_link(target)));
+        let link = native_link.or_else(|| preview_link.and_then(|target| self.keep_drawing_link(target)));
         Some((object, link))
     }
 

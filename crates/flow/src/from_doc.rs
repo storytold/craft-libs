@@ -1,11 +1,34 @@
 use super::types::{
-    BoxLook, Cell, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, MAX_GROUP_DEPTH, Member, Meta,
-    Para, RevMark, Spacing,
+    BoxLook, Cell, Dropped, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Img, Inline, Kind, ListInfo, MAX_DEPTH, MAX_GROUP_DEPTH,
+    MAX_LINK, MAX_RUN_STRINGS, Member, Meta, Para, RevMark, Spacing, dropped,
 };
 use super::{
     Arc, Block, Blocks, CharProps, Document, InlineObject, NumFormat, OBJ, PAGE_BREAK, ParaProps, Paragraph, StyleKind, Table, TextColor, Underline,
     VMerge, VertAlign,
 };
+
+/// One conversion's retained drawing targets, across roots, members and nested stories.
+#[derive(Default)]
+struct DrawingLinks {
+    bytes: usize,
+}
+
+impl DrawingLinks {
+    fn keep(&mut self, target: Option<&str>) -> Option<String> {
+        let target = target?;
+        if target.len() > MAX_LINK {
+            let _ = super::kept_link(target);
+            return None;
+        }
+        let Some(bytes) = self.bytes.checked_add(target.len()).filter(|&n| n <= MAX_RUN_STRINGS) else {
+            dropped(Dropped::RunStrings);
+            return None;
+        };
+        let target = super::kept_link(target)?;
+        self.bytes = bytes;
+        Some(target.to_string())
+    }
+}
 
 pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
     depth <= MAX_DEPTH
@@ -281,12 +304,12 @@ fn media_ext(key: &str, data: &[u8]) -> String {
 
 /// The flow inlines for a note reference, comment mark or field `o` of `doc`, when `opts` asks
 /// for them; `None` for other objects. `f` is the formatting of the run `o` is in.
-fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Option<Vec<Inline>> {
+fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts, links: &mut DrawingLinks) -> Option<Vec<Inline>> {
     Some(match o {
         InlineObject::NoteRef { kind, id, custom } if opts.notes => {
             // The note's content without its own mark (a note holds no notes).
             let story = doc.parts.get(id).map(|part| &part.blocks);
-            let mut blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, ..opts })).unwrap_or_default();
+            let mut blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, ..opts }, links)).unwrap_or_default();
             // The space after the mark is the mark's (see `to_doc`'s `note`); a tab or more
             // spaces there are the note's own.
             if let Some(FBlock::Para(first)) = blocks.first_mut() {
@@ -305,7 +328,7 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
         // comment that starts the thread), which have no place of their own.
         InlineObject::CommentStart { id } if opts.comments => {
             let Some(c) = doc.comments.get(id) else { return Some(Vec::new()) };
-            let mut out = vec![Inline::Comment { id: *id, comment: Box::new(flow_comment(doc, c, None, opts)) }];
+            let mut out = vec![Inline::Comment { id: *id, comment: Box::new(flow_comment(doc, c, None, opts, links)) }];
             let mut thread = std::collections::BTreeSet::from([*id]);
             let mut k = 0;
             while let Some(Inline::Comment { id: at, .. }) = out.get(k) {
@@ -313,7 +336,7 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
                 k += 1;
                 for (rid, r) in doc.comments.iter().filter(|(_, r)| r.parent == Some(at)) {
                     if thread.insert(*rid) {
-                        out.push(Inline::Comment { id: *rid, comment: Box::new(flow_comment(doc, r, Some(*id), opts)) });
+                        out.push(Inline::Comment { id: *rid, comment: Box::new(flow_comment(doc, r, Some(*id), opts, links)) });
                     }
                 }
             }
@@ -329,9 +352,9 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
         // A text box's content, without notes, comments or boxes of its own.
         // A drawing shape, text box or group (pictures have their own place below).
         InlineObject::Shape { .. } | InlineObject::Group { .. } if opts.boxes => {
-            let mut inline = drawing_inline(doc, o, opts, 0, (1.0, 1.0))?;
+            let mut inline = drawing_inline(doc, o, opts, 0, (1.0, 1.0), links)?;
             if let Inline::Shape { link, .. } | Inline::Group { link, .. } = &mut inline {
-                *link = f.link.as_deref().map(str::to_string);
+                *link = links.keep(f.link.as_deref());
             }
             vec![inline]
         }
@@ -366,7 +389,7 @@ fn frame_freeform(corner: Option<u32>, w: f32, h: f32) -> craft_wordmodel::freef
 /// its size scaled by `scale` (a group's members are in its own coordinates). A shape or text
 /// box keeps its text, but not notes, comments or boxes of its own. `None` for what a flow has
 /// no drawing for: a freeform's paths, a picture whose data is missing.
-fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize, scale: (f32, f32)) -> Option<Inline> {
+fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize, scale: (f32, f32), links: &mut DrawingLinks) -> Option<Inline> {
     use craft_wordmodel::para::ShapeKind;
     let (sx, sy) = scale;
     match o {
@@ -386,7 +409,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             };
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
             let part = story.and_then(|id| doc.parts.get(&id));
-            let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
+            let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner, links)).unwrap_or_default();
             let look = BoxLook {
                 fill: fill.clone().filter(|_| kind != ShapeKind::Line),
                 line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
@@ -432,8 +455,8 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             let members: Vec<Member> = children
                 .iter()
                 .filter_map(|c| {
-                    drawing_inline(doc, &c.obj, opts, depth + 1, inner).map(|inline| Member {
-                        link: c.link.as_deref().and_then(super::kept_link).map(|s| s.to_string()),
+                    drawing_inline(doc, &c.obj, opts, depth + 1, inner, links).map(|inline| Member {
+                        link: links.keep(c.link.as_deref()),
                         x: c.x * inner.0,
                         y: c.y * inner.1,
                         inline,
@@ -453,9 +476,9 @@ fn kept_float(f: &craft_wordmodel::para::Float) -> Option<Box<craft_wordmodel::p
     (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v || f.z != 0).then(|| Box::new(f.clone()))
 }
 
-fn flow_comment(doc: &Document, c: &craft_wordmodel::Comment, parent: Option<u32>, opts: FlowOpts) -> FComment {
+fn flow_comment(doc: &Document, c: &craft_wordmodel::Comment, parent: Option<u32>, opts: FlowOpts, links: &mut DrawingLinks) -> FComment {
     let story = doc.parts.get(&c.part).map(|p| &p.blocks);
-    let blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, comments: false, ..opts })).unwrap_or_default();
+    let blocks = story.map(|b| flow_blocks(doc, b, 0, FlowOpts { notes: false, comments: false, ..opts }, links)).unwrap_or_default();
     FComment { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), resolved: c.resolved, parent, blocks }
 }
 
@@ -507,12 +530,12 @@ fn shown_text(o: &InlineObject) -> &str {
 }
 
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
-    flow_paras_in(doc, p, FlowOpts::default())
+    flow_paras_in(doc, p, FlowOpts::default(), &mut DrawingLinks::default())
 }
 
 /// [`flow_paras`]; `tracked` keeps tracked changes: deleted text stays, and text carries its
 /// insertion and deletion marks.
-fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
+fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts, links: &mut DrawingLinks) -> Vec<Para> {
     let tracked = opts.tracked;
     let (kind, list) = para_kind(doc, p);
     let list = flow_list(doc, kind, list, p, opts);
@@ -615,7 +638,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                 continue;
             }
             let from = out.inlines.len();
-            if let Some(items) = obj.and_then(|o| rich_inlines(doc, o, &f, opts)) {
+            if let Some(items) = obj.and_then(|o| rich_inlines(doc, o, &f, opts, links)) {
                 if !buf.is_empty() {
                     out.push_text(&std::mem::take(&mut buf), &f);
                 }
@@ -633,7 +656,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     let alt = if o.is_decorative() { "" } else { alt.as_str() };
                     match doc.media.get(media) {
                         Some(data) => out.inlines.push(Inline::Image(Img {
-                            link: f.link.as_deref().map(str::to_string),
+                            link: links.keep(f.link.as_deref()),
                             data: data.clone(),
                             ext: media_ext(media, data),
                             w: *w,
@@ -968,7 +991,7 @@ fn kept_index(doc: &Document, bl: &Blocks, i: usize) -> Option<(usize, std::sync
     (paras.len() == *n && craft_wordmodel::kept::run_fingerprint(paras.into_iter()) == *run).then(|| (*n, xml.clone()))
 }
 
-fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> Vec<FBlock> {
+fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts, links: &mut DrawingLinks) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut skip = 0usize;
     for (i, b) in bl.iter().enumerate() {
@@ -985,7 +1008,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
             let from = out.len();
             for b in bl.get(i..i + ix.0).unwrap_or(&[]) {
                 if let Block::Para(p) = &**b {
-                    out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para));
+                    out.extend(flow_paras_in(doc, p, tracked, links).into_iter().map(FBlock::Para));
                 }
             }
             let n = out.len() - from;
@@ -996,12 +1019,12 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
             continue;
         }
         match &**b {
-            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para)),
-            Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked))),
+            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked, links).into_iter().map(FBlock::Para)),
+            Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked, links))),
             Block::Table(t) => {
                 for r in &t.rows {
                     for c in &r.cells {
-                        out.extend(flow_blocks(doc, &c.blocks, depth, tracked));
+                        out.extend(flow_blocks(doc, &c.blocks, depth, tracked, links));
                     }
                 }
             }
@@ -1130,7 +1153,7 @@ fn with_cell_text(doc: &Document, blocks: &Blocks, chr: &CharProps, align: Optio
         .collect()
 }
 
-fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTable {
+fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts, links: &mut DrawingLinks) -> FTable {
     let mut rows = Vec::new();
     // Formats that keep cell formatting get the table style's and the table's borders cell by cell.
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
@@ -1160,8 +1183,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 }
             }
             let blocks = match &styled {
-                Some(st) => flow_blocks(doc, &with_cell_text(doc, &c.blocks, &st.chr, st.align, &st.para), depth + 1, tracked),
-                None => flow_blocks(doc, &c.blocks, depth + 1, tracked),
+                Some(st) => flow_blocks(doc, &with_cell_text(doc, &c.blocks, &st.chr, st.align, &st.para), depth + 1, tracked, links),
+                None => flow_blocks(doc, &c.blocks, depth + 1, tracked, links),
             };
             cells.push(Cell {
                 blocks,
@@ -1252,13 +1275,13 @@ pub fn from_doc_with(doc: &Document, opts: FlowOpts) -> Flow {
 
 /// `blocks` of `doc` (a header, footer or note) as flow blocks, keeping what `opts` asks for.
 pub fn part_flow(doc: &Document, blocks: &Blocks, opts: FlowOpts) -> Vec<FBlock> {
-    flow_blocks(doc, blocks, 0, opts)
+    flow_blocks(doc, blocks, 0, opts, &mut DrawingLinks::default())
 }
 
 fn flow_of(doc: &Document, tracked: FlowOpts) -> Flow {
     let c = &doc.core;
     Flow {
-        blocks: flow_blocks(doc, &doc.body, 0, tracked),
+        blocks: flow_blocks(doc, &doc.body, 0, tracked, &mut DrawingLinks::default()),
         meta: Meta {
             title: c.title.clone(),
             author: c.creator.clone(),
@@ -1331,5 +1354,59 @@ mod stacking_tests {
         assert_eq!(kept.z, u32::MAX);
         assert_eq!(kept.rot, f.rot);
         assert!(super::kept_float(&Float::default()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod drawing_link_tests {
+    use super::*;
+
+    #[test]
+    fn vml_hyperlinks_share_one_conversion_budget() {
+        let group = || Inline::Group {
+            w: 12.0,
+            h: 8.0,
+            float: None,
+            link: Some("root".into()),
+            members: vec![Member {
+                x: 0.0,
+                y: 0.0,
+                link: Some("member".into()),
+                inline: Inline::Shape {
+                    kind: craft_wordmodel::para::ShapeKind::Rectangle,
+                    w: 12.0,
+                    h: 8.0,
+                    float: None,
+                    blocks: Vec::new(),
+                    look: BoxLook::default(),
+                    path: None,
+                    link: None,
+                },
+            }],
+        };
+        let flow = Flow {
+            blocks: vec![
+                FBlock::Para(Para { kind: Kind::Normal, inlines: vec![group()], ..Default::default() }),
+                FBlock::Para(Para { kind: Kind::Normal, inlines: vec![group()], ..Default::default() }),
+            ],
+            ..Default::default()
+        };
+        let doc = crate::to_doc(&flow);
+        // Use the real conversion consumer near its existing limit, without a
+        // 64 MiB fixture. Both groups and both paragraphs share this same counter.
+        let mut links = DrawingLinks { bytes: MAX_RUN_STRINGS - 14 };
+        let blocks = flow_blocks(&doc, &doc.body, 0, FlowOpts { boxes: true, paras: true, ..Default::default() }, &mut links);
+        assert_eq!(blocks.len(), 2);
+        let FBlock::Para(first) = &blocks[0] else { panic!() };
+        let FBlock::Para(second) = &blocks[1] else { panic!() };
+        let [Inline::Group { link: first_root, members: first_members, .. }] = first.inlines.as_slice() else { panic!("first group") };
+        let [Inline::Group { link: second_root, members: second_members, .. }] = second.inlines.as_slice() else { panic!("second group") };
+        assert_eq!(first_root.as_deref(), Some("root"));
+        assert_eq!(first_members.len(), 1);
+        assert_eq!(first_members[0].link.as_deref(), Some("member"));
+        assert_eq!(second_members.len(), 1);
+        assert!(second_members[0].link.is_none(), "later member exceeds the conversion's remaining bytes");
+        assert_eq!(second_root.as_deref(), Some("root"), "a fitting root target remains independent of its member");
+        assert_eq!(links.bytes, MAX_RUN_STRINGS);
     }
 }

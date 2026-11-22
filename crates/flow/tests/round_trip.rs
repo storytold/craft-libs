@@ -258,4 +258,36 @@ fn vml_hyperlinks_survive_flow_for_roots_and_nested_members() {
         assert!(matches!(&children[0].obj, craft_wordmodel::para::InlineObject::Image { .. }));
     }
     check_depth_boundary(image);
+
+    fn check_oversized_drawing_links(image: impl Fn(Option<&str>) -> Inline) {
+        // Construct valid drawable inputs first; to_doc's own budget must not hide
+        // the from_doc boundary being checked by this regression.
+        let group =
+            Inline::Group { w: 12.0, h: 8.0, float: None, link: None, members: vec![Member { x: 0.0, y: 0.0, inline: image(None), link: None }] };
+        let input = Flow {
+            blocks: vec![FBlock::Para(para(Kind::Normal, vec![group, image(None), image(Some("https://example.com/kept"))]))],
+            ..Default::default()
+        };
+        let mut doc = to_doc(&input);
+        let mut paragraph = doc.body[0].as_para().unwrap().clone();
+        let offsets = paragraph.object_offsets();
+        let oversized = "x".repeat(craft_flow::MAX_LINK + 1);
+        paragraph.format(offsets[0], offsets[0] + craft_wordmodel::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
+        paragraph.format(offsets[1], offsets[1] + craft_wordmodel::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
+        let craft_wordmodel::para::InlineObject::Group { children, .. } = &mut paragraph.objects[0] else { panic!() };
+        children[0].link = Some(oversized);
+        doc.body = vec![Block::Para(paragraph).into()];
+        let back = from_doc_with(&doc, FlowOpts { boxes: true, paras: true, ..Default::default() });
+        let got = paras(&back.blocks);
+        let [Inline::Group { link, members, .. }, Inline::Image(unlinked), Inline::Image(kept)] = got[0].inlines.as_slice() else {
+            panic!("all drawings remain")
+        };
+        assert!(link.is_none(), "oversized group target is dropped");
+        assert_eq!(members.len(), 1);
+        assert!(members[0].link.is_none(), "oversized member target is dropped");
+        assert!(unlinked.link.is_none(), "oversized root image target is dropped");
+        assert_eq!(kept.link.as_deref(), Some("https://example.com/kept"));
+        assert_eq!(kept.data.as_slice(), PNG);
+    }
+    check_oversized_drawing_links(image);
 }

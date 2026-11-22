@@ -491,7 +491,8 @@ impl Relink<'_> {
                     }
                 }
             }
-            InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => children.iter_mut().for_each(|c| self.object(&mut c.obj, depth + 1)),
+            // Imported drawings retain a root plus eight nested groups; their leaf is at depth nine.
+            InlineObject::Group { children, .. } if depth <= MAX_BOX_DEPTH => children.iter_mut().for_each(|c| self.object(&mut c.obj, depth + 1)),
             InlineObject::NoteRef { id, .. } => map(self.notes, id),
             InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => map(self.comments, id),
             InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } => *id = id.saturating_add(self.perms),

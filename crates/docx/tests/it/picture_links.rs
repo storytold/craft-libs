@@ -674,6 +674,10 @@ fn native_ink_keeps_its_vml_preview_target_without_overriding_its_own() {
         let input = super::fixtures::ink_docx(true, false);
         let mut xml = part(&input, "word/document.xml");
         xml = xml.replace(r#"<v:shape id="preview""#, r#"<v:shape id="preview" href="https://example.com/preview""#);
+        let target = format!("https://example.com/{}", "x".repeat((8 << 10) - "https://example.com/".len()));
+        let leaf = r##"<v:shape type="#Later" style="width:1pt;height:1pt"><v:imagedata r:id="rPreview"/></v:shape>"##.repeat(1000);
+        let later = format!(r#"<v:group style="width:1pt;height:1pt" coordsize="1,1">{leaf}</v:group>"#).repeat(9);
+        xml = xml.replace("</w:pict>", &format!(r#"<v:shapetype id="Later" href="{target}"/>{later}</w:pict>"#));
         let mut input = replacing_picture_part(&input, "word/document.xml", &xml);
         if own_target {
             let xml = xml.replace(
@@ -698,4 +702,38 @@ fn native_ink_keeps_its_vml_preview_target_without_overriding_its_own() {
             doc = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
         }
     }
+}
+
+#[test]
+fn deepest_linked_vml_tree_survives_flow_and_docx() {
+    fn check(doc: &Document) {
+        let paragraph = doc.body[0].as_para().unwrap();
+        assert_eq!(paragraph.objects.len(), 1);
+        assert_eq!(paragraph.props_of_char(0).link.as_deref(), Some("https://example.com/root"));
+        let mut object = &paragraph.objects[0];
+        for level in 0..=8 {
+            let InlineObject::Group { children, .. } = object else { panic!("group at level {level}") };
+            assert_eq!(children.len(), 1);
+            let expected = if level == 8 { "#last-picture".to_string() } else { format!("https://example.com/level{}", level + 1) };
+            assert_eq!(children[0].link.as_deref(), Some(expected.as_str()));
+            object = &children[0].obj;
+        }
+        let InlineObject::Image { media, w, h, .. } = object else { panic!("deepest picture") };
+        assert_eq!(doc.media.get(media).unwrap().as_slice(), png().as_slice());
+        assert!((*w - 6.0).abs() < 0.001 && (*h - 5.0).abs() < 0.001);
+    }
+    let mut members = r##"<v:shape style="width:6pt;height:5pt" href="#last-picture"><v:imagedata r:id="rIdPic"/></v:shape>"##.to_string();
+    for level in (1..=8).rev() {
+        members = format!(r#"<v:group style="width:12pt;height:8pt" coordsize="12,8" href="https://example.com/level{level}">{members}</v:group>"#,);
+    }
+    let body = format!(
+        r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:group style="width:12pt;height:8pt" coordsize="12,8" href="https://example.com/root">{members}</v:group></w:pict></w:r></w:p>"#,
+    );
+    let imported = craft_docx::read(&package(&body)).unwrap();
+    check(&imported);
+    let flow = craft_flow::from_doc_with(&imported, craft_flow::FlowOpts { boxes: true, paras: true, ..Default::default() });
+    let rebuilt = craft_flow::to_doc(&flow);
+    check(&rebuilt);
+    let reopened = craft_docx::read(&craft_docx::write(&rebuilt).unwrap()).unwrap();
+    check(&reopened);
 }
