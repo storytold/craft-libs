@@ -226,11 +226,11 @@ reads proptest's own variables:
 
 | Variable | Not set | Set |
 |---|---|---|
-| `PROPTEST_CASES` | `cases` | The value proptest parsed as a `u32`. For a value it cannot parse, proptest prints a warning and uses 256. |
-| `PROPTEST_RNG_SEED` | `prop::SEED` (`0x5eed_9a7f`) | The value proptest parsed as a `u64`. For a value it cannot parse, proptest prints a warning and uses a random seed. |
+| `PROPTEST_CASES` | `cases` | The value as a `u32`. Any other value makes `config` panic. |
+| `PROPTEST_RNG_SEED` | `prop::SEED` (`0x5eed_9a7f`) | The value as a `u64`. Any other value makes `config` panic. |
 
-A suite under `prop::config` repeats the same cases on every run. To run it with random seeds, set
-`PROPTEST_RNG_SEED` to a value that is not a number. No file under `proptest-regressions/` is read
+A suite under `prop::config` repeats the same cases on every run. To run it with other cases, set
+`PROPTEST_RNG_SEED` to another number. No file under `proptest-regressions/` is read
 or written, so a minimal failure found with other seeds or counts is kept as a named regression test
 in the suite.
 

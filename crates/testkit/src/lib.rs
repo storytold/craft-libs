@@ -27,7 +27,8 @@
 //!
 //! With the `prop` feature, on targets other than `wasm32`, `prop::config` returns a proptest
 //! configuration with a pinned seed and failure persistence off. `PROPTEST_CASES` and
-//! `PROPTEST_RNG_SEED` override the case count and the seed.
+//! `PROPTEST_RNG_SEED` override the case count and the seed, and `config` panics on a value it cannot
+//! parse.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!

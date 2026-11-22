@@ -4,7 +4,7 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::process::Command;
+use std::process::{Command, Output};
 
 use craft_testkit::prop::{SEED, config};
 use proptest::prelude::any;
@@ -41,7 +41,7 @@ struct Report {
     draws: String,
 }
 
-fn run_child(vars: &[(&str, &str)]) -> Report {
+fn spawn_child(vars: &[(&str, &str)]) -> Output {
     let exe = std::env::current_exe().expect("locate the test binary");
     let mut cmd = Command::new(exe);
     cmd.args(["--exact", "child_reports_config", "--nocapture", "--test-threads=1"]).env(CHILD, "1");
@@ -51,7 +51,21 @@ fn run_child(vars: &[(&str, &str)]) -> Report {
     for (name, value) in vars {
         cmd.env(name, value);
     }
-    let out = cmd.output().expect("run the child test");
+    cmd.output().expect("run the child test")
+}
+
+/// Runs a child that `config` must reject, and returns its stderr.
+fn rejected_child(vars: &[(&str, &str)]) -> String {
+    let out = spawn_child(vars);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "child passed with {vars:?}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(!stdout.contains("PROPCFG "), "child printed a config with {vars:?}\nstdout:\n{stdout}");
+    stderr
+}
+
+fn run_child(vars: &[(&str, &str)]) -> Report {
+    let out = spawn_child(vars);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "child failed with {vars:?}\nstdout:\n{stdout}\nstderr:\n{stderr}");
@@ -111,21 +125,17 @@ fn both_variables_apply_together() {
 }
 
 #[test]
-fn an_unparsable_case_count_keeps_proptest_default() {
+fn an_unparsable_case_count_is_rejected() {
     for value in ["many", "", "-1", "4294967296"] {
-        let r = run_child(&[("PROPTEST_CASES", value)]);
-        assert_eq!(r.cases, "256", "PROPTEST_CASES={value:?}");
-        assert_eq!(r.seed, SEED.to_string(), "PROPTEST_CASES={value:?}");
-        assert_eq!(r.persistence, "false", "PROPTEST_CASES={value:?}");
+        let stderr = rejected_child(&[("PROPTEST_CASES", value)]);
+        assert!(stderr.contains(&format!("PROPTEST_CASES={value:?} is not a u32")), "PROPTEST_CASES={value:?}\nstderr:\n{stderr}");
     }
 }
 
 #[test]
-fn an_unparsable_seed_runs_with_a_random_seed() {
-    for value in ["random", "", "18446744073709551616"] {
-        let r = run_child(&[("PROPTEST_RNG_SEED", value)]);
-        assert_eq!(r.cases, CASES.to_string(), "PROPTEST_RNG_SEED={value:?}");
-        assert_eq!(r.seed, "random", "PROPTEST_RNG_SEED={value:?}");
-        assert_eq!(r.persistence, "false", "PROPTEST_RNG_SEED={value:?}");
+fn an_unparsable_seed_is_rejected() {
+    for value in ["random", "", "-1", "18446744073709551616"] {
+        let stderr = rejected_child(&[("PROPTEST_RNG_SEED", value)]);
+        assert!(stderr.contains(&format!("PROPTEST_RNG_SEED={value:?} is not a u64")), "PROPTEST_RNG_SEED={value:?}\nstderr:\n{stderr}");
     }
 }
