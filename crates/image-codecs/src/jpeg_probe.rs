@@ -128,10 +128,11 @@ fn walk_segments<'a>(
 
 /// EXIF orientation from the first complete APP1 segment prefixed with `Exif\0\0`.
 ///
-/// Scans only contiguous JPEG header markers before SOS or EOI. Returns 1 if that
-/// segment has no readable orientation, or if none is found before the header
-/// ends or becomes unreadable. This deliberately does not resynchronize past
-/// non-marker bytes as [`walk_jpeg_segments`] does.
+/// Requires consecutive marker prefixes before SOS or EOI. Returns 1 if the
+/// first EXIF segment has no readable orientation, or if none is found before
+/// the header ends or becomes unreadable. Unlike [`walk_jpeg_segments`], this
+/// does not resynchronize past bytes outside a segment. For compatibility,
+/// even a marker code of zero is treated as an unknown length-bearing marker.
 pub fn strict_exif_orientation(bytes: &[u8]) -> u16 {
     let mut orientation = 1;
     let _ = walk_segments(bytes, true, |marker, _, segment| {
@@ -232,6 +233,11 @@ mod tests {
         header.extend_from_slice(app1);
         header.extend_from_slice(ORIENTATION_6);
         assert_eq!(strict_exif_orientation(&header), 6);
+        // Preserve the legacy placement scanner’s treatment of a zero marker code.
+        let mut zero_marker = Vec::from(b"\xFF\xD8\xFF\x00\x00\x02".as_slice());
+        zero_marker.extend_from_slice(&header[2..]);
+        assert_eq!(strict_exif_orientation(&zero_marker), 6);
+
         let mut interrupted = vec![0xff, 0xd8, 0x01];
         interrupted.extend_from_slice(&header[2..]);
         assert_eq!(strict_exif_orientation(&interrupted), 1);
