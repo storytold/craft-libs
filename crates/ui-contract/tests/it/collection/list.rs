@@ -455,7 +455,7 @@ fn a_detail_body_takes_room_under_its_row_and_keeps_its_presses() {
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
         in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
-            let list = List::new(SelectMode::Single).id_salt("list");
+            let list = List::new(SelectMode::Single).sized().id_salt("list");
             seen.take(list.show_items(ui, &source, &mut |key, cx| {
                 rects.borrow_mut()[*key] = cx.rect;
                 if *key == WITH {
