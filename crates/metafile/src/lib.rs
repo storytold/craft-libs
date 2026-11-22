@@ -26,7 +26,9 @@ mod cliprect;
 mod dib;
 mod emf;
 mod emfplus;
+mod eof;
 mod geom;
+pub mod pict;
 mod place;
 mod size;
 mod text;
@@ -44,9 +46,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use canvas::Raw;
-use geom::{Op, P};
-mod eof;
 pub use eof::ends_early;
+use geom::{Op, P};
+pub use pict::{is_pict, parse as parse_pict};
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
 pub use text::{Font, HAlign, SYMBOL_CHARSET, Text, VAlign};
@@ -234,6 +236,8 @@ pub enum Seg {
 pub enum Error {
     #[error("not a WMF or EMF file")]
     NotMetafile,
+    #[error("not a PICT file")]
+    NotPict,
     #[error("metafile header is truncated or invalid")]
     BadHeader,
     #[error("metafile has no readable records")]
@@ -285,6 +289,8 @@ pub(crate) fn parse_nested(bytes: &[u8], depth: u8) -> Result<Picture, Error> {
             }
         }
         (parsed.cv, parsed.frame)
+    } else if pict::is_pict(bytes) {
+        return pict::parse_nested(bytes);
     } else {
         return Err(Error::NotMetafile);
     };
@@ -323,7 +329,7 @@ pub fn sniff(bytes: &[u8]) -> Option<Kind> {
 
 /// Maps device-space output into the picture frame. Without a usable frame the frame is the bounding
 /// box of the drawing, so the origin is still the top-left of what was drawn.
-fn build(raw: Vec<Raw>, frame: Option<Frame>) -> Picture {
+pub(crate) fn build(raw: Vec<Raw>, frame: Option<Frame>) -> Picture {
     let frame = frame.filter(|f| f.rect.iter().all(|v| v.is_finite()) && f.rect[2] > 0.0 && f.rect[3] > 0.0);
     let (rect, size) = match frame {
         Some(f) => (f.rect, f.size.unwrap_or((f.rect[2], f.rect[3]))),
