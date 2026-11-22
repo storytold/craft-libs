@@ -1289,6 +1289,10 @@ pub(crate) mod guard {
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
         (
+            "runtime::memory::FactRecord<craft_ui_contract::runtime::commands::ShownFact>",
+            "where commands were shown: last pass's, read; registered by real runs only (a measuring run is not parted)",
+        ),
+        (
             "shell::app_shell::dialogs::Hosts",
             "dialog hosts: one handle per window, made on first use; dialogs open on clicks, which only real runs sense",
         ),
