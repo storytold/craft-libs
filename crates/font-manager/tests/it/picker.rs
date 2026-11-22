@@ -198,6 +198,62 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
     }
 }
 
+/// A picker as the character controls host it: a given value, the filters (so the class column shows beside the
+/// families) and a preview text. The field's list keys go to the family list: Enter on a typed part of a name picks the
+/// best match, and Down moves the family row, which previews, before Enter picks it.
+#[trial]
+fn with_the_class_column_shown_the_field_keys_move_and_pick_in_the_family_list() {
+    #[derive(Default)]
+    struct Reported {
+        picks: Vec<String>,
+        previews: Vec<String>,
+    }
+    let reported = Rc::new(RefCell::new(Reported::default()));
+    let seen = Rc::clone(&reported);
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT]);
+    let mut settings = FontPickerSettings::default();
+    let mut filters = FontFilters::default();
+    let mut fx = Fixture::new(move |ui| {
+        let out = FontPicker::new("Font family", Bind::given("Inter".to_owned()), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .filters(Bind::bound(&mut filters))
+            .preview_text("Sample")
+            .show(ui);
+        let mut seen = seen.borrow_mut();
+        if let Preview::Shows(family) = out.preview {
+            seen.previews.push(family);
+        }
+        seen.picks.extend(out.picked);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let words = FontPickerWords::default();
+    let type_in = |fx: &mut Fixture, text: &str| {
+        let field = fx.by_label("Font family").expect("the family field");
+        fx.click(&field);
+        fx.settle();
+        fx.type_text(text);
+        fx.settle();
+    };
+
+    type_in(&mut fx, "Ha");
+    assert!(present(&fx, words.all_classes.as_str()), "the class column shows");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks, ["Hack"], "Enter on a partial name picks the best match");
+
+    // "n" matches Inter and Ubuntu.
+    type_in(&mut fx, "n");
+    reported.borrow_mut().previews.clear();
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.settle();
+    let keyed = reported.borrow().previews.last().cloned().expect("Down moves the family row, which previews its family");
+    assert!(["Inter", "Ubuntu"].contains(&keyed.as_str()), "the row is a family that matches: {keyed}");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks.last(), Some(&keyed), "Enter picks the family row the keys reached");
+}
+
 /// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.
 fn plain_rig(
     catalog: Arc<Catalog>,

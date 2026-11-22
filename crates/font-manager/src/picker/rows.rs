@@ -389,7 +389,14 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let mut stars: Vec<(String, bool)> = Vec::new();
     let mut over_rows = false;
     let mut under_pointer: Option<SlotKey> = None;
-    let events = ui.show(popup, Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)), |ui, _| {
+    // The field's list keys go to the family list, not to the class column beside it. Without matches no list shows,
+    // and the field keeps Enter (a plain box applies the typed name).
+    let families = cx.id.with("families");
+    let mut overlay = Overlay::dropdown().dismiss(Dismiss::new().focus_left(true));
+    if !slots.is_empty() {
+        overlay = overlay.list(families);
+    }
+    let events = ui.show(popup, overlay, |ui, _| {
         let mut events = Vec::new();
         Stack::new().show(ui, |ui, _| {
             if let Some(text) = banner_text {
@@ -434,6 +441,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                     let selection =
                         current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, |at| Selection::single(slots[at].key()));
                     let rows = List::<SlotKey>::options(name.clone())
+                        .id(families)
                         .tree(true)
                         .tree_leaves(leaves)
                         .columns(columns.clone())
