@@ -9,7 +9,7 @@ use crate::runtime::egui::{input, pass};
 use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::inputs::{self, Input};
 use crate::runtime::sampler;
-use craft_behavior::press::MULTI_TAP_TIME;
+use craft_behavior::press::{MULTI_TAP_SLOP, MULTI_TAP_TIME};
 use craft_behavior::{
     Buttons, MultiTap, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape,
     Winner, count_clicks, resolve,
@@ -127,7 +127,7 @@ struct Touched {
 }
 
 /// The recognizer of the multi-finger tap: the fingers of one touch, where each landed, the most down at once, when
-/// the first landed and whether the touch is spoiled (a finger moved past the slop, stayed past [`MULTI_TAP_TIME`] or
+/// the first landed and whether the touch is spoiled (a finger moved past [`MULTI_TAP_SLOP`], stayed past [`MULTI_TAP_TIME`] or
 /// was cancelled).
 #[derive(Default)]
 struct Taps {
@@ -139,8 +139,8 @@ struct Taps {
 }
 
 impl Taps {
-    /// Follows the pass's finger events at time `now`; a finger moves `slop` at most in a tap.
-    fn feed(&mut self, fingers: &[input::Finger], now: f64, slop: f32) -> Touched {
+    /// Follows the pass's finger events at time `now`.
+    fn feed(&mut self, fingers: &[input::Finger], now: f64) -> Touched {
         let mut touched = Touched { landed: false, tap: None, tracked: None };
         for finger in fingers {
             match finger.phase {
@@ -156,7 +156,8 @@ impl Taps {
                     self.most = self.most.max(self.down.len());
                 }
                 TouchPhase::Move => {
-                    let moved = self.landed.iter().rev().find(|(id, _)| *id == finger.id).is_some_and(|(_, at)| at.distance(finger.pos) > slop);
+                    let moved =
+                        self.landed.iter().rev().find(|(id, _)| *id == finger.id).is_some_and(|(_, at)| at.distance(finger.pos) > MULTI_TAP_SLOP);
                     self.spoiled |= moved && self.down.contains(&finger.id);
                 }
                 TouchPhase::End | TouchPhase::Cancel => {
@@ -268,7 +269,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         if read.primary_pressed || other_pressed {
             memory.press_targets = PressTargets { click: hits.0, drag: hits.1 };
         }
-        (events, memory.press_targets, memory.taps.feed(&read.touches, read.time, hit.slop))
+        (events, memory.press_targets, memory.taps.feed(&read.touches, read.time))
     });
     // Where a modal holds the wheel off the canvas, a tap is not reported and a touch under way is dropped, by the
     // wheel's own rule.

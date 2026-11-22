@@ -1,5 +1,6 @@
 //! Touch fingers: the multi-finger tap, the modal gate, the second finger that ends a press and the two-finger pan.
 
+use craft_behavior::press::MULTI_TAP_SLOP;
 use craft_behavior::{PressCancel, PressPhase, Sense, WheelTaker};
 use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
 use craft_ui::style::StyleCx;
@@ -102,7 +103,8 @@ fn two_and_three_fingers_tap_and_a_pinch_a_hold_a_cancel_or_one_finger_do_not() 
         assert_eq!(taps[0].0 as usize, fingers);
         assert!(taps[0].1.distance(centre(fingers)) < 0.5, "the tap is at the fingers' centre: {:?}", taps[0].1);
     }
-    assert!(tapped(2, 0.0, TouchPhase::End, 40.0).is_empty(), "a finger that moved past the slop pinches or pans");
+    assert_eq!(tapped(2, 0.0, TouchPhase::End, MULTI_TAP_SLOP / 2.0).len(), 1, "a finger may drift past a press's slop while the others land");
+    assert!(tapped(2, 0.0, TouchPhase::End, MULTI_TAP_SLOP * 2.0).is_empty(), "a finger that moved past the tap's slop pinches or pans");
     assert!(tapped(2, 0.6, TouchPhase::End, 0.0).is_empty(), "fingers held past the tap time");
     assert!(tapped(2, 0.0, TouchPhase::Cancel, 0.0).is_empty(), "a cancelled touch");
     assert!(tapped(1, 0.0, TouchPhase::End, 0.0).is_empty(), "one finger is a press");

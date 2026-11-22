@@ -164,7 +164,7 @@ pub enum PressCancel {
     Gesture,
 }
 
-/// Two or more fingers came down and all lifted within the tap time without moving past the slop.
+/// Two or more fingers came down and all lifted within [`MULTI_TAP_TIME`] without moving past [`MULTI_TAP_SLOP`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MultiTap {
@@ -356,6 +356,10 @@ pub const MULTI_CLICK_TIME: f64 = 0.3;
 
 /// The longest the fingers of a multi-finger tap may stay down, in seconds.
 pub const MULTI_TAP_TIME: f64 = 0.5;
+
+/// How far a finger of a multi-finger tap may move from where it landed, in points: fingers drift more than a
+/// pointer does while the others land.
+pub const MULTI_TAP_SLOP: f32 = 16.0;
 
 /// The click count of a press at `pos` and `time` with `mods` held, given the previous press `(pos, time, clicks,
 /// mods)`: one more when it follows within [`MULTI_CLICK_TIME`] and `slop` of the previous one with the same
