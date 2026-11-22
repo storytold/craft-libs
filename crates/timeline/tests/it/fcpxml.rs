@@ -643,3 +643,217 @@ fn optional_report_limit_bounds_fcpxml_export_diagnostics_without_changing_outpu
     assert_eq!(total(&limited), total(&ordinary));
     assert!(limited.entries.iter().all(|e| e.message == "further diagnostics omitted"), "{limited}");
 }
+
+// Original metadata-only resources: A first cuts off M64, then B rebuilds M63/M64 at a
+// shallower depth. C repeats that same cache hit, without another reason to rebuild it.
+fn deferred_audio_document(m62: &str, leaf_extra: &str, audio_only_chain: bool) -> String {
+    let selection = if audio_only_chain { r#" srcEnable="audio""# } else { "" };
+    let mut resources = String::new();
+    for i in 0..64 {
+        let spine = if i == 62 && !m62.is_empty() {
+            m62.to_string()
+        } else {
+            format!(r#"<ref-clip ref="m{}" name="Next" duration="20s"{selection}/>"#, i + 1)
+        };
+        resources.push_str(&format!(r#"<media id="m{i}" name="M{i}"><sequence format="f"><spine>{spine}</spine></sequence></media>"#));
+    }
+    format!(
+        r#"<fcpxml version="1.10"><resources>
+          <format id="f" frameDuration="1/24s" width="1920" height="1080"/>
+          <asset id="av" name="Original AV" start="0s" duration="60s" hasVideo="1" hasAudio="1" format="f" audioChannels="2">
+            <media-rep kind="original-media" src="file:///original-deferred-audio.mov"/>
+          </asset>
+          {resources}
+          <media id="m64" name="M64"><sequence format="f"><spine>
+            <asset-clip ref="av" name="Real audio" duration="20s"/>{leaf_extra}
+          </spine></sequence></media>
+        </resources><library><event>
+          <project name="A"><sequence format="f"><spine><ref-clip ref="m0" name="Earlier parent" duration="20s"{selection}/></spine></sequence></project>
+          <project name="B"><sequence format="f"><spine><ref-clip ref="m63" duration="20s"/></spine></sequence></project>
+          <project name="C"><sequence format="f"><spine><ref-clip ref="m63" duration="20s"/></spine></sequence></project>
+        </event></library></fcpxml>"#
+    )
+}
+
+fn deferred_audio_sequence<'a>(p: &'a Project, name: &str) -> (ItemId, &'a Sequence) {
+    let item = p.items.values().find(|i| i.name == name).unwrap();
+    (item.id, p.sequence(item.id).unwrap())
+}
+
+fn deferred_audio_pair(seq: &Sequence, name: &str) {
+    let video = seq.video_tracks.iter().flat_map(|t| &t.items).find(|i| i.name == name).unwrap();
+    let audio = seq.audio_tracks.iter().flat_map(|t| &t.items).filter(|i| i.name == name).collect::<Vec<_>>();
+    assert_eq!(audio.len(), 1, "deferred parent audio was not restored exactly once: {name}");
+    let audio = audio[0];
+    assert!(video.link.is_some());
+    assert_eq!(audio.link, video.link);
+    assert_eq!((audio.item, audio.start, audio.duration, audio.source_in), (video.item, video.start, video.duration, video.source_in));
+    assert_eq!((audio.speed, audio.reverse, audio.frame_hold, audio.enabled), (video.speed, video.reverse, video.frame_hold, video.enabled));
+}
+
+#[test]
+fn deferred_audio_returns_after_shallower_rebuild() {
+    let xml = deferred_audio_document("", "", false);
+    let (imp, report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    let p = &imp.project;
+    assert_eq!(imp.sequences.len(), 3);
+    let (_, a) = deferred_audio_sequence(p, "A");
+    let (_, b) = deferred_audio_sequence(p, "B");
+    let (_, c) = deferred_audio_sequence(p, "C");
+    assert_eq!(a.video_tracks[0].items.len(), 1, "the earlier picture must already exist");
+    assert_eq!(p.item(a.video_tracks[0].items[0].item).unwrap().name, "M0");
+    assert!(report.mentions("nested too deeply"), "{report}");
+    let (m63_id, m63) = deferred_audio_sequence(p, "M63");
+    let (m64_id, m64) = deferred_audio_sequence(p, "M64");
+    assert_eq!(m63.audio_tracks[0].items.len(), 1, "the permitted shallower rebuild must really reach audio");
+    assert_eq!(m63.audio_tracks[0].items[0].item, m64_id);
+    assert_eq!(media_key(p, m64.audio_tracks[0].items[0].item), "/original-deferred-audio.mov");
+    assert_eq!(b.audio_tracks[0].items[0].item, m63_id);
+    assert_eq!(c.audio_tracks[0].items[0].item, m63_id);
+    // The baseline fails here, after proving that parsing, depth truncation and child recovery worked.
+    deferred_audio_pair(a, "Earlier parent");
+    for i in 0..64 {
+        let (_, seq) = deferred_audio_sequence(p, &format!("M{i}"));
+        deferred_audio_pair(seq, "Next");
+    }
+    assert_eq!(b.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>(), 1);
+    assert_eq!(c.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>(), 1);
+}
+
+#[test]
+fn deferred_audio_keeps_selection_adjustments_and_overlap_lanes() {
+    use craft_timeline::model::{Catalog, EffectDef, EffectInstance, EffectKind, ParamDef};
+
+    struct AudioCatalog;
+    impl Catalog for AudioCatalog {
+        fn effect(&self, id: &str) -> Option<EffectDef> {
+            if id == "original_audio_filter" {
+                Some(EffectDef {
+                    id: id.into(),
+                    name: "Original audio filter".into(),
+                    kind: EffectKind::Audio,
+                    category: "Original test".into(),
+                    intrinsic: false,
+                    params: vec![ParamDef { id: "mix".into(), label: "Mix".into(), default: ParamValue::Float(0.0) }],
+                })
+            } else {
+                TestCatalog.effect(id)
+            }
+        }
+        fn effect_by_name(&self, name: &str) -> Option<EffectDef> {
+            if name == "Original audio filter" { self.effect("original_audio_filter") } else { TestCatalog.effect_by_name(name) }
+        }
+        fn intrinsic(&self, kind: TrackKind) -> Vec<EffectInstance> {
+            TestCatalog.intrinsic(kind)
+        }
+    }
+    let refs = r#"
+      <asset-clip ref="av" name="Existing sound" offset="0s" duration="4s" srcEnable="audio"/>
+      <ref-clip ref="m63" name="Adjusted" offset="0s" start="3s" duration="4s" enabled="0" label="Rose">
+        <adjust-volume amount="-6dB"><param name="amount"><keyframeAnimation>
+          <keyframe time="3s" value="-6dB"/><keyframe time="5s" value="-3dB"/>
+        </keyframeAnimation></param></adjust-volume>
+        <filter-audio name="Original audio filter" enabled="0"><param key="mix" value="0.25"/></filter-audio>
+        <marker start="4s" duration="1/24s" value="Cue" note="original"/>
+        <ref-clip ref="m63" name="Positive lane" lane="2" offset="3s" duration="2s"/>
+        <ref-clip ref="m63" name="Negative lane" lane="-3" offset="3s" duration="2s" srcEnable="audio"/>
+      </ref-clip>
+      <ref-clip ref="m63" name="Audio only" offset="4s" duration="2s" srcEnable="audio"/>
+      <ref-clip ref="m63" name="Video only" offset="6s" duration="2s" srcEnable="video"/>
+      <ref-clip ref="m63" name="Explicit all" offset="8s" duration="2s" srcEnable="all"/>
+    "#;
+    let xml = deferred_audio_document(refs, "", false);
+    let mut report = Report::default();
+    let opts = craft_timeline::ImportOptions { catalog: &AudioCatalog, ..iopts(None) };
+    let imp = craft_timeline::fcpxml::import(&xml, &opts, &mut report).unwrap();
+    assert!(report.mentions("nested too deeply"), "{report}");
+    let (_, seq) = deferred_audio_sequence(&imp.project, "M62");
+    let videos = seq.video_tracks.iter().flat_map(|t| &t.items).collect::<Vec<_>>();
+    let audios = seq.audio_tracks.iter().flat_map(|t| &t.items).collect::<Vec<_>>();
+    assert!(videos.iter().all(|i| !matches!(i.name.as_str(), "Audio only" | "Negative lane" | "Existing sound")));
+    assert!(audios.iter().all(|i| i.name != "Video only"));
+    assert!(videos.iter().find(|i| i.name == "Video only").unwrap().link.is_none());
+    for name in ["Adjusted", "Positive lane", "Explicit all"] {
+        deferred_audio_pair(seq, name);
+    }
+    let adjusted = seq.audio_tracks[1].items.iter().find(|i| i.name == "Adjusted").unwrap();
+    assert_eq!(seq.audio_tracks[0].items[0].name, "Existing sound");
+    assert_eq!(adjusted.source_in, Tick(3 * TICKS_PER_SECOND));
+    assert!(!adjusted.enabled);
+    assert_eq!(adjusted.label, Label::Rose);
+    assert_eq!(adjusted.effect("volume").unwrap().param("level").unwrap().value, ParamValue::Float(-6.0));
+    let keys = &adjusted.effect("volume").unwrap().param("level").unwrap().keyframes;
+    assert_eq!(keys.len(), 2);
+    assert_eq!((keys[1].time, keys[1].value.clone()), (Tick(5 * TICKS_PER_SECOND), ParamValue::Float(-3.0)));
+    let effect = adjusted.effect("original_audio_filter").unwrap();
+    assert!(!effect.enabled);
+    assert_eq!(effect.param("mix").unwrap().value, ParamValue::Float(0.25));
+    assert_eq!(adjusted.markers.len(), 1);
+    assert_eq!((adjusted.markers[0].name.as_str(), adjusted.markers[0].comment.as_str()), ("Cue", "original"));
+    assert_eq!(adjusted.markers[0].start, Tick(4 * TICKS_PER_SECOND));
+    assert!(seq.audio_tracks[2].items.iter().any(|i| i.name == "Positive lane"));
+    assert!(seq.audio_tracks[3].items.iter().any(|i| i.name == "Negative lane"), "overlapping lane -3 must move past occupied A3");
+    let audio_only = audios.iter().filter(|i| i.name == "Audio only").collect::<Vec<_>>();
+    assert_eq!(audio_only.len(), 1);
+    assert!(audio_only[0].link.is_none(), "audio-only restoration must not manufacture a picture anchor");
+}
+
+#[test]
+fn deferred_audio_keeps_retime_reverse_hold_and_export_links() {
+    for (end, expected_speed, reverse, hold, source) in [(11, 2.0, false, false, 3), (1, 0.5, true, false, 1), (3, 1.0, false, true, 3)] {
+        let refs = format!(
+            r#"<ref-clip ref="m63" name="Timed" start="3s" duration="4s"><timeMap>
+              <timept time="3s" value="3s"/><timept time="7s" value="{end}s"/>
+            </timeMap></ref-clip>"#
+        );
+        let xml = deferred_audio_document(&refs, "", false);
+        let (imp, _) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+        let (id, seq) = deferred_audio_sequence(&imp.project, "M62");
+        deferred_audio_pair(seq, "Timed");
+        let audio = &seq.audio_tracks[0].items[0];
+        assert_eq!((audio.start, audio.duration, audio.source_in), (Tick::ZERO, Tick(4 * TICKS_PER_SECOND), Tick(source * TICKS_PER_SECOND)));
+        assert_eq!((audio.speed, audio.reverse), (expected_speed, reverse));
+        assert_eq!(audio.frame_hold, hold.then_some(Tick(source * TICKS_PER_SECOND)));
+        // Export the shallow rebuilt parent, not an artificially unbounded 65-level traversal.
+        let (reopened, _, report) = roundtrip(&imp.project, id, Format::Fcpxml, &xopts());
+        let seq = reopened.project.sequence(only_seq(&reopened)).unwrap();
+        assert!(!report.mentions("nested too deeply"), "{report}");
+        deferred_audio_pair(seq, "Timed");
+        let again = &seq.audio_tracks[0].items[0];
+        assert_eq!(
+            (again.duration, again.source_in, again.speed, again.reverse, again.frame_hold),
+            (audio.duration, audio.source_in, audio.speed, audio.reverse, audio.frame_hold)
+        );
+    }
+}
+
+#[test]
+fn deferred_audio_only_cached_back_edges_stay_acyclic_and_bounded() {
+    let back = r#"<ref-clip ref="m0" name="Back edge" offset="20s" duration="1s" srcEnable="audio"/>"#;
+    let xml = deferred_audio_document("", back, true);
+    let (imp, report) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(report.mentions("nested too deeply"), "{report}");
+    assert!(imp.project.items.len() <= 69, "reconciliation must reuse the existing resource identities");
+    let (_, a) = deferred_audio_sequence(&imp.project, "A");
+    assert!(a.video_tracks.iter().all(|t| t.items.is_empty()));
+    assert_eq!(a.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>(), 1);
+    let mut active = std::collections::HashSet::new();
+    let mut done = std::collections::HashSet::new();
+    fn visit(p: &Project, id: ItemId, active: &mut std::collections::HashSet<ItemId>, done: &mut std::collections::HashSet<ItemId>) {
+        if done.contains(&id) {
+            return;
+        }
+        assert!(active.insert(id), "deferred audio introduced a cycle at {id:?}");
+        if let Some(seq) = p.sequence(id) {
+            assert!(seq.video_tracks.len() <= 256 && seq.audio_tracks.len() <= 256);
+            for item in seq.all_tracks().flat_map(|t| &t.items) {
+                visit(p, item.item, active, done);
+            }
+        }
+        active.remove(&id);
+        done.insert(id);
+    }
+    for id in imp.project.items.keys() {
+        visit(&imp.project, *id, &mut active, &mut done);
+    }
+}
