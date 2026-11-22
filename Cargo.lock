@@ -1813,6 +1813,7 @@ dependencies = [
  "craft-color-transform",
  "craft-develop-model",
  "craft-geom",
+ "craft-raw",
  "craft-render-parity",
  "proptest",
  "rayon",
