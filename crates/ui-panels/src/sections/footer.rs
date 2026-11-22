@@ -382,6 +382,9 @@ pub enum DialogRole {
     Cancel,
     /// Any other outcome.
     Other,
+    /// A second answer to the question the dialog asks ("Save as…" beside "Save anyway"): between Cancel and the
+    /// accepting button, as a document app's prompt orders them.
+    Alternative,
 }
 
 impl DialogRole {
@@ -392,9 +395,10 @@ impl DialogRole {
             DialogRole::Other => 0,
             DialogRole::Destructive => 1,
             DialogRole::Cancel => 2,
-            DialogRole::Accept => 3,
+            DialogRole::Alternative => 3,
+            DialogRole::Accept => 4,
         };
-        if windows { 3 - rank } else { rank }
+        if windows { 4 - rank } else { rank }
     }
 }
 
@@ -523,7 +527,8 @@ pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -
         order.sort_by_key(|&at| match roles[at] {
             DialogRole::Accept => 0,
             DialogRole::Cancel => 1,
-            DialogRole::Destructive | DialogRole::Other => 2,
+            DialogRole::Alternative => 2,
+            DialogRole::Destructive | DialogRole::Other => 3,
         });
     } else {
         order.sort_by_key(|&at| roles[at].rank(windows));
@@ -635,7 +640,7 @@ impl FooterBar {
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-                            DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
+                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternative => Variant::SECONDARY,
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {

@@ -2,6 +2,7 @@
 
 mod caption;
 mod footer_keys;
+mod footer_order;
 mod footer_row;
 mod layout;
 mod panel_header;

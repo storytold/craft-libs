@@ -80,7 +80,7 @@ impl PromptChoice {
     fn role(self) -> DialogRole {
         match self {
             PromptChoice::Proceed => DialogRole::Accept,
-            PromptChoice::Alternate => DialogRole::Other,
+            PromptChoice::Alternate => DialogRole::Alternative,
             PromptChoice::Cancel => DialogRole::Cancel,
         }
     }
@@ -401,7 +401,7 @@ impl StandardPrompt {
                 let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| (label.clone(), choice.role()));
                 let (label, role) = own.unwrap_or_else(|| match choice {
                     PromptChoice::Proceed => (proceed.clone(), role),
-                    PromptChoice::Alternate => (alternate.clone(), DialogRole::Other),
+                    PromptChoice::Alternate => (alternate.clone(), DialogRole::Alternative),
                     PromptChoice::Cancel => (common.cancel.clone(), DialogRole::Cancel),
                 });
                 let role = match role {
