@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -430,4 +431,27 @@ fn a_language_without_a_typographic_family_name_keeps_its_legacy_name() {
     let both = Spec { ja: Some("テスト明朝 Pro"), legacy_ja: Some("テスト明朝"), ..typographic_english.clone() };
     assert_eq!(localized(&both), ["テスト明朝 Pro"], "the typographic record of a language wins over its legacy one");
     assert!(localized(&typographic_english).is_empty());
+}
+
+/// A face installed from two files is listed once, and each file's version is found from either, as rescans add and
+/// remove the second file.
+#[test]
+fn every_file_of_a_face_is_one_of_its_versions() {
+    let root = temp("versions");
+    let cat = system(&root);
+    let bold = cat.resolve("Test Sans", "Bold").unwrap().0;
+    assert_eq!(cat.versions(&bold), std::slice::from_ref(&bold));
+    let second = root.join("home/.local/share/fonts/TestSans-Bold.ttf");
+    write(&second, font(&spec("Test Sans", "Bold", 700)));
+    cat.rescan();
+    assert_eq!(cat.styles("Test Sans").iter().filter(|f| f.style == "Bold").count(), 1, "the lists show a face once");
+    let versions = cat.versions(&bold);
+    let paths: HashSet<_> = versions.iter().filter_map(|f| f.path.clone()).collect();
+    assert_eq!(paths, HashSet::from([bold.path.clone().unwrap(), second.clone()]));
+    let other = versions.iter().find(|f| f.path.as_ref() == Some(&second)).unwrap();
+    assert_eq!(cat.versions(other), versions);
+    std::fs::remove_file(&second).unwrap();
+    cat.rescan();
+    assert_eq!(cat.versions(&bold).len(), 1);
+    assert!(cat.versions(other).is_empty());
 }

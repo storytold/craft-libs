@@ -1,5 +1,6 @@
 //! The catalog: every installed face, found by any of its names, loaded once.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -128,6 +129,9 @@ struct Index {
     by_family: HashMap<String, Vec<usize>>,
     aliases: HashMap<String, Vec<Alias>>,
     postscript: HashMap<String, usize>,
+    /// The faces left out of `faces` for having a listed face's family, style, PostScript name
+    /// and variations (another file's version of it), by the listed face.
+    versions: HashMap<usize, Vec<FaceInfo>>,
 }
 
 impl Index {
@@ -135,12 +139,17 @@ impl Index {
     /// same family and style.
     fn build(added: &[Face], scanned: &[Face]) -> Self {
         let mut faces: Vec<Face> = Vec::new();
-        let mut seen = HashSet::new();
+        let mut listed = HashMap::new();
+        let mut versions: HashMap<usize, Vec<FaceInfo>> = HashMap::new();
         for f in added.iter().chain(scanned) {
             let variations: Vec<(u32, u32)> = f.info.variations.iter().map(|(t, v)| (u32::from_be_bytes(*t), v.to_bits())).collect();
             let key = (f.info.family.to_ascii_lowercase(), norm(&f.info.style), f.keys.postscript.first().cloned(), variations);
-            if seen.insert(key) {
-                faces.push(f.clone());
+            match listed.entry(key) {
+                Entry::Occupied(e) => versions.entry(*e.get()).or_default().push(f.info.clone()),
+                Entry::Vacant(e) => {
+                    e.insert(faces.len());
+                    faces.push(f.clone());
+                }
             }
         }
         let mut by_family: HashMap<String, Vec<usize>> = HashMap::new();
@@ -182,7 +191,7 @@ impl Index {
         }
         families.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
         let infos: Arc<[FaceInfo]> = faces.iter().map(|f| f.info.clone()).collect();
-        Self { faces, infos, families: families.into(), by_family, aliases, postscript }
+        Self { faces, infos, families: families.into(), by_family, aliases, postscript, versions }
     }
 
     fn face(&self, i: usize) -> Option<&Face> {
@@ -537,6 +546,25 @@ impl Catalog {
     pub fn styles(&self, family: &str) -> Vec<FaceInfo> {
         let index = self.snapshot();
         index.family_of(family).unwrap_or_default().iter().filter_map(|i| index.face(*i)).map(|f| f.info.clone()).collect()
+    }
+
+    /// Every cataloged version of `face`: the faces with its family, style, PostScript name and
+    /// variations, from every file that has it. The one the catalog lists ([`Catalog::faces`])
+    /// comes first, then the others: added faces, then installed files by path. Empty when `face`
+    /// is no longer cataloged.
+    pub fn versions(&self, face: &FaceInfo) -> Vec<FaceInfo> {
+        let index = self.snapshot();
+        let same = |f: &FaceInfo| {
+            f.path == face.path && f.blob == face.blob && f.index == face.index && f.style == face.style && f.variations == face.variations
+        };
+        for i in index.by_family.get(&face.family.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or_default() {
+            let Some(listed) = index.face(*i) else { continue };
+            let others = index.versions.get(i).map(Vec::as_slice).unwrap_or_default();
+            if same(&listed.info) || others.iter().any(same) {
+                return std::iter::once(&listed.info).chain(others).cloned().collect();
+            }
+        }
+        Vec::new()
     }
 
     /// The face for `name` in `style`, and how it matched. `name` is a family name (any of its
