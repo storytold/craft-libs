@@ -230,11 +230,12 @@ fn hostile_radar_charts_never_panic() {
     let small =
         chart_items(&space(&format!("<c:radarChart>{}</c:radarChart>", ser(0, "S", None, &["a", "b", "c"], &["1", "2", "3"]))), &theme(), 20.0, 20.0);
     let _ = small;
-    // Caps: thousands of categories and series stay bounded.
-    let cats: Vec<String> = (0..5000).map(|i| format!("c{i}")).collect();
+    // Caps: more categories than spokes and more series than polygons stay bounded. Both
+    // counts are just over their caps, so the cell budget (its own test) does not bite first.
+    let cats: Vec<String> = (0..150).map(|i| format!("c{i}")).collect();
     let refs: Vec<&str> = cats.iter().map(String::as_str).collect();
-    let vals = vec!["1"; 5000];
-    let many: Vec<String> = (0..300).map(|i| ser(i, "S", None, &refs, &vals)).collect();
+    let vals = vec!["1"; 150];
+    let many: Vec<String> = (0..60).map(|i| ser(i, "S", None, &refs, &vals)).collect();
     let items = radar_chart("marker", &many);
     let polygons = items.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), .. } if *c != GRID)).count();
     assert!(polygons <= MAX_RADAR_SERIES, "{polygons}");
