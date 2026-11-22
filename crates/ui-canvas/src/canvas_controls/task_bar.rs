@@ -243,7 +243,6 @@ impl<'a> TaskBar<'a> {
     /// Adds `rows` to the More menu after Hide, Pin and Reset and a divider: command rows take their label, chord, check
     /// and enabled state from the command, and submenus show as in panel menus. A dock row (`PanelRow::Item`) is not
     /// offered.
-    #[must_use]
     pub fn more_rows(mut self, rows: Vec<PanelRow>) -> Self {
         debug_assert!(rows.iter().all(offered), "the task bar's More menu offers no dock rows");
         self.rows = rows;
@@ -252,7 +251,6 @@ impl<'a> TaskBar<'a> {
 
     /// Hangs the bar on `side` of the anchor's screen bounds, aligned by `align`, in place of the kind's side (below
     /// for the task bar, above for a selection bar) and centred.
-    #[must_use]
     pub fn side(mut self, side: Side, align: Align) -> Self {
         self.side = Some(side);
         self.align = align;

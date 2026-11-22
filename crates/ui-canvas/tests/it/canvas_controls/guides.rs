@@ -240,8 +240,7 @@ fn a_double_press_on_a_ruler_places_a_guide_at_once() {
         fixture.fixture().hold(mods);
         fixture.double_press_at(at(rect));
         fixture.fixture().hold(Modifiers::NONE);
-        let placed = guides.borrow().clone();
-        placed
+        guides.borrow().clone()
     };
     let top = |x: f32| move |rect: Rect| pos2(x, rect.min.y + 4.0);
     let left = |y: f32| move |rect: Rect| pos2(rect.min.x + 4.0, y);
