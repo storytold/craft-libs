@@ -173,9 +173,10 @@ fn captions_take_room_only_while_the_rail_shows_them() {
         Tracked::new(slots().into_iter().enumerate().map(|(at, slot)| if at == 0 { slot.captioned(CAPTION) } else { slot }).collect::<Vec<_>>());
     let last = Tracked::new(LastUsed::default());
     let mut fixture = Fixture::new(move |ui| {
-        let none = ToolRail::new("Tools", &plain, &0, &last).measure_rail(ui, width, |_, _| {});
-        let off = ToolRail::new("Tools", &captioned, &0, &last).measure_rail(ui, width, |_, _| {});
-        let on = ToolRail::new("Tools", &captioned, &0, &last).captions().measure_rail(ui, width, |_, _| {});
+        // Three rails measured in one pass, each under an id of its own.
+        let none = ToolRail::new("Tools", &plain, &0, &last).id_salt("none").measure_rail(ui, width, |_, _| {});
+        let off = ToolRail::new("Tools", &captioned, &0, &last).id_salt("off").measure_rail(ui, width, |_, _| {});
+        let on = ToolRail::new("Tools", &captioned, &0, &last).captions().id_salt("on").measure_rail(ui, width, |_, _| {});
         report.set([none, off, on]);
         ToolRail::new("Tools", &captioned, &0, &last).captions().show_rail(ui, |_, _| {});
     });
@@ -188,22 +189,24 @@ fn captions_take_room_only_while_the_rail_shows_them() {
     assert!(above(caption, rect(&fixture, "Move")), "the caption heads its group");
 }
 
-/// A rail at `width` in a room 800 high, its tokens resolved in `scope`: its columns, its rect and its Move button.
+/// A rail at `width` in a room 800 high under a comfortable root, its tokens resolved in `scope`: its columns, its rect
+/// and its Move button.
 fn rail_in_scope(width: f32, scope: ThemeScope) -> (usize, Rect, Rect) {
     let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
     let mut fixture = Fixture::new(move |ui| {
         ToolRail::new("Tools", &slots, &0, &last).theme(scope.clone()).show_rail(ui, |_, _| {});
     });
-    fixture.room(Vec2::new(width, 800.0)).settle();
+    fixture.density(Size::Comfortable).room(Vec2::new(width, 800.0)).settle();
     (columns_of(&fixture), rect(&fixture, "Tools"), rect(&fixture, "Move"))
 }
 
 /// A rail with a compact scope of its own fills the rail grid of that scope: its first step shows one column, its
 /// second two, each of buttons smaller than a rail at the root's density shows; the compact grid is narrower than the
-/// root one.
+/// comfortable root's.
 #[trial]
 fn a_rail_with_a_compact_scope_of_its_own_fills_the_rail_grid_of_that_scope() {
-    let probe = Fixture::new(|_| {});
+    let mut probe = Fixture::new(|_| {});
+    probe.density(Size::Comfortable).settle();
     let compact = ThemeScope::new().density(Size::Compact);
     let grid_in = |scope: &ThemeScope| DockGrid::rail(LABELS.len()).resolved(&StyleCx::with_root_scoped(probe.ctx(), scope, DockSizes::style));
     let (root, scoped) = (grid_in(&ThemeScope::new()), grid_in(&compact));
