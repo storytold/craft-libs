@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-use super::backend::{ClipboardBackend, Written};
+use super::backend::{ClipboardBackend, LaterRead, Written};
 use super::types::{ClipboardError, ClipboardImage, ClipboardLimits, Flavor, SVG, TEXT};
 
 /// The app's clipboard: one per window, on the UI thread.
@@ -101,7 +101,7 @@ impl Clipboard {
 
     /// As [`read`](Self::read), with its limits and gates, but the slow part of the read is the returned closure,
     /// which runs off the UI thread. A flavour over its limit, found only once the closure has made it, is `None`.
-    pub fn read_later(&mut self, mimes: &[&str]) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
+    pub fn read_later(&mut self, mimes: &[&str]) -> Result<Option<LaterRead>, ClipboardError> {
         let Some(make) = self.backend.read_later(mimes, read_limit(&self.limits, mimes))? else { return Ok(None) };
         let limits = self.limits;
         Ok(Some(Box::new(move || make().filter(|flavor| flavor.data.len() as u64 <= read_limit(&limits, &[&*flavor.mime])))))

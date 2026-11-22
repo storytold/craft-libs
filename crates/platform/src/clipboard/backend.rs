@@ -10,6 +10,9 @@ use super::offer;
 use super::types::{BITMAP, HTML, RGBA8, RTF, TEXT, URI_LIST};
 use super::types::{ClipboardError, ClipboardImage, Flavor};
 
+/// The slow part of a read, run off the UI thread ([`ClipboardBackend::read_later`]); `None` when it reads nothing.
+pub type LaterRead = Box<dyn FnOnce() -> Option<Flavor> + Send>;
+
 /// What a write did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
@@ -43,8 +46,8 @@ pub trait ClipboardBackend: Send {
     fn has(&mut self, mimes: &[&str]) -> bool;
     /// As [`read`](Self::read), but the slow part (the Wayland pipe, a DIB conversion) is left in the returned
     /// closure, which runs off the UI thread. Reads now and wraps the result by default.
-    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
-        Ok(self.read(mimes, limit)?.map(|flavor| Box::new(move || Some(flavor)) as Box<dyn FnOnce() -> Option<Flavor> + Send>))
+    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<LaterRead>, ClipboardError> {
+        Ok(self.read(mimes, limit)?.map(|flavor| Box::new(move || Some(flavor)) as LaterRead))
     }
     /// Whether the clipboard can be read at any time; `false` where it can be read only inside a paste event (the
     /// web).
@@ -86,7 +89,7 @@ impl<B: ClipboardBackend + ?Sized> ClipboardBackend for Box<B> {
     fn has(&mut self, mimes: &[&str]) -> bool {
         (**self).has(mimes)
     }
-    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
+    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<LaterRead>, ClipboardError> {
         (**self).read_later(mimes, limit)
     }
     fn readable_any_time(&self) -> bool {

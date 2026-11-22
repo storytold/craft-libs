@@ -6,6 +6,9 @@ use std::sync::Arc;
 /// Most steps a history keeps.
 const LIMIT: usize = 100;
 
+/// How a value weighs under a history's budget.
+type Weigh<T> = fn(&T) -> usize;
+
 /// Which way [`EditHistory::step`] goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,7 +47,7 @@ pub struct EditHistory<T> {
     settled_weight: usize,
     open: Option<Open>,
     /// The most summed weight the undo steps keep, and how a value weighs.
-    budget: Option<(usize, fn(&T) -> usize)>,
+    budget: Option<(usize, Weigh<T>)>,
 }
 
 impl<T: Value> EditHistory<T> {
