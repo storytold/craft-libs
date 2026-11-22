@@ -500,7 +500,7 @@ impl<'p> Pass<'p> {
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(0.0);
         line.show(ui, |ui| {
-            let mut field = number_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit).step(step);
+            let mut field = unit_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit).step(step);
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
@@ -929,7 +929,7 @@ impl<'p> Pass<'p> {
                     }
                     None => {}
                 }
-                let field = number_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit).range(range.clone());
+                let field = unit_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit).range(range.clone());
                 let field = field.id_salt("field").enabled(self.work.number(line.key).is_some());
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
@@ -1006,6 +1006,15 @@ fn beside(ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
 /// A number field named `name` that reads and writes `decimals` digits and the spellings of `unit`.
 fn number_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>) -> NumberField<'static> {
     NumberField::new(name, Bind::given(value)).codec(NumberCodec::new(units.reader(unit), decimals as usize))
+}
+
+/// A [`number_field`] that shows the symbol of its unit after the number (the parameter's `unit`).
+fn unit_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>) -> NumberField<'static> {
+    let field = number_field(units, name, value, decimals, unit);
+    match unit {
+        Some(kind) => field.unit_kind(kind),
+        None => field,
+    }
 }
 
 /// The range that has the bounds that are set, open on the other side; `None` when neither is.

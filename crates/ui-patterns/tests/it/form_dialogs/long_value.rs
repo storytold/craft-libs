@@ -22,3 +22,17 @@ fn a_long_unbroken_read_only_value_wraps_inside_the_dialog() {
     let dialog = layers.first().expect("the dialog layer");
     assert!(dialog.left() >= 0.0 && dialog.right() <= room.x, "the dialog stays inside the window: {dialog:?}");
 }
+
+/// A number row with a unit shows the unit's symbol after the number, as the parameter says.
+#[trial]
+fn a_number_row_shows_its_unit_after_the_number() {
+    use craft_ui::runtime::env::UnitKind;
+    let mut fixture = Fixture::new(|ui| {
+        let mut fields = DialogFields::new();
+        let rows = vec![Param::number("width", "Width", 0.01, 0.001, 3).unit(UnitKind::Inches)];
+        ParamDialog::new("units", "Hairlines", rows).values(Bind::bound(&mut fields)).show(ui);
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    assert!(fixture.texts().iter().any(|run| run.text == "in"), "the unit symbol is painted: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+}
