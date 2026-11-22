@@ -382,9 +382,13 @@ fn plan_view(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, 
     unreadable.extend(report.not_read.iter().map(|n| Line::new(n.text.clone(), n.line)));
     unreadable.retain(&shown);
     let [(skipped_title, skipped), ..] = report_lists(say, env, report);
-    let skipped: Vec<Line> = skipped.into_iter().filter(&shown).collect();
+    let mut skipped: Vec<Line> = skipped.into_iter().filter(&shown).collect();
 
     let Some(review) = state.review.as_ref() else { return act };
+    // An entry left out is planned as if the set lacked it: it is listed with the skipped keys, its include box off.
+    skipped.extend(
+        review.set.entries.iter().zip(&review.included).filter(|(_, on)| !**on).map(|(entry, _)| Line::new(entry.item(), entry.line)).filter(&shown),
+    );
     let entry_of = |item: &str, line: Option<usize>| review.entry_at(item, line).and_then(|i| review.included.get(i).map(|on| (i, *on)));
     let catalog = env.keymap.catalog();
     let shared: OnceCell<Vec<Entry<usize>>> = OnceCell::new();
