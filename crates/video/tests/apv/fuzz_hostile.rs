@@ -63,12 +63,15 @@ fn hostile_frames_never_panic() {
 fn sweep() {
     let seeds = seeds();
     assert!(!seeds.is_empty());
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut, from 0, the byte and word edits at
+    // every N-th position, from a different offset for each seed, and 1/N of the random rounds.
+    let step = craft_media_testkit::hostile::divisor();
     for (si, seed) in seeds.iter().enumerate() {
         let stride = (seed.len() / 400).max(1);
-        for n in (0..seed.len()).step_by(stride) {
+        for n in (0..seed.len()).step_by(stride * step) {
             run(&seed[..n], &format!("seed {si} truncate {n}"));
         }
-        for p in 0..seed.len().min(256) {
+        for p in (si % step..seed.len().min(256)).step_by(step) {
             for v in [0u8, 0xff, 0x80, 0x01, 0x7f] {
                 let mut d = seed.clone();
                 d[p] = v;
@@ -81,7 +84,7 @@ fn sweep() {
             }
         }
         // Whole big-endian 32-bit words of the header set to 0 / huge values (sizes, counts, dimensions).
-        for p in 0..seed.len().min(128) {
+        for p in (si % step..seed.len().min(128)).step_by(step) {
             for v in [0u32, 0xffff_ffff, 0x0001_0000, 0x7fff_ffff] {
                 let mut d = seed.clone();
                 if let Some(s) = d.get_mut(p..p + 4) {
@@ -91,7 +94,7 @@ fn sweep() {
             }
         }
         let mut rng = Rng(0x9e3779b97f4a7c15 ^ si as u64);
-        let iters = std::env::var("FILMCRAFT_FUZZ_ITERS").ok().and_then(|s| s.parse().ok()).unwrap_or(1000);
+        let iters = std::env::var("FILMCRAFT_FUZZ_ITERS").ok().and_then(|s| s.parse().ok()).unwrap_or(1000usize).div_ceil(step);
         for i in 0..iters {
             let mut d = seed.clone();
             for _ in 0..1 + rng.below(8) {

@@ -30,4 +30,5 @@ blake3 = { version = "1.8", default-features = false, features = ["pure"], optio
 ruzstd = { version = "0.9", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }

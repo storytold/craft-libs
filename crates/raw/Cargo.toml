@@ -70,6 +70,7 @@ zune-core = { version = "0.5", default-features = false, features = ["std"], opt
 jxl-oxide = { version = "0.12", default-features = false, optional = true }
 
 [dev-dependencies]
+craft-testkit = { workspace = true }
 proptest = { workspace = true }
 # The SHA-256 of the SR2 keystream known answer.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }

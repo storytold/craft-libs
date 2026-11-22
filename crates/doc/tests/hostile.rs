@@ -368,8 +368,12 @@ impl Rng {
 #[test]
 fn seeded_mutations_never_panic() {
     let mut rng = Rng(0x5eed);
-    for s in samples() {
-        for _ in 0..1500 {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) exercises every N-th round, from a different offset
+    // for each sample, capped at the 1,500 rounds so each sample keeps one. Every round's
+    // mutation is still drawn, so the ones exercised are the full sweep's.
+    let step = craft_testkit::hostile::divisor().min(1500);
+    for (k, s) in samples().into_iter().enumerate() {
+        for round in 0..1500 {
             let mut d = s.clone();
             for _ in 0..1 + rng.below(4) {
                 let at = rng.below(d.len());
@@ -389,6 +393,9 @@ fn seeded_mutations_never_panic() {
                         }
                     }
                 }
+            }
+            if (round + k) % step != 0 {
+                continue;
             }
             exercise(&d, &small());
         }

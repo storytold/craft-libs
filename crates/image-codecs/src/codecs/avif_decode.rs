@@ -1206,14 +1206,17 @@ mod tests {
 
     #[test]
     fn hostile_files_are_errors_not_panics() {
-        for file in [QUAD_420, QUAD_GBR_LOSSLESS] {
+        // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut, from 0, and flips every N-th
+        // byte, from a different offset for each file.
+        let step = craft_media_testkit::hostile::divisor();
+        for (k, file) in [QUAD_420, QUAD_GBR_LOSSLESS].into_iter().enumerate() {
             // every truncation
-            for n in 0..file.len() {
+            for n in (0..file.len()).step_by(step) {
                 let _ = crate::probe_size(&file[..n]);
                 let _ = crate::decode(&file[..n]);
             }
             // byte flips through the container and the AV1 data
-            for i in 0..file.len() {
+            for i in (k % step..file.len()).step_by(step) {
                 for x in [0x01u8, 0x80, 0xff] {
                     let mut m = file.to_vec();
                     m[i] ^= x;

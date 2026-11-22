@@ -160,9 +160,12 @@ fn mutate_all(base: &[u8], seed: u64, iterations: usize) {
 
 #[test]
 fn mutated_synthetic_files_never_panic() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs the first 1/N of the mutations, as the hammer below
+    // does; the unmodified file still runs.
+    let iterations = 20_000usize.div_ceil(craft_media_testkit::hostile::divisor());
     for (i, f) in synthetic_files().iter().enumerate() {
         exercise(f);
-        mutate_all(f, 0x5EED_0000 + i as u64, 20_000);
+        mutate_all(f, 0x5EED_0000 + i as u64, iterations);
     }
 }
 
