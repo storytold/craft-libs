@@ -19,6 +19,32 @@ pub const MAX_SPECULAR: f32 = 25.0;
 /// a view at this cosine.
 const MIN_N_DOT_V: f32 = 1e-4;
 
+/// The geometry term of the specular lobe in [`Material::try_direct`]. Each form uses
+/// `α = roughness²` with roughness at least [`MIN_DIRECT_ROUGHNESS`]. The environment BRDF of
+/// [`try_environment_brdf`] does not depend on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Visibility {
+    /// EffectCraft's term, the default: the Smith-Schlick `G` with `k = (roughness + 1)² / 8`
+    /// that Karis gives for analytic lights in *Real Shading in Unreal Engine 4*
+    /// (<https://de45xmedrsdbp.cloudfront.net/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf>),
+    /// divided by `4 (n·v) (n·l)` taken as at least `1e-4`. It equals
+    /// [`SmithSeparable`](Visibility::SmithSeparable) at roughness 1 and is darker at grazing
+    /// angles on smoother surfaces.
+    #[default]
+    SmithSchlick,
+    /// The visibility of glTF 2.0 section B.3.2
+    /// (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specular-brdf>), from the
+    /// separable form of the Smith masking-shadowing function:
+    /// `V = 1 / ((n·l + √(α² + (1 − α²) (n·l)²)) (n·v + √(α² + (1 − α²) (n·v)²)))`.
+    SmithSeparable,
+    /// The height-correlated Smith masking-shadowing function for GGX of Heitz, *Understanding
+    /// the Masking-Shadowing Function in Microfacet-Based BRDFs* (JCGT 2014,
+    /// <https://jcgt.org/published/0003/02/03/>), which section B.3.2 cites for the derivation:
+    /// `V = 0.5 / (n·l √((n·v)² (1 − α²) + α²) + n·v √((n·l)² (1 − α²) + α²))`. TextureCraft's
+    /// mesh shader uses this form.
+    SmithHeightCorrelated,
+}
+
 /// A metallic-roughness material: linear base color, metallic and perceptual roughness, each in
 /// `0..=1` as glTF 2.0 defines them, and two weights for direct light.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,6 +54,7 @@ pub struct Material {
     roughness: f32,
     specular: f32,
     diffuse: f32,
+    visibility: Visibility,
 }
 
 /// Checks that `v` is finite and in `lo..=hi`.
@@ -36,8 +63,9 @@ fn in_range(v: f32, lo: f32, hi: f32, what: &'static str) -> Result<f32, PbrErro
 }
 
 impl Material {
-    /// A material with specular and diffuse weights of 1. Returns [`PbrError::BadMaterial`] when
-    /// a base color channel, `metallic` or `roughness` is not a number in `0..=1`.
+    /// A material with specular and diffuse weights of 1 and the default [`Visibility`],
+    /// [`Visibility::SmithSchlick`]. Returns [`PbrError::BadMaterial`] when a base color channel,
+    /// `metallic` or `roughness` is not a number in `0..=1`.
     pub fn try_new(base_color: [f32; 3], metallic: f32, roughness: f32) -> Result<Material, PbrError> {
         for c in base_color {
             in_range(c, 0.0, 1.0, "a base color channel is not a number from 0 to 1")?;
@@ -48,7 +76,13 @@ impl Material {
             roughness: in_range(roughness, 0.0, 1.0, "the roughness is not a number from 0 to 1")?,
             specular: 1.0,
             diffuse: 1.0,
+            visibility: Visibility::default(),
         })
+    }
+
+    /// The material with this geometry term for direct light.
+    pub fn with_visibility(self, visibility: Visibility) -> Material {
+        Material { visibility, ..self }
     }
 
     /// The material with these weights. `specular` scales the dielectric reflectance at normal
@@ -88,6 +122,11 @@ impl Material {
         self.diffuse
     }
 
+    /// The geometry term for direct light.
+    pub fn visibility(&self) -> Visibility {
+        self.visibility
+    }
+
     /// The reflectance at normal incidence: `0.04 × specular` mixed toward the base color by
     /// `metallic`. Each channel is in `0..=1`.
     pub fn f0(&self) -> [f32; 3] {
@@ -101,18 +140,21 @@ impl Material {
     ///
     /// `n`, `v` and `l` are the surface normal, the direction to the viewer and the direction to
     /// the light; they are normalized here. The BRDF is the final form of glTF 2.0 section
-    /// B.3.5: a Lambert lobe `(1 − F) (1 − metallic) base / π` plus `F D G / (4 (n·v) (n·l))`,
-    /// with Schlick's `F` (section B.3.4) at `v·h`, the GGX `D` of
-    /// [`ggx_distribution_between`] from `n` and the half vector, and the Smith-Schlick `G`
-    /// with `k = (roughness + 1)² / 8` that Karis gives for analytic lights, where section
-    /// B.3.2 writes the separable Smith form. Roughness is shaded as at least
+    /// B.3.5: a Lambert lobe `(1 − F) (1 − metallic) base / π` plus `F D V`, with Schlick's `F`
+    /// (section B.3.4) at `v·h`, the GGX `D` of [`ggx_distribution_between`] from `n` and the
+    /// half vector, and the visibility `V = G / (4 (n·v) (n·l))` that [`Material::visibility`]
+    /// selects. By default `G` is the Smith-Schlick term with `k = (roughness + 1)² / 8` that
+    /// Karis gives for analytic lights, where section B.3.2 writes the separable Smith form
+    /// ([`Visibility::SmithSeparable`]). Roughness is shaded as at least
     /// [`MIN_DIRECT_ROUGHNESS`]. A light at or below the surface gives 0, and so does a view
     /// straight opposite the light, which has no half vector. `n·v` is taken as at least `1e-4`,
     /// so a view at or below the surface sees the surface as at a grazing angle. `D` is exact
     /// where `n·h` is close to 1, so the highlight peaks at its head-on value. `D` is 0 where
     /// `n·h` is 0 or less, which happens when the view is at least as far below the surface as
-    /// the light is above it. The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`,
-    /// as in EffectCraft, so where it is smaller the specular lobe is below the expression above.
+    /// the light is above it. With [`Visibility::SmithSchlick`] the specular denominator
+    /// `4 (n·v) (n·l)` is taken as at least `1e-4`, as in EffectCraft, so where it is smaller the
+    /// specular lobe is below `F D G / (4 (n·v) (n·l))`. The other two forms divide by no such
+    /// product and have no floor.
     ///
     /// Returns [`PbrError::BadDirection`] when a direction is not finite or has zero length.
     pub fn try_direct(&self, n: [f32; 3], v: [f32; 3], l: [f32; 3]) -> Result<[f32; 3], PbrError> {
@@ -129,7 +171,7 @@ impl Material {
         let r = self.roughness.max(MIN_DIRECT_ROUGHNESS);
         let f = fresnel_schlick(self.f0(), v_h);
         let d = ggx_distribution_between(n.to_array(), h.to_array(), r)?;
-        let spec = d * smith_schlick_ggx(n_v, n_l, r) / (4.0 * n_v * n_l).max(1e-4);
+        let spec = d * visibility(self.visibility, n_v, n_l, r);
         let mut out = [0.0; 3];
         for c in 0..3 {
             let kd = (1.0 - f[c]) * (1.0 - self.metallic);
@@ -150,6 +192,19 @@ fn smith_schlick_ggx(n_v: f32, n_l: f32, roughness: f32) -> f32 {
     let k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
     let g1 = |x: f32| x / (x * (1.0 - k) + k);
     g1(n_v) * g1(n_l)
+}
+
+/// The visibility `G / (4 (n·v) (n·l))` of `kind` for `n_v` and `n_l` in `(0, 1]` and perceptual
+/// `roughness`. `χ⁺(h·l)` and `χ⁺(h·v)` of section B.3.2 are 1: with `h` the normalized `v + l`,
+/// `h·l` and `h·v` are equal and positive whenever `h` exists.
+fn visibility(kind: Visibility, n_v: f32, n_l: f32, roughness: f32) -> f32 {
+    let a2 = (roughness * roughness) * (roughness * roughness);
+    let root = |x: f32| (a2 + (1.0 - a2) * x * x).sqrt();
+    match kind {
+        Visibility::SmithSchlick => smith_schlick_ggx(n_v, n_l, roughness) / (4.0 * n_v * n_l).max(1e-4),
+        Visibility::SmithSeparable => 1.0 / ((n_l + root(n_l)) * (n_v + root(n_v))),
+        Visibility::SmithHeightCorrelated => 0.5 / (n_l * root(n_v) + n_v * root(n_l)),
+    }
 }
 
 /// The environment BRDF term of the split sum for `n_dot_v` and perceptual `roughness`, as

@@ -52,26 +52,38 @@ It has no UI, does no file or network I/O and has no `unsafe` code.
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metal-brdf-and-dielectric-brdf>):
   `f0` is 0.04 mixed toward the base color by metallic, `F` is Schlick's approximation at `v·h`
   (section B.3.4), the diffuse lobe is `(1 − F) (1 − metallic) base / π`, and the specular lobe
-  is `F D G / (4 (n·v) (n·l))` with the `D` of `ggx_distribution_between` from the normal and the
-  half vector.
-  - `G` is the Smith-Schlick term with `k = (roughness + 1)² / 8`, which Karis gives for analytic
-    lights in the 2013 notes above. Section B.3.2 writes the separable Smith
-    form. The two are equal at roughness 1; on smoother surfaces this `G` is darker at grazing
-    angles.
+  is `F D V`, with the `D` of `ggx_distribution_between` from the normal and the half vector and
+  the visibility `V = G / (4 (n·v) (n·l))`.
+  - `Material::with_visibility` selects the geometry term, a `Visibility`:
+    - `SmithSchlick`, the default and EffectCraft's term: the Smith-Schlick `G` with
+      `k = (roughness + 1)² / 8`, which Karis gives for analytic lights in the 2013 notes above.
+    - `SmithSeparable`: the `V` of section B.3.2, from the separable form of the Smith
+      masking-shadowing function.
+    - `SmithHeightCorrelated`: the height-correlated Smith form for GGX of Heitz, *Understanding
+      the Masking-Shadowing Function in Microfacet-Based BRDFs* (JCGT 2014,
+      <https://jcgt.org/published/0003/02/03/>), which section B.3.2 cites for its formulas.
+      TextureCraft's mesh shader uses this form.
+
+    The Smith-Schlick term equals the separable form at roughness 1; on smoother surfaces it is
+    darker at grazing angles (below half of the separable form with roughness 0.25 and the view
+    and light both about 84 degrees from the normal). The height-correlated form is at least as
+    bright as the separable one. The visibility affects `try_direct` only.
   - Roughness is shaded as at least `MIN_DIRECT_ROUGHNESS` (0.032, `α` = 0.001024).
   - `n·v` is taken as at least `1e-4`, so a view at or below the surface sees it as at a
     grazing angle. `D` is exact where `n·h` is close to 1, so the highlight peaks at its head-on
     value. `D` is 0 where `n·h` is 0 or less, which happens when the view is at least as far
     below the surface as the light is above it.
-  - The specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`, as in EffectCraft.
-    Where the product is smaller, at grazing angles, the specular lobe is below
-    `F D G / (4 (n·v) (n·l))`: about 4% of it with `n·v` and `n·l` both 0.001.
+  - With `SmithSchlick`, the specular denominator `4 (n·v) (n·l)` is taken as at least `1e-4`,
+    as in EffectCraft. Where the product is smaller, at grazing angles, the specular lobe is below
+    `F D G / (4 (n·v) (n·l))`: about 4% of it with `n·v` and `n·l` both 0.001. The other two
+    forms divide by no such product and have no floor.
   - A light at or below the surface, or a view straight opposite the light, gives
     0. Directions are normalized; one that is not finite or has zero length gives
     `PbrError::BadDirection`.
-  - A white metal reflects at most the light it receives. As section B.3.6.3 notes, the Fresnel
-    coupling of the two lobes does not conserve energy: a smooth white dielectric seen about 80
-    degrees from the normal reflects about 9.8% more light than it receives.
+  - A white metal reflects at most the light it receives, with each geometry term. As section
+    B.3.6.3 notes, the Fresnel coupling of the two lobes does not conserve energy: with
+    `SmithSchlick`, a smooth white dielectric seen about 80 degrees from the normal reflects about 9.8% more light than it
+    receives.
 - **Default environment.** `default_environment()` is an 8 × 4 gray studio gradient for an
   environment light that has no image: radiance proportional to `0.15 + 1.2 max(0, d·key)` with
   the key `(0.66, 0.75, 0)`, up and toward +X, scaled to a mean of 0.3 over the pixels weighted

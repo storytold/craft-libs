@@ -28,7 +28,9 @@
 //! [`Material`] holds a glTF 2.0 metallic-roughness material, and [`Material::try_direct`]
 //! evaluates its BRDF for one light in the final form of section B.3.5
 //! (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metal-brdf-and-dielectric-brdf>),
-//! with the Smith-Schlick geometry term Karis gives for analytic lights. [`default_environment`]
+//! with the Smith-Schlick geometry term Karis gives for analytic lights by default. [`Visibility`]
+//! selects section B.3.2's separable Smith form or the height-correlated Smith form instead.
+//! [`default_environment`]
 //! is a small studio environment for an environment light without an image.
 //!
 //! The diffuse coefficients are the nine real SH coefficients of the radiance, convolved with the
@@ -54,7 +56,7 @@ mod vec3;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, try_environment_brdf};
+pub use brdf::{MAX_SPECULAR, MIN_DIRECT_ROUGHNESS, Material, Visibility, try_environment_brdf};
 pub use environment::{ColorEncoding, ENVIRONMENTS, EnvImage, Environment, MAX_RADIANCE, default_environment, dir_of, uv_of};
 pub use prefilter::{PrefilterOptions, ggx_distribution, ggx_distribution_between, hammersley, try_prefilter};
 pub use sh::{irradiance, sh_basis, try_sh9};

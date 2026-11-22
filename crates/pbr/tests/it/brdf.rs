@@ -5,9 +5,11 @@
 use std::f32::consts::PI;
 
 use craft_pbr::{
-    EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, default_environment, ggx_distribution, ggx_distribution_between, hammersley,
+    EnvImage, MIN_DIRECT_ROUGHNESS, Material, PbrError, Visibility, default_environment, ggx_distribution, ggx_distribution_between, hammersley,
     try_environment_brdf,
 };
+
+const VISIBILITIES: [Visibility; 3] = [Visibility::SmithSchlick, Visibility::SmithSeparable, Visibility::SmithHeightCorrelated];
 
 use crate::reference::effectcraft as ec;
 
@@ -246,6 +248,96 @@ fn the_geometry_term_against_the_gltf_separable_smith_form() {
     assert!(karis < 0.5 * ggx, "{karis} vs {ggx}");
 }
 
+/// `n·v`, `n·l` and `n·h` in `f64` for the normal +Z.
+fn cosines64(v: [f32; 3], l: [f32; 3]) -> (f64, f64, f64) {
+    let unit = |d: [f64; 3]| {
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        [d[0] / len, d[1] / len, d[2] / len]
+    };
+    let (v, l) = (unit(v.map(f64::from)), unit(l.map(f64::from)));
+    let h = unit([v[0] + l[0], v[1] + l[1], v[2] + l[2]]);
+    (v[2], l[2], h[2])
+}
+
+/// glTF 2.0 section B.3.2's GGX `D` in `f64`, with `α = roughness²`.
+fn gltf_d64(nh: f64, roughness: f64) -> f64 {
+    let a2 = roughness.powi(4);
+    a2 / (std::f64::consts::PI * (nh * nh * (a2 - 1.0) + 1.0).powi(2))
+}
+
+/// Views and lights for the visibility tests: a spread over the hemisphere and grazing pairs at
+/// 89 and 89.9 degrees from the normal, mirrored and side by side.
+fn visibility_pairs() -> Vec<([f32; 3], [f32; 3])> {
+    let mut pairs = Vec::new();
+    for &v in &hemisphere(12, 0.05) {
+        for &l in &hemisphere(12, 0.05) {
+            pairs.push((v, l));
+        }
+    }
+    for deg in [89.0f32, 89.9] {
+        let (s, c) = (deg.to_radians().sin(), deg.to_radians().cos());
+        let head_on = [0.0, 0.0, 1.0];
+        pairs.extend([([s, 0.0, c], [-s, 0.0, c]), ([s, 0.0, c], [0.0, s, c]), ([s, 0.0, c], head_on), (head_on, [s, 0.0, c])]);
+    }
+    pairs
+}
+
+/// The specular light of a white metal, whose `F` is 1 and whose diffuse lobe is 0, against
+/// `want(n·v, n·l, α)`, a visibility computed in `f64` from a published formula.
+fn check_visibility(kind: Visibility, want: impl Fn(f64, f64, f64) -> f64) {
+    let n = [0.0, 0.0, 1.0];
+    for roughness in [0.0f32, 0.1, 0.25, 0.5, 1.0] {
+        let r = f64::from(roughness.max(MIN_DIRECT_ROUGHNESS));
+        let m = material([1.0; 3], 1.0, roughness).with_visibility(kind);
+        for (v, l) in visibility_pairs() {
+            let (nv, nl, nh) = cosines64(v, l);
+            let expect = want(nv, nl, r * r) * gltf_d64(nh, r) * nl * std::f64::consts::PI;
+            let got = f64::from(m.try_direct(n, v, l).unwrap()[0]);
+            assert!((got - expect).abs() <= 1e-3 * expect + 1e-6, "{kind:?} roughness {roughness} at {v:?} {l:?}: {got} vs {expect}");
+        }
+    }
+}
+
+/// `Visibility::SmithSeparable` is the `V` of glTF 2.0 section B.3.2, written here as the
+/// section writes it, at roughness 0 (shaded at the floor) to 1 and at grazing angles.
+#[test]
+fn the_separable_visibility_is_gltf_section_b_3_2() {
+    check_visibility(Visibility::SmithSeparable, |nv, nl, a| {
+        let a2 = a * a;
+        1.0 / (nl.abs() + (a2 + (1.0 - a2) * nl * nl).sqrt()) / (nv.abs() + (a2 + (1.0 - a2) * nv * nv).sqrt())
+    });
+}
+
+/// `Visibility::SmithHeightCorrelated` is Heitz's height-correlated masking-shadowing
+/// `G₂ = 1 / (1 + Λ(v) + Λ(l))` with the GGX `Λ = (√(1 + α² tan² θ) − 1) / 2`, divided by
+/// `4 (n·v) (n·l)`, computed here from the tangents rather than in the crate's form.
+#[test]
+fn the_height_correlated_visibility_is_heitzs_smith_form() {
+    check_visibility(Visibility::SmithHeightCorrelated, |nv, nl, a| {
+        let lambda = |c: f64| ((1.0 + a * a * (1.0 - c * c) / (c * c)).sqrt() - 1.0) / 2.0;
+        1.0 / (1.0 + lambda(nv) + lambda(nl)) / (4.0 * nv * nl)
+    });
+}
+
+/// A material uses EffectCraft's Smith-Schlick term unless a host selects another, and the two
+/// Smith forms are brighter than it at grazing angles on a smooth surface.
+#[test]
+fn the_default_visibility_is_effectcrafts_smith_schlick() {
+    let n = [0.0, 0.0, 1.0];
+    assert_eq!(Visibility::default(), Visibility::SmithSchlick);
+    let m = material([0.8, 0.4, 0.2], 0.3, 0.45);
+    assert_eq!(m.visibility(), Visibility::SmithSchlick);
+    assert_eq!(m.try_with_weights(2.0, 0.5).unwrap().visibility(), Visibility::SmithSchlick);
+    let schlick = m.with_visibility(Visibility::SmithSchlick);
+    for (v, l) in visibility_pairs() {
+        assert_eq!(m.try_direct(n, v, l).unwrap(), schlick.try_direct(n, v, l).unwrap());
+    }
+    let (v, l) = (norm([0.995, 0.0, 0.1]), norm([-0.995, 0.0, 0.1]));
+    let at = |kind| material([1.0; 3], 1.0, 0.25).with_visibility(kind).try_direct(n, v, l).unwrap()[0];
+    assert!(at(Visibility::SmithSeparable) > 2.0 * at(Visibility::SmithSchlick));
+    assert!(at(Visibility::SmithHeightCorrelated) > at(Visibility::SmithSeparable));
+}
+
 /// A unit vector along `d`, computed in the same steps and order as the crate normalizes
 /// directions: divided by its largest component, then multiplied by the reciprocal length.
 fn crate_unit(d: [f32; 3]) -> [f32; 3] {
@@ -299,14 +391,16 @@ const ANGLES: [f32; 8] = [0.0, 30.0, 60.0, 75.0, 80.0, 85.0, 89.0, 89.9];
 const ROUGHNESS: [f32; 9] = [0.0, 0.01, 0.032, 0.05, 0.1, 0.25, 0.5, 0.75, 1.0];
 
 /// A white furnace: a white metal, whose BRDF is the specular lobe alone with `F = 1`, reflects
-/// at most the light it receives at every roughness and view angle.
+/// at most the light it receives at every roughness and view angle, with each geometry term.
 #[test]
 fn a_white_metal_reflects_at_most_the_light_it_receives() {
-    for roughness in ROUGHNESS {
-        for deg in ANGLES {
-            let e = albedo(&material([1.0; 3], 1.0, roughness), deg.to_radians(), 96);
-            assert!(e <= 1.0 + 1e-3, "roughness {roughness} at {deg}°: {e}");
-            assert!(e > 0.0, "roughness {roughness} at {deg}°: {e}");
+    for kind in VISIBILITIES {
+        for roughness in ROUGHNESS {
+            for deg in ANGLES {
+                let e = albedo(&material([1.0; 3], 1.0, roughness).with_visibility(kind), deg.to_radians(), 96);
+                assert!(e <= 1.0 + 1e-3, "{kind:?} roughness {roughness} at {deg}°: {e}");
+                assert!(e > 0.0, "{kind:?} roughness {roughness} at {deg}°: {e}");
+            }
         }
     }
 }
@@ -330,8 +424,8 @@ fn the_brdf_is_reciprocal() {
     let n = norm([0.1, -0.2, 1.0]);
     let dirs: Vec<[f32; 3]> = hemisphere(20, 0.2).into_iter().map(|d| norm([d[0] + 0.1, d[1] - 0.2, d[2]])).collect();
     for (base, metallic) in [([0.7, 0.3, 0.1], 0.0), ([0.9, 0.8, 0.2], 1.0), ([0.5; 3], 0.4)] {
-        for roughness in [0.05, 0.3, 0.9] {
-            let m = material(base, metallic, roughness);
+        for (roughness, kind) in [0.05, 0.3, 0.9].into_iter().flat_map(|r| VISIBILITIES.map(|k| (r, k))) {
+            let m = material(base, metallic, roughness).with_visibility(kind);
             for &v in &dirs {
                 for &l in &dirs {
                     let (nv, nl) = (dot(n, v), dot(n, l));
@@ -444,8 +538,10 @@ fn valid_inputs_give_finite_non_negative_light() {
     for base in [[0.0; 3], [1.0; 3]] {
         for metallic in [0.0, 1.0] {
             for roughness in [0.0, 1.0] {
-                for (specular, diffuse) in [(0.0, 0.0), (craft_pbr::MAX_SPECULAR, 1.0)] {
-                    let m = material(base, metallic, roughness).try_with_weights(specular, diffuse).unwrap();
+                for (specular, diffuse, kind) in
+                    [(0.0, 0.0), (craft_pbr::MAX_SPECULAR, 1.0)].into_iter().flat_map(|(s, d)| VISIBILITIES.map(|k| (s, d, k)))
+                {
+                    let m = material(base, metallic, roughness).try_with_weights(specular, diffuse).unwrap().with_visibility(kind);
                     for &v in &all {
                         for &l in &all {
                             let out = m.try_direct(n, v, l).unwrap();
