@@ -9,7 +9,8 @@
 //!
 //! Keys follow spec 9.7: Alt and a letter open the menu with that mnemonic (also while another is open). F10 or a
 //! lone Alt closes an open menu; with none open it moves focus to the first title, and the next F10 or lone Alt, an
-//! Escape, or running a row returns focus to where it was. A `&` in a title's words row marks its mnemonic; without
+//! Escape, a shortcut (Space, a canvas's momentary Hand, among them) or running a row returns focus to where it was.
+//! Down and Enter open the focused title's menu; Space opens none. A `&` in a title's words row marks its mnemonic; without
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
@@ -428,7 +429,10 @@ impl<'a> MenuBar<'a> {
 
 impl Component for MenuBar<'_> {
     const ROLE: Role = Role::MENU_BAR;
-    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
+    // Enter and Down open the focused title's menu; Space does not. Space is a canvas's momentary Hand, so it goes on
+    // to the app's shortcuts, and a shortcut pressed on the bar gives the keyboard back to where it was.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves().with_activate(crate::runtime::focus::ActivateKeys::Enter);
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 

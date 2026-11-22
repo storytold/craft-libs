@@ -297,6 +297,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.held = self.held(props, &env);
         self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(..)));
         self.in_column = label::in_column(ui);
+        self.egui_cell = env.egui_cell;
         self.given.1 |= self.given_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
@@ -329,6 +330,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             // is laid out as given the room, at the footer and header this run measured, so the children that fill share
             // it; its record of the content height lets later runs of the pass and kept transcripts lay it out the same.
             None if self.capped(&self.props, at.env, at.at) => self.measure_capped(comp, at, cx, plan),
+            None if self.footed_layer() => self.measure_footed_layer(comp, at, cx, plan),
             None => self.measure_run(comp, at, cx, plan.key, None),
         };
         self.measured_took(took, pad, vertical)
@@ -1288,6 +1290,7 @@ impl BodyHooks<'_> {
                     plan.regions.body.width()
                 },
                 content_row: false,
+                egui_cell: self.egui_cell,
                 text: resolved.label_value,
                 side,
                 help: props.help.as_ref(),
@@ -1787,10 +1790,10 @@ impl BodyHooks<'_> {
     fn measure_room<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Result<bool, Vec2> {
         let props = &self.props;
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
-        // measured itself. A pane as tall as its content takes its height in the flow.
+        // measured itself. A pane as large as its content takes its extent in the flow.
         let flows = match &props.mount {
             Mount::Inline => true,
-            Mount::Pane(pane) => pane.content_height,
+            Mount::Pane(pane) => pane.content_extent,
             _ => false,
         };
         if !flows && at.ui.is_sizing_pass() {
@@ -1839,6 +1842,7 @@ impl BodyHooks<'_> {
             self.room.x = width;
         }
         self.in_column = label::in_column(at.ui);
+        self.egui_cell = at.env.egui_cell;
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
@@ -1922,6 +1926,26 @@ impl BodyHooks<'_> {
             self.measured_footer = self.footer_size.unwrap_or(Vec2::ZERO);
             self.measure_run(comp, at, cx, plan.key, Some(content))
         }
+    }
+
+    /// Whether the container is a layer with a footer: its body is laid out before the footer runs, so a body that
+    /// fills the layer's room takes the footer's height too, unless the run knows the footer from an earlier one.
+    fn footed_layer(&self) -> bool {
+        overlay_of(&self.props).is_some() && self.props.footer.is_some() && self.room.y.is_finite()
+    }
+
+    /// The measuring run of a layer with a footer (photocraft#16326): while what the regions took fits the room it
+    /// stands; taller (a body that fills, such as a scrolling list, took the room the footer needs), the run is taken
+    /// back and the body is laid out again beside the footer this run measured, so the layer keeps to its room with
+    /// the footer as its last row.
+    fn measure_footed_layer<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>, plan: MeasurePlan) -> Vec2 {
+        let fits = self.room.y + plan.tolerance;
+        let (took, kept) = crate::contract::draft(&plan.ctx, || self.measure_run(comp, at, cx, plan.key.clone(), None), |took| took.y <= fits);
+        if kept {
+            return took;
+        }
+        self.measured_footer = self.footer_size.unwrap_or(Vec2::ZERO);
+        self.measure_run(comp, at, cx, plan.key, None)
     }
 
     /// The extent a measuring run reports from what its regions `took`.
