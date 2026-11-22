@@ -166,6 +166,9 @@ pub(super) struct BodyHooks<'b> {
     /// The container is a row of a vertical flow, not a member of a row's line (`label::in_column`), as its parent
     /// flow showed it this run: its own measuring run shows its content in a flow of its own.
     in_column: bool,
+    /// The container is shown in a cell of an `egui::Grid` (`LabelIn::egui_cell`), as its parent flow showed it this
+    /// run: its label is decided at its own width.
+    egui_cell: bool,
     /// The line just before the container in its flow is a rule (`layout::flow_start`), as its parent flow showed it
     /// this run: a rule above its header is not drawn, so two rules never follow each other.
     after_rule: bool,
@@ -245,6 +248,7 @@ impl<'b> BodyHooks<'b> {
             held: false,
             across: false,
             in_column: true,
+            egui_cell: false,
             after_rule: false,
             follows_end: false,
         }
