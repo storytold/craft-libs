@@ -167,3 +167,20 @@ fn a_wide_notice_wraps_its_message_beside_its_actions() {
     assert!(text.top() >= action.top(), "the message begins within the action line: {text:?}, {action:?}");
     assert!(text.top() < action.bottom() && action.top() < text.bottom(), "the actions share the message's first line");
 }
+
+/// A card with a short message is as wide as its text, not the card width; a long one wraps at the card width.
+#[trial]
+fn a_card_is_as_wide_as_its_text_up_to_the_card_width() {
+    let width = |message: String| {
+        let seen = Rc::new(Cell::new(0.0_f32));
+        let out = seen.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            out.set(Notice::new(Tone::Neutral, message.clone()).layout(NoticeLayout::Card).show(ui).response.rect.width());
+        });
+        fixture.settle();
+        seen.get()
+    };
+    let (short, long) = (width("No recent files".to_owned()), width("Couldn't read the file. ".repeat(20)));
+    assert!(short < long, "a short card is narrower than a long one: {short} vs {long}");
+    assert!(long < 400.0, "a long card wraps at the card width: {long}");
+}

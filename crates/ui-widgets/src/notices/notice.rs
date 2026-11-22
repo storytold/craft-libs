@@ -587,10 +587,12 @@ impl Component for Notice<'_> {
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let natural = self.plan(cx, &texts, f32::INFINITY).needs;
         let width = match (self.layout, cx.room) {
-            // The card is the card width wide, its padding included, where the room allows.
+            // The card is as wide as its text, up to the card width (padding included) where the room allows. A card
+            // that hosts content (a progress bar) has no text width of its own and takes the card width.
             (NoticeLayout::Card, room) => {
                 let padding = cx.style.metrics.padding;
-                let width = cx.style.card_width - padding.start - padding.end;
+                let cap = cx.style.card_width - padding.start - padding.end;
+                let width = if self.content_sizes.is_empty() { natural.min(cap) } else { cap };
                 room.map_or(width, |room| width.min(room))
             }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),
