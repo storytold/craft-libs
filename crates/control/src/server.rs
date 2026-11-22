@@ -1339,6 +1339,19 @@ mod tests {
         }
     }
 
+    /// The cap holds when the line arrives a few bytes at a time, and at the end of the stream:
+    /// a `\r\n` split across two reads does not count toward it, and a last line of one byte
+    /// more than the cap with no newline is refused.
+    #[test]
+    fn the_cap_holds_across_reads() {
+        let mut fits = vec![b'A'; 1000];
+        fits.extend_from_slice(b"\r\n");
+        assert_eq!(read_line(&mut BufReader::with_capacity(7, fits.as_slice()), 1000).unwrap().unwrap().len(), 1000);
+        let last = vec![b'A'; 1001];
+        let e = read_line(&mut BufReader::with_capacity(7, last.as_slice()), 1000).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    }
+
     /// A read interrupted by a signal is tried again instead of ending the connection, and a
     /// `\r` before the newline is not part of the line.
     #[test]
