@@ -1059,7 +1059,7 @@ fn a_run_only_remember_reopens_with_its_values_and_stores_nothing() {
 }
 
 // A host's reset restores the opening values with `reset_to` over them, keeps the dialog open and answers false for an
-// unknown id.
+// unknown id. Whether it can reset compares with that target: values that opened off it can be reset, and none at it.
 #[trial]
 fn a_hosted_dialogs_reset_through_the_host_restores_the_opening_values() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
@@ -1069,12 +1069,13 @@ fn a_hosted_dialogs_reset_through_the_host_restores_the_opening_values() {
         blur(fields).reset_to(DialogFields::from_pairs([("smooth", true)]))
     }));
     fixture.idle(6);
-    assert!(!host.borrow().can_reset_by_id(id), "nothing changed yet");
+    assert!(host.borrow().can_reset_by_id(id), "Smooth opened off its reset target");
     host.borrow_mut().set_json_field(&ctx, id, "radius", json!(60.0)).expect("the radius row takes a number");
     assert!(host.borrow().can_reset_by_id(id), "an edit can be reset");
     assert!(host.borrow_mut().reset_by_id(&ctx, id), "the reset happened");
     fixture.idle(4);
     let fields = on_dialog(&host, |dialog| dialog.fields().clone()).expect("the dialog stays open");
     assert_eq!((fields.number("radius"), fields.bool("smooth")), (Some(10.0), Some(true)), "the opening values with reset_to over them");
+    assert!(!host.borrow().can_reset_by_id(id), "at the reset target there is nothing to reset");
     assert!(!host.borrow_mut().reset_by_id(&ctx, dialog_id("unknown")), "an unknown id answers false");
 }

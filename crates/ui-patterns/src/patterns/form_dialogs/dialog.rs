@@ -1130,6 +1130,13 @@ impl HostedParamDialog {
         self.requests.take_help_link()
     }
 
+    /// What the Reset footer restores: the opening values with the dialog's `reset_to` over them.
+    fn reset_goal(&self) -> DialogFields {
+        let mut fields = self.fields.clone();
+        let reset_to = (self.build)(&mut fields).reset_to;
+        reset_target(&self.opening, reset_to.as_ref())
+    }
+
     /// The answer OK gives with `fields`: the key, the part a remembering dialog saves and this dialog's id, as the
     /// dialog's own build says them.
     fn result_of(&mut self, fields: DialogFields) -> ParamResult {
@@ -1420,13 +1427,12 @@ impl StackDialog for HostedParamDialog {
 
     /// Whether the Reset footer's restore would change the values.
     fn can_reset(&self) -> bool {
-        self.fields != self.opening
+        self.fields != self.reset_goal()
     }
 
     /// Runs the restore the Reset footer runs: the opening values with `reset_to` over them.
     fn reset(&mut self, _: &Context) -> bool {
-        let reset_to = (self.build)(&mut self.fields).reset_to;
-        let target = reset_target(&self.opening, reset_to.as_ref());
+        let target = self.reset_goal();
         let changed = self.fields != target;
         self.fields = target;
         changed
