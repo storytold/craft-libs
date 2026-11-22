@@ -68,6 +68,7 @@ pub struct ScrollbarsStyle {
     metrics: Metrics,
     look: ScrollBarLook,
     document: Option<DocumentLook>,
+    margin: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -271,9 +272,12 @@ impl Bars {
         held: Option<&HeldThumb>,
     ) -> Bars {
         let document_chrome = style.document.is_some();
+        let margin = style.margin;
         let mut width = style.look.thickness;
         if document_chrome {
             width = width.min(rect.width().max(0.0)).min(rect.height().max(0.0));
+        } else {
+            width = width.min((rect.width() - 2.0 * margin).max(0.0)).min((rect.height() - 2.0 * margin).max(0.0));
         }
         let x = Span::of(
             doc.width(),
@@ -284,9 +288,15 @@ impl Bars {
         )
         .filter(|_| horizontal);
         let y = Span::of(doc.height(), view.center.y - doc.y0, f64::from(view.rect.height()), view.zoom, KEPT_IN_VIEW);
-        let right = if y.is_some() { rect.right() - width } else { rect.right() };
-        let bottom = if x.is_some() { rect.bottom() - width } else { rect.bottom() };
-        let corner = (document_chrome && x.is_some() && y.is_some()).then(|| Rect::from_min_max(pos2(right, bottom), rect.max));
+        let v_left = rect.right() - margin - width;
+        let v_right = rect.right() - margin;
+        let v_top = rect.top() + margin;
+        let v_bottom = if x.is_some() { rect.bottom() - 2.0 * margin - width } else { rect.bottom() - margin };
+        let h_left = rect.left() + margin;
+        let h_right = if y.is_some() { rect.right() - 2.0 * margin - width } else { rect.right() - margin };
+        let h_top = rect.bottom() - margin - width;
+        let h_bottom = rect.bottom() - margin;
+        let corner = (document_chrome && x.is_some() && y.is_some()).then(|| Rect::from_min_max(pos2(v_left, h_top), rect.max));
         let bar = |span: Option<Span>, axis, rect| {
             span.map(|span| {
                 let mut scroll = span.scroll(overscroll);
@@ -297,8 +307,8 @@ impl Bars {
             })
         };
         Bars {
-            horizontal: bar(x, Axis::X, Rect::from_min_max(pos2(rect.left(), bottom), pos2(right, rect.bottom()))),
-            vertical: bar(y, Axis::Y, Rect::from_min_max(pos2(right, rect.top()), pos2(rect.right(), bottom))),
+            horizontal: bar(x, Axis::X, Rect::from_min_max(pos2(h_left, h_top), pos2(h_right, h_bottom))),
+            vertical: bar(y, Axis::Y, Rect::from_min_max(pos2(v_left, v_top), pos2(v_right, v_bottom))),
             corner,
         }
     }
@@ -451,17 +461,18 @@ impl Component for CanvasScrollbars<'_> {
 
     fn style(cx: &StyleCx<'_>, key: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
         let mut look = cx.scroll_bar_of(ScrollBarKind::Docked);
+        look.thickness = cx.tokens.size.icon.md;
+        let margin = if key.document_chrome { 0.0 } else { cx.tokens.space.gap.tight };
         let document = key.document_chrome.then(|| {
             let color = &cx.tokens.color;
-            look.thickness = cx.tokens.size.icon.md;
             look.track = Stateful::new(cx.color(color.surface.sunken));
             DocumentLook { corner: cx.color(color.surface.panel), arrow: cx.quiet_ink() }
         });
-        ScrollbarsStyle { metrics: Metrics::new(), look, document }
+        ScrollbarsStyle { metrics: Metrics::new(), look, document, margin }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.style.look.thickness)
+        Vec2::splat(cx.style.look.thickness + cx.style.margin)
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, CanvasView>> {
