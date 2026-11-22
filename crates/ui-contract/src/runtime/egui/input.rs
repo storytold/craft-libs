@@ -300,9 +300,18 @@ pub(crate) fn button_of(button: egui::PointerButton) -> PointerButton {
     }
 }
 
+/// Where the force of the last touch that carried one waits for the next pass (see [`pointer_read`]).
+fn touch_force_id() -> Id {
+    Id::new("craft-ui-contract-last-touch-force")
+}
+
 /// Converts the running pass's pointer input. The pen's readings since the last drain pair with the pass's pointer
 /// moves (`PenPass::paired`); a touch's force pairs with its moves instead. A pen tip pressed with the barrel button
 /// held is the secondary button until it lifts.
+///
+/// A touch's end carries no force, so a pass whose only touch event is the end (a Windows Ink pen lifting: the lift's
+/// pass holds the touch's end and the last move) keeps the force of the last touch that carried one, from an earlier
+/// pass. Without it that last move had no sample, and a tool host gave it the press's.
 ///
 /// Only a pass whose events carry pointer events drains the pen's queue: a pass without one (another window's, or a
 /// rerun pass, whose events egui hands only to the frame's first pass) leaves the readings for the pass with the moves.
@@ -320,13 +329,16 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         Some(sample) => Some(PenPass::injected(sample)),
         None => pen.as_ref().map(|source| if pointed { PenPass::read(source) } else { PenPass::live(source) }),
     };
-    let (read, barrel_press) = ctx.input(|input| {
+    let carried_touch = super::memory::peek_copy::<PointerSample>(ctx, touch_force_id());
+    let (read, barrel_press, touch_left) = ctx.input(|input| {
         let mut events = Vec::new();
         let mut moves = Vec::new();
         let mut focus_lost = false;
         let mut stirred = false;
         let mut touched = false;
         let mut touch_sample = None;
+        // The pass's last touch event ended its touch: no force carries on to the next pass.
+        let mut touch_ended = false;
         let mut release = None;
         let mut other_press = None;
         let mut rotation = 0.0;
@@ -384,7 +396,8 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                 Event::WindowFocused(false) => focus_lost = true,
                 Event::Touch { phase, force, .. } => {
                     touched = true;
-                    if *phase != TouchPhase::End {
+                    touch_ended = *phase == TouchPhase::End;
+                    if !touch_ended {
                         touch_sample = force.map(PointerSample::new);
                     }
                 }
@@ -406,6 +419,9 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             }
         }
         let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+        let touch_sample = if touched { touch_sample.or(carried_touch) } else { touch_sample };
+        // What the next pass carries: this pass's force while the touch goes on, nothing once it ended.
+        let touch_left = touched.then(|| if touch_ended { None } else { touch_sample });
         let pen_active = tablet.as_ref().is_some_and(PenPass::active);
         let (kind, sample) = match &tablet {
             _ if touched => (PointerKind::Touch, touch_sample),
@@ -449,10 +465,17 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             rotation,
             multi_touch,
         };
-        (read, barrel_press)
+        (read, barrel_press, touch_left)
     });
     if let Some(pen) = &pen {
         pen.set_barrel_press(barrel_press);
+    }
+    match touch_left {
+        Some(Some(sample)) => super::memory::put(ctx, touch_force_id(), sample),
+        Some(None) => {
+            let _ended = super::memory::take::<PointerSample>(ctx, touch_force_id());
+        }
+        None => {}
     }
     read
 }

@@ -91,6 +91,63 @@ impl CanvasTool for Recorder {
 
 const BY: Vec2 = Vec2::new(60.0, 40.0);
 
+/// A brush-like tool that keeps the pressure each move hands it.
+#[derive(Default)]
+struct Pressures {
+    drags: Vec<f32>,
+}
+
+impl CanvasTool for Pressures {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.drags.push(pointer.sample.pressure);
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn takes_every_move(&self) -> bool {
+        true
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Brush tool")
+    }
+}
+
+fn pen_touch(phase: egui::TouchPhase, pos: Pos2, force: Option<f32>) -> egui::Event {
+    egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(0), phase, pos, force }
+}
+
+#[trial]
+fn the_last_move_of_a_pen_stroke_keeps_the_pens_pressure_when_the_lift_carries_none() {
+    let mut fixture = ToolFixture::new("Document", Pressures::default());
+    let from = fixture.canvas().center();
+    let (firm, light) = (0.9, 0.2);
+    let step = Vec2::new(12.0, 0.0);
+    let frames = fixture.fixture();
+    frames.frame(vec![pointer::moved(from)]);
+    frames.frame(vec![pen_touch(egui::TouchPhase::Start, from, Some(firm)), pointer::press(from)]);
+    frames.frame(vec![pen_touch(egui::TouchPhase::Move, from + step, Some(light)), pointer::moved(from + step)]);
+    // A Windows Ink pen lifting: the pass holds the touch's end, which carries no force, the last move and the release.
+    let to = from + step * 2.0;
+    frames.frame(vec![pen_touch(egui::TouchPhase::End, to, None), pointer::moved(to), pointer::release(to)]);
+    frames.frame(Vec::new());
+    let tool = fixture.tool();
+    let last = tool.drags.last().copied();
+    assert!(
+        last.is_some_and(|pressure| pressure < (firm + light) / 2.0),
+        "the last move reads the pen's last pressure, nearer the light move than the firm press: {:?}",
+        tool.drags
+    );
+}
+
 #[trial]
 fn a_drag_reaches_the_tool_as_one_press_drags_and_one_release() {
     let mut fixture = ToolFixture::new("Document", Recorder::default());
