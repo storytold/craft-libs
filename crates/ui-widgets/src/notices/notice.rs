@@ -512,6 +512,7 @@ impl Component for Notice<'_> {
             ),
             NoticeLayout::Bar => {
                 let colors = &cx.tokens.color;
+                let ink = if key.tone == Tone::Neutral { normal } else { cx.color(key.tone.on_soft(cx.tokens)) };
                 let fill = match key.tone {
                     Tone::Info => colors.status.info.bg,
                     Tone::Good => colors.status.good.bg,
@@ -521,9 +522,9 @@ impl Component for Notice<'_> {
                     _ => colors.surface.panel,
                 };
                 (
-                    TextLook::new(TypeRole::BodyStrong, stateful(normal)),
-                    TextLook::new(TypeRole::Body, stateful(normal)),
-                    TextLook::new(TypeRole::Body, stateful(normal)),
+                    TextLook::new(TypeRole::BodyStrong, stateful(ink)),
+                    TextLook::new(TypeRole::Body, stateful(ink)),
+                    TextLook::new(TypeRole::Body, stateful(ink)),
                     SurfaceLook::new(Stateful::new(cx.color(fill))),
                     Insets::uniform(cx.tokens.space.pad.control),
                     cx.tokens.space.gap.stack,
@@ -558,10 +559,11 @@ impl Component for Notice<'_> {
                 0.0,
             ),
         };
-        let brand = TextLook::new(TypeRole::Display, stateful(normal));
-        let byline = TextLook::new(TypeRole::Label, stateful(faint));
-        let line = TextLook::new(message.role, stateful(muted));
-        let more = TextLook::new(message.role, stateful(faint));
+        let bar_ink = if key.layout == NoticeLayout::Bar { Some(message.color.clone()) } else { None };
+        let brand = TextLook::new(TypeRole::Display, bar_ink.clone().unwrap_or_else(|| stateful(normal)));
+        let byline = TextLook::new(TypeRole::Label, bar_ink.clone().unwrap_or_else(|| stateful(faint)));
+        let line = TextLook::new(message.role, bar_ink.clone().unwrap_or_else(|| stateful(muted)));
+        let more = TextLook::new(message.role, bar_ink.unwrap_or_else(|| stateful(faint)));
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
