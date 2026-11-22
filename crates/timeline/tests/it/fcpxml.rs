@@ -962,4 +962,38 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
         failures.push("a recoverable encounter-order placement reported a false track-cap skip".into());
     }
     assert!(failures.is_empty(), "deferred audio changed encounter-order lanes: {failures:?}");
+
+    // Unlike the in-range O2 collision above, preferred index256 can never fit. Both an
+    // ordinary asset and a deferred reference must leave only their final cap diagnostics.
+    let outside = r#"
+      <asset-clip ref="av" name="Outside ordinary" lane="-257" offset="3s" duration="2s" srcEnable="audio">
+        <adjust-volume amount="-9dB"/><marker start="1s" value="Outside ordinary marker"/>
+      </asset-clip>
+      <ref-clip ref="m63" name="Outside deferred" lane="-257" offset="3s" duration="2s" srcEnable="audio">
+        <adjust-volume amount="-12dB"/><marker start="1s" value="Outside deferred marker"/>
+      </ref-clip>
+    </ref-clip>"#;
+    assert_eq!(refs.matches("</ref-clip>").count(), 1);
+    let outside_refs = refs.replacen("</ref-clip>", outside, 1);
+    let outside_xml = deferred_audio_document_at(61, &outside_refs, "", false);
+    let prewarmed_outside = prewarm(&outside_xml);
+    for text in [&outside_xml, &prewarmed_outside] {
+        let (imported, report) = import(text.as_bytes(), Format::Fcpxml, None).unwrap();
+        let (_, seq) = deferred_audio_sequence(&imported.project, "M61");
+        assert_eq!(lanes(seq), expected, "permanently outside preferences must not move valid neighbours");
+        assert!(seq.audio_tracks.len() <= 256 && seq.video_tracks.len() <= 256);
+        assert!(seq.all_tracks().flat_map(|t| &t.items).all(|i| !i.name.starts_with("Outside ")));
+        assert!(seq.markers.iter().all(|m| !m.name.starts_with("Outside ")));
+        assert!(seq.all_tracks().flat_map(|t| &t.items).flat_map(|i| &i.markers).all(|m| !m.name.starts_with("Outside ")));
+        deferred_audio_pair(seq, "Adjusted");
+        deferred_audio_pair(seq, "Positive lane");
+        assert!(seq.audio_tracks[3].items[0].link.is_none(), "the ordinary audio neighbour must remain unpaired");
+        let cap_failures = report
+            .entries
+            .iter()
+            .filter(|e| e.message == "FCPXML Audio lane exceeds the 256-track import limit; clip was skipped")
+            .map(|e| e.count)
+            .sum::<u32>();
+        assert_eq!(cap_failures, 2, "each outside reference contributes exactly one final diagnostic: {report}");
+    }
 }

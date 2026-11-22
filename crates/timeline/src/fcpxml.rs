@@ -16,7 +16,7 @@
 //!   clip markers. Transitions are supported on the primary storyline (and read from secondary
 //!   storylines); transitions elsewhere are reported.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::build::{
     Builder, Imported, MAX_IMPORTED_TRACKS, MediaSpec, base_item, db_to_gain, empty_sequence, gain_to_db, generator_of, item_media, item_path,
@@ -190,6 +190,80 @@ struct AudioReplay {
     unplaced: Vec<TrackItem>,
     paired: HashMap<ClipId, (ClipId, Option<u64>)>,
     video_index: Option<HashMap<ClipId, (usize, usize)>>,
+    final_cap_skips: usize,
+}
+
+/// Small immutable input for exact encounter-order replay planning.
+#[derive(Clone, Copy)]
+struct AudioInterval {
+    id: ClipId,
+    preferred: usize,
+    start: Tick,
+    end: Tick,
+}
+
+fn spend_audio_work(left: &mut usize, work: usize) -> bool {
+    let Some(rest) = left.checked_sub(work) else { return false };
+    *left = rest;
+    true
+}
+
+/// Logarithmic index-work units, not measured instructions or wall time.
+fn audio_index_work(items: usize) -> usize {
+    (usize::BITS - items.leading_zeros()) as usize + 1
+}
+
+fn audio_sort_work(items: usize) -> usize {
+    if items < 2 { 0 } else { items.saturating_mul(audio_index_work(items)) }
+}
+
+/// Plan with predecessor/successor queries; no stored sequence or replay state is mutated.
+fn indexed_audio_plan(audio: &[AudioInterval], transitions: &[usize], work: &mut usize) -> Option<Vec<(ClipId, Option<usize>)>> {
+    let mut tracks: Vec<BTreeSet<(Tick, Tick, ClipId)>> = Vec::new();
+    let mut plan = Vec::with_capacity(audio.len());
+    for clip in audio {
+        let mut placed = None;
+        for track in clip.preferred..MAX_IMPORTED_TRACKS {
+            if !spend_audio_work(work, 1) {
+                return None;
+            }
+            if track >= tracks.len() {
+                if !spend_audio_work(work, track + 1 - tracks.len()) {
+                    return None;
+                }
+                tracks.resize_with(track + 1, BTreeSet::new);
+            }
+            let intervals = &mut tracks[track];
+            let index_work = audio_index_work(intervals.len());
+            if !spend_audio_work(work, index_work.saturating_mul(2)) {
+                return None;
+            }
+            let at = (clip.start, Tick(i64::MAX), ClipId(u64::MAX));
+            let before = intervals.range(..=at).next_back().is_some_and(|&(start, end, _)| start < clip.end && clip.start < end);
+            let after = intervals
+                .range((std::ops::Bound::Excluded(at), std::ops::Bound::Unbounded))
+                .next()
+                .is_some_and(|&(start, end, _)| start < clip.end && clip.start < end);
+            if before || after {
+                continue;
+            }
+            if !spend_audio_work(work, index_work) {
+                return None;
+            }
+            intervals.insert((clip.start, clip.end, clip.id));
+            placed = Some(track);
+            break;
+        }
+        plan.push((clip.id, placed));
+    }
+    for track in 0..tracks.len().max(transitions.len()) {
+        let items = tracks.get(track).map_or(0, BTreeSet::len);
+        let transitions = transitions.get(track).copied().unwrap_or(0);
+        if !spend_audio_work(work, audio_sort_work(items).saturating_add(audio_sort_work(transitions))) {
+            return None;
+        }
+    }
+    Some(plan)
 }
 
 /// Placement context of a storyline element.
@@ -434,10 +508,10 @@ impl<'a> Imp<'a, '_, '_> {
             pending = waiting;
         }
         // Report only final failures: a later replay may vacate a provisionally full lane.
-        let mut parents: Vec<_> = self.audio_replay.values().collect();
-        parents.sort_by_key(|state| state.order.first().map(|p| p.0.0));
-        for state in parents {
-            for _ in &state.unplaced {
+        let mut parents: Vec<_> = self.audio_replay.iter().collect();
+        parents.sort_by_key(|(parent, state)| (state.order.first().map(|p| p.0.0), parent.0));
+        for (_, state) in parents {
+            for _ in 0..state.unplaced.len().saturating_add(state.final_cap_skips) {
                 self.report.warn_limited(
                     self.report_limit,
                     format!("FCPXML Audio lane exceeds the {MAX_IMPORTED_TRACKS}-track import limit; clip was skipped"),
@@ -450,27 +524,65 @@ impl<'a> Imp<'a, '_, '_> {
         self.report.warn_limited(self.report_limit, "FCPXML deferred audio exceeds the cache traversal budget; remaining audio was skipped");
     }
 
-    /// Replay actual items from original preferences, retaining track containers and metadata.
+    /// Complete budgeted planning before taking ownership of the parent or its replay ledger.
     fn replay_parent_audio(&mut self, parent: ItemId, intents: Vec<PendingAudio>) -> Option<bool> {
-        let mut state = self.audio_replay.remove(&parent).unwrap_or_default();
-        let Some(stored) = self.b.p.sequence(parent) else {
-            self.audio_replay.insert(parent, state);
-            return Some(false);
-        };
+        let Some(state) = self.audio_replay.get(&parent) else { return Some(false) };
+        let Some(stored) = self.b.p.sequence(parent) else { return Some(false) };
         let had_audio = stored.audio_tracks.iter().any(|t| !t.items.is_empty());
-        let items = stored.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>();
+        let count = stored.audio_tracks.iter().map(|t| t.items.len()).sum::<usize>();
         let video_work = if state.video_index.is_none() { stored.video_tracks.iter().map(|t| t.items.len()).sum::<usize>() } else { 0 };
-        let work = items
-            .saturating_add(state.unplaced.len())
-            .saturating_add(state.order.len().saturating_mul(2))
-            .saturating_add(state.paired.len())
-            .saturating_add(intents.len())
-            .saturating_add(video_work);
-        if work > self.cache_edges_left {
-            self.audio_replay.insert(parent, state);
+        let work = count
+            .saturating_mul(3)
+            .saturating_add(state.unplaced.len().saturating_mul(4))
+            .saturating_add(state.order.len().saturating_mul(4))
+            .saturating_add(state.paired.len().saturating_mul(2))
+            .saturating_add(intents.len().saturating_mul(4))
+            .saturating_add(video_work)
+            .saturating_add(stored.audio_tracks.len())
+            .saturating_add(stored.video_tracks.len());
+        if !spend_audio_work(&mut self.cache_edges_left, work) {
             return None;
         }
-        self.cache_edges_left -= work;
+        let mut candidates: Vec<_> = state.unplaced.iter().map(|a| (a.id, a.item)).chain(intents.iter().map(|p| (p.audio.id, p.child))).collect();
+        if !spend_audio_work(&mut self.cache_edges_left, audio_sort_work(candidates.len())) {
+            return None;
+        }
+        candidates.sort_by_key(|p| p.0.0);
+        let mut rejected = HashSet::new();
+        for (id, child) in candidates {
+            let reaches_parent = self.cache_reaches_any(child, &HashSet::from([parent]));
+            if self.cache_edges_left == 0 {
+                return None;
+            }
+            if reaches_parent {
+                self.report.warn_limited(
+                    self.report_limit,
+                    "FCPXML deferred audio could form a recursive graph or exceeds the cache traversal budget; audio was skipped",
+                );
+                rejected.insert(id);
+            }
+        }
+        let state = self.audio_replay.get(&parent)?;
+        let stored = self.b.p.sequence(parent)?;
+        let items: HashMap<_, _> = stored
+            .audio_tracks
+            .iter()
+            .flat_map(|track| &track.items)
+            .chain(&state.unplaced)
+            .chain(intents.iter().map(|p| &p.audio))
+            .map(|a| (a.id, a))
+            .collect();
+        let audio: Vec<_> = state
+            .order
+            .iter()
+            .filter(|placement| !rejected.contains(&placement.0))
+            .filter_map(|&(id, preferred)| items.get(&id).map(|a| AudioInterval { id, preferred, start: a.start, end: a.end() }))
+            .collect();
+        drop(items);
+        let transitions: Vec<_> = stored.audio_tracks.iter().map(|t| t.transitions.len()).collect();
+        let plan = indexed_audio_plan(&audio, &transitions, &mut self.cache_edges_left)?;
+        // No stored field has changed before this point. Work/refusal can only affect the budget/report.
+        let Some(mut state) = self.audio_replay.remove(&parent) else { return Some(false) };
         for intent in intents {
             let id = intent.audio.id;
             state.unplaced.push(intent.audio);
@@ -478,23 +590,9 @@ impl<'a> Imp<'a, '_, '_> {
                 state.paired.insert(id, (video, None));
             }
         }
-        // Resurrected ordinary references introduce edges too. Check them before itemclear.
-        let preferences: HashMap<_, _> = state.order.iter().copied().collect();
-        state.unplaced.sort_by_key(|item| item.id.0);
-        let mut admitted = Vec::new();
-        for item in std::mem::take(&mut state.unplaced) {
-            if preferences.get(&item.id).is_some_and(|&p| p < MAX_IMPORTED_TRACKS) && self.cache_reaches_any(item.item, &HashSet::from([parent])) {
-                self.report.warn_limited(
-                    self.report_limit,
-                    "FCPXML deferred audio could form a recursive graph or exceeds the cache traversal budget; audio was skipped",
-                );
-                state.paired.remove(&item.id);
-            } else {
-                admitted.push(item);
-            }
-        }
+        state.unplaced.retain(|a| !rejected.contains(&a.id));
+        state.paired.retain(|id, _| !rejected.contains(id));
         let Some(stored) = self.b.p.sequence_mut(parent) else {
-            state.unplaced = admitted;
             self.audio_replay.insert(parent, state);
             return Some(false);
         };
@@ -507,7 +605,6 @@ impl<'a> Imp<'a, '_, '_> {
                 .flat_map(|(track, t)| t.items.iter().enumerate().map(move |(item, clip)| (clip.id, (track, item))))
                 .collect()
         });
-        // Only deferred pairs belong to this ledger. Ordinary links travel unchanged.
         for (audio, _) in &state.order {
             if let Some((video, Some(link))) = state.paired.get(audio)
                 && let Some(&(track, item)) = video_index.get(video)
@@ -516,38 +613,45 @@ impl<'a> Imp<'a, '_, '_> {
                 seq.video_tracks[track].items[item].link = None;
             }
         }
-        let mut items: HashMap<_, _> = admitted.into_iter().map(|item| (item.id, item)).collect();
+        let mut items: HashMap<_, _> = std::mem::take(&mut state.unplaced).into_iter().map(|a| (a.id, a)).collect();
         for track in &mut seq.audio_tracks {
             for item in std::mem::take(&mut track.items) {
                 items.insert(item.id, item);
             }
         }
-        for &(id, preferred) in &state.order {
+        for (id, track) in plan {
             let Some(mut audio) = items.remove(&id) else { continue };
             let pair = state.paired.get(&id).and_then(|(video, saved)| video_index.get(video).map(|&position| (position, *saved)));
-            let pair = pair.map(|((track, item), saved)| {
-                let link = seq.video_tracks[track].items[item].link.or(saved).unwrap_or_else(|| self.b.link_id());
-                audio.link = Some(link);
-                ((track, item), link)
-            });
-            let (placed, unplaced) = self.b.place_retaining(&mut seq, TrackKind::Audio, preferred, audio);
-            if placed.is_some()
-                && let Some(((track, item), link)) = pair
+            if let Some(track) = track
+                && self.b.ensure_tracks(&mut seq, TrackKind::Audio, track + 1)
             {
-                seq.video_tracks[track].items[item].link = Some(link);
-                if let Some(pair) = state.paired.get_mut(&id) {
-                    pair.1 = Some(link);
+                if let Some((position, saved)) = pair {
+                    let (vtrack, item) = position;
+                    let link = seq.video_tracks[vtrack].items[item].link.or(saved).unwrap_or_else(|| self.b.link_id());
+                    audio.link = Some(link);
+                    seq.audio_tracks[track].items.push(audio);
+                    seq.video_tracks[vtrack].items[item].link = Some(link);
+                    if let Some(pair) = state.paired.get_mut(&id) {
+                        pair.1 = Some(link);
+                    }
+                } else {
+                    seq.audio_tracks[track].items.push(audio);
                 }
-            }
-            if let Some(mut audio) = unplaced {
+            } else {
                 if pair.is_some() {
                     audio.link = None;
                 }
                 state.unplaced.push(audio);
             }
         }
+        // Sorting was paid by the plan; video tracks were never reordered.
+        for track in &mut seq.audio_tracks {
+            track.sort();
+        }
         let new_audio = !had_audio && seq.audio_tracks.iter().any(|t| !t.items.is_empty());
-        self.b.put_sequence(parent, seq);
+        if let Some(stored) = self.b.p.sequence_mut(parent) {
+            *stored = seq;
+        }
         self.audio_replay.insert(parent, state);
         Some(new_audio)
     }
@@ -835,7 +939,12 @@ impl<'a> Imp<'a, '_, '_> {
                     }
                 };
                 if kind == TrackKind::Audio {
-                    self.audio_replay.entry(ctx.sequence).or_default().order.push((ti.id, pref));
+                    let replay = self.audio_replay.entry(ctx.sequence).or_default();
+                    if pref >= MAX_IMPORTED_TRACKS {
+                        replay.final_cap_skips += 1;
+                        continue;
+                    }
+                    replay.order.push((ti.id, pref));
                 }
                 if deferred {
                     self.pending_audio.entry(ctx.sequence).or_default().push(PendingAudio {
@@ -1692,8 +1801,7 @@ mod tests {
         assert_eq!(imp.b.place(&mut seq, TrackKind::Video, 0, video), Some(0));
         let ordinary0 = imp.b.clip(leaf, TrackKind::Audio, "Ordinary 0", Tick(0), Tick(10), Tick(0));
         let ordinary1 = imp.b.clip(leaf, TrackKind::Audio, "Ordinary 1", Tick(9), Tick(3), Tick(0));
-        let mut state = AudioReplay::default();
-        state.order = vec![(deferred.id, 0), (ordinary0.id, 0), (ordinary1.id, 0)];
+        let state = AudioReplay { order: vec![(deferred.id, 0), (ordinary0.id, 0), (ordinary1.id, 0)], ..AudioReplay::default() };
         assert_eq!(imp.b.place(&mut seq, TrackKind::Audio, 0, ordinary0), Some(0));
         assert_eq!(imp.b.place(&mut seq, TrackKind::Audio, 0, ordinary1), Some(1));
         seq.start_timecode = 7;
@@ -1727,6 +1835,82 @@ mod tests {
             result.is_none() && parent_unchanged && ledger_unchanged,
             "audio replay budget refusal: result={result:?}, parent_unchanged={parent_unchanged}, ledger_unchanged={ledger_unchanged}",
         );
+
+        let mut empty_report = Report::default();
+        let (mut empty_imp, empty_parent, empty_intents) = replay_fixture(&opts, &mut empty_report);
+        let pending_id = empty_intents[0].audio.id;
+        for track in &mut empty_imp.b.p.sequence_mut(empty_parent).unwrap().audio_tracks {
+            track.items.clear();
+        }
+        empty_imp.audio_replay.get_mut(&empty_parent).unwrap().order.retain(|p| p.0 == pending_id);
+        assert!(empty_imp.b.p.sequence(empty_parent).unwrap().audio_tracks.iter().all(|t| t.items.is_empty()));
+        assert!(empty_imp.b.p.sequence(empty_intents[0].child).unwrap().audio_tracks.iter().any(|t| !t.items.is_empty()));
+        let original = empty_imp.b.p.sequence(empty_parent).unwrap().clone();
+        let state = empty_imp.audio_replay.get(&empty_parent).unwrap();
+        let ledger = (state.order.clone(), state.unplaced.clone(), state.paired.clone(), state.video_index.clone());
+        // Twelve metadata units leave no budget for the ready child's first graph edge.
+        empty_imp.cache_edges_left = 12;
+        let result = empty_imp.replay_parent_audio(empty_parent, empty_intents);
+        let parent_unchanged = empty_imp.b.p.sequence(empty_parent) == Some(&original);
+        let state = empty_imp.audio_replay.get(&empty_parent).unwrap();
+        let ledger_unchanged = (&state.order, &state.unplaced, &state.paired, &state.video_index) == (&ledger.0, &ledger.1, &ledger.2, &ledger.3);
+        assert!(
+            result.is_none() && parent_unchanged && ledger_unchanged,
+            "empty parent audio replay budget refusal: result={result:?}, parent_unchanged={parent_unchanged}, ledger_unchanged={ledger_unchanged}",
+        );
+    }
+
+    #[test]
+    fn indexed_audio_plan_preserves_first_fit_boundaries_and_cap_recovery() {
+        let intervals = [
+            AudioInterval { id: ClipId(1), preferred: 254, start: Tick(0), end: Tick(5) },
+            AudioInterval { id: ClipId(2), preferred: 254, start: Tick(0), end: Tick(10) },
+            AudioInterval { id: ClipId(3), preferred: 254, start: Tick(9), end: Tick(12) },
+            AudioInterval { id: ClipId(4), preferred: 255, start: Tick(11), end: Tick(13) },
+        ];
+        let mut work = MAX_CACHE_EDGES;
+        let plan = indexed_audio_plan(&intervals, &[], &mut work).unwrap();
+        assert_eq!(plan, vec![(ClipId(1), Some(254)), (ClipId(2), Some(255)), (ClipId(3), Some(254)), (ClipId(4), Some(255))]);
+        let intervals = [
+            AudioInterval { id: ClipId(1), preferred: 0, start: Tick(0), end: Tick(10) },
+            AudioInterval { id: ClipId(2), preferred: 0, start: Tick(10), end: Tick(20) },
+            AudioInterval { id: ClipId(3), preferred: 0, start: Tick(3), end: Tick(4) },
+            AudioInterval { id: ClipId(4), preferred: 0, start: Tick(-2), end: Tick(2) },
+            AudioInterval { id: ClipId(5), preferred: 0, start: Tick(0), end: Tick(0) },
+            AudioInterval { id: ClipId(6), preferred: 0, start: Tick(5), end: Tick(5) },
+        ];
+        let mut work = MAX_CACHE_EDGES;
+        let lanes: Vec<_> = indexed_audio_plan(&intervals, &[], &mut work).unwrap().into_iter().map(|p| p.1).collect();
+        assert_eq!(lanes, vec![Some(0), Some(0), Some(1), Some(1), Some(0), Some(1)]);
+    }
+
+    #[test]
+    fn indexed_audio_replay_preserves_items_pairs_and_track_metadata() {
+        let catalog = crate::fx::Standard;
+        let opts = ImportOptions { base_dir: None, name: None, catalog: &catalog, namespace: "test" };
+        let mut report = Report::default();
+        let (mut imp, parent, intents) = replay_fixture(&opts, &mut report);
+        let mut expected = intents[0].audio.clone();
+        let original = imp.b.p.sequence(parent).unwrap().clone();
+        assert!(imp.replay_parent_audio(parent, intents).is_some());
+        let seq = imp.b.p.sequence(parent).unwrap();
+        assert_eq!(seq.settings, original.settings);
+        assert_eq!(seq.start_timecode, original.start_timecode);
+        assert_eq!(seq.markers, original.markers);
+        assert_eq!(seq.audio_tracks[0].id, original.audio_tracks[0].id);
+        assert_eq!(seq.audio_tracks[0].name, "Original A1");
+        assert!(seq.audio_tracks[0].locked);
+        assert!(!seq.audio_tracks[0].enabled);
+        assert_eq!(seq.video_tracks[0].id, original.video_tracks[0].id);
+        assert_eq!(seq.video_tracks[0].transitions, original.video_tracks[0].transitions);
+        assert_eq!(seq.audio_tracks[0].items.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), vec!["Deferred", "Ordinary 1"]);
+        assert_eq!(seq.audio_tracks[1].items[0].name, "Ordinary 0");
+        let actual = &seq.audio_tracks[0].items[0];
+        expected.link = actual.link;
+        assert_eq!(actual, &expected);
+        assert!(actual.link.is_some());
+        assert_eq!(actual.link, seq.video_tracks[0].items[0].link);
+        assert!(imp.audio_replay.get(&parent).unwrap().unplaced.is_empty());
     }
 
     #[test]
