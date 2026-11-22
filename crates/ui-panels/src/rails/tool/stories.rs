@@ -4,9 +4,11 @@ use super::{LastUsed, RailTool, ToolRail, ToolRailOutput, ToolSlot, ToolTips};
 use crate::contract::{MemoProps, Show as _, Tracked};
 use crate::display::{Shade, Text};
 use crate::docking::{DockGrid, DockSizes};
+use crate::runtime::env::Env;
 use crate::style::TypeRole;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use egui::Ui;
+use craft_behavior::Flow;
+use egui::{Ui, UiBuilder};
 
 /// The tools of the stories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui_macros::CommandSet)]
@@ -65,12 +67,12 @@ fn captioned_slots() -> Vec<ToolSlot<u8>> {
 }
 
 /// Shows `rail` in a room as wide as the grid of `cells` cells at `columns` columns, the stage a dock column of that
-/// many steps gives it, and at most `height` high.
+/// many steps gives it, at the reading start and at most `height` high.
 fn in_columns(ui: &mut Ui, columns: u8, cells: usize, height: Option<f32>, rail: ToolRail<'_, u8>) -> ToolRailOutput<u8> {
     let width = DockGrid::rail(cells).resolved(&DockSizes::of_scope(ui)).width(u16::from(columns));
+    let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, width);
     // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
-    ui.scope(|ui| {
-        ui.set_max_width(width);
+    ui.scope_builder(UiBuilder::new().max_rect(room), |ui| {
         if let Some(height) = height {
             ui.set_max_height(height);
         }
