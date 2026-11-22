@@ -1470,6 +1470,23 @@ impl<W: WindingNumber> Topology<W> {
                 .map(|path| clockwise(path) == walked_outer)
                 .collect();
             let keep = same_kind.iter().position(|&s| s).unwrap_or(0);
+            let sole_same_kind = same_kind.iter().filter(|&&s| s).count() == 1;
+            // The points of the same-kind pieces, each with the piece through it, sorted
+            // by point, and the bounding box of every piece. They limit the winding
+            // queries that pick a parent among several same-kind pieces.
+            let mut touching: Vec<(usize, usize)> = Vec::new();
+            if same_kind[keep] && !sole_same_kind {
+                for (j, piece) in pieces.iter().enumerate().filter(|&(j, _)| same_kind[j]) {
+                    touching.extend(piece.iter().map(|&seg| (self.point_idx[seg].0, j)));
+                }
+                touching.sort_unstable();
+                touching.dedup();
+            }
+            let bboxes: Vec<Rect> = if touching.is_empty() {
+                Vec::new()
+            } else {
+                paths.iter().map(|path| path.bounding_box()).collect()
+            };
             let mut idxs = vec![contour_idx; pieces.len()];
             for (i, idx) in idxs.iter_mut().enumerate() {
                 if i != keep {
@@ -1487,11 +1504,35 @@ impl<W: WindingNumber> Topology<W> {
                         // No piece winds like the walked contour, so the loops stay
                         // children of the rest of the walk.
                         (Some(contour_idx), !walked_outer)
+                    } else if sole_same_kind {
+                        // Only one piece winds like the walked contour, so every other
+                        // piece attaches to it without a winding query.
+                        (Some(idxs[keep]), !walked_outer)
                     } else {
                         let probe = path.segments().next().map(|s| s.eval(0.5));
-                        let container = (0..paths.len())
-                            .filter(|&j| same_kind[j])
-                            .find(|&j| probe.is_some_and(|pt| paths[j].winding(pt) != 0))
+                        let holds = |j: usize| {
+                            probe.is_some_and(|pt| {
+                                let b = bboxes[j];
+                                b.x0 <= pt.x
+                                    && pt.x <= b.x1
+                                    && b.y0 <= pt.y
+                                    && pt.y <= b.y1
+                                    && paths[j].winding(pt) != 0
+                            })
+                        };
+                        // The same-kind pieces that share a point with this piece are
+                        // tried first, and the others only when none of them holds it.
+                        let touched = pieces[i].iter().flat_map(|&seg| {
+                            let p = self.point_idx[seg].0;
+                            let start = touching.partition_point(|&(q, _)| q < p);
+                            touching[start..]
+                                .iter()
+                                .take_while(move |&&(q, _)| q == p)
+                                .map(|&(_, j)| j)
+                        });
+                        let container = touched
+                            .chain((0..paths.len()).filter(|&j| same_kind[j]))
+                            .find(|&j| holds(j))
                             .unwrap_or(keep);
                         (Some(idxs[container]), !walked_outer)
                     }
@@ -2825,6 +2866,21 @@ mod tests {
                 let hole = &contours[contour_with_box(&contours, hole)];
                 assert_eq!(hole.parent, Some(square), "{svg}");
             }
+        }
+
+        // The same two holes, with an island that touches the edge of the second hole
+        // and a second island that touches only the first island. Both islands
+        // attach to the second hole.
+        let near = "M200,150 L210,170 L200,190 L190,170 Z";
+        let far = "M200,190 L210,210 L200,230 L190,210 Z";
+        let svg = holes.clone() + near + " " + far;
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(contours.len(), 5, "{svg}");
+        let container = contour_with_box(&contours, h2);
+        for island in [near, far] {
+            let island = &contours[contour_with_box(&contours, svg_box(island))];
+            assert!(island.outer, "{svg}");
+            assert_eq!(island.parent, Some(container), "{svg}");
         }
 
         // A square with a hole that touches its top edge at (150, 0), and a second
