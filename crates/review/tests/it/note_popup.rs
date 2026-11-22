@@ -269,3 +269,14 @@ fn a_composer_kept_open_on_outside_press_closes_only_on_post_or_cancel() {
         assert!(host.cancelled.get() && !host.open.get(), "{close:?}: Cancel closes the composer");
     }
 }
+
+/// Reply sits at the end edge of the body under the note's text, as production's small right-aligned button.
+#[trial]
+fn the_reply_button_sits_at_the_end_edge_of_the_window() {
+    let host = NoteHost::new(Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 200.0)));
+    let fixture = NoteHost::fixture(&host);
+    let reply = fixture.by_label("Reply").expect("the Reply button");
+    let window = host.window.get();
+    assert!(window.right() - reply.rect.right() < 24.0, "Reply ends near the window's end edge: {:?} in {window:?}", reply.rect);
+    assert!(reply.rect.left() > window.center().x, "Reply sits in the end half: {:?} in {window:?}", reply.rect);
+}

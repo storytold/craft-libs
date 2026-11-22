@@ -3,16 +3,17 @@
 use std::collections::HashMap;
 
 use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
-use craft_theme::Opacity;
+use craft_theme::{ControlSize, Mode};
 use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton, PressFocus};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use craft_ui::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay,
-    Pad, PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, clicked,
+    Pad, PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, ThemeScope, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::layout::RowAlign;
 use craft_ui::primitives::{IconSpec, PaintShape, TextRun, Wrap};
 use craft_ui::runtime::env::{Env, EnvView, Label};
 use craft_ui::runtime::overlay::CloseReason;
@@ -111,7 +112,8 @@ impl NoteBody<'_, '_> {
     fn show(&mut self, ui: &mut Ui, words: &ThreadWords, view: &EnvView<'_>) {
         let messages = self.messages;
         let (answers, replies) = nest(messages);
-        Stack::new().fill_width().show(ui, |ui, _| {
+        // The body sits on the note's pale tint, so it reads in the light palette whatever the theme: light fields, dark ink.
+        Stack::new().fill_width().theme(ThemeScope::mode(Mode::Light)).show(ui, |ui, _| {
             if let Some(note) = messages.first() {
                 if self.allowed && note.editable {
                     self.note_text(ui, note, words);
@@ -174,9 +176,11 @@ impl NoteBody<'_, '_> {
         let id = self.id;
         let open = self.drafts.replies.get(&id).filter(|(target, _)| *target == to).map(|(_, text)| text.clone());
         let Some(mut typed) = open else {
-            if clicked(&Button::new(words.reply.clone()).show(ui)) {
-                self.drafts.replies.insert(id, (to, String::new()));
-            }
+            Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| {
+                if clicked(&Button::new(words.reply.clone()).size(ControlSize::Sm).show(ui)) {
+                    self.drafts.replies.insert(id, (to, String::new()));
+                }
+            });
             return;
         };
         let field = TextField::new(words.reply.clone(), Bind::bound(&mut typed)).lines(NOTE_ROWS).placeholder(words.reply.clone()).submits().show(ui);
@@ -184,9 +188,9 @@ impl NoteBody<'_, '_> {
         // The multi-line field submits on Cmd/Ctrl+Enter; plain Enter adds a line.
         let mut post = field.submitted && field.submit_mods.cmd;
         let mut cancel = field.escaped;
-        Row::new().show(ui, |ui, _| {
-            post |= clicked(&Button::new(words.post.clone()).variant(Variant::PRIMARY).enabled(!text.is_empty()).show(ui));
-            cancel |= clicked(&Button::new(words.cancel.clone()).show(ui));
+        Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| {
+            cancel |= clicked(&Button::new(words.cancel.clone()).size(ControlSize::Sm).show(ui));
+            post |= clicked(&Button::new(words.post.clone()).size(ControlSize::Sm).variant(Variant::PRIMARY).enabled(!text.is_empty()).show(ui));
         });
         let posted = post && !text.is_empty();
         if posted {
@@ -391,6 +395,11 @@ fn changed(from: Rect, to: Rect) -> bool {
     (to.min - from.min).length() >= LEAST_CHANGE || (to.size() - from.size()).length() >= LEAST_CHANGE
 }
 
+/// A channel of the note's colour thinned with white to a third.
+fn pale(channel: u8) -> u8 {
+    ((u16::from(channel) + 2 * 255) / 3) as u8
+}
+
 /// The connector wedge from the mark to the window: its point on the mark where it is nearest the window, and the two
 /// ends of its base (`half` wide each side of the middle) on the window's side that faces the mark. `None` without an
 /// anchor, while neither the mark (`anchor`'s flag) nor the window (`hovered`) is hovered and the note is not
@@ -542,7 +551,10 @@ impl Component for NoteWindow {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
         let fill = self.look.fill;
-        draw.faded(Opacity::TINT, |draw| draw.data_fill(&PaintShape::Rect(cx.response.rect, CornerRadius::ZERO), fill));
+        // The body is the note's colour thinned with white to a third, as production's.
+        let DataColor(base) = fill;
+        let pale = Color32::from_rgb(pale(base.r()), pale(base.g()), pale(base.b()));
+        draw.data_fill(&PaintShape::Rect(cx.response.rect, CornerRadius::ZERO), DataColor::new(pale));
         if let Some(wedge) = self.wedge(&cx.response, cx.style.wedge) {
             draw.faded(CONNECTOR_SHARE, |draw| draw.data_fill(&PaintShape::Polygon(wedge.to_vec()), fill));
         }
