@@ -443,6 +443,8 @@ impl Component for ColorWheel<'_> {
         if self.inner == WheelInner::Triangle {
             // The triangle turns with the hue, so its ring is rebuilt each pass.
             triangle.focusable().focus_shape(FocusShape::Polygon(geometry.corners(hue, 0.0).to_vec()));
+        } else {
+            triangle.pointer_only("the square's own stop takes the keys");
         }
         let marker_reach = Marker::reach(&cx.style.knob, MarkerSize::Regular);
         for (index, place) in self.places(&geometry).into_iter().enumerate() {
