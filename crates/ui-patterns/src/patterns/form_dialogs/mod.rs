@@ -18,7 +18,7 @@ mod path_row;
 mod preview;
 
 pub use dialog::{
-    BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ParamTab, ResetFooter, ResetPick,
+    BelowRows, DialogLayout, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ParamTab, ResetFooter, ResetPick,
     SharedOverlay, SharedRows, set_param_field,
 };
 pub use form::{FormCx, FormDialog, FormDialogWords, FormOutput};

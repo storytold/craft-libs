@@ -13,7 +13,7 @@ use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
+    LabelScheme, Pad, Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
     SideLabel, TooltipSpec, clicked,
 };
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -33,6 +33,7 @@ use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec};
 use craft_host::PickRequest;
 
 use craft_theme::Srgba;
+use crate::style::SurfaceKind;
 use egui::{Id, Response, Ui};
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -139,6 +140,7 @@ pub struct ParamRows<'a> {
     patterns: &'a [PresetRow<String>],
     preview_colors: &'a [(String, Srgba)],
     sliders: SliderFieldLayout,
+    labels: Option<LabelScheme>,
 }
 
 impl<'a> ParamRows<'a> {
@@ -154,6 +156,7 @@ impl<'a> ParamRows<'a> {
             patterns: &[],
             preview_colors: &[],
             sliders: SliderFieldLayout::Inline,
+            labels: None,
         }
     }
 
@@ -198,9 +201,16 @@ impl<'a> ParamRows<'a> {
         self
     }
 
+    /// How the rows' captions sit: a document dialog's `LabelScheme::Inline`, in which the option groups (sections)
+    /// are also shaded. Without it the group's scheme comes from its surroundings.
+    pub fn labels(mut self, scheme: LabelScheme) -> Self {
+        self.labels = Some(scheme);
+        self
+    }
+
     /// Shows the rows across the width offered.
     pub fn show(self, ui: &mut Ui) -> ParamRowsOutput {
-        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, patterns, preview_colors, sliders } = self;
+        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, patterns, preview_colors, sliders, labels } = self;
         let env = Env::of(ui);
         let words = env.words::<ParamWords>();
         let units = env.units();
@@ -208,11 +218,17 @@ impl<'a> ParamRows<'a> {
         let mut pass = Pass::new(&words, &units, patterns, canvas);
         pass.previews = preview_colors;
         pass.sliders = sliders;
+        pass.shaded = labels == Some(LabelScheme::Inline);
         let mut changed = false;
         let mut values = None;
         let mut edited = Vec::new();
         let mut group = |ui: &mut Ui| {
-            FieldGroup::new(label.clone()).show(ui, |ui, cx| {
+            let group = FieldGroup::new(label.clone());
+            let group = match labels {
+                Some(scheme) => group.labels(scheme),
+                None => group,
+            };
+            group.show(ui, |ui, cx| {
                 let before = match fields.reborrow().read(cx) {
                     Some(Mixed::Same(held)) => held,
                     _ => DialogFields::new(),
@@ -296,6 +312,8 @@ struct Pass<'p> {
     previews: &'p [(String, Srgba)],
     /// How range rows arrange their slider and number field (`ParamRows::sliders`).
     sliders: SliderFieldLayout,
+    /// The option groups are shaded: a card under each section's rows (`ParamRows::labels`).
+    shaded: bool,
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -346,6 +364,7 @@ impl<'p> Pass<'p> {
             canvas,
             previews: &[],
             sliders: SliderFieldLayout::Inline,
+            shaded: false,
         }
     }
 
@@ -411,11 +430,22 @@ impl<'p> Pass<'p> {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
-                Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
-                    for param in body {
-                        self.row(ui, param);
-                    }
-                });
+                if self.shaded {
+                    // A document dialog's option group: a caption over its rows on a card.
+                    Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
+                        Stack::new().fill_width().surface(SurfaceKind::Raised).pad(Pad::Control).show(ui, |ui, _| {
+                            for param in body {
+                                self.row(ui, param);
+                            }
+                        });
+                    });
+                } else {
+                    Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
+                        for param in body {
+                            self.row(ui, param);
+                        }
+                    });
+                }
             }
             rest = after;
         }

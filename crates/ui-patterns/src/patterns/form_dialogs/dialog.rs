@@ -38,6 +38,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 
+use crate::contract::LabelScheme;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use egui::{Context, Pos2, Rect, Response, Ui};
@@ -72,20 +73,39 @@ pub enum ParamLayout {
     /// Preview check box at their start: PhotoCraft's filter dialogs. The other rows keep the form's label and control
     /// columns.
     Stacked,
+    /// A document dialog, as production's: the captions at the row start with their control right after them, the
+    /// option groups shaded, the preview pane under the rows and the buttons across the foot.
+    Document,
 }
 
 impl ParamLayout {
     /// Whether a dialog that previews stands its buttons in a column beside the body.
     fn side_buttons(self) -> bool {
-        !matches!(self, ParamLayout::Stacked)
+        !matches!(self, ParamLayout::Stacked | ParamLayout::Document)
     }
 
     /// How the range rows arrange their slider and number field.
     fn sliders(self) -> SliderFieldLayout {
         match self {
             ParamLayout::Stacked => SliderFieldLayout::Stacked,
-            ParamLayout::Beside | ParamLayout::Below => SliderFieldLayout::Inline,
+            ParamLayout::Beside | ParamLayout::Below | ParamLayout::Document => SliderFieldLayout::Inline,
         }
+    }
+
+    /// The label scheme the rows take, when the layout sets one.
+    fn labels(self) -> Option<LabelScheme> {
+        (self == ParamLayout::Document).then_some(LabelScheme::Inline)
+    }
+}
+
+/// The layout a [`ParamDialog`] takes when it names none: set once for an app on the root's values
+/// (`RootEnv::values`), so every dialog of the app lays out alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DialogLayout(pub ParamLayout);
+
+impl crate::runtime::env::EnvValue for DialogLayout {
+    fn root() -> Self {
+        DialogLayout::default()
     }
 }
 
@@ -330,7 +350,7 @@ pub struct ParamDialog<'a> {
     reset_to: Option<DialogFields>,
     /// How the rows, the preview pane and the buttons are arranged.
     #[prop]
-    layout: ParamLayout,
+    layout: Option<ParamLayout>,
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
@@ -445,7 +465,7 @@ impl<'a> ParamDialog<'a> {
             history: false,
             collection_body: false,
             reset_to: None,
-            layout: ParamLayout::default(),
+            layout: None,
             closable: true,
             previews: false,
             preview_on: None,
@@ -584,6 +604,7 @@ impl<'a> ParamDialog<'a> {
             host_notes,
         } = self;
         let env = Env::of(ui);
+        let layout = layout.unwrap_or_else(|| env.view().get::<DialogLayout>().0);
         let preview_label = env.words::<FormDialogWords>().preview.clone();
         // A read-only dialog has one button, so there is no second one for Alt to turn into Reset.
         let alt_resets = alt_resets && !read_only;
@@ -675,6 +696,7 @@ impl<'a> ParamDialog<'a> {
             patterns: &patterns,
             preview_colors: &preview_colors,
             sliders: layout.sliders(),
+            labels: layout.labels(),
             canvas,
             read_only,
         };
@@ -744,7 +766,7 @@ impl<'a> ParamDialog<'a> {
                     });
                 }
                 (Some(state), layout) => {
-                    let zoom = if layout == ParamLayout::Stacked { ZoomRow::Below } else { ZoomRow::Above };
+                    let zoom = if matches!(layout, ParamLayout::Stacked | ParamLayout::Document) { ZoomRow::Below } else { ZoomRow::Above };
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
                         shown_preview = show_preview(ui, &preview_label, state, &mut extras, click_centres, zoom, &mut live);
@@ -947,6 +969,8 @@ struct DialogRows<'p> {
     patterns: &'p [PresetRow<String>],
     preview_colors: &'p [(String, Srgba)],
     sliders: SliderFieldLayout,
+    /// The label scheme the layout sets for the rows.
+    labels: Option<LabelScheme>,
     canvas: Option<egui::Id>,
     /// The dialog shows values only.
     read_only: bool,
@@ -960,6 +984,9 @@ impl DialogRows<'_> {
             .preview_colors(self.preview_colors)
             .sliders(self.sliders)
             .read_only(self.read_only || read_only);
+        if let Some(scheme) = self.labels {
+            rows = rows.labels(scheme);
+        }
         if let Some(canvas) = self.canvas {
             rows = rows.canvas(canvas);
         }

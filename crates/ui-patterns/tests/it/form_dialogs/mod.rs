@@ -3,6 +3,7 @@
 
 mod about;
 mod dialog;
+mod document_layout;
 mod export;
 mod files;
 mod hosted;
