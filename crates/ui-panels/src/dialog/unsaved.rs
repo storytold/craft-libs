@@ -10,6 +10,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
+use craft_behavior::IconId;
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 use craft_quit::{CloseAnswer, CloseScope};
@@ -63,18 +64,69 @@ pub struct UnsavedChangesDialog {
     open: bool,
     /// What a programmatic OK answers; the accepting answer's when `None`.
     chosen: Option<CloseAnswer>,
+    /// The buttons are worded and ordered as a document app's save question: Don't save, Cancel, Save.
+    document_wording: bool,
+    title: Option<Label>,
+    message: Option<Label>,
+    note: Option<Label>,
+    icon: Option<IconId>,
 }
 
 impl UnsavedChangesDialog {
     /// The question for the document `document_name`, closing under `scope`; the guard asks about one document.
     pub fn new(scope: CloseScope, document_name: impl Into<String>) -> Self {
-        Self { id: dialog_id("unsaved-changes"), scope, name: document_name.into(), remaining: 1, apply_to_all: false, open: true, chosen: None }
+        Self { id: dialog_id("unsaved-changes"), scope, name: document_name.into(), remaining: 1,
+            apply_to_all: false,
+            open: true,
+            chosen: None,
+            document_wording: false,
+            title: None,
+            message: None,
+            note: None,
+            icon: None,
+        }
     }
 
     /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
     /// answer the question has no button for (Save while reverting) gives none.
     pub fn set_answer(&mut self, answer: CloseAnswer) {
         self.chosen = Some(answer);
+    }
+
+    /// Words and orders the buttons as a document app's save question on every platform: Don't save, Cancel and Save
+    /// last, the accepting answer at the end.
+    #[must_use]
+    pub fn document_wording(mut self, on: bool) -> Self {
+        self.document_wording = on;
+        self
+    }
+
+    /// Replaces the title ("Unsaved changes").
+    #[must_use]
+    pub fn title(mut self, title: impl Into<Label>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Replaces the question, in the app's words (the document's name is the app's to put in).
+    #[must_use]
+    pub fn message(mut self, message: impl Into<Label>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    /// A muted note under the question.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<Label>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
+
+    /// An icon of the catalog beside the question.
+    #[must_use]
+    pub fn icon(mut self, icon: IconId) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     /// What a programmatic OK answers.
@@ -98,7 +150,7 @@ impl UnsavedChangesDialog {
     /// The answers in the order the buttons are given: what each means and how it is asked. Cmd+D (Ctrl+D off macOS)
     /// also answers Don't Save, as the platform's own save sheets do; Revert has no such chord.
     fn replies(&self, words: &DialogWords, cancel: Label, os: Os) -> Vec<(CloseAnswer, Reply)> {
-        let mac = os == Os::Mac;
+        let mac = os == Os::Mac || self.document_wording;
         self.offered()
             .iter()
             .map(|&answer| {
@@ -120,6 +172,8 @@ impl UnsavedChangesDialog {
     fn offered(&self) -> &'static [CloseAnswer] {
         if self.scope == CloseScope::Revert {
             &[CloseAnswer::DontSave, CloseAnswer::Cancel]
+        } else if self.document_wording {
+            &[CloseAnswer::DontSave, CloseAnswer::Cancel, CloseAnswer::Save]
         } else {
             &[CloseAnswer::Save, CloseAnswer::DontSave, CloseAnswer::Cancel]
         }
@@ -143,7 +197,15 @@ impl UnsavedChangesDialog {
         let replies = self.replies(&words, common.cancel.clone(), env.view().shell().os);
         let answers: Vec<CloseAnswer> = replies.iter().map(|(answer, _)| *answer).collect();
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
-        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
+        let title = self.title.clone().unwrap_or_else(|| words.unsaved_title.clone());
+        let message = self.message.clone().unwrap_or_else(|| Label::from(message));
+        let mut prompt = Prompt::new(title, message).answers(buttons(&env, replies));
+        if let Some(icon) = self.icon.clone() {
+            prompt = prompt.icon(icon);
+        }
+        if let Some(note) = self.note.clone() {
+            prompt = prompt.note(note);
+        }
         let mut ticked = hosted && self.apply_to_all;
         if self.offers_apply_to_all() {
             prompt = apply_to_all(prompt, words.unsaved_apply_to_all.clone(), self.remaining, hosted.then_some(&mut self.apply_to_all), &mut ticked);

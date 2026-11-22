@@ -411,3 +411,22 @@ fn a_prompt_shows_an_icon_beside_its_message_and_a_note_under_it() {
     assert!(message.left() > note.left() + 8.0, "the message starts after the icon: {message:?} vs {note:?}");
     assert!(note.top() > message.bottom() - 1.0, "the note is under the message");
 }
+
+/// A document app's save question words and orders its buttons the same on every platform: Don't Save, Cancel and
+/// Save last, with the app's title, question and note.
+#[trial]
+fn the_unsaved_question_can_ask_as_a_document_app_does() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    fixture.os(Os::Linux);
+    host.borrow_mut().open(
+        UnsavedChangesDialog::new(CloseScope::Close, "poster.pdf")
+            .document_wording(true)
+            .title("Save changes to “poster.pdf” before closing?")
+            .message("Your changes will be lost if you don't save them."),
+    );
+    fixture.idle(6);
+    let at = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name:?} is a button")).rect.min.x;
+    assert!(at("Don't Save") < at("Cancel") && at("Cancel") < at("Save"), "Don't Save, Cancel, Save");
+    assert!(fixture.texts().iter().any(|run| run.text.contains("before closing?")), "the app's title is shown");
+}
