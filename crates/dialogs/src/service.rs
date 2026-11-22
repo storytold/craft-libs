@@ -14,7 +14,7 @@
 //! prompt on the app's `DialogHost` from `FilePanels::pump_with`; a typed name without an extension gets the suggested one and a new file's
 //! uppercase extension is lowercased, while an existing file keeps its spelling (`file_dialog.rs:210 lowercased_extension`, `:365 saved_path`); the
 //! steps are separate settings of the [`ExtensionPolicy`]. A name the panel left alone takes the
-//! extension of the file type picked in the panel ([`with_chosen_type`]): the GTK file chooser keeps
+//! extension of the file type picked in the panel (`with_chosen_type`): the GTK file chooser keeps
 //! the typed name when another type is picked, and the format follows the extension.
 
 use std::collections::{HashMap, VecDeque};

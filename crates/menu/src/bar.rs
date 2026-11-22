@@ -134,7 +134,7 @@ impl<'a> MenuBarUi<'a> {
     }
 
     /// Draws the bar and its open menu. Disabled rows never run. A chosen item is a fired command in the frame's
-    /// output; [`Builtin::Quit`](crate::Builtin::Quit) and [`Builtin::Minimize`](crate::Builtin::Minimize) act on
+    /// output; [`Builtin::Quit`] and [`Builtin::Minimize`] act on
     /// the root window instead.
     pub fn show(self, ui: &mut Ui) -> MenuBarOutput {
         let env = Env::of(ui);
