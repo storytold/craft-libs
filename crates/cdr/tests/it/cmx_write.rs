@@ -287,15 +287,23 @@ fn pages_are_numbered_in_their_order() {
 /// a u16 length counting the 3 header bytes, the data; 0xff after the last field).
 fn table_entries(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<u8>> {
     let at = bytes.windows(4).position(|w| w == id).unwrap_or_else(|| panic!("no {id:?} chunk")) + 8;
+    // The chunk's body runs for the size after its id.
+    let end = at + u32::from_le_bytes(bytes[at - 4..at].try_into().unwrap()) as usize;
+    assert!(end <= bytes.len(), "{id:?} chunk ends at {end}, past the file");
     let count = usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
     let mut p = at + 2;
     let mut out = Vec::new();
     for _ in 0..count {
         let mut first = None;
-        while bytes[p] != 0xff {
+        loop {
+            assert!(p < end, "entry runs past the {id:?} chunk at {p}");
+            if bytes[p] == 0xff {
+                break;
+            }
+            assert!(p + 3 <= end, "field header at {p} runs past the {id:?} chunk");
             let len = usize::from(u16::from_le_bytes([bytes[p + 1], bytes[p + 2]]));
-            // A length shorter than its header, or past the file, would stop the walk.
-            assert!(len >= 3 && p + len <= bytes.len(), "field at {p} has length {len}");
+            // A length shorter than its header, or past the chunk, would stop the walk.
+            assert!(len >= 3 && p + len <= end, "field at {p} has length {len}");
             if bytes[p] == 1 {
                 first = Some(bytes[p + 3..p + len].to_vec());
             }
@@ -1119,6 +1127,32 @@ fn a_cubic_crossing_an_edge_between_its_flattened_points_is_reported() {
     };
     assert!(filled(2.237));
     assert!(!filled(2.3));
+}
+
+#[test]
+fn a_cubic_crossing_the_next_edge_near_their_shared_point_is_reported() {
+    let p = |x: f64, y: f64| Pt { x: x * 1000.0, y: y * 1000.0 };
+    // The arch (16 t, 9 t (1 − t)) ends at (16, 0) heading back at a slope of 9/16, and the line
+    // from there to (0, 8.8) leaves at a slope of 0.55: the arch starts above the line and crosses
+    // it. The arch's last flattened piece, at a slope of 0.527, stays below the line.
+    let segments = vec![Segment::Cubic(p(16.0 / 3.0, 3.0), p(32.0 / 3.0, 3.0), p(16.0, 0.0)), Segment::Line(p(0.0, 8.8))];
+    let arch = SubPath { start: p(0.0, 0.0), segments, closed: true };
+    // A clockwise square apart from it.
+    let square = SubPath { start: p(20.0, 0.0), segments: [p(20.0, 1.0), p(21.0, 1.0), p(21.0, 0.0)].map(Segment::Line).to_vec(), closed: true };
+    let geometry = Geometry::Path(Path { subpaths: vec![arch, square] });
+    let s = Shape { nonzero: true, ..Shape::new(geometry, Matrix::IDENTITY, Some(Color::Gray(0.5)), None) };
+    assert!(write_cmx(&one_shape(s)).unwrap().nonzero_fills);
+    // A square whose bottom edge is a straight cubic that eases in and out, so its first and last
+    // flattened pieces are short beside the lines next to them, crosses nothing.
+    let eased = vec![Segment::Cubic(p(0.0, 0.0), p(10.0, 0.0), p(10.0, 0.0)), Segment::Line(p(10.0, 10.0)), Segment::Line(p(0.0, 10.0))];
+    let geometry = Geometry::Path(Path { subpaths: vec![SubPath { start: p(0.0, 0.0), segments: eased, closed: true }] });
+    let s = Shape { nonzero: true, ..Shape::new(geometry, Matrix::IDENTITY, Some(Color::Gray(0.5)), None) };
+    assert!(!write_cmx(&one_shape(s)).unwrap().nonzero_fills);
+    // A crescent: two arcs that leave each tip along the same tangent and part at once.
+    let arcs = vec![Segment::Cubic(p(2.0, 4.0), p(8.0, 4.0), p(10.0, 0.0)), Segment::Cubic(p(9.0, 2.0), p(1.0, 2.0), p(0.0, 0.0))];
+    let geometry = Geometry::Path(Path { subpaths: vec![SubPath { start: p(0.0, 0.0), segments: arcs, closed: true }] });
+    let s = Shape { nonzero: true, ..Shape::new(geometry, Matrix::IDENTITY, Some(Color::Gray(0.5)), None) };
+    assert!(!write_cmx(&one_shape(s)).unwrap().nonzero_fills);
 }
 
 #[test]

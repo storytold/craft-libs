@@ -84,8 +84,9 @@ pub struct Written {
     /// A shape filled with the nonzero rule may fill differently with the even-odd rule every
     /// curve is written with: one of its cubics loops, one of its subpaths crosses or touches
     /// itself or loops over itself, or two turn the same way and their boxes overlap, measured
-    /// with each cubic flattened to 16 lines, and with two lines that are not neighbors taken to
-    /// cross when they are closer than the cubics may stray from them. Past 50,000,000 comparisons of edges and boxes in one
+    /// with each cubic flattened to 16 lines, with two lines that are not neighbors taken to cross
+    /// when they are closer than the cubics may stray from them, and with two neighbors taken to
+    /// cross when the curves along them may meet away from their shared point. Past 50,000,000 comparisons of edges and boxes in one
     /// file, a shape is taken to fill differently.
     pub nonzero_fills: bool,
     /// A spot color has no name, so it opens as a process color, its look at its tint: the reader
@@ -1180,7 +1181,8 @@ fn flatten(s: &SubPath) -> (Vec<Pt>, Vec<f64>) {
 /// Whether `p` may fill differently even-odd than nonzero: one of its cubics loops, a subpath
 /// crosses itself or turns around other than once, measured with the cubics flattened (two edges
 /// that are not neighbors count as crossing when they are closer than the cubics may stray from
-/// their lines), or two of its subpaths turn the same way and their boxes, control points
+/// their lines, and two neighbors when the curves along them may meet away from their shared
+/// point), or two of its subpaths turn the same way and their boxes, control points
 /// included, overlap. Subpaths
 /// that turn opposite ways, such as a letter's counter inside the letter, and subpaths apart from
 /// each other, fill the same either way. `budget` counts down the comparisons, and is charged for
@@ -1211,7 +1213,7 @@ fn may_fill_differently(p: &Path, budget: &mut u64) -> bool {
             }
         }
         let (pts, strays) = flatten(s);
-        if loops(&pts) || crosses(&pts, &strays) {
+        if loops(&pts) || crosses(&pts, &strays) || joints_meet(s, budget) {
             return true;
         }
         polygons.push(pts);
@@ -1374,6 +1376,139 @@ fn gap(a: Pt, b: Pt, c: Pt, d: Pt) -> f64 {
         (p.x - a.x - t * dx).hypot(p.y - a.y - t * dy)
     };
     to(a, c, d).min(to(b, c, d)).min(to(c, a, b)).min(to(d, a, b))
+}
+
+/// A segment as the start, the two control points and the end of a cubic; a line as the cubic
+/// along it.
+type Bez = [Pt; 4];
+
+/// How many times [`meet_away_from_start`] halves two cubics around their shared start before
+/// taking what is left beside it not to meet, and [`boxes_meet`] halves two cubics before taking
+/// them to meet.
+const NEAR_HALVINGS: u32 = 32;
+const APART_HALVINGS: u32 = 24;
+
+/// The point a share `t` of the way from `a` to `b`.
+fn lerp(a: Pt, b: Pt, t: f64) -> Pt {
+    Pt { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+
+/// The cubic `c` cut at `t` into the part before and the part after.
+fn cut(c: Bez, t: f64) -> (Bez, Bez) {
+    let (ab, bc, cd) = (lerp(c[0], c[1], t), lerp(c[1], c[2], t), lerp(c[2], c[3], t));
+    let (abc, bcd) = (lerp(ab, bc, t), lerp(bc, cd, t));
+    let m = lerp(abc, bcd, t);
+    ([c[0], ab, abc, m], [m, bcd, cd, c[3]])
+}
+
+/// The directions from `c[0]` that the cubic `c` stays within away from that point, which its
+/// control points and end bound: the angle halfway between the outermost two, and half the angle
+/// between them. `None` when they span half a turn or more, or all lie on `c[0]`.
+fn directions(c: &Bez) -> Option<(f64, f64)> {
+    let o = c[0];
+    let vs: Vec<(f64, f64)> = c[1..].iter().map(|q| (q.x - o.x, q.y - o.y)).filter(|v| v.0 != 0.0 || v.1 != 0.0).collect();
+    let first = *vs.first()?;
+    let angle = |v: &(f64, f64)| (first.0 * v.1 - first.1 * v.0).atan2(first.0 * v.0 + first.1 * v.1);
+    let (lo, hi) = vs.iter().map(angle).fold((0.0_f64, 0.0_f64), |(lo, hi), a| (lo.min(a), hi.max(a)));
+    (hi - lo < std::f64::consts::PI).then(|| (first.1.atan2(first.0) + (lo + hi) / 2.0, (hi - lo) / 2.0))
+}
+
+/// Whether the cubics `a` and `b`, which start at the same point, may meet away from it. Near that
+/// point they stay within the directions their control points bound, so where those do not overlap
+/// they do not meet there; the parts away from it are compared by their boxes. `halvings` counts
+/// down how often the two are halved again. Two cubics that leave the point along the same tangent
+/// keep overlapping directions however often they are halved; the parts left at the last halving
+/// span 2⁻³² of each given cubic's parameter from the point, and are taken not to meet. `budget` counts
+/// down the comparisons.
+fn meet_away_from_start(a: Bez, b: Bez, halvings: u32, budget: &mut u64) -> bool {
+    if !charge(budget, 1) {
+        return true;
+    }
+    if let (Some((ca, wa)), Some((cb, wb))) = (directions(&a), directions(&b)) {
+        let apart = (ca - cb).sin().atan2((ca - cb).cos()).abs();
+        if apart - (wa + wb) > 1e-9 {
+            return false;
+        }
+        // Each runs straight out along the same direction: one runs along the other.
+        if wa == 0.0 && wb == 0.0 {
+            return true;
+        }
+    }
+    if halvings == 0 {
+        return false;
+    }
+    let ((an, af), (bn, bf)) = (cut(a, 0.5), cut(b, 0.5));
+    meet_away_from_start(an, bn, halvings - 1, budget)
+        || [(an, bf), (af, bn), (af, bf)].into_iter().any(|(x, y)| boxes_meet(x, y, APART_HALVINGS, budget))
+}
+
+/// Whether the cubics `a` and `b` may meet: their boxes, control points included, overlap or touch
+/// after `halvings` halvings of both. `budget` counts down the comparisons.
+fn boxes_meet(a: Bez, b: Bez, halvings: u32, budget: &mut u64) -> bool {
+    if !charge(budget, 1) {
+        return true;
+    }
+    let bounds =
+        |c: &Bez| c.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |e, q| [e[0].min(q.x), e[1].min(q.y), e[2].max(q.x), e[3].max(q.y)]);
+    let (p, q) = (bounds(&a), bounds(&b));
+    if p[0] > q[2] || q[0] > p[2] || p[1] > q[3] || q[1] > p[3] {
+        return false;
+    }
+    if halvings == 0 {
+        return true;
+    }
+    let ((a0, a1), (b0, b1)) = (cut(a, 0.5), cut(b, 0.5));
+    [(a0, b0), (a0, b1), (a1, b0), (a1, b1)].into_iter().any(|(x, y)| boxes_meet(x, y, halvings - 1, budget))
+}
+
+/// Whether, at a point where two segments of the subpath `s` meet (the last and the first
+/// included, closing it), the subpath's pieces beside that point may meet away from it: a line
+/// whole, and the first or last of a cubic's [`CURVE_STEPS`] pieces. These are the curves along
+/// the neighboring edges of the flattened polygon, which [`crosses`] does not compare. Segments
+/// that do not leave their start are skipped, and two lines are not compared. `budget` counts down
+/// the comparisons.
+fn joints_meet(s: &SubPath, budget: &mut u64) -> bool {
+    let line = |a: Pt, b: Pt| [a, lerp(a, b, 1.0 / 3.0), lerp(a, b, 2.0 / 3.0), b];
+    // Each segment as a cubic, and whether it is a cubic.
+    let mut curves: Vec<(Bez, bool)> = Vec::with_capacity(s.segments.len() + 1);
+    let mut last = s.start;
+    for seg in &s.segments {
+        let c = match *seg {
+            Segment::Line(p) => (line(last, p), false),
+            Segment::Cubic(c1, c2, p) => ([last, c1, c2, p], true),
+        };
+        last = c.0[3];
+        if c.0.iter().any(|q| *q != c.0[0]) {
+            curves.push(c);
+        }
+    }
+    if last != s.start {
+        curves.push((line(last, s.start), false));
+    }
+    let n = curves.len();
+    if n < 2 {
+        return false;
+    }
+    let piece = 1.0 / f64::from(CURVE_STEPS);
+    (0..n).any(|k| {
+        let ((a, a_cubic), (b, b_cubic)) = (curves[k], curves[(k + 1) % n]);
+        // Two lines meet away from their shared point only by one running back along the other,
+        // which wraps no area, so the rules fill the same.
+        if !a_cubic && !b_cubic {
+            return false;
+        }
+        // Both from the point they share.
+        let a = if a_cubic { cut(a, 1.0 - piece).1 } else { a };
+        let a = [a[3], a[2], a[1], a[0]];
+        let b = if b_cubic { cut(b, piece).0 } else { b };
+        // Turned about the shared point so that `b` leaves it along x: two cubics leaving it along
+        // one tangent then have boxes thin across it, which part as soon as the cubics do.
+        let o = b[0];
+        let lead = b[1..].iter().map(|q| (q.x - o.x, q.y - o.y)).find(|v| v.0 != 0.0 || v.1 != 0.0).unwrap_or((1.0, 0.0));
+        let (sin, cos) = lead.1.atan2(lead.0).sin_cos();
+        let turn = |c: Bez| c.map(|q| Pt { x: (q.x - o.x) * cos + (q.y - o.y) * sin, y: (q.y - o.y) * cos - (q.x - o.x) * sin });
+        meet_away_from_start(turn(a), turn(b), NEAR_HALVINGS, budget)
+    })
 }
 
 /// A rectangle from the origin to (`w`, `h`) with its corners rounded by `radii`, counterclockwise
