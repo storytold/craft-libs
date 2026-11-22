@@ -474,7 +474,14 @@ fn perms_filler_bytes_follow_the_seed() {
     for encrypt_metadata in [false, true] {
         let build = |seed| {
             create(
-                &NewEncryption { algorithm: Algorithm::Aes256, user_password: "user", owner_password: "owner", permissions: -1, encrypt_metadata, seed },
+                &NewEncryption {
+                    algorithm: Algorithm::Aes256,
+                    user_password: "user",
+                    owner_password: "owner",
+                    permissions: -1,
+                    encrypt_metadata,
+                    seed,
+                },
                 ID,
             )
             .unwrap()
