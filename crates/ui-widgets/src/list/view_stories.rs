@@ -644,22 +644,33 @@ fn list_follows_end(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// A tree whose top-level groups after the first are set apart by a rule, with no title and no disclosure.
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
-fn list_rule_heads(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let shown: Vec<usize> = (0..TREE.len()).collect();
-    let mut open = OpenSet::new();
-    for at in shown.iter().copied().filter(|&at| is_group(at)) {
-        open.set(&at, true);
-    }
-    List::<usize>::new("Layers")
-        .tree(true)
-        .group_heads(GroupHeads::Rule)
-        .natural_height(true)
-        .show_items(ui, &TreeNodes { shown: &shown, open: &open }, &mut |key, _| {
+fn list_rule_heads(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let groups: Vec<usize> = (0..TREE.len()).filter(|&at| is_group(at)).collect();
+    let all_open = || {
+        let mut open = OpenSet::new();
+        for at in &groups {
+            open.set(at, true);
+        }
+        open
+    };
+    let open = data.value("open", all_open()).clone();
+    let shown = shown_nodes(&open);
+    let out = List::<usize>::new("Layers").tree(true).group_heads(GroupHeads::Rule).natural_height(true).show_items(
+        ui,
+        &TreeNodes { shown: &shown, open: &open },
+        &mut |key, _| {
             let (name, depth) = TREE[*key];
             let row = ListRow::new(name).depth(depth);
-            if is_group(*key) { row.group(true) } else { row }
-        })
-        .into()
+            if is_group(*key) { row.group(open.is_open(key)) } else { row }
+        },
+    );
+    // The first top-level group and the nested ones keep their disclosure: the story opens and closes them.
+    for event in &out.events {
+        if let CollectionEvent::Open(change) = event {
+            data.value("open", all_open()).apply(&change.key, change.open, change.all, &groups);
+        }
+    }
+    out.into()
 }
 
 /// A row with a body under it: the body is part of the row's slot.
