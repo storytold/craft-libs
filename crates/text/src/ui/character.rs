@@ -135,7 +135,7 @@ impl CharacterRows {
     pub const COLOR: CharacterRows = CharacterRows(1 << 0);
     /// Faux Bold and Faux Italic.
     pub const FAUX: CharacterRows = CharacterRows(1 << 1);
-    /// Vertical and horizontal scale and baseline shift.
+    /// Vertical and horizontal scale.
     pub const SCALES: CharacterRows = CharacterRows(1 << 2);
     /// Rotation.
     pub const ROTATION: CharacterRows = CharacterRows(1 << 3);
@@ -151,8 +151,17 @@ impl CharacterRows {
     pub const EAST_ASIAN: CharacterRows = CharacterRows(1 << 8);
     /// Horizontal and vertical diacritic positions.
     pub const MIDDLE_EASTERN: CharacterRows = CharacterRows(1 << 9);
+    /// Baseline shift.
+    pub const BASELINE: CharacterRows = CharacterRows(1 << 10);
+    /// The style toggles: All Caps, Small Caps, Underline and Strikethrough, with Faux Bold and Italic under
+    /// [`FAUX`](Self::FAUX) and Superscript and Subscript under [`SUPERSCRIPT`](Self::SUPERSCRIPT).
+    pub const STYLE_TOGGLES: CharacterRows = CharacterRows(1 << 11);
+    /// The Properties panel's Character section: family, style, the axes, size, leading, kerning and tracking, with
+    /// no other group on.
+    pub const PROPERTIES: CharacterRows = CharacterRows(1 << 12);
     /// The set `show` draws by default.
-    pub const PHOTOSHOP: CharacterRows = CharacterRows(Self::COLOR.0 | Self::FAUX.0 | Self::SCALES.0 | Self::OPENTYPE.0);
+    pub const PHOTOSHOP: CharacterRows =
+        CharacterRows(Self::COLOR.0 | Self::FAUX.0 | Self::SCALES.0 | Self::BASELINE.0 | Self::STYLE_TOGGLES.0 | Self::OPENTYPE.0);
 
     /// Whether every group in `rows` is on.
     pub const fn contains(self, rows: CharacterRows) -> bool {
@@ -319,7 +328,8 @@ impl Cell {
         match self {
             Cell::Size | Cell::Leading | Cell::Kerning | Cell::Tracking => true,
             Cell::FontHeight => rows.contains(CharacterRows::FONT_HEIGHT),
-            Cell::VerticalScale | Cell::HorizontalScale | Cell::BaselineShift => rows.contains(CharacterRows::SCALES),
+            Cell::VerticalScale | Cell::HorizontalScale => rows.contains(CharacterRows::SCALES),
+            Cell::BaselineShift => rows.contains(CharacterRows::BASELINE),
             Cell::Color => rows.contains(CharacterRows::COLOR),
             Cell::Rotation => rows.contains(CharacterRows::ROTATION),
             Cell::AntiAlias => rows.contains(CharacterRows::ANTI_ALIAS),
@@ -790,10 +800,12 @@ impl Outcome for CharacterControlsOutput {
 }
 
 /// The Character panel's controls, in Photoshop's rows: family; style; size and leading; kerning and tracking;
-/// vertical and horizontal scale; baseline shift and colour; the style toggles (Faux Bold, Faux Italic, All Caps,
-/// Small Caps, then Superscript and Subscript with [`CharacterRows::SUPERSCRIPT`], Underline, Strikethrough); the
-/// OpenType buttons; the language when [`languages`](Self::languages) is given. [`rows`](Self::rows) turns the other
-/// groups (rotation, anti-aliasing, font height reference, East Asian and Middle Eastern fields) on or off.
+/// vertical and horizontal scale; baseline shift ([`CharacterRows::BASELINE`]) and colour; the style toggles
+/// ([`CharacterRows::STYLE_TOGGLES`]: Faux Bold, Faux Italic, All Caps, Small Caps, then Superscript and Subscript with
+/// [`CharacterRows::SUPERSCRIPT`], Underline, Strikethrough); the OpenType buttons; the language when
+/// [`languages`](Self::languages) is given. [`rows`](Self::rows) turns these and the other groups (rotation,
+/// anti-aliasing, font height reference, East Asian and Middle Eastern fields) on or off;
+/// [`CharacterRows::PROPERTIES`] keeps family, style, the axes, size, leading, kerning and tracking.
 ///
 /// ```ignore
 /// let out = CharacterControls::new("Character", &values, &families, &styles).unit(DocUnit::points()).show(ui);
@@ -1094,42 +1106,44 @@ impl<'a> CharacterControls<'a> {
                 }
             }
 
-            let caps = values.caps;
-            let position = values.position;
-            let mut toggles: Vec<Toggle<CharacterChange>> = Vec::new();
-            if rows.contains(CharacterRows::FAUX) {
-                toggles.push(Toggle::new(&words.faux_bold, "text_bold", values.faux_bold, Box::new(CharacterChange::FauxBold)));
-                toggles.push(Toggle::new(&words.faux_italic, "text_italic", values.faux_italic, Box::new(CharacterChange::FauxItalic)));
-            }
-            toggles.push(Toggle::new(
-                &words.all_caps,
-                "text_all_caps",
-                caps.map(|caps| caps == Caps::AllCaps),
-                Box::new(|on| CharacterChange::Caps(if on { Caps::AllCaps } else { Caps::Normal })),
-            ));
-            toggles.push(Toggle::new(
-                &words.small_caps,
-                "text_small_caps",
-                caps.map(|caps| caps == Caps::SmallCaps),
-                Box::new(|on| CharacterChange::Caps(if on { Caps::SmallCaps } else { Caps::Normal })),
-            ));
-            if rows.contains(CharacterRows::SUPERSCRIPT) {
+            if rows.contains(CharacterRows::STYLE_TOGGLES) {
+                let caps = values.caps;
+                let position = values.position;
+                let mut toggles: Vec<Toggle<CharacterChange>> = Vec::new();
+                if rows.contains(CharacterRows::FAUX) {
+                    toggles.push(Toggle::new(&words.faux_bold, "text_bold", values.faux_bold, Box::new(CharacterChange::FauxBold)));
+                    toggles.push(Toggle::new(&words.faux_italic, "text_italic", values.faux_italic, Box::new(CharacterChange::FauxItalic)));
+                }
                 toggles.push(Toggle::new(
-                    &words.superscript,
-                    "text_superscript",
-                    position.map(|position| position == BaselinePosition::Superscript),
-                    Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Superscript } else { BaselinePosition::Normal })),
+                    &words.all_caps,
+                    "text_all_caps",
+                    caps.map(|caps| caps == Caps::AllCaps),
+                    Box::new(|on| CharacterChange::Caps(if on { Caps::AllCaps } else { Caps::Normal })),
                 ));
                 toggles.push(Toggle::new(
-                    &words.subscript,
-                    "text_subscript",
-                    position.map(|position| position == BaselinePosition::Subscript),
-                    Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Subscript } else { BaselinePosition::Normal })),
+                    &words.small_caps,
+                    "text_small_caps",
+                    caps.map(|caps| caps == Caps::SmallCaps),
+                    Box::new(|on| CharacterChange::Caps(if on { Caps::SmallCaps } else { Caps::Normal })),
                 ));
+                if rows.contains(CharacterRows::SUPERSCRIPT) {
+                    toggles.push(Toggle::new(
+                        &words.superscript,
+                        "text_superscript",
+                        position.map(|position| position == BaselinePosition::Superscript),
+                        Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Superscript } else { BaselinePosition::Normal })),
+                    ));
+                    toggles.push(Toggle::new(
+                        &words.subscript,
+                        "text_subscript",
+                        position.map(|position| position == BaselinePosition::Subscript),
+                        Box::new(|on| CharacterChange::Position(if on { BaselinePosition::Subscript } else { BaselinePosition::Normal })),
+                    ));
+                }
+                toggles.push(Toggle::new(&words.underline, "text_underline", values.underline, Box::new(CharacterChange::Underline)));
+                toggles.push(Toggle::new(&words.strikethrough, "text_strikethrough", values.strikethrough, Box::new(CharacterChange::Strikethrough)));
+                edits.extend(toggle_row(ui, None, &toggles));
             }
-            toggles.push(Toggle::new(&words.underline, "text_underline", values.underline, Box::new(CharacterChange::Underline)));
-            toggles.push(Toggle::new(&words.strikethrough, "text_strikethrough", values.strikethrough, Box::new(CharacterChange::Strikethrough)));
-            edits.extend(toggle_row(ui, None, &toggles));
 
             if rows.contains(CharacterRows::OPENTYPE) {
                 let names = [

@@ -98,6 +98,13 @@ fn rows_east_asian_and_middle_eastern(ui: &mut Ui, _: &mut StoryData) -> StoryOu
 }
 
 #[story(CharacterControls<'static>, covers = [], drive = Drive::Never)]
+fn rows_properties(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let values = single();
+    let (families, styles) = (families(), styles());
+    CharacterControls::new("Character", &values, &families, &styles).rows(CharacterRows::PROPERTIES).show(ui).into()
+}
+
+#[story(CharacterControls<'static>, covers = [], drive = Drive::Never)]
 fn mixed_values(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let values = CharacterValues { size: Some(12.0), kerning: Some(Kerning::Manual(-20.0)), ..CharacterValues::default() };
     let (families, styles) = (families(), styles());
