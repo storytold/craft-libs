@@ -8,7 +8,7 @@ use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_
 use super::{LabelUnderline, ListRow, RowRun};
 use crate::buttons::IconButton;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
+use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Role, Styled as _, item_part_open};
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
 use crate::primitives::{Draw, IconSpec, PaintShape, RectSide, RuleKind, Span, StrokeWidth, TextRun, Wrap};
@@ -297,7 +297,8 @@ impl ListRow<'_> {
     }
 
     /// Shows each cell field in its column's cell, or in the label's room in the label's column, at its own height up to
-    /// the row's, centred on the row's band.
+    /// the row's, centred on the row's band. A link is as wide as its text, at the room's start, as a text cell's text
+    /// is: a press past it acts on the row.
     pub(super) fn paint_cell_fields(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let sizes = &cx.style.sizes;
         let rtl = cx.env.direction().is_rtl();
@@ -305,6 +306,7 @@ impl ListRow<'_> {
         let band = placed.label.y_range();
         for (at, (column, field)) in self.cell_fields.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (field.item.take(), field.size) else { continue };
+            let link = item.role() == Role::LINK;
             let room = if label.as_ref() == Some(column) {
                 placed.label
             } else {
@@ -313,7 +315,9 @@ impl ListRow<'_> {
                 Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
             };
             let height = size.ideal.y.min(room.height());
-            item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
+            let width = if link { size.ideal.x.min(room.width()) } else { room.width() };
+            let slot = Flow::new(room, rtl).take_start(width).0;
+            item.show(ui, cell_key(at), Rect::from_center_size(Pos2::new(slot.center().x, room.center().y), Vec2::new(width, height)));
         }
     }
 }

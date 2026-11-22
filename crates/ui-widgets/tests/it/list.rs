@@ -615,6 +615,50 @@ fn a_cell_field_stands_in_its_cell_takes_the_click_and_reports_its_edit() {
     assert_eq!(*typed.borrow(), Some(12.0), "the field's edit reaches the output");
 }
 
+/// A link in the label's column is only as wide as its text, as a label is: a press on it follows the link, and a
+/// press past it acts on the row (selects it, and would start its drag), as production's rows named by a link did.
+#[trial]
+fn a_link_in_a_cell_is_as_wide_as_its_text_and_a_press_past_it_acts_on_the_row() {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::buttons::Link;
+    use craft_ui::contract::ColumnSpec;
+    use craft_ui::table::Table;
+    use egui::Rect;
+    use std::cell::Cell;
+    const NAME: ColumnKey = ColumnKey::new("name");
+    let followed = Rc::new(Cell::new(0));
+    let selections = Rc::new(Cell::new(0));
+    let name_cell = Rc::new(RefCell::new(Rect::NOTHING));
+    let (clicks, selected, cell) = (followed.clone(), selections.clone(), name_cell.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let (clicks, cell) = (clicks.clone(), cell.clone());
+        let out =
+            Table::<usize>::new("Appearance", vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0))]).show_items(ui, &source, &mut |_, icx| {
+                *cell.borrow_mut() = icx.cell(&NAME).unwrap_or(Rect::NOTHING);
+                let clicks = clicks.clone();
+                ListRow::new("Fill").cells(icx.cells()).cell_field(NAME, Link::new("Fill:"), move |out| {
+                    if out.clicked() {
+                        clicks.set(clicks.get() + 1);
+                    }
+                })
+            });
+        let changes = out.events.iter().filter(|event| matches!(event, CollectionEvent::Selection { .. })).count();
+        selected.set(selected.get() + changes);
+    });
+    fixture.room(Vec2::new(400.0, 200.0)).settle();
+    let link = fixture.by_label("Fill:").expect("the link shows");
+    let cell = *name_cell.borrow();
+    assert!(link.rect.width() < cell.width() / 2.0, "the link is as wide as its text: {:?} in {cell:?}", link.rect);
+    let past = egui::Pos2::new((link.rect.right() + cell.right()) / 2.0, link.rect.center().y);
+    fixture.click_at(past).settle();
+    assert_eq!(followed.get(), 0, "a press past the text is not the link's");
+    assert!(selections.get() > 0, "a press past the text acts on the row");
+    fixture.click(&link).settle();
+    assert_eq!(followed.get(), 1, "a press on the text follows the link");
+}
+
 /// A row's label band takes the toggle columns it leaves empty next to it, up to the nearest toggle it fills: a row
 /// without toggles starts its label at the row's start, a row with the first toggle only starts it inside the second
 /// column, and a row with both starts it past them. A row without toggles that keeps its label in the label column

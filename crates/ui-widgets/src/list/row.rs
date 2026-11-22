@@ -523,7 +523,8 @@ impl<'a> ListRow<'a> {
 
     /// A component in the cell of `column` in place of a text: a field that edits the row's value in that column (a
     /// tab stop's position or alignment). It fills the cell's width, inset as a text cell is, at its own height up to
-    /// the row's. In the column the label takes it stands in the label's place, and the label stays the row's
+    /// the row's; a link is only as wide as its text, so a press past it acts on the row (selects it, starts its
+    /// drag) as a press on a text cell does. In the column the label takes it stands in the label's place, and the label stays the row's
     /// accessible name. The row shows `field` and hands its output to `output` in the pass it is shown; its stop joins
     /// the row's roving group as a trailing field's does, and it takes its own presses and the keys it declares. A
     /// column that `cells(..)` does not list shows nothing.
