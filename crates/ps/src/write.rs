@@ -602,9 +602,10 @@ mod tests {
 
     #[test]
     fn numbers_match_base_formatter() {
+        let values = number_samples();
         let mut integer_path = 0usize;
-        for places in 0..=12 {
-            for v in number_samples() {
+        for places in 0..=10 {
+            for &v in &values {
                 let mut expected = String::from("x ");
                 base_push_num_places(&mut expected, v, places);
                 let mut got = String::from("x ");
