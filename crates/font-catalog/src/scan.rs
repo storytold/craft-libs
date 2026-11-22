@@ -282,8 +282,10 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, outlines: Outlines, index: 
     // `name` read past the record cap `localized` keeps, so it decides whether a typographic family exists.
     let has_typo_family = name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME]).is_some();
     let family_records = if has_typo_family { &typo_family } else { &legacy_family };
+    // A language the typographic records leave out keeps its legacy name (`宋体` beside an English-only typographic `SimSun`).
+    let legacy_only = legacy_family.iter().filter(|(language, _)| has_typo_family && !typo_family.iter().any(|(l, _)| l == language));
     let mut localized_families: Vec<LocalizedName> = Vec::new();
-    for (language, n) in family_records {
+    for (language, n) in family_records.iter().chain(legacy_only) {
         if *n != family && !localized_families.iter().any(|l| l.name == *n) {
             localized_families.push(LocalizedName { language: language.clone(), name: n.clone() });
         }

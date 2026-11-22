@@ -20,6 +20,8 @@ struct Spec {
     legacy: Option<(&'static str, &'static str)>,
     /// Japanese family name.
     ja: Option<&'static str>,
+    /// Japanese legacy family name (name ID 1), beside a typographic family.
+    legacy_ja: Option<&'static str>,
     weight: u16,
     width: u16,
     italic: bool,
@@ -30,7 +32,7 @@ struct Spec {
 }
 
 fn spec(family: &'static str, style: &'static str, weight: u16) -> Spec {
-    Spec { family, style, legacy: None, ja: None, weight, width: 5, italic: false, fs_type: 0, instances: vec![], outlines: true }
+    Spec { family, style, legacy: None, ja: None, legacy_ja: None, weight, width: 5, italic: false, fs_type: 0, instances: vec![], outlines: true }
 }
 
 fn font(s: &Spec) -> Vec<u8> {
@@ -53,6 +55,9 @@ fn font(s: &Spec) -> Vec<u8> {
     add(0x409, 6, ps);
     if let Some(ja) = s.ja {
         add(0x411, if s.legacy.is_some() { 16 } else { 1 }, ja.into());
+    }
+    if let Some(ja) = s.legacy_ja {
+        add(0x411, 1, ja.into());
     }
     let mut instances = Vec::new();
     for (next_id, (style, wght)) in (256..).zip(&s.instances) {
@@ -410,4 +415,19 @@ fn a_confined_folder_follows_only_links_that_stay_inside_it() {
     assert_eq!(families(false), (true, true), "links are followed out of a folder that isn't confined");
     assert_eq!(families(true), (true, false), "a confined folder follows no link out of it");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A language the typographic family records leave out names the family by its legacy record, so an English-only
+/// typographic family keeps its Japanese legacy name; a language they cover keeps the typographic name.
+#[test]
+fn a_language_without_a_typographic_family_name_keeps_its_legacy_name() {
+    let localized = |s: &Spec| {
+        let faces = crate::scan::data_faces(&font(s), 1, None, Source::System);
+        faces[0].info.localized_families.iter().map(|l| l.name.clone()).collect::<Vec<_>>()
+    };
+    let typographic_english = Spec { legacy: Some(("Test Mincho", "Regular")), ..spec("Test Mincho", "Regular", 400) };
+    assert_eq!(localized(&Spec { legacy_ja: Some("テスト明朝"), ..typographic_english.clone() }), ["テスト明朝"]);
+    let both = Spec { ja: Some("テスト明朝 Pro"), legacy_ja: Some("テスト明朝"), ..typographic_english.clone() };
+    assert_eq!(localized(&both), ["テスト明朝 Pro"], "the typographic record of a language wins over its legacy one");
+    assert!(localized(&typographic_english).is_empty());
 }
