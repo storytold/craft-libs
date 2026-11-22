@@ -445,6 +445,14 @@ fn char_at(lines: &[HostLine], pos: TextPos) -> usize {
     line.chars.start + line.text[..byte].chars().count()
 }
 
+/// The I-beam is the editor's over its text and while its own press is held; elsewhere the canvas's tool or the rest
+/// of the UI sets the pointer.
+fn show_i_beam(cx: &mut Cx<'_, TextEditor<'_>>, phase: &PressPhase, vertical: bool) {
+    if !matches!(phase, PressPhase::Idle) {
+        cx.cursor(if vertical { CursorIcon::VerticalText } else { CursorIcon::Text }, CursorPriority::Hover);
+    }
+}
+
 /// The clipboard's text when the pass's input asks to paste and the clipboard has it ready.
 fn pasted_text(cx: &mut Cx<'_, TextEditor<'_>>, inputs: &[EditorInput]) -> Option<std::sync::Arc<str>> {
     if !inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))) {
@@ -620,7 +628,7 @@ impl Component for TextEditor<'_> {
         if let Some(text) = copied {
             cx.clipboard().put(&[ClipItem::Text(text.into())]);
         }
-        cx.cursor(if vertical { CursorIcon::VerticalText } else { CursorIcon::Text }, CursorPriority::Hover);
+        show_i_beam(cx, &press.phase, vertical);
         if done.changed {
             cx.propose(selection);
         } else if selection != before {
