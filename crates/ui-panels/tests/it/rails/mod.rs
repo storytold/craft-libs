@@ -3,9 +3,9 @@
 
 pub(crate) mod drawer;
 
-use craft_behavior::GesturePhase;
+use craft_behavior::{GesturePhase, Mixed};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
-use craft_ui::contract::{Role, Show as _};
+use craft_ui::contract::{Props as _, Role, Show as _};
 use craft_ui::docking::{FloatingGroup, GroupDrag};
 use craft_ui::rails::{FlyoutButton, RailTool};
 use craft_ui::runtime::commands::EditCommands;
@@ -128,6 +128,24 @@ fn the_flyout_of_a_low_tool_slides_up_to_stay_in_the_window() {
     assert!(target.rect.top() + flyout.height() > window.bottom(), "the flyout does not fit under the tool's top");
     assert!(window.contains_rect(flyout), "the flyout {flyout:?} stays in the window {window:?}");
     assert!(flyout.bottom() > target.rect.bottom() + 1.0, "it slides: its bottom {} is below the tool's {}", flyout.bottom(), target.rect.bottom());
+}
+
+/// A rail button tells assistive technology which tool is the current one: the current tool's button is pressed and
+/// every other tool's button is not, as it paints.
+#[trial]
+fn the_current_tools_button_reports_pressed_and_the_others_not() {
+    let (undo, cut) = (tools(&[UNDO]), tools(&[CUT]));
+    let mut fixture = Fixture::new(move |ui| {
+        FlyoutButton::new(&undo, &UNDO).id_salt("undo").selected(true).show(ui);
+        FlyoutButton::new(&cut, &CUT).id_salt("cut").selected(false).show(ui);
+    });
+    fixture.settle();
+    let pressed = |label: &str| {
+        let button = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} button shows"));
+        fixture.tree().toggled_of(button.node)
+    };
+    assert_eq!(pressed("Undo"), Some(Mixed::Same(true)), "the current tool's button is pressed");
+    assert_eq!(pressed("Cut"), Some(Mixed::Same(false)), "another tool's button reports that it is not");
 }
 
 /// With a click command a click, Enter or Space fires it and selects nothing; a hold, a drag away and a right click

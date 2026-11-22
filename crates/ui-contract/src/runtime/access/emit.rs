@@ -32,6 +32,8 @@ pub(crate) struct Own<'a> {
     /// A display component describes itself with its tooltip.
     pub display: bool,
     pub flags: Flags,
+    /// `Common.selected`: the component's chosen state outside a collection.
+    pub selected: Option<bool>,
     pub enabled: bool,
     pub read_only: bool,
     pub focusable: bool,
@@ -124,15 +126,20 @@ fn expanded_of(flags: Flags, explicit: Option<bool>) -> Option<bool> {
     explicit.or_else(|| flags.intersects(Flags::OPEN | Flags::EXPANDED).then_some(true))
 }
 
-/// The state flags of a node.
-fn write_states(spec: &mut NodeSpec, flags: Flags, enabled: bool, read_only: bool) {
+/// The state flags of a node, and `selected`, the `Common.selected` of a component's own node. A node that is neither
+/// checked nor selected by its role, and shows no checked value, reports `selected` as pressed: a tool's button is down
+/// while it is the tool, and up otherwise.
+fn write_states(spec: &mut NodeSpec, flags: Flags, selected: Option<bool>, enabled: bool, read_only: bool) {
     spec.disabled = !enabled;
+    let pressed = selected.filter(|_| !is_checkable(spec.role) && !is_selectable(spec.role) && !flags.intersects(Flags::CHECKED | Flags::MIXED));
     if flags.contains(Flags::MIXED) {
         spec.toggled = Some(Toggle::Mixed);
     } else if flags.contains(Flags::CHECKED) || is_checkable(spec.role) {
         spec.toggled = Some(if flags.contains(Flags::CHECKED) { Toggle::On } else { Toggle::Off });
+    } else if let Some(on) = pressed {
+        spec.toggled = Some(if on { Toggle::On } else { Toggle::Off });
     }
-    if flags.contains(Flags::SELECTED) || is_selectable(spec.role) {
+    if pressed.is_none() && (flags.contains(Flags::SELECTED) || is_selectable(spec.role)) {
         spec.selected = Some(flags.contains(Flags::SELECTED));
     }
     spec.invalid = flags.contains(Flags::INVALID);
@@ -287,7 +294,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
         column_index: spec.grid.column_index.or(access.grid.column_index),
         column_count: spec.grid.column_count.or(access.grid.column_count),
     };
-    write_states(&mut spec, own.flags, own.enabled, own.read_only);
+    write_states(&mut spec, own.flags, own.selected, own.enabled, own.read_only);
     spec.ltr_axis = own.ltr_axis;
     spec.busy |= access.busy;
     if let Some(expanded) = expanded {
@@ -389,7 +396,7 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.grid = node.grid;
     spec.sort = node.sort;
     spec.sortable = node.sortable;
-    write_states(&mut spec, flags, decl.enabled, false);
+    write_states(&mut spec, flags, None, decl.enabled, false);
     declare_actions(&mut spec, decl.focusable, decl.clickable, numeric);
     if node.steps && numeric.is_none() {
         spec.actions.extend([NodeAction::Increment, NodeAction::Decrement]);
