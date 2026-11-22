@@ -462,7 +462,7 @@ pub(crate) mod mapped_overlay {
 }
 
 /// A canvas whose image the app paints itself: the app's paint draws the image in the source's place.
-mod painted_image {
+pub(crate) mod painted_image {
     use craft_behavior::{CanvasView, PixelSize};
     use craft_ui::canvas::{AppPaint, PixelRect, RasterSource};
     use craft_ui::contract::Bind;
