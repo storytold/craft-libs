@@ -70,6 +70,8 @@ pub struct UnsavedChangesDialog {
     message: Option<Label>,
     note: Option<Label>,
     icon: Option<IconId>,
+    /// The app's word for the Don't Save button, replacing the catalog's.
+    dont_save: Option<Label>,
 }
 
 impl UnsavedChangesDialog {
@@ -84,6 +86,7 @@ impl UnsavedChangesDialog {
             message: None,
             note: None,
             icon: None,
+            dont_save: None,
         }
     }
 
@@ -129,6 +132,13 @@ impl UnsavedChangesDialog {
         self
     }
 
+    /// Replaces the Don't Save button's word, in the app's words.
+    #[must_use]
+    pub fn dont_save_label(mut self, label: impl Into<Label>) -> Self {
+        self.dont_save = Some(label.into());
+        self
+    }
+
     /// What a programmatic OK answers.
     fn chosen(&self) -> CloseAnswer {
         let accepting = if self.scope == CloseScope::Revert { CloseAnswer::DontSave } else { CloseAnswer::Save };
@@ -159,6 +169,7 @@ impl UnsavedChangesDialog {
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave => {
                         let word = if mac { &words.unsaved_dont_save } else { &words.unsaved_no };
+                        let word = self.dont_save.as_ref().unwrap_or(word);
                         Reply::new(word.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
                     }
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
