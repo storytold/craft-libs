@@ -117,6 +117,9 @@ pub enum LayerRole {
     Plain,
     /// A progress window: `any_open` leaves it out, as it blocks nothing the user waits on.
     Progress,
+    /// A field over its owner's own content that edits it in place (a page's rename field): it is part of the owner,
+    /// so the owner reports no open or expanded state and no popup it controls while it shows.
+    InPlaceEditor,
 }
 
 /// What `any_open` counts.

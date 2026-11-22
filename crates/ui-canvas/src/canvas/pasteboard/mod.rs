@@ -7,7 +7,7 @@
 pub(crate) mod stories;
 
 use super::space::canvas_space;
-use crate::contract::overlay::{Dismiss, Outside};
+use crate::contract::overlay::{Dismiss, LayerRole, Outside};
 use crate::contract::{
     Access, Bind, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
     Props as _, Rename, Role,
@@ -556,7 +556,10 @@ impl Component for Pasteboard<'_> {
             // Typing needs room beyond a name cut to its page: the field is as wide as the page.
             Some(Rect::from_min_size(rect.min, Vec2::new(rect.width().max(bounds(&space.view.quad(page.rect)).width()), rect.height())))
         });
-        let layer = Overlay::popover().dismiss(Dismiss::new().outside(Outside::Keep)).focus(FocusPolicy::POPUP.initial(Initial::First));
+        let layer = Overlay::popover()
+            .dismiss(Dismiss::new().outside(Outside::Keep))
+            .focus(FocusPolicy::POPUP.initial(Initial::First))
+            .role(LayerRole::InPlaceEditor);
         let layer = match field.or(state.shown) {
             Some(rect) => layer.placed(rect),
             None => layer,
