@@ -481,7 +481,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
             _ => {}
         }
     }
-    cx.memory::<Typing>().hide_classes = hide_classes;
+    let typing = cx.memory::<Typing>();
+    typing.hide_classes = hide_classes;
+    typing.over_rows = over_rows;
     // A preview the pointer proposed ends when the pointer leaves the rows (a keyed row keeps its preview). The
     // collection keeps its lead on the row, so the pointer coming back to that row reports no move: the row under it
     // proposes again.
