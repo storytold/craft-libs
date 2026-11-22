@@ -202,12 +202,15 @@ impl<K: Clone + Eq> RowMap<'_, K> {
 /// borrows its rows for less than the host's closure lives takes the drop as it is.
 type DropAccepts<'a, K> = Rc<dyn Fn(&dyn Any, &DropAt<K>) -> bool + 'a>;
 
+/// Builds the drop kind of one payload type over the rows of one browser pass.
+type BuildDrop<K> = for<'m> fn(DropPlace, DropAccepts<'m, K>, Rc<RowMap<'m, K>>) -> DropKind<'m, BrowserKey<K>>;
+
 /// A drop target on the presets: a host payload of type `P` dropped onto a preset or between presets.
 pub struct PresetDrop<'a, K> {
     place: DropPlace,
     accepts: DropAccepts<'a, K>,
     /// The drop kind of the payload type the drop was made for, over the rows of one browser pass.
-    build: for<'m> fn(DropPlace, DropAccepts<'m, K>, Rc<RowMap<'m, K>>) -> DropKind<'m, BrowserKey<K>>,
+    build: BuildDrop<K>,
 }
 
 impl<'a, K: Clone + Eq + 'a> PresetDrop<'a, K> {
@@ -411,7 +414,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
     }
 
     /// Takes host payloads dropped onto a preset or between presets; each drop comes back as `PresetEvent::Dropped`.
-    #[must_use]
     pub fn takes_drop(mut self, drop: PresetDrop<'a, K>) -> Self {
         self.drops.push(drop);
         self

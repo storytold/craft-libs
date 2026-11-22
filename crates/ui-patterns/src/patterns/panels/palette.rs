@@ -234,7 +234,7 @@ impl<'a> CommandPalette<'a> {
                         let format = stack.env.format();
                         let text = match &*status.borrow() {
                             Status::Quiet => return,
-                            Status::Empty => Label::from(words.palette_empty.clone()),
+                            Status::Empty => words.palette_empty.clone(),
                             Status::Line(line) => Label::from(line.clone()),
                             Status::Count { shown, total } if shown < total => Label::from(
                                 words.palette_count.fill(&[("shown", &format.integer(*shown as u64)), ("n", &format.integer(*total as u64))]),

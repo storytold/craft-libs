@@ -12,8 +12,7 @@ use std::rc::Rc;
 
 /// A saved preset that differs from the defaults in its version and its trim marks.
 fn mine() -> PdfPreset {
-    let mut settings = PdfSettings::default();
-    settings.compatibility = Compatibility::Pdf15;
+    let mut settings = PdfSettings { compatibility: Compatibility::Pdf15, ..PdfSettings::default() };
     settings.marks.trim = true;
     PdfPreset { name: "Mine".to_owned(), description: String::new(), settings }
 }
@@ -29,6 +28,11 @@ fn listed(host: &DialogHost, id: DialogId, field: &str) -> Value {
     fields.pointer(&format!("/{}", field.replace('.', "/"))).cloned().unwrap_or(Value::Null)
 }
 
+/// Writes `value` to `field` of the open dialog `id`.
+fn write_field(host: &mut DialogHost, ctx: &Context, id: DialogId, field: &str, value: Value) -> Result<(), String> {
+    host.set_json_field(ctx, id, field, value)
+}
+
 #[trial]
 fn the_hosted_dialog_takes_the_automation_fields() {
     let ctx = Context::default();
@@ -37,7 +41,7 @@ fn the_hosted_dialog_takes_the_automation_fields() {
     for name in ["section", "preset", "artboards", "range", "bleedLinked", "marks", "compression"] {
         assert_ne!(listed(&host, id, name), Value::Null, "{name} is listed");
     }
-    let set = |host: &mut DialogHost, field: &str, value: Value| host.set_json_field(&ctx, id, field, value);
+    let set = |host: &mut DialogHost, field: &str, value: Value| write_field(host, &ctx, id, field, value);
 
     // The preset applies a listed name and refuses an unknown one.
     assert!(set(&mut host, "preset", json!("No such preset")).is_err());
@@ -60,6 +64,14 @@ fn the_hosted_dialog_takes_the_automation_fields() {
     assert_eq!(set(&mut host, "bleedLinked", json!(true)), Ok(()));
     assert_eq!(listed(&host, id, "bleed.right"), json!(3.0));
     assert_eq!(listed(&host, id, "bleedLinked"), json!(true));
+}
+
+#[trial]
+fn the_hosted_dialog_takes_the_artboards_and_refuses_what_a_standard_disables() {
+    let ctx = Context::default();
+    let mut host = DialogHost::new();
+    let id = host.open(dialog());
+    let set = |host: &mut DialogHost, field: &str, value: Value| write_field(host, &ctx, id, field, value);
 
     // The artboards and the range.
     assert!(set(&mut host, "artboards", json!("everything")).is_err());

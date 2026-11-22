@@ -549,28 +549,24 @@ impl<'a> NewDocumentDialog<'a, DocumentOptions> {
 
     /// The cards Recent shows after the recent documents, in place of `PresetCategory::default_recent()`. A card with
     /// the id `"default"` is named "Default {app} Size".
-    #[must_use]
     pub fn recent_defaults(mut self, presets: Vec<DocumentPreset>) -> Self {
         self.setup.recent_defaults = presets;
         self
     }
 
     /// The clipboard holds an image of this size: Recent shows a Clipboard card first and the dialog opens on it.
-    #[must_use]
     pub fn clipboard(mut self, size: PixelSize) -> Self {
         self.setup.clipboard = Some(size);
         self
     }
 
     /// The app's background colour, offered as the Background Color choice.
-    #[must_use]
     pub fn background_color(mut self, color: Srgba) -> Self {
         self.setup.background = color.to_rgb_array();
         self
     }
 
     /// The colour profiles each mode offers.
-    #[must_use]
     pub fn profiles(mut self, profiles: Vec<ColorProfiles>) -> Self {
         self.setup.profiles = profiles;
         self
@@ -578,14 +574,12 @@ impl<'a> NewDocumentDialog<'a, DocumentOptions> {
 
     /// The app's own pixel aspect ratios as `(id, name)`, listed after the built-in ones ([`PIXEL_ASPECTS`]); the
     /// names are the user's and are not translated.
-    #[must_use]
     pub fn custom_pixel_aspects(mut self, aspects: Vec<(String, String)>) -> Self {
         self.setup.custom_pixel_aspects = aspects;
         self
     }
 
     /// The application's name, for the "Default {app} Size" card.
-    #[must_use]
     pub fn app_name(mut self, name: impl Into<Label>) -> Self {
         self.setup.app_name = Some(name.into());
         self

@@ -55,7 +55,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> SectionList<'a, K> {
     }
 
     /// Content under the list, in the list's column.
-    #[must_use]
     pub fn foot(mut self, foot: impl FnMut(&mut Ui) + 'a) -> Self {
         self.foot = Some(Box::new(foot));
         self

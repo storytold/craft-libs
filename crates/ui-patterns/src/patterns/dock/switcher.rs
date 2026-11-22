@@ -53,7 +53,6 @@ impl<'a, P> WorkspaceSwitcher<'a, P> {
     }
 
     /// The header menu's command rows, in place of the default `WorkspaceCommands` rows.
-    #[must_use]
     pub fn commands(mut self, rows: Vec<CommandRef>) -> Self {
         self.commands = Some(rows);
         self

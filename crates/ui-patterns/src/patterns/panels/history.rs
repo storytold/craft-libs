@@ -415,10 +415,8 @@ impl<'a> HistoryPanel<'a> {
                     CollectionEvent::Delete(keys) => {
                         picked.extend(keys.into_iter().filter(|key| deletable.contains(key)).map(|key| HistoryEvent::Delete(Some(key))));
                     }
-                    CollectionEvent::ContextMenu(request) => {
-                        if renamable(&request.key) || removable(&request.key) {
-                            target = Some(request.key);
-                        }
+                    CollectionEvent::ContextMenu(request) if renamable(&request.key) || removable(&request.key) => {
+                        target = Some(request.key);
                     }
                     _ => {}
                 }

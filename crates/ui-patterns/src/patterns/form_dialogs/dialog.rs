@@ -558,11 +558,12 @@ impl<'a> ParamDialog<'a> {
             }
             apply_answers(&params, values, cx.take_answers());
             // A footer row pressed in the previous pass flips once; a measuring run leaves it for the real one.
-            if !footer_rows.is_empty() && !crate::runtime::measure::active(ui.ctx()) {
-                if let Some(flip) = with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip.take()) {
-                    let on = values.bool(&flip).unwrap_or(false);
-                    values.set(flip, FieldValue::Bool(!on));
-                }
+            if !footer_rows.is_empty()
+                && !crate::runtime::measure::active(ui.ctx())
+                && let Some(flip) = with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip.take())
+            {
+                let on = values.bool(&flip).unwrap_or(false);
+                values.set(flip, FieldValue::Bool(!on));
             }
             if let Some(presets) = &presets {
                 show_presets(ui, &presets_label, presets, values, &mut preset_events);
