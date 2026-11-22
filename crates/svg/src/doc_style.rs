@@ -138,8 +138,51 @@ pub const STYLE_PROPS: &[&str] = &[
     "stop-opacity",
 ];
 
+/// Normalize only numeric CSS length-unit suffixes in the properties this cascade resolves.
+/// Raw SVG attributes and opaque CSS values keep their existing spelling and compatibility.
+fn css_length_units(property: &str, value: String) -> String {
+    if !matches!(property, "font-size" | "stroke-width" | "stroke-dasharray" | "stroke-dashoffset") {
+        return value;
+    }
+    let separator = |c: char| c == ',' || c.is_whitespace();
+    let finite = |number: &str| number.parse::<f64>().ok().is_some_and(f64::is_finite);
+    let supported = |unit: &str| matches!(unit.to_ascii_lowercase().as_str(), "px" | "pt" | "pc" | "mm" | "cm" | "in" | "em" | "ex");
+    let numeric_length = |token: &str| {
+        finite(token.strip_suffix('%').unwrap_or(token))
+            || token.len().checked_sub(2).is_some_and(|split| token.get(..split).is_some_and(finite) && token.get(split..).is_some_and(supported))
+    };
+    let eligible = if property == "stroke-dasharray" {
+        value.split(separator).filter(|token| !token.is_empty()).all(numeric_length)
+    } else {
+        numeric_length(value.trim())
+    };
+    if !eligible {
+        return value;
+    }
+    let mut out = String::with_capacity(value.len());
+    for part in value.split_inclusive(separator) {
+        let token = part.trim_end_matches(separator);
+        if let Some(split) = token.len().checked_sub(2)
+            && let (Some(number), Some(unit)) = (token.get(..split), token.get(split..))
+            && number.parse::<f64>().ok().is_some_and(f64::is_finite)
+        {
+            let unit = unit.to_ascii_lowercase();
+            if matches!(unit.as_str(), "px" | "pt" | "pc" | "mm" | "cm" | "in" | "em" | "ex") {
+                out.push_str(number);
+                out.push_str(&unit);
+                out.push_str(&part[token.len()..]);
+                continue;
+            }
+        }
+        out.push_str(part);
+    }
+    out
+}
+
 /// Collect the declared properties of an element: presentation attributes, then CSS rules
 /// (by specificity and source order, bounded by `charge_css`), then the inline `style` attribute.
+/// Supported numeric length-unit suffixes are normalized only for CSS declarations; raw
+/// presentation attributes retain their existing spelling and length compatibility.
 pub fn declared(n: roxmltree::Node, css: &StyleSheet, charge_css: impl FnMut(usize) -> bool) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for a in n.attributes() {
@@ -147,9 +190,15 @@ pub fn declared(n: roxmltree::Node, css: &StyleSheet, charge_css: impl FnMut(usi
             out.insert(a.name().to_string(), a.value().to_string());
         }
     }
-    css.apply(n.tag_name().name(), n.attribute("id"), n.attribute("class").unwrap_or_default(), &mut out, charge_css);
+    let mut css_values = HashMap::new();
+    css.apply(n.tag_name().name(), n.attribute("id"), n.attribute("class").unwrap_or_default(), &mut css_values, charge_css);
+    out.extend(css_values.into_iter().map(|(k, v)| {
+        let v = css_length_units(&k, v);
+        (k, v)
+    }));
     if let Some(st) = n.attribute("style") {
         for (k, v) in declarations(st) {
+            let v = css_length_units(&k, v);
             out.insert(k, v);
         }
     }
