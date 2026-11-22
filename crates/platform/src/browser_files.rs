@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use craft_host::{FileError, Files, PickId, PickKind, PickRequest, Picked, Wake};
+use craft_host::{FileError, Files, PendingPick, PickId, PickKind, PickRequest, Picked, Wake};
 use js_sys::{Array, Function, Object, Promise, Reflect};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
@@ -40,8 +40,8 @@ pub struct BrowserFiles {
 struct State {
     next: u64,
     /// Picks and saves whose task has not finished, forgotten or not: a save already writing
-    /// still holds the page.
-    running: Vec<PickId>,
+    /// still holds the page. Oldest first.
+    running: Vec<(PickId, PickRequest)>,
     /// Running tickets whose owner gave them up; their answer is dropped when it comes.
     forgotten: Vec<PickId>,
     /// Answers not yet taken.
@@ -56,7 +56,7 @@ impl State {
 
     /// Records the answer of `id`, unless its owner forgot it.
     fn finish(&mut self, id: PickId, picked: Picked) {
-        self.running.retain(|r| *r != id);
+        self.running.retain(|(r, _)| *r != id);
         if let Some(at) = self.forgotten.iter().position(|f| *f == id) {
             self.forgotten.swap_remove(at);
             return;
@@ -97,11 +97,11 @@ impl BrowserFiles {
         Self { limits, ..self }
     }
 
-    /// A ticket whose task is about to start.
-    fn start(&self) -> PickId {
+    /// A ticket for `request` whose task is about to start.
+    fn start(&self, request: PickRequest) -> PickId {
         let mut state = lock(&self.state);
         let id = state.issue();
-        state.running.push(id);
+        state.running.push((id, request));
         id
     }
 
@@ -253,7 +253,7 @@ impl Files for BrowserFiles {
         for filter in &request.filters {
             dialog = dialog.add_filter(filter.name.as_str(), &filter.extensions);
         }
-        let id = self.start();
+        let id = self.start(request);
         let (state, wake, limits) = (Arc::clone(&self.state), self.wake.clone(), self.limits);
         spawn_local(async move {
             let handles = if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
@@ -287,13 +287,14 @@ impl Files for BrowserFiles {
     fn forget(&self, id: PickId) {
         let mut state = lock(&self.state);
         state.answered.retain(|(a, _)| *a != id);
-        if state.running.contains(&id) && !state.forgotten.contains(&id) {
+        if state.running.iter().any(|(r, _)| *r == id) && !state.forgotten.contains(&id) {
             state.forgotten.push(id);
         }
     }
 
-    fn pick_pending(&self) -> bool {
-        !lock(&self.state).running.is_empty()
+    // The browser's pickers are never sheets: closing the page drops them.
+    fn pending_pick(&self) -> Option<PendingPick> {
+        lock(&self.state).running.first().map(|(_, request)| PendingPick { request: request.clone(), sheet: false })
     }
 
     fn read(&self, _path: &Path) -> Result<Vec<u8>, FileError> {
@@ -323,7 +324,7 @@ impl Files for BrowserFiles {
             // A picker that threw in the call is refused like one that rejected later.
             Err(error) => return self.answer_now(rejected(&error_name(&error), &name, || download(&name, mime, &bytes))),
         };
-        let id = self.start();
+        let id = self.start(request);
         let (state, wake) = (Arc::clone(&self.state), self.wake.clone());
         spawn_local(async move {
             let picked = match JsFuture::from(promise).await {
