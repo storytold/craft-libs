@@ -1269,7 +1269,7 @@ impl<'r> Builder<'r> {
             .last()
             .and_then(|e| if !self.page && matches!(e.name.as_str(), "body" | "html") { None } else { e.fmt.background.or(e.block_background) });
         apply_style(css, &mut fmt, (&mut align, &mut rtl), &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
-        if auto_dir && super::css::declares_direction(css) {
+        if auto_dir && super::css::sets_direction(css) {
             // CSS `direction` wins over the `dir` attribute, and an inherited `auto` too.
             auto_dir = false;
         }
@@ -1494,10 +1494,11 @@ impl<'r> Builder<'r> {
     }
 }
 
-/// Whether the first strong character of `text` reads right to left (an `auto` direction); text
+/// Whether the first strong character of `text` (or a left-to-right or right-to-left mark) reads right to left (an `auto` direction); text
 /// without one is left to right.
 fn first_strong_rtl(text: &str) -> bool {
-    text.chars().find(|c| c.is_alphabetic()).is_some_and(|c| {
-        matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
+    let strong = |c: &char| c.is_alphabetic() || matches!(c, '\u{200E}' | '\u{200F}');
+    text.chars().find(strong).is_some_and(|c| {
+        c == '\u{200F}' || matches!(u32::from(c), 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
     })
 }

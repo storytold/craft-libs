@@ -479,9 +479,9 @@ fn is_valid_bg_layer(layer: &BgLayer<'_>) -> bool {
     remaining_after.iter().all(|t| is_valid_non_slash_bg_token(t))
 }
 
-/// Whether the declarations `css` set `direction`.
-pub(super) fn declares_direction(css: &str) -> bool {
-    decls(css).any(|(k, _)| k == "direction")
+/// Whether the declarations `css` set `direction` to a value [`apply_style`] applies.
+pub(super) fn sets_direction(css: &str) -> bool {
+    decls(css).any(|(k, v)| k == "direction" && matches!(v.to_ascii_lowercase().as_str(), "ltr" | "rtl" | "initial"))
 }
 
 /// A `text-align` value as stated. `left` and `right` are physical edges in CSS and HTML, while the
