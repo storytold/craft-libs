@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use rayon::prelude::*;
 
 use crate::raster::f32_crossing;
-use crate::scene::{EnvInfo, Light, Scene, ShadowMap, TexInfo, unit, validate};
+use crate::scene::{EnvInfo, Light, Material, Scene, ShadowMap, TexInfo, unit, validate};
 use crate::shade::sample;
 use crate::{Limits, RenderError};
 
@@ -133,13 +133,50 @@ fn map_corners(m: &ShadowMap, poly: &[LightCorner]) -> Vec<MapCorner> {
         .collect()
 }
 
-/// A caster's alpha test: the base texture, the material's base alpha and the opacity it is
-/// multiplied by (1 for a masked caster). A texel is skipped when its alpha is below `cutoff`.
+/// A caster's alpha test: the base texture and the factor its alpha is multiplied by (the
+/// material's base alpha times the opacity, or the base alpha alone for a masked caster). A texel
+/// is skipped when its alpha is below `cutoff`.
 struct AlphaTest<'a> {
     tex: &'a TexInfo,
-    base: f32,
-    opacity: f32,
+    factor: f32,
     cutoff: f32,
+}
+
+/// The opacity a caster's material alpha is multiplied by and the cutoff it is tested against: a
+/// masked caster tests the material's alpha against its cutoff, as shading does; a blended one
+/// tests its alpha times the opacity against 0.5.
+fn caster_alpha(mat: &Material) -> (f32, f32) {
+    if mat.alpha_mode == 1 { (1.0, mat.alpha_cutoff) } else { (mat.opacity, 0.5) }
+}
+
+/// Whether a caster of material `mat` casts nothing whatever its texels: a masked or blended
+/// caster without a base texture has one alpha, tested as a texel's alpha is; a masked or blended
+/// caster with a base texture and a factor of 0 fails a cutoff above 0 at every texel; and an
+/// opaque-mode or masked caster draws with its opacity alone, tested as a blended caster's alpha
+/// is.
+fn casts_nothing(mat: &Material) -> bool {
+    let (opacity, cutoff) = caster_alpha(mat);
+    let factor = mat.base[3] * opacity;
+    let alpha_fails = if mat.tex_base < 0 { factor < cutoff } else { factor == 0.0 && cutoff > 0.0 };
+    (mat.alpha_mode != 0 && alpha_fails) || (mat.alpha_mode != 2 && mat.opacity < 0.5)
+}
+
+/// Texture coordinate `i` at the barycentric weights `l` of map triangle `tri`, perspective
+/// correct with depth `z` on a perspective map. A sum that overflows `f32` (a large coordinate
+/// times a corner's 1/depth) is taken in `f64` and kept within `f32`'s range, so the sample
+/// reduces it by its wrap period.
+fn caster_uv(tri: &[MapCorner; 3], l: [f32; 3], z: f32, i: usize, ortho: bool) -> f32 {
+    let u = if ortho {
+        l[0] * tri[0].3[i] + l[1] * tri[1].3[i] + l[2] * tri[2].3[i]
+    } else {
+        (l[0] * tri[0].3[i] * tri[0].1 + l[1] * tri[1].3[i] * tri[1].1 + l[2] * tri[2].3[i] * tri[2].1) * z
+    };
+    if u.is_finite() {
+        return u;
+    }
+    let (iz, z) = if ortho { ([1.0; 3], 1.0) } else { ([tri[0].1, tri[1].1, tri[2].1].map(f64::from), f64::from(z)) };
+    let sum: f64 = (0..3).map(|k| f64::from(l[k]) * f64::from(tri[k].3[i]) * iz[k]).sum();
+    (sum * z).clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
 }
 
 impl AlphaTest<'_> {
@@ -179,19 +216,18 @@ fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<
                 continue;
             }
             let l = [e0 as f32, e1 as f32, e2 as f32];
-            let (z, uv) = if m.ortho {
-                (l[0] * tri[0].2 + l[1] * tri[1].2 + l[2] * tri[2].2, [0, 1].map(|i| l[0] * tri[0].3[i] + l[1] * tri[1].3[i] + l[2] * tri[2].3[i]))
+            let z = if m.ortho {
+                l[0] * tri[0].2 + l[1] * tri[1].2 + l[2] * tri[2].2
             } else {
-                let iz = l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1;
-                let z = 1.0 / iz;
-                (z, [0, 1].map(|i| (l[0] * tri[0].3[i] * tri[0].1 + l[1] * tri[1].3[i] * tri[1].1 + l[2] * tri[2].3[i] * tri[2].1) * z))
+                1.0 / (l[0] * tri[0].1 + l[1] * tri[1].1 + l[2] * tri[2].1)
             };
             let px = &mut d[y * n + x];
             if z >= *px {
                 continue;
             }
+            let uv = [0, 1].map(|i| caster_uv(&tri, l, z, i, m.ortho));
             if let Some(t) = alpha
-                && t.discards(sample(t.tex, &s.texels, uv[0], uv[1])[3] * t.base * t.opacity)
+                && t.discards(sample(t.tex, &s.texels, uv[0], uv[1])[3] * t.factor)
             {
                 continue;
             }
@@ -226,7 +262,8 @@ fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> 
                 return;
             }
             let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
-            let poly = light_poly(s, m, ids);
+            // A caster that casts nothing is not projected, as the rasterizer skips it.
+            let poly = if casts_nothing(&s.materials[s.vertices[ids[0]].material as usize]) { Vec::new() } else { light_poly(s, m, ids) };
             let mut cost = 1u64;
             if poly.len() >= 3 {
                 let scr = map_corners(m, &poly);
@@ -253,25 +290,15 @@ fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
     for &t in casters {
         let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
         let mat = &s.materials[s.vertices[ids[0]].material as usize];
-        // A masked caster tests the material's alpha against its cutoff, as shading does; a
-        // blended one tests its alpha times the opacity against 0.5.
-        let (opacity, cutoff) = if mat.alpha_mode == 1 { (1.0, mat.alpha_cutoff) } else { (mat.opacity, 0.5) };
+        if casts_nothing(mat) {
+            continue;
+        }
+        let (opacity, cutoff) = caster_alpha(mat);
         let alpha = (mat.alpha_mode != 0 && mat.tex_base >= 0).then(|| AlphaTest {
             tex: &s.textures[mat.tex_base as usize],
-            base: mat.base[3],
-            opacity,
+            factor: mat.base[3] * opacity,
             cutoff,
         });
-        // A masked or blended caster without a base texture has one alpha, tested as a texel's
-        // alpha is.
-        if mat.alpha_mode != 0 && mat.tex_base < 0 && mat.base[3] * opacity < cutoff {
-            continue;
-        }
-        // An opaque-mode or masked caster draws with its opacity alone, tested as a blended
-        // caster's alpha is.
-        if mat.alpha_mode != 2 && mat.opacity < 0.5 {
-            continue;
-        }
         let poly = light_poly(s, m, ids);
         if poly.len() < 3 {
             continue;
