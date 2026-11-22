@@ -247,9 +247,7 @@ fn load(lang: ProofLang) -> (Loaded, Option<(DictionarySource, String)>) {
     for dic in candidates.into_iter().take(MAX_CANDIDATES) {
         let loaded = match already_read(&HUNSPELL, &dic) {
             Some(d) => Ok(d),
-            None => dic.load_english()
-                .and_then(|d| if d.is_empty() { Err(format!("{}: no words", dic.description())) } else { Ok(d) })
-                .map(Arc::new),
+            None => dic.load_english().and_then(|d| if d.is_empty() { Err(format!("{}: no words", dic.description())) } else { Ok(d) }).map(Arc::new),
         };
         match loaded {
             Ok(d) => return (Some((d, dic)), first_error),

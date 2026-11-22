@@ -39,7 +39,10 @@ impl PartialEq for DictionarySource {
 
 impl DictionarySource {
     pub(crate) fn file(&self) -> Option<PathBuf> {
-        match self { Self::Files { dic, .. } => Some(dic.clone()), Self::Memory(_) => None }
+        match self {
+            Self::Files { dic, .. } => Some(dic.clone()),
+            Self::Memory(_) => None,
+        }
     }
 
     pub(crate) fn description(&self) -> String {
@@ -82,8 +85,7 @@ impl DictionarySource {
                 let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
                 len(aff).saturating_add(len(dic))
             }
-            Self::Memory(p) => p.files.spelling_aff.as_ref().map_or(0, Vec::len) as u64
-                + p.files.spelling_dic.as_ref().map_or(0, Vec::len) as u64,
+            Self::Memory(p) => p.files.spelling_aff.as_ref().map_or(0, Vec::len) as u64 + p.files.spelling_dic.as_ref().map_or(0, Vec::len) as u64,
         }
     }
 
@@ -93,7 +95,9 @@ impl DictionarySource {
             Self::Memory(_) => {
                 clear_load_error(key);
                 if let Err(error) = &result {
-                    MEMORY_LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+                    MEMORY_LOAD_ERRORS
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .push((key.to_string(), format!("{}: {error}", self.description())));
                 }
                 result
@@ -106,8 +110,12 @@ impl DictionarySource {
 static MEMORY_LOAD_ERRORS: RwLock<Vec<(String, String)>> = RwLock::new(Vec::new());
 
 pub(crate) fn source_load_error(key: &str) -> Option<String> {
-    MEMORY_LOAD_ERRORS.read().unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter().find(|(k, _)| k == key).map(|(_, e)| e.clone())
+    MEMORY_LOAD_ERRORS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, e)| e.clone())
         .or_else(|| load_error(key).map(|(_, e)| e))
 }
 
@@ -292,11 +300,14 @@ pub(crate) fn source_candidates(names: &[&str]) -> Vec<DictionarySource> {
     let norm = |n: &str| n.to_ascii_lowercase().replace('_', "-");
     let first = names.first().map(|n| norm(n));
     let (region, rest): (Vec<_>, Vec<_>) = names.iter().copied().partition(|n| Some(norm(n)) == first);
-    let files = |names: &[&str], dirs: &[PathBuf]| ordered(names, dirs, &[], &[], &[]).into_iter()
-        .map(|(aff, dic)| DictionarySource::Files { aff, dic }).collect::<Vec<_>>();
+    let files = |names: &[&str], dirs: &[PathBuf]| {
+        ordered(names, dirs, &[], &[], &[]).into_iter().map(|(aff, dic)| DictionarySource::Files { aff, dic }).collect::<Vec<_>>()
+    };
     let mut out = files(names, &dirs);
     for source in region_packs.into_iter().chain(files(&region, &system)).chain(other_packs).chain(files(&rest, &system)) {
-        if !out.contains(&source) { out.push(source); }
+        if !out.contains(&source) {
+            out.push(source);
+        }
     }
     out
 }
@@ -304,12 +315,12 @@ pub(crate) fn source_candidates(names: &[&str]) -> Vec<DictionarySource> {
 pub(crate) fn source_candidates_exact(names: &[&str]) -> Vec<DictionarySource> {
     let lo = names.first().copied().map(lo_ext_dirs);
     let (dirs, system) = search_tiers(lo.as_deref());
-    let mut out: Vec<_> = ordered(names, &dirs, &[], &[], &[]).into_iter()
-        .map(|(aff, dic)| DictionarySource::Files { aff, dic }).collect();
-    let system = ordered(names, &system, &[], &[], &[]).into_iter()
-        .map(|(aff, dic)| DictionarySource::Files { aff, dic });
+    let mut out: Vec<_> = ordered(names, &dirs, &[], &[], &[]).into_iter().map(|(aff, dic)| DictionarySource::Files { aff, dic }).collect();
+    let system = ordered(names, &system, &[], &[], &[]).into_iter().map(|(aff, dic)| DictionarySource::Files { aff, dic });
     for source in crate::packs::exact_spelling_sources(names).into_iter().chain(system) {
-        if !out.contains(&source) { out.push(source); }
+        if !out.contains(&source) {
+            out.push(source);
+        }
     }
     out
 }

@@ -120,8 +120,7 @@ impl PackSource {
             Self::Disk(dir) => {
                 let aff = dir.join(format!("{SPELLING}.aff"));
                 let dic = dir.join(format!("{SPELLING}.dic"));
-                (is_regular_file(&aff) && is_regular_file(&dic))
-                    .then_some(crate::hunspell::DictionarySource::Files { aff, dic })
+                (is_regular_file(&aff) && is_regular_file(&dic)).then_some(crate::hunspell::DictionarySource::Files { aff, dic })
             }
             Self::Memory(pack) => Some(crate::hunspell::DictionarySource::Memory(pack)),
         }
@@ -173,8 +172,16 @@ struct State {
     changes: u64,
 }
 
-static STATE: RwLock<State> =
-    RwLock::new(State { dir: None, memory: BTreeMap::new(), memory_bytes: 0, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 });
+static STATE: RwLock<State> = RwLock::new(State {
+    dir: None,
+    memory: BTreeMap::new(),
+    memory_bytes: 0,
+    scan: None,
+    hyphenation: BTreeMap::new(),
+    hyphenation_bytes: 0,
+    hyphenation_errors: Vec::new(),
+    changes: 0,
+});
 
 fn read() -> RwLockReadGuard<'static, State> {
     STATE.read().unwrap_or_else(PoisonError::into_inner)
@@ -233,8 +240,12 @@ fn add_memory(files: PackFiles, limit: usize) -> Result<InstalledPack, String> {
             return Err(format!("more than {MAX_PACKS} memory packs"));
         }
         let old_bytes = s.memory.get(&info.locale).map_or(0, |p| p.bytes);
-        let next = s.memory_bytes.checked_sub(old_bytes).and_then(|n| n.checked_add(bytes))
-            .filter(|&n| n <= limit).ok_or_else(|| format!("memory packs exceed {limit} raw bytes"))?;
+        let next = s
+            .memory_bytes
+            .checked_sub(old_bytes)
+            .and_then(|n| n.checked_add(bytes))
+            .filter(|&n| n <= limit)
+            .ok_or_else(|| format!("memory packs exceed {limit} raw bytes"))?;
         let pack = MemoryPack { info: info.clone(), files, revision: s.changes.wrapping_add(1), bytes };
         s.memory.insert(info.locale.clone(), Arc::new(pack));
         s.memory_bytes = next;
@@ -246,8 +257,7 @@ fn add_memory(files: PackFiles, limit: usize) -> Result<InstalledPack, String> {
 
 fn compact_files(files: PackFiles) -> PackFiles {
     let tight = |v: Vec<u8>| v.into_boxed_slice().into_vec();
-    let licences: Vec<_> = files.licences.into_iter()
-        .map(|(n, b)| (n.into_boxed_str().into_string(), tight(b))).collect();
+    let licences: Vec<_> = files.licences.into_iter().map(|(n, b)| (n.into_boxed_str().into_string(), tight(b))).collect();
     PackFiles {
         pack_toml: tight(files.pack_toml),
         spelling_aff: files.spelling_aff.map(tight),
@@ -260,8 +270,12 @@ fn compact_files(files: PackFiles) -> PackFiles {
 fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> {
     let mut bytes = 0usize;
     let mut count = |name: &str, data: &[u8], cap: u64| -> Result<(), String> {
-        if data.len() as u64 > cap { return Err(format!("{name}: too large")) }
-        bytes = bytes.checked_add(data.len()).filter(|&n| n <= MAX_MEMORY_BYTES)
+        if data.len() as u64 > cap {
+            return Err(format!("{name}: too large"));
+        }
+        bytes = bytes
+            .checked_add(data.len())
+            .filter(|&n| n <= MAX_MEMORY_BYTES)
             .ok_or_else(|| format!("memory pack exceeds {MAX_MEMORY_BYTES} raw bytes"))?;
         Ok(())
     };
@@ -276,8 +290,12 @@ fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> 
         (None, None) => {}
         _ => return Err("spelling.aff and spelling.dic must be supplied together".into()),
     }
-    if let Some(pat) = &files.hyphenation { count(HYPHENATION, pat, crate::hunspell::MAX_FILE)?; }
-    if files.licences.len() > MAX_LICENCE_FILES { return Err(format!("more than {MAX_LICENCE_FILES} licence files")) }
+    if let Some(pat) = &files.hyphenation {
+        count(HYPHENATION, pat, crate::hunspell::MAX_FILE)?;
+    }
+    if files.licences.len() > MAX_LICENCE_FILES {
+        return Err(format!("more than {MAX_LICENCE_FILES} licence files"));
+    }
     let mut names = std::collections::BTreeSet::new();
     for (name, text) in &files.licences {
         if !safe_relative(name) || name.contains('/') || !names.insert(name.as_str()) {
@@ -295,7 +313,9 @@ fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> 
             crate::affix::AffixDict::from_hunspell(&a, &d, &[])?;
         }
     }
-    if let Some(pat) = &files.hyphenation { patterns_from_bytes(pat, &info.locale)?; }
+    if let Some(pat) = &files.hyphenation {
+        patterns_from_bytes(pat, &info.locale)?;
+    }
     let name = info.name.unwrap_or_else(|| info.locale.clone());
     Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: None }, bytes))
 }
@@ -390,7 +410,9 @@ fn memory_licences(pack: &MemoryPack, left: &mut u64) -> Vec<(String, String)> {
     files.sort_by(|(a, _), (b, _)| a.cmp(b));
     let mut out = Vec::new();
     for (name, bytes) in files {
-        if bytes.len() as u64 > *left { continue }
+        if bytes.len() as u64 > *left {
+            continue;
+        }
         *left -= bytes.len() as u64;
         out.push((name.clone(), String::from_utf8_lossy(bytes).into_owned()));
     }
@@ -680,13 +702,21 @@ fn packs_for(locales: &[String], has: impl Fn(&Holds) -> bool) -> Vec<PackSource
     let mut out = Vec::new();
     for l in locales {
         if let Some((p, _)) = usable().find(|(p, _)| pack_region(&p.locale) == l)
-            && let Some(source) = origin(&scan, p) { out.push(source); }
+            && let Some(source) = origin(&scan, p)
+        {
+            out.push(source);
+        }
     }
     // Another region may follow, never another script's pack.
     for (p, _) in usable() {
         let primary = p.locale.split('-').next().unwrap_or_default();
         let fits = locales.iter().any(|l| l.split('-').next() == Some(primary) && same_script(l, &p.locale));
-        if fits && let Some(source) = origin(&scan, p) && !out.contains(&source) { out.push(source); }
+        if fits
+            && let Some(source) = origin(&scan, p)
+            && !out.contains(&source)
+        {
+            out.push(source);
+        }
     }
     out
 }
@@ -699,14 +729,15 @@ fn packs_for(locales: &[String], has: impl Fn(&Holds) -> bool) -> Vec<PackSource
 /// never beats them.
 pub(crate) fn spelling_dirs(names: &[&str]) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let (region, other) = spelling_sources(names);
-    let paths = |v: Vec<crate::hunspell::DictionarySource>| v.into_iter().filter_map(|s| s.file().and_then(|p| p.parent().map(Path::to_path_buf))).collect();
+    let paths =
+        |v: Vec<crate::hunspell::DictionarySource>| v.into_iter().filter_map(|s| s.file().and_then(|p| p.parent().map(Path::to_path_buf))).collect();
     (paths(region), paths(other))
 }
 
 pub(crate) fn spelling_sources(names: &[&str]) -> (Vec<crate::hunspell::DictionarySource>, Vec<crate::hunspell::DictionarySource>) {
     let region = region_locales(names);
-    let (own, other): (Vec<_>, Vec<_>) = packs_for(&locales_for(names), |h| h.spelling).into_iter()
-        .partition(|s| region.iter().any(|r| r == pack_region(&s.locale())));
+    let (own, other): (Vec<_>, Vec<_>) =
+        packs_for(&locales_for(names), |h| h.spelling).into_iter().partition(|s| region.iter().any(|r| r == pack_region(&s.locale())));
     (own.into_iter().filter_map(PackSource::spelling).collect(), other.into_iter().filter_map(PackSource::spelling).collect())
 }
 
@@ -722,7 +753,10 @@ pub(crate) fn exact_spelling_sources(names: &[&str]) -> Vec<crate::hunspell::Dic
         let l = n.to_ascii_lowercase().replace('_', "-");
         if let Some((p, _)) = scan.packs.iter().find(|(p, h)| h.spelling && pack_region(&p.locale) == l)
             && let Some(source) = origin(&scan, p).and_then(PackSource::spelling)
-            && !out.contains(&source) { out.push(source); }
+            && !out.contains(&source)
+        {
+            out.push(source);
+        }
     }
     out
 }
@@ -772,7 +806,9 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        if s.dir.is_none() && s.memory.is_empty() { return None }
+        if s.dir.is_none() && s.memory.is_empty() {
+            return None;
+        }
         if let Some(p) = s.hyphenation.get(&lang) {
             return p.clone();
         }
@@ -853,7 +889,16 @@ mod tests {
     /// only a count, so 256 languages of large patterns can't each stay in memory.
     #[test]
     fn remembered_patterns_keep_to_a_memory_budget() {
-        let mut s = State { dir: None, memory: BTreeMap::new(), memory_bytes: 0, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 };
+        let mut s = State {
+            dir: None,
+            memory: BTreeMap::new(),
+            memory_bytes: 0,
+            scan: None,
+            hyphenation: BTreeMap::new(),
+            hyphenation_bytes: 0,
+            hyphenation_errors: Vec::new(),
+            changes: 0,
+        };
         let p = Arc::new(Patterns::parse("hy3ph he2n hena4 hen5at 1na n2at 1tio 2io o2n"));
         let bytes = pattern_bytes(&p);
         assert_eq!(bytes, 9 * BYTES_PER_PATTERN);
