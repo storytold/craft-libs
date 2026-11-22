@@ -194,6 +194,15 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
+fn reflected_control(at: Point, previous: Point) -> Point {
+    let reflect = |coordinate: f64, prior: f64| {
+        let doubled = coordinate * 2.0;
+        // If both inputs are finite and doubling overflows, round only the final value.
+        if doubled.is_infinite() && coordinate.is_finite() && prior.is_finite() { coordinate.mul_add(2.0, -prior) } else { doubled - prior }
+    };
+    Point::new(reflect(at.x, previous.x), reflect(at.y, previous.y))
+}
+
 /// Split `d` into subpaths, resolving relative commands and S/T control reflections while
 /// raising quadratic (`Q`/`T`) segments to cubics.
 pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
@@ -355,7 +364,7 @@ pub fn parse_path_with_quads(d: &str) -> Result<Vec<QuadSubpath>> {
                 cur = p;
             }
             b'S' => {
-                let c1 = prev_cubic.map_or(cur, |c2| cur * 2.0 - c2);
+                let c1 = prev_cubic.map_or(cur, |c2| reflected_control(cur, c2));
                 let (c2, p) = (point(args[0], args[1]), point(args[2], args[3]));
                 segs.push(QuadSegment::Cubic(c1, c2, p));
                 prev_cubic = Some(c2);
@@ -370,7 +379,7 @@ pub fn parse_path_with_quads(d: &str) -> Result<Vec<QuadSubpath>> {
                 cur = p;
             }
             b'T' => {
-                let reflect = prev_quad.map_or(cur, |q| cur * 2.0 - q);
+                let reflect = prev_quad.map_or(cur, |q| reflected_control(cur, q));
                 let p = point(args[0], args[1]);
                 segs.push(QuadSegment::Quad(reflect, p));
                 prev_quad = Some(reflect);
@@ -508,6 +517,21 @@ mod tests {
             paths[0].segs,
             vec![QuadSegment::Quad(Point::new(5.0, 20.0), Point::new(10.0, 10.0)), QuadSegment::Quad(Point::new(15.0, 0.0), Point::new(20.0, 10.0)),]
         );
+    }
+
+    #[test]
+    fn smooth_cubic_matches_explicit_control_when_doubling_would_overflow() {
+        let smooth = "M1e308 0 C1e308 1 1e308 2 1e308 3 S1e308 5 1e308 6";
+        let explicit = "M1e308 0 C1e308 1 1e308 2 1e308 3 C1e308 4 1e308 5 1e308 6";
+        assert_eq!(parse_path(smooth).unwrap(), parse_path(explicit).unwrap());
+    }
+
+    #[test]
+    fn smooth_quadratic_matches_explicit_control_when_doubling_would_overflow() {
+        let smooth = "M0 -1e308 Q1 -1e308 2 -1e308 T4 -1e308";
+        let explicit = "M0 -1e308 Q1 -1e308 2 -1e308 Q3 -1e308 4 -1e308";
+        assert_eq!(parse_path_with_quads(smooth).unwrap(), parse_path_with_quads(explicit).unwrap());
+        assert_eq!(parse_path(smooth).unwrap(), parse_path(explicit).unwrap());
     }
 
     #[test]
