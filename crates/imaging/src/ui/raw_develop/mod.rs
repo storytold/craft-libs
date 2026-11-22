@@ -31,6 +31,7 @@ use craft_behavior::edit_history::Step;
 use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed, PixelSize};
 use craft_color_ui::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, SamplerCache, SamplerEvent};
+use craft_host::target::WindowChrome;
 use craft_theme::TypeRole;
 use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource, ToolHost, ViewCommands, ZoomTool};
 use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _};
@@ -547,7 +548,9 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
         let ws = RefCell::new(&mut *self);
 
         let shown = FullWindowDialog::new(title)
-            .own_window(WindowSpec::dialog())
+            // The OS title bar: the dialog's header leaves no room for the window buttons and is no drag area, so an
+            // inherited inset or integrated frame would leave the window unmovable.
+            .own_window(WindowSpec::dialog().chrome(WindowChrome::Native))
             .remember(SaveKey::new("craft_imaging.raw_develop.window"))
             .opened(open)
             .command_scope(RawDevelopCommands::SCOPE)

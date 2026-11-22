@@ -50,6 +50,7 @@ use serde_json::Value;
 
 use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
+use craft_host::target::WindowChrome;
 use craft_ui::bars::StatusMessage;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::contract::{Bind, Job, Pending, Remember as _, Show as _, ShowContainer as _, Tracked};
@@ -381,7 +382,9 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         let this = RefCell::new(&mut *self);
 
         let shown = FullWindowDialog::new(title)
-            .own_window(WindowSpec::dialog())
+            // The OS title bar: the dialog's header leaves no room for the window buttons and is no drag area, so an
+            // inherited inset or integrated frame would leave the window unmovable.
+            .own_window(WindowSpec::dialog().chrome(WindowChrome::Native))
             .opened(open)
             .command_scope(VanishingPointCommands::SCOPE)
             .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
