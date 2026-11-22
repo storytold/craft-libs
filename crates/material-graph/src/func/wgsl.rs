@@ -290,6 +290,37 @@ fn sample_expression(binding: Option<usize>, filter: u32, grey: bool, coordinate
     Some(if grey { format!("tc_lum({read})") } else { read })
 }
 
+/// A `vecNf(..)` of the scalar parts of a vector node (`defaults` stand in for the parts that are not linked). A linked
+/// vector fills several lanes on the CPU, which this cannot say, so it is left to the CPU (`None`).
+fn vec_expression(
+    n: u8,
+    defaults: &[f64; 4],
+    operand: &dyn Fn(usize) -> Option<u32>,
+    pin: &dyn Fn(u32) -> Option<Pin>,
+    float: &dyn Fn(usize, usize) -> Option<String>,
+) -> Option<String> {
+    if has_vector_part(operand, pin) {
+        return None;
+    }
+    let values = defaults
+        .iter()
+        .take(n as usize)
+        .enumerate()
+        .map(|(i, &d)| if operand(i).is_none() { Some(format!("bitcast<f32>({}u)", (d as f32).to_bits())) } else { float(i, 1) })
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("vec{n}f({})", values.join(", ")))
+}
+
+/// WGSL for "`value` is not zero": a vector is true when one of its lanes is.
+fn non_zero(value: &str, lanes: usize) -> String {
+    if lanes > 1 { format!("any({value} != vec{lanes}f(0.0))") } else { format!("{value} != 0.0") }
+}
+
+/// Whether any of an instruction's four operands is a vector (more than one lane).
+fn has_vector_part(operand: &dyn Fn(usize) -> Option<u32>, pin: &dyn Fn(u32) -> Option<Pin>) -> bool {
+    (0..4).any(|slot| operand(slot).and_then(pin).is_some_and(|p| p.lanes() > 1))
+}
+
 fn expression(
     code: &Code,
     index: usize,
@@ -321,16 +352,7 @@ fn expression(
             let n = input_lanes(0).max(input_lanes(1));
             binary(op, &float(0, n)?, &float(1, n)?, n)?
         }
-        Op::Vec(n, false) => {
-            let defaults = code.vec_defaults.get(instruction.x as usize)?;
-            let values = defaults
-                .iter()
-                .take(n as usize)
-                .enumerate()
-                .map(|(i, &d)| if operand(i).is_none() { Some(format!("bitcast<f32>({}u)", (d as f32).to_bits())) } else { float(i, 1) })
-                .collect::<Option<Vec<_>>>()?;
-            format!("vec{n}f({})", values.join(", "))
-        }
+        Op::Vec(n, false) => vec_expression(n, code.vec_defaults.get(instruction.x as usize)?, &operand, &pin, &float)?,
         Op::Swizzle => {
             let (components, n) = code.swizzles.get(instruction.x as usize)?.as_ref()?;
             swizzle_expression(&float(0, 1)?, input_lanes(0), components, *n)?
@@ -357,7 +379,10 @@ fn expression(
             format!("select({on_false}, {on_true}, {condition})")
         }
         Op::ToFloat => float(0, lanes)?,
-        Op::ToBool => format!("{} != 0.0", float(0, 1)?),
+        Op::ToBool => {
+            let n = input_lanes(0);
+            non_zero(&float(0, if n > 1 { n } else { 1 })?, n)
+        }
         _ => return None,
     })
 }
@@ -451,4 +476,35 @@ fn binary(op: B, a: &str, b: &str, n: usize) -> Option<String> {
         B::Ge => format!("{a} >= {b}"),
         B::And | B::Or | B::Xor => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::Graph;
+    use std::collections::BTreeMap;
+
+    /// The pixel shader of a single-precision function made of `body`, if it can be lowered.
+    fn shader(body: &str) -> Option<PixelShader> {
+        let g = Graph::parse_unchecked(&format!("meta kind \"function\"\nmeta float32 \"1\"\n{body}")).unwrap();
+        Prog::compile(&g, &BTreeMap::new()).unwrap().pixel_shader(&FnEnv::new([8.0, 8.0]))
+    }
+
+    /// A float2 is true when one of its lanes is: comparing a `vec2f` with the scalar `0.0` is not valid WGSL.
+    #[test]
+    fn a_vector_is_reduced_to_a_bool_with_any() {
+        let s = shader("node 1 f_pos\nnode 2 f_to_bool a=@1\nnode 3 f_out in=@2\n").expect("a shader for the position test");
+        assert!(s.source.contains("any(") && s.source.contains("!= vec2f(0.0))"), "{}", s.source);
+        let s =
+            shader("node 1 f_pos\nnode 4 f_swizzle a=@1 mask=\"x\"\nnode 2 f_to_bool a=@4\nnode 3 f_out in=@2\n").expect("a shader for the scalar");
+        assert!(!s.source.contains("any("), "a scalar is compared as it is: {}", s.source);
+    }
+
+    /// A linked vector fills several lanes of the vector on the CPU, which `vec2f(r1, 0.5)` in WGSL would not say.
+    #[test]
+    fn a_vector_part_of_a_vector_is_left_to_the_cpu() {
+        assert!(shader("node 1 f_pos\nnode 2 f_vec4 x=@1 y=0.5\nnode 3 f_out in=@2\n").is_none());
+        // scalar parts still lower
+        assert!(shader("node 1 f_pos\nnode 4 f_swizzle a=@1 mask=\"x\"\nnode 2 f_vec4 x=@4 y=0.5\nnode 3 f_out in=@2\n").is_some());
+    }
 }

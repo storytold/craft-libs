@@ -9,10 +9,10 @@ mod digest;
 #[path = "build/source/mod.rs"]
 mod source;
 
-use digest::Fingerprint;
+use digest::{Fingerprint, epoch_in, with_epoch};
 use source::items::Dispatcher;
 use source::modules::reachable;
-use source::{SourceFile, SourceTree};
+use source::{SourceFile, SourceTree, included_files};
 use std::path::{Path, PathBuf};
 
 /// The functions that pick by node kind.
@@ -49,21 +49,6 @@ fn rust_files(dir: &Path, root: &Path, out: &mut Vec<SourceFile>) {
     }
 }
 
-/// The contents of the files `text` names in `include_bytes!` and the like, relative to its folder.
-fn included_files(text: &str, folder: &Path) -> Vec<(String, Vec<u8>)> {
-    let mut out = Vec::new();
-    for marker in ["include_bytes!(\"", "include_str!(\"", "include!(\""] {
-        for (at, _) in text.match_indices(marker) {
-            let rest = text.get(at + marker.len()..).unwrap_or("");
-            let name = rest.split('"').next().unwrap_or("").to_string();
-            if let Ok(data) = std::fs::read(folder.join(&name)) {
-                out.push((name, data));
-            }
-        }
-    }
-    out
-}
-
 /// What isn't source but changes results: the compiler, its settings, the dependencies.
 fn toolchain(lock: &Path) -> String {
     let mut f = Fingerprint::of("toolchain");
@@ -78,7 +63,7 @@ fn toolchain(lock: &Path) -> String {
     f.finish().to_hex()
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=build");
     println!("cargo:rerun-if-changed=src");
@@ -86,6 +71,8 @@ fn main() {
     // the workspace's lock file, two folders up (`crates/material-graph`)
     let lock = manifest.join("../../Cargo.lock");
     println!("cargo:rerun-if-changed={}", lock.display());
+    // the number a developer bumps for a change the source doesn't show: it goes into every version
+    let epoch = epoch_in(&std::fs::read_to_string(manifest.join("src/versions.rs")).unwrap_or_default());
     let mut files = Vec::new();
     rust_files(&manifest.join("src"), &manifest, &mut files);
     let engine: Vec<SourceFile> = reachable(&files, "src", &[START]).into_iter().cloned().collect();
@@ -93,17 +80,16 @@ fn main() {
 
     let mut out = String::new();
     out.push_str(&format!("pub const TOOLCHAIN: &str = {:?};\n", toolchain(&lock)));
-    out.push_str(&format!("pub const ALL: &str = {:?};\n", tree.all("all kinds").to_hex()));
+    out.push_str(&format!("pub const ALL: &str = {:?};\n", with_epoch(&epoch, &tree.all("all kinds")).to_hex()));
     out.push_str(&format!("pub const FILES: usize = {};\n", engine.len()));
     out.push_str("pub const KINDS: &[(&str, &str)] = &[\n");
     for kind in tree.kinds() {
         if let Some(version) = tree.kind_version(kind, SHARED) {
-            out.push_str(&format!("    ({kind:?}, {:?}),\n", version.to_hex()));
+            out.push_str(&format!("    ({kind:?}, {:?}),\n", with_epoch(&epoch, &version).to_hex()));
         }
     }
     out.push_str("];\n");
     let dir = PathBuf::from(std::env::var("OUT_DIR").unwrap_or_default());
-    if let Err(e) = std::fs::write(dir.join("kind_versions.rs"), out) {
-        println!("cargo:warning=node kind versions not written: {e}");
-    }
+    // a failure stops the build: an older file left in `OUT_DIR` would give a new evaluator the old versions
+    std::fs::write(dir.join("kind_versions.rs"), out)
 }

@@ -31,6 +31,18 @@ pub struct SourceFile {
     pub included: Vec<(String, Vec<u8>)>,
 }
 
+/// The contents of the files `text` names in `include_bytes!` and the like, relative to `folder`. It reads the same
+/// tokens as the parser, so a spacing like `include_bytes!( "x" )` finds the file the digest asks for.
+pub fn included_files(text: &str, folder: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    for name in items::includes_in(&tokens::tokenize(text)) {
+        if let Ok(data) = std::fs::read(folder.join(&name)) {
+            out.push((name, data));
+        }
+    }
+    out
+}
+
 /// What a closure is made of, for telling a developer what a version covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Covered {
@@ -81,6 +93,7 @@ impl SourceTree {
             .iter()
             .map(|a| {
                 let mut f = Fingerprint::of("arm");
+                f.u64(a.after as u64);
                 let mut text = String::new();
                 a.tokens.iter().for_each(|t: &Token| t.write(&mut text));
                 f.text(&text);
@@ -345,6 +358,43 @@ mod tests {
         };
         assert_ne!(of(b"one")["blur"], of(b"two")["blur"]);
         assert_eq!(of(b"one")["sharpen"], of(b"two")["sharpen"]);
+    }
+
+    #[test]
+    fn an_include_is_found_however_it_is_spaced() {
+        let folder = std::env::temp_dir().join(format!("craft_material_graph_include_{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("table.bin"), b"data").unwrap();
+        for text in [
+            r#"include_bytes!("table.bin")"#,
+            r#"include_bytes!( "table.bin" )"#,
+            "include_bytes! (\n    \"table.bin\",\n)",
+            r##"include_bytes!(r#"table.bin"#)"##,
+        ] {
+            assert_eq!(included_files(text, &folder), [("table.bin".to_string(), b"data".to_vec())], "{text}");
+        }
+        assert!(included_files(r#"include_bytes!("absent.bin")"#, &folder).is_empty());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// The first arm that matches runs: a guarded arm in front of a literal one is not the same program as behind it.
+    #[test]
+    fn the_order_of_arms_that_can_overlap_counts() {
+        let guarded = r#"fn eval() { compute("x", true); } fn compute(kind: &str, flag: bool) -> f32 { let k = shared_helper(); match kind { "blur" if flag => blur(k), "blur" => sharpen(k), _ => 0.0 } }"#;
+        let swapped = r#"fn eval() { compute("x", true); } fn compute(kind: &str, flag: bool) -> f32 { let k = shared_helper(); match kind { "blur" => sharpen(k), "blur" if flag => blur(k), _ => 0.0 } }"#;
+        assert_ne!(versions(&tree(guarded, B))["blur"], versions(&tree(swapped, B))["blur"]);
+    }
+
+    #[test]
+    fn an_attribute_on_a_module_changes_what_is_inside() {
+        let backend = |first: &str, second: &str| {
+            format!(
+                "#[cfg({first})] mod backend {{ pub fn shade() -> f32 {{ 1.0 }} }} #[cfg({second})] mod backend {{ pub fn shade() -> f32 {{ 2.0 }} }}"
+            )
+        };
+        let b = |attrs: String| format!("{attrs} fn blur(v: f32) -> f32 {{ v * backend::shade() }} fn sharpen() {{}} fn shared_helper() {{}}");
+        let (one, other) = (b(backend("unix", "not(unix)")), b(backend("not(unix)", "unix")));
+        assert_ne!(versions(&tree(A, &one))["blur"], versions(&tree(A, &other))["blur"]);
     }
 
     #[test]

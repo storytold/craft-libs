@@ -17,7 +17,8 @@
 //!   roughness r and tree depth D, `r^depth / (1 + r + .. + r^D)`, or 1 when r is 0. Quadrants that draw nothing count
 //!   towards the depth; iterations and switches don't.
 //! - Instances add, or with `max` keep the larger value, on a canvas that starts at the background. Global opacity
-//!   scales each instance. The canvas is clamped to 0..1 once, at the end.
+//!   scales each instance. A grey canvas is clamped to 0..1 once, at the end; a colour canvas is clamped after every
+//!   additive instance.
 //! - Patterns wrap around the canvas. Edges are hard: each pixel is sampled once, at its centre.
 
 use crate::context::Cancel;
@@ -1200,9 +1201,11 @@ mod tests {
         // a disc half covering a pixel lays its colour over by half, it doesn't darken it as well
         let text = "size 8\nsubgraph f\nmeta kind \"function\"\nnode 2 f_vec4 x=1 y=1 z=1 w=1\nnode 1 f_out in=@2\nend\nsubgraph p\nmeta kind \"patterns\"\nnode 1 pp_quadrant pattern=3 draws=1 max=1 fn.luminance=\"f\"\nnode 2 pp_out in=@1\nend\nnode 1 color r=0 g=0 b=0\nnode 2 pattern_program program=\"p\" color=1 bg=@1 roughness=0\noutput o 2\n";
         let t = &Graph::parse(text).unwrap().evaluate(Some(8)).unwrap()["o"];
-        let p = t.px.iter().copied().find(|p| p[0] > 0.05 && p[0] < 0.95).expect("an edge pixel");
-        // white over black by coverage a gives a, not a squared
-        assert!((p[0] - p[3]).abs() < 1e-4 || p[3] >= 0.999, "{p:?}");
+        let (i, p) = t.px.iter().copied().enumerate().find(|(_, p)| p[0] > 0.05 && p[0] < 0.95).expect("an edge pixel");
+        // white over black by coverage a gives a, not a squared: the same disc drawn in grey is the coverage itself
+        let grey = &Graph::parse(&text.replace(" fn.luminance=\"f\"", "").replace(" color=1", "")).unwrap().evaluate(Some(8)).unwrap()["o"];
+        let coverage = grey.px[i][0];
+        assert!((p[0] - coverage).abs() < 1e-4, "{p:?} against coverage {coverage}");
     }
 
     #[test]

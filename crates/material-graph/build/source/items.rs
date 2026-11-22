@@ -53,6 +53,9 @@ pub struct Alias {
 #[derive(Debug, Clone)]
 pub struct Arm {
     pub kinds: Vec<String>,
+    /// How many arms that aren't literal-only (a guard, a binding) come before it in the match. The first arm that
+    /// matches wins, so moving a literal arm past such an arm changes what runs.
+    pub after: usize,
     pub tokens: Vec<Token>,
     pub mentions: Vec<Mention>,
 }
@@ -107,12 +110,12 @@ pub fn mentions_in(tokens: &[Token], owner: Option<&str>) -> Vec<Mention> {
 }
 
 /// The files `include_bytes!("x")`, `include_str!`, `include!` in `tokens` name.
-fn includes_in(tokens: &[Token]) -> Vec<String> {
+pub fn includes_in(tokens: &[Token]) -> Vec<String> {
     let mut out = Vec::new();
     for (i, t) in tokens.iter().enumerate() {
         if t.is("include_bytes") || t.is("include_str") || t.is("include") {
             let text = tokens.iter().skip(i + 1).take(3).find_map(|x| match x {
-                Token::Text(s) => Some(s.clone()),
+                Token::Text(s) | Token::Raw(s) => Some(s.clone()),
                 _ => None,
             });
             out.extend(text);
@@ -167,22 +170,39 @@ struct Parser<'a> {
     out: Parsed,
     /// Tokens no item took.
     loose: Vec<Token>,
+    /// The attributes and name of the enclosing inline modules that have attributes: `#[cfg(unix)] mod backend`
+    /// decides whether what is inside exists, so it goes into the digest of each item inside.
+    scope: Vec<Token>,
 }
 
 impl Parser<'_> {
     fn add(&mut self, from: usize, to: usize, name: &str, kind: ItemKind, owner: Option<&str>, trait_impl: bool) {
         let tokens = self.tokens.get(from..to).unwrap_or(&[]);
+        let includes = includes_in(tokens);
+        let tokens = self.scoped(tokens);
         self.out.items.push(Item {
             name: name.to_string(),
             kind,
             owner: owner.map(str::to_string),
             trait_impl,
-            tokens: tokens.to_vec(),
-            mentions: mentions_in(tokens, owner),
+            mentions: mentions_in(&tokens, owner),
+            tokens,
             loose: false,
-            includes: includes_in(tokens),
+            includes,
             file: self.file.to_string(),
         });
+    }
+
+    /// `tokens` after the attributes of the modules around them.
+    fn scoped(&self, tokens: &[Token]) -> Vec<Token> {
+        let mut out = self.scope.clone();
+        out.extend_from_slice(tokens);
+        out
+    }
+
+    /// Whether the item starting at `start` has attributes.
+    fn has_attributes(&self, start: usize) -> bool {
+        self.tokens.get(start).is_some_and(|t| t.is_punct('#'))
     }
 
     /// `use` declarations: their `as` renames.
@@ -197,6 +217,33 @@ impl Parser<'_> {
                 }
             }
         }
+    }
+
+    /// The `use` declaration at `at` (its attributes start at `start`); the index past it.
+    fn use_declaration(&mut self, start: usize, at: usize) -> usize {
+        let end = past_item(self.tokens, at, false);
+        self.aliases(at, end);
+        if self.has_attributes(start) {
+            // `#[cfg(unix)] use a::shade;` decides which `shade` runs: it counts for every result
+            let tokens = self.tokens;
+            self.loose.extend_from_slice(tokens.get(start..end).unwrap_or(&[]));
+        }
+        end
+    }
+
+    /// The `mod` at `at` (its attributes start at `start`); the index past it. An inline module's items are parsed.
+    fn module(&mut self, start: usize, at: usize) -> usize {
+        let end = past_item(self.tokens, at, true);
+        if end > 0 && self.tokens.get(end - 1).is_some_and(|c| c.is_punct('}')) {
+            let outer = self.scope.len();
+            if self.has_attributes(start) {
+                let tokens = self.tokens;
+                self.scope.extend_from_slice(tokens.get(start..at + 2).unwrap_or(&[]));
+            }
+            self.items(at + 3, end - 1, None, false);
+            self.scope.truncate(outer);
+        }
+        end
     }
 
     /// The items of a module or `impl` body, from `from` to `to`.
@@ -259,15 +306,9 @@ impl Parser<'_> {
                 self.add(start, end, &name, ItemKind::Value, owner, trait_impl);
                 end
             } else if t.is("use") {
-                let end = past_item(self.tokens, i, false);
-                self.aliases(i, end);
-                end
+                self.use_declaration(start, i)
             } else if t.is("mod") {
-                let end = past_item(self.tokens, i, true);
-                if end > 0 && self.tokens.get(end - 1).is_some_and(|c| c.is_punct('}')) {
-                    self.items(i + 3, end - 1, None, false);
-                }
-                end
+                self.module(start, i)
             } else if t.is("trait") {
                 let end = past_item(self.tokens, i, true);
                 self.body_block(start, i, end, &name, ItemKind::Type, false);
@@ -306,13 +347,14 @@ impl Parser<'_> {
         let Some(open) = (keyword..end).find(|&k| self.tokens.get(k).is_some_and(|t| t.is_punct('{'))) else { return };
         // the header's tokens with no body: a change of bounds or of the target counts
         let header = self.tokens.get(start..open).unwrap_or(&[]);
+        let header = self.scoped(header);
         self.out.items.push(Item {
             name: name.to_string(),
             kind,
             owner: Some(name.to_string()),
             trait_impl,
-            tokens: header.to_vec(),
-            mentions: mentions_in(header, Some(name)),
+            mentions: mentions_in(&header, Some(name)),
+            tokens: header,
             loose: false,
             includes: Vec::new(),
             file: self.file.to_string(),
@@ -371,7 +413,7 @@ fn impl_target(tokens: &[Token]) -> ImplTarget {
 /// One source file's items. `dispatchers` names functions to cut into arms.
 pub fn parse(source: &str, file: &str, dispatchers: &[Dispatcher]) -> Parsed {
     let tokens = tokenize(source);
-    let mut parser = Parser { tokens: &tokens, file, out: Parsed::default(), loose: Vec::new() };
+    let mut parser = Parser { tokens: &tokens, file, out: Parsed::default(), loose: Vec::new(), scope: Vec::new() };
     parser.items(0, tokens.len(), None, false);
     let Parser { out: mut parsed, loose, .. } = parser;
     if !loose.is_empty() {
@@ -406,12 +448,16 @@ fn cut_arms(parsed: &mut Parsed, function: &str) {
     let mut kept: Vec<Token> = tokens.get(..=start).unwrap_or(&[]).to_vec();
     let mut i = start + 1;
     let last = end.saturating_sub(1);
+    let mut after = 0;
     while i < last {
         let arm_end = past_arm(&tokens, i, last);
         let arm = tokens.get(i..arm_end).unwrap_or(&[]);
         match literal_kinds(arm) {
-            Some(kinds) => parsed.arms.push(Arm { kinds, tokens: arm.to_vec(), mentions: mentions_in(arm, None) }),
-            None => kept.extend_from_slice(arm),
+            Some(kinds) => parsed.arms.push(Arm { kinds, after, tokens: arm.to_vec(), mentions: mentions_in(arm, None) }),
+            None => {
+                after += 1;
+                kept.extend_from_slice(arm);
+            }
         }
         i = arm_end;
     }
@@ -499,6 +545,22 @@ mod tests {
         );
         assert_eq!(names(&p), [("a", None), ("S", None), ("S", Some("S")), ("m", Some("S")), ("C", Some("S")), ("K", None), ("V", None)]);
         assert!(p.items.iter().all(|i| !i.loose));
+    }
+
+    #[test]
+    fn the_attributes_of_a_module_are_part_of_what_is_inside() {
+        let of = |text: &str| {
+            let p = parse(text, "x.rs", &[]);
+            p.items.iter().map(|i| (i.name.clone(), i.tokens.clone(), i.loose)).collect::<Vec<_>>()
+        };
+        let one = of("#[cfg(unix)] mod backend { pub fn shade() { 1 } } #[cfg(not(unix))] mod backend { pub fn shade() { 2 } }");
+        let swapped = of("#[cfg(not(unix))] mod backend { pub fn shade() { 1 } } #[cfg(unix)] mod backend { pub fn shade() { 2 } }");
+        assert_ne!(one, swapped);
+        // a module with no attributes brings nothing but its items
+        assert_eq!(of("mod m { fn a() {} }"), of("pub mod m { fn a() {} }"));
+        // a `use` under `cfg` counts for every result, a plain one does not
+        assert!(of("#[cfg(unix)] use a::shade;").iter().any(|(_, _, loose)| *loose));
+        assert!(of("use a::shade;").is_empty());
     }
 
     #[test]

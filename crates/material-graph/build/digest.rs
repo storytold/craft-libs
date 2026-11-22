@@ -170,9 +170,33 @@ impl Fingerprint {
     }
 }
 
+/// What `pub const EPOCH` is set to in the text of `versions.rs`; empty when it isn't found.
+pub fn epoch_in(text: &str) -> String {
+    let line = text.lines().find(|l| l.trim_start().starts_with("pub const EPOCH"));
+    line.and_then(|l| l.split('=').nth(1)).map(|v| v.trim().trim_end_matches(';').trim().to_string()).unwrap_or_default()
+}
+
+/// `version` with `epoch` mixed in: bumping the epoch changes every version that goes through here.
+pub fn with_epoch(epoch: &str, version: &Digest) -> Digest {
+    let mut f = Fingerprint::of("epoch");
+    f.text(epoch);
+    f.digest(version);
+    f.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_epoch_is_read_and_changes_every_version() {
+        assert_eq!(epoch_in("/// docs\npub const EPOCH: u32 = 12;\nmod generated {}"), "12");
+        assert_eq!(epoch_in("nothing"), "");
+        let version = Fingerprint::of("kind").finish();
+        assert_ne!(with_epoch("1", &version), with_epoch("2", &version));
+        assert_ne!(with_epoch("1", &version), version);
+        assert_eq!(with_epoch("1", &version), with_epoch("1", &version));
+    }
 
     fn sha(data: &[u8]) -> String {
         let mut f = Fingerprint::default();

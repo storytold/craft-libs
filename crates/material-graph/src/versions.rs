@@ -5,7 +5,9 @@
 //! theirs, with nothing to bump by hand.
 //!
 //! [`EPOCH`] is the one number a developer may have to change: for a change that alters results without changing any
-//! Rust source of the evaluator (a data file read at run time, say). It invalidates everything.
+//! Rust source of the evaluator (a data file read at run time, say). It is mixed into [`ALL`] and into every version
+//! in [`KINDS`]. The kinds of the graphs that nodes run (function, pattern and FX-map nodes) have no entry there: they
+//! report the fixed `hosted` string, and a change is covered through the node kinds that run them.
 
 /// See the module docs.
 pub const EPOCH: u32 = 1;

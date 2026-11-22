@@ -11,7 +11,8 @@ pub trait Profiler: Send + Sync {
     fn enabled(&self) -> bool;
     /// Opens a span of `name`; dropping the returned value closes it.
     fn span(&self, name: &str) -> Box<dyn Any + Send>;
-    /// Observes a node before resizing or evaluating its inputs, even when span timers are disabled.
+    /// Observes a node once its inputs are evaluated, before they are resized and the node is computed (the time of
+    /// the inputs is not in it), even when span timers are disabled.
     fn node(&self, _id: u32, _kind: &str, _size: (usize, usize)) -> Option<Box<dyn Any + Send>> {
         None
     }

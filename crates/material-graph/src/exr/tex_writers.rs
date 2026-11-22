@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Dependency-free writers for high dynamic range images: OpenEXR (uncompressed scanlines, half or float RGBA) and
-//! Radiance HDR (RGBE). Values are written as they are, so results above 1.0 or below 0.0 survive.
+//! Radiance HDR (RGBE). EXR writes values as they are, so results above 1.0 or below 0.0 survive (to the sample
+//! precision); RGBE stores no sign, so negative components become zero.
 use crate::math;
 use crate::tex::Tex;
 

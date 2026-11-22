@@ -102,7 +102,7 @@ fn subgraph_extract_preserves_result() {
 
 #[test]
 fn publish_embeds_bitmap_and_loads() {
-    let dir = std::env::temp_dir().join("tc_graph_test_bitmap");
+    let dir = std::env::temp_dir().join(format!("tc_graph_test_bitmap_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let f = dir.join("t.png");
     let px = vec![[1.0, 0.0, 0.0, 1.0]; 16];
@@ -114,6 +114,7 @@ fn publish_embeds_bitmap_and_loads() {
     let g2 = G2::parse(&pkg).unwrap();
     let out = g2.evaluate(None).unwrap();
     assert!(out["basecolor"].px.iter().all(|p| p[0] > 0.99 && p[1] < 0.01));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -463,24 +464,39 @@ fn a_cancelled_evaluation_stops_early() {
         t1.elapsed(),
         full_time
     );
-    // cancelled while it runs: it stops within a few rows of the node it is in
-    let late = EvalContext::with_cancel(Cancel::new());
-    let flag = late.cancel.clone();
-    let t2 = std::time::Instant::now();
-    let r = std::thread::scope(|s| {
-        s.spawn(move || {
-            std::thread::sleep(full_time / 5);
-            flag.cancel();
-        });
-        g.evaluate_all_in(&late, 1024, &keep)
-    });
-    let _ = r;
-    assert!(
-        t2.elapsed() < full_time / 2 + std::time::Duration::from_millis(50),
-        "a run cancelled at a fifth took {:?} (full run {:?})",
-        t2.elapsed(),
-        full_time
-    );
+    // cancelled while it runs: the flag is set as the third node starts, and the run stops early
+    use craft_material_graph::profile::Profiler;
+    struct CancelAt {
+        cancel: Cancel,
+        at: usize,
+        started: std::sync::atomic::AtomicUsize,
+    }
+    impl Profiler for CancelAt {
+        fn enabled(&self) -> bool {
+            false
+        }
+        fn span(&self, _name: &str) -> Box<dyn std::any::Any + Send> {
+            Box::new(())
+        }
+        fn node(&self, _id: u32, _kind: &str, _size: (usize, usize)) -> Option<Box<dyn std::any::Any + Send>> {
+            if self.started.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 == self.at {
+                self.cancel.cancel();
+            }
+            None
+        }
+    }
+    let run = |at: usize| {
+        let cancel = Cancel::new();
+        let probe = std::sync::Arc::new(CancelAt { cancel: cancel.clone(), at, started: Default::default() });
+        let ec = EvalContext { cancel, profiler: Some(probe.clone()), ..EvalContext::default() };
+        let r = g.evaluate_all_in(&ec, 64, &keep);
+        (r, probe.started.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    let (whole, all) = run(usize::MAX);
+    assert!(!whole.kept.is_empty() && all > 3, "{all} nodes");
+    let (cut, started) = run(3);
+    assert!((3..all).contains(&started), "{started} of {all} nodes started: none starts once the run is cancelled");
+    assert!(cut.kept.is_empty(), "a run cancelled on the way must not deliver outputs");
 }
 
 #[test]
@@ -878,6 +894,10 @@ fn m0_per_node_output_format_quantises() {
     assert!(i8.px.iter().all(|p| p[0] <= 1.0 && ((p[0] * 255.0).round() - p[0] * 255.0).abs() < 1e-3));
     let i16 = run(" ofmt=2");
     assert!(i16.px.iter().all(|p| p[0] <= 1.0));
+    // whole steps of 1/65535 (to f32 precision), and not the coarser steps of 8 bit
+    let steps = |v: f32, k: f64| (f64::from(v) * k - (f64::from(v) * k).round()).abs();
+    assert!(i16.px.iter().all(|p| steps(p[0], 65535.0) < 0.01), "16 bit steps");
+    assert!(i16.px.iter().any(|p| steps(p[0], 255.0) > 0.01), "finer than 8 bit");
     let h = run(" ofmt=3");
     assert!(h.px.iter().any(|p| p[0] > 1.0), "16-bit float keeps values above 1");
     assert!(h.px.iter().zip(&f32t.px).all(|(a, b)| (a[0] - b[0]).abs() <= b[0].abs() * 1e-3 + 1e-6));
@@ -1136,4 +1156,120 @@ fn m1_channel_shuffle_and_bitmap_options() {
     let g = G2::parse("size 8\nnode 1 color r=0.2 g=0.4 b=0.6\nnode 2 channel_shuffle in=@1 src_r=2 src_g=8 src_b=9 inv_a=1\noutput o 2\n").unwrap();
     let p = g.evaluate(Some(8)).unwrap()["o"].px[0];
     assert!((p[0] - 0.6).abs() < 1e-5 && p[1] == 0.0 && p[2] == 1.0 && p[3] == 0.0, "{p:?}");
+}
+
+#[test]
+fn an_imported_graph_keeps_the_functions_it_runs() {
+    let other = Graph::parse(
+        "size 16\nsubgraph shade\nmeta kind \"function\"\nnode 1 f_pos\nnode 2 f_swizzle a=@1 mask=\"x\"\nnode 3 f_out in=@2\nend\nnode 1 pixel_processor fn=\"shade\"\noutput o 1\n",
+    )
+    .unwrap();
+    let mut host = Graph::parse("size 16\nnode 1 color r=0 g=0 b=0\noutput base 1\n").unwrap();
+    host.import_graph(other, "coat").unwrap();
+    assert!(host.subgraphs.contains_key("coat__shade"));
+    assert_eq!(host.subgraphs["coat"].nodes[&1].strs["fn"], "coat__shade");
+    let text = format!("{}node 2 subgraph graph=\"coat\"\noutput coat 2\n", host.to_text());
+    let out = Graph::parse(&text).unwrap().evaluate(None).unwrap();
+    // (the function is the pixel's x position)
+    assert!((out["coat"].px[0][0] - 0.5 / 16.0).abs() < 1e-3, "{:?}", out["coat"].px[0]);
+}
+
+#[test]
+fn extracting_nodes_keeps_the_output_pins_that_are_read() {
+    let text = "size 16\nnode 1 color r=0.9 g=0.2 b=0.4\nnode 2 rgba_split in=@1\nnode 3 invert in=@2.g\noutput o 3\n";
+    let before = Graph::parse(text).unwrap().evaluate(None).unwrap();
+    // the split goes into the subgraph; outside, the pin `g` was read from it
+    let mut g = Graph::parse(text).unwrap();
+    let sel: BTreeSet<u32> = [2].into_iter().collect();
+    g.extract_subgraph(&sel, "split").unwrap();
+    assert_eq!(g.evaluate(None).unwrap()["o"].px, before["o"].px);
+    // the invert goes into the subgraph; it read the pin `g` from outside
+    let mut h = Graph::parse(text).unwrap();
+    let sel: BTreeSet<u32> = [3].into_iter().collect();
+    h.extract_subgraph(&sel, "inv").unwrap();
+    assert_eq!(h.evaluate(None).unwrap()["o"].px, before["o"].px);
+}
+
+#[test]
+fn the_node_cache_sees_the_end_of_a_long_chain() {
+    use craft_material_graph::context::EvalContext;
+    // the output has the lowest id and the chain it reads the higher ones: its key must cover all of them
+    let chain = |angle: f32| {
+        let mut t = String::from("size 16\n");
+        for i in 1..=600 {
+            t.push_str(&format!("node {i} invert in=@{}\n", i + 1));
+        }
+        t.push_str(&format!("node 601 gradient angle={angle}\noutput o 1\n"));
+        t
+    };
+    let cache = std::sync::Arc::new(craft_material_graph::graph::NodeCache::new(64));
+    let render = |angle: f32| {
+        let r = Graph::parse(&chain(angle)).unwrap().evaluate_all_cached(&EvalContext::default(), 16, &[1], &cache, None, &mut |_| {});
+        assert!(r.errors.is_empty(), "{:?}", r.errors.iter().next());
+        r.kept[&1].px.clone()
+    };
+    assert_ne!(render(0.1), render(0.35), "a change at the far end of the chain shows");
+}
+
+#[test]
+fn the_node_cache_tells_accelerators_apart_by_their_tag() {
+    use craft_material_graph::accelerator::Accelerator;
+    use craft_material_graph::context::EvalContext;
+    struct Tagged(&'static str);
+    impl Accelerator for Tagged {
+        fn cache_tag(&self) -> &str {
+            self.0
+        }
+    }
+    let g = Graph::parse("size 16\nnode 1 perlin scale=4\nnode 2 invert in=@1\noutput o 2\n").unwrap();
+    let cache = std::sync::Arc::new(craft_material_graph::graph::NodeCache::new(16));
+    // the nodes a run with the accelerator `tag` takes from the cache
+    let reused = |tag: &'static str| {
+        let ec = EvalContext { accelerator: Some(std::sync::Arc::new(Tagged(tag))), ..EvalContext::default() };
+        let before = cache.stats().0;
+        let r = g.evaluate_all_cached(&ec, 16, &[2], &cache, None, &mut |_| {});
+        assert!(r.errors.is_empty());
+        cache.stats().0 - before
+    };
+    let first = reused("a");
+    let again = reused("a");
+    let other = reused("b");
+    assert!(again > first, "the same accelerator reuses what the first run computed ({first} then {again})");
+    assert!(other < again, "another tag is another result, it reuses less ({other} against {again})");
+}
+
+#[test]
+fn the_node_cache_sees_a_file_a_subgraph_reads_change() {
+    use craft_material_graph::context::EvalContext;
+    let dir = std::env::temp_dir().join(format!("tc_graph_subgraph_file_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("t.png");
+    let text = format!("size 16\nsubgraph s\nnode 1 bitmap file=\"{}\"\noutput o 1\nend\nnode 1 subgraph graph=\"s\"\noutput o 1\n", file.display());
+    let cache = std::sync::Arc::new(craft_material_graph::graph::NodeCache::new(64));
+    let first_pixel = |side: usize, color: [f32; 4]| {
+        std::fs::write(&file, png::encode(side, side, &vec![color; side * side], 8)).unwrap();
+        let r = Graph::parse(&text).unwrap().evaluate_all_cached(&EvalContext::default(), 16, &[1], &cache, None, &mut |_| {});
+        assert!(r.errors.is_empty(), "{:?}", r.errors.iter().next());
+        r.kept[&1].px[0]
+    };
+    let red = first_pixel(4, [1.0, 0.0, 0.0, 1.0]);
+    // (another size, so the file's length differs whatever the clock says)
+    let green = first_pixel(8, [0.0, 1.0, 0.0, 1.0]);
+    assert!(red[0] > 0.9 && red[1] < 0.1, "{red:?}");
+    assert!(green[1] > 0.9 && green[0] < 0.1, "the new file shows, not the cached one: {green:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn named_outputs_of_nodes_with_high_ids_do_not_share_a_cache_entry() {
+    // the ids 3 and 65539 differ only above the low 16 bits
+    let g = Graph::parse(concat!(
+        "size 8\nnode 1 color r=0 g=0.2 b=0\nnode 2 color r=0 g=0.8 b=0\n",
+        "node 3 rgba_split in=@1\nnode 65539 rgba_split in=@2\n",
+        "node 4 invert in=@3.g\nnode 5 invert in=@65539.g\noutput a 4\noutput b 5\n",
+    ))
+    .unwrap();
+    let out = g.evaluate(None).unwrap();
+    assert!((out["a"].px[0][0] - 0.8).abs() < 1e-5, "{:?}", out["a"].px[0]);
+    assert!((out["b"].px[0][0] - 0.2).abs() < 1e-5, "{:?}", out["b"].px[0]);
 }
