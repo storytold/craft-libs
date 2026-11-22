@@ -136,14 +136,12 @@ impl<'a> SwatchesPanel<'a> {
     }
 
     /// The host's tools, shown beside the browser's toolbar.
-    #[must_use]
     pub fn tools(mut self, tools: impl FnMut(&mut Ui) + 'a) -> Self {
         self.tools = Some(Box::new(tools));
         self
     }
 
     /// Where a drop onto the panel lands.
-    #[must_use]
     pub fn drop_zone(mut self, zone: DropZone) -> Self {
         self.drop_zone = Some(zone);
         self
@@ -151,35 +149,30 @@ impl<'a> SwatchesPanel<'a> {
 
     /// The footer's options; `None` leaves the footer out. Without it the footer keeps Delete enabled while a swatch
     /// is selected.
-    #[must_use]
     pub fn footer(mut self, footer: Option<PresetFooterOptions<'a>>) -> Self {
         self.footer = Some(footer);
         self
     }
 
     /// The swatch to scroll into view.
-    #[must_use]
     pub fn reveal(mut self, key: Option<SwatchKey>) -> Self {
         self.reveal = key;
         self
     }
 
     /// Whether the browser shows its search field.
-    #[must_use]
     pub fn search(mut self, on: bool) -> Self {
         self.search = on;
         self
     }
 
     /// The icons trailing each swatch row, through `PresetRow::trailing`.
-    #[must_use]
     pub fn row_icons(mut self, icons: impl Fn(&SwatchKey) -> Vec<(IconSpec<'static>, String)> + 'a) -> Self {
         self.row_icons = Some(Box::new(icons));
         self
     }
 
     /// How picks select: one swatch, or several with Shift and Cmd.
-    #[must_use]
     pub fn select(mut self, mode: SelectMode) -> Self {
         self.select = mode;
         self
@@ -187,7 +180,6 @@ impl<'a> SwatchesPanel<'a> {
 
     /// A host payload of type `P` can be dropped onto a swatch or between swatches at `place` where `accepts` agrees;
     /// the drop comes back as `PresetEvent::Dropped`.
-    #[must_use]
     pub fn takes_drop<P: Send + Sync + 'static>(mut self, place: DropPlace, accepts: impl Fn(&P, &DropAt<SwatchKey>) -> bool + 'a) -> Self {
         // The body can run more than once a pass, and a `PresetDrop` is used up by the browser: it is built per run.
         let accepts = Rc::new(accepts);
@@ -199,7 +191,6 @@ impl<'a> SwatchesPanel<'a> {
     }
 
     /// The host's rows of the row menu for a swatch; the standard rows give way to them.
-    #[must_use]
     pub fn row_items(mut self, items: impl Fn(&SwatchKey) -> Vec<Entry<String>> + 'a) -> Self {
         self.row_items = Some(Box::new(items));
         self

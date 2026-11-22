@@ -158,7 +158,7 @@ impl DisplayTransform {
         }) {
             let Some(src) = scratch.get_mut(..chunk.len()) else { continue };
             src.copy_from_slice(chunk);
-            for px in src.chunks_exact_mut(4) {
+            for px in src.as_chunks_mut::<4>().0 {
                 let a = u32::from(px[3]);
                 if a != 0 && a != 255 {
                     for c in &mut px[..3] {
@@ -170,10 +170,10 @@ impl DisplayTransform {
             if t.convert_u8(src, 4, chunk, 4, true).is_err() {
                 continue;
             }
-            for (d, s) in chunk.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+            for (d, s) in chunk.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
                 let a = u32::from(d[3]);
                 if a == 0 {
-                    d.copy_from_slice(s);
+                    *d = *s;
                 } else if a != 255 {
                     for c in &mut d[..3] {
                         *c = ((u32::from(*c) * a + 127) / 255) as u8;

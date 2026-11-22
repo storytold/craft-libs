@@ -503,7 +503,6 @@ impl<'a> ColorPanel<'a> {
 
     /// The host's working-RGB colour model, whose channels replace the built-in `rgb` rows (wide working spaces show
     /// their own numbers).
-    #[must_use]
     pub fn working_rgb(mut self, model: &'a dyn ColorModel) -> Self {
         self.rgb = Some(model);
         self
@@ -517,7 +516,6 @@ impl<'a> ColorPanel<'a> {
     }
 
     /// How the panel arranges its body; the Photoshop foreground and background arrangement by default.
-    #[must_use]
     pub fn layout(mut self, layout: ColorPanelLayout) -> Self {
         self.layout = layout;
         self
@@ -525,7 +523,6 @@ impl<'a> ColorPanel<'a> {
 
     /// The host's wells (paints) and the active well; `active` replaces `ColorPanelState::background` as the edited
     /// well.
-    #[must_use]
     pub fn wells(mut self, wells: [PairWell; 2], active: Bind<'a, Well>) -> Self {
         self.wells = Some((wells, active));
         self
@@ -533,35 +530,30 @@ impl<'a> ColorPanel<'a> {
 
     /// The colour the rows edit, with its model values; `None` disables the rows (mixed, None, a pattern). The edited
     /// well's colour by default.
-    #[must_use]
     pub fn edited(mut self, color: Option<PickedColor>) -> Self {
         self.edited = Some(color);
         self
     }
 
     /// Which rows show, by the host's model rule; `Mode(state.mode)` by default.
-    #[must_use]
     pub fn shown(mut self, shown: ColorPanelShown) -> Self {
         self.shown = Some(shown);
         self
     }
 
     /// The Recent Colors, a spaced `SwatchPalette` that wraps and drags.
-    #[must_use]
     pub fn recent(mut self, colors: &'a [Srgba]) -> Self {
         self.recent = colors;
         self
     }
 
     /// The payload a Recent Colors chip drags.
-    #[must_use]
     pub fn recent_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(usize) -> Option<P> + Send + Sync + 'static) -> Self {
         self.recent_setup = Some(recent_setup(map));
         self
     }
 
     /// The host's gamut for the out-of-gamut chip and the spectrum.
-    #[must_use]
     pub fn gamut(mut self, gamut: Gamut<'a>) -> Self {
         self.gamut = Some(gamut);
         self

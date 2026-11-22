@@ -240,7 +240,7 @@ impl Component for ColorArea<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let shading = self.shading(&self.base(cx.value()), &cx.style);
+        let shading = self.shading(&self.base(cx.value()), cx.style);
         let picker = self.picker(cx.value(), true, shading).label(cx.label());
         let edit = ui.inner("picker", cx.rect, picker);
         let start = ModelValues::new(self.mode.model().id(), &[]);

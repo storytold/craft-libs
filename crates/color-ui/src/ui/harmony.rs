@@ -155,21 +155,18 @@ impl<'a> HarmonyWheel<'a> {
 
     /// The colour drawn large, the set's base (`None`: none); the selected colour by default, as the Color Guide shows
     /// it. The selected colour, when it is not the base, gets the selection ring.
-    #[must_use]
     pub fn base(mut self, base: Option<usize>) -> Self {
         self.base = Some(base);
         self
     }
 
     /// How the wheel draws its colours; smooth by default.
-    #[must_use]
     pub fn look(mut self, look: DiscLook) -> Self {
         self.look = look;
         self
     }
 
     /// The channel the wheel's radius shows; its slider shows the other. Saturation by default.
-    #[must_use]
     pub fn radius(mut self, radius: DiscRadius) -> Self {
         self.radius = radius;
         self
@@ -336,8 +333,11 @@ trait CellDrag: Send + Sync {
     fn attach<'t>(&self, table: SwatchTable<'t>, cells: Arc<[GuideCell]>) -> SwatchTable<'t>;
 }
 
+/// The host's map from a cell to its payload.
+type CellMap<P> = dyn Fn(&GuideCell) -> Option<P> + Send + Sync;
+
 /// The host's payload map for cells, with the payload type it erases.
-struct CellPayload<P>(Arc<dyn Fn(&GuideCell) -> Option<P> + Send + Sync>, PhantomData<fn() -> P>);
+struct CellPayload<P>(Arc<CellMap<P>>, PhantomData<fn() -> P>);
 
 impl<P: Send + Sync + 'static> CellDrag for CellPayload<P> {
     fn attach<'t>(&self, table: SwatchTable<'t>, cells: Arc<[GuideCell]>) -> SwatchTable<'t> {
@@ -402,6 +402,9 @@ impl GuideCache {
     }
 }
 
+/// The host's colour of a guide cell (`HarmonyPanel::cell_color`).
+type CellColorFn<'a> = Box<dyn Fn(&GuideCell) -> Srgba + 'a>;
+
 /// Color Guide: the base swatch (a click sets the base to the current colour) and the rule `Select`; the harmony strip
 /// (one cell per colour, tooltip the hex); the variation grid, one row per harmony colour from shades to tints (or
 /// cool to warm, muted to vivid), the harmony colour itself in the marked centre column; the grid's end labels. The
@@ -414,7 +417,7 @@ pub struct HarmonyPanel<'a> {
     picked: Bind<'a, HarmonyPicked>,
     base: Srgba,
     limit: Option<&'a [Srgba]>,
-    cell_color: Option<Box<dyn Fn(&GuideCell) -> Srgba + 'a>>,
+    cell_color: Option<CellColorFn<'a>>,
     payload: Option<Arc<dyn CellDrag>>,
 }
 
@@ -425,14 +428,12 @@ impl<'a> HarmonyPanel<'a> {
     }
 
     /// The colour the host shows in each cell (spot tints), drawn instead of the guide's.
-    #[must_use]
     pub fn cell_color(mut self, color: impl Fn(&GuideCell) -> Srgba + 'a) -> Self {
         self.cell_color = Some(Box::new(color));
         self
     }
 
     /// The payload a cell drags, through the swatch table's `drag_payload`.
-    #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&GuideCell) -> Option<P> + Send + Sync + 'static) -> Self {
         self.payload = Some(Arc::new(CellPayload(Arc::new(map), PhantomData)));
         self

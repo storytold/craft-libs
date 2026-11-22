@@ -63,14 +63,12 @@ impl<'a> SwatchPalette<'a> {
     }
 
     /// The gap between the cells, passed on to its `SwatchTable`.
-    #[must_use]
     pub fn spacing(mut self, spacing: SwatchSpacing) -> Self {
         self.spacing = spacing;
         self
     }
 
     /// The payload a cell drags, passed on to its `SwatchTable`.
-    #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
         let map = Arc::new(map);
         self.drag = Some(Arc::new(move |table| {

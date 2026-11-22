@@ -134,7 +134,10 @@ pub struct SwatchPairStyle {
 }
 
 /// What a [`SwatchPair`]'s wells take of a dragged payload: `SwatchPair::accepts`.
-pub struct DropAccepts<'a, P>(Box<dyn Fn(Well, &P) -> bool + 'a>);
+pub struct DropAccepts<'a, P>(Box<AcceptsFn<'a, P>>);
+
+/// The host's test of a payload over a well.
+type AcceptsFn<'a, P> = dyn Fn(Well, &P) -> bool + 'a;
 
 impl<'a, P> DropAccepts<'a, P> {
     /// A test that runs `accepts` on the well and the payload.
