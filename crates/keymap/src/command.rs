@@ -10,13 +10,14 @@ use serde_json::Value;
 pub const MAX_KEY: usize = 256;
 
 /// A command id with the parameters a binding runs it with.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandRef {
     /// The command's id.
     pub id: String,
     /// `Null` for no parameters.
     #[serde(default)]
+    #[plain_data(assume = "a JSON value owns its data and has no interior mutability")]
     pub params: Value,
 }
 

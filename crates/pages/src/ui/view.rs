@@ -18,9 +18,9 @@
 //! if let Some(view) = reply.and_then(|reply| reply.view) { out.adopt(&mut view_state, &view); }
 //! ```
 
-mod pictures;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod pictures;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use self::pictures::{PageMetrics, PagePictures};
 use super::access::AccessDescriber;
@@ -38,6 +38,7 @@ use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContaine
 use craft_ui::primitives::EditorPurpose;
 use craft_ui::primitives::textures::ThumbSource;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::EditSet;
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::DataColor;
 use egui::{Rect, Ui, Vec2, pos2};
@@ -338,6 +339,7 @@ pub struct PageView<'a> {
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
     editor: Option<EditorPurpose>,
+    inactive_edits: EditSet,
     snap: Option<PageSnap>,
     tool_regions: Vec<PageRegion>,
     rulers: bool,
@@ -362,6 +364,7 @@ impl<'a> PageView<'a> {
             describer: None,
             paper,
             editor: None,
+            inactive_edits: EditSet::NONE,
             snap: None,
             tool_regions: Vec::new(),
             rulers: false,
@@ -401,6 +404,13 @@ impl<'a> PageView<'a> {
     #[must_use]
     pub fn editor(mut self, purpose: EditorPurpose) -> Self {
         self.editor = Some(purpose);
+        self
+    }
+
+    /// Edit commands the view's editor part cannot act on right now, forwarded to [`Canvas::inactive_edits`].
+    #[must_use]
+    pub fn inactive_edits(mut self, inactive: EditSet) -> Self {
+        self.inactive_edits = inactive;
         self
     }
 
@@ -455,11 +465,39 @@ impl<'a> PageView<'a> {
     }
 
     fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper, editor, snap, tool_regions, rulers, reach } = self;
+        let PageView {
+            label,
+            source,
+            state,
+            options,
+            navigation,
+            bodies,
+            describer,
+            paper,
+            editor,
+            inactive_edits,
+            snap,
+            tool_regions,
+            rulers,
+            reach,
+        } = self;
 
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
+        // With rulers the canvas shows inside the strips, so its view lies inside them. Its body is clipped to its view
+        // (`ContainerProps::scroll_owner`), so the app's body runs with the clip opened over the strips again, where
+        // its `PageRulers` show. The canvas's own `with_rulers` would show the general rulers there instead.
+        let (canvas_rect, strips_clip) = if rulers {
+            let (top, left, _) = Rulers::strips(ui, rect);
+            let inner = Rect::from_min_max(pos2(left.max.x.min(rect.max.x), top.max.y.min(rect.max.y)), rect.max);
+            (inner, Some(ui.clip_rect().intersect(rect)))
+        } else {
+            (rect, None)
+        };
+        // One rect for the canvas view and the page offset: the layout, the given view and every clamp use the inset one.
+        let full = rect;
+        let rect = canvas_rect;
         let viewport = Size::new(f64::from(rect.width()), f64::from(rect.height()));
         let start = state.clone();
         let build = Geometry { sizes: &sizes, viewport, options, spacing, bodies, cache: RefCell::new(None) };
@@ -471,18 +509,8 @@ impl<'a> PageView<'a> {
         // The app's page geometry, in page points, placed where its page shows in this pass's layout.
         let regions: Vec<ToolRegion> = tool_regions.iter().filter_map(|region| placed_region(region, &geo, &frame)).collect();
         let mut canvas = Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).tool_regions(regions);
-        // With rulers the canvas shows inside the strips, so its view lies inside them. Its body is clipped to its view
-        // (`ContainerProps::scroll_owner`), so the app's body runs with the clip opened over the strips again, where
-        // its `PageRulers` show. The canvas's own `with_rulers` would show the general rulers there instead.
-        let (canvas_rect, strips_clip) = if rulers {
-            let (top, left) = Rulers::strips(ui, rect);
-            let inner = Rect::from_min_max(pos2(left.max.x.min(rect.max.x), top.max.y.min(rect.max.y)), rect.max);
-            (inner, Some(ui.clip_rect().intersect(rect)))
-        } else {
-            (rect, None)
-        };
         if let Some(purpose) = editor {
-            canvas = canvas.editor(purpose);
+            canvas = canvas.editor(purpose).inactive_edits(inactive_edits);
         }
         if let Some(snap) = &snap {
             canvas = canvas.snap(placed_snap(snap, &geo, &frame));
@@ -498,7 +526,7 @@ impl<'a> PageView<'a> {
             let body_rect = match strips_clip {
                 Some(clip) => {
                     ui.set_clip_rect(clip);
-                    Rect::from_min_max(rect.min, cx.rect.max)
+                    Rect::from_min_max(full.min, cx.rect.max)
                 }
                 None => cx.rect,
             };
@@ -706,8 +734,6 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let mut mem = cx.memory::<Memory>().clone();
     let (vw, vh) = (build.viewport.width, build.viewport.height);
     let count = build.sizes.len();
-    let spacing = build.spacing;
-
     // The layout the canvas was given its view for: what this pass draws, whatever the pass makes of the state.
     let drawn = build.of(&state);
     let drawn_frame = Frame::of(&drawn);
@@ -804,9 +830,23 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         geo = build.of(&state);
         state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
         want.1 = match geo.layout.rects.get(state.current) {
+            // A point inside the page goes to the view's top. The page's own top puts the view's top where what shows
+            // of the row above ends (the document's start for the first row), so the space the layout keeps above the
+            // page shows and nothing of the page before it.
             Some(r) if state.continuous => {
                 let (top, bottom) = geo.layout.bands[state.current];
-                r.y0 + top + fraction * (bottom - top) - spacing.margin
+                let start = r.y0 + top;
+                if fraction > 0.0 {
+                    start + fraction * (bottom - top)
+                } else {
+                    geo.layout
+                        .rects
+                        .iter()
+                        .zip(&geo.layout.bands)
+                        .map(|(r, band)| r.y0 + band.1)
+                        .filter(|&end| end <= start)
+                        .fold(geo.doc.y0, f64::max)
+                }
             }
             _ => geo.doc.y0,
         };

@@ -3,8 +3,8 @@
 
 mod contributors;
 mod credits;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
 pub use credits::{AboutInfo, AboutLink, Contributor, Credits, ModelCredit};
@@ -114,7 +114,8 @@ pub enum AboutTab {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AboutLayout {
-    /// The blurb, the version, the community button and the link row centred, the built-with line faint; OK closes.
+    /// The blurb and the version, then the community button and the link row centred, then the built-with line faint,
+    /// the blocks set apart by the section gap; OK closes.
     #[default]
     Centred,
     /// From the start edge, one item to a line: the app's name as a heading, the version, the blurb, the community
@@ -304,7 +305,7 @@ impl<'a> AboutDialog<'a> {
             }
             let before = kept.tab;
             *view.borrow_mut() = kept;
-            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).show(ui, |ui, _| {
+            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).fill_width().show(ui, |ui, _| {
                 let tab = view.borrow().tab;
                 let app = match tab {
                     AboutTab::App(at) => app_tabs.as_deref_mut().and_then(|tabs| tabs.get_mut(usize::from(at))),
@@ -398,26 +399,32 @@ impl Shown<'_> {
             });
             return;
         }
-        Stack::new().show(ui, |ui, _| {
-            Text::new(info.blurb.clone()).show(ui);
-            Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                if let Some(community) = &info.community
-                    && clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui))
-                {
-                    *link.borrow_mut() = Some(community.url.clone());
-                }
+        // Four blocks set apart by the section gap: the blurb and version at the start edge, the community button and
+        // the link row each centred across the body, the built-with line at the start edge.
+        Stack::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                Text::new(info.blurb.clone()).show(ui);
+                Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
             });
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                for (at, item) in info.links.iter().enumerate() {
-                    if at > 0 {
-                        Text::new("·").shade(Shade::Faint).show(ui);
+            if let Some(community) = &info.community {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    if clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui)) {
+                        *link.borrow_mut() = Some(community.url.clone());
                     }
-                    if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
-                        *link.borrow_mut() = Some(item.url.clone());
+                });
+            }
+            if !info.links.is_empty() {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    for (at, item) in info.links.iter().enumerate() {
+                        if at > 0 {
+                            Text::new("·").shade(Shade::Faint).show(ui);
+                        }
+                        if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
+                            *link.borrow_mut() = Some(item.url.clone());
+                        }
                     }
-                }
-            });
+                });
+            }
             Text::new(info.built_with.clone()).shade(Shade::Faint).show(ui);
         });
     }

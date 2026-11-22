@@ -72,8 +72,10 @@ impl Mount {
 /// its siblings (so a pane can overlay another) and ignores the extent. Otherwise an edge pane takes
 /// [`extent`](Self::extent) along its edge from the room left, or, without an extent, the size it first took, which it
 /// keeps in pane memory until the user resizes it. The central pane fills what the edge panes leave. A pane at a rect
-/// that is as tall as its content (a content-sized embedded shell's body) takes the rect's width, its content's height
-/// from the rect's top, and that room in the flow of its parent.
+/// that is as large as its content along its edge (a content-sized embedded shell's body, a slot sized by its content)
+/// takes the rect's cross extent, its content's extent from the rect's outer edge, and that room in the flow of its
+/// parent: a top or central pane its height from the rect's top, a bottom pane its height from the rect's bottom, a
+/// start or end pane its width from that side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ShellPane {
@@ -85,14 +87,14 @@ pub struct ShellPane {
     pub extent: Option<f32>,
     /// The rect the caller laid the pane out in.
     pub at: Option<Rect>,
-    /// The pane at `at` is as tall as its content.
-    pub(crate) content_height: bool,
+    /// The pane at `at` is as large as its content along its edge.
+    pub(crate) content_extent: bool,
 }
 
 impl ShellPane {
     /// The central pane named `name`.
     pub const fn new(name: &'static str) -> Self {
-        ShellPane { name, edge: PaneEdge::Center, extent: None, at: None, content_height: false }
+        ShellPane { name, edge: PaneEdge::Center, extent: None, at: None, content_extent: false }
     }
 
     /// The pane at `edge`.
@@ -113,17 +115,18 @@ impl ShellPane {
         self
     }
 
-    /// The pane at `rect`, as tall as its content from the rect's top, taking that room in its parent's flow.
+    /// The pane in `rect`, as large as its content along its edge from the rect's outer edge, taking that room in its
+    /// parent's flow. `rect` is the room the content may take.
     #[doc(hidden)]
-    pub const fn at_content_height(mut self, rect: Rect) -> Self {
+    pub const fn at_content_extent(mut self, rect: Rect) -> Self {
         self.at = Some(rect);
-        self.content_height = true;
+        self.content_extent = true;
         self
     }
 }
 
 /// The padding tier of a body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Pad {
     /// No padding.
@@ -717,7 +720,7 @@ pub enum Gap {
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
 /// of a menu touch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InMenu(pub bool);
 
@@ -725,6 +728,19 @@ impl EnvValue for InMenu {
     fn root() -> Self {
         InMenu(false)
     }
+}
+
+/// The bracket a `Row` draws from the labelled rows of its first child to the child after them (Image Size's width and
+/// height to their chain): a tick from each of the first and the last row's controls to the middle child's centre
+/// line, joined along that line. The middle child sits halfway between the two controls. The value is the link's
+/// state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Bracket {
+    /// The rows are linked: the bracket is drawn.
+    Linked,
+    /// The rows are not linked: the middle child keeps its place, with no bracket.
+    Unlinked,
 }
 
 /// What a container or collection adds to `Common`. A builder added here is added to the forwarder list in
@@ -777,6 +793,10 @@ pub struct ContainerProps {
     pub body_gap: Gap,
     /// The least width of the content, from a size role; the content may be wider.
     pub least_width: Option<LeastWidth>,
+    /// The least height of an unwrapped `Row` body's line, in points: the line is at least this high, as if a child of
+    /// more than one line this high stood in it, so the children that fill the line's height take at least it. Other
+    /// layouts ignore it.
+    pub least_height: Option<f32>,
     /// The line length of the body's paragraphs while the container takes its width from its content, from a size role.
     pub wrap_width: Option<WrapWidth>,
     /// A divider along the inner edge of a container mounted as an edge pane (`Mount::Pane` at an edge): the edge that
@@ -820,6 +840,9 @@ pub struct ContainerProps {
     pub label_column: bool,
     /// How the labelled rows under the container show their labels; `None` keeps the scheme of the scope.
     pub labels: Option<LabelScheme>,
+    /// The bracket an unwrapped `Row` placed from its start draws from its first child's labelled rows to the child
+    /// after them; any other body draws none.
+    pub bracket: Option<Bracket>,
     /// The component whose memory holds the container's shown memory and its layer's bookkeeping, when it is another:
     /// the body of a popup an `overlay` hook shows belongs to the component that shows it.
     pub(crate) owner: Option<egui::Id>,
@@ -851,6 +874,7 @@ impl ContainerProps {
             && self.collapse == other.collapse
             && self.body_gap == other.body_gap
             && self.least_width == other.least_width
+            && self.least_height == other.least_height
             && self.wrap_width == other.wrap_width
             && self.child_size == other.child_size
             && self.child_glyphs == other.child_glyphs
@@ -860,6 +884,7 @@ impl ContainerProps {
             && self.outer_edit == other.outer_edit
             && self.collection_body == other.collection_body
             && self.labels == other.labels
+            && self.bracket == other.bracket
     }
 
     /// Props with every field at its default.
@@ -883,6 +908,7 @@ impl ContainerProps {
             collapse: None,
             body_gap: Gap::Row,
             least_width: None,
+            least_height: None,
             wrap_width: None,
             edge_rule: false,
             child_size: None,
@@ -901,6 +927,7 @@ impl ContainerProps {
             collection_body: false,
             label_column: false,
             labels: None,
+            bracket: None,
             owner: None,
         }
     }
@@ -1023,6 +1050,12 @@ impl ContainerProps {
         self
     }
 
+    /// The least height of an unwrapped `Row` body's line ([`least_height`](Self::least_height)).
+    pub const fn least_height(mut self, points: f32) -> Self {
+        self.least_height = Some(points);
+        self
+    }
+
     /// The line length of the body's paragraphs while the container takes its width from its content, from a size role.
     pub const fn wrap_width(mut self, wrap: WrapWidth) -> Self {
         self.wrap_width = Some(wrap);
@@ -1119,6 +1152,12 @@ impl ContainerProps {
     /// their mark and icon columns through it.
     pub const fn label_column(mut self, on: bool) -> Self {
         self.label_column = on;
+        self
+    }
+
+    /// The bracket of a `Row` from its first child's labelled rows to the child after them ([`bracket`](Self::bracket)).
+    pub const fn bracket(mut self, bracket: Bracket) -> Self {
+        self.bracket = Some(bracket);
         self
     }
 

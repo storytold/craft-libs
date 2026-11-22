@@ -4,8 +4,8 @@
 //! list: folders open and close with Left, Right, Enter and a click, and an item is picked with Enter or a click.
 //! Typing lists the items whose path holds every typed word instead of the tree.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::SelectFace;
 use super::face::toggle_on_key;

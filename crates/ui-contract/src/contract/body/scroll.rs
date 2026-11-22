@@ -31,6 +31,14 @@ pub const STRIP_FORWARD: PartKey = PartKey::new("body_scroll_strip_forward");
 /// Rows per second a region scrolls at while the pointer rests on one of its strips, in rows a control high.
 const STRIP_ROWS_PER_SECOND: f32 = 24.0;
 
+/// The child the scroll position of the scrolling body `body` is named by (`lazy::Anchor`), for trials.
+#[cfg(feature = "testing")]
+pub(crate) fn anchor_of(ctx: &Context, body: Id) -> Option<Id> {
+    crate::runtime::memory::with_session::<ScrollState, _>(ctx, crate::runtime::memory::sub(body, "scroll"), |state| {
+        state.anchor.map(|anchor| anchor.child)
+    })
+}
+
 /// The height of a scroll strip.
 pub(super) fn scroll_strip_height(tokens: &UiTokens) -> f32 {
     tokens.size.control.sm
@@ -187,7 +195,7 @@ impl BodyHooks<'_> {
             let content = Vec2::new(if scroll.horizontal_on() { ex } else { view.width() }, if scroll.vertical_on() { ey } else { view.height() });
             let offset = Vec2::new(self.offset.x as f32, self.offset.y as f32);
             let background = surface_style(tokens, SurfaceKind::under(own_surface(props, cx), env.surface)).fill;
-            ui.painter().extend(ScrollBar::fades(&look, view, HiddenContent::new(content, view.size(), offset, rtl), background));
+            ui.painter().extend(ScrollBar::fades(view, HiddenContent::new(content, view.size(), offset, rtl), background));
         }
         if let Some(view) = self.view {
             use crate::contract::Pointer as _;

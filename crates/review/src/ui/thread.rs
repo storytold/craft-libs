@@ -6,10 +6,10 @@
 //! ```
 
 mod mention;
-mod pins;
-mod popover;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod pins;
+pub(crate) mod popover;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use mention::{insert_mention, mention_matches, mention_query};
 pub use pins::{CommentPin, CommentPins, CommentPinsOutput, PinCluster, PinMove, cluster};

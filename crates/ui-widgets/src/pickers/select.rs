@@ -16,6 +16,7 @@ use crate::contract::{
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupHandle, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _, step_stop, step_stops,
 };
+use crate::layout_components::Row;
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::menu::Menu;
 use crate::primitives::ContentPainterCx;
@@ -31,8 +32,8 @@ use craft_theme::{Stateful, States};
 use egui::{Rect, Ui, Vec2};
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The part that shows the face over the whole field and opens the list on a click.
 const FACE: PartKey = PartKey::new("face");
@@ -318,7 +319,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             let list = ui.scope_id().with("options");
             let mut query = String::new();
             if searchable || header_menu.is_some() {
-                ui.horizontal(|ui| {
+                let _ = Row::new().show(ui, |ui, _| {
                     if searchable {
                         query = search::show(ui, body, popup, cx, &name, list);
                     }

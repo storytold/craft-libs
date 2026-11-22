@@ -13,15 +13,16 @@ pub mod ghost;
 mod group;
 mod held;
 mod hosted;
-mod items;
-mod label;
+pub(crate) mod items;
+pub(crate) mod label;
 mod lazy;
-#[cfg(feature = "testing")]
-mod level;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
+pub(crate) mod level;
+#[cfg(feature = "suite")]
 mod level_table;
 mod looks;
 mod memo;
+mod memo_view;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -52,22 +53,24 @@ pub use crate::runtime::pending::{Job, Pending, Progress};
 #[doc(hidden)]
 pub use body::REORDER_BAND;
 #[doc(hidden)]
+pub use body::grip_band;
 pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};
 pub use collection::{
     ActivateOn, CollectionEvent, CollectionProps, CollectionResponse, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRemove,
     ColumnRequest, ColumnSort, ColumnSpec, ContextMenuRequest, DragPayload, DropAt, DropKind, DropPayload, DropPlace, EdgePress, HeaderMenuRequest,
-    ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed, RowState,
-    SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
+    HoverLead, ItemKeys, LeadOnOpen, LeadSource, ListDrag, OpenChange, PendingDrop, Rename, ReorderMove, ReorderRule, RowHeight, RowPressed,
+    RowState, SelectMode, ShownRow, SpaceAction, ToggleColumn, ToggleEdit,
 };
 #[doc(hidden)]
 pub use container::InBar;
 #[doc(hidden)]
 pub use container::InMenu;
 pub use container::{
-    BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
-    Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
+    BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
+    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope,
+    WrapWidth,
 };
 pub use craft_tracked::{PlainData, Revision, Tracked};
 pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
@@ -92,23 +95,21 @@ pub use label::colon_of;
 pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
 pub use lazy::Lazy;
 #[doc(hidden)]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
 pub use memo::{MemoKey, MemoProps, Stateless};
+pub use memo_view::{MemoView, Outbox};
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
 pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
 #[doc(hidden)]
-#[cfg(feature = "testing")]
-pub use registry::registrations;
-#[doc(hidden)]
 pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, PatternKind, PatternProbe, Probe, Registration, ShowEntry};
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
@@ -121,7 +122,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
@@ -355,6 +356,12 @@ pub trait Component: Meta + Sized {
     /// Whether the component or its parts can take key focus: `false` skips the stop registration of step 7, except
     /// for the roving group of a body the shape declares.
     const STOPS: bool = true;
+    /// The focus scope a leaf runs in, as `ContainerProps::focus` gives a container's: the leaf's own stop and its
+    /// parts lie inside it, and `FocusPolicy::NONE` (the default) opens none. A scope that restores
+    /// (`FocusPolicy::TAB_LAYER`) makes the stop focus came from its opener, so focus goes back there when the leaf
+    /// goes away with focus inside (a canvas text editor hands it back to the canvas). Containers and collections take
+    /// their scope from their props, not from this.
+    const FOCUS_SCOPE: crate::runtime::focus::FocusPolicy = crate::runtime::focus::FocusPolicy::NONE;
     /// Keys the focused component keeps from egui and the shortcut dispatcher.
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(Self::INPUT);
     /// The keys this instance keeps in its current state. The default is `KEYS`; a component whose key use depends
@@ -653,7 +660,8 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Adjusts the item the closure built for a row, from the row's state.
+    /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
+    /// makes, under the row-hook contract on `ItemCx`.
     fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r> {
         item
     }

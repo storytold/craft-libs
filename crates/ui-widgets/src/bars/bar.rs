@@ -11,7 +11,7 @@ use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
 use craft_behavior::{IconId, Metrics, NavShape, Roving, Sense};
 use craft_theme::ControlSize;
 use egui::{Response, Ui};
@@ -21,7 +21,7 @@ use std::num::NonZeroU8;
 type TrailingFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 
 /// What a bar is for; it picks the bar's role, spacing and name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum BarKind {
     /// A strip of tools or commands.
@@ -89,6 +89,10 @@ impl Outcome for BarOutput {
 /// `Divider::vertical()`; it shows only with the member after it. A bar with `commit_cancel` ends with a
 /// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
 /// members' line; they run `BarCommands`.
+///
+/// The bar is a plain container; its members are the host's. A host memoizes them with a `MemoView` inside the body
+/// closure, over props that hold what the members read (`BarItem`, `StatusMessage`, `StatusProgress` and the other
+/// member types derive `MemoProps`), and sends the members' events through an `Outbox`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -124,6 +128,9 @@ impl<'a> Bar<'a> {
             .scroll(Scroll::horizontal().overlay());
         if kind == BarKind::Status {
             props = props.live(Politeness::Polite);
+        }
+        if kind == BarKind::Options {
+            props = props.child_glyphs(GlyphRole::Tool);
         }
         Bar { common: Common::new(), props, kind, commit_cancel: None, committed: false, cancelled: false, trailing: None }.label(label)
     }

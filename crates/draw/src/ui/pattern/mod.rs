@@ -5,31 +5,41 @@
 use craft_theme::Srgba;
 
 mod dialog;
-mod editor;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod editor;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 
 pub use dialog::PatternFillDialog;
-pub use editor::{PatternFillEditor, PatternFillOutput, SwatchPainter};
+pub use editor::{PatternFillEditor, PatternFillOutput};
 pub use words::PatternWords;
 
 /// A pattern the editor offers: the app's pattern library (PhotoCraft's Patterns, a bitmap each)
-/// or its preset patterns (PowerPoint's "pct25", "dkHorz", …). The app paints each swatch's tile
-/// ([`PatternFillEditor::thumbnails`]).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// or its preset patterns (PowerPoint's "pct25", "dkHorz", …), with the app's picture of its tile
+/// ([`picture`](Self::picture)); a swatch without one shows its name.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PatternSwatch {
     /// The app's id, which [`PatternFillOptions::pattern`] holds.
     pub id: String,
     /// The name in the tooltip and for a screen reader ("Bubbles", "25 %").
     pub name: String,
+    /// The tile's picture, a texture the app made: the picker's field and cells and the preset grid show it.
+    #[memo_props(hash = "a texture handle: the texture store keeps one picture under it")]
+    pub picture: Option<egui::TextureId>,
 }
 
 impl PatternSwatch {
     /// A swatch of the app's pattern `id`, named `name`.
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
-        PatternSwatch { id: id.into(), name: name.into() }
+        PatternSwatch { id: id.into(), name: name.into(), picture: None }
+    }
+
+    /// This swatch with its tile's `picture`.
+    #[must_use]
+    pub fn with_picture(mut self, picture: egui::TextureId) -> Self {
+        self.picture = Some(picture);
+        self
     }
 }
 

@@ -2,7 +2,7 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
+    Access, BodyCx, Bracket, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
     LeastWidth, Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
 };
 use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
@@ -10,8 +10,8 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of the layout components: no minimum size, and padding only at the start edge, one
 /// `space.pad.regular` per level of indent.
@@ -59,7 +59,7 @@ macro_rules! layout_component {
     ($(#[$doc:meta])* $name:ident, $key:ident, [$($fwd:ident),*] $(, <$life:lifetime> { $($field:ident: $ty:ty),* })?) => {
         $(#[$doc])*
         #[derive(crate::contract::Component, crate::contract::Props)]
-        #[component(container)]
+        #[component(container, unregistered)]
         pub struct $name $(<$life>)? {
             #[common]
             common: Common,
@@ -189,6 +189,13 @@ macro_rules! layout_component {
     };
 }
 
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Stack<'static>; container, purpose = "Children one under another");
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Row; container, purpose = "Children side by side");
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Grid; container, purpose = "Children row-major over a column list: a child in flow takes the next cell");
+
 layout_component!(
     /// Children one under another. A header and a footer sit outside the body: the footer stays in the room under
     /// a collection that fills it.
@@ -205,6 +212,11 @@ layout_component!(
 );
 layout_component!(
     /// Children row-major over a column list: a child in flow takes the next cell.
+    ///
+    /// The cells are the grid's craft children. An egui container shown in the body (`ui.horizontal`, an
+    /// `egui::Grid`) is no cell: egui places it below the cells placed so far, and its children are not cells. The
+    /// rows after it are placed over it, since the grid's rows do not count it: show it as the last child, or put it
+    /// in a craft body (`Row`), which takes a cell.
     Grid,
     GridStyleKey,
     []
@@ -316,6 +328,22 @@ impl Row {
     /// Where the block of children sits along the row.
     pub fn align(mut self, align: RowAlign) -> Self {
         self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).align(align);
+        self
+    }
+
+    /// The row's line is at least `points` high, as a child of more than one line that high would make it: the
+    /// children that fill the line's height take at least it. A row of command groups keeps the height of its
+    /// rows of controls while its groups are shorter. Ignored by a row that wraps.
+    pub fn least_height(mut self, points: f32) -> Self {
+        self.props = self.props.least_height(points);
+        self
+    }
+
+    /// Links the labelled rows of the first child to the child after them (width and height to their chain): that
+    /// child sits halfway between the first and the last row's controls, and `Bracket::Linked` draws the bracket
+    /// from the controls to it.
+    pub fn bracket(mut self, bracket: Bracket) -> Self {
+        self.props = self.props.bracket(bracket);
         self
     }
 }

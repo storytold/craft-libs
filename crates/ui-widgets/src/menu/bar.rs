@@ -9,14 +9,15 @@
 //!
 //! Keys follow spec 9.7: Alt and a letter open the menu with that mnemonic (also while another is open). F10 or a
 //! lone Alt closes an open menu; with none open it moves focus to the first title, and the next F10 or lone Alt, an
-//! Escape, or running a row returns focus to where it was. A `&` in a title's words row marks its mnemonic; without
+//! Escape, a shortcut (Space, a canvas's momentary Hand, among them) or running a row returns focus to where it was.
+//! Down and Enter open the focused title's menu; Space opens none. A `&` in a title's words row marks its mnemonic; without
 //! one the title takes the first letter no earlier title holds. The mnemonic is underlined while Alt is held.
 //!
 //! The Help menu can start with a search field over a list of `HelpEntry` commands: typing lists up to `search::MAX_RESULTS`
 //! matches by label, English label, menu path or command id, each as a command row with its path as detail.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;
@@ -37,7 +38,7 @@ use crate::runtime::words::common::CommonWords;
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook, TextLook, TypeRole};
 use crate::text::TextField;
 use craft_behavior::fit::{FitItem, FitKeep, fit_items};
-use craft_behavior::{Arrows, Axis, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Roving, Sense};
+use craft_behavior::{Arrows, Flow, Intent, Metrics, NavMove, NavShape, PartKey, PartRef, Proposal, Roving, Sense};
 use craft_host::target::MenuPlacement;
 use craft_keymap::mnemonic;
 use craft_theme::Flags;
@@ -237,8 +238,10 @@ struct BarState {
 #[derive(Clone, Debug, Default)]
 struct Query(String, u32, bool);
 
+craft_ui_contract::stays!(BarFact);
+
 /// What the bar published for `is_open` and `is_focused`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BarFact {
     open: bool,
     focused: bool,
@@ -426,7 +429,10 @@ impl<'a> MenuBar<'a> {
 
 impl Component for MenuBar<'_> {
     const ROLE: Role = Role::MENU_BAR;
-    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
+    // Enter and Down open the focused title's menu; Space does not. Space is a canvas's momentary Hand, so it goes on
+    // to the app's shortcuts, and a shortcut pressed on the bar gives the keyboard back to where it was.
+    const KEYS: crate::runtime::focus::KeyUse =
+        crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves().with_activate(crate::runtime::focus::ActivateKeys::Enter);
     type Style = MenuBarStyle;
     type Output = MenuBarOutput;
 
@@ -434,18 +440,15 @@ impl Component for MenuBar<'_> {
         MenuBarStyle { metrics: Metrics::new() }
     }
 
-    /// Every title's width when the room allows it; the bar fills the row, so what is left over is room for the
-    /// overflow.
+    /// Every title's width; at its least (`Proposal::Min`) the width of the "…" title alone. A row that has less room
+    /// than every title needs narrows the bar, and the titles that no longer fit go into "…".
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         if !Self::in_window(&cx.env) {
             return Vec2::ZERO;
         }
-        let (widths, height, _) = self.widths(cx);
-        Vec2::new(widths.iter().sum(), height)
-    }
-
-    fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
+        let (widths, height, more) = self.widths(cx);
+        let width = if cx.proposal == Proposal::Min { more } else { widths.iter().sum() };
+        Vec2::new(width, height)
     }
 
     fn sense(&self) -> Sense {

@@ -30,7 +30,7 @@ mod drag;
 mod model;
 mod spec;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use contour::{Contour, ContourPoint};
 pub use draft::LayerStyleDraft;

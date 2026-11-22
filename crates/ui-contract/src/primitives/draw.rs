@@ -30,7 +30,7 @@ pub enum PaintShape {
 }
 
 /// A line width from the theme, so content never picks a literal one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum StrokeWidth {
     /// One physical pixel.
@@ -315,7 +315,8 @@ impl<'a> Draw<'a> {
     pub fn doc(&self, rect: Rect, text: &DocText<'_>) -> TextLayout {
         let text = DocText { wrap: Some(rect.width()), ..*text };
         let layout = text.layout(self.painter.ctx(), self.env.tokens, self.text_direction);
-        let layout = TextLayout { galley: super::text::anchored_at_start(layout.galley.clone()), ..layout };
+        let anchored = super::text::anchored_at_start(layout.galley.clone());
+        let layout = layout.with_galley(anchored);
         let share = super::text::free_room_before(text.align, self.text_direction == Direction::Rtl);
         let x = rect.left() + (rect.width() - layout.size().x).max(0.0) * share;
         // The runs' colours are data.
@@ -366,7 +367,7 @@ impl<'a> Draw<'a> {
         let mut record = self.record.borrow_mut();
         record.baseline.get_or_insert(pos.y + layout.first_baseline);
         if layout.elided && record.elided.is_none() {
-            record.elided = Some(layout.full.clone());
+            record.elided = Some(layout.full().to_owned());
         }
         drop(record);
         super::text::note_painted(self.painter.ctx(), layout);
@@ -399,7 +400,15 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
-            _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon, self.data != DataMode::Full),
+            _ => super::icon::paint(
+                self.painter,
+                self.env.tokens,
+                self.env.direction,
+                rect,
+                icon,
+                self.data != DataMode::Full,
+                self.env.ink == Ink::OnDark,
+            ),
         }
         match icon.badge {
             Some(super::IconMark::Dot(badge)) => {
@@ -484,6 +493,29 @@ impl<'a> Draw<'a> {
     /// colour or width.
     pub fn rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2) {
         self.painter.extend(super::rule::Rule::shapes(look, from, to, self.painter.pixels_per_point()));
+    }
+
+    /// Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a dotted line.
+    pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32) {
+        self.painter.extend(super::rule::Rule::dotted(look, from, to, gap, self.painter.pixels_per_point()));
+    }
+
+    /// Paints the line `look` from `from` to `to` as ticks `across` points long, `gap` points apart (`Rule::ticks`):
+    /// a grip's row of marks.
+    pub fn ticked_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32, across: f32) {
+        self.painter.extend(super::rule::Rule::ticks(look, from, to, gap, across, self.painter.pixels_per_point()));
+    }
+
+    /// Paints `count` upright ticks of `look` centred on `centre`, side by side on a level line, `gap` points apart and
+    /// `across` points tall (`Rule::ticks`): a grip's row of marks, `count` of them at every display scale.
+    pub fn grip_ticks(&self, look: &crate::style::RuleLook, centre: Pos2, count: u16, gap: f32, across: f32) {
+        let ppp = self.painter.pixels_per_point().max(f32::EPSILON);
+        let (side, gap_px) = (look.width.pixels(ppp), (gap * ppp).round().max(1.0));
+        // The run `Rule::ticks` fits exactly `count` marks into: their sides, the gaps between them and the one free
+        // pixel it keeps.
+        let length = f32::from(count) * side + f32::from(count.saturating_sub(1)) * gap_px + 1.0;
+        let half = egui::vec2(length / ppp / 2.0, 0.0);
+        self.ticked_rule_with(look, centre - half, centre + half, gap, across);
     }
 
     /// Paints a surface of `kind` (tracks, plot wells).

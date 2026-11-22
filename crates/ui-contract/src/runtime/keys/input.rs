@@ -583,12 +583,47 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 /// down).
 #[doc(hidden)]
 pub fn down(ctx: &Context) -> Vec<Key> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.down.clone())
+}
+
+/// The key state, as the tracked input `Keys` compares it: the keys down, whether a key arrived and Caps Lock.
+pub(crate) fn keys_state(ctx: &Context) -> (Vec<Key>, bool, bool) {
+    let (down, keyed) = current(ctx, |stage| (stage.down.clone(), stage.keyed));
+    (down, keyed, crate::runtime::lock_keys::caps_on(ctx))
+}
+
+/// Counts an input of `viewport` whose `events` hold one sent to the focus: a key, text, IME, clipboard or AccessKit
+/// action event (`Input::Sent`). Read before any stage takes events, so the IME's and the ones a shortcut takes count.
+pub(crate) fn count_sent(ctx: &Context, viewport: ViewportId, events: &[Arrived]) {
+    let sent = events.iter().any(|arrived| {
+        matches!(
+            arrived.event,
+            egui::Event::Key { .. }
+                | egui::Event::Text(_)
+                | egui::Event::Ime(_)
+                | egui::Event::Copy
+                | egui::Event::Cut
+                | egui::Event::Paste(_)
+                | egui::Event::PasteImage(_)
+                | egui::Event::MiddleClickPaste { .. }
+                | egui::Event::AccessKitActionRequest(_)
+        )
+    });
+    if sent {
+        with(ctx, viewport, |stage| stage.sent += 1);
+    }
+}
+
+/// How many inputs of the running viewport held an event sent to the focus: its value moves with each one.
+pub(crate) fn sent(ctx: &Context) -> u64 {
+    current(ctx, |stage| stage.sent)
 }
 
 /// Whether the running viewport's input hook read a key press, typed text or a clipboard event in this pass, the ones
 /// the key stage took from egui's input included: an app that redraws state after input asks this, not egui's events.
 pub fn keyed(ctx: &Context) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.keyed)
 }
 

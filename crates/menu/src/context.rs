@@ -15,7 +15,7 @@ use craft_ui::runtime::pointer;
 use craft_ui::runtime::windows::{WindowAction, WindowHost};
 use egui::{Ui, ViewportId};
 
-use crate::bar::{EnglishHook, Labeled, keymap_platform};
+use crate::bar::keymap_platform;
 use crate::layout::Target;
 use crate::model::{Builtin, Item, ItemKind, Node};
 
@@ -26,25 +26,44 @@ use crate::model::{Builtin, Item, ItemKind, Node};
 /// AppKit's own items ([`Node::Standard`]) are left out. The chord of a row without a binding is the item's own
 /// shortcut, written for the shell's operating system.
 pub fn rows(ui: &mut Ui, nodes: &[Node]) {
-    Rows::new(Target::of_shell(Env::of(ui).view().shell())).show(ui, nodes);
+    let rows = Rows::new(Target::of_shell(Env::of(ui).view().shell()));
+    let labels = rows.level_labels(nodes, rows.platform(ui));
+    rows.show(ui, nodes, &labels);
 }
 
-/// How the rows of a menu are written: the target that names the shortcuts, the app's English labels and its
-/// preferred mnemonic letters.
+/// The text a menu level shows for its nodes, parallel to them: what [`LevelLabels::build`] works out once for a
+/// model, so a pass that shows the menu again writes none of it.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LevelLabels {
+    rows: Vec<RowLabels>,
+}
+
+/// One node's text: its label as the menu shows it (markers escaped, mnemonic marked), the item's shortcut text, and the
+/// text of a submenu's own level. Separators and AppKit's items hold empty text.
+#[derive(Debug, Default, PartialEq)]
+struct RowLabels {
+    label: String,
+    shortcut: Option<String>,
+    children: LevelLabels,
+}
+
+/// The text of a bar: its titles as the bar shows them and the text of each menu's rows.
+#[derive(Debug, PartialEq)]
+pub(crate) struct BarLabels {
+    pub(crate) titles: Vec<String>,
+    pub(crate) menus: Vec<LevelLabels>,
+}
+
+/// How the rows of a menu are written: the target that names the shortcuts and the app's preferred mnemonic
+/// letters.
 pub(crate) struct Rows<'a> {
     target: Target,
-    english: Option<&'a EnglishHook<'a>>,
     preferred: &'a [(&'a str, char)],
 }
 
 impl<'a> Rows<'a> {
     pub(crate) fn new(target: Target) -> Self {
-        Rows { target, english: None, preferred: &[] }
-    }
-
-    pub(crate) fn english(mut self, english: Option<&'a EnglishHook<'a>>) -> Self {
-        self.english = english;
-        self
+        Rows { target, preferred: &[] }
     }
 
     pub(crate) fn preferred(mut self, preferred: &'a [(&'a str, char)]) -> Self {
@@ -87,10 +106,6 @@ impl<'a> Rows<'a> {
         self.preferred.iter().find(|(k, _)| *k == key).map(|(_, c)| *c)
     }
 
-    pub(crate) fn english_of(&self, labeled: Labeled<'_>) -> Option<String> {
-        self.english.and_then(|hook| hook(labeled))
-    }
-
     /// The label a node shows as the menu's sibling, for the preferred letters and the English labels.
     pub(crate) fn node_labels(&self, nodes: &[Node]) -> Vec<String> {
         let shown: Vec<&Node> = nodes.iter().filter(|node| !matches!(node, Node::Separator | Node::Standard { .. })).collect();
@@ -108,8 +123,8 @@ impl<'a> Rows<'a> {
                     _ => "",
                 },
                 |node| match node {
-                    Node::Item(item) => self.english_of(Labeled::Command(&item.command)),
-                    Node::Submenu { label, .. } => self.english_of(Labeled::Title(label)),
+                    Node::Item(item) => item.english.clone(),
+                    Node::Submenu { english, .. } => english.clone(),
                     _ => None,
                 },
             )
@@ -120,12 +135,35 @@ impl<'a> Rows<'a> {
             .collect()
     }
 
-    /// Shows `nodes` as the rows of the menu body `ui` is in.
-    pub(crate) fn show(&self, ui: &mut Ui, nodes: &[Node]) {
+    /// The text of `nodes` and of every submenu below them, with shortcuts written for `platform`.
+    pub(crate) fn level_labels(&self, nodes: &[Node], platform: Platform) -> LevelLabels {
         let labels = self.node_labels(nodes);
-        for (node, label) in nodes.iter().zip(labels) {
+        let rows = nodes
+            .iter()
+            .zip(labels)
+            .map(|(node, label)| match node {
+                Node::Item(item) => {
+                    RowLabels { label, shortcut: item.shortcut.as_ref().map(|chord| chord.display(platform)), children: LevelLabels::default() }
+                }
+                Node::Submenu { children, .. } => RowLabels { label, shortcut: None, children: self.level_labels(children, platform) },
+                Node::Separator | Node::Standard { .. } => RowLabels::default(),
+            })
+            .collect();
+        LevelLabels { rows }
+    }
+
+    /// The text of a whole bar: the titles and each menu's rows.
+    pub(crate) fn bar_labels(&self, menus: &[crate::model::Menu], platform: Platform) -> BarLabels {
+        let titles = self.labels(menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| menu.english.clone());
+        BarLabels { titles, menus: menus.iter().map(|menu| self.level_labels(&menu.children, platform)).collect() }
+    }
+
+    /// Shows `nodes` as the rows of the menu body `ui` is in, with their `labels`.
+    pub(crate) fn show(&self, ui: &mut Ui, nodes: &[Node], labels: &LevelLabels) {
+        for (node, text) in nodes.iter().zip(&labels.rows) {
+            let label = text.label.clone();
             match node {
-                Node::Item(item) => self.item(ui, item, label),
+                Node::Item(item) => self.item(ui, item, label, text.shortcut.clone()),
                 Node::Separator => {
                     Divider::horizontal().show(ui);
                 }
@@ -133,7 +171,7 @@ impl<'a> Rows<'a> {
                     if is_dead(children) {
                         MenuItem::submenu(label).enabled(false).show(ui);
                     } else {
-                        Menu::submenu_row(ui, label, |ui, _| self.show(ui, children));
+                        Menu::submenu_row(ui, label, |ui, _| self.show(ui, children, &text.children));
                     }
                 }
                 Node::Standard { .. } => {}
@@ -141,9 +179,7 @@ impl<'a> Rows<'a> {
         }
     }
 
-    fn item(&self, ui: &mut Ui, item: &Item, label: String) {
-        let platform = self.platform(ui);
-        let shortcut = item.shortcut.as_ref().map(|chord| chord.display(platform));
+    fn item(&self, ui: &mut Ui, item: &Item, label: String, shortcut: Option<String>) {
         match Builtin::of(&item.command) {
             Some(Builtin::Quit) => {
                 if local(ui, item, label, shortcut).ran {
@@ -162,7 +198,7 @@ impl<'a> Rows<'a> {
     }
 
     /// The platform whose key names the shortcut column shows.
-    fn platform(&self, ui: &Ui) -> Platform {
+    pub(crate) fn platform(&self, ui: &Ui) -> Platform {
         keymap_platform(self.target, Env::of(ui).view().shell().os)
     }
 }

@@ -52,6 +52,8 @@ pub struct PaintUi<'a> {
     /// The fade `steps::fade` began (`DisabledLook::Faded`): the faces paint their enabled look, and the children
     /// shown from here lie under the component's veil.
     pub(crate) fade: Option<super::steps::Fade>,
+    /// The composite has a node (`CxCore::node`): its step 16 fills its parts' sub-nodes from the faces' records.
+    pub(crate) node: bool,
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
 }
@@ -161,7 +163,7 @@ impl PaintUi<'_> {
         let env = Env::of(self.ui);
         let mut child = child;
         let under = label::leaf_under(&env, &side, &child, (self.enabled, self.size));
-        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, text: &label, side: &side, under: &under };
+        let at = LeafLabel { id, owner: self.id, parent: Some(self.id), row: rect, egui_cell: false, text: &label, side: &side, under: &under };
         let ctx = self.ui.ctx().clone();
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
@@ -181,12 +183,14 @@ impl PaintUi<'_> {
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
+        // The kids' `Ui` holds no entry of its own: they inherit the env of the composite's `Ui`.
+        let outer = Env::of(parent);
         let kids = self.kids.get_or_insert_with(|| {
             let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
             alloc::child(parent, access::with_parent(builder, self.id))
         });
         let ctx = kids.ctx().clone();
-        let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
+        let env = super::cx::child_env(&outer, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
         // A child shown while the owner's fade runs lies under the owner's veil, so a faded child adds none of its own.
         let env = match self.fade {
             Some(_) => {
@@ -249,15 +253,14 @@ impl PaintUi<'_> {
             flags: self.flags,
             enabled: self.enabled,
             faded: self.fade.is_some(),
+            reported: reported && self.node,
         };
-        let record = run::paint_face(self.ui, self.env, &source, part, face);
+        let (baseline, record) = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();
-        if let Some(baseline) = record.baseline {
+        if let Some(baseline) = baseline {
             own.baseline.get_or_insert(baseline);
         }
-        if reported {
-            own.faces.push(record);
-        }
+        own.faces.extend(record);
     }
 
     /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code

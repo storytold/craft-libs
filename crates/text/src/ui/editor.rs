@@ -23,8 +23,8 @@
 
 mod commands;
 mod edits;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::ops::Range;
 
@@ -40,7 +40,7 @@ use craft_ui::contract::{
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::ClipItem;
 use craft_ui::runtime::env::Label;
-use craft_ui::runtime::focus::KeyUse;
+use craft_ui::runtime::focus::{FocusPolicy, KeyUse};
 use craft_ui::runtime::pending::Pending;
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -461,6 +461,8 @@ impl Component for TextEditor<'_> {
     const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
     /// Escape always ends the session, so the editor keeps it from its row and from the shortcuts while focused.
     const KEYS: KeyUse = KeyUse::CODE.with_claims(&[ESCAPE]);
+    /// When the session ends, focus goes back to the stop it came from (the canvas), not to the stop before the editor.
+    const FOCUS_SCOPE: FocusPolicy = FocusPolicy::TAB_LAYER;
     type Style = TextEditorStyle;
     type Output = TextEditorOutput;
 

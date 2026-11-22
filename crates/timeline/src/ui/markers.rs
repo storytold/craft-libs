@@ -1,8 +1,8 @@
 //! Markers on a ruler or a clip bar, and the Marker dialog (N1.12).
 
-mod dialog;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod dialog;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use dialog::{MarkerDialog, MarkerDialogAction, MarkerDialogResult, MarkerDraft};
 

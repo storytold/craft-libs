@@ -16,8 +16,8 @@ use craft_ui::runtime::focus::{ActivateKeys, FocusShape, KeepKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx};
 use egui::{Color32, Mesh, Pos2, Response, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The disc: a press on it grabs the nearest marker within reach.
 const DISC: PartKey = PartKey::new("disc");
@@ -226,7 +226,8 @@ impl Component for ColorDisc<'_> {
 
     /// A band across the width it is given, as tall as the square that fits it: the picture is centred in it.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::new(cx.picture_width(cx.style.least, f32::INFINITY), cx.picture_width(cx.style.least, cx.style.most))
+        let most = cx.style.most.max(cx.style.least);
+        cx.picture_size(cx.style.least, f32::INFINITY, |width| width.min(most))
     }
 
     fn sense(&self) -> Sense {

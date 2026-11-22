@@ -22,8 +22,11 @@ thread_local! {
     static CHILD_EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
     /// The files hovering over and dropped on the child's window in the next child pass.
     static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<String>)> = const { RefCell::new((Vec::new(), Vec::new())) };
-    /// The window facts every child pass reports.
+    /// The window facts every child opened from the root reports.
     static CHILD_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
+    /// The window facts of each child opened from another child (a popup window): it opens where its builder puts it
+    /// and follows its own commands.
+    static OWN_INFO: RefCell<Vec<(ViewportId, ViewportInfo)>> = const { RefCell::new(Vec::new()) };
     /// The window facts the root reports.
     static ROOT_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
     /// The children whose windows are open: those that ran a pass and are still shown. Like an integration, every pass's
@@ -43,14 +46,30 @@ thread_local! {
 /// Seconds between two frames.
 const FRAME_SECONDS: f64 = 1.0 / 60.0;
 
+/// Runs `f` on the facts `id` reports: its own for a child opened from another child, else the ones every child
+/// opened from the root shares.
+fn with_facts<R>(id: ViewportId, f: impl FnOnce(&mut ViewportInfo) -> R) -> R {
+    let own = OWN_INFO.with(|own| {
+        let mut own = own.borrow_mut();
+        own.iter().position(|(held, _)| *held == id).map(|at| own.swap_remove(at))
+    });
+    match own {
+        Some((_, mut info)) => {
+            let out = f(&mut info);
+            OWN_INFO.with(|own| own.borrow_mut().push((id, info)));
+            out
+        }
+        None => CHILD_INFO.with(|info| f(&mut info.borrow_mut())),
+    }
+}
+
 /// The window system's answer to a move or a resize: the children's facts follow the commands (the fake window
-/// has no decoration, so its inner and outer rects are one). Every child shares one set of facts.
+/// has no decoration, so its inner and outer rects are one). The children opened from the root share one set of facts.
 fn os_applies(id: ViewportId, command: &ViewportCommand) {
     if id == ViewportId::ROOT {
         return;
     }
-    CHILD_INFO.with(|info| {
-        let mut info = info.borrow_mut();
+    with_facts(id, |info| {
         let current = info.outer_rect.or(info.inner_rect).unwrap_or_else(|| Rect::from_min_size(Pos2::ZERO, CHILD_SIZE));
         let moved = match command {
             ViewportCommand::OuterPosition(pos) => Rect::from_min_size(*pos, current.size()),
@@ -75,26 +94,40 @@ fn keep_commands(output: &FullOutput) {
 }
 
 /// The window facts of every window the integration knows: the root and the children that ran, each with the
-/// facts the trial gave it.
-fn all_viewports(child: ViewportInfo) -> egui::ViewportIdMap<ViewportInfo> {
+/// facts the trial gave it or its own.
+fn all_viewports() -> egui::ViewportIdMap<ViewportInfo> {
     let mut all = egui::ViewportIdMap::default();
     all.insert(ViewportId::ROOT, ROOT_INFO.with(|info| info.borrow().clone()));
     CHILDREN.with(|children| {
         for id in children.borrow().iter() {
-            all.insert(*id, child.clone());
+            all.insert(*id, with_facts(*id, |info| info.clone()));
         }
     });
     all
 }
 
-/// Patches the window of `id` with `builder`, as an integration does before the child's pass: the fields that
-/// changed go to the window as commands. The first builder opens the window.
-fn patch_window(id: ViewportId, builder: ViewportBuilder) {
+/// Patches the window of `ids.this` with `builder`, as an integration does before the child's pass: the fields that
+/// changed go to the window as commands. The first builder opens the window; a window opened from another child opens
+/// where the builder puts it, with focus unless the builder opens it inactive.
+fn patch_window(ids: egui::ViewportIdPair, builder: ViewportBuilder) {
+    let id = ids.this;
     let commands = BUILDERS.with(|kept| {
         let mut kept = kept.borrow_mut();
         match kept.iter_mut().find(|(held, _)| *held == id) {
             Some((_, window)) => window.patch(builder).0,
             None => {
+                if ids.parent != ViewportId::ROOT {
+                    let rect = Rect::from_min_size(builder.position.unwrap_or(Pos2::ZERO), builder.inner_size.unwrap_or(CHILD_SIZE));
+                    let scale = CHILD_INFO.with(|info| info.borrow().native_pixels_per_point);
+                    let info = ViewportInfo {
+                        focused: Some(builder.active.unwrap_or(true)),
+                        inner_rect: Some(rect),
+                        outer_rect: Some(rect),
+                        native_pixels_per_point: scale,
+                        ..ViewportInfo::default()
+                    };
+                    OWN_INFO.with(|own| own.borrow_mut().push((id, info)));
+                }
                 kept.push((id, builder));
                 Vec::new()
             }
@@ -129,12 +162,12 @@ impl egui::DroppedFile for DroppedPath {
 }
 
 fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
-    patch_window(viewport.ids.this, viewport.builder);
+    patch_window(viewport.ids, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
     let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
     let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     let dropped_files = dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
-    let mut info = CHILD_INFO.with(|info| info.borrow().clone());
+    let mut info = with_facts(viewport.ids.this, |info| info.clone());
     info.parent = Some(viewport.ids.parent);
     let mut input = RawInput {
         viewport_id: viewport.ids.this,
@@ -152,7 +185,8 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
             children.push(viewport.ids.this);
         }
     });
-    input.viewports = all_viewports(info);
+    input.viewports = all_viewports();
+    input.viewports.insert(viewport.ids.this, info);
     let mut output = ctx.run_ui(input, |ui| callback(ui));
     output.textures_delta.clear();
     keep_commands(&output);
@@ -162,6 +196,45 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
 fn keep_tree(output: &mut FullOutput, viewport: ViewportId) {
     let tree = tree_of(output);
     TREES.with(|kept| kept.borrow_mut().push((viewport, tree)));
+}
+
+/// An OS window as macOS runs egui's window commands on it through winit, in desktop points with y down: a position
+/// moves the frame's top-left corner at its current size (`setFrameOrigin`); a size keeps the frame's bottom-left
+/// corner (`setContentSize`), so a change of height moves the top edge; the largest size in force clamps the current
+/// size the same way, and every size the window takes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AppKitWindow {
+    /// Where the window is.
+    pub rect: Rect,
+    max: Option<Vec2>,
+}
+
+impl AppKitWindow {
+    /// A window at `rect` whose largest size is `max`, the limit the commands of earlier frames left in force.
+    pub fn new(rect: Rect, max: Option<Vec2>) -> Self {
+        AppKitWindow { rect, max }
+    }
+
+    /// Runs `commands` in order.
+    pub fn run(&mut self, commands: &[ViewportCommand]) {
+        for command in commands {
+            match command {
+                ViewportCommand::OuterPosition(to) => self.rect = Rect::from_min_size(*to, self.rect.size()),
+                ViewportCommand::InnerSize(size) => self.content_size(*size),
+                ViewportCommand::MinInnerSize(least) => self.content_size(self.rect.size().max(*least)),
+                ViewportCommand::MaxInnerSize(most) => {
+                    self.max = Some(*most);
+                    self.content_size(self.rect.size());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn content_size(&mut self, size: Vec2) {
+        let size = self.max.map_or(size, |max| size.min(max));
+        self.rect = Rect::from_min_size(Pos2::new(self.rect.min.x, self.rect.max.y - size.y), size);
+    }
 }
 
 /// What a frame sent out.
@@ -205,6 +278,7 @@ impl Windows {
         CHILD_EVENTS.with(|events| events.borrow_mut().clear());
         CHILD_FILES.with(|files| *files.borrow_mut() = Default::default());
         CHILD_INFO.with(|info| *info.borrow_mut() = ViewportInfo::default());
+        OWN_INFO.with(|own| own.borrow_mut().clear());
         CHILDREN.with(|children| children.borrow_mut().clear());
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
@@ -215,6 +289,12 @@ impl Windows {
     /// The window facts child passes report from now on.
     pub fn child_info(&self, info: ViewportInfo) {
         CHILD_INFO.with(|kept| *kept.borrow_mut() = info);
+    }
+
+    /// The window facts `viewport` reports: its own for a child opened from another child, else those
+    /// [`child_info`](Self::child_info) gave.
+    pub fn facts(&self, viewport: ViewportId) -> ViewportInfo {
+        with_facts(viewport, |info| info.clone())
     }
 
     /// The window facts the root viewport reports from now on.
@@ -258,11 +338,15 @@ impl Windows {
             now.get()
         }));
         ROOT_INFO.with(|info| *info.borrow_mut() = self.root_info.borrow().clone());
-        input.viewports = all_viewports(CHILD_INFO.with(|info| info.borrow().clone()));
+        input.viewports = all_viewports();
         let mut output = self.ctx.run_ui(input, ui);
         // A child the frame no longer shows has closed: like an integration, the kit drops its window, so later inputs
-        // stop listing it (and what its last pass left, such as a modal, stops counting).
-        CHILDREN.with(|children| children.borrow_mut().retain(|id| output.viewport_output.contains_key(id)));
+        // stop listing it (and what its last pass left, such as a modal, stops counting), and a window opened again
+        // opens anew.
+        let shown = |id: &ViewportId| output.viewport_output.contains_key(id);
+        CHILDREN.with(|children| children.borrow_mut().retain(shown));
+        OWN_INFO.with(|own| own.borrow_mut().retain(|(id, _)| shown(id)));
+        BUILDERS.with(|kept| kept.borrow_mut().retain(|(id, _)| shown(id)));
         output.textures_delta.clear();
         keep_commands(&output);
         keep_tree(&mut output, ViewportId::ROOT);

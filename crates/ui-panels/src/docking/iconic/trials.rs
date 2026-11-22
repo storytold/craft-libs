@@ -1,9 +1,14 @@
-//! Trials of `IconicColumn`: the letter of a panel without an icon, the names a wide column shows, and the resizes
-//! of its flyouts.
+//! Trials of `IconicColumn`: the letter of a panel without an icon, the names a wide column shows, the grips of its
+//! groups, and the resizes of its flyouts.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
+use super::GRIP;
 use crate::contract::{Bind, Show as _, ShowContainer as _};
-use crate::docking::{DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupGrip, IconicColumn, PanelKey, PanelSpec};
+use crate::docking::{
+    DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
+};
+use crate::runtime::drag;
+use crate::runtime::env::Direction;
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
@@ -204,9 +209,9 @@ impl Flyouts {
         StyleCx::with_root(self.fixture.ctx(), DockSizes::style)
     }
 
-    /// Half the side of a resize grip, which straddles the edge it moves.
+    /// How far a resize grip reaches in from the edge it moves.
     fn grip_reach(&self) -> f32 {
-        StyleCx::with_root(self.fixture.ctx(), |cx| cx.tokens.size.handle.sm) / 2.0
+        StyleCx::with_root(self.fixture.ctx(), |cx| crate::contract::grip_band(cx.tokens))
     }
 }
 
@@ -257,7 +262,7 @@ fn flyout_top_edge_and_free_top_corner_grow_it_upward() {
     }
 }
 
-/// The top grip is the standard one, straddling the edge: a press inside it resizes; a press below it reaches the
+/// The top grip is the standard one, inside the edge: a press inside it resizes; a press below it reaches the
 /// tab strip and drags the group.
 #[trial]
 fn the_flyout_top_handle_is_a_band_that_leaves_the_strip_its_drags() {
@@ -340,6 +345,51 @@ fn a_flyout_with_an_offset_in_a_short_viewport_stays_inside_and_resizes_its_widt
     }
 }
 
+/// Each icon group's grip strip has its own room at the group's top: across the group, below the bar or the group
+/// before it and above the group's first icon, overlapping no icon. A drag that starts on a grip moves its whole
+/// group, as a drag on an icon moves its panel.
+#[trial]
+fn a_groups_grip_lies_above_its_icons_and_its_drag_moves_the_group() {
+    let overlap = |a: Rect, b: Rect| {
+        let both = a.intersect(b);
+        both.width() > 0.0 && both.height() > 0.0
+    };
+    for direction in [Direction::Ltr, Direction::Rtl] {
+        let mut fixture = Fixture::hosted(|ui| {
+            let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
+            column.iconic = true;
+            let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+            let output = IconicColumn::new("Panels", global("iconic column", "grips"), &column, Bind::kept(), &named)
+                .within(screen())
+                .show_flyouts_at(ui, place, |_, _, _, _| None);
+            Some(output.into())
+        });
+        fixture.direction(direction).room(SCREEN).settle();
+        let id = fixture.root_id().expect("the column shows");
+        let grips = [0, 1].map(|group| fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip"));
+        let icon_rect = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
+        let (brushes, layers, swatches) = (icon_rect("Brushes"), icon_rect("Layers"), icon_rect("Swatches"));
+        assert!(grips[0].top() > 0.0, "{direction:?}: the first grip is under the bar: {grips:?}");
+        assert!(grips[0].bottom() <= brushes.top(), "{direction:?}: the first grip is above its group's first icon");
+        assert!(layers.bottom() <= grips[1].top(), "{direction:?}: the second grip is below the first group");
+        assert!(grips[1].bottom() <= swatches.top(), "{direction:?}: the second grip is above its group's first icon");
+        for grip in grips {
+            assert!(grip.x_range().contains(brushes.center().x), "{direction:?}: the grip runs across the group: {grip:?}");
+            for cell in [brushes, layers, swatches] {
+                assert!(!overlap(grip, cell), "{direction:?}: {grip:?} overlaps the icon {cell:?}");
+            }
+        }
+        assert!(!overlap(grips[0], grips[1]), "{direction:?}: the grips overlap");
+
+        for (grip, anchor) in grips.into_iter().zip([1, 3]) {
+            fixture.drag_hold_at(grip.center(), Vec2::new(RAIL * 2.0, 0.0));
+            let unit = drag::active::<GroupDrag<u8>>(fixture.ctx()).map(|drag| drag.unit.clone());
+            assert_eq!(unit, Some(DragUnit::Group(anchor)), "{direction:?}: a drag on the grip moves its group");
+            fixture.release_at(grip.center() + Vec2::new(RAIL * 2.0, 0.0)).settle();
+        }
+    }
+}
+
 /// The icon groups take drops as an expanded column's groups do: the middle of a group joins its tabs, the separator
 /// between two groups is the seam between them and wins there, the top of the first group stacks above it, and the
 /// bottom of the last group, down through the column's empty foot, stacks below it.
@@ -349,22 +399,25 @@ fn icon_groups_take_the_drops_of_an_expanded_columns_groups() {
     let probes: Rc<RefCell<Vec<Pos2>>> = Rc::default();
     let found: Rc<RefCell<Vec<Option<DockSpot<u8>>>>> = Rc::default();
     let (asked, seen) = (Rc::clone(&probes), Rc::clone(&found));
-    let mut fixture = Fixture::new(move |ui| {
+    let mut fixture = Fixture::hosted(move |ui| {
         let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
         column.iconic = true;
         let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
-        IconicColumn::new("Panels", dock, &column, Bind::kept(), &named).within(screen()).show_flyouts_at(ui, place, |_, _, _, _| None);
+        let output = IconicColumn::new("Panels", dock, &column, Bind::kept(), &named).within(screen()).show_flyouts_at(ui, place, |_, _, _, _| None);
         // The registry a drop reads is the previous pass's.
         *seen.borrow_mut() = asked.borrow().iter().map(|at| DockTargets::<u8>::resolve(ui.ctx(), dock, *at).map(|(spot, _)| spot)).collect();
+        Some(output.into())
     });
     fixture.room(SCREEN).settle();
     let rect_of = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
     let (brushes, layers, swatches) = (rect_of("Brushes"), rect_of("Layers"), rect_of("Swatches"));
+    let grip = |group: u64| fixture.root_id().and_then(|id| fixture.part_rect(id, GRIP.at(group))).expect("the group's grip");
+    let (first, second) = (grip(0), grip(1));
     let x = brushes.center().x;
     *probes.borrow_mut() = vec![
         Pos2::new(x, brushes.bottom()),
-        Pos2::new(x, (layers.bottom() + swatches.top()) / 2.0),
-        Pos2::new(x, brushes.top() + 1.0),
+        Pos2::new(x, (layers.bottom() + second.top()) / 2.0),
+        Pos2::new(x, first.center().y),
         Pos2::new(x, swatches.center().y),
         Pos2::new(x, swatches.bottom() + 2.0 * swatches.height()),
     ];
@@ -375,4 +428,58 @@ fn icon_groups_take_the_drops_of_an_expanded_columns_groups() {
     assert_eq!(found[2], Some(DockSpot::group(1, DockSide::Top)), "the first group's top stacks above it");
     assert_eq!(found[3], Some(DockSpot::group(3, DockSide::Center)), "a one-icon group keeps its middle for the join");
     assert_eq!(found[4], Some(DockSpot::group(3, DockSide::Bottom)), "the foot under the icons stacks below the last group");
+}
+
+/// The ticks of a grip strip in `shapes`: the quads of the one mesh that lies inside `strip`, and their colour.
+pub(crate) fn grip_ticks(shapes: &[egui::Shape], strip: Rect) -> Option<(Vec<Rect>, egui::Color32)> {
+    shapes.iter().find_map(|shape| {
+        let egui::Shape::Mesh(mesh) = shape else { return None };
+        let quads: Vec<Rect> = mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
+        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(0.01).contains_rect(*quad));
+        inside.then(|| (quads, mesh.vertices.first().map_or(egui::Color32::TRANSPARENT, |v| v.color)))
+    })
+}
+
+/// Checks the ticks of a grip strip: ten upright marks, one point wide, four tall, one point apart, centred on the
+/// strip and darker than the panel `panel`.
+pub(crate) fn assert_grip_ticks(ticks: &[Rect], ink: egui::Color32, strip: Rect, panel: craft_theme::Rgba, what: &str) {
+    assert_eq!(ticks.len(), 10, "{what}: ten ticks: {ticks:?}");
+    for tick in ticks {
+        assert!((tick.width() - 1.0).abs() < 0.01 && (tick.height() - 4.0).abs() < 0.01, "{what}: a tick is 1 x 4 points: {tick:?}");
+    }
+    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 1.0).abs() < 0.01), "{what}: one point apart: {ticks:?}");
+    let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+    assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
+    assert!((run.center().y - strip.center().y).abs() <= 0.5, "{what}: centred in the strip's height: {run:?} in {strip:?}");
+    let [r, g, b, _] = panel.0;
+    assert!(ink.r() < r && ink.g() < g && ink.b() < b && ink.r() >= r / 2, "{what}: the ticks are a little darker than the panel {panel:?}: {ink:?}");
+}
+
+/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks a little
+/// darker than the panel, the same under the pointer.
+#[trial]
+fn a_groups_grip_is_a_row_of_upright_ticks_darker_than_the_panel() {
+    let mut fixture =
+        Fixture::hosted(|ui| {
+            let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
+            column.iconic = true;
+            let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+            let output = IconicColumn::new("Panels", global("iconic column", "ticks"), &column, Bind::kept(), &named)
+                .within(screen())
+                .show_flyouts_at(ui, place, |_, _, _, _| None);
+            Some(output.into())
+        });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let panel = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.panel);
+    for group in [0, 1] {
+        let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip");
+        let shapes = fixture.frame_shapes();
+        let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
+        assert_grip_ticks(&ticks, ink, strip, panel, &format!("group {group}"));
+        fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
+        let hovered = fixture.frame_shapes();
+        let (_, hover_ink) = grip_ticks(&hovered, strip).expect("the grip paints its ticks under the pointer");
+        assert_eq!(hover_ink, ink, "group {group}: the ticks keep their ink under the pointer");
+    }
 }

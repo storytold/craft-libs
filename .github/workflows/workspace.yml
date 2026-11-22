@@ -24,16 +24,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
-  # Whether this run needs the macOS and Windows legs. On a pull request they run only when it can
-  # change platform behaviour: a crate with platform cfg code or one that depends on it, the build
-  # setup, or a file outside the crates (craft-common-actions' select-platforms). The full-ci label
-  # runs them anyway from the next push or manual run; every other event runs them.
+  # Whether this run needs the macOS and Windows legs, and which tests every leg runs
+  # (craft-common-actions' select-platforms). On a pull request the macOS and Windows legs run only
+  # when it can change platform behaviour: a crate with platform cfg code or one that depends on
+  # it, the build setup, or a file outside the crates. The tests are those of the crates a change
+  # reaches: the crates that own a changed file, the crates whose Cargo.toml declares a read of it
+  # (`[package.metadata.craft] reads`, which this job checks is complete), and every crate that
+  # depends on those. The build setup, a crate's own Cargo.toml or a file outside the crates other
+  # than documentation runs every test; documentation alone runs none. The full-ci label runs
+  # everything from the next push or manual run; every other event runs everything.
   platforms:
     name: select platforms
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       platform: ${{ steps.select.outputs.platform }}
+      tests: ${{ steps.select.outputs.tests }}
+      filter: ${{ steps.select.outputs.filter }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@v2.22.4
@@ -46,10 +53,11 @@ jobs:
           persist-credentials: false
           fetch-depth: 2
       - id: select
-        uses: storytold/craft-common-actions/actions/select-platforms@d65d611f0ef67eaa94039351be5afce61102dbb0
+        uses: storytold/craft-common-actions/actions/select-platforms@0bef64f155fcea81edbd9542381777358bfbdcf4
         with:
           os: '["ubuntu-latest","windows-latest","macos-latest"]'
           select-os: '["windows-latest","macos-latest"]'
+          select-tests: true
           label: full-ci
 
   # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
@@ -61,6 +69,7 @@ jobs:
   # cold lint leg is still shorter than its gate leg.
   native:
     name: Workspace
+    needs: platforms
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["ubuntu-latest"]'
@@ -79,10 +88,13 @@ jobs:
       # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
       # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
       # count 64 cases instead of 256. nightly.yml runs them all in full.
+      # CRAFT_TESTS and CRAFT_TEST_FILTER are the `platforms` job's test selection.
       env: &env |
         CRAFT_PRINT_REQUIRE_QUEUE=0
         CRAFT_HOSTILE_DIVISOR=8
         PROPTEST_CASES=64
+        CRAFT_TESTS=${{ needs.platforms.outputs.tests }}
+        CRAFT_TEST_FILTER=${{ needs.platforms.outputs.filter }}
       setup-command: &setup bash scripts/ci-test-inputs.sh
       # The PhotoCraft corpora, keyed on the script that pins them: a hit skips the PhotoCraft
       # checkout and its xtask build (1:51 on Windows).
@@ -109,10 +121,22 @@ jobs:
         # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
         # first clippy run; the last command runs the crates whose tests check behaviour with a
         # feature off, which an all-features build cannot reach.
-        cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
+        # Every build is the whole workspace's, as on main; the filter narrows only the run. The
+        # doctests run for the whole workspace: `cargo test -p <selected>` would resolve features
+        # over the selected crates only and rebuild the dependencies whose features differ.
+        if [ "$CRAFT_TESTS" = none ]; then
+          echo "No crate changed: no tests to run."
+          exit 0
+        fi
+        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+        # The replay audit (craft-libs#2336), on Linux: the selected UI crates' tests again, from the same build, with every
+        # memoized view that would replay also run for real and compared with its replay.
+        if [ "$RUNNER_OS" = Linux ]; then
+          CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci -E "($CRAFT_TEST_FILTER) & (package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu))" --no-tests=warn --lib --bins --tests
+        fi
         cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
   # The macOS and Windows legs, when `platforms` says this run needs them, with the Linux leg's
   # inputs.
@@ -143,11 +167,15 @@ jobs:
       lint-command: *lint
       command: *command
       windows-command: |
+        if [ "$CRAFT_TESTS" = none ]; then
+          echo "No crate changed: no tests to run."
+          exit 0
+        fi
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
-        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
+        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
         cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
   # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
   # every run restores only the newest. This deletes the older ones as soon as the Linux leg is

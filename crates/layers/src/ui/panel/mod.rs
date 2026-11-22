@@ -11,8 +11,8 @@ mod events;
 mod footer;
 mod menu;
 mod row;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use drag::{LayersDrag, document_hash};
 pub use events::{
@@ -26,7 +26,7 @@ pub(crate) use row::FX_BADGE;
 
 use std::cell::RefCell;
 
-use craft_ui::contract::{Bind, CommandSet as _, Commands as _, NoValue, Outcome, Show, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet as _, Commands as _, NoValue, Outcome, Show, ShowContainer as _, Tracked};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::ListWords;
 use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
@@ -160,7 +160,7 @@ impl<Id> Default for Session<Id> {
 #[derive(craft_ui::contract::Pattern)]
 #[pattern(probe(LayersPanel<'static, crate::ui::mock::FakeLayers>))]
 pub struct LayersPanel<'a, T: LayerTree> {
-    tree: &'a T,
+    tree: &'a Tracked<T>,
     settings: Option<&'a LayersSettings>,
     thumbnails: Option<ThumbHost<'a, T::Id>>,
     filter: Option<Bind<'a, LayerFilter>>,
@@ -213,8 +213,9 @@ impl<Id> Outcome for LayersOutput<Id> {
 }
 
 impl<'a, T: LayerTree> LayersPanel<'a, T> {
-    /// The panel showing `tree`.
-    pub fn new(tree: &'a T) -> Self {
+    /// The panel showing `tree`. The panel derives the display order from the tracked revision, so an edit of the tree
+    /// through the `Tracked` is what makes it walk the tree again.
+    pub fn new(tree: &'a Tracked<T>) -> Self {
         Self {
             tree,
             settings: None,
@@ -339,7 +340,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     /// rows, the footer. Events are reported in that order.
     pub fn show(self, ui: &mut Ui) -> LayersOutput<T::Id> {
         let LayersPanel {
-            tree,
+            tree: tracked,
             settings,
             thumbnails,
             mut filter,
@@ -355,6 +356,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             rename,
             document,
         } = self;
+        let tree: &T = tracked;
         let env = Env::of(ui);
         let words = env.words::<LayersPanelWords>();
         let list_words = env.words::<ListWords>();
@@ -376,7 +378,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             lock_column,
             visibility_key,
             trailing: trailing.as_deref(),
-            held: craft_ui::runtime::pointer::frame(ui.ctx()).mods,
+            held: craft_ui::runtime::pointer::mods(ui.ctx()),
         };
         let events = RefCell::new(Vec::new());
         let current = RefCell::new(LayerFilter::default());
@@ -440,13 +442,13 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
             })
             .show(ui, |ui, stack| {
                 let filter = current.borrow().clone();
-                let session = stack.memory::<Session<T::Id>>();
                 let plan = reveal_plan(tree, reveal.clone());
-                let rows = LayerRows::new(tree, &filter, &plan.opened());
+                let rows = LayerRows::new(stack, tracked, &filter, &plan.opened());
+                let session = stack.memory::<Session<T::Id>>();
                 if let Some(layer) = rename.clone() {
                     start_rename(ui, list, layer);
                 }
-                let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered, &unlock_label);
+                let body = show_body(ui, &cx, &rows, session, &plan, rows.filtered(), &unlock_label);
                 let menus = show_row_menus(ui, &cx, &body.response, row_menu.as_deref(), session);
                 let mut reported = body.events;
                 reported.extend(menus);

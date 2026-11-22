@@ -170,7 +170,8 @@ fn apply_binding<V: Value>(
 /// of this component took from the old value. A leaf measures itself again at each room and proposal it was measured
 /// at and asks only when a size differs; a body, whose measure runs its content, asks when any measuring run read the
 /// value. A given value has no read record, so its edit asks for no rerun: the component shows the edit itself, and
-/// the app's other views of the value show it in the next frame, which the edit requests.
+/// the app's other views of the value show it in the next frame, which the edit requests: the app writes the edit into
+/// its model, and the memoized views whose props hold that model run.
 pub(crate) fn rerun_after_edit(
     p: &mut dyn ErasedPass<'_>,
     style: &dyn StyleView,
@@ -180,9 +181,7 @@ pub(crate) fn rerun_after_edit(
     leaf: bool,
 ) {
     if edit.given {
-        let ctx = &p.core_ref().ctx;
-        crate::runtime::lazy::note_given_edit(ctx);
-        ctx.request_repaint();
+        p.core_ref().ctx.request_repaint();
         return;
     }
     let Some(key) = edit.key.filter(|_| edit.written || edit.shown) else { return };

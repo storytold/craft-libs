@@ -3,13 +3,13 @@
 //! The data types of a tile (badges, status, marks, the caption's place) live here; `TileGrid` shows tiles in
 //! rows and columns and reads the tile size from the value a `ThumbnailSlider` edits.
 
-mod grid;
+pub(crate) mod grid;
 mod headers;
 mod layout;
-mod slider;
-#[cfg(feature = "testing")]
-mod stories;
-mod tile;
+pub(crate) mod slider;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+pub(crate) mod tile;
 mod words;
 
 use crate::runtime::env::Label;
@@ -34,6 +34,33 @@ pub enum CaptionPlace {
     Start,
     /// No caption: the picture takes the whole tile.
     None,
+}
+
+/// How a framed card (`TileGrid::card`) sets its name and detail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CardText {
+    /// For cards of files (the start screen's recent documents): a strong name and the detail under it, both at the
+    /// reading start.
+    #[default]
+    File,
+    /// For cards of presets (New Document): a regular name and the detail under it, both centred.
+    Preset,
+}
+
+impl CardText {
+    /// The type role of the name.
+    pub(super) fn name_role(self) -> craft_theme::TypeRole {
+        match self {
+            CardText::File => craft_theme::TypeRole::BodyStrong,
+            CardText::Preset => craft_theme::TypeRole::Body,
+        }
+    }
+
+    /// Whether the name and detail are centred in the card.
+    pub(super) fn centred(self) -> bool {
+        self == CardText::Preset
+    }
 }
 
 /// A pick or reject flag.

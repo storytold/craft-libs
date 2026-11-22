@@ -387,6 +387,8 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn access(&self) -> (Access, Option<String>) {
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_access_build(&self.cx.core.ctx);
         let mut access = Access::default();
         self.comp.access(&mut access, self.cx);
         (access, self.comp.value_text(self.cx))
@@ -546,6 +548,7 @@ pub(crate) fn show_container_taking<C: Container, R>(
     body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
     let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
+    crate::layout::close_flow_start_in(ui);
     crate::runtime::egui::alloc::advance_past(ui, rect);
     shown
 }
@@ -679,8 +682,15 @@ pub(crate) fn measured_extent<C: Component>(
 
 /// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13, under
 /// the composite's `env`. It registers no id, senses nothing, opens no memory stage and fires nothing. Returns the
-/// record step 16 fills the part's sub-node from, and the facts the face's `access` declared.
-pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSource<'_>, part: PartRef, mut face: C) -> FaceRecord {
+/// face's first text baseline and, for a reported face (`FaceSource::reported`), the record step 16 fills the part's
+/// sub-node from, with the facts the face's `access` declared.
+pub(crate) fn paint_face<C: Show>(
+    ui: &mut Ui,
+    env: &Env,
+    source: &super::FaceSource<'_>,
+    part: PartRef,
+    mut face: C,
+) -> (Option<f32>, Option<FaceRecord>) {
     let ctx = ui.ctx().clone();
     let common = std::mem::take(face.common_mut(Internal::new()));
     debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
@@ -739,19 +749,22 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
             size: step1.size,
             selections: &[],
             fade: None,
+            node: false,
             kids: None,
         };
         face.paint(&mut pui, &cx);
     }
-    let (elided, baseline) = {
-        let paint = cx.core.paint.borrow();
-        (paint.elided.clone(), paint.baseline)
-    };
-    let name = elided.unwrap_or_else(|| step1.label.as_str().to_owned());
+    let baseline = cx.core.paint.borrow().baseline;
+    if !source.reported {
+        return (baseline, None);
+    }
+    let name = cx.core.paint.borrow().elided.clone().unwrap_or_else(|| step1.label.as_str().to_owned());
     // The face's own `access` adds its facts; the composite's step 16 fills the part's sub-node from the record.
     let mut access = Access::default();
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_access_build(&ctx);
     face.access(&mut access, &cx);
-    FaceRecord {
+    let record = FaceRecord {
         part,
         name,
         flags,
@@ -762,7 +775,8 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
         baseline,
         value: access.value,
         color: access.color,
-    }
+    };
+    (baseline, Some(record))
 }
 
 /// A member of a collection's run (`Collection::MEMBERS`) after steps 1, 2, 4 (read only) and 7: what the batch join
@@ -833,6 +847,8 @@ pub(crate) struct MemberNode {
     pub enabled: bool,
     /// The member's sense as an item: whether its sub-node takes AccessKit focus and clicks, which the collection serves.
     pub item_sense: Sense,
+    /// The collection has a node this pass: the member's sub-node is written under it.
+    pub reported: bool,
 }
 
 /// What a member's show leaves for the collection: its output, and its tooltip while the pointer rests on it.
@@ -884,6 +900,7 @@ pub(crate) fn member_show<C: Show>(
     core.results = sensed.parts;
     core.press = sensed.press;
     core.member_of = Some(node.owner);
+    core.node = node.reported;
     core.intents = crate::runtime::keys::intents_of(&ctx, Some(id), rtl);
     let mut cx = Cx::<C> { core: &mut core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
     let flags = part_state.flags | steps::value_flags(&item, &cx);
@@ -903,10 +920,12 @@ pub(crate) fn member_show<C: Show>(
     item.paint_over(&mut super::paint_ui(ui, env, cx.core, &*style), &cx);
     steps::unfade(ui, cx.core, fade);
     ui.set_clip_rect(outer_clip);
-    let mut access = Access::default();
-    item.access(&mut access, &cx);
-    let member_node = report_member(cx.core, &access, node, C::ROLE);
-    {
+    if node.reported {
+        let mut access = Access::default();
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_access_build(&ctx);
+        item.access(&mut access, &cx);
+        let member_node = report_member(cx.core, &access, node, C::ROLE);
         let paint = cx.core.paint.borrow();
         steps::report_parts(cx.core, &decls, &access.nodes, &paint.faces, member_node);
     }

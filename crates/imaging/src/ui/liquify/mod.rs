@@ -44,11 +44,11 @@
 //! [`FullWindowSide`]: craft_ui::dialog::FullWindowSide
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod canvas;
+pub(crate) mod canvas;
 mod commands;
-mod panel;
+pub(crate) mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tools;
 mod words;
@@ -72,14 +72,15 @@ use craft_behavior::{CancelReason, Cursor, EditEvent, EditHistory, Mixed};
 use craft_ui::canvas::{NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Pattern, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Pattern, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, FullWindowWorkspace, RasterOverlay,
     WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
+use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
-use craft_ui::rails::{LastUsed, ToolRail};
+use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
@@ -223,13 +224,26 @@ pub struct LiquifyDone {
 
 /// What the workspace keeps between passes besides the session: the view, the strip's memory and the tool in progress. None of it is
 /// the app's, and none of it is in the history.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct LiquifyView {
     view: FullWindowView,
-    last_used: LastUsed<LiquifyTool>,
+    last_used: Tracked<LastUsed<LiquifyTool>>,
+    slots: Tracked<Vec<ToolSlot<LiquifyTool>>>,
     canvas: LiquifyCanvas,
     /// The canvas the tools run under, to cancel their gestures outside a pass.
     canvas_id: Option<Id>,
+}
+
+impl Default for LiquifyView {
+    fn default() -> Self {
+        LiquifyView {
+            view: FullWindowView::default(),
+            last_used: Tracked::default(),
+            slots: Tracked::new(LiquifyTool::slots()),
+            canvas: LiquifyCanvas::default(),
+            canvas_id: None,
+        }
+    }
 }
 
 /// The Liquify workspace: the session and its history and the settings, as one value the app keeps while Liquify
@@ -441,7 +455,6 @@ impl LiquifyWorkspace {
             self.edit.events.push(LiquifyEvent::BackdropWanted(of));
             self.asked = Some(of);
         }
-        let slots = LiquifyTool::slots();
         let preview_label = words.preview.clone();
         let this = RefCell::new(&mut *self);
 
@@ -450,7 +463,7 @@ impl LiquifyWorkspace {
             .opened(open)
             .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
             .footer(|ui, _| {
-                ui.vertical_centered(|ui| {
+                let _ = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
                     let mut guard = this.borrow_mut();
                     let work: &mut LiquifyWorkspace = &mut guard;
                     let events = Checkbox::new(Bind::given(work.preview)).label(preview_label.clone()).show(ui).events;
@@ -499,7 +512,7 @@ impl LiquifyWorkspace {
                             if fired.phase == FirePhase::Release {
                                 continue;
                             }
-                            let slot = slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
+                            let slot = work.view.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
                             let tools: Vec<_> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                             let picked = slot.and_then(|slot| {
                                 tool_pick(&tools, slot.id, &work.edit.settings.tool, &work.view.last_used, PickStep::of(&fired), |_| true)
@@ -543,10 +556,10 @@ impl LiquifyWorkspace {
                     let shown = Row::new()
                         .fill()
                         .show(ui, |ui, _| {
-                            let rail =
-                                ToolRail::new(words.tools.clone(), &slots, &work.edit.settings.tool, &state.last_used).show_column(ui, |_, _| {});
+                            let rail = ToolRail::new(words.tools.clone(), &state.slots, &work.edit.settings.tool, &state.last_used)
+                                .show_column(ui, |_, _| {});
                             if let Some(next) = rail.last_used {
-                                state.last_used = next;
+                                *state.last_used = next;
                             }
                             if let Some(tool) = rail.select {
                                 work.edit.pick(Some(&ctx), state, tool);

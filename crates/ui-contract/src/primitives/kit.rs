@@ -30,17 +30,99 @@ pub enum TickEdge {
     Right,
 }
 
+impl TickEdge {
+    /// Whether positions run along x (a top or bottom edge).
+    pub const fn horizontal(self) -> bool {
+        matches!(self, TickEdge::Bottom | TickEdge::Top)
+    }
+}
+
+/// How a ruler lays out its marks and numbers. A ruler takes a face from its `face` prop, else from the scope's
+/// component set ([`RulerFace::of`]); the face changes the arrangement only, every value still comes from the same
+/// tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RulerFace {
+    /// Marks rise from the strip's inner edge, a major one across the strip's depth, and each number sits beside its
+    /// major mark.
+    #[default]
+    Edge,
+    /// A bar inset in the strip by `BAR_INSET` carries the marks centred on it, and a number stands in place of
+    /// each major mark; a major mark shows only where its number is dropped.
+    Centred,
+}
+
+impl RulerFace {
+    /// The face the component set `set` shows: the creative set the edge face, the productivity set the centred one.
+    pub const fn of(set: craft_theme::ComponentSet) -> Self {
+        match set {
+            craft_theme::ComponentSet::Creative => RulerFace::Edge,
+            craft_theme::ComponentSet::Productivity => RulerFace::Centred,
+        }
+    }
+
+    /// Where the marks of a strip along `edge` sit: the whole strip for the edge face, the strip inset across its
+    /// depth by `BAR_INSET` on each side for the centred face.
+    pub fn bar(self, strip: Rect, edge: TickEdge) -> Rect {
+        match self {
+            RulerFace::Edge => strip,
+            RulerFace::Centred => {
+                if edge.horizontal() {
+                    strip.shrink2(Vec2::new(0.0, BAR_INSET))
+                } else {
+                    strip.shrink2(Vec2::new(BAR_INSET, 0.0))
+                }
+            }
+        }
+    }
+
+    /// The marks of `marks` this face shows beside the numbers in `numbers` (screen boxes): the edge face shows every
+    /// mark, the centred face leaves out each one whose position lies inside a number widened by `pad` along `edge`'s
+    /// axis, so a number stands in place of its own mark and no mark runs through one. `origin` is the screen position
+    /// the marks' `at` counts from.
+    pub fn beside_numbers(self, edge: TickEdge, origin: f32, marks: Vec<Tick>, numbers: &[Rect], pad: f32) -> Vec<Tick> {
+        match self {
+            RulerFace::Edge => marks,
+            RulerFace::Centred => marks
+                .into_iter()
+                .filter(|mark| {
+                    let at = origin + mark.at;
+                    !numbers.iter().any(|number| {
+                        let along = if edge.horizontal() { number.x_range() } else { number.y_range() };
+                        (along.min - pad..=along.max + pad).contains(&at)
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    /// The box a centred number of `size` takes for the mark at `at` (a screen position along `edge`'s axis): centred
+    /// on the mark and on the bar.
+    pub fn centred_number(bar: Rect, edge: TickEdge, at: f32, size: Vec2) -> Rect {
+        let centre = if edge.horizontal() { pos2(at, bar.center().y) } else { pos2(bar.center().x, at) };
+        Rect::from_center_size(centre, size)
+    }
+}
+
 /// How long a tick is: the rank it has among its neighbours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TickRank {
-    /// The shortest, `size.ruler.tick.minor`.
+    /// The shortest, `TICK_MINOR` long.
     Minor,
-    /// Halfway between two major ticks, `size.ruler.tick.mid`.
+    /// Halfway between two major ticks, `TICK_MID` long.
     Mid,
-    /// The longest, `space.gap.inline`.
+    /// The longest: across the depth of the rect the marks are painted in.
     Major,
 }
+
+/// The length of a minor tick, in points. The same in every density, as in the apps' rulers.
+const TICK_MINOR: f32 = 3.0;
+
+/// The length of the tick halfway between two major ticks, in points, in every density.
+const TICK_MID: f32 = 6.0;
+
+/// How far the centred face's bar sits inside the ruler strip on each side across its depth.
+const BAR_INSET: f32 = 2.0;
 
 /// One tick: where it sits along its edge and how long it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -387,9 +469,6 @@ const MINOR_SHARE: f32 = 0.45;
 /// How many times a thinned grid doubles its step before it gives up.
 const MAX_DOUBLINGS: u32 = 32;
 
-/// The radius of a dot, in screen points.
-const DOT_RADIUS: f32 = 0.6;
-
 /// What a grid does when its lines come closer than the minimum step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -611,35 +690,45 @@ pub fn grid_lines_with(look: &GridLook, grid: &GridLines, ink: &GridInk, pixels_
             match ink.stroke {
                 GridStroke::Solid => shapes.extend(Rule::shapes(&RuleLook { color, width: look.width }, a, b, pixels_per_point)),
                 GridStroke::Dashed => shapes.extend(dashed(&[a, b], Dashes::new(look.dash, look.gap), look.width.points(pixels_per_point), color)),
-                GridStroke::Dots => shapes.extend(Shape::dotted_line(&[a, b], color, look.gap, DOT_RADIUS)),
+                GridStroke::Dots => shapes.extend(Rule::dotted(&RuleLook { color, width: look.width }, a, b, look.gap, pixels_per_point)),
             }
         }
     }
     shapes
 }
 
-/// The tick marks of `ticks` on one edge of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
-/// `size.ruler.tick.minor` long, mid ones `size.ruler.tick.mid`, major ones across the whole depth of `rect`, beside their labels.
-pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
+/// The tick marks of `ticks` along `edge` of `rect` that `clip` shows, `stroke.thin` lines of `text.faint`: minor ones
+/// `TICK_MINOR` long, mid ones `TICK_MID`, major ones across the whole depth of `rect`. The edge
+/// face hangs them from `edge`; the centred face centres them on `rect`'s middle line (`rect` is then the face's bar).
+pub fn ticks(tokens: &UiTokens, rect: Rect, edge: TickEdge, face: RulerFace, ticks: &[Tick], clip: Rect, pixels_per_point: f32) -> Vec<Shape> {
     let look = RuleLook { color: rgba_color(tokens.color.text.faint), width: RuleWidth::Points(tokens.stroke.thin) };
     let depth = match edge {
         TickEdge::Bottom | TickEdge::Top => rect.height(),
         TickEdge::Left | TickEdge::Right => rect.width(),
     };
-    let (minor, mid, major) = (tokens.size.ruler.tick.minor, tokens.size.ruler.tick.mid, depth);
     ticks
         .iter()
         .filter_map(|tick| {
             let length = match tick.rank {
-                TickRank::Minor => minor,
-                TickRank::Mid => mid,
-                TickRank::Major => major,
+                TickRank::Minor => TICK_MINOR,
+                TickRank::Mid => TICK_MID,
+                TickRank::Major => depth,
             };
-            let (from, to) = match edge {
-                TickEdge::Bottom => (pos2(rect.left() + tick.at, rect.bottom()), pos2(rect.left() + tick.at, rect.bottom() - length)),
-                TickEdge::Top => (pos2(rect.left() + tick.at, rect.top()), pos2(rect.left() + tick.at, rect.top() + length)),
-                TickEdge::Left => (pos2(rect.left(), rect.top() + tick.at), pos2(rect.left() + length, rect.top() + tick.at)),
-                TickEdge::Right => (pos2(rect.right(), rect.top() + tick.at), pos2(rect.right() - length, rect.top() + tick.at)),
+            let (from, to) = match (face, edge) {
+                (RulerFace::Edge, TickEdge::Bottom) => {
+                    (pos2(rect.left() + tick.at, rect.bottom()), pos2(rect.left() + tick.at, rect.bottom() - length))
+                }
+                (RulerFace::Edge, TickEdge::Top) => (pos2(rect.left() + tick.at, rect.top()), pos2(rect.left() + tick.at, rect.top() + length)),
+                (RulerFace::Edge, TickEdge::Left) => (pos2(rect.left(), rect.top() + tick.at), pos2(rect.left() + length, rect.top() + tick.at)),
+                (RulerFace::Edge, TickEdge::Right) => (pos2(rect.right(), rect.top() + tick.at), pos2(rect.right() - length, rect.top() + tick.at)),
+                (RulerFace::Centred, TickEdge::Bottom | TickEdge::Top) => {
+                    let (x, y) = (rect.left() + tick.at, rect.center().y);
+                    (pos2(x, y - length / 2.0), pos2(x, y + length / 2.0))
+                }
+                (RulerFace::Centred, TickEdge::Left | TickEdge::Right) => {
+                    let (x, y) = (rect.center().x, rect.top() + tick.at);
+                    (pos2(x - length / 2.0, y), pos2(x + length / 2.0, y))
+                }
             };
             clip.intersects(Rect::from_two_pos(from, to)).then(|| Rule::shapes(&look, from, to, pixels_per_point))
         })
@@ -923,9 +1012,14 @@ impl ContentPainterCx<'_> {
         super::draw::data_checker(&self.painter, self.tokens, self.data, checker, rect, radius);
     }
 
-    /// Paints tick marks on one edge of `rect`.
-    pub fn ticks(&self, rect: Rect, edge: TickEdge, marks: &[Tick]) {
-        self.painter.extend(ticks(self.tokens, rect, edge, marks, self.painter.clip_rect(), self.ppp()));
+    /// Where the marks of a ruler strip along `edge` sit in `face`; see [`RulerFace::bar`].
+    pub fn ruler_bar(&self, strip: Rect, edge: TickEdge, face: RulerFace) -> Rect {
+        face.bar(strip, edge)
+    }
+
+    /// Paints tick marks along `edge` of `rect` in `face`; see [`ticks`].
+    pub fn ticks(&self, rect: Rect, edge: TickEdge, face: RulerFace, marks: &[Tick]) {
+        self.painter.extend(ticks(self.tokens, rect, edge, face, marks, self.painter.clip_rect(), self.ppp()));
     }
 
     /// Paints a halo-and-line outline of `shape`.

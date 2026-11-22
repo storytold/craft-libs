@@ -9,7 +9,7 @@ use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::buttons::ControlPlace;
@@ -18,7 +18,7 @@ use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::moved;
-use craft_ui::testing::{Fixture, Room, trial};
+use craft_ui::testing::{Fixture, Room, last_frame_derived_builds, trial};
 use egui::{Event, Key, Modifiers};
 
 const INTER_REGULAR: &[u8] = include_bytes!("../../../ui-contract/fonts/inter/Inter-Regular.ttf");
@@ -125,14 +125,15 @@ fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a
     let catalog = catalog_of(&[epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT, INTER_REGULAR]);
     let mut similar = FontFilters::default();
     similar.similar = true;
-    let rows = family_rows(&catalog, "", None, &similar, "Inter", "en");
+    let infos = FamilyInfos::of(&catalog);
+    let rows = family_rows(&catalog, &infos, "", None, &similar, "Inter", "en");
     let names: Vec<&str> = rows.iter().map(|row| row.family.as_str()).collect();
     assert_eq!(names.first(), Some(&"Inter"), "the current family first, though it is not first by name");
     assert!(rows.len() <= SIMILAR_COUNT);
 
     // A current family the catalog lacks has no traits: the list stays as unfiltered.
-    let unfiltered = family_rows(&catalog, "", None, &FontFilters::default(), "", "en");
-    assert_eq!(family_rows(&catalog, "", None, &similar, "Missing", "en"), unfiltered);
+    let unfiltered = family_rows(&catalog, &infos, "", None, &FontFilters::default(), "", "en");
+    assert_eq!(family_rows(&catalog, &infos, "", None, &similar, "Missing", "en"), unfiltered);
 }
 
 #[trial]
@@ -359,4 +360,118 @@ fn a_squeezed_ribbon_font_box_keeps_a_short_fields_name() {
     let short = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.short;
     assert!(squeezed > short, "the squeezed font box keeps a name field {short} wide and its arrow: {squeezed}");
     assert!(squeezed <= picker_width("Inter", true) + 0.5, "and is no wider than where the room allows");
+}
+
+/// The family data builds of the last frame.
+fn family_builds(fx: &Fixture) -> u32 {
+    last_frame_derived_builds(fx.ctx()).iter().map(|(_, builds)| builds).sum()
+}
+
+#[trial]
+fn the_family_data_builds_when_the_catalog_changes_and_not_while_it_is_idle() {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let (mut fx, _) = rig(Arc::clone(&catalog), vec![]);
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 0, "an idle open list builds nothing");
+    catalog.add_bytes(INTER_SEMIBOLD.to_vec(), Source::Bundled, &Limits::default()).expect("a font file");
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 1, "a changed catalog builds the data once, whatever reads it");
+}
+
+#[trial]
+fn a_picker_handed_another_catalog_at_the_same_generation_builds_its_family_data_once() {
+    let (one, two) = (catalog_of(&[INTER_REGULAR]), catalog_of(&[INTER_REGULAR]));
+    assert_eq!(one.generation(), two.generation(), "the two catalogs count alike");
+    assert_ne!(one.id(), two.id());
+    let shown = Rc::new(RefCell::new(Arc::clone(&one)));
+    let held = Rc::clone(&shown);
+    let mut family = String::new();
+    let mut fx = Fixture::new(move |ui| {
+        let catalog = Arc::clone(&held.borrow());
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog).show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 0, "the first catalog's data is kept");
+    *shown.borrow_mut() = Arc::clone(&two);
+    fx.frame(vec![]);
+    assert_eq!(family_builds(&fx), 1, "the second catalog builds the data once");
+}
+
+/// Every non-transparent vertex colour of textured meshes whose centre falls inside `rect`.
+fn mesh_tints(shapes: &[egui::Shape], rect: egui::Rect, out: &mut Vec<egui::Color32>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => mesh_tints(inner, rect, out),
+            egui::Shape::Mesh(mesh) if rect.contains(mesh.calc_bounds().center()) => {
+                out.extend(mesh.vertices.iter().map(|vertex| vertex.color).filter(|color| color.a() > 0));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The painted tint colours of the missing-font warning icon in `mode`/`contrast`, enabled or disabled, together with
+/// the theme's `status.warn.fg`, `text.normal` and `text.disabled` colours.
+fn missing_warning_colors(
+    mode: craft_theme::Mode,
+    contrast: craft_theme::Contrast,
+    enabled: bool,
+) -> (Vec<egui::Color32>, egui::Color32, egui::Color32, egui::Color32) {
+    use craft_ui::contract::Props as _;
+    use craft_ui::runtime::env::Env;
+    use egui::Color32;
+    use std::cell::Cell;
+
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let seen = Rc::new(Cell::new((None, Color32::TRANSPARENT, Color32::TRANSPARENT, Color32::TRANSPARENT)));
+    let held = Rc::clone(&seen);
+    let mut family = "Gotham".to_owned();
+    let mut fx = Fixture::new(move |ui| {
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let env = Env::of(ui);
+        let tokens = &env.tokens.tokens().color;
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .kind(FontPickerKind::Plain)
+            .shown_as("Inter")
+            .enabled(enabled)
+            .show(ui);
+        held.set((Some(out.edit.response.id), color(tokens.status.warn.fg.0), color(tokens.text.normal.0), color(tokens.text.disabled.0)));
+    });
+    fx.theme(mode, contrast);
+    fx.in_room(Room::Window);
+    fx.settle();
+    let (id, warn_fg, text_normal, text_disabled) = seen.get();
+    let picker = id.expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    let mut tints = Vec::new();
+    mesh_tints(&fx.frame_shapes(), mark, &mut tints);
+    tints.dedup();
+    (tints, warn_fg, text_normal, text_disabled)
+}
+
+#[trial]
+fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled() {
+    use craft_theme::{Contrast, Mode};
+
+    for (mode, contrast) in [(Mode::Light, Contrast::Standard), (Mode::Dark, Contrast::Standard), (Mode::Dark, Contrast::High)] {
+        let (tints, warn_fg, text_normal, _) = missing_warning_colors(mode, contrast, true);
+        assert_ne!(warn_fg, text_normal, "{mode:?} {contrast:?}: warning ink differs from neutral text ink");
+        assert!(!tints.is_empty(), "{mode:?} {contrast:?}: the missing-font warning icon paints");
+        assert!(
+            tints.iter().all(|tint| *tint == warn_fg),
+            "{mode:?} {contrast:?}: the warning icon paints in status.warn.fg {warn_fg:?}, not {tints:?}"
+        );
+    }
+
+    let (tints, warn_fg, _, text_disabled) = missing_warning_colors(Mode::Dark, Contrast::Standard, false);
+    assert_ne!(text_disabled, warn_fg, "disabled ink differs from warning ink");
+    assert!(!tints.is_empty(), "a disabled picker still paints its warning icon");
+    assert!(
+        tints.iter().all(|tint| *tint == text_disabled),
+        "a disabled picker paints its warning icon in text.disabled {text_disabled:?}, not {tints:?}"
+    );
 }
