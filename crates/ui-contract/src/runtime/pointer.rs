@@ -757,6 +757,23 @@ pub(crate) fn child_part_bounds(ctx: &Context, subject: Id, part: craft_behavior
     })
 }
 
+/// The parts in last pass's shape record that take a press (a click or a drag), each with its owner and bounds: with
+/// the access tree, where the pointer-only ones lie, which have no node to read a place from.
+#[cfg(feature = "suite")]
+pub(crate) fn press_parts(ctx: &Context) -> Vec<(Id, craft_behavior::PartRef, egui::Rect)> {
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record
+            .last
+            .values()
+            .flat_map(|roots| roots.values())
+            .flat_map(|root| root.shapes.iter())
+            .filter(|shape| shape.sense.intersects(craft_behavior::Sense::CLICK | craft_behavior::Sense::DRAG))
+            .filter_map(|shape| Some((shape.owner, shape.part?, shape.shape.bounds())))
+            .collect()
+    })
+}
+
 /// The roots and egui widgets the root viewport's latest pass registered: what bypass detection counts as made by
 /// components.
 #[cfg(feature = "testing")]
