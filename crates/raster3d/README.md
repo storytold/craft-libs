@@ -82,8 +82,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   `AuxPlanes`: three planes at the color's size, row-major from the top row, that describe one
   surface per pixel. `depth` is the surface's camera depth (`f32`, the units of `Scene::view`),
   infinity where empty. `normal` is its unit normal in view space, `[0, 0, 0]` where empty: the
-  interpolated vertex normal (one of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a
-  back face, turned by the inverse transpose of the upper-left 3 × 3 of `Scene::view` and
+  vertex normal interpolated in `f64` (one of length 1e-20 or less is read as `[0, 0, −1]`),
+  reversed on a back face, turned by the inverse transpose of the upper-left 3 × 3 of `Scene::view` and
   normalized, so it stays perpendicular to the surface when the view scales axes unequally or
   shears; normal textures are not applied. `part_id` is the `Scene::part_ids` entry of the
   surface's triangle (`u32`), or `NO_PART` (`u32::MAX`) where empty; a triangle cut by clipping keeps its ID. Only a fragment that

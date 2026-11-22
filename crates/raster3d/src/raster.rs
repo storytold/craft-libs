@@ -42,8 +42,8 @@ pub struct AuxPlanes {
     /// Camera-space depth of the surface (the third row of [`Scene::view`]), ∞ where empty. For
     /// a transparent surface this differs from [`Target::depth`], which holds opaque surfaces only.
     pub depth: Vec<f32>,
-    /// Unit normal of the surface in view space, `[0, 0, 0]` where empty: the interpolated vertex
-    /// normal (a vector of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a back face,
+    /// Unit normal of the surface in view space, `[0, 0, 0]` where empty: the vertex normal
+    /// interpolated in `f64` (a vector of length 1e-20 or less is read as `[0, 0, −1]`), reversed on a back face,
     /// turned by the inverse transpose of the upper-left 3 × 3 of [`Scene::view`] and normalized,
     /// so it stays perpendicular to the surface under a non-uniform scale or a shear. Normal
     /// textures are not applied.
@@ -469,16 +469,34 @@ impl Band<'_> {
         if z.is_finite() { z } else { f32::NAN }
     }
 
-    /// The unit view-space normal of a fragment for [`AuxPlanes::normal`], computed in `f64`.
+    /// The unit view-space normal for [`AuxPlanes::normal`] of screen triangle `t` at
+    /// screen-corner weights `l`. The vertex normals are interpolated, normalized and turned in
+    /// `f64`, so finite normals near the top of the `f32` range do not overflow.
     /// [`crate::scene::validate_aux`] has checked that the view's 3 × 3 is invertible, so the
     /// turned vector has a length above 0.
-    fn view_normal(&self, f: &Frag) -> [f32; 3] {
+    fn view_normal(&self, t: &STri, l: [f32; 3]) -> [f32; 3] {
         let unit = |v: [f64; 3], floor: f64| {
             let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
             (len > floor && len.is_finite()).then(|| v.map(|x| x / len))
         };
-        let mut n = unit(f.normal.map(f64::from), 1e-20).unwrap_or([0.0, 0.0, -1.0]);
-        if !f.front {
+        let s = self.s;
+        let base = t.tri as usize * 3;
+        // The weights over the original vertices, as `frag` computes them.
+        let mut wv = [0.0f32; 3];
+        for c in 0..3 {
+            for k in 0..3 {
+                wv[k] += l[c] * t.w[c][k];
+            }
+        }
+        let mut sum = [0.0f64; 3];
+        for (k, &x) in wv.iter().enumerate() {
+            let vn = s.vertices[s.indices[base + k] as usize].normal;
+            for i in 0..3 {
+                sum[i] += f64::from(vn[i]) * f64::from(x);
+            }
+        }
+        let mut n = unit(sum, 1e-20).unwrap_or([0.0, 0.0, -1.0]);
+        if !t.front {
             n = n.map(|x| -x);
         }
         // A normal turns by the inverse transpose of the view's 3 × 3, which is its cofactor
@@ -542,7 +560,7 @@ impl Band<'_> {
                     if let Some(a) = aux
                         && c[3] > 0.0
                     {
-                        a.set(i, drow[i], self.view_normal(&f), self.part(t));
+                        a.set(i, drow[i], self.view_normal(t, l), self.part(t));
                     }
                 }
                 None => discarded[i] = true,
@@ -564,7 +582,7 @@ impl Band<'_> {
                         && b.color[3] > 0.0
                     {
                         let t = &opaque.tris[b.tri as usize];
-                        a.set(i, b.depth, self.view_normal(&frag(s, t, b.l)), self.part(t));
+                        a.set(i, b.depth, self.view_normal(t, b.l), self.part(t));
                     }
                 }
                 None => vis[i].1 = EMPTY,
@@ -625,7 +643,7 @@ impl Band<'_> {
                         if let Some(a) = aux
                             && c[3] > 0.0
                         {
-                            a.offer(i, self.cam_z(f.pos), || self.view_normal(&f), self.part(t));
+                            a.offer(i, self.cam_z(f.pos), || self.view_normal(t, l), self.part(t));
                         }
                     }
                 }
@@ -732,12 +750,36 @@ pub fn try_render_with_aux(s: &Scene, limits: &Limits) -> Result<AuxTarget, Rend
 
 #[cfg(test)]
 mod tests {
-    use super::f32_crossing;
+    use super::{Band, STri, f32_crossing};
+    use crate::scene::{Scene, Vertex};
 
     #[test]
     fn a_crossing_whose_distance_difference_overflows_is_taken_in_f64() {
         // −3e38 − 1e38 overflows f32; the plane lies three quarters of the way along the edge.
         assert_eq!(f32_crossing(-3e38, 1e38), (false, 0.75));
         assert_eq!(f32_crossing(1e38, -3e38), (false, 0.25));
+    }
+
+    #[test]
+    fn an_auxiliary_normal_near_the_top_of_f32_is_interpolated_in_f64() {
+        // Three normals of `[f32::MAX, 0, 0]` at weights whose sum is just above 1: the weighted
+        // sum overflows `f32` and must still give the normal's direction.
+        let v = Vertex { normal: [f32::MAX, 0.0, 0.0], ..Vertex::default() };
+        let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+        let s = Scene { vertices: vec![v; 3], indices: vec![0, 1, 2], view: id, ..Scene::default() };
+        let t = STri {
+            p: [[0.0; 2]; 3],
+            z: [0.0; 3],
+            inv_w: [1.0; 3],
+            w: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            tri: 0,
+            front: true,
+            bbox: [0; 4],
+        };
+        let b = Band { s: &s, y0: 0, rows: 1, w: 1 };
+        let l = [0.5, 0.25, 0.25 + 2f32.powi(-22)];
+        assert_eq!(b.view_normal(&t, l), [1.0, 0.0, 0.0]);
+        let back = STri { front: false, ..t };
+        assert_eq!(b.view_normal(&back, l), [-1.0, 0.0, 0.0]);
     }
 }

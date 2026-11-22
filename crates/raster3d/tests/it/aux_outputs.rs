@@ -473,9 +473,10 @@ fn a_view_that_cannot_turn_normals_is_rejected() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn the_byte_check_counts_the_auxiliary_planes() {
-    // 2^30 × 150,000,000 pixels: the target's 40 bytes per pixel fit `isize::MAX` bytes, and 60
-    // do not. The check runs before anything is allocated.
+    // 2^30 × 150,000,000 pixels: on a 64-bit target the target's 40 bytes per pixel fit
+    // `isize::MAX` bytes, and 60 do not. The check runs before anything is allocated.
     let l = limits(|l| l.max_pixels = u64::MAX);
     let (w, h) = (1 << 30, 150_000_000);
     assert!(l.check(w, h).is_ok());
