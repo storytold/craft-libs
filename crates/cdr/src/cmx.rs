@@ -314,7 +314,7 @@ fn inner_page(b: &[u8], p: usize, end: usize, depth: usize, budget: &Budget, lef
     let first = walk(b, p, end, lists, left)?;
     found.find_map(|k| {
         let alt = walk(b, k, end, lists, left)?;
-        rejoins(b, end, &first, &alt, budget, left).map(|extra| (k, extra))
+        rejoins(b, &first, &alt, budget, left).map(|extra| (k, extra))
     })
 }
 
@@ -324,8 +324,9 @@ struct Walk {
     /// Where the walk starts, and its place after each step: the position, and for each `LIST`
     /// chunk it is inside, where that list's body ends and where the reader goes on after it.
     at: Vec<(usize, Vec<(usize, usize)>)>,
-    /// Where each chunk the walk read starts; a `LIST` chunk it enters counts by the chunks inside.
-    read: Vec<usize>,
+    /// Where each chunk the walk read starts, and where its body ends, cut at the end of the list
+    /// that holds it; a `LIST` chunk it enters counts by the chunks inside.
+    read: Vec<(usize, usize)>,
     /// The walk left the list it started in: at its end, or at stray bytes with no chunk id after
     /// them, where [`chunks`] stops reading that list too.
     ended: bool,
@@ -349,7 +350,7 @@ fn walk(b: &[u8], from: usize, end: usize, lists: usize, left: &mut usize) -> Op
                 pos = chunk + 12;
             }
             Some((next, chunk)) => {
-                w.read.extend(chunk);
+                w.read.extend(chunk.map(|c| (c, chunk_stop(b, c).map_or(list_end, |stop| stop.min(list_end)))));
                 pos = next;
             }
             None => match inside.pop() {
@@ -390,24 +391,26 @@ fn step(b: &[u8], pos: usize, end: usize) -> Option<(usize, Option<usize>)> {
 /// chunk id `first` does not, when the two walks meet at a place both pass (a position inside the
 /// same lists) or both end, and `alt` reads at least what `first` reads until then (R53). The page
 /// `alt` starts at reads with objects and without damage in its instructions. Each chunk the reader
-/// uses that `first` reads before that point, `alt` reads too, unless it is a page that reads
-/// without objects. The pages judged spend `left`; when it runs out, the walks do not meet.
-fn rejoins(b: &[u8], end: usize, first: &Walk, alt: &Walk, budget: &Budget, left: &mut usize) -> Option<Vec<usize>> {
+/// uses that `first` reads before that point, `alt` reads too, with the same body, unless it is a
+/// page that reads without objects. The pages judged spend `left`; when it runs out, the walks do
+/// not meet.
+fn rejoins(b: &[u8], first: &Walk, alt: &Walk, budget: &Budget, left: &mut usize) -> Option<Vec<usize>> {
     let meet = first.at.iter().find(|q| alt.at.contains(q)).map(|(q, _)| *q).or((first.ended && alt.ended).then_some(usize::MAX))?;
     let uses = |q: usize| q < meet && id_at(b, q).is_some_and(|id| READ_IDS.contains(&id));
-    let used = |w: &Walk| -> Vec<usize> { w.read.iter().copied().filter(|&q| uses(q)).collect() };
+    let used = |w: &Walk| -> Vec<(usize, usize)> { w.read.iter().copied().filter(|&(q, _)| uses(q)).collect() };
     let (kept, taken) = (used(first), used(alt));
-    let start = *alt.read.first()?;
-    if page_reads(b, start, end, budget, left)? != (true, false) {
+    let (start, stop) = *alt.read.first()?;
+    if page_reads(b, start, stop, budget, left)? != (true, false) {
         return None;
     }
-    for &q in kept.iter().filter(|q| !taken.contains(q)) {
-        // A page that reads without objects is the only chunk the walk from `alt` may leave out.
-        if id_at(b, q) != Some(*b"page") || page_reads(b, q, end, budget, left)?.0 {
+    for &(q, stop) in kept.iter().filter(|q| !taken.contains(q)) {
+        // A page that reads without objects is the only chunk the walk from `alt` may leave out,
+        // or read with a body cut shorter by a list.
+        if id_at(b, q) != Some(*b"page") || page_reads(b, q, stop, budget, left)?.0 {
             return None;
         }
     }
-    Some(taken.into_iter().filter(|q| !kept.contains(q)).collect())
+    Some(taken.into_iter().map(|(q, _)| q).filter(|q| !kept.iter().any(|&(k, _)| k == *q)).collect())
 }
 
 /// Whether the page chunk at `at` reads with objects, and whether its instructions read with

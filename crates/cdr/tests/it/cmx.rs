@@ -644,6 +644,38 @@ fn after_stray_bytes_a_page_is_read_when_the_chunk_found_lands_inside_a_list() {
     assert_eq!(names, [name, "R"]);
 }
 
+#[test]
+fn after_stray_bytes_a_page_is_not_read_when_a_list_cuts_short_the_page_both_walks_reach() {
+    // As above, except that the list ends after the header of the page inside it, so walking on
+    // from the inner page reads that page without its body. Walking on from the letters reads the
+    // whole page, so the reader resumes at the letters and the page keeps its square.
+    let (name, q) = ["Q", "Qa"]
+        .iter()
+        .map(|n| {
+            let carried = long_instr(-1, &[b"page".as_slice(), &12u32.to_le_bytes()].concat());
+            (*n, [begin_page(None), begin_layer(n, None), square(&attrs(Some(1), None, false), 0, 0, 1000), end_layer(), carried].concat())
+        })
+        .find(|(_, body)| body.len() % 2 == 0)
+        .unwrap();
+    let r = page(&[begin_page(None), begin_layer("R", None), square(&attrs(Some(1), None, false), 0, 0, 2000), end_layer()]);
+    let mut b = vec![1u8; 2];
+    b.extend(b"abcd");
+    b.extend((q.len() as u32).to_le_bytes());
+    b.extend(chunk(b"page", &q));
+    b.extend(b"LIST");
+    b.extend(12u32.to_le_bytes());
+    b.extend(b"pgls");
+    b.extend(r);
+    let mut children = vec![cont(b'4', 1e-7)];
+    children.extend(tables());
+    children.push(b);
+    let d = read_checked(&riff(&children), Limits::default()).unwrap();
+    let names: Vec<&str> = d.pages.iter().filter_map(|p| p.layers.first()).map(|l| l.name.as_str()).collect();
+    assert!(!names.contains(&name), "{names:?}");
+    assert_eq!(names, ["R"]);
+    assert_eq!(d.pages.last().unwrap().layers[0].objects.len(), 1);
+}
+
 /// A page that fills with color 1, then, inside a list, letters spelling `page` whose length runs
 /// past the list and that hold another page and a color table of one red entry, then `after`.
 fn page_and_recovered_red(after: &[Vec<u8>]) -> Vec<u8> {
