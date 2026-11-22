@@ -30,6 +30,7 @@ mod geom;
 mod place;
 mod size;
 mod text;
+mod units;
 mod wmf;
 
 #[cfg(feature = "write")]
@@ -44,9 +45,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use canvas::Raw;
 use geom::{Op, P};
+mod eof;
+pub use eof::ends_early;
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
 pub use text::{Font, HAlign, SYMBOL_CHARSET, Text, VAlign};
+pub use units::{EmfDevice, EmfPhysicalSize, UnitFacts, unit_facts};
 
 /// Items kept from one file. Past the cap the parse stops and keeps what it has.
 pub(crate) const MAX_ITEMS: usize = 200_000;
@@ -60,6 +64,8 @@ pub(crate) const MAX_STACK: usize = 1024;
 pub(crate) const MAX_PATH_OPS: usize = 2_000_000;
 /// Bytes of path ops and pixels kept from one file (about 256 MB).
 pub(crate) const MAX_BYTES: usize = 256 * 1024 * 1024;
+/// Maximum metafile nesting depth (EMF+ metafile images and WMF-wrapped EMFs).
+pub(crate) const MAX_NESTED_DEPTH: u8 = 3;
 
 /// A parsed metafile. Items use coordinates in `0..width` and `0..height`, y down.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -244,18 +250,41 @@ pub(crate) struct Frame {
 /// Parses a WMF (placeable or plain) or EMF file.
 pub fn parse(bytes: &[u8]) -> Result<Picture, Error> {
     dib::set_decode_budget(dib::MAX_DECODE_PIXELS);
-    parse_nested(bytes)
+    parse_nested(bytes, 0)
 }
 
 /// [`parse`] for a metafile inside the one being parsed: it draws on the same budgets.
-pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
+pub(crate) fn parse_nested(bytes: &[u8], depth: u8) -> Result<Picture, Error> {
+    if depth > MAX_NESTED_DEPTH {
+        return Err(Error::NoRecords);
+    }
     let b = Bytes(bytes);
     let (cv, frame) = if emf::is_emf(b) {
-        emf::parse(b)?
+        emf::parse(b, depth)?
     } else if wmf::is_wmf(b) {
         // A WMF converted from an EMF can carry the original in MFCOMMENT escapes; Office draws
-        // the WMF's own records (its dx rounding shows), so the copy is not used.
-        wmf::parse(b)?
+        // the WMF's own records (its dx rounding shows), so the copy is used only when the outer
+        // WMF produces no drawing items of its own.
+        let mut parsed = wmf::parse(b)?;
+        if parsed.cv.items.is_empty() {
+            if parsed.embedded_emf_capped {
+                parsed.cv.truncated_inside = true;
+            } else if let Some(emf_bytes) = parsed.embedded_emf.as_deref()
+                && emf::is_emf(Bytes(emf_bytes))
+            {
+                if depth >= MAX_NESTED_DEPTH {
+                    parsed.cv.truncated_inside = true;
+                } else if let Ok(mut pic) = parse_nested(emf_bytes, depth + 1) {
+                    pic.skipped_records = pic.skipped_records.saturating_add(parsed.cv.skipped);
+                    pic.truncated |= parsed.cv.full() || parsed.cv.truncated_inside;
+                    pic.dropped_images = pic.dropped_images.saturating_add(parsed.cv.dropped_images);
+                    pic.ignored_clips = pic.ignored_clips.saturating_add(parsed.cv.ignored_clips);
+                    pic.unplayed_raster_ops = pic.unplayed_raster_ops.saturating_add(parsed.cv.unplayed_raster_ops);
+                    return Ok(pic);
+                }
+            }
+        }
+        (parsed.cv, parsed.frame)
     } else {
         return Err(Error::NotMetafile);
     };
