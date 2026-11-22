@@ -53,15 +53,19 @@ fn mix(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// sRGB-encoded → linear light.
+/// sRGB-encoded → linear light. The segment is chosen by magnitude and a negative value keeps
+/// its sign, as in CSS Color 4's conversion code.
 #[inline]
 pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    let a = c.abs();
+    if a <= 0.04045 { c / 12.92 } else { ((a + 0.055) / 1.055).powf(2.4).copysign(c) }
 }
-/// Linear light → sRGB-encoded (over-range values continue the curve).
+/// Linear light → sRGB-encoded. Values above 1 continue the curve; the segment is chosen by
+/// magnitude and a negative value keeps its sign, as in CSS Color 4's conversion code.
 #[inline]
 pub fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+    let a = c.abs();
+    if a <= 0.0031308 { c * 12.92 } else { (1.055 * a.powf(1.0 / 2.4) - 0.055).copysign(c) }
 }
 
 /// GGX / Trowbridge–Reitz normal distribution, `a = roughness²`.

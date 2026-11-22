@@ -111,7 +111,7 @@ fn mean_f64(t: &Target, k: usize, x: usize, y: usize) -> ([f32; 4], f32) {
 ///
 /// Every pixel is checked before any is changed. Returns [`RenderError::BadPixel`] with the first
 /// pixel whose channels are not finite, whose alpha is negative or over 1 (beyond rounding), or
-/// whose color divided by its alpha or encoded is not finite,
+/// whose color divided by its alpha is not finite,
 /// and [`RenderError::BadDataLength`] when the image does not hold width × height pixels.
 pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
     let expected = area(img.width, img.height).ok_or(RenderError::TooLarge(img.width, img.height))?;
@@ -121,8 +121,8 @@ pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
     let bad = |p: &[f32; 4]| {
         !p.iter().all(|c| c.is_finite()) || p[3] < 0.0 || p[3] > 1.0 + ALPHA_SLACK || (p[3] > 1e-6 && !p[..3].iter().all(|c| (c / p[3]).is_finite()))
     };
-    // A pixel that fails the checks above is written as NaN, so the first pixel that is invalid or
-    // does not encode is reported.
+    // A pixel that fails the checks above is written as NaN, so the first invalid pixel is
+    // reported.
     let encoded: Vec<[f32; 4]> = map_collect(&img.data, |&p| {
         if bad(&p) {
             return [f32::NAN; 4];
@@ -136,7 +136,6 @@ pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
         }
         p
     })?;
-    // A finite color far outside 0 to 1 can still overflow the curve's segments.
     if let Some(i) = encoded.iter().position(|p| !p.iter().all(|c| c.is_finite())) {
         return Err(RenderError::BadPixel(i));
     }

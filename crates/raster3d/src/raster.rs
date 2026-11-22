@@ -7,7 +7,7 @@
 //! nearer) and each pixel is shaded once; transparent triangles (already sorted back to front)
 //! are then shaded per fragment and blended over, depth-tested against the opaque surfaces.
 
-use crate::scene::{Scene, Vertex, validate, validate_shadow_refs};
+use crate::scene::{Scene, Vertex, validate, validate_passes, validate_shadow_refs};
 use crate::shade::{Frag, shade};
 use crate::{Limits, RenderError, filled, for_each_chunk_pair, try_with_capacity};
 
@@ -546,6 +546,7 @@ fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Result<T
 /// infinite depth. A triangle whose clipped polygon has zero area draws nothing.
 pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
     let pixels = validate(s, limits)?;
+    validate_passes(s)?;
     validate_shadow_refs(s)?;
     let clip = clip_positions(s)?;
     let mut work = 0;

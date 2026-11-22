@@ -28,7 +28,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   first and each pixel is shaded once; where the visible fragment is discarded (an alpha test or the
   back face of a single-sided material), the nearest surviving fragment under the pixel is shaded
   instead. The remaining indices are transparent triangles, which the caller sorts back to front.
-  Each is shaded per fragment, depth-tested against the opaque surfaces and blended over them.
+  Each is shaded per fragment, depth-tested against the opaque surfaces and blended over them. A
+  triangle whose material is shadows-only belongs in the transparent range; `try_render` returns an
+  error for one in the opaque range unless its material's `visible` is false.
 - **Facing.** A triangle whose screen-space winding is negative with y down
   (counterclockwise on the screen) faces the camera. A material with `double_sided` false does not
   draw back faces; a double-sided material shades a back face with its normal reversed.
@@ -75,40 +77,50 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   `try_env_shadow_map` builds the environment light's map. A second call of `try_shadow_maps`
   replaces the maps of the first, and gives the same maps and marks. Its depth tests (one per
   caster and map, plus each caster's bounding box in each map) are limited by `max_work`, and on
-  an error it leaves the scene as it was.
+  an error it leaves the scene as it was. The bounding boxes of casters that are skipped for their
+  material's alpha or opacity are not counted: a masked or blended caster without a base texture
+  whose alpha fails its test, a masked or blended caster with a base texture whose base alpha
+  times the opacity (the base alpha alone when masked) is 0 under a cutoff above 0, and an
+  opaque-mode or masked caster with an opacity below 0.5.
 - **Resolve and encoding.** `try_resolve(&target, k)` averages each `k × k` block of premultiplied
   pixels with equal weights, and takes the mean depth of the block's covered pixels, infinity where
   none is covered; a pixel whose `f32` sums overflow, and every pixel when a block holds more than
   2^24 subsamples, is averaged in `f64`. `try_encode(&mut image)` divides each color by alpha, applies the sRGB transfer
   function of CSS Color 4 (<https://www.w3.org/TR/css-color-4/#color-conversion-code>), a linear
-  segment up to 0.0031308 and a 1/2.4 power above it, multiplies by alpha again and leaves alpha
-  linear. Pixels with alpha of 1e-6 or less are left as they are. `try_render_cpu` renders and
+  segment up to a magnitude of 0.0031308 and a 1/2.4 power above it, with a negative color keeping
+  its sign, multiplies by alpha again and leaves alpha linear. `srgb_to_linear` decodes a negative
+  value the same way. Pixels with alpha of 1e-6 or less are left as they are. `try_render_cpu` renders and
   resolves by `Scene::ssaa`, and rejects a factor that does not divide the raster size before it
   renders.
 - **Limits.** `Limits` caps the raster pixels (2^24), the triangles of a scene (2^22), its vertices, used or not (3 × 2^22), the lights
   (1024) and the coverage tests of the visibility and transparent passes (2^31: the pixels of every
-  clipped triangle's bounding box, plus one per triangle). Every `try_` function checks the scene
-  first and returns a `RenderError` before it allocates the target: a zero side, a size over the
-  limits, a side over 2^30, a buffer over `isize::MAX` bytes, a light whose shadow map does not
+  clipped triangle's bounding box, plus one per triangle). `try_render`, `try_render_cpu` and
+  `try_shadow_maps` check the scene first and return a `RenderError` before they allocate a target
+  or a map: a zero side, a size over the limits, a side over 2^30, a buffer over `isize::MAX` bytes, a light whose shadow map does not
   exist (`try_render`; a mark of −1 means no shadow), an index list that is not whole triangles, an index, material
   or texture that does not exist, an environment light with no radiance level or with a level or
   irradiance map that does not exist, a texture or shadow-map span past its array, a value that is
   not finite, a material or texel alpha, a material opacity, metallic, roughness or occlusion
   strength, a shadow darkness or an environment
-  light's key outside 0 to 1, a negative shadow diffusion, a parallel or spot light direction or an environment light direction
+  light's key outside 0 to 1, a negative shadow diffusion or shadow-map radius, a parallel or spot light direction or an environment light direction
   (other than zero) whose length differs from 1 by more than 0.001, a spot light whose inner cone
   cosine is below its outer one, a light kind
-  or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns
+  or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` also returns
+  `ShadowsOnlyOpaque` for a triangle in the opaque range whose material is shadows-only and
+  visible, and
   `BadPixel` when a rendered color or depth overflows `f32` (finite inputs near the top of its
   range). `try_shadow_maps` also returns an error when a map's view or a caster's
   light-space corners would not fit `f32` (vertices far from the origin).
   `try_env_shadow_map` returns an error for inputs out of range and for a map that would hold a
-  value that is not finite. `try_resolve` returns an error for a factor that is zero or does
-  not divide both sides and for buffers of the wrong length. `try_encode` returns an error for a
+  value that is not finite. `try_resolve` and `try_encode` take no `Scene` and check only their
+  own inputs. `try_resolve` returns an error for a factor that is zero or does not divide both
+  sides and for buffers of the wrong length; a target with a zero side resolves to an empty image.
+  `try_encode` returns an error for an image whose buffer does not hold width × height pixels, a
   pixel that is not finite, an alpha below 0 or above 1 (beyond 1e-4 of rounding), or a color whose
-  division by alpha or encoding overflows, and changes no pixel then; the error names the first
-  such pixel. The renderer holds 40 bytes per raster
-  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. Targets, images,
+  division by alpha overflows, and changes no pixel then; the error names the first such pixel. The renderer holds 40 bytes per raster
+  pixel (color, depth and visibility) and up to seven clipped triangles of about 140 bytes per
+  scene triangle. A band of 16 rows that has a discarded opaque pixel also holds 29 bytes per pixel
+  (a discard flag and a candidate fragment) while its opaque pixels are shaded. Targets, images,
   shadow maps and the working buffers that grow with the raster or the vertex or triangle count
   are reserved fallibly: when a reservation fails, the `try_` function returns `OutOfMemory`. A
   triangle's clipped polygon, at most nine corners, and the shadow pass's lists of lights and
@@ -150,19 +162,23 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
 
 The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resolve`, `encode`,
 `render_cpu`), `adv/raster.rs`, `adv/shade.rs` and the scene types of `adv/scene.rs`, at
-`2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane,
-whose depth-range crossings lie more than 1/4096 of an edge from its inside corner, whose texture
-coordinates times the texture's width or height stay below 2^23 in magnitude, whose normals'
-squared lengths, squared distances from fragments to point and spot lights, and casters'
-light-space coordinates times a map's focal length fit `f32`, whose
-shadow-casting spot lights' outer cones are at most 1.40 radians wide, whose resolve blocks hold
-at most 2^24 subsamples, whose shadows-only materials receive
-shadows, whose fragments under discarded opaque pixels stay inside the depth range, whose blended
-casters have a base texture, whose opaque-mode and masked casters have an opacity of 0.5 or more,
-and whose casters do not reach within
-1 unit of light-space depth of a spot or point light, every shadow texel, raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit for bit
-with the alpha-mask change of storytold/effectcraft#4075 applied;
-`tests/it/differential.rs` runs a copy of EffectCraft's code with that change on the same scenes.
+`2f16feb12f`. `tests/it/differential.rs` runs a copy of EffectCraft's code with the alpha-mask
+change of storytold/effectcraft#4075 applied on the scenes in that module, and for those scenes
+every shadow texel, raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit
+for bit. Each test prints the FNV-1a hashes of both sides' outputs. Other valid scenes can differ
+through the changes listed below, for example where triangles leave the guard band or reach the
+far plane, where depth-range crossings lie within 1/4096 of an edge from its inside corner, where
+texture coordinates times the texture's width or height reach 2^23 in magnitude, where normals'
+squared lengths, squared distances from fragments to point and spot lights, or casters'
+light-space coordinates times a map's focal length overflow `f32`, where shadow-casting spot
+lights' outer cones are over 1.40 radians wide, where resolve blocks hold more than 2^24
+subsamples, where shadows-only materials do not receive shadows, where fragments under discarded
+opaque pixels leave the depth range, where blended casters have no base texture, where
+opaque-mode and masked casters have an opacity below 0.5, where casters reach within 1 unit of
+light-space depth of a spot or point light, where an encoded color is negative, and where a
+texture is sampled between large finite texels of opposite signs. Halfway between red values of
+`3e38` and `−3e38`, for example, the sampler here returns red 0 and EffectCraft's interpolation
+overflows `f32`.
 Changes from those files:
 
 - Scenes, resolve factors and pixels are checked, and sizes, triangles, lights and coverage work
@@ -194,10 +210,19 @@ Changes from those files:
   whose interpolated depth rounded past 1.
 - A shadows-only material that does not receive shadows draws nothing. EffectCraft drew the
   shadows on it.
+- A triangle in the opaque range whose material is shadows-only and visible is an error.
+  EffectCraft shaded it in the opaque pass, which wrote its shadow color and its depth and hid the
+  surfaces behind it. Its scene builder puts shadows-only triangles in the transparent range, so its scenes pass.
 - A texture coordinate whose value times the texture's width or height reaches 2^23 is scaled to
   texels in `f64`, after a repeated or mirrored axis reduces it by its period. EffectCraft scaled
   it in `f32`, which dropped the half-texel shift there, and from 2^24 saturated the texel index,
-  which picked a texel off the wrap period.
+  which picked a texel off the wrap period. A shadow caster's texture coordinate whose
+  perspective interpolation overflows `f32` (a large coordinate times a corner's 1/depth) is
+  interpolated in `f64`; EffectCraft's was infinite, and its alpha test read a texel off the wrap
+  period.
+- A negative color is encoded on the sRGB curve with its magnitude choosing the segment and its
+  sign kept, as CSS Color 4's conversion code does. EffectCraft put every negative value on the
+  linear segment, so red −0.25 encoded to −3.23 instead of about −0.537.
 - A normal whose squared length overflows `f32`, and the direction to a point or spot light whose
   squared distance overflows `f32`, are normalized in `f64`. EffectCraft divided them by an
   infinite length, so the surface took no direct light.
