@@ -430,7 +430,8 @@ impl Component for ListRow<'_> {
         if self.progress.is_some() {
             access.node(PROGRESS, Role::PROGRESS_INDICATOR).name = Name::Text(label.to_owned());
         }
-        if let Some(open) = self.group {
+        // A rule head's group is always open and has no disclosure.
+        if let Some(open) = self.group.filter(|_| !self.rule_head) {
             access.expanded(open);
             if !self.disclosure_by_host {
                 let pattern = if open { &words.collapse } else { &words.expand };
