@@ -204,12 +204,14 @@ fn a_field_editor_keeps_its_draft_when_its_popup_is_used() {
     let shown_ends = ends.clone();
     let mut host = Host { text: "abc".into(), ..Host::default() };
     let mut selection = TextSelection::caret_at(3);
-    let mut open = true;
+    let open = Rc::new(Cell::new(false));
+    let shown_open = open.clone();
     let mut picked = Some(PickedDate::day(2025, 3, 14));
     let mut fixture = Fixture::new(move |ui| {
         let bounds = Rect::from_min_size(pos2(20.0, 20.0), vec2(200.0, 20.0));
         let output = TextEditor::new("Text", &mut host, Bind::bound(&mut selection)).mode(EditorMode::FieldLine).show_at(ui, bounds);
         shown_ends.borrow_mut().extend(output.ended);
+        let mut open = shown_open.get();
         CalendarPopover::new("Calendar", Bind::bound(&mut open), Bind::bound(&mut picked))
             .precisions(&[DatePrecision::Day])
             .overlay(|overlay| {
@@ -217,9 +219,12 @@ fn a_field_editor_keeps_its_draft_when_its_popup_is_used() {
                     .dismiss(Dismiss::new().focus_left(false))
             })
             .show(ui, |_, _| {});
+        shown_open.set(open);
     });
     fixture.settle();
     fixture.click_at(pos2(30.0, 30.0)).settle();
+    open.set(true);
+    fixture.settle();
     let next = fixture.by_label("Next").expect("the calendar is open");
     fixture.click(&next).settle();
     assert!(ends.borrow().is_empty(), "using the popup must not end the field editor");
