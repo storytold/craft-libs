@@ -110,6 +110,8 @@ fn a_corner_pick_reports_the_cell_and_the_glyph() {
     let (mut fx, seen) = rig();
     let cell = fx.by_label(&name(FIRST)).expect("the first cell");
     fx.frame(vec![Event::PointerMoved(cell.center())]);
+    // A tile declares its hover-revealed parts from the last pass's hover.
+    fx.settle();
     let action = fx.by_label("Show Alternates").expect("the corner action shows while the pointer is over the cell");
     fx.click(&action);
     fx.settle();
@@ -129,6 +131,7 @@ fn glyphs_panel_alternates() {
     let cell = fx.by_label(&name(FIRST)).expect("the first cell");
     assert!(fx.by_label("Show Alternates").is_none(), "the corner action stays hidden while the pointer is elsewhere");
     fx.frame(vec![Event::PointerMoved(cell.center())]);
+    fx.settle();
     let action = fx.by_label("Show Alternates").expect("the corner action shows while the pointer is over the cell");
     fx.click(&action);
     fx.settle();
