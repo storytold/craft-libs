@@ -225,6 +225,8 @@ pub struct FormDialog<'a, V: Value + Default> {
     opening: Option<V>,
     /// Where OK files the values instead of closing; a refusal shows until the values change.
     held: Option<&'a mut HeldAnswer<V>>,
+    /// Only the content, for a window of its own (`Dialog::bare`).
+    bare: bool,
 }
 
 impl<'a, V: Value + Default> FormDialog<'a, V> {
@@ -257,6 +259,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             opening: None,
             on_reset: None,
             held: None,
+            bare: false,
         }
     }
 
@@ -360,6 +363,13 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
+    /// Shows only the content (`Dialog::bare`): the body, its notice and the buttons, for a window of its own that has
+    /// the title and the close action (`DialogHost::run_windowed`).
+    pub fn bare(mut self, on: bool) -> Self {
+        self.bare = on;
+        self
+    }
+
     /// The Preview check box, first in the footer: the host previews the value while it is on, and the unfiltered
     /// picture while it is held ([`FormOutput::comparing`]). With `on`, the box reads and writes that bind (a kept
     /// bind starts on). Without it, every open starts with the box on, and the dialog keeps it off while it stays open.
@@ -445,6 +455,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             on_reset,
             opening,
             held: hold,
+            bare,
         } = self;
         // A measuring run files and closes nothing: the real run that follows does.
         let measuring_run = crate::runtime::measure::active(ui.ctx());
@@ -544,6 +555,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         }
         if let Some(shape) = shaped {
             dialog = shape(dialog);
+        }
+        if bare {
+            dialog = dialog.bare();
         }
         if hold.is_some() {
             let reason = Rc::clone(&reason_cell);

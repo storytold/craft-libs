@@ -104,6 +104,8 @@ pub struct Dialog<'a> {
     /// The body ran in this pass: the header region marks it.
     body_shown: bool,
     alert: bool,
+    /// Shows only the content, for a window of its own ([`bare`](Dialog::bare)).
+    bare: bool,
     /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
     /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
     /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
@@ -145,6 +147,7 @@ impl<'a> Dialog<'a> {
             picked: None,
             body_shown: false,
             alert: false,
+            bare: false,
             refusal: None,
         }
         .label(title)
@@ -161,6 +164,25 @@ impl<'a> Dialog<'a> {
             Mount::Viewport { fallback, spec } => self.props.mount(Mount::Viewport { fallback: change(fallback), spec }),
             _ => self.props.mount(Mount::Layer(change(Overlay::dialog().resizable(false)))),
         };
+        self
+    }
+
+    /// Shows only the dialog's content in the flow of its parent: the body, its refusal notice and the buttons, without
+    /// the surface, the title row or the close action. For a dialog in a window of its own, which has those
+    /// (`DialogHost::run_windowed`). Escape still cancels and Enter still answers, through a dialog focus scope. Call it
+    /// last: [`overlay`](Dialog::overlay) and [`viewport`](Dialog::viewport) mount the dialog again.
+    #[must_use]
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
+        self.props.mount = Mount::Inline;
+        self.props.surface = None;
+        self.props.pad = Pad::None;
+        self.props.header = Some(HeaderRegion::new());
+        self.props.focus = crate::runtime::focus::FocusPolicy::DIALOG;
+        // An inline container closes on Escape only with an open state; the layer kept one of its own.
+        if self.open.is_none() {
+            self.open = Some(Bind::kept());
+        }
         self
     }
 
@@ -501,6 +523,9 @@ impl Container for Dialog<'_> {
         self.body_shown = true;
         if self.holds_outer_gesture() {
             outer::keep(ui.ctx(), cx);
+        }
+        if self.bare {
+            return;
         }
         frame::header(ui, cx, frame::close_action(self.closable));
         self.keep_window_draggable(ui);

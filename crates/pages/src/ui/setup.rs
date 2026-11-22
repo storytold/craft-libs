@@ -623,6 +623,9 @@ pub struct PageSetupDialog<'a> {
     /// OK files the setup in the held answer and the dialog stays open until the app answers it (`FormDialog::held`).
     #[prop(into)]
     held: Option<&'a mut craft_ui::dialog::HeldAnswer<PageSetup>>,
+    /// Shows only the content, for a window of its own (`FormDialog::bare`).
+    #[prop]
+    bare: bool,
 }
 
 impl<'a> PageSetupDialog<'a> {
@@ -637,18 +640,19 @@ impl<'a> PageSetupDialog<'a> {
             direction: false,
             open: None,
             held: None,
+            bare: false,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> FormOutput<PageSetup> {
-        let PageSetupDialog { setup, papers, unit, document_setup, layout, direction, open, held } = self;
+        let PageSetupDialog { setup, papers, unit, document_setup, layout, direction, open, held, bare } = self;
         let env = Env::of(ui);
         let words = env.words::<PageSetupDialogWords>();
         let common = env.words::<CommonWords>();
         let rows = Rows { words: &words, common: &common, units: env.units(), unit };
         let title = if document_setup { words.document_setup.clone() } else { words.title.clone() };
-        let mut dialog = FormDialog::new(title, setup).outer_gesture(true);
+        let mut dialog = FormDialog::new(title, setup).outer_gesture(true).bare(bare);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

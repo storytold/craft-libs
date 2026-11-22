@@ -809,3 +809,48 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "text that is no number leaves the value");
     assert!(!alert(), "and raises no alert");
 }
+
+// A bare form (a window of its own has the title and the close box) shows its body and buttons without a close box of
+// its own; Enter still files the held OK, and Escape still cancels.
+#[trial]
+fn a_bare_form_has_no_close_box_and_enter_and_escape_still_answer() {
+    let showing = Rc::new(Cell::new(true));
+    let shown_with = |bare: bool| {
+        let held = Rc::new(RefCell::new(HeldAnswer::<bool>::new()));
+        let (state, closed) = (Rc::clone(&held), Rc::new(Cell::new(None::<CloseReason>)));
+        let (ended, on) = (Rc::clone(&closed), Rc::clone(&showing));
+        let mut fixture = Fixture::new(move |ui| {
+            if !on.get() {
+                return;
+            }
+            let mut held = state.borrow_mut();
+            let shown = FormDialog::own("Insert").held(&mut held).bare(bare).show(ui, |ui, _, value: &mut bool| {
+                Checkbox::new(Bind::bound(value)).label("Wide").show(ui);
+                true
+            });
+            if let Some(why) = shown.closed {
+                ended.set(Some(why));
+            }
+        });
+        fixture.idle(10);
+        (held, closed, fixture)
+    };
+    let (_, _, framed) = shown_with(false);
+    assert!(framed.by_label("Close").is_some(), "the dialog over a window has its own close box");
+
+    let (held, closed, mut fixture) = shown_with(true);
+    assert!(fixture.by_label("Close").is_none(), "the bare form leaves the close box to its window");
+    for label in ["Wide", "OK", "Cancel"] {
+        assert!(fixture.by_label(label).is_some(), "{label} is shown");
+    }
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(held.borrow().is_waiting(), "Enter files the values");
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(closed.get().is_some(), "Escape cancels");
+    // Opened again after it closed, it shows open.
+    showing.set(false);
+    fixture.idle(4);
+    showing.set(true);
+    fixture.idle(10);
+    assert!(fixture.by_label("OK").is_some(), "a bare form opened again shows");
+}
