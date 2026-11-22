@@ -1667,6 +1667,14 @@ mod tests {
         let text = "Het huis en de fietz.";
         let english_before = check_text(text, &[]);
         let unchecked = |lang: ProofLang| check_text(text, &[(0..text.len(), lang)]).iter().all(|i| i.kind == IssueKind::Grammar);
+        // System dictionaries are valid sources too; the Dutch pack must leave French unchanged.
+        let french = ProofLang::from_tag(Some("fr-FR"));
+        let french_state = || (
+            has_dictionary(Some("fr-FR")),
+            pack_dictionary_file(french),
+            check_text(text, &[(0..text.len(), french)]),
+        );
+        let french_before = french_state();
         let before = (is_correct_in("fietz", nl), hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), pack_dictionary_file(nl));
         let pack = write_pack(
             &root,
@@ -1678,15 +1686,8 @@ mod tests {
             ],
         );
         packs::set_packs_dir(Some(root.clone()));
-        assert!(
-            nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("fr-FR")),
-            "nl={}, nl-BE={}, fr-FR={}, French file={:?}, French error={:?}",
-            nl.is_proofed(),
-            has_dictionary(Some("nl-BE")),
-            has_dictionary(Some("fr-FR")),
-            pack_dictionary_file(ProofLang::from_tag(Some("fr-FR"))),
-            dictionary_load_error(ProofLang::from_tag(Some("fr-FR"))),
-        );
+        assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")));
+        assert_eq!(french_state(), french_before, "the Dutch pack does not change French availability, source or proofing");
         assert_eq!(pack_dictionary_file(nl), Some(pack.join("spelling.dic")));
         assert_eq!(pack_dictionary_file(ProofLang::from_tag(Some("nl"))), Some(pack.join("spelling.dic")), "a region falls back to the pack");
         for w in ["huis", "Huis", "huizen", "huisen", "fietsen", "HUIS"] {
@@ -1702,7 +1703,11 @@ mod tests {
         assert!(suggest_in("fietz", 5, nl).contains(&"fiets".to_string()), "{:?}", suggest_in("fietz", 5, nl));
         assert!(check_grammar_in("de de huis", nl).is_empty(), "no grammar rules");
         assert_eq!(hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), "xx-naxx");
-        assert!(unchecked(ProofLang::from_tag(Some("fr-FR"))), "a language with no pack stays unchecked");
+        assert_eq!(
+            unchecked(french),
+            french_before.2.iter().all(|i| i.kind == IssueKind::Grammar),
+            "an unrelated language remains unchecked when it had no dictionary, or keeps its existing proofing",
+        );
         assert_eq!(check_text(text, &[]), english_before, "English is unaffected");
         // A broken dictionary is reported, never a panic.
         std::fs::write(pack.join("spelling.aff"), "SET SHIFT_JIS\n").unwrap();
