@@ -26,6 +26,7 @@ pub struct NodeKey(u64);
 
 impl NodeKey {
     /// The AccessKit node number.
+    #[cfg(feature = "testing")]
     pub(crate) fn raw(self) -> u64 {
         self.0
     }
