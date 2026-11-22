@@ -1,7 +1,7 @@
 //! The intents routed to a component and what it leaves untaken: Submit, Cancel, Escape and context requests.
 
 use super::route::push;
-use super::{Stage, current};
+use super::{Nudge, Stage, current};
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
 use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, PartRef};
@@ -17,7 +17,7 @@ pub struct Intents {
     /// read by index, so an item pushed without one has none.
     places: Vec<Option<usize>>,
     took_arrows: Vec<NavMove>,
-    nudge: Option<(Vec2, Mods)>,
+    nudge: Option<Nudge>,
     chords: Vec<Chord>,
     set_value: Option<(Option<PartRef>, f64)>,
     whole_reset: bool,
@@ -154,7 +154,14 @@ impl Intents {
 
     /// Takes the physical arrow nudge for canvas content: a unit direction and the modifiers.
     pub fn take_nudge(&mut self) -> Option<(Vec2, Mods)> {
-        self.nudge.take()
+        self.nudge.take().map(|nudge| (nudge.direction, nudge.mods))
+    }
+
+    /// The keys that were down when the arrow of the nudge not yet taken went down, the arrow not among them; empty
+    /// without one. Unlike `keys::held`, which is the state after the frame's input, it keeps the order of the frame's
+    /// events: a key let go after the arrow in the same frame was held with it, and one pressed after it was not.
+    pub fn nudge_held(&self) -> &[Key] {
+        self.nudge.as_ref().map_or(&[], |nudge| &nudge.held)
     }
 
     /// Takes the chords this pass's presses spell, for a component whose key use is `KeyUse::RECORDER`; empty for any

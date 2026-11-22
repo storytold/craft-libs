@@ -87,6 +87,16 @@ struct Press {
     canvas: bool,
     /// The press's place among the frame's events ([`Batch::place`]).
     place: usize,
+    /// The keys down when it went down, itself not among them: what a nudge reads as held with its arrow.
+    held: Vec<Key>,
+}
+
+/// An arrow press as a nudge of content: its unit direction, its modifiers and the keys down when it went down.
+#[derive(Clone, Debug)]
+pub(crate) struct Nudge {
+    pub(crate) direction: Vec2,
+    pub(crate) mods: Mods,
+    pub(crate) held: Vec<Key>,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
@@ -217,7 +227,7 @@ struct Item {
 #[derive(Clone, Default)]
 struct Routed {
     items: Vec<Item>,
-    nudge: Option<(Vec2, Mods)>,
+    nudge: Option<Nudge>,
     /// The chords a recorder stop's presses spell this pass.
     chords: Vec<Chord>,
     set_value: Option<(Option<PartRef>, f64)>,

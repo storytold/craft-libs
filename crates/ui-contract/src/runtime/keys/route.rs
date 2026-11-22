@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, EscapePress, Item, MenuKey, Node, Press, Routed, Shortcuts, Taken, current, with};
+use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Taken, current, with};
 use crate::runtime::commands::{self, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
@@ -110,7 +110,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
                 *taken = Taken::Yes;
-            } else if !modal && let Some(nudge) = nudge_of(press.key, press.mods) {
+            } else if !modal && let Some(nudge) = nudge_of(press) {
                 routed.entry(None).or_default().nudge = Some(nudge);
                 *taken = Taken::Yes;
             }
@@ -359,7 +359,17 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     if current(ctx, |stage| super::input::focused_claims(&record, stage)).contains(&chord) {
         return true;
     }
-    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None, canvas: false, place: 0 };
+    let press = Press {
+        key: chord.key,
+        mods: chord.mods,
+        repeat: false,
+        in_egui: None,
+        release: None,
+        text: None,
+        canvas: false,
+        place: 0,
+        held: Vec::new(),
+    };
     let driven = Driven::of(ctx, &rec);
     let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));
     let taken = !matches!(route, PressRoute::Free);
@@ -545,7 +555,7 @@ enum PressRoute {
     /// An intent of the stop.
     Intent(Intent),
     /// A nudge of the stop's content.
-    Nudge((Vec2, Mods)),
+    Nudge(Nudge),
 }
 
 /// Where one key press of the focused component goes: the table's row, else the activation keys, else a nudge. The
@@ -605,7 +615,7 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         None if press.key == Key::Tab && press.mods == Mods::SHIFT && stop.keys.keep == focus::KeepKeys::Tab && stop.keys.is_document_editor() => {
             PressRoute::Intent(Intent::BackTab)
         }
-        None if stop.role.nudge => nudge_of(press.key, press.mods).map_or(PressRoute::Free, PressRoute::Nudge),
+        None if stop.role.nudge => nudge_of(press).map_or(PressRoute::Free, PressRoute::Nudge),
         None => PressRoute::Free,
     }
 }
@@ -662,16 +672,16 @@ fn route_activate(ctx: &Context, rec: &StopRec, routed: &mut HashMap<Option<Id>,
     push(routed, Some(target), Intent::Activate, false);
 }
 
-/// An arrow key as a unit direction with the modifiers held.
-fn nudge_of(key: Key, mods: Mods) -> Option<(Vec2, Mods)> {
-    let direction = match key {
+/// An arrow press as a nudge: a unit direction, with the modifiers and the keys held at the press.
+fn nudge_of(press: &Press) -> Option<Nudge> {
+    let direction = match press.key {
         Key::Left => -Vec2::X,
         Key::Right => Vec2::X,
         Key::Up => -Vec2::Y,
         Key::Down => Vec2::Y,
         _ => return None,
     };
-    Some((direction, mods))
+    Some(Nudge { direction, mods: press.mods, held: press.held.clone() })
 }
 
 /// Routes an AccessKit action request to the owner of its target node, whatever the focus (9.2 rule 2).

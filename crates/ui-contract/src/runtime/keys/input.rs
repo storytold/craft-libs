@@ -73,8 +73,9 @@ impl Strip<'_> {
     /// Records `event` in `batch` and returns whether egui keeps it.
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
-    /// with the press, in this pass or a later one. `at` is the event's arrival time (`Arrived::at`).
-    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, event: KeyEvent, at: Option<f64>) -> bool {
+    /// with the press, in this pass or a later one. `down` holds the keys down before the event. `at` is the event's
+    /// arrival time (`Arrived::at`).
+    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, down: &[Key], event: KeyEvent, at: Option<f64>) -> bool {
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
@@ -96,6 +97,7 @@ impl Strip<'_> {
                 // The release key is kept for withheld presses too: the held-over rule matches repeats by it.
                 if let Some(press) = batch.presses.get_mut(pushed) {
                     press.release = input.physical.or(input.typed);
+                    press.held = down.iter().copied().filter(|key| Some(*key) != press.release).collect();
                     if kept {
                         press.in_egui = Some(batch.egui_presses);
                     }
@@ -299,7 +301,17 @@ impl Strip<'_> {
                 // The canvas has Space while the pointer is over it (`runtime::sampler`): only the shortcut dispatcher reads
                 // it, so the dialog's focused control does not activate, and a focused field neither types its space nor
                 // keeps its momentary command from firing (production pans under a dialog whatever has focus).
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true, place: batch.place });
+                batch.presses.push(Press {
+                    key,
+                    mods,
+                    repeat,
+                    in_egui: None,
+                    release: None,
+                    text: None,
+                    canvas: true,
+                    place: batch.place,
+                    held: Vec::new(),
+                });
                 if !repeat {
                     batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true, at });
                 }
@@ -318,7 +330,17 @@ impl Strip<'_> {
                 false
             }
             PressUse::CtrlTab => {
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false, place: batch.place });
+                batch.presses.push(Press {
+                    key,
+                    mods,
+                    repeat,
+                    in_egui: None,
+                    release: None,
+                    text: None,
+                    canvas: false,
+                    place: batch.place,
+                    held: Vec::new(),
+                });
                 false
             }
             PressUse::Pane(forward) => {
@@ -338,7 +360,17 @@ impl Strip<'_> {
                 false
             }
             PressUse::Press => {
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false, place: batch.place });
+                batch.presses.push(Press {
+                    key,
+                    mods,
+                    repeat,
+                    in_egui: None,
+                    release: None,
+                    text: None,
+                    canvas: false,
+                    place: batch.place,
+                    held: Vec::new(),
+                });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
                         input: *input,
@@ -537,7 +569,6 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             }
             // Read from the event the pass applies, so a held-back one is not read twice.
             batch.focus_lost |= matches!(arrived.event, egui::Event::WindowFocused(false));
-            note_down(&mut stage.down, &read);
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             stage.textless_paste |= matches!(read, KeyEvent::Clip { command: EditCommand::Paste, text: None, .. });
             visible = match &read {
@@ -545,7 +576,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
                 _ => visible,
             };
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, read, arrived.at)
+            let down = stage.down.clone();
+            note_down(&mut stage.down, &read);
+            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrived.at)
         });
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);

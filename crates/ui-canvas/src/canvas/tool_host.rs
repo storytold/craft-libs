@@ -855,6 +855,12 @@ fn report_access(ctx: &Context, canvas: &ToolPass, rect: Rect, tool: &ToolAccess
     }
 }
 
+/// The arrow nudge of `intents` as a tool key, with the keys held at its press.
+fn take_nudge(intents: &mut keys::Intents) -> Option<ToolKey> {
+    let held = intents.nudge_held().to_vec();
+    intents.take_nudge().map(|(direction, mods)| ToolKey::Nudge { direction, mods, held })
+}
+
 /// An AccessKit Increment or Decrement on the tool's node.
 fn is_tool_step(request: &AccessRequest) -> bool {
     matches!(request.action, AccessAction::Increment | AccessAction::Decrement) && request.target == Some(TOOL_NODE.into())
@@ -1431,7 +1437,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// focused document canvas's Escape); one the tool leaves stays the canvas's, for the scopes around it.
     fn keys(&mut self, ctx: &Context, canvas: Id, rtl: bool) {
         keys::with_window_intents(ctx, rtl, |window| {
-            let mut taken = self.offer(window, |intents| intents.take_nudge().map(|(direction, mods)| ToolKey::Nudge { direction, mods }));
+            let mut taken = self.offer(window, take_nudge);
             taken |= self.offer(window, |intents| intents.take(Intent::Submit).then_some(ToolKey::Submit));
             if !self.cancelled {
                 taken |= self.offer(window, |intents| intents.take(Intent::Cancel).then_some(ToolKey::Cancel));
@@ -1439,14 +1445,14 @@ impl<'a, 't: 'a> Run<'a, 't> {
             taken
         });
         let mut intents = keys::intents_of(ctx, Some(canvas), rtl);
-        let mut taken = self.offer(&mut intents, |intents| intents.take_nudge().map(|(direction, mods)| ToolKey::Nudge { direction, mods }));
+        let mut taken = self.offer(&mut intents, take_nudge);
         if self.state.claims.nudges {
             // Increment is the arrow toward the reading end, as for any focused control.
             let forward = if rtl { -Vec2::X } else { Vec2::X };
             taken |= self.offer(&mut intents, |intents| {
                 intents.take_access_where(is_tool_step).map(|request| {
                     let direction = if request.action == AccessAction::Increment { forward } else { -forward };
-                    ToolKey::Nudge { direction, mods: Mods::NONE }
+                    ToolKey::nudge(direction, Mods::NONE)
                 })
             });
         }

@@ -178,6 +178,29 @@ fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focu
     assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
 }
 
+/// A nudge carries the keys held when its arrow went down, in the order of the frame's events: a key let go after the
+/// arrow in the same frame was held with it, and one pressed after it was not.
+#[trial]
+fn a_nudge_carries_the_keys_held_at_its_arrows_press() {
+    let (mut canvas, ..) = session(false);
+    canvas.fixture().settle();
+    let none = Modifiers::NONE;
+    canvas.fixture().frame(vec![key_press(Key::Backtick, none)]).settle();
+    canvas.fixture().frame(vec![key_press(Key::ArrowRight, none), key_release(Key::Backtick, none), key_release(Key::ArrowRight, none)]).settle();
+    canvas.fixture().frame(vec![key_press(Key::ArrowRight, none), key_press(Key::Backtick, none), key_release(Key::ArrowRight, none)]).settle();
+    canvas.fixture().frame(vec![key_release(Key::Backtick, none)]).settle();
+    let backtick: Vec<bool> = canvas
+        .tool()
+        .seen
+        .iter()
+        .filter_map(|key| match key {
+            ToolKey::Nudge { held, .. } => Some(held.contains(&ChordKey::Backtick)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(backtick, [true, false], "Backtick is held with the first arrow and not with the second");
+}
+
 #[trial]
 fn a_tool_that_claims_the_alt_tap_gets_it() {
     let (mut canvas, ..) = session(false);

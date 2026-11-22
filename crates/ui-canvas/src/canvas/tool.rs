@@ -93,13 +93,20 @@ pub enum ToolAction {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ToolKey {
-    /// An arrow key: a unit direction on screen (not mirrored in a right-to-left interface) and the modifiers.
+    /// An arrow key: a unit direction on screen (not mirrored in a right-to-left interface), the modifiers and the
+    /// keys held with it.
     #[non_exhaustive]
     Nudge {
         /// The direction.
         direction: Vec2,
         /// The modifiers held.
         mods: Mods,
+        /// The keys down when the arrow went down, the arrow not among them ([`Intents::nudge_held`]): a key held
+        /// with the arrow (Backtick, to move only a fill's pattern), read in the order of the frame's events, where
+        /// [`ToolContext::held`] is the state after them.
+        ///
+        /// [`Intents::nudge_held`]: crate::runtime::keys::Intents::nudge_held
+        held: Vec<Key>,
     },
     /// Delete (`forward`) or Backspace, while the tool claims the deletes ([`ToolClaims::deletes`]).
     #[non_exhaustive]
@@ -120,10 +127,10 @@ pub enum ToolKey {
 }
 
 impl ToolKey {
-    /// An arrow key: a unit direction on screen and the modifiers held; what the host passes for an arrow, built by
-    /// a test of a tool.
+    /// An arrow key: a unit direction on screen and the modifiers held, with no other key held; what the host passes
+    /// for an arrow, built by a test of a tool.
     pub fn nudge(direction: Vec2, mods: Mods) -> Self {
-        ToolKey::Nudge { direction, mods }
+        ToolKey::Nudge { direction, mods, held: Vec::new() }
     }
 
     /// Delete (`forward`) or Backspace.
