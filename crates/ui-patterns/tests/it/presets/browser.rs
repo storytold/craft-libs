@@ -402,3 +402,46 @@ fn a_pointer_move_beside_the_browser_replays_it() {
         }
     }
 }
+
+/// A preset dropped in the left half of another tile of the grid lands before that tile, in a grid with group headers
+/// as in one without: the reorder's place counts the rows as the host's rows are.
+#[trial]
+fn a_grid_drop_in_the_left_half_of_a_tile_lands_before_it_under_a_group_header() {
+    use craft_ui::patterns::presets::PresetReorder;
+    for grouped in [false, true] {
+        let events: Events = Rc::new(RefCell::new(Vec::new()));
+        let seen = events.clone();
+        let rows = PresetSource::new(
+            grouped,
+            PresetFns::new(|grouped: &bool, _| {
+                let mut rows = if *grouped { vec![PresetRow::group(GROUP, "Group", 0)] } else { Vec::new() };
+                rows.extend((1..=3).map(|key| PresetRow::item(key, format!("Preset {key}"), usize::from(*grouped))));
+                rows
+            }),
+        );
+        let mut state = PresetState::<u32>::new();
+        let mut fixture = Fixture::new(move |ui| {
+            ui.scope_builder(UiBuilder::new().max_rect(BROWSER), |ui| {
+                let out = PresetBrowser::new("Patterns", Bind::bound(&mut state), &rows)
+                    .view_lock(PresetView::Grid)
+                    .reorder(PresetReorder::items())
+                    .show(ui);
+                seen.borrow_mut().extend(out.events);
+            });
+        });
+        fixture.room(vec2(480.0, 320.0)).settle();
+        let first = fixture.by_label("Preset 1").expect("the first preset");
+        let from = fixture.by_label("Preset 3").expect("the last preset").center();
+        let to = first.center() - vec2(first.rect.width() / 4.0, 0.0);
+        fixture.drag_at(from, to - from).settle();
+        let places: Vec<usize> = events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                PresetEvent::Reorder(edit) => edit.value().map(|mv| mv.to),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(places, [usize::from(grouped)], "Preset 3 takes Preset 1's row (grouped: {grouped})");
+    }
+}

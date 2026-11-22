@@ -1033,7 +1033,8 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
     } else if view == PresetView::Grid {
         let plan = grid_plan(rows, &shown, |at| open_flags[at], counted);
         let tiles = Shown { rows, at: plan.tiles.clone(), open: vec![false; plan.tiles.len()], tree: false, actions: 0 };
-        let map = Rc::new(RowMap { rows, displayed: plan.tiles.clone() });
+        // The grid's positions count its group header rows as the list's count its group rows: the shown rows.
+        let map = Rc::new(RowMap { rows, displayed: shown.clone() });
         let tail: Vec<TailRow<BrowserKey<K>>> =
             actions.iter().enumerate().map(|(at, label)| TailRow::new(BrowserKey::Action(at), label.clone())).collect();
         let aspect = card_aspect(cell_shape);
