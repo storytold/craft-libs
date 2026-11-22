@@ -76,7 +76,9 @@ impl Opener {
             let inside = frame
                 .pos
                 .is_some_and(|pos| anchor.rect.contains(areas::layer_map(&anchor.ctx, anchor.layer_id).map_or(pos, |map| map.to_layer(pos))));
-            let by_pointer = inside && frame.release == Some(PointerButton::Secondary);
+            let by_pointer = inside
+                && frame.release == Some(PointerButton::Secondary)
+                && frame.pos.is_some_and(|pos| areas::layer_at(&anchor.ctx, pos) == Some(anchor.layer_id));
             // A root opener opens on the primary press inside it, as a pop-up button does, however long the press is
             // then held; a `Click` opener's release completes the click that press began.
             let primary = pressed_on && frame.press.is_some_and(|press| press.button == PointerButton::Primary);
@@ -138,7 +140,8 @@ pub(super) fn secondary_release_in(response: &Response) -> bool {
         pass.frame.as_ref().is_some_and(|frame| {
             frame.release == Some(PointerButton::Secondary)
                 && frame.pos.is_some_and(|pos| {
-                    response.rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
+                    areas::layer_at(&response.ctx, pos) == Some(response.layer_id)
+                        && response.rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
                 })
         })
     })

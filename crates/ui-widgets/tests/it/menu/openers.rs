@@ -64,6 +64,29 @@ fn right_click(fixture: &mut Fixture, at: egui::Pos2) {
     fixture.settle();
 }
 
+#[trial]
+fn a_context_menu_beneath_a_popover_does_not_open_from_its_click() {
+    let mut fixture = Fixture::new(|ui| {
+        let background = Button::new("Background").show_at(ui, Rect::from_min_max(pos2(0.0, 0.0), pos2(500.0, 500.0)));
+        Menu::context("Background menu", &background).show(ui, |ui, _| {
+            MenuItem::new("Background action").show(ui);
+        });
+        let opener = Button::new("Open popover").show(ui);
+        let mut open = true;
+        Popover::new("Floating", Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
+            let target = Button::new("Floating target").show(ui);
+            Menu::context("Floating menu", &target).show(ui, |ui, _| {
+                MenuItem::new("Floating action").show(ui);
+            });
+        });
+    });
+    fixture.settle();
+    let at = fixture.by_label("Floating target").expect("floating target").center();
+    right_click(&mut fixture, at);
+    assert!(fixture.by_label("Floating action").is_some(), "the floating menu opens");
+    assert!(fixture.by_label("Background action").is_none(), "the covered menu stays closed");
+}
+
 /// A secondary click on a press menu's button opens its menu, as a primary press does.
 #[trial]
 fn a_secondary_click_on_a_press_menu_button_opens_its_menu() {
