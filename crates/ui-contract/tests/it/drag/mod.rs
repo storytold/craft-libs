@@ -308,6 +308,31 @@ fn files_that_leave_the_window_end_the_drag_without_a_drop() {
     assert!(landed.borrow().rows.is_empty() && landed.borrow().window.is_empty(), "nothing landed");
 }
 
+/// Files that hover in the pass right after a drop start a drag of their own, which their drop ends on the target under
+/// the pointer, with or without the pointer moving.
+#[trial]
+fn files_hovering_right_after_a_drop_drag_and_drop_on_their_own() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+    };
+    let row = |n: usize| LIST.min + Vec2::new(LIST.width() / 2.0, (n as f32 + 0.5) * ROW);
+    frames.idle(2, &mut show);
+    for (file, events) in [("a.png", vec![moved(row(0))]), ("b.png", vec![moved(row(1))]), ("c.png", vec![])] {
+        frames.hover_files(&[file]);
+        frames.frame(events, &mut show);
+        let held = drag::active::<OsFiles>(&frames.ctx).map(|files| names(&files));
+        assert_eq!(held, Some(vec![file.to_owned()]), "the hovering files are the payload, not the last drop's");
+        frames.drop_files(&[file]);
+        frames.frame(vec![], &mut show);
+    }
+    frames.frame(vec![], &mut show);
+    let on = |n: usize, file: &str| (n, vec![file.to_owned()]);
+    assert_eq!(landed.borrow().rows, vec![on(0, "a.png"), on(1, "b.png"), on(1, "c.png")], "each drop lands on its row");
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_none(), "the last drop ends the drag");
+}
+
 /// Where the window's inner rect sits on the desktop in the desktop-pointer trial.
 const WINDOW_AT: Pos2 = Pos2::new(100.0, 50.0);
 
