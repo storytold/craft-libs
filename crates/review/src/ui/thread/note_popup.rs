@@ -17,7 +17,7 @@ use craft_ui::layout::RowAlign;
 use craft_ui::primitives::{IconSpec, PaintShape, TextRun, Wrap};
 use craft_ui::runtime::env::{Env, EnvView, Label};
 use craft_ui::runtime::overlay::CloseReason;
-use craft_ui::style::{ComponentStyle, DataColor, StyleCx, SurfaceKind, TypeRole};
+use craft_ui::style::{ComponentStyle, DataColor, StyleCx, SurfaceKind, TypeRole, UiTokens};
 use craft_ui::text::TextField;
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 
@@ -104,6 +104,8 @@ struct NoteBody<'a, 'm> {
     drafts: &'a mut NoteDrafts,
     allowed: bool,
     now: i64,
+    /// The body's tint: the note's colour thinned with white to a third, as production's.
+    tint_color: Color32,
     body: Option<String>,
     reply: Option<(u64, String)>,
 }
@@ -112,6 +114,8 @@ impl NoteBody<'_, '_> {
     fn show(&mut self, ui: &mut Ui, words: &ThreadWords, view: &EnvView<'_>) {
         let messages = self.messages;
         let (answers, replies) = nest(messages);
+        // The tint goes in behind the body's content, over the window's surface.
+        let tint = ui.painter().add(egui::Shape::Noop);
         // The body sits on the note's pale tint, so it reads in the light palette whatever the theme: light fields, dark ink.
         Stack::new().fill_width().theme(ThemeScope::mode(Mode::Light)).show(ui, |ui, _| {
             if let Some(note) = messages.first() {
@@ -128,6 +132,10 @@ impl NoteBody<'_, '_> {
                 self.reply_panel(ui, words, view, &answers, at);
             }
         });
+        let area = ui.min_rect().union(ui.clip_rect());
+        let radius = UiTokens::corner(Env::of(ui).tokens.shape.radius.surface);
+        let radius = CornerRadius { nw: 0, ne: 0, ..radius };
+        ui.painter().set(tint, egui::Shape::rect_filled(area, radius, self.tint_color));
     }
 
     /// The panel of reply `at`: its author line, text and Reply, then the panels of its answers (`answers[at]`), one
@@ -355,7 +363,7 @@ impl<'a> NotePopup<'a> {
             Overlay::floating().modeless().movable(allowed).resize_edges(grip).body_scroll(true).size_limits(NOTE_POPUP_LIMITS).placed(shown_at);
         let layer = NoteWindow::new(label, overlay, NoteLook { title, age, fill }, words.close.clone(), allowed, anchor, selected)
             .id_salt(("note-popup", id));
-        let mut content = NoteBody { id, messages, drafts, allowed, now, body: None, reply: None };
+        let mut content = NoteBody { id, messages, drafts, allowed, now, tint_color: Color32::from_rgb(pale(r), pale(g), pale(b)), body: None, reply: None };
         let shown = layer.show(ui, |ui, _| content.show(ui, &words, &view));
         let NoteBody { drafts, mut body, reply, .. } = content;
         let out = shown.output;
@@ -551,10 +559,6 @@ impl Component for NoteWindow {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
         let fill = self.look.fill;
-        // The body is the note's colour thinned with white to a third, as production's.
-        let DataColor(base) = fill;
-        let pale = Color32::from_rgb(pale(base.r()), pale(base.g()), pale(base.b()));
-        draw.data_fill(&PaintShape::Rect(cx.response.rect, CornerRadius::ZERO), DataColor::new(pale));
         if let Some(wedge) = self.wedge(&cx.response, cx.style.wedge) {
             draw.faded(CONNECTOR_SHARE, |draw| draw.data_fill(&PaintShape::Polygon(wedge.to_vec()), fill));
         }
