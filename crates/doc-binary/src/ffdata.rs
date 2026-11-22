@@ -31,6 +31,8 @@ const MAX_ENTRIES: usize = 64;
 const VERSION: u32 = 0xFFFF_FFFF;
 /// `iRes` of a check box that is checked.
 const CHECKED: u8 = 1;
+/// The longest `w:ffData` markup the `.docx` reader keeps (`MAX_FORM` in `craft-docx`).
+const MAX_FFDATA_XML: usize = 64 * 1024;
 
 /// A bounded reader over one definition that charges each byte it takes.
 struct Cursor<'a> {
@@ -168,6 +170,15 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
     let protected = bits & (1 << 9) != 0;
     let size_set = bits & (1 << 10) != 0;
     let recalc = bits & (1 << 14) != 0;
+    // iTypeTxt: the kind of a text field (0 is regular, which WordprocessingML assumes).
+    let text_type = match (bits >> 11) & 0b111 {
+        1 => Some("number"),
+        2 => Some("date"),
+        3 => Some("currentDate"),
+        4 => Some("currentTime"),
+        5 => Some("calculated"),
+        _ => None,
+    };
     let max_len = cur.u16()?;
     let hps = cur.u16()?;
     let name = cur.xstz()?;
@@ -189,6 +200,9 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
     match kind {
         0 => {
             out.push_str("<w:textInput>");
+            if let Some(t) = text_type {
+                out.push_str(&format!("<w:type w:val=\"{t}\"/>"));
+            }
             leaf(&mut out, "w:default", &text_default);
             if max_len > 0 {
                 out.push_str(&format!("<w:maxLength w:val=\"{max_len}\"/>"));
@@ -206,13 +220,17 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
             out.push_str(&format!("<w:default w:val=\"{}\"/>", u8::from(default != 0)));
             if res == CHECKED {
                 out.push_str("<w:checked/>");
+            } else if default != 0 {
+                // Without w:checked a reader falls back to w:default, so say the box is not ticked.
+                out.push_str("<w:checked w:val=\"0\"/>");
             }
             out.push_str("</w:checkBox>");
         }
         2 => {
             let entries = cur.entries()?;
             out.push_str("<w:ddList>");
-            // Only a choice that names an entry is kept; 0 is what Word leaves out.
+            // Only a choice that names an entry is kept. Word leaves w:result out when the first
+            // entry is chosen (an absent result is the first entry), so 0 is not written.
             let valid = |n: usize| n != 0 && n < entries.len();
             if valid(usize::from(res)) {
                 out.push_str(&format!("<w:result w:val=\"{res}\"/>"));
@@ -230,6 +248,10 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
         _ => return None,
     }
     out.push_str("</w:ffData>");
+    // The .docx reader drops a w:ffData longer than this, so none that long is produced.
+    if out.len() > MAX_FFDATA_XML {
+        return None;
+    }
     // The markup is copied into the field, so its size is charged too.
     work.charge(out.len() as u64, Cost::FormData).then_some(out)
 }

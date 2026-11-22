@@ -158,6 +158,40 @@ fn a_check_box_keeps_its_state_and_size() {
     );
 }
 
+#[test]
+fn an_unticked_check_box_whose_default_is_ticked_says_so() {
+    // Without w:checked a reader uses w:default, which would tick the box.
+    for res in [0u16, 0x19] {
+        let unticked = Ff { bits: 1 | (res << 2), hps: 20, name: "Box", default: 1, ..Ff::default() };
+        let form = form_of("FORMCHECKBOX", with_picf(&ffdata_bytes(&unticked)));
+        assert!(form.contains(r#"<w:default w:val="1"/><w:checked w:val="0"/>"#), "{form}");
+    }
+}
+
+#[test]
+fn a_text_field_keeps_its_kind() {
+    for (n, name) in [(1u16, "number"), (2, "date"), (3, "currentDate"), (4, "currentTime"), (5, "calculated")] {
+        let f = Ff { bits: n << 11, name: "T", ..Ff::default() };
+        let form = form_of("FORMTEXT", with_picf(&ffdata_bytes(&f)));
+        assert!(form.contains(&format!(r#"<w:textInput><w:type w:val="{name}"/></w:textInput>"#)), "{form}");
+    }
+    let regular = form_of("FORMTEXT", with_picf(&ffdata_bytes(&Ff { name: "T", ..Ff::default() })));
+    assert!(!regular.contains("w:type"), "{regular}");
+}
+
+#[test]
+fn a_definition_the_docx_reader_would_drop_is_not_produced() {
+    // 25 entries of 1,000 ampersands escape to about 122 KiB, past what the .docx reader keeps.
+    let entry: &'static str = Box::leak("&".repeat(1000).into_boxed_str());
+    let entries: &'static [&'static str] = Box::leak(vec![entry; 25].into_boxed_slice());
+    let big = Ff { bits: 2, name: "Big", entries, ..Ff::default() };
+    assert_eq!(form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&big))), "");
+    // Just under the limit is kept.
+    let entries: &'static [&'static str] = Box::leak(vec![entry; 10].into_boxed_slice());
+    let small = Ff { bits: 2, name: "Small", entries, ..Ff::default() };
+    assert!(form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&small))).contains("<w:ddList>"));
+}
+
 const DROP: Ff = Ff {
     bits: 2 | (2 << 2) | (1 << 14) | (1 << 15),
     max_len: 0,
