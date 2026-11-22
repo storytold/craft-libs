@@ -47,21 +47,21 @@ impl Graph {
     }
 
     /// Keeps only the graph outputs named in `names` (by identifier, as [`Graph::output_nodes`] gives them), so an
-    /// evaluation computes nothing the others alone need. Errors name an output the graph doesn't have.
+    /// evaluation computes nothing the others alone need. An output that a kept one reads from stays. Errors name an
+    /// output the graph doesn't have.
     pub fn keep_outputs(&mut self, names: &[&str]) -> Result<(), String> {
         let have: Vec<String> = self.output_nodes().into_iter().map(|(_, ident, _)| ident).collect();
         if let Some(missing) = names.iter().find(|n| !have.iter().any(|h| h == *n)) {
             return Err(format!("no output '{missing}' (outputs: {})", have.join(", ")));
         }
         let keep = |ident: &str| names.contains(&ident);
+        // an output node another kept output reads from stays too
+        let roots: Vec<u32> = self.output_nodes().into_iter().filter(|(_, ident, _)| keep(ident)).map(|(_, _, id)| id).collect();
+        let needed = crate::graph::reached(self, &roots);
         let drop: Vec<u32> = self
             .nodes
             .iter()
-            .filter(|(_, n)| n.kind == "output")
-            .filter(|(_, n)| {
-                let usage = n.strs.get("usage").map_or("basecolor", String::as_str);
-                !keep(n.strs.get("identifier").filter(|s| !s.is_empty()).map_or(usage, String::as_str))
-            })
+            .filter(|(id, n)| n.kind == "output" && !needed.contains(id))
             .map(|(id, _)| *id)
             .collect();
         for id in drop {
@@ -105,5 +105,15 @@ mod tests {
         m.migrate_outputs();
         m.keep_outputs(&["lum"]).unwrap();
         assert_eq!(m.evaluate(None).unwrap().keys().collect::<Vec<_>>(), ["lum"]);
+    }
+
+    #[test]
+    fn an_output_a_kept_output_reads_is_not_dropped() {
+        let text = "size 8\nnode 1 color r=1 g=0 b=0\nnode 2 output usage=\"basecolor\" identifier=\"mid\" in=@1\nnode 3 output usage=\"roughness\" identifier=\"last\" in=@2\nnode 4 output usage=\"metallic\" identifier=\"other\" in=@1\n";
+        let mut g = Graph::parse(text).unwrap();
+        g.keep_outputs(&["last"]).unwrap();
+        assert!(!g.nodes.contains_key(&4), "an output nobody needs is dropped");
+        let out = g.evaluate(None).expect("the kept output still has what it reads");
+        assert_eq!(out["last"].px[0], [1.0, 0.0, 0.0, 1.0]);
     }
 }

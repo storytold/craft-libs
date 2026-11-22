@@ -16,7 +16,7 @@ fn demo_graphs() -> Vec<(&'static str, Graph)> {
     graph::SPECS
         .iter()
         .filter_map(|s| graph::demo_graph_for(s.kind).map(|t| (s.kind, t)))
-        .filter_map(|(k, t)| Graph::parse(&t).ok().map(|g| (k, g)))
+        .map(|(k, t)| (k, Graph::parse(&t).unwrap_or_else(|e| panic!("the demo graph of {k} does not parse: {e}"))))
         .collect()
 }
 
@@ -51,12 +51,17 @@ fn one_thread_and_eight_render_the_same_bytes() {
 fn cached_and_uncached_evaluations_give_the_same_bytes() {
     let cache = Arc::new(NodeCache::new(256));
     let mut differ = Vec::new();
+    let mut not_reused = Vec::new();
     for (kind, g) in demo_graphs() {
         let keep: Vec<u32> = g.nodes.keys().copied().collect();
         let fresh = g.evaluate_all(SIDE, &keep);
         let first = g.evaluate_all_cached(&EvalContext::default(), SIDE, &keep, &cache, None, &mut |_| {});
         // the second run takes every node from the cache
+        let hits = cache.stats().0;
         let again = g.evaluate_all_cached(&EvalContext::default(), SIDE, &keep, &cache, None, &mut |_| {});
+        if again.errors.len() < keep.len() && cache.stats().0 == hits {
+            not_reused.push(kind);
+        }
         for r in [&first, &again] {
             let same = keep.iter().all(|id| fresh.kept.get(id).map(|t| bits(t)) == r.kept.get(id).map(|t| bits(t)))
                 && fresh.errors == r.errors
@@ -68,4 +73,5 @@ fn cached_and_uncached_evaluations_give_the_same_bytes() {
         cache.clear();
     }
     assert!(differ.is_empty(), "the cache changes these kinds: {differ:?}");
+    assert!(not_reused.is_empty(), "the second run took nothing from the cache for these kinds: {not_reused:?}");
 }

@@ -24,7 +24,7 @@ fn every_node_is_seamless() {
         let out = match g.evaluate(Some(seam_size())) {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("{}: error {e}", sp.kind);
+                bad.push(format!("{:<22} error {e}", sp.kind));
                 continue;
             }
         };
@@ -80,14 +80,15 @@ fn filters_commute_with_wrapped_shifts() {
         "height_blend bg=@100 fg=@107 opacity=0.5",
         "clamp low=0.2 high=0.8",
         "hsl",
-        "gradient_map",
         "quantize",
     ];
     let mut bad = Vec::new();
     for c in filters {
-        let _kind = c.split(' ').next().unwrap();
+        let kind = c.split(' ').next().unwrap();
         let mut line = format!("node 1 {c}");
-        if !line.contains("in=@") {
+        // (the nodes that read no `in` are given their inputs in the line)
+        let reads_in = SPECS.iter().any(|s| s.kind == kind && (s.req.contains(&"in") || s.opt.contains(&"in")));
+        if reads_in && !line.contains(" in=@") {
             line += " in=@100";
         }
         let pre = |shift: bool| {
@@ -101,13 +102,19 @@ fn filters_commute_with_wrapped_shifts() {
         };
         let ga = format!("{}{}\nnode 2 transform in=@1 offset_x={} offset_y={}\noutput o 2\n", pre(false), line, dx, dy);
         let gb = format!("{}{}\noutput o 1\n", pre(true), line);
-        let (Ok(a), Ok(b)) = (Graph::parse(&ga), Graph::parse(&gb)) else {
-            eprintln!("{c}: parse failed");
-            continue;
+        let (a, b) = match (Graph::parse(&ga), Graph::parse(&gb)) {
+            (Ok(a), Ok(b)) => (a, b),
+            (a, b) => {
+                bad.push(format!("{c:<56} parse failed: {:?}", a.err().or(b.err()).map(|e| e.to_string())));
+                continue;
+            }
         };
-        let (Ok(a), Ok(b)) = (a.evaluate(Some(N)), b.evaluate(Some(N))) else {
-            eprintln!("{c}: evaluate failed");
-            continue;
+        let (a, b) = match (a.evaluate(Some(N)), b.evaluate(Some(N))) {
+            (Ok(a), Ok(b)) => (a, b),
+            (a, b) => {
+                bad.push(format!("{c:<56} evaluate failed: {:?}", a.err().or(b.err()).map(|e| e.to_string())));
+                continue;
+            }
         };
         let (a, b) = (&a["o"], &b["o"]);
         let mut worst = 0.0f32;

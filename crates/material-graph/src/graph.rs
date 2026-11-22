@@ -704,6 +704,12 @@ impl Default for Graph {
     }
 }
 
+/// The output of node `src` that a link reads when it names `pin`: `None` for the default output (no pin, or the first).
+fn pin_read(nodes: &BTreeMap<u32, Node>, src: u32, pin: Option<&String>) -> Option<String> {
+    let kind = nodes.get(&src).map_or("", |n| n.kind.as_str());
+    pin.filter(|p| !p.is_empty() && node_outputs(kind).first().is_none_or(|first| *first != p.as_str())).cloned()
+}
+
 fn split_tokens(line: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -1379,10 +1385,14 @@ impl Graph {
         s
     }
 
-    /// Flatten into a self-contained package: embeds bitmaps, drops editor-only data.
+    /// Flatten into a self-contained package: embeds bitmaps and the graphs of live links, drops editor-only data. A
+    /// link that is not resolved (see [`Graph::resolve_links`]) is an error: its graphs cannot be embedded.
     pub fn publish(&self) -> Result<String, Error> {
         self.validate()?;
         let mut g = self.clone();
+        for name in g.links.iter().map(|l| l.name.clone()).collect::<Vec<_>>() {
+            g.break_link(&name).map_err(|m| Error::BadParam(0, m))?;
+        }
         g.comments.clear();
         let mut res = std::mem::take(&mut g.resources);
         let mut seen: HashMap<String, String> = HashMap::new();
@@ -1455,11 +1465,18 @@ impl Graph {
         let renamed: Vec<String> = inner.keys().cloned().collect();
         for g in std::iter::once(&mut other).chain(inner.values_mut()) {
             for n in g.nodes.values_mut() {
-                if n.kind == "subgraph"
-                    && let Some(r) = n.strs.get_mut("graph")
-                    && renamed.contains(r)
-                {
-                    *r = format!("{name}__{r}");
+                let is_subgraph = n.kind == "subgraph";
+                // the settings that name a graph: a subgraph node's `graph`, and the `fn`, `fn.*` and `program` of the
+                // nodes that run a function or a program
+                for (slot, r) in n.strs.iter_mut() {
+                    let names_graph = match slot.as_str() {
+                        "graph" => is_subgraph,
+                        "fn" | "program" => true,
+                        _ => slot.starts_with("fn."),
+                    };
+                    if names_graph && renamed.contains(r) {
+                        *r = format!("{name}__{r}");
+                    }
                 }
             }
         }
@@ -1625,13 +1642,36 @@ impl Graph {
         }
     }
 
-    /// Read a package file, resolve its live links and validate it. The strings are link problems (not fatal).
+    /// Read a package file and resolve its live links. The strings are link problems (not fatal). The graph is not
+    /// validated, so that an editor can open a package that is broken (see [`Graph::validate`]).
     pub fn load_file(path: &std::path::Path) -> Result<(Graph, Vec<String>), Error> {
         let text = read_disk_text(path).map_err(|e| Error::Parse(0, format!("{}: {e}", path.display())))?;
         let mut g = Graph::parse_unchecked(&text)?;
         g.migrate_outputs();
         let issues = g.resolve_links(path.parent().unwrap_or_else(|| std::path::Path::new(".")));
         Ok((g, issues))
+    }
+
+    /// What nodes (and legacy outputs) outside `sel` read from it: each selected node and pin, once.
+    fn read_outside(&self, sel: &BTreeSet<u32>) -> Vec<(u32, Option<String>)> {
+        let mut outs: Vec<(u32, Option<String>)> = Vec::new();
+        for (oid, on) in &self.nodes {
+            if sel.contains(oid) {
+                continue;
+            }
+            for (slot, src) in &on.ins {
+                let out = (*src, pin_read(&self.nodes, *src, on.in_out.get(slot)));
+                if sel.contains(src) && !outs.contains(&out) {
+                    outs.push(out);
+                }
+            }
+        }
+        for (_, s) in &self.outputs {
+            if sel.contains(s) && !outs.contains(&(*s, None)) {
+                outs.push((*s, None));
+            }
+        }
+        outs
     }
 
     /// Replace the selected nodes with a subgraph instance. Returns the new node id.
@@ -1653,8 +1693,9 @@ impl Graph {
             map.insert(*id, next);
             next += 1;
         }
-        let mut ext: Vec<u32> = Vec::new();
-        let mut input_ids: HashMap<u32, u32> = HashMap::new();
+        // what the instance reads from outside: (node, pin) in the order of its inputs
+        let mut ext: Vec<(u32, Option<String>)> = Vec::new();
+        let mut input_ids: HashMap<(u32, Option<String>), u32> = HashMap::new();
         for id in &sel {
             let Some(n) = self.nodes.get(id) else { continue };
             let Some(new) = map.get(id).copied() else { continue };
@@ -1664,49 +1705,38 @@ impl Graph {
                 if let Some(m) = map.get(src) {
                     nn.ins.insert(slot.clone(), *m);
                 } else {
-                    let iid = if let Some(x) = input_ids.get(src) {
+                    let from = (*src, pin_read(&self.nodes, *src, n.in_out.get(slot)));
+                    let iid = if let Some(x) = input_ids.get(&from) {
                         *x
                     } else {
                         if ext.len() >= 4 {
                             return Err("a subgraph supports at most 4 external inputs".into());
                         }
                         let idx = ext.len();
-                        ext.push(*src);
+                        ext.push(from.clone());
                         let iid = next;
                         next += 1;
                         let mut inode = Node { kind: "input".into(), ..Default::default() };
                         inode.nums.insert("idx".into(), idx as f32);
                         inode.pos = [n.pos[0] - 150.0, n.pos[1]];
                         sub.nodes.insert(iid, inode);
-                        input_ids.insert(*src, iid);
+                        input_ids.insert(from, iid);
                         iid
                     };
                     nn.ins.insert(slot.clone(), iid);
+                    // (the pin is read outside now, by the instance)
+                    nn.in_out.remove(slot);
                 }
             }
             sub.nodes.insert(new, nn);
         }
-        let mut outs: Vec<u32> = Vec::new();
-        for (oid, on) in &self.nodes {
-            if sel.contains(oid) {
-                continue;
-            }
-            for src in on.ins.values() {
-                if sel.contains(src) && !outs.contains(src) {
-                    outs.push(*src);
-                }
-            }
-        }
-        for (_, s) in &self.outputs {
-            if sel.contains(s) && !outs.contains(s) {
-                outs.push(*s);
-            }
-        }
+        let outs = self.read_outside(&sel);
         if outs.len() > 1 {
             return Err(format!("the selection has {} outputs used elsewhere; a subgraph supports exactly one", outs.len()));
         }
+        let out_pin = outs.first().and_then(|(_, pin)| pin.clone());
         let out_id = match outs.first() {
-            Some(x) => *x,
+            Some((x, _)) => *x,
             None => {
                 let consumed: BTreeSet<u32> = sel.iter().filter_map(|i| self.nodes.get(i)).flat_map(|n| n.ins.values().copied()).collect();
                 *sel.iter().rev().find(|i| !consumed.contains(i)).unwrap_or_else(|| sel.iter().next_back().unwrap_or(&0))
@@ -1719,6 +1749,9 @@ impl Graph {
             let mut o = Node { kind: "output".into(), pos: opos, ..Default::default() };
             o.strs.insert("usage".into(), "out".into());
             o.ins.insert("in".into(), inner);
+            if let Some(pin) = out_pin {
+                o.in_out.insert("in".into(), pin);
+            }
             sub.nodes.insert(onode_id, o);
         }
         let (mut cx, mut cy) = (0.0, 0.0);
@@ -1732,14 +1765,19 @@ impl Graph {
         }
         let mut inst = Node { kind: "subgraph".into(), pos: [cx / sel.len() as f32, cy / sel.len() as f32], ..Default::default() };
         inst.strs.insert("graph".into(), name.to_string());
-        for (i, e) in ext.iter().enumerate() {
+        for (i, (e, pin)) in ext.iter().enumerate() {
             inst.ins.insert(format!("in{i}"), *e);
+            if let Some(pin) = pin {
+                inst.in_out.insert(format!("in{i}"), pin.clone());
+            }
         }
         self.nodes.insert(new_id, inst);
         for n in self.nodes.values_mut() {
-            for v in n.ins.values_mut() {
+            for (slot, v) in n.ins.iter_mut() {
                 if *v == out_id {
                     *v = new_id;
+                    // (the instance has the one output)
+                    n.in_out.remove(slot);
                 }
             }
         }
@@ -2171,14 +2209,37 @@ impl Fnv {
     }
 }
 
+/// Folds the length and modification time of the files a node reads from disk (those the graph does not carry) into
+/// `h`: a file can change under us, and what was drawn from it must then count as another result.
+fn hash_files(n: &Node, ctx: &Ctx, h: &mut Fnv) {
+    if matches!(n.kind.as_str(), "bitmap" | "svg" | "text") {
+        for f in [n.strs.get("file"), n.strs.get("font")].into_iter().flatten() {
+            if !ctx.res.contains_key(f)
+                && let Some((len, modified)) = ctx.ec.files.stamp(f)
+            {
+                h.u64(len);
+                h.u64(modified);
+            }
+        }
+    }
+}
+
 /// Hash of every node (and named subgraph output) of the graph: kind, settings, evaluation context and the hashes of
 /// its inputs. Two nodes with the same hash always produce the same texture.
-fn hash_graph(g: &Graph, ctx: &Ctx) -> HashMap<u32, u64> {
+fn hash_graph(g: &Graph, ctx: &Ctx) -> HashMap<Key, u64> {
     let mut env = Fnv::new();
     env.u64(g.default_format() as u64);
+    // an accelerator can draw other pixels than the reference code: its tag is part of every result's identity
+    if let Some(accelerator) = &ctx.ec.accelerator {
+        env.str(accelerator.cache_tag());
+    }
     for (k, sub) in ctx.lib {
         env.str(k);
         env.str(&sub.to_text());
+        // (the files a subgraph reads are not in its text)
+        for n in sub.nodes.values() {
+            hash_files(n, ctx, &mut env);
+        }
     }
     for (k, v) in ctx.res {
         env.str(k);
@@ -2191,58 +2252,64 @@ fn hash_graph(g: &Graph, ctx: &Ctx) -> HashMap<u32, u64> {
         env.str(k);
         env.str(&v.show());
     }
-    let mut memo: HashMap<u32, u64> = HashMap::new();
-    fn go(g: &Graph, id: u32, out: Option<&str>, ctx: &Ctx, env: u64, memo: &mut HashMap<u32, u64>, depth: u32) -> u64 {
-        let key = cache_key(g, id, out);
-        if let Some(h) = memo.get(&key) {
-            return *h;
-        }
-        let Some(n) = g.nodes.get(&id) else { return 0 };
-        let mut h = Fnv::new();
-        h.u64(env);
-        h.u64(ctx.size as u64);
-        h.u64(ctx.height as u64);
-        h.u64(ctx.nominal as u64);
-        h.u64(ctx.so as u64);
-        h.str(&n.kind);
-        if key != id {
-            h.str(out.unwrap_or(""));
-        }
-        for (k, v) in &n.nums {
-            h.str(k);
-            h.u64(v.to_bits() as u64);
-        }
-        for (k, v) in &n.strs {
-            h.str(k);
-            h.str(v);
-        }
-        if matches!(n.kind.as_str(), "bitmap" | "svg" | "text") {
-            // a file on disk can change under us: its size and modification time are part of the identity
-            for f in [n.strs.get("file"), n.strs.get("font")].into_iter().flatten() {
-                if !ctx.res.contains_key(f)
-                    && let Some((len, modified)) = ctx.ec.files.stamp(f)
-                {
-                    h.u64(len);
-                    h.u64(modified);
+    let mut memo: HashMap<Key, u64> = HashMap::new();
+    // Hashes `root` and everything it reads, inputs first. The nodes still waiting for their inputs are kept in a list,
+    // not on the call stack, so a chain of any length is hashed whole (the graph has no cycles: they are refused first).
+    fn walk(g: &Graph, ctx: &Ctx, env: u64, root: u32, root_out: Option<&str>, memo: &mut HashMap<Key, u64>) {
+        let mut todo: Vec<(u32, Option<String>)> = vec![(root, root_out.map(str::to_string))];
+        while let Some((id, out)) = todo.last().cloned() {
+            let out = out.as_deref();
+            let key = cache_key(g, id, out);
+            let Some(n) = g.nodes.get(&id).filter(|_| !memo.contains_key(&key)) else {
+                todo.pop();
+                continue;
+            };
+            let mut waiting = false;
+            for (slot, rid) in &n.ins {
+                let want = n.in_out.get(slot).map(String::as_str);
+                if g.nodes.contains_key(rid) && !memo.contains_key(&cache_key(g, *rid, want)) {
+                    todo.push((*rid, want.map(str::to_string)));
+                    waiting = true;
                 }
             }
-        }
-        if depth < 512 {
+            if waiting {
+                continue;
+            }
+            let mut h = Fnv::new();
+            h.u64(env);
+            h.u64(ctx.size as u64);
+            h.u64(ctx.height as u64);
+            h.u64(ctx.nominal as u64);
+            h.u64(ctx.so as u64);
+            h.str(&n.kind);
+            if key != Key::from(id) {
+                h.str(out.unwrap_or(""));
+            }
+            for (k, v) in &n.nums {
+                h.str(k);
+                h.u64(v.to_bits() as u64);
+            }
+            for (k, v) in &n.strs {
+                h.str(k);
+                h.str(v);
+            }
+            hash_files(n, ctx, &mut h);
             for (slot, rid) in &n.ins {
-                let want = n.in_out.get(slot).map(|s| s.as_str());
+                let want = n.in_out.get(slot).map(String::as_str);
                 h.str(slot);
                 h.str(want.unwrap_or(""));
-                h.u64(go(g, *rid, want, ctx, env, memo, depth + 1));
+                // (a link to a node the graph doesn't have counts as 0)
+                h.u64(memo.get(&cache_key(g, *rid, want)).copied().unwrap_or(0));
             }
+            memo.insert(key, h.0);
+            todo.pop();
         }
-        memo.insert(key, h.0);
-        h.0
     }
     for (id, n) in &g.nodes {
-        go(g, *id, None, ctx, env.0, &mut memo, 0);
+        walk(g, ctx, env.0, *id, None, &mut memo);
         for (slot, rid) in &n.ins {
             if let Some(w) = n.in_out.get(slot) {
-                go(g, *rid, Some(w), ctx, env.0, &mut memo, 0);
+                walk(g, ctx, env.0, *rid, Some(w), &mut memo);
             }
         }
     }
@@ -2383,13 +2450,18 @@ fn eval_node(g: &Graph, id: u32, ctx: &Ctx, ext: &[Option<Val>], cache: &mut Cac
     eval_node_out(g, id, None, ctx, ext, cache)
 }
 
+/// What the evaluation cache is keyed by: a plain node id (a node's default output), or for a named output the id with
+/// a hash of the name above it. The whole id is kept, so no two nodes share a key.
+type Key = u64;
+
 /// Cache key for one named output of a graph node (plain node ids keep their own key).
-fn out_key(id: u32, out: &str) -> u32 {
+fn out_key(id: u32, out: &str) -> Key {
     let mut h: u32 = 2166136261;
     for b in out.bytes() {
         h = (h ^ b as u32).wrapping_mul(16777619);
     }
-    0x8000_0000 | ((h & 0x7fff) << 16) | (id & 0xffff)
+    // (never zero in the high half, which only a plain id has)
+    (Key::from(h | 1) << 32) | Key::from(id)
 }
 
 /// A profile span of `name` when profiling is on (see `crate::profile`); nothing otherwise.
@@ -2439,7 +2511,7 @@ fn node_size(n: &Node, ins: &BTreeMap<String, NodeValue>, ctx: &Ctx) -> (usize, 
 /// A node on its way: its inputs are evaluated one at a time ([`eval_node_out`]) before it is computed itself.
 struct Pending<'g> {
     id: u32,
-    key: u32,
+    key: Key,
     /// the named output asked for (`None` for a node's plain output)
     out: Option<String>,
     /// the persistent cache's hash of the result
@@ -2534,7 +2606,7 @@ impl NodeClock {
 /// The first look at a node: its cached result, or the node with its settings bound, ready for its inputs.
 fn start_node<'g>(g: &'g Graph, id: u32, out: Option<&str>, ctx: &Ctx<'g>, cache: &mut Cache) -> Result<Start<'g>, Error> {
     let key = cache_key(g, id, out);
-    let out = if key != id { out } else { None };
+    let out = if key != Key::from(id) { out } else { None };
     if let Some(t) = cache.map.get(&key) {
         return Ok(Start::Done(t.clone()));
     }
@@ -2547,7 +2619,7 @@ fn start_node<'g>(g: &'g Graph, id: u32, out: Option<&str>, ctx: &Ctx<'g>, cache
     {
         let t = NodeValue::Host(Val::Rgba(t));
         cache.put(key, t.clone());
-        if key == id {
+        if key == Key::from(id) {
             cache.sizes.insert(id, sz);
             if let Some(tm) = cache.thumbs.as_mut() {
                 tm.insert(id, th);
@@ -2654,7 +2726,11 @@ fn finish_node(g: &Graph, p: Pending, ctx: &Ctx, ext: &[Option<Val>], cache: &mu
         done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     // Results that outlive the evaluation are kept as RGBA in the editor.
-    let full = if cache.persist.is_some() || (key == id && cache.thumbs.is_some()) { Some(t.clone().into_host(id, ctx.ec)?.tex()) } else { None };
+    let full = if cache.persist.is_some() || (key == Key::from(id) && cache.thumbs.is_some()) {
+        Some(t.clone().into_host(id, ctx.ec)?.tex())
+    } else {
+        None
+    };
     let t = match (&full, &cache.persist) {
         (Some(f), Some(_)) => NodeValue::Host(Val::Rgba(f.clone())),
         _ => t,
@@ -2676,17 +2752,17 @@ fn finish_node(g: &Graph, p: Pending, ctx: &Ctx, ext: &[Option<Val>], cache: &mu
             cache.live >> 20
         );
     }
-    if key == id {
+    if key == Key::from(id) {
         cache.sizes.insert(id, sz.0);
     }
     let thumb = match &full {
-        Some(f) if key == id => thumbnail(f),
+        Some(f) if key == Key::from(id) => thumbnail(f),
         _ => Vec::new(),
     };
     if let (Some(p), Some(h), Some(f)) = (&cache.persist, phash, &full) {
         p.put(h, f.clone(), thumb.clone(), sz.0);
     }
-    if key == id
+    if key == Key::from(id)
         && let Some(th) = cache.thumbs.as_mut()
     {
         th.insert(id, thumb);
@@ -2889,10 +2965,10 @@ fn expanded(ins: &BTreeMap<String, Val>) -> BTreeMap<String, Rc<Tex>> {
 
 /// Textures of finished nodes, plus what is needed to free them early.
 struct Cache {
-    map: HashMap<u32, NodeValue>,
+    map: HashMap<Key, NodeValue>,
     /// how many not-yet-evaluated links still read each cached entry; an entry is freed when it reaches zero
-    left: HashMap<u32, u32>,
-    keep: HashSet<u32>,
+    left: HashMap<Key, u32>,
+    keep: HashSet<Key>,
     /// thumbnails taken while evaluating (editor preview)
     thumbs: Option<HashMap<u32, Vec<u8>>>,
     sizes: HashMap<u32, usize>,
@@ -2903,7 +2979,7 @@ struct Cache {
     counter: LiveBytes,
     /// results that outlive one evaluation (editor): a node whose settings and inputs did not change is not recomputed
     persist: Option<Arc<NodeCache>>,
-    hashes: HashMap<u32, u64>,
+    hashes: HashMap<Key, u64>,
 }
 
 impl Cache {
@@ -2936,14 +3012,14 @@ impl Cache {
                 *c.left.entry(cache_key(g, *rid, n.in_out.get(slot).map(|s| s.as_str()))).or_insert(0) += 1;
             }
         }
-        c.keep = keep.iter().copied().collect();
+        c.keep = keep.iter().map(|k| Key::from(*k)).collect();
         if thumbs {
             c.thumbs = Some(HashMap::new());
         }
         c
     }
 
-    fn put(&mut self, key: u32, t: NodeValue) {
+    fn put(&mut self, key: Key, t: NodeValue) {
         let b = t.bytes();
         if let Some(old) = self.map.insert(key, t) {
             self.live = self.live.saturating_sub(old.bytes());
@@ -2954,7 +3030,7 @@ impl Cache {
         self.counter.add(b);
     }
 
-    fn drop_entry(&mut self, key: u32) {
+    fn drop_entry(&mut self, key: Key) {
         if let Some(old) = self.map.remove(&key) {
             self.live = self.live.saturating_sub(old.bytes());
             self.counter.sub(old.bytes());
@@ -2963,7 +3039,7 @@ impl Cache {
 }
 
 /// The nodes evaluating `from` runs: those and everything they read, through every input.
-fn reached(g: &Graph, from: &[u32]) -> HashSet<u32> {
+pub(crate) fn reached(g: &Graph, from: &[u32]) -> HashSet<u32> {
     let mut seen: HashSet<u32> = HashSet::new();
     let mut todo: Vec<u32> = from.to_vec();
     while let Some(id) = todo.pop() {
@@ -3269,15 +3345,15 @@ pub fn pin_types(g: &Graph) -> HashMap<u32, Pin> {
 
 /// Cache key of an output: the node id, or a hash of (id, output name) for a named output of a graph node or of a
 /// built-in multi-output node (its default output keeps the plain node id).
-fn cache_key(g: &Graph, id: u32, out: Option<&str>) -> u32 {
-    let Some(o) = out else { return id };
+fn cache_key(g: &Graph, id: u32, out: Option<&str>) -> Key {
+    let Some(o) = out else { return Key::from(id) };
     match g.nodes.get(&id) {
         Some(n) if n.kind == "subgraph" => out_key(id, o),
         Some(n) => match node_outputs(&n.kind).iter().position(|x| *x == o) {
             Some(i) if i > 0 => out_key(id, o),
-            _ => id,
+            _ => Key::from(id),
         },
-        None => id,
+        None => Key::from(id),
     }
 }
 

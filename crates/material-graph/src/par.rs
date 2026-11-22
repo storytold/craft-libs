@@ -4,7 +4,8 @@
 //!
 //! - Work runs on the pool of the calling thread's [`crate::context::EvalContext`] when it names one, else on the pool
 //!   the caller is in (rayon's global pool outside any). The caller's context is current on every thread that runs a
-//!   piece, so cancel checks and profile spans inside the pieces see it.
+//!   piece, so cancel checks and profile spans inside the pieces see it. Work that is a single run is not handed to a
+//!   pool at all: the calling thread does it.
 //! - Items are split at fixed indices (runs of a given length), never by thread count, and each piece is handed to
 //!   whichever thread is free, so uneven items (tiles with many dabs, tiles with none) balance.
 //!
