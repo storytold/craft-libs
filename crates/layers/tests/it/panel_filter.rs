@@ -240,8 +240,11 @@ fn an_object_filter_keeps_the_rows_holding_a_match_at_their_depth() {
     rig.tree.borrow_mut().layer_mut(trees).open = false;
     rig.fixture.idle(3);
     assert_eq!(rig.rows(), ["Cover", "Trees", "Oak"], "the holders and the path; Shapes holds none");
-    let left = |rig: &Rig, label: &str| rig.fixture.by_label(label).expect("the row is shown").rect.left();
-    assert!(left(&rig, "Cover") < left(&rig, "Trees") && left(&rig, "Trees") < left(&rig, "Oak"), "each holder sits at its own depth");
+    let level = |rig: &Rig, label: &str| {
+        rig.fixture.tree().level_of(rig.fixture.by_label(label).expect("the row is shown").node).expect("a tree row has a level")
+    };
+    let levels = ["Cover", "Trees", "Oak"].map(|label| level(&rig, label));
+    assert!(levels[0] < levels[1] && levels[1] < levels[2], "each holder sits at its own depth: {levels:?}");
 
     rig.filter_by(|filter| (filter.by, filter.kinds) = (FilterBy::Kind, vec![FilterKind::Pixel]));
     assert_eq!(rig.rows(), ["Pine", "Grass", "Loose", "Background"], "a Kind filter lists no holder");
