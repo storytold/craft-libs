@@ -510,6 +510,29 @@ fn a_reveal_from_a_hosted_field_scrolls_its_collection_in_the_same_pass() {
     assert_eq!(changes, 1, "the collection scrolls once for the reveal: {held:?}");
 }
 
+/// A reveal of a rect the view already shows moves nothing, so it asks for no second pass: a part that asks every frame
+/// (a focused row that keeps itself in view) must not make every frame run twice (egui's "request_discard has been
+/// called N frames in a row").
+#[trial]
+fn a_reveal_of_a_rect_in_view_runs_no_second_pass() {
+    let (log, source) = (Log::new(), Count(30));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).id_salt("list");
+            log.take(list.show_items(ui, &source, &mut |key, _| ProbeRow::new(*key, log)));
+        });
+    };
+    frames.idle(3, &mut show);
+    let idle = frames.frame(vec![], &mut show);
+    let row = log.rect(1);
+    for _ in 0..3 {
+        craft_ui::testing::contract::queue_reveal(&frames.ctx, log.id(), row);
+        let passes = frames.frame(vec![], &mut show);
+        assert_eq!(passes, idle, "a reveal of a row in view runs no extra pass");
+    }
+}
+
 /// Enter on a rename field nobody typed in commits the draft the collection proposed, and ends with no event when the
 /// draft is the row's own text.
 #[trial]

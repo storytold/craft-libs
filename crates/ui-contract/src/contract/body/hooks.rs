@@ -658,10 +658,14 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let (by, shown) = crate::contract::steps::reveal_move(rect, view);
             let rtl = cx.core.env.direction().is_rtl();
             let id = cx.core.id;
-            let mut offset = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            let current = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            let mut offset = current;
             offset.y += f64::from(by.y);
             offset.x += f64::from(if rtl { -by.x } else { by.x });
-            super::scroll::queue_jump(&cx.core.ctx, id, offset);
+            // A reveal of what the view shows moves nothing: no jump, so no repeated pass.
+            if offset != current {
+                super::scroll::queue_jump(&cx.core.ctx, id, offset);
+            }
             crate::contract::Focus::reveal(cx, shown);
         }
         // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
