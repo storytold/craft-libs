@@ -21,7 +21,7 @@ pub enum PropertyError {
 /// copy payloads or impose object budgets; those decisions belong to the caller.
 #[derive(Clone, Debug)]
 pub struct Properties<'a> {
-    headers: std::slice::ChunksExact<'a, u8>,
+    headers: std::slice::Iter<'a, [u8; 6]>,
     payload: &'a [u8],
 }
 
@@ -35,7 +35,7 @@ impl<'a> Properties<'a> {
         }
         let count = usize::from(u16::from_le_bytes([*lo, *hi]));
         let (headers, payload) = tail.split_at_checked(count * 6).ok_or(PropertyError::TruncatedIndex)?;
-        Ok(Self { headers: headers.chunks_exact(6), payload })
+        Ok(Self { headers: headers.as_chunks::<6>().0.iter(), payload })
     }
     pub(super) fn remaining_count(&self) -> usize {
         self.headers.len()
@@ -44,7 +44,7 @@ impl<'a> Properties<'a> {
     // The store checks duplicate IDs before validating the corresponding payload,
     // so a record that is both duplicate and truncated retains its old diagnostic.
     pub(super) fn next_id(&self) -> Option<u16> {
-        let [lo, hi, ..] = self.headers.clone().next()? else { return None };
+        let [lo, hi, ..] = self.headers.as_slice().first()?;
         Some(u16::from_le_bytes([*lo, *hi]))
     }
 }
@@ -53,10 +53,10 @@ impl<'a> Iterator for Properties<'a> {
     type Item = Result<Property<'a>, PropertyError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let [id0, id1, form0, form1, len0, len1] = self.headers.next()? else { return None };
+        let [id0, id1, form0, form1, len0, len1] = self.headers.next()?;
         let len = usize::from(u16::from_le_bytes([*len0, *len1]));
         let Some((payload, tail)) = self.payload.split_at_checked(len) else {
-            self.headers = [].chunks_exact(6);
+            self.headers = [].iter();
             return Some(Err(PropertyError::TruncatedValue));
         };
         self.payload = tail;
