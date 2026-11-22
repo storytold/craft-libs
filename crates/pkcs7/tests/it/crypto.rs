@@ -163,29 +163,6 @@ fn signatures_round_trip_for_every_key_type() {
 }
 
 #[test]
-fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
-    let name = Name::build("Grace Hopper", "Compilers", "Navy", "grace@example.com", "us");
-    let now = Time { year: 2026, month: 10, day: 2, hour: 12, minute: 0, second: 0 };
-    for key in [craft_pkcs7::PrivateKey::generate_rsa(2048).unwrap(), craft_pkcs7::PrivateKey::generate_p256().unwrap()] {
-        let cert = Certificate::self_signed(&name, &key, now, 5, &[0x42, 0x01]).unwrap();
-        assert!(cert.is_self_signed());
-        assert_eq!(cert.subject.display(), "C=US, O=Navy, OU=Compilers, CN=Grace Hopper, E=grace@example.com");
-        assert_eq!(cert.not_after.year, 2031);
-        assert_eq!(cert.key_usage.map(|u| u & 0b11), Some(0b11));
-        let id = pkcs12::DigitalId { key, certificate: cert, chain: Vec::new(), friendly_name: Some("Grace Hopper".into()) };
-        let p12 = pkcs12::write(&id, "s3cret").unwrap();
-        let back = pkcs12::open(&p12, "s3cret").unwrap();
-        assert_eq!(back.certificate, id.certificate);
-        assert_eq!(back.friendly_name.as_deref(), Some("Grace Hopper"));
-        assert!(matches!(pkcs12::open(&p12, "wrong"), Err(Error::WrongPassword)));
-        let d = DigestAlg::Sha256.digest(&[b"x"]);
-        let sig = cms::sign_detached(&back.key, &back.certificate, &[], DigestAlg::Sha256, &d).unwrap();
-        let sd = cms::SignedData::parse(&sig).unwrap();
-        assert!(sd.verify_signature(&back.certificate, &d).unwrap());
-    }
-}
-
-#[test]
 fn new_digital_ids_use_the_stronger_round_count_for_the_key_and_the_mac() {
     let name = Name::build("Grace Hopper", "", "", "", "");
     let now = Time { year: 2026, month: 10, day: 14, hour: 12, minute: 0, second: 0 };

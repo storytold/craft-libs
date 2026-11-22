@@ -489,14 +489,19 @@ fn random(n: usize) -> Result<Vec<u8>, Error> {
 
 /// Write a digital ID as a `.p12` protected by `password`.
 pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, Error> {
+    write_with_rounds(id, password, WRITE_ROUNDS)
+}
+
+// The production entry point fixes the count; only the in-crate tests choose a cheaper one.
+fn write_with_rounds(id: &DigitalId, password: &str, rounds: u32) -> Result<Vec<u8>, Error> {
     let encrypt = |plain: &[u8]| -> Result<Vec<u8>, Error> {
         let (salt, iv) = (random(16)?, random(16)?);
-        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, WRITE_ROUNDS, 32)?;
+        let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, rounds, 32)?;
         let ct =
             cbc::Encryptor::<aes::Aes256>::new_from_slices(&key, &iv).map_err(|_| Error::Crypto("AES".into()))?.encrypt_padded_vec::<Pkcs7>(plain);
         let kdf = der::seq(&[
             &der::oid(PBKDF2),
-            &der::seq(&[&der::octets(&salt), &der::int(WRITE_ROUNDS as u64), &der::seq(&[&der::oid(HMAC_SHA256), &der::null()])]),
+            &der::seq(&[&der::octets(&salt), &der::int(rounds as u64), &der::seq(&[&der::oid(HMAC_SHA256), &der::null()])]),
         ]);
         let alg = der::seq(&[&der::oid(PBES2), &der::seq(&[&kdf, &der::seq(&[&der::oid(AES256_CBC), &der::octets(&iv)])])]);
         Ok(der::seq(&[&alg, &der::octets(&ct)]))
@@ -526,15 +531,39 @@ pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, Error> {
     let ci_key = der::seq(&[&der::oid(DATA), &der::explicit(0, &der::octets(&der::seq(&[&key_bag])))]);
     let auth_safe = der::seq(&[&ci_certs, &ci_key]);
     let salt = random(16)?;
-    let mac_key = pkcs12_kdf(DigestAlg::Sha256, &bmp(password), &salt, 3, WRITE_ROUNDS, 32);
+    let mac_key = pkcs12_kdf(DigestAlg::Sha256, &bmp(password), &salt, 3, rounds, 32);
     let mac = hmac(DigestAlg::Sha256, &mac_key, &auth_safe)?;
-    let mac_data = der::seq(&[&der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&mac)]), &der::octets(&salt), &der::int(WRITE_ROUNDS as u64)]);
+    let mac_data = der::seq(&[&der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&mac)]), &der::octets(&salt), &der::int(rounds as u64)]);
     Ok(der::seq(&[&der::int(3), &der::seq(&[&der::oid(DATA), &der::explicit(0, &der::octets(&auth_safe))]), &mac_data]))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Name, Time, cms, pkcs12};
+
+    #[test]
+    fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
+        let name = Name::build("Grace Hopper", "Compilers", "Navy", "grace@example.com", "us");
+        let now = Time { year: 2026, month: 10, day: 2, hour: 12, minute: 0, second: 0 };
+        for key in [PrivateKey::generate_rsa(2048).unwrap(), PrivateKey::generate_p256().unwrap()] {
+            let cert = Certificate::self_signed(&name, &key, now, 5, &[0x42, 0x01]).unwrap();
+            assert!(cert.is_self_signed());
+            assert_eq!(cert.subject.display(), "C=US, O=Navy, OU=Compilers, CN=Grace Hopper, E=grace@example.com");
+            assert_eq!(cert.not_after.year, 2031);
+            assert_eq!(cert.key_usage.map(|u| u & 0b11), Some(0b11));
+            let id = pkcs12::DigitalId { key, certificate: cert, chain: Vec::new(), friendly_name: Some("Grace Hopper".into()) };
+            let p12 = write_with_rounds(&id, "s3cret", 1_000).unwrap();
+            let back = pkcs12::open(&p12, "s3cret").unwrap();
+            assert_eq!(back.certificate, id.certificate);
+            assert_eq!(back.friendly_name.as_deref(), Some("Grace Hopper"));
+            assert!(matches!(pkcs12::open(&p12, "wrong"), Err(Error::WrongPassword)));
+            let d = DigestAlg::Sha256.digest(&[b"x"]);
+            let sig = cms::sign_detached(&back.key, &back.certificate, &[], DigestAlg::Sha256, &d).unwrap();
+            let sd = cms::SignedData::parse(&sig).unwrap();
+            assert!(sd.verify_signature(&back.certificate, &d).unwrap());
+        }
+    }
 
     #[test]
     fn one_budget_covers_every_derivation_in_a_file() {
