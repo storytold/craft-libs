@@ -32,6 +32,7 @@ pub mod pict;
 mod place;
 mod size;
 mod text;
+mod units;
 mod wmf;
 
 #[cfg(feature = "write")]
@@ -51,6 +52,7 @@ pub use pict::{is_pict, parse as parse_pict};
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
 pub use text::{Font, HAlign, SYMBOL_CHARSET, Text, VAlign};
+pub use units::{EmfDevice, EmfPhysicalSize, UnitFacts, unit_facts};
 
 /// Items kept from one file. Past the cap the parse stops and keeps what it has.
 pub(crate) const MAX_ITEMS: usize = 200_000;

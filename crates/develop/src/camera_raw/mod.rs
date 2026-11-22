@@ -422,11 +422,19 @@ pub fn band_weights(h: f32) -> [f32; 8] {
     let mut w = [0.0f32; 8];
     for k in 0..8 {
         let (c, prev, next) = (HSL_BANDS[k], HSL_BANDS[(k + 7) % 8], HSL_BANDS[(k + 1) % 8]);
-        let diff = ((h - c + 540.0) % 360.0) - 180.0;
+        let diff = (h - c + 540.0).rem_euclid(360.0) - 180.0;
         let span = if diff >= 0.0 { (next - c).rem_euclid(360.0) } else { (c - prev).rem_euclid(360.0) };
         w[k] = (1.0 - diff.abs() / span.max(1e-3)).max(0.0);
     }
     w
+}
+
+#[cfg(test)]
+#[test]
+fn band_weights_wrap_equivalent_hues_in_both_directions() {
+    let weights = band_weights(320.0);
+    assert_eq!(band_weights(-400.0), weights);
+    assert_eq!(band_weights(680.0), weights);
 }
 
 /// Contrast, Highlights, Shadows, Texture and Clarity (the luminance stage) at rest.
@@ -687,7 +695,18 @@ fn balance(mut q: [f32; 4], g: [f32; 3]) -> [f32; 4] {
 /// The index of the `q` quantile (0 … 1) among `len` sorted values, as every percentile in the
 /// develop picks it.
 pub fn quantile_rank(len: usize, q: f32) -> usize {
-    (len.saturating_sub(1) as f32 * q).round() as usize
+    let last = len.saturating_sub(1);
+    ((last as f32 * q).round() as usize).min(last)
+}
+
+#[cfg(test)]
+#[test]
+fn quantile_rank_keeps_the_upper_endpoint_inside_the_sample() {
+    // This last index rounds up when cast to f32.
+    let len = 16_777_220;
+    assert_eq!(quantile_rank(len, 1.0), len - 1);
+    assert_eq!(quantile_rank(4, 0.5), 2);
+    assert_eq!(quantile_rank(0, 1.0), 0);
 }
 
 /// The image's black and white points as sRGB-encoded grey levels: the 3rd percentile of the
@@ -819,6 +838,11 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     });
 }
 
+fn sharpening_detail(detail: f32) -> f32 {
+    let detail = if detail.is_nan() { CameraRaw::default().sharpen_detail } else { detail.clamp(0.0, 100.0) };
+    detail / 100.0
+}
+
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
     // The controls' documented 0..=100 range: raw values drive the filter radii below.
     let [nl, nld, nc, ncd] = [p.noise_luminance, p.noise_luminance_detail, p.noise_color, p.noise_color_detail].map(|v| v.clamp(0.0, 100.0));
@@ -859,7 +883,7 @@ fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
             })
         });
         let amt = p.sharpen_amount / 100.0 * 1.2;
-        let det = p.sharpen_detail / 100.0;
+        let det = sharpening_detail(p.sharpen_detail);
         for i in 0..w * h {
             let hp = y[i] - blur[i];
             // Low Detail damps large (halo-producing) differences.
@@ -947,6 +971,18 @@ mod tests {
     /// [`super::per_pixel`] with the default inputs.
     fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
         super::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
+    }
+
+    #[test]
+    fn sharpening_detail_stays_in_range_at_the_shared_entry_point() {
+        for value in [0.0_f32, 25.0, 37.5, 100.0] {
+            assert_eq!(sharpening_detail(value).to_bits(), (value / 100.0).to_bits());
+        }
+        assert_eq!(sharpening_detail(-1.0), 0.0);
+        assert_eq!(sharpening_detail(101.0), 1.0);
+        assert_eq!(sharpening_detail(f32::NAN), sharpening_detail(CameraRaw::default().sharpen_detail));
+        assert_eq!(sharpening_detail(f32::NEG_INFINITY), 0.0);
+        assert_eq!(sharpening_detail(f32::INFINITY), 1.0);
     }
 
     /// #9273: Dehaze clears the haze evenly over a sky, right up to a dark building, instead of
