@@ -42,7 +42,7 @@ pub(crate) fn hold_escape(ctx: &Context, owner: Id) {
 }
 
 /// A state-dependent claim of `owner`, held from the next frame's input hook on while `owner` is the focused
-/// component, or the window's document canvas while nothing has focus.
+/// component, or the window's document canvas while nothing has focus and no modal layer is open.
 #[doc(hidden)]
 pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
     crate::runtime::replay::journal(ctx, || (owner, chord), |ctx, &(owner, chord)| claim(ctx, owner, chord));

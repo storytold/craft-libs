@@ -89,8 +89,9 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu_bar: Option<Id>,
     /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics (`register_menu_bar_by_claim`).
     pub(crate) menu_bar_by_claim: bool,
-    /// The window's document canvas (`KeyUse::chrome_key`) the last pass registered, while no stop has focus: its
-    /// state-dependent claims hold, as its tool takes the arrows, Enter and Escape with nothing focused.
+    /// The window's document canvas (`KeyUse::chrome_key`) the last pass registered, while no stop has focus and no
+    /// modal layer is open: its state-dependent claims hold, as its tool takes the arrows, Enter and Escape with nothing
+    /// focused.
     pub(crate) canvas: Option<Id>,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
@@ -995,7 +996,10 @@ pub(crate) fn end(ctx: &Context) {
     let foreign = host_focus || (!captured && crate::runtime::egui::areas::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
     let host_text = host_focus && ctx.text_edit_focused();
+    // A modal layer keeps the canvas's claims from it, as it keeps the arrows (`overlay::end_pass` ran before).
+    let modal = crate::runtime::overlay::top_modal_in(ctx, viewport).is_some();
     with(ctx, |state| {
+        state.record.canvas = state.record.canvas.filter(|_| !modal);
         state.record.foreign = foreign;
         state.record.host_focus = host_focus;
         state.record.host_text = host_text;

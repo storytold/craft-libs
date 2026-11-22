@@ -2,7 +2,7 @@
 //! with Enter without a click on the canvas first); a focused field beside the canvas keeps its own Enter. On the
 //! focused canvas or with nothing focused, a tool takes the deletes it claims in its state at the end of the last pass: the plain ones, and
 //! with Alt held while it keeps the keyboard (Photoshop's polygonal lasso removes its last point while Alt holds the
-//! freehand switch). Unclaimed deletes are the app's (Edit > Clear, Fill). Enter and Escape reach a tool as `Submit`
+//! freehand switch); a modal open over the canvas keeps them from it. Unclaimed deletes are the app's (Edit > Clear, Fill). Enter and Escape reach a tool as `Submit`
 //! and `Cancel` with Alt carried, and Shift+Delete is no delete (Photoshop opens Fill, which the app binds). A
 //! session control in the canvas body (a crop frame) takes the arrows, Enter and Escape before the tool, with the
 //! canvas focused or nothing focused; with none shown, the arrows reach the tool with nothing focused. A tool that
@@ -16,6 +16,8 @@ use craft_keymap::{Chord, Key as ChordKey, Mods};
 use craft_ui::buttons::Button;
 use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::dialog::Dialog;
+use craft_ui::display::Text;
 use craft_ui::popover::Popover;
 use craft_ui::primitives::Draw;
 use craft_ui::testing::access::Declared;
@@ -105,6 +107,30 @@ fn a_tool_takes_the_deletes_it_claims_with_nothing_focused() {
     assert_eq!(canvas.fixture().focused(), None, "nothing has focus");
     canvas.fixture().key(Key::Delete, Modifiers::NONE).key(Key::Backspace, Modifiers::NONE).settle();
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }, Seen::Delete { forward: false }]);
+}
+
+/// A modal layer open over the canvas keeps the deletes a tool claims from it while nothing is focused, as it keeps
+/// the arrows: they are the modal's or the app's. Once the modal closes, the tool takes them again.
+#[trial]
+fn a_modal_keeps_the_deletes_a_tool_claims_with_nothing_focused() {
+    let modal = Rc::new(Cell::new(true));
+    let shown = Rc::clone(&modal);
+    let mut canvas = ToolFixture::with_body("Document", Outline::new(true), move |ui, _| {
+        let mut open = shown.get();
+        if open {
+            Dialog::new("Over the canvas").opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+                Text::new("Modal").show(ui);
+            });
+        }
+    });
+    canvas.fixture().settle();
+    assert_eq!(canvas.fixture().focused(), None, "nothing has focus under the modal");
+    canvas.fixture().key(Key::Delete, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [], "the modal keeps the claimed Delete from the tool");
+    modal.set(false);
+    canvas.fixture().settle();
+    canvas.fixture().key(Key::Delete, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }], "with the modal closed the tool takes it");
 }
 
 /// A tool that takes every key the host offers it, and the lone Alt tap while `taps`.

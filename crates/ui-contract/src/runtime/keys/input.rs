@@ -428,7 +428,7 @@ enum PressUse {
 
 /// The chords the focused component of `record` claims: its stop's, the state-dependent ones (`keys::claim`) of the
 /// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`. With nothing
-/// focused, the window's document canvas's state-dependent claims hold instead.
+/// focused and no modal layer open, the window's document canvas's state-dependent claims hold instead.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
     let canvas = record.canvas.filter(|_| !record.foreign);
