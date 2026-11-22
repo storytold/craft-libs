@@ -1294,26 +1294,24 @@ fn pad() -> (Fixture, Rc<RefCell<Pad>>) {
             .close_on_enter(true)
             .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
             .show(ui, |ui, _| {
-                ui.allocate_ui(egui::vec2(400.0, 300.0), |ui| {
-                    let room = ui.available_rect_before_wrap();
-                    let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
-                    let state = {
-                        let mut pad = shown.borrow_mut();
-                        pad.host.view = view;
-                        pad.host.state
-                    };
-                    let canvas = Canvas::new("Document").view(view).show(ui, |ui, body| {
-                        TransformBox::new("Free Transform", Bind::given(state), RECT, 0.0)
-                            .rules(BoxRules::in_mode(TransformMode::Distort))
-                            .reference_point(false)
-                            .inside_moves(false)
-                            .session_commit(false)
-                            .show_at(ui, body.rect)
-                    });
-                    if let Some(output) = canvas.inner {
-                        absorb(&mut shown.borrow_mut().host, &output, false);
-                    }
+                let (room, _) = ui.allocate_exact_size(egui::vec2(400.0, 300.0), egui::Sense::hover());
+                let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+                let state = {
+                    let mut pad = shown.borrow_mut();
+                    pad.host.view = view;
+                    pad.host.state
+                };
+                let canvas = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
+                    TransformBox::new("Free Transform", Bind::given(state), RECT, 0.0)
+                        .rules(BoxRules::in_mode(TransformMode::Distort))
+                        .reference_point(false)
+                        .inside_moves(false)
+                        .session_commit(false)
+                        .show_at(ui, body.rect)
                 });
+                if let Some(output) = canvas.inner {
+                    absorb(&mut shown.borrow_mut().host, &output, false);
+                }
             });
         if dialog.output.closed.is_some() {
             shown.borrow_mut().closed = dialog.output.closed;
