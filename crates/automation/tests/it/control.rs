@@ -388,7 +388,8 @@ fn a_complete_json_request_at_eof_can_reach_the_app() {
     stream.shutdown(std::net::Shutdown::Write).expect("shut down");
     let reply = read_json(&mut reader).expect("a reply");
     assert_eq!((&reply["id"], &reply["result"]), (&json!(3), &json!("once")));
-    assert!(read_json(&mut reader).is_none(), "closed after the last request");
+    let mut rest = String::new();
+    assert_eq!(reader.read_line(&mut rest).expect("closed, not timed out"), 0, "closed after the last request: {rest:?}");
     handler.join().expect("handler ran");
 }
 
