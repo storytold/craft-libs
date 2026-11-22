@@ -229,7 +229,7 @@ fn direct_pixel_maps_and_masked_bitmaps() {
     let row = vec![7, 5, 255, 0, 0, 255, 0, 0];
     let direct =
         [be(&[0, 0xFF, 0x8008u16 as i16]), rect(0, 0, 1, 2), pixmap_fields(4, 32, 3), rect(0, 0, 1, 2), rect(0, 0, 1, 2), be(&[0]), row].concat();
-    let mask = [be(&[10]), rect(0, 0, 1, 1)].concat();
+    let mask = [be(&[10]), rect(5, 0, 6, 1)].concat();
     let bitmap = [be(&[2]), rect(0, 0, 1, 2), rect(0, 0, 1, 2), rect(5, 0, 6, 2), be(&[1]), mask, vec![0x80, 0]].concat();
     let p = parse_pict(&v2([0, 0, 10, 10], &[(0x9A, direct), (0x91, bitmap)])).unwrap();
     assert_eq!(p.items.len(), 2);
@@ -239,7 +239,7 @@ fn direct_pixel_maps_and_masked_bitmaps() {
     let Item::Bitmap { rgba: rgba1, region: Some(r), .. } = &p.items[1] else { panic!("expected bitmap 1 with region") };
     assert_eq!(rgba1[0..4], [0, 0, 0, 255]);
     assert_eq!(rgba1[7], 0, "the clear bit is left out");
-    assert!(!r.is_empty(), "mask region clips the bitmap");
+    assert_eq!(r, &vec![[0.0, 5.0, 1.0, 6.0]]);
 }
 
 #[test]
@@ -248,12 +248,12 @@ fn rows_far_longer_than_their_pixels_are_refused() {
     let mut row = be(&[256]);
     (0..127).for_each(|_| row.extend([0x81, 1]));
     row.extend([0x82, 1]);
-    let rows = row.repeat(4);
-    let map = [be(&[0xBFFFu16 as i16]), rect(0, 0, 4, 1), pixmap_fields(0, 8, 1), table.clone()].concat();
-    let data = [map, rect(0, 0, 4, 1), rect(0, 0, 4, 1), be(&[0]), rows].concat();
-    let p = parse_pict(&v2([0, 0, 10, 10], &[(0x98, data)])).unwrap();
+    let map = [be(&[0xBFFFu16 as i16]), rect(0, 0, 1, 1), pixmap_fields(0, 8, 1), table.clone()].concat();
+    let data = [map, rect(0, 0, 1, 1), rect(0, 0, 1, 1), be(&[0]), row.clone()].concat();
+    let p = parse_pict(&v2([0, 0, 10, 10], &[(0x98, data), (0x31, rect(0, 0, 5, 5))])).unwrap();
     assert_eq!(p.dropped_images, 1);
-    assert!(p.items.is_empty());
+    assert_eq!(p.items.len(), 1);
+    assert!(!p.truncated);
 
     let pattern = [be(&[1]), vec![0xFF; 8], be(&[0xBFFFu16 as i16]), rect(0, 0, 1, 1), pixmap_fields(0, 8, 1), table, row].concat();
     let p = parse_pict(&v2([0, 0, 10, 10], &[(0x12, pattern), (0x32, rect(0, 0, 5, 5))])).unwrap();
@@ -371,6 +371,9 @@ fn a_picture_that_never_ends_stops_at_the_opcode_limit() {
     let mut b = v2([0, 0, 50, 50], &[(0x31, rect(0, 0, 10, 10))]);
     b.truncate(b.len() - 2);
     b.resize(b.len() + 2 * ((1 << 22) + 1), 0);
+    b.extend([0x00, 0x31]);
+    b.extend(rect(20, 20, 30, 30));
+    b.extend([0x00, 0xFF]);
     let p = parse_pict(&b).unwrap();
     assert_eq!(p.items.len(), 1);
     assert!(p.truncated);

@@ -121,7 +121,9 @@ fn header(bytes: &[u8], at: usize) -> Option<Header> {
 
 /// The picture of a file (after its application data), else the picture `bytes` start with.
 fn find(bytes: &[u8]) -> Option<Header> {
-    header(bytes, FILE_HEADER).or_else(|| header(bytes, 0))
+    let v2_at_512 = header(bytes, FILE_HEADER).filter(|h| h.v2);
+    let v2_at_0 = header(bytes, 0).filter(|h| h.v2);
+    v2_at_512.or(v2_at_0).or_else(|| header(bytes, FILE_HEADER)).or_else(|| header(bytes, 0))
 }
 
 /// The size in points from the PICT header when valid.
@@ -135,7 +137,7 @@ pub(crate) fn header_size(bytes: &[u8]) -> Option<(f32, f32)> {
 /// Do `bytes` hold a version 2 picture, after a file's application data or on their own? The
 /// version 1 signature is two bytes, too short to tell a file by.
 pub fn is_pict(bytes: &[u8]) -> bool {
-    [FILE_HEADER, 0].into_iter().any(|at| header(bytes, at).is_some_and(|h| h.v2))
+    find(bytes).is_some_and(|h| h.v2)
 }
 
 #[derive(Clone, Copy)]
@@ -321,7 +323,11 @@ fn bands(b: &mut Be, work: &mut u64) -> Option<Vec<Rect>> {
     let mut active: Vec<i16> = vec![];
     let mut last_band = 0;
     let mut prev_y = 0.0;
-    while let Some(y) = b.i16().filter(|y| *y != 0x7FFF) {
+    loop {
+        let y = b.i16()?;
+        if y == 0x7FFF {
+            break;
+        }
         let y = f64::from(y);
         let spans: Vec<(f64, f64)> = active.as_chunks::<2>().0.iter().map(|[a, b]| (f64::from(*a), f64::from(*b))).collect();
         if !spans.is_empty() && y > prev_y {
@@ -341,7 +347,11 @@ fn bands(b: &mut Be, work: &mut u64) -> Option<Vec<Rect>> {
             }
         }
         prev_y = y;
-        while let Some(x) = b.i16().filter(|x| *x != 0x7FFF) {
+        loop {
+            let x = b.i16()?;
+            if x == 0x7FFF {
+                break;
+            }
             if !spend(work, active.len().saturating_add(1)) {
                 return None;
             }
@@ -419,7 +429,7 @@ impl PixMap {
     fn row_len(&self, w: usize) -> usize {
         match self.packing() {
             4 if self.size == 32 && self.row_bytes >= 8 => w.saturating_mul(usize::from(self.cmps)),
-            2 if self.size == 32 => w.saturating_mul(3),
+            2 if self.size == 32 => (self.row_bytes / 4).saturating_mul(3),
             _ => self.row_bytes,
         }
     }
@@ -427,7 +437,7 @@ impl PixMap {
     fn decodable(&self, w: usize) -> bool {
         let need = match self.size {
             1 | 2 | 4 | 8 => (w.saturating_mul(usize::from(self.size))).div_ceil(8),
-            16 => 2 * w,
+            16 if matches!(self.packing(), 0 | 3) => 2 * w,
             32 if self.packing() == 4 && self.row_bytes >= 8 => {
                 if !matches!(self.cmps, 3 | 4) {
                     return false;
@@ -435,7 +445,7 @@ impl PixMap {
                 w.saturating_mul(usize::from(self.cmps))
             }
             32 if self.packing() == 2 => 3 * w,
-            32 => 4 * w,
+            32 if matches!(self.packing(), 0 | 1) => 4 * w,
             _ => return false,
         };
         (need..=need.saturating_add(ROW_SLACK)).contains(&self.row_len(w))
@@ -524,44 +534,51 @@ fn color_table(r: &mut Be) -> Option<Vec<[u8; 3]>> {
 fn unpack(data: &[u8], len: usize, unit: usize, out: &mut Vec<u8>) -> bool {
     let start = out.len();
     let mut i = 0;
-    let mut ok = true;
     while out.len().saturating_sub(start) < len {
         let Some(&n) = data.get(i) else {
-            ok = false;
-            break;
+            return false;
         };
         i += 1;
         let n = n as i8;
         if n >= 0 {
             let k = (n as usize + 1).saturating_mul(unit);
+            if out.len().saturating_sub(start).saturating_add(k) > len {
+                return false;
+            }
             let Some(lit) = data.get(i..i + k) else {
-                ok = false;
-                break;
+                return false;
             };
             out.extend_from_slice(lit);
             i += k;
         } else if n != -128 {
+            let count = (1 - isize::from(n)) as usize;
+            let total = count.saturating_mul(unit);
+            if out.len().saturating_sub(start).saturating_add(total) > len {
+                return false;
+            }
             let Some(v) = data.get(i..i + unit) else {
-                ok = false;
-                break;
+                return false;
             };
-            for _ in 0..(1 - isize::from(n)) {
+            for _ in 0..count {
                 out.extend_from_slice(v);
             }
             i += unit;
         }
     }
-    out.resize(start.saturating_add(len), 0);
-    ok
+    out.len().saturating_sub(start) == len
 }
 
-fn crop(img: Rgba, src: Rect) -> Rgba {
+fn crop(img: Rgba, src: Rect) -> Option<(Rgba, Rect)> {
     let (w, h) = (img.w, img.h);
     let s = Rect::new(src.x0.min(src.x1), src.y0.min(src.y1), src.x0.max(src.x1), src.y0.max(src.y1));
     let clamp = |v: f64, max: usize| if v.is_finite() { v.round().clamp(0.0, max as f64) as usize } else { 0 };
     let (x0, y0, x1, y1) = (clamp(s.x0, w), clamp(s.y0, h), clamp(s.x1, w), clamp(s.y1, h));
-    if (x0, y0, x1, y1) == (0, 0, w, h) || x1 <= x0 || y1 <= y0 {
-        return img;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let in_bounds = Rect::new(x0 as f64, y0 as f64, x1 as f64, y1 as f64);
+    if (x0, y0, x1, y1) == (0, 0, w, h) {
+        return Some((img, in_bounds));
     }
     let mut px = Vec::with_capacity((x1 - x0).saturating_mul(y1 - y0).saturating_mul(4));
     for y in y0..y1 {
@@ -570,7 +587,7 @@ fn crop(img: Rgba, src: Rect) -> Rgba {
             px.extend_from_slice(p);
         }
     }
-    Rgba { w: x1 - x0, h: y1 - y0, px }
+    Some((Rgba { w: x1 - x0, h: y1 - y0, px }, in_bounds))
 }
 
 struct Pict {
@@ -655,6 +672,9 @@ impl Pict {
 
     fn push_raw(&mut self, mut raw: Raw, keep_region: bool) {
         if self.items.len() >= MAX_ITEMS {
+            if matches!(raw, Raw::Bitmap { .. }) {
+                self.dropped_images = self.dropped_images.saturating_add(1);
+            }
             self.truncated = true;
             return;
         }
@@ -679,6 +699,9 @@ impl Pict {
         }
         .saturating_add(region_cost);
         if self.used_bytes.saturating_add(cost) > MAX_BYTES {
+            if matches!(raw, Raw::Bitmap { .. }) {
+                self.dropped_images = self.dropped_images.saturating_add(1);
+            }
             self.truncated = true;
             return;
         }
@@ -864,8 +887,13 @@ impl Pict {
         self.push_fill(bp, color, even_odd);
     }
 
+    fn scale_factor(&self) -> f64 {
+        let c = self.xf().as_coeffs();
+        (c[0].abs() + c[3].abs()) / 2.0
+    }
+
     fn stroke(&mut self, mut bp: BezPath, color: [u8; 3], ends: u32) {
-        let width = (self.pen.x + self.pen.y) / 2.0;
+        let width = (self.pen.x + self.pen.y) / 2.0 * self.scale_factor();
         let cap = match ends {
             FLAT => Cap::Flat,
             SQUARE => Cap::Square,
@@ -985,9 +1013,24 @@ impl Pict {
         match verb {
             Verb::Frame if self.has_pen() => {
                 let half = self.pen / 2.0;
-                let inner: Vec<Rect> = rects.iter().map(|r| Rect::new(r.x0 + half.x, r.y0 + half.y, r.x1 - half.x, r.y1 - half.y)).collect();
                 let color = self.pen_color();
-                self.stroke(rects_path(&inner), color, SQUARE);
+                if rects.len() == 1 {
+                    let r = rects[0];
+                    let inner = Rect::new(r.x0 + half.x, r.y0 + half.y, r.x1 - half.x, r.y1 - half.y);
+                    self.stroke(rects_path(&[inner]), color, SQUARE);
+                } else {
+                    let outer_rects: Vec<[f64; 4]> = rects.iter().map(|r| [r.x0, r.y0, r.x1, r.y1]).collect();
+                    let inner_rects: Vec<[f64; 4]> = rects
+                        .iter()
+                        .filter_map(|r| {
+                            let (x0, y0, x1, y1) = (r.x0 + half.x, r.y0 + half.y, r.x1 - half.x, r.y1 - half.y);
+                            (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+                        })
+                        .collect();
+                    let diff = clip::combine(Some(outer_rects), inner_rects, clip::RGN_DIFF, None).unwrap_or_default();
+                    let diff_rects: Vec<Rect> = diff.into_iter().map(|[x0, y0, x1, y1]| Rect::new(x0, y0, x1, y1)).collect();
+                    self.fill(rects_path(&diff_rects), color, false);
+                }
             }
             Verb::Frame => {}
             Verb::Invert => {
@@ -1065,11 +1108,15 @@ impl Pict {
             self.fill(bp, color, false);
             return Some(());
         }
-        let width = (self.pen.x + self.pen.y) / 2.0;
+        let width = (self.pen.x + self.pen.y) / 2.0 * self.scale_factor();
         let pen = (color, width);
         if self.pending_pen != Some(pen) {
             self.flush();
             self.pending_pen = Some(pen);
+        }
+        if self.items.len() >= MAX_ITEMS {
+            self.truncated = true;
+            return Some(());
         }
         let half = self.pen / 2.0;
         let xf = self.xf();
@@ -1113,7 +1160,8 @@ impl Pict {
             charset: 0,
         };
         let pt = self.xf() * self.text_loc;
-        let transform = [1.0, 0.0, 0.0, 1.0, pt.x, pt.y];
+        let c = self.xf().as_coeffs();
+        let transform = [c[0], c[1], c[2], c[3], pt.x, pt.y];
         self.push(Raw::Text {
             text: Box::new(Text {
                 transform,
@@ -1178,13 +1226,24 @@ impl Pict {
     }
 
     fn image(&mut self, img: Rgba, src: Rect, dest: Rect, mask: Option<Vec<Rect>>) {
-        let img = crop(img, src);
-        if img.w == 0 || img.h == 0 {
+        let Some((cropped, in_bounds)) = crop(img, src) else {
+            return;
+        };
+        let (sw, sh) = (src.width(), src.height());
+        if sw <= 0.0 || sh <= 0.0 {
             return;
         }
-        let (w, h) = (img.w as f64, img.h as f64);
-        let xf = Affine::translate(dest.origin().to_vec2()) * Affine::scale_non_uniform(dest.width() / w, dest.height() / h);
-        self.image_xf(img, xf, mask);
+        let kx = dest.width() / sw;
+        let ky = dest.height() / sh;
+        let sub_dest = Rect::new(
+            dest.x0 + (in_bounds.x0 - src.x0) * kx,
+            dest.y0 + (in_bounds.y0 - src.y0) * ky,
+            dest.x0 + (in_bounds.x1 - src.x0) * kx,
+            dest.y0 + (in_bounds.y1 - src.y0) * ky,
+        );
+        let (w, h) = (cropped.w as f64, cropped.h as f64);
+        let xf = Affine::translate(sub_dest.origin().to_vec2()) * Affine::scale_non_uniform(sub_dest.width() / w, sub_dest.height() / h);
+        self.image_xf(cropped, xf, mask);
     }
 
     fn image_xf(&mut self, img: Rgba, xf: Affine, mask: Option<Vec<Rect>>) {
@@ -1228,15 +1287,7 @@ impl Pict {
             (RawClip { rects: self.clip.clone(), paths: Vec::new() }, false)
         };
 
-        self.push_raw(
-            Raw::Bitmap {
-                rect,
-                xf: unit_xf.as_coeffs(),
-                img,
-                region,
-            },
-            keep_region,
-        );
+        self.push_raw(Raw::Bitmap { rect, xf: unit_xf.as_coeffs(), img, region }, keep_region);
     }
 
     fn transfer(&mut self, img: &mut Rgba, mode: u16, bitmap: bool) {
@@ -1265,8 +1316,9 @@ impl Pict {
         match qt_image(data) {
             Some((ctype, xf, src, image)) if &ctype == b"jpeg" => match self.jpeg(image) {
                 Some(img) => {
-                    let img = crop(img, src);
-                    self.image_xf(img, xf * Affine::translate(src.origin().to_vec2()), None);
+                    if let Some((img, _)) = crop(img, src) {
+                        self.image_xf(img, xf * Affine::translate(src.origin().to_vec2()), None);
+                    }
                 }
                 None => self.dropped_images = self.dropped_images.saturating_add(1),
             },
@@ -1311,6 +1363,7 @@ fn qt_image(d: &[u8]) -> Option<([u8; 4], Affine, Rect, &[u8])> {
 
 /// Read a QuickDraw picture.
 pub fn parse(bytes: &[u8]) -> Result<Picture, Error> {
+    crate::dib::set_decode_budget(crate::dib::MAX_DECODE_PIXELS);
     let h = find(bytes).ok_or(Error::NotPict)?;
     let mut q = Pict::new(h.frame);
     let mut r = Be::new(bytes, h.ops);
@@ -1334,10 +1387,8 @@ pub fn parse(bytes: &[u8]) -> Result<Picture, Error> {
         q.truncated = true;
     }
     q.flush();
-    let pic = crate::build(
-        q.items,
-        Some(Frame { rect: [0.0, 0.0, h.frame.width(), h.frame.height()], size: Some((h.frame.width(), h.frame.height())) }),
-    );
+    let pic =
+        crate::build(q.items, Some(Frame { rect: [0.0, 0.0, h.frame.width(), h.frame.height()], size: Some((h.frame.width(), h.frame.height())) }));
     Ok(Picture {
         skipped_records: q.skipped_records.saturating_add(pic.skipped_records),
         truncated: q.truncated || pic.truncated,
