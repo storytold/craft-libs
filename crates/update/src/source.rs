@@ -219,7 +219,8 @@ pub(crate) mod tests {
 
     #[trial]
     fn a_rate_limited_source_with_nothing_saved_answers_rate_limited_not_english_text() {
-        let dir = std::env::temp_dir().join("craft-update-source-rate-limited");
+        // Nothing is written (a rate-limited answer saves nothing), and a name only this run uses has no cache to read.
+        let dir = std::env::temp_dir().join(format!("craft-update-source-rate-limited-{}-{}", std::process::id(), crate::now()));
         let http = Http::new("craft-update-test/0.0").expect("an HTTP client");
         let source = GitHubSource::new(http, dir.join("releases.json"));
         *source.limited_until.lock().expect("lock") = Some(crate::now() + 600);
