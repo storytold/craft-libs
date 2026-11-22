@@ -322,6 +322,10 @@ fn expression(
             binary(op, &float(0, n)?, &float(1, n)?, n)?
         }
         Op::Vec(n, false) => {
+            // a linked vector fills several lanes on the CPU: only scalar parts are lowered
+            if (0..4).any(|slot| operand(slot).and_then(pin).is_some_and(|p| p.lanes() > 1)) {
+                return None;
+            }
             let defaults = code.vec_defaults.get(instruction.x as usize)?;
             let values = defaults
                 .iter()
@@ -357,7 +361,10 @@ fn expression(
             format!("select({on_false}, {on_true}, {condition})")
         }
         Op::ToFloat => float(0, lanes)?,
-        Op::ToBool => format!("{} != 0.0", float(0, 1)?),
+        Op::ToBool => match input_lanes(0) {
+            n @ 2..=4 => format!("any({} != vec{n}f(0.0))", float(0, n)?),
+            _ => format!("{} != 0.0", float(0, 1)?),
+        },
         _ => return None,
     })
 }

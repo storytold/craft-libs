@@ -573,7 +573,8 @@ fn splat_instances(pats: &Patterns, p: &SplatterP) -> Vec<SplatInst> {
     inst
 }
 
-/// Data of the top-most instance under every pixel (the same coverage test the pattern itself uses).
+/// Data of the top-most instance under every pixel. An instance covers a pixel in its box where its value times the opacity
+/// is above 0.001, so the faintest edge of a soft pattern has no data.
 pub fn splatter_data(w: usize, h: usize, pats: &Patterns, p: &SplatterP, what: SplatData) -> Tex {
     let inst = splat_instances(pats, p);
     Tex::from_fn(w, h, |u, v| {
