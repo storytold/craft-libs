@@ -274,17 +274,17 @@ mod tests {
 
     fn raw_with(color: ColorData) -> RawImage {
         RawImage {
-            format: super::RawFormat::Dng,
+            format: super::super::RawFormat::Dng,
             width: 1,
             height: 1,
             cpp: 1,
-            data: super::RawData::U16(vec![0]),
+            data: super::super::RawData::U16(vec![0]),
             cfa: None,
             bits: 16,
             black: Default::default(),
             white: vec![65535.0],
-            active_area: super::Rect::new(0, 0, 1, 1),
-            crop: super::Rect::new(0, 0, 1, 1),
+            active_area: super::super::Rect::new(0, 0, 1, 1),
+            crop: super::super::Rect::new(0, 0, 1, 1),
             orientation: Default::default(),
             color,
             wb_multipliers: None,
@@ -295,7 +295,7 @@ mod tests {
             camera: Default::default(),
             cinema: Default::default(),
             lens_metadata: Default::default(),
-            gain_table_map: None,
+            level_sources: Default::default(),
             notices: Default::default(),
         }
     }

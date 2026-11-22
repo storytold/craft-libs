@@ -174,7 +174,7 @@ mod tests {
             camera: Default::default(),
             cinema: Default::default(),
             lens_metadata: Default::default(),
-            gain_table_map: None,
+            level_sources: Default::default(),
             notices: Default::default(),
         }
     }

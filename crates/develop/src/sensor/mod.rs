@@ -49,6 +49,7 @@ pub trait RawDevelopExt {
     fn develop(&self, method: Method) -> Result<Rgb32f>;
     fn finish_demosaiced(&self, rgb: Rgb32f) -> Rgb32f;
     fn develop_crop(&self, width: usize, height: usize) -> Rect;
+    fn can_bin(&self, k: usize) -> bool;
     fn develop_binned(&self, k: usize, clip: f32) -> Result<Option<Rgb32f>>;
     fn develop_binned_masked(&self, k: usize, clip: f32) -> Result<Option<(Rgb32f, Vec<u8>)>>;
 }
@@ -149,6 +150,10 @@ impl RawDevelopExt for RawImage {
     fn develop_crop(&self, width: usize, height: usize) -> Rect {
         let c = self.crop.clipped(width, height);
         if c.width == 0 || c.height == 0 { Rect::new(0, 0, width, height) } else { c }
+    }
+
+    fn can_bin(&self, k: usize) -> bool {
+        binned::can_bin(self, k)
     }
 
     fn develop_binned(&self, k: usize, clip: f32) -> Result<Option<Rgb32f>> {
