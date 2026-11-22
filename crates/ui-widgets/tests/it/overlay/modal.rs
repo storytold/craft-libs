@@ -5,7 +5,7 @@ use craft_behavior::Sense;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, Overlay, OverlayUi, Overlays as _, Props as _, Role, Show as _, Trigger};
 use craft_ui::runtime::commands::{FireSource, fire};
 use craft_ui::runtime::focus::{FocusTarget, Initial, request};
-use craft_ui::runtime::overlay::{OpenFilter, any_open};
+use craft_ui::runtime::overlay::{Backdrop, OpenFilter, Rank, any_open};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::focus::is_focused;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -15,6 +15,13 @@ use std::cell::{Cell, RefCell};
 
 const OPENER: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(180.0, 120.0) };
 const BELOW: Rect = Rect { min: Pos2::new(600.0, 500.0), max: Pos2::new(660.0, 530.0) };
+
+#[trial]
+fn modal_dialogs_dim_the_window_but_modeless_windows_do_not() {
+    assert_eq!(Overlay::dialog().rank, Rank::modal(Backdrop::Scrim));
+    assert_eq!(Overlay::modal().rank, Rank::modal(Backdrop::None), "a modal popover need not dim its content");
+    assert_eq!(Overlay::dialog().modeless().rank, Rank::Window);
+}
 
 /// A modal whose focus starts on its first stop: the content here has no field and no default button, where a dialog
 /// starts with nothing focused.

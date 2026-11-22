@@ -97,10 +97,10 @@ impl<'a> Dialog<'a> {
         Dialog::on(title, overlay, HEADER.band(DragBand::Move))
     }
 
-    /// A prompt titled `title`: a dialog on the modal preset, centred with its content capped, fixed in place and
+    /// A prompt titled `title`: a dialog centred with its content capped, fixed in place and
     /// not remembered.
     pub fn prompt(title: impl Into<Label>) -> Self {
-        Dialog::on(title, Overlay::modal(), HEADER)
+        Dialog::on(title, Overlay::dialog().movable(false).resizable(false), HEADER)
     }
 
     fn on(title: impl Into<Label>, overlay: Overlay, header: HeaderRegion) -> Self {
