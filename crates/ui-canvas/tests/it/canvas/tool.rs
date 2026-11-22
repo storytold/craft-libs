@@ -889,6 +889,20 @@ fn injected_clicks_reach_the_tool_as_a_multi_click() {
     assert_eq!(clicks.last(), Some(&3), "the third press is a triple click");
 }
 
+/// Two clicks whose presses and releases all came in one frame (a stalled window delivers a double click at once)
+/// reach the tool as two presses in the frames the runtime asks for (one press per pass), the second counted as a
+/// double click.
+#[trial]
+fn two_clicks_in_one_frame_reach_the_tool_as_a_double_click() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (mut fixture, _) = probe_fixture(&probe);
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::press(at), pointer::release(at), pointer::press(at), pointer::release(at)]).settle();
+    let clicks = probe.borrow().clicks.clone();
+    assert!(clicks.len() == 2 && clicks[1] > clicks[0], "each click reaches the tool, the second counted on: {clicks:?}");
+}
+
 /// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
 /// were injected with, and the pointer kind of a pen.
 #[trial]
