@@ -279,11 +279,13 @@ impl<'a> Button<'a> {
         }
     }
 
-    /// The chord a `Trailing` button shows: the bound `command`'s, written as `Kbd` writes it with the scope's key
-    /// names (`words`, asked only then). `None` for a hidden chord and for a command with none.
-    fn chord_text(&self, command: Option<&ResolvedCommand>, os: Os, words: impl FnOnce() -> Arc<DisplayWords>) -> Option<String> {
+    /// The chord a `Trailing` button shows: the bound `command`'s, written as `Kbd` writes it for the scope's OS and
+    /// with its key names (`keys`, asked only then, so a button with no chord reads neither). `None` for a hidden chord
+    /// and for a command with none.
+    fn chord_text(&self, command: Option<&ResolvedCommand>, keys: impl FnOnce() -> (Os, Arc<DisplayWords>)) -> Option<String> {
         let chord = command.filter(|_| self.chord == ButtonChord::Trailing)?.chord?;
-        Some(Kbd::text(&Trigger::from(chord), os, &words(), ChordWrite::default()))
+        let (os, words) = keys();
+        Some(Kbd::text(&Trigger::from(chord), os, &words, ChordWrite::default()))
     }
 }
 
@@ -334,7 +336,7 @@ impl Component for Button<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let chord = self.chord_text(cx.command(), cx.env.shell().os, || cx.words::<DisplayWords>());
+        let chord = self.chord_text(cx.command(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
         let shown = face::measure(cx, &self.spec(cx.resolved.label, cx.style, chord.as_deref()));
         match &self.room_for {
             Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str(), cx.style, chord.as_deref()))),
@@ -357,7 +359,7 @@ impl Component for Button<'_> {
                 cx.part(SPINNER, rect);
             }
         } else if self.picture.is_some() {
-            let chord = self.chord_text(cx.command(), cx.env.shell().os, || cx.words::<DisplayWords>());
+            let chord = self.chord_text(cx.command(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
             let lead = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style, chord.as_deref()), &cx.style.face, cx.style.icon.side, area, rtl);
             if let Some(rect) = lead {
                 cx.part(PICTURE, rect);
@@ -398,7 +400,7 @@ impl Component for Button<'_> {
             ui.draw().data_fill(&shape, DataColor::new(Color32::from(craft_theme::Srgba::from(tint))));
             ui.draw().fill(&shape, cx.resolve(&cx.style.overlay));
         }
-        let chord = self.chord_text(cx.command.as_deref(), cx.env.shell().os, || cx.words::<DisplayWords>());
+        let chord = self.chord_text(cx.command.as_deref(), || (cx.env.shell().os, cx.words::<DisplayWords>()));
         face::paint(
             ui,
             cx,
