@@ -367,6 +367,11 @@ impl ParagraphDialog {
     pub fn format(&self) -> &ParagraphFormat {
         &self.format
     }
+
+    /// The Tabs page's dialog, when the dialog has the page.
+    pub fn tabs_page_mut(&mut self) -> Option<&mut TabStopsDialog> {
+        self.tabs.as_mut()
+    }
 }
 
 /// The largest length Word takes, points.
