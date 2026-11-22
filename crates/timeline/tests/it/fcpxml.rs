@@ -864,6 +864,34 @@ fn deferred_audio_only_cached_back_edges_stay_acyclic_and_bounded() {
     }
 }
 
+fn deferred_audio_lanes(seq: &Sequence) -> Vec<(String, Tick, Tick, usize)> {
+    let mut items = seq
+        .audio_tracks
+        .iter()
+        .enumerate()
+        .flat_map(|(track, t)| t.items.iter().map(move |i| (i.name.clone(), i.start, i.duration, track)))
+        .collect::<Vec<_>>();
+    items.sort_by(|a, b| a.0.cmp(&b.0));
+    items
+}
+fn assert_outside_audio_control(seq: &Sequence, report: &Report, expected: &[(String, Tick, Tick, usize)]) {
+    assert_eq!(deferred_audio_lanes(seq).as_slice(), expected, "permanently outside preferences must not move valid neighbours");
+    assert!(seq.audio_tracks.len() <= 256 && seq.video_tracks.len() <= 256);
+    assert!(seq.all_tracks().flat_map(|t| &t.items).all(|i| !i.name.starts_with("Outside ")));
+    assert!(seq.markers.iter().all(|m| !m.name.starts_with("Outside ")));
+    assert!(seq.all_tracks().flat_map(|t| &t.items).flat_map(|i| &i.markers).all(|m| !m.name.starts_with("Outside ")));
+    deferred_audio_pair(seq, "Adjusted");
+    deferred_audio_pair(seq, "Positive lane");
+    assert!(seq.audio_tracks[3].items[0].link.is_none(), "the ordinary audio neighbour must remain unpaired");
+    let cap_failures = report
+        .entries
+        .iter()
+        .filter(|e| e.message == "FCPXML Audio lane exceeds the 256-track import limit; clip was skipped")
+        .map(|e| e.count)
+        .sum::<u32>();
+    assert_eq!(cap_failures, 2, "each outside reference contributes exactly one final diagnostic: {report}");
+}
+
 #[test]
 fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     fn prewarm(xml: &str) -> String {
@@ -872,16 +900,6 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
         let project_b = &xml[start..end];
         let without_b = format!("{}{}", &xml[..start], &xml[end..]);
         without_b.replacen("<project name=\"A\">", &format!("{project_b}<project name=\"A\">"), 1)
-    }
-    fn lanes(seq: &Sequence) -> Vec<(String, Tick, Tick, usize)> {
-        let mut items = seq
-            .audio_tracks
-            .iter()
-            .enumerate()
-            .flat_map(|(track, t)| t.items.iter().map(move |i| (i.name.clone(), i.start, i.duration, track)))
-            .collect::<Vec<_>>();
-        items.sort_by(|a, b| a.0.cmp(&b.0));
-        items
     }
     let refs = r#"<ref-clip ref="m63" name="Adjusted" start="3s" duration="4s">
       <ref-clip ref="m63" name="Positive lane" lane="2" offset="3s" duration="2s"/>
@@ -897,7 +915,7 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     deferred_audio_pair(warm_seq, "Positive lane");
     assert_eq!(warm_seq.audio_tracks[2].items[0].name, "Positive lane");
     assert_eq!(warm_seq.audio_tracks[3].items[0].name, "Negative lane");
-    let expected = lanes(warm_seq);
+    let expected = deferred_audio_lanes(warm_seq);
     assert_eq!(expected.len(), 3);
 
     // The audio asset remains available, but an intentionally video-only leaf can never
@@ -911,7 +929,7 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     let (_, silent_child) = deferred_audio_sequence(&silent.project, "M63");
     assert!(silent_child.audio_tracks.iter().all(|t| t.items.is_empty()));
     assert!(silent_seq.video_tracks[2].items.iter().any(|i| i.name == "Positive lane"));
-    assert_eq!(lanes(silent_seq), vec![("Negative lane".into(), Tick::ZERO, Tick(2 * TICKS_PER_SECOND), 2)]);
+    assert_eq!(deferred_audio_lanes(silent_seq), vec![("Negative lane".into(), Tick::ZERO, Tick(2 * TICKS_PER_SECOND), 2)]);
     let ordinary = &silent_seq.audio_tracks[2].items[0];
     assert!(ordinary.link.is_none());
     assert_eq!(media_key(&silent.project, ordinary.item), "/original-deferred-audio.mov");
@@ -923,7 +941,7 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     assert_eq!(child.audio_tracks[0].items.len(), 1, "the later B visit must really recover child audio");
     deferred_audio_pair(cold_seq, "Adjusted");
     deferred_audio_pair(cold_seq, "Positive lane");
-    assert_eq!(lanes(cold_seq).len(), 3, "no missing or duplicate restoration may explain the lane difference");
+    assert_eq!(deferred_audio_lanes(cold_seq).len(), 3, "no missing or duplicate restoration may explain the lane difference");
 
     // Four entries suffice to reach the existing track cap. O2 is rejected during the
     // premature ordinary-only placement, but fits when all recoverable entries replay in order.
@@ -937,7 +955,7 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     let (warm_cap, warm_cap_report) = import(prewarm(&capped_xml).as_bytes(), Format::Fcpxml, None).unwrap();
     assert!(!warm_cap_report.mentions("track import limit"), "{warm_cap_report}");
     let (_, warm_cap_seq) = deferred_audio_sequence(&warm_cap.project, "M61");
-    let cap_expected = lanes(warm_cap_seq);
+    let cap_expected = deferred_audio_lanes(warm_cap_seq);
     assert_eq!(
         cap_expected,
         vec![
@@ -952,11 +970,11 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     let (_, cold_cap_seq) = deferred_audio_sequence(&cold_cap.project, "M61");
     assert!(cold_cap_seq.audio_tracks.len() <= 256);
     let mut failures = Vec::new();
-    if lanes(cold_seq) != expected {
-        failures.push(format!("ordinary collision: cold {:?}, prewarmed {expected:?}", lanes(cold_seq)));
+    if deferred_audio_lanes(cold_seq) != expected {
+        failures.push(format!("ordinary collision: cold {:?}, prewarmed {expected:?}", deferred_audio_lanes(cold_seq)));
     }
-    if lanes(cold_cap_seq) != cap_expected {
-        failures.push(format!("track-cap collision: cold {:?}, prewarmed {cap_expected:?}", lanes(cold_cap_seq)));
+    if deferred_audio_lanes(cold_cap_seq) != cap_expected {
+        failures.push(format!("track-cap collision: cold {:?}, prewarmed {cap_expected:?}", deferred_audio_lanes(cold_cap_seq)));
     }
     if cold_cap_report.mentions("track import limit") {
         failures.push("a recoverable encounter-order placement reported a false track-cap skip".into());
@@ -980,20 +998,6 @@ fn deferred_audio_preserves_encounter_order_with_ordinary_audio() {
     for text in [&outside_xml, &prewarmed_outside] {
         let (imported, report) = import(text.as_bytes(), Format::Fcpxml, None).unwrap();
         let (_, seq) = deferred_audio_sequence(&imported.project, "M61");
-        assert_eq!(lanes(seq), expected, "permanently outside preferences must not move valid neighbours");
-        assert!(seq.audio_tracks.len() <= 256 && seq.video_tracks.len() <= 256);
-        assert!(seq.all_tracks().flat_map(|t| &t.items).all(|i| !i.name.starts_with("Outside ")));
-        assert!(seq.markers.iter().all(|m| !m.name.starts_with("Outside ")));
-        assert!(seq.all_tracks().flat_map(|t| &t.items).flat_map(|i| &i.markers).all(|m| !m.name.starts_with("Outside ")));
-        deferred_audio_pair(seq, "Adjusted");
-        deferred_audio_pair(seq, "Positive lane");
-        assert!(seq.audio_tracks[3].items[0].link.is_none(), "the ordinary audio neighbour must remain unpaired");
-        let cap_failures = report
-            .entries
-            .iter()
-            .filter(|e| e.message == "FCPXML Audio lane exceeds the 256-track import limit; clip was skipped")
-            .map(|e| e.count)
-            .sum::<u32>();
-        assert_eq!(cap_failures, 2, "each outside reference contributes exactly one final diagnostic: {report}");
+        assert_outside_audio_control(seq, &report, &expected);
     }
 }
