@@ -146,8 +146,8 @@ pub struct GradientBarOutput<P = ()> {
     pub edit: EditResponse<GradientStops>,
     /// The selection after this pass, when the bar changed it.
     pub select: Option<Option<StopRef>>,
-    /// The colour stop whose colour is asked for: a double click on it, Enter or Space.
-    pub color_requested: Option<usize>,
+    /// The colour stop whose colour is asked for (a double click on it, Enter or Space) and its marker's square.
+    pub color_requested: Option<(usize, Rect)>,
     /// Enter or Space on an opacity stop or a midpoint: its first field takes the focus.
     pub field_requested: bool,
     /// A payload dropped on the bar: where it landed.
@@ -191,7 +191,7 @@ pub struct GradientBar<'a, P: Clone + Send + Sync + 'static = ()> {
     #[prop]
     selected_marker: Option<StopRef>,
     select: Option<Option<StopRef>>,
-    color_requested: Option<usize>,
+    color_requested: Option<(usize, Rect)>,
     field_requested: bool,
     dropped: Option<(StopDrop, P)>,
     payload: PhantomData<fn() -> P>,
@@ -370,6 +370,11 @@ impl Geometry {
         Rect::from_min_size(pos2(self.x(at) - self.marker / 2.0, top), vec2(self.marker, self.marker))
     }
 
+    /// The square of colour stop `i`.
+    fn color_square(&self, stops: &GradientStops, i: usize) -> Rect {
+        self.body(StopRow::Color, location(stops, StopRow::Color, i))
+    }
+
     /// What a press takes for marker `m`: a stop within `hit` across, from a diamond's radius away from the ramp's edge
     /// to the marker's far edge; a midpoint within `hit` of its diamond.
     fn hit_rect(&self, stops: &GradientStops, m: StopRef) -> Rect {
@@ -538,7 +543,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
                 if press.double_pressed()
                     && let StopRef::Color(i) = marker
                 {
-                    self.color_requested = Some(i);
+                    self.color_requested = Some((i, geo.color_square(stops, i)));
                 }
             }
             PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
@@ -647,7 +652,7 @@ impl<P: Clone + Send + Sync + 'static> GradientBar<'_, P> {
         let activated = self.selected_marker.is_some_and(|m| matches!(cx.part_activated(part_of(m)), Some(FireSource::Key | FireSource::Access)));
         if activated {
             match self.selected_marker {
-                Some(StopRef::Color(i)) => self.color_requested = Some(i),
+                Some(StopRef::Color(i)) => self.color_requested = Some((i, geo.color_square(&stops, i))),
                 Some(_) => self.field_requested = true,
                 None => {}
             }

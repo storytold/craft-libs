@@ -10,7 +10,7 @@ use craft_color_ui::ui::gradient::{ColorStop, GradientEditor, GradientStops, Opa
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Color32, Event, Modifiers, Shape, TextureId, Vec2, vec2};
+use egui::{Color32, Event, Key, Modifiers, Rect, Shape, TextureId, Vec2, vec2};
 
 const RED: Srgba = Srgba::rgb(1.0, 0.0, 0.0);
 const BLUE: Srgba = Srgba::rgb(0.0, 0.0, 1.0);
@@ -45,7 +45,7 @@ fn the_default_sampler_bends_each_segment_to_its_midpoint_and_splits_alpha_by_la
 #[derive(Default)]
 struct Seen {
     events: Vec<&'static str>,
-    requested: Vec<usize>,
+    requested: Vec<(usize, Option<Rect>)>,
     dropped: Vec<StopDrop>,
     selected: Option<StopRef>,
 }
@@ -82,7 +82,7 @@ fn rig_below(start: GradientStops, rules: StopRules, fields: bool, above: f32) -
         let out = GradientEditor::new("Gradient", Bind::bound(&mut stops)).rules(rules.clone()).fields(fields).drop_target::<u32>().show(ui);
         let mut seen = report.borrow_mut();
         seen.events.extend(out.edit.events.iter().map(kind));
-        seen.requested.extend(out.color_requested.iter().map(|c| c.index));
+        seen.requested.extend(out.color_requested.iter().map(|c| (c.index, c.rect)));
         seen.dropped.extend(out.dropped.iter().map(|(place, _)| *place));
         seen.selected = out.selected;
     });
@@ -109,6 +109,23 @@ impl Rig {
     fn tags(&self) -> Vec<u64> {
         self.stops.borrow().color.iter().map(|s| s.tag).collect()
     }
+}
+
+/// The host opens its picker where the request came from: under the stop's marker for Enter on it, at the Color well
+/// for a click on the well.
+#[trial]
+fn a_colour_request_carries_the_rect_of_what_asked() {
+    let mut rig = rig(three(), StopRules::default(), true);
+    let last = rig.marker("Color stop 3 of 3");
+    rig.fixture.click(&last).key(Key::Enter, Modifiers::NONE).idle(1);
+    let requested = std::mem::take(&mut rig.seen.borrow_mut().requested);
+    let Some(&(2, Some(rect))) = requested.last() else { panic!("Enter asks for the last stop's colour at a place: {requested:?}") };
+    assert!(rect.x_range().contains(last.center().x), "under the last stop's marker: {rect:?}, marker {:?}", last.rect);
+    let well = rig.marker("Color");
+    rig.fixture.click(&well).idle(1);
+    let requested = std::mem::take(&mut rig.seen.borrow_mut().requested);
+    let Some(&(2, Some(rect))) = requested.last() else { panic!("the well asks for the selected stop's colour at a place: {requested:?}") };
+    assert!(rect.intersects(well.rect), "at the well: {rect:?}, well {:?}", well.rect);
 }
 
 #[trial]

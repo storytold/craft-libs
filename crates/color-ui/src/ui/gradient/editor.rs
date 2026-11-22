@@ -316,10 +316,10 @@ impl<'a, P: Clone + Send + Sync + 'static> GradientEditor<'a, P> {
                     stops.reborrow().write(cx, &event);
                     edit.events.push(event);
                 }
-                color_requested = color_requested.filter(|i| *i < now.color.len());
-                if let Some(i) = color_requested {
+                color_requested = color_requested.filter(|(i, _)| *i < now.color.len());
+                if let Some((i, rect)) = color_requested {
                     let request = ColorRequest::new(REQUEST_KEY, stop_color(&now, rules.rows, i)).title(label.clone());
-                    output = Some(StopColor::new(i, now.color[i].tag, request));
+                    output = Some(StopColor::new(i, now.color[i].tag, request).at(rect));
                 }
             }
             if now_selected != held {
