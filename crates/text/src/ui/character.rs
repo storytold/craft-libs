@@ -961,7 +961,7 @@ impl<'a> CharacterControls<'a> {
                         sliders.show(ui).edit
                     }
                     AxesLayout::Button => {
-                        let mut button = AxesButton::new(words.axes.clone(), axes.axes, Bind::given(held))
+                        let mut button = AxesButton::new(words.variable_font.clone(), axes.axes, Bind::given(held))
                             .instances(axes.instances)
                             .italic(axes.italic)
                             .mixed(&values.mixed_axes);
