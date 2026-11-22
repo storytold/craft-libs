@@ -96,7 +96,8 @@ fn the_grid_colour_follows_the_pixel_below() {
 }
 
 /// How many shapes a canvas paints before and after its picture, with the grid shown before the picture carrying the
-/// `picture` flag when `under` is set.
+/// `picture` flag when `under` is set. The empty shapes a paint slot leaves where it took shapes from paint nothing, so
+/// they are not counted.
 fn shapes_around_the_picture(under: bool) -> (usize, usize) {
     let room = Vec2::new(800.0, 600.0);
     let source = StoryPicture::new(40, 30, |_| Color32::WHITE);
@@ -110,7 +111,7 @@ fn shapes_around_the_picture(under: bool) -> (usize, usize) {
     });
     fixture.room(room);
     fixture.settle();
-    let shapes = fixture.frame_shapes();
+    let shapes: Vec<Shape> = fixture.frame_shapes().into_iter().filter(|shape| !matches!(shape, Shape::Noop)).collect();
     let at =
         shapes.iter().position(|shape| matches!(shape, Shape::Mesh(mesh) if mesh.texture_id != TextureId::default())).expect("the picture's mesh");
     (at, shapes.len() - at - 1)
