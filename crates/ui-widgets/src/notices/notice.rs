@@ -29,6 +29,10 @@ pub enum NoticeLayout {
     /// The inline layout on a floating surface, the card width wide where the room allows: a toast. A card of a status
     /// tone draws its edge and title in the tone's colour.
     Card,
+    /// The card on the inverse surface (`surface.inverse`, with `text.on_inverse`): light on a dark theme, dark on a
+    /// light one. Toasts use it. The size and layout are the card's; a status tone draws its icon and edge in the
+    /// tone's colour.
+    Toast,
     /// Icon, title, message and actions in a column centred in the room, at most the reading width wide: an empty
     /// state. The first action is the primary button and the others secondary, all as wide as the widest, side by side
     /// or stacked when they do not fit.
@@ -530,8 +534,11 @@ impl Component for Notice<'_> {
                     cx.tokens.space.gap.stack,
                 )
             }
-            NoticeLayout::Card => {
-                let fill = StyleColor(cx.surface(SurfaceKind::Floating).fill);
+            NoticeLayout::Card | NoticeLayout::Toast => {
+                let toast = key.layout == NoticeLayout::Toast;
+                let colors = &cx.tokens.color;
+                let fill = if toast { cx.color(colors.surface.inverse) } else { StyleColor(cx.surface(SurfaceKind::Floating).fill) };
+                let normal = if toast { cx.color(colors.text.on_inverse) } else { normal };
                 let mut surface =
                     SurfaceLook::new(Stateful::new(fill)).kind(SurfaceKind::Floating).radius(UiTokens::corner(cx.tokens.shape.radius.surface));
                 // A card of a status tone carries the tone on its edge and title; a neutral card keeps the surface's edge.
@@ -539,7 +546,8 @@ impl Component for Notice<'_> {
                     normal
                 } else {
                     surface = surface.border(stateful(tone), cx.tokens.stroke.thin).border_replaces_edge();
-                    tone
+                    // Tone text is tuned for the ordinary surfaces, not the inverse one.
+                    if toast { normal } else { tone }
                 };
                 (
                     TextLook::new(TypeRole::BodyStrong, stateful(title)),
@@ -589,7 +597,7 @@ impl Component for Notice<'_> {
         let width = match (self.layout, cx.room) {
             // The card is as wide as its text, up to the card width (padding included) where the room allows. A card
             // that hosts content (a progress bar) has no text width of its own and takes the card width.
-            (NoticeLayout::Card, room) => {
+            (NoticeLayout::Card | NoticeLayout::Toast, room) => {
                 let padding = cx.style.metrics.padding;
                 let cap = cx.style.card_width - padding.start - padding.end;
                 let width = if self.content_sizes.is_empty() { natural.min(cap) } else { cap };

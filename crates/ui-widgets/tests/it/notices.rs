@@ -184,3 +184,35 @@ fn a_card_is_as_wide_as_its_text_up_to_the_card_width() {
     assert!(short < long, "a short card is narrower than a long one: {short} vs {long}");
     assert!(long < 400.0, "a long card wraps at the card width: {long}");
 }
+
+fn luminance(color: egui::Color32) -> f32 {
+    f32::from(color.r()) * 0.2126 + f32::from(color.g()) * 0.7152 + f32::from(color.b()) * 0.0722
+}
+
+fn rect_fills(shapes: &[egui::Shape], out: &mut Vec<(Rect, egui::Color32)>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => rect_fills(inner, out),
+            egui::Shape::Rect(rect) if rect.fill.a() == 255 => out.push((rect.rect, rect.fill)),
+            _ => {}
+        }
+    }
+}
+
+/// A toast sits on the inverse surface: light on a dark theme and dark on a light one, with its text the other way.
+#[trial]
+fn a_toast_is_light_on_a_dark_theme_and_dark_on_a_light_one() {
+    use craft_theme::{Contrast, Mode};
+    for (mode, light_card) in [(Mode::Dark, true), (Mode::Light, false)] {
+        let mut fixture = Fixture::new(|ui| {
+            Notice::new(Tone::Neutral, "No recent files").layout(NoticeLayout::Toast).show(ui);
+        });
+        fixture.theme(mode, Contrast::Standard).settle();
+        let shapes = fixture.frame_shapes();
+        let mut fills = Vec::new();
+        rect_fills(&shapes, &mut fills);
+        let text = fixture.texts().iter().find(|run| run.text == "No recent files").expect("the message is painted").rect;
+        let card = fills.iter().filter(|(rect, _)| rect.contains_rect(text)).min_by(|a, b| a.0.area().total_cmp(&b.0.area())).expect("a card under the text");
+        assert_eq!(luminance(card.1) > 128.0, light_card, "{mode:?}: the toast's card is {:?}", card.1);
+    }
+}
