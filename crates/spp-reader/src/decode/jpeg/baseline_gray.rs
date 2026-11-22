@@ -5,8 +5,8 @@
 //! kept many bitmap graphs under 99 % within one step.
 
 const ZIGZAG: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29,
-    22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43,
+    36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 /// Canonical Huffman decoding: for each code length the first code, how many there are and where their symbols start.
@@ -130,6 +130,34 @@ const DRI: u8 = 0xdd;
 /// Start of scan.
 const SOS: u8 = 0xda;
 
+fn read_quantization_tables(body: &[u8], tables: &mut [[i32; 64]; 4]) -> Option<()> {
+    let mut at = 0;
+    while at < body.len() {
+        let spec = *body.get(at)?;
+        if spec >> 4 != 0 {
+            return None;
+        }
+        let table = tables.get_mut(usize::from(spec & 3))?;
+        for (slot, value) in table.iter_mut().zip(body.get(at + 1..at + 65)?) {
+            *slot = i32::from(*value);
+        }
+        at += 65;
+    }
+    Some(())
+}
+
+fn read_huffman_tables(body: &[u8], tables: &mut [Huffman; 8]) -> Option<()> {
+    let mut at = 0;
+    while at < body.len() {
+        let spec = *body.get(at)?;
+        let bits = body.get(at + 1..at + 17)?;
+        let symbols: usize = bits.iter().map(|byte| usize::from(*byte)).sum();
+        *tables.get_mut(usize::from((spec >> 4 & 1) * 4 + (spec & 3)))? = Huffman::new(bits, body.get(at + 17..at + 17 + symbols)?);
+        at += 17 + symbols;
+    }
+    Some(())
+}
+
 /// Samples of a JPEG if it is baseline, 8 bits and one channel: (width, height, samples); `None` for anything else.
 pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     if jpeg.get(..2)? != SOI {
@@ -147,30 +175,8 @@ pub fn decode(jpeg: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         let len = usize::from(*jpeg.get(at + 2)?) << 8 | usize::from(*jpeg.get(at + 3)?);
         let body = jpeg.get(at + 4..at + 2 + len)?;
         match marker {
-            DQT => {
-                let mut p = 0;
-                while p < body.len() {
-                    let spec = *body.get(p)?;
-                    if spec >> 4 != 0 {
-                        return None;
-                    }
-                    let table = quant.get_mut(usize::from(spec & 3))?;
-                    for (slot, v) in table.iter_mut().zip(body.get(p + 1..p + 65)?) {
-                        *slot = i32::from(*v);
-                    }
-                    p += 65;
-                }
-            }
-            DHT => {
-                let mut p = 0;
-                while p < body.len() {
-                    let spec = *body.get(p)?;
-                    let bits = body.get(p + 1..p + 17)?;
-                    let n: usize = bits.iter().map(|b| usize::from(*b)).sum();
-                    *tables.get_mut(usize::from((spec >> 4 & 1) * 4 + (spec & 3)))? = Huffman::new(bits, body.get(p + 17..p + 17 + n)?);
-                    p += 17 + n;
-                }
-            }
+            DQT => read_quantization_tables(body, &mut quant)?,
+            DHT => read_huffman_tables(body, &mut tables)?,
             SOF0 => {
                 // one 8-bit channel, sampled 1 x 1
                 if *body.first()? != 8 || *body.get(5)? != 1 {
