@@ -58,8 +58,9 @@ fn review_choices_replan_the_import() {
     let mut rig = review_rig();
     assert!(rig.has("Will change (1)"), "Save's own shortcut differs from the current one");
 
+    // The start changes what the import is applied over, not which entries it takes, as in the production app.
     rig.click("Defaults");
-    assert!(!rig.has("Will change (1)"), "from the defaults Save already has Cmd+S");
+    assert!(rig.has("Will change (1)"), "from the defaults Save still takes the set's key");
     rig.click("Current shortcuts");
     assert!(rig.has("Will change (1)"));
 
