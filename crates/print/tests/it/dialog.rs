@@ -195,3 +195,33 @@ fn a_refused_print_keeps_the_dialog_open_and_presets_are_named() {
     dialog.set_json_field(&ctx, "preset", serde_json::json!("proof")).expect("a listed preset applies");
     assert_eq!(dialog.take_preset_events(), vec![NamedPresetEvent::Apply("proof".to_owned())]);
 }
+
+/// The sections layout of a hosted print dialog shows its list of sections beside the shown section, and a click on
+/// another section shows that one. The list sat inside the dialog's scrolling body, where a collection may not.
+#[trial]
+fn the_sections_layout_shows_the_picked_section() {
+    use craft_print::ui::{PrintLayout, PrintSection};
+    use craft_ui::patterns::form_dialogs::{Param, ParamKind};
+    let options = || vec![("all".to_owned(), "All".into()), ("range".to_owned(), "Range".into())];
+    let general = vec![
+        Param::new("copies", "Copies", ParamKind::int(Some(1), Some(99), 1)),
+        Param::new("artboards", "Artboards", ParamKind::radio(options(), None)),
+        Param::section("Media"),
+        Param::new("size", "Size", ParamKind::choice(options(), None)),
+    ];
+    let sections = vec![
+        PrintSection::new("General", general),
+        PrintSection::new("Printing Marks", vec![Param::number("markWeight", "Mark weight", 0.25, 0.25, 2)]),
+    ];
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let header = vec![Param::number("pagesPerSheet", "Pages per sheet", 1.0, 1.0, 0)];
+    host.borrow_mut().open(HostedPrint::new(State::default(), DialogFields::default(), sections).layout(PrintLayout::Sections).header(header));
+    let shared = host.clone();
+    let mut fixture = Fixture::new(move |ui| shared.borrow_mut().run(ui));
+    fixture.room(Vec2::new(900.0, 600.0)).settle();
+    assert!(fixture.by_label("Copies").is_some(), "the first section shows");
+    let marks = fixture.by_label("Printing Marks").expect("the list names the other section");
+    fixture.click(&marks).settle();
+    assert!(fixture.by_label("Mark weight").is_some(), "the picked section shows");
+    assert!(fixture.by_label("Copies").is_none(), "in place of the first");
+}
