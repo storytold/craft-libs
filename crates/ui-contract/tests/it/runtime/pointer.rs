@@ -573,3 +573,30 @@ fn a_click_carries_the_modifiers_its_release_carried() {
         assert_eq!(pick, released, "Shift is the pick's in the release pass only: {seen:?}");
     }
 }
+
+/// A press of another button counts in the click run as a primary one does: a primary click, a middle click (a pan the
+/// view tools take) and a primary click make the last a triple click, as the old apps counted them. Only primary
+/// presses carry the count.
+#[trial]
+fn a_middle_click_between_primary_clicks_counts_in_the_click_run() {
+    let at = Pos2::new(50.0, 50.0);
+    let counts: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let sink = counts.clone();
+    let mut show = move |ui: &mut Ui| {
+        if let Some(press) = craft_ui::runtime::pointer::frame(ui.ctx()).press.filter(|press| press.button == craft_behavior::PointerButton::Primary)
+        {
+            sink.borrow_mut().push(press.clicks);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    for button in ["primary", "middle", "primary"] {
+        let (down, up) =
+            if button == "middle" { (pointer::middle(at, true), pointer::middle(at, false)) } else { (pointer::press(at), pointer::release(at)) };
+        frames.frame(vec![down], &mut show);
+        frames.frame(vec![up], &mut show);
+    }
+    let counts = counts.borrow();
+    assert!(counts.len() == 2 && counts[1] == counts[0] + 2, "the middle press counts in the run: {counts:?}");
+}

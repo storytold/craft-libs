@@ -100,7 +100,7 @@ pub struct PassPointer {
 
 #[derive(Default)]
 pub(crate) struct Memory {
-    /// The latest primary press: where, when, its click count and the modifiers held with it.
+    /// The latest press of any button: where, when, its place in the click run and the modifiers held with it.
     last_press: Option<(Pos2, f64, u32, Mods)>,
     press_targets: PressTargets,
     /// A cancel a service requested for the running pass.
@@ -260,10 +260,15 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         read.events.iter().any(|event| matches!(event, PointerEvent::Pressed { button: PointerButton::Middle | PointerButton::Secondary, .. }));
     let (events, targets, touched) = PerViewport::<Memory>::with(ctx, viewport, |memory| {
         let mut events = read.events.clone();
+        // Every button's press runs on the click run, as a click of any button did in the old apps: a middle-button pan
+        // click between two clicks makes the second a triple click. Only a primary press carries its count.
         for event in &mut events {
-            if let PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks, .. } = event {
-                *clicks = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
-                memory.last_press = Some((*pos, *time, *clicks, mods));
+            if let PointerEvent::Pressed { button, pos, time, clicks, .. } = event {
+                let counted = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
+                memory.last_press = Some((*pos, *time, counted, mods));
+                if *button == PointerButton::Primary {
+                    *clicks = counted;
+                }
             }
         }
         if read.primary_pressed || other_pressed {
