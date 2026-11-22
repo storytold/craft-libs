@@ -28,6 +28,17 @@ pub mod rgba8;
 /// RFC 1950/1951 compression and bounded inflation for EXR chunks.
 pub mod zlib;
 
+/// Bounded reconstruction of inflated PXR24 scanline blocks.
+pub mod pxr24;
+
+/// How a channel's samples are stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleType {
+    F16,
+    F32,
+    U32,
+}
+
 pub mod channels;
 pub mod cryptomatte;
 #[cfg(feature = "decode")]
