@@ -3249,7 +3249,8 @@ mod tests {
         writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/artcraft-launcher.exe", zip::write::SimpleFileOptions::default()).unwrap();
         writer.write_all(&std::fs::read(system_program("cmd.exe")).unwrap()).unwrap();
         // An unsigned program under a harmless name.
-        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/notes.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("artcraft-launcher-0.2.0-windows-x64-portable/notes.txt", stored).unwrap();
         writer.write_all(&std::fs::read(std::env::current_exe().unwrap()).unwrap()).unwrap();
         writer.finish().unwrap();
         let tmp = dir.path().join("cache").join(PORTABLE_STAGING);
