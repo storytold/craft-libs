@@ -411,3 +411,127 @@ fn rejects_bogus_sizes_and_pixel_formats() {
     no_format.extend([0; 4]);
     assert!(matches!(decode(&no_format), Err(CodecError::Unsupported { .. })));
 }
+
+fn mip_chain() -> Vec<u8> {
+    let mut b = compressed(4, 4, b"DXT1");
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes());
+    b[28..32].copy_from_slice(&3u32.to_le_bytes());
+    for c in [RED, GREEN, BLUE] {
+        b.extend(bc1_block(c, c, [0; 4]));
+    }
+    b
+}
+
+#[test]
+fn import_info_rejects_truncated_legacy_headers() {
+    let b = compressed(4, 4, b"DXT1");
+    for n in 0..b.len() {
+        assert!(matches!(dds::info(&b[..n]), Err(CodecError::Malformed { .. })), "accepted {n} of {} header bytes", b.len());
+    }
+}
+
+#[test]
+fn import_info_rejects_truncated_dx10_headers() {
+    let b = dx10(4, 4, 71, 3, 0, 1);
+    for n in 0..b.len() {
+        assert!(matches!(dds::info(&b[..n]), Err(CodecError::Malformed { .. })), "accepted {n} of {} header bytes", b.len());
+    }
+}
+
+#[test]
+fn import_info_accepts_complete_headers_without_pixel_data() {
+    for b in [compressed(4, 4, b"DXT1"), dx10(4, 4, 71, 3, 0, 1)] {
+        assert_eq!(dds::info(&b).unwrap(), dds::DdsInfo { width: 4, height: 4, levels: 1, alpha: true, compression: Some(dds::DdsCompression::Bc1) });
+        assert!(matches!(decode(&b), Err(CodecError::Malformed { .. })));
+        assert!(matches!(dds::decode_levels(&b, &Limits::default(), &|| false), Err(CodecError::Malformed { .. })));
+    }
+}
+
+#[test]
+fn import_info_and_all_mips_use_the_shared_decoder() {
+    let b = mip_chain();
+    let info = dds::info(&b[..128]).unwrap();
+    assert_eq!((info.width, info.height, info.levels, info.alpha), (4, 4, 3, true));
+    assert_eq!(info.compression, Some(dds::DdsCompression::Bc1));
+    let levels = dds::decode_levels(&b, &Limits::default(), &|| false).unwrap();
+    assert_eq!(levels.iter().map(Image::dimensions).collect::<Vec<_>>(), [(4, 4), (2, 2), (1, 1)]);
+    for (img, color) in levels.iter().zip([[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]) {
+        assert!(img.data().as_chunks::<4>().0.iter().all(|p| *p == color));
+    }
+    assert_eq!(decode(&b).unwrap().data(), levels[0].data());
+}
+
+#[test]
+fn mip_chain_charges_the_combined_allocation() {
+    for (budget, accepted) in [(63, false), (64, false), (80, false), (83, false), (84, true)] {
+        let result = dds::decode_levels(&mip_chain(), &Limits { max_alloc: budget, ..Default::default() }, &|| false);
+        if accepted {
+            assert_eq!(result.unwrap().len(), 3);
+        } else {
+            assert!(matches!(result, Err(CodecError::LimitExceeded(_))));
+        }
+    }
+}
+
+#[test]
+fn cancellation_is_checked_after_a_level_was_decoded() {
+    let calls = std::cell::Cell::new(0);
+    let result = dds::decode_levels(&mip_chain(), &Limits::default(), &|| {
+        let n = calls.get();
+        calls.set(n + 1);
+        n == 1
+    });
+    assert!(matches!(result, Err(CodecError::Malformed { message, .. }) if message.contains("cancelled")));
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
+fn mip_import_rejects_truncation_and_bounds_declared_count() {
+    let mut b = mip_chain();
+    for n in 0..b.len() {
+        assert!(dds::decode_levels(&b[..n], &Limits::default(), &|| false).is_err(), "length {n}");
+    }
+    b[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(dds::decode_levels(&b, &Limits::default(), &|| false).unwrap().len(), 3);
+    b[8..12].copy_from_slice(&0x1007u32.to_le_bytes());
+    assert_eq!(dds::info(&b).unwrap().levels, 3);
+    assert_eq!(dds::decode_levels(&b, &Limits::default(), &|| false).unwrap().len(), 3);
+    b[28..32].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(dds::info(&b).unwrap().levels, 1);
+    assert_eq!(dds::decode_levels(&b, &Limits::default(), &|| false).unwrap().len(), 1);
+}
+
+#[test]
+fn sixteen_bit_mip_chains_keep_16_bits_and_r16g16_is_red_and_green() {
+    // R16G16_UNORM, 2×2 then 1×1: red and green, blue 0, at 16 bits like the top level `decode` opens.
+    let mut b = dx10(2, 2, 35, 3, 0, 1);
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes());
+    b[28..32].copy_from_slice(&2u32.to_le_bytes());
+    let samples: [u16; 10] = [300, 40000, 1, 2, 3, 4, 5, 65535, 1000, 1002];
+    b.extend(samples.iter().flat_map(|v| v.to_le_bytes()));
+    assert!(!dds::info(&b).unwrap().alpha);
+    let levels = dds::decode_levels(&b, &Limits::default(), &|| false).unwrap();
+    let u16s = |img: &Image| -> Vec<u16> { img.data().as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes(*c)).collect() };
+    for img in &levels {
+        assert_eq!((img.layout(), img.sample_type()), (ChannelLayout::Rgb, SampleType::U16));
+    }
+    assert_eq!(u16s(&levels[0]), [300, 40000, 0, 1, 2, 0, 3, 4, 0, 5, 65535, 0]);
+    assert_eq!(u16s(&levels[1]), [1000, 1002, 0]);
+    assert_eq!(decode(&b).unwrap().data(), levels[0].data());
+    // The budget counts two bytes a sample: 24 + 6 bytes.
+    let budget = |max_alloc| dds::decode_levels(&b, &Limits { max_alloc, ..Default::default() }, &|| false);
+    assert!(matches!(budget(29), Err(CodecError::LimitExceeded(_))));
+    assert_eq!(budget(30).unwrap().len(), 2);
+}
+
+#[test]
+fn lower_mips_do_not_inherit_top_level_pitch() {
+    let mut b = header(2, 2, DDPF_LUMINANCE, &[0; 4], 8, [0xff, 0, 0, 0]);
+    set_pitch(&mut b, 4);
+    b[8..12].copy_from_slice(&(0x1007u32 | DDSD_PITCH | 0x2_0000).to_le_bytes());
+    b[28..32].copy_from_slice(&2u32.to_le_bytes());
+    b.extend([1, 2, 99, 99, 3, 4, 99, 99, 5]);
+    let levels = dds::decode_levels(&b, &Limits::default(), &|| false).unwrap();
+    assert_eq!(levels[0].data(), [1, 2, 3, 4]);
+    assert_eq!(levels[1].data(), [5]);
+}

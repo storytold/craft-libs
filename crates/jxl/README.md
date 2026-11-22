@@ -16,6 +16,12 @@ linear sRGB and converted to Rec. 2020 to avoid the known wide-gamut XYB renderi
 returns the profile; it does not claim to transform ICC data without a CMS. `decode` retains the
 decoder's default rendering target.
 
+Brotli-compressed metadata boxes (`brob`: Exif, XMP) are inflated before the file reaches
+`jxl-oxide`, which would inflate them outside its allocation tracker (a 54-byte box can expand to
+64 MiB and more). All the `brob` boxes of one file share an 8 MiB budget; a box past it, a nested or
+broken one, is dropped (the pixels still decode) and the others are handed over as the plain box
+they wrap. A file without a `brob` box is not copied.
+
 The encoder accepts interleaved 8-bit, 16-bit, or HDR floating-point samples. Floating-point input
 is linear-light and is currently available only with the Rec. 2020 PQ option; one input unit maps
 to 203 cd/m². Gray input is expanded to RGB, and opaque alpha is omitted. ICC data is embedded in

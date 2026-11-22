@@ -248,3 +248,26 @@ fn adobe_transform_zero_keeps_numeric_id_components_as_rgb() {
         }
     }
 }
+
+#[test]
+fn track_dispatch_preserves_mjpeg_frames_and_timestamps() {
+    use craft_media::{CodecId, CodecParams};
+    use craft_video::{TrackDecoder, VideoError, frame::VideoFrame};
+
+    let enc = Encoder::default();
+    let direct = Decoder::new();
+    let mut track = TrackDecoder::new(&CodecParams::new(CodecId::Mjpeg)).expect("Motion JPEG track");
+    let color = enc.encode(17, 11, 3, &picture(17, 11, 3)).expect("RGB packet");
+    let gray = enc.encode(13, 9, 1, &picture(13, 9, 1)).expect("gray packet");
+    let mut want_color = VideoFrame::try_from(direct.decode(&color).expect("RGB picture")).expect("RGB frame");
+    want_color.pts = Some(71);
+    assert_eq!(track.decode(&color, 71).expect("RGB track picture"), [want_color]);
+    assert!(matches!(track.decode(&[], 72), Err(VideoError::Malformed(_))));
+    assert!(track.flush().expect("flush").is_empty());
+
+    track.reset().expect("seek to an earlier packet");
+    let mut want_gray = VideoFrame::try_from(direct.decode(&gray).expect("gray picture")).expect("gray frame");
+    want_gray.pts = Some(-3);
+    assert_eq!(track.decode(&gray, -3).expect("gray track picture"), [want_gray]);
+    assert!(track.flush().expect("flush").is_empty());
+}

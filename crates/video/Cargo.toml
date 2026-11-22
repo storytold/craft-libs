@@ -1,6 +1,6 @@
 [package]
 name = "craft-video"
-description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2."
+description = "Clean-room pure-Rust video codecs, one feature per codec: DNxHD/DNxHR, VP8, ProRes, H.264, HEVC, VP9, AV1, MPEG-4 Part 2, Sierra VMD."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,8 @@ all-features = true
 workspace = true
 
 [features]
+# FLV codec 3 / SWF Screen Video key frames.
+screen-video = ["dep:miniz_oxide"]
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
 dnx = []
@@ -60,10 +62,14 @@ av1-decode = []
 av1-encode = ["craft-media/isobmff"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
+# Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
+vmd = ["vmd-decode"]
+vmd-decode = []
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon", "rav1e?/threading"]
 
 [dependencies]
+miniz_oxide = { workspace = true, optional = true }
 craft-media = { workspace = true }
 craft-jpeg = { workspace = true, optional = true }
 thiserror = { workspace = true }
@@ -74,8 +80,17 @@ rav1e = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
-# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test.
-craft-media = { workspace = true, features = ["avi"] }
+# The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test; the MP4, MPEG-TS and AVI
+# demuxers, for the track decoder's tests; the VMD demuxer, for the VMD decoder's.
+craft-media = { workspace = true, features = ["avi", "isobmff", "mpegts", "vmd"] }
+
+# Built with any decoder feature; each codec's tests need its own.
+[[test]]
+name = "track"
+
+[[test]]
+name = "vmd"
+required-features = ["vmd-decode"]
 
 [[test]]
 name = "hap"

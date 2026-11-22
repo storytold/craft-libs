@@ -18,6 +18,7 @@
 //! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: decoder (`hevc-decode`) and encoder (`hevc-encode`) |
 //! | `vp9` | [`vp9`] | VP9: decoder (`vp9-decode`) and encoder (`vp9-encode`) |
 //! | `av1` | [`av1`] | AV1 (AOMedia Video 1): decoder (`av1-decode`) and encoder (`av1-encode`) |
+//! | `vmd` | [`vmd`] | Sierra VMD video (8-bit paletted): decoder (`vmd-decode`) |
 //!
 //! No codec is on by default. Feature `threads` spreads the work of the codecs that support it
 //! over rayon worker threads.
@@ -27,11 +28,47 @@
 //! Each decoder returns its own picture type. [`frame::VideoFrame`] is the codec-agnostic form
 //! they all convert into (`VideoFrame::try_from`).
 //!
+//! `TrackDecoder` picks the decoder for a track from its `craft_media::CodecParams` and returns
+//! `VideoFrame`s, for H.264, HEVC, VP9, AV1, MPEG-2, ProRes, DNx, APV, FFV1 and VP8
+//! (built with any of their decoder features).
+//!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
 
 pub mod budget;
+mod error;
 pub mod frame;
+
+pub use error::VideoError;
+
+#[cfg(any(
+    feature = "h264-decode",
+    feature = "hevc-decode",
+    feature = "vp9-decode",
+    feature = "av1-decode",
+    feature = "mpeg2-decode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-decode",
+    feature = "ffv1",
+    feature = "vp8-decode",
+    feature = "mjpeg"
+))]
+mod track;
+#[cfg(any(
+    feature = "h264-decode",
+    feature = "hevc-decode",
+    feature = "vp9-decode",
+    feature = "av1-decode",
+    feature = "mpeg2-decode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-decode",
+    feature = "ffv1",
+    feature = "vp8-decode",
+    feature = "mjpeg"
+))]
+pub use track::{TrackDecoder, TrackDecoderOptions};
 
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;
@@ -74,3 +111,10 @@ pub mod av1;
 
 /// Uncompressed AVI and QuickTime pixel layouts.
 pub mod raw_video;
+
+/// Bounded Screen Video key-frame decoding (FLV codec 3).
+#[cfg(feature = "screen-video")]
+pub mod screen_video;
+
+#[cfg(feature = "vmd-decode")]
+pub mod vmd;

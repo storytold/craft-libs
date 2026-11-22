@@ -258,6 +258,7 @@ impl Stream {
                 b"HEVC" | b"H265" | b"HEV1" | b"HVC1" | b"X265" => Id::Hevc,
                 b"DIVX" | b"DX50" | b"XVID" | b"FMP4" | b"MP4V" | b"M4S2" | b"3IV2" => Id::Mpeg4Video,
                 b"MPG2" | b"MPEG" | b"MPG1" => Id::Mpeg2Video,
+                b"FFV1" => Id::Ffv1,
                 b"VP80" => Id::Vp8,
                 b"VP90" => Id::Vp9,
                 b"AV01" => Id::Av1,

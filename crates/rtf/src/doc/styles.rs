@@ -1,5 +1,5 @@
 use super::export::HEAD_SIZES;
-use super::state::St;
+use super::state::{Dest, St};
 use super::{Fmt, Kind, ListInfo, Para, Reader, model};
 
 impl Reader {
@@ -259,12 +259,14 @@ fn spacing(st: &St) -> model::Spacing {
     use craft_wordmodel::props::LineSpacing;
     let pt = |v: i32| (v as f32 / 20.0).clamp(-1584.0, 1584.0);
     let gap = |v: Option<i32>| v.map(|v| pt(v).max(0.0));
-    let sl = st.sl;
+    let old = st.dest == Dest::OldProps(true);
+    let sl = st.sl.unwrap_or(0);
     let line = if sl == 0 {
-        None
+        (old && st.sl == Some(0) && st.slmult == Some(false)).then_some(LineSpacing::AtLeast(0.0))
     } else if sl < 0 {
-        Some(LineSpacing::Exactly(pt(sl.saturating_neg()).max(1.0)))
-    } else if st.slmult {
+        let min = if old { 0.7 } else { 1.0 };
+        Some(LineSpacing::Exactly(pt(sl.saturating_neg()).max(min)))
+    } else if st.slmult == Some(true) {
         // \sl240\slmult1 is single spacing.
         Some(LineSpacing::Multiple((sl as f32 / 240.0).clamp(0.06, 132.0)))
     } else {

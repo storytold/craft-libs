@@ -952,3 +952,25 @@ fn the_cr3_copy_chosen_for_a_thumbnail_decodes() {
         assert_eq!(((w, h), c), (want, 3), "covering {min} px");
     }
 }
+
+#[cfg(feature = "orf")]
+/// ORF capability reporting must not disable preview scanning for an unrecognized stream.
+#[test]
+fn supported_orf_keeps_unreferenced_jpeg_fallback() {
+    let mut ifd = IfdBuilder::new();
+    ifd.set(t::IMAGE_WIDTH, Value::Long(vec![64]));
+    ifd.set(t::IMAGE_LENGTH, Value::Long(vec![64]));
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![1]));
+    ifd.set_image(ImageData::Strips { rows_per_strip: 64, strips: vec![vec![0; 16]] });
+    let mut file = TiffWriter::default().write(&[ifd]).unwrap();
+    file[2..4].copy_from_slice(b"RO");
+    let jpeg = scan_jpeg(3, 900);
+    file.extend_from_slice(&jpeg);
+    let format = crate::probe(&file).unwrap();
+    assert_eq!(format, crate::RawFormat::Orf);
+    assert!(format.is_supported());
+    assert!(matches!(crate::decode(&file), Err(crate::RawError::Unsupported(_))));
+    assert_eq!(embedded_preview(&file).as_deref(), Some(jpeg.as_slice()));
+    assert_eq!(embedded_preview_covering(&file, 1).as_deref(), Some(jpeg.as_slice()));
+}

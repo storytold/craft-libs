@@ -1,0 +1,23 @@
+[package]
+name = "craft-cdr"
+description = "Bounded reader for .cdr drawings of versions 1 to 27 and .cmx files: WL records, RIFF index, compressed lists, ZIP packages, shapes, fills, outlines, pages and layers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Synthetic-file builders for tests and fuzz seeds; not a .cdr writer.
+synth = []
+
+[dependencies]
+crc32fast = "1.5"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+craft-cdr = { path = ".", features = ["synth"] }
