@@ -82,7 +82,7 @@ mod tests {
         let mut sum = wal_checksum(&wal[..24], big, (0, 0));
         word(&mut wal, 24, sum.0);
         word(&mut wal, 28, sum.1);
-        for (i, frame) in wal[32..].chunks_exact_mut(536).enumerate() {
+        for (i, frame) in wal[32..].as_chunks_mut::<536>().0.iter_mut().enumerate() {
             word(frame, 0, i as u32 + 1);
             word(frame, 4, [1, 3, 0][i]);
             word(frame, 8, 17);
