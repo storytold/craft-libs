@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-android-res = { path = "crates/android-res" }
 craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
