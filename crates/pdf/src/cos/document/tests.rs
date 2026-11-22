@@ -2931,3 +2931,17 @@ fn a_string_past_the_copy_budget_is_not_read() {
     assert_eq!(doc.get(ObjRef::new(1, 0)).as_string().map(|s| s.bytes.as_slice()), Some(b"hi".as_slice()));
     assert!(doc.get(ObjRef::new(2, 0)).as_string().is_none());
 }
+
+/// `xref_entry_is_exact` parses the object at the recorded offset, so a string it copies is
+/// charged. One the allowance cannot hold is not confirmed, though the offset is exact.
+#[test]
+fn an_exact_entry_charges_the_string_it_copies() {
+    let doc = Document::open(Arc::new(build(
+        &["(abcdefghij)", "<< /Type /Catalog /Pages 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"],
+        "/Root 2 0 R",
+    )))
+    .unwrap();
+    assert!(doc.xref_entry_is_exact(1));
+    doc.budget().unwrap().set_for_test(4);
+    assert!(!doc.xref_entry_is_exact(1));
+}

@@ -224,6 +224,8 @@ impl Document {
     /// position of its object stream. When it does not, [`Self::get`] still finds the object by
     /// searching, but another reader may resolve the number differently. Ignores unsaved edits.
     pub fn xref_entry_is_exact(&self, num: u32) -> bool {
+        // Parsing the object copies its strings out of the file; charge them like a load does.
+        let _copies = crate::cos::budget::CopyScope::enter(&self.copy_budget);
         match self.xref_entry(num) {
             None | Some(XrefEntry::Free { .. }) => true,
             Some(XrefEntry::InFile { offset, generation }) => {
