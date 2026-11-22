@@ -3,7 +3,7 @@
 //!
 //! An optional absence prints one line to stderr, `SKIPPED: <reason>`, and the test returns and
 //! passes. When the variable the caller names is `1`, the absence fails the test instead and no
-//! skip line is printed. Unset, empty and `0` leave the test optional. Any other value, such as
+//! skip line is printed. Unset and empty leave the test optional. Any other value, such as `0`,
 //! `true`, ` 1`, `1\n` or a value that is not valid Unicode, is a configuration error: the absence
 //! fails the test with the variable's name and value. The caller passes the name its repository
 //! uses, such as `CRAFT_MEDIA_REQUIRE_ORACLES` or `CRAFT_PDF_ORACLES_REQUIRED`; [`REQUIRED_VAR`] is
@@ -40,29 +40,29 @@ pub const REQUIRED_VAR: &str = "CRAFT_TEST_REQUIRED";
 /// The variable `craft-fonts-build` reads, named by [`craft_fonts`] when it fails a test.
 pub const FONTS_REQUIRED_VAR: &str = "CRAFT_FONTS_REQUIRED";
 
-/// A value of the required variable that is not unset, empty, `0` or `1`.
+/// A value of the required variable that is not unset, empty or `1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequiredError {
     /// The value is not valid Unicode.
     NotUnicode { variable: String },
-    /// The value is valid Unicode but not empty, `0` or `1`.
+    /// The value is valid Unicode but not empty or `1`.
     BadValue { variable: String, value: String },
 }
 
 impl fmt::Display for RequiredError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const FIX: &str = "set it to 1 to fail a test that lacks a prerequisite, or leave it unset, empty or 0 to skip the test";
+        const FIX: &str = "set it to 1 to fail a test that lacks a prerequisite, or leave it unset or empty to skip the test";
         match self {
             Self::NotUnicode { variable } => write!(f, "{variable} is not valid Unicode; {FIX}"),
-            Self::BadValue { variable, value } => write!(f, "{variable}={value:?} is not empty, 0 or 1; {FIX}"),
+            Self::BadValue { variable, value } => write!(f, "{variable}={value:?} is not empty or 1; {FIX}"),
         }
     }
 }
 
 impl std::error::Error for RequiredError {}
 
-/// Whether the variable `var` makes a missing prerequisite fail the test. Unset, empty and `0`
-/// return `Ok(false)`, and `1` returns `Ok(true)`. Any other value, including one that is not
+/// Whether the variable `var` makes a missing prerequisite fail the test. Unset and empty return
+/// `Ok(false)`, and `1` returns `Ok(true)`. Any other value, including `0` and a value that is not
 /// valid Unicode, returns an error that names the variable.
 pub fn required(var: &str) -> Result<bool, RequiredError> {
     parse_required(var, std::env::var_os(var).as_deref())
@@ -72,7 +72,7 @@ fn parse_required(variable: &str, value: Option<&OsStr>) -> Result<bool, Require
     let Some(value) = value else {
         return Ok(false);
     };
-    if value.is_empty() || value == OsStr::new("0") {
+    if value.is_empty() {
         return Ok(false);
     }
     if value == OsStr::new("1") {
@@ -226,8 +226,8 @@ mod tests {
         }
     }
 
-    /// Values other than unset, empty, `0` and `1`.
-    const INVALID: [&str; 10] = ["true", "TRUE", "yes", "on", " 1", "1 ", "1\n", "01", "11", " "];
+    /// Values other than unset, empty and `1`.
+    const INVALID: [&str; 11] = ["0", "true", "TRUE", "yes", "on", " 1", "1 ", "1\n", "01", "11", " "];
 
     /// A value that is not valid Unicode: a lone surrogate on Windows, a byte that is not UTF-8
     /// elsewhere.
@@ -244,21 +244,20 @@ mod tests {
         }
     }
 
-    /// Unset, empty and `0` are optional, `1` is required, and every other value is an error that
-    /// names the variable and the value.
+    /// Unset and empty are optional, `1` is required, and every other value, `0` included, is an
+    /// error that names the variable and the value.
     #[test]
-    fn only_unset_empty_0_and_1_are_valid() {
+    fn only_unset_empty_and_1_are_valid() {
         let var = "CRAFT_PDF_ORACLES_REQUIRED";
         assert_eq!(parse_required(var, None), Ok(false));
         assert_eq!(parse_required(var, Some(OsStr::new(""))), Ok(false));
-        assert_eq!(parse_required(var, Some(OsStr::new("0"))), Ok(false));
         assert_eq!(parse_required(var, Some(OsStr::new("1"))), Ok(true));
         for value in INVALID {
             let error = parse_required(var, Some(OsStr::new(value)));
             assert_eq!(error, Err(RequiredError::BadValue { variable: var.into(), value: value.into() }), "{value:?}");
         }
         let message = RequiredError::BadValue { variable: var.into(), value: "1\n".into() }.to_string();
-        assert!(message.starts_with("CRAFT_PDF_ORACLES_REQUIRED=\"1\\n\" is not empty, 0 or 1; "), "{message}");
+        assert!(message.starts_with("CRAFT_PDF_ORACLES_REQUIRED=\"1\\n\" is not empty or 1; "), "{message}");
         assert_eq!(message.lines().count(), 1, "{message}");
     }
 
@@ -271,11 +270,11 @@ mod tests {
     }
 
     /// Absence is never silent, and which of the two loud forms it takes is decided by the
-    /// variable: `1` fails the test, and `0` (fatal under the any-value rule) skips.
+    /// variable: `1` fails the test, and unset or empty skips.
     #[test]
     fn a_missing_oracle_is_fatal_exactly_when_it_is_required() {
         let var = "CRAFT_PDF_ORACLES_REQUIRED";
-        assert!(!skip_with(parse_required(var, Some(OsStr::new("0"))) == Ok(true), "qpdf is not on PATH", var));
+        assert!(!skip_with(parse_required(var, None) == Ok(true), "qpdf is not on PATH", var));
         assert!(!skip_with(parse_required(var, Some(OsStr::new(""))) == Ok(true), "qpdf is not on PATH", var));
 
         let failed = std::panic::catch_unwind(|| skip_with(parse_required(var, Some(OsStr::new("1"))) == Ok(true), "qpdf is not on PATH", var));
@@ -294,11 +293,10 @@ mod tests {
         assert_eq!(skip_line(""), "SKIPPED: \n");
     }
 
-    /// The variable is read from the environment: unset, empty and `0` skip, and `1` fails the
-    /// test.
+    /// The variable is read from the environment: unset and empty skip, and `1` fails the test.
     #[test]
     fn skip_reads_its_variable_from_the_environment() {
-        for value in [None, Some(""), Some("0")] {
+        for value in [None, Some("")] {
             let out = run_child("skip", value);
             let err = stderr(&out);
             assert!(out.status.success(), "{value:?}: {err}");
@@ -317,11 +315,11 @@ mod tests {
     /// skip line.
     #[test]
     fn an_invalid_variable_fails_the_test() {
-        for value in ["true", "yes", " 1", "1\n"] {
+        for value in ["0", "true", "yes", " 1", "1\n"] {
             let out = run_child("skip", Some(value));
             let err = stderr(&out);
             assert!(!out.status.success(), "{value:?}: {err}");
-            let expected = format!("probe absent, and CRAFT_TEST_REQUIRED={value:?} is not empty, 0 or 1; ");
+            let expected = format!("probe absent, and CRAFT_TEST_REQUIRED={value:?} is not empty or 1; ");
             assert!(err.contains(&expected), "{value:?}: {err}");
             assert!(!err.contains("SKIPPED:"), "{value:?}: {err}");
             assert!(!err.contains("returned from skip"), "{value:?}: {err}");
@@ -333,12 +331,14 @@ mod tests {
         assert!(err.contains("probe absent, and CRAFT_TEST_REQUIRED is not valid Unicode; "), "{err}");
         assert!(!err.contains("SKIPPED:"), "{err}");
 
-        let out = run_child("or_skip", Some("true"));
-        let err = stderr(&out);
-        assert!(!out.status.success(), "{err}");
-        assert!(err.contains("CRAFT_TEST_REQUIRED=\"true\" is not empty, 0 or 1"), "{err}");
-        assert!(!err.contains("SKIPPED:"), "{err}");
-        assert!(!err.contains("ran on"), "{err}");
+        for value in ["0", "true"] {
+            let out = run_child("or_skip", Some(value));
+            let err = stderr(&out);
+            assert!(!out.status.success(), "{value:?}: {err}");
+            assert!(err.contains(&format!("CRAFT_TEST_REQUIRED={value:?} is not empty or 1")), "{value:?}: {err}");
+            assert!(!err.contains("SKIPPED:"), "{value:?}: {err}");
+            assert!(!err.contains("ran on"), "{value:?}: {err}");
+        }
     }
 
     #[test]

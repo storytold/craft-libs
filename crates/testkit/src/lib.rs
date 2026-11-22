@@ -27,8 +27,8 @@
 //!
 //! [`skip`] decides what a test does when something it needs is missing (a program, a corpus,
 //! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
-//! variable the caller names is `1`. A value other than unset, empty, `0` or `1` fails the test as
-//! a configuration error. It is not built for `wasm32`.
+//! variable the caller names is `1`. A value other than unset, empty or `1` fails the test as a
+//! configuration error. It is not built for `wasm32`.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!

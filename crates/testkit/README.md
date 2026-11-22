@@ -225,9 +225,9 @@ The variable is read only when something is missing.
 
 | Value | Result |
 |---|---|
-| Not set, empty or `0` | The helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`. |
+| Not set or empty | The helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`. |
 | `1` | The test fails. No skip line is printed. |
-| Any other value, such as `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
+| Any other value, such as `0`, `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
 | Not Unicode | The test fails with the reason and the variable's name. No skip line is printed. |
 
 `skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
@@ -352,7 +352,7 @@ cases change, and keep the test names.
 | craft-libs `craft-media-testkit` | `skip` and `skip_with`, which accept `1`, `true`, `yes` and `on` | Not started |
 | craft-libs `pdf` tests | `or_skip!` in `crates/pdf/tests/cos/oracle.rs`, which reads any value of `CRAFT_PDF_ORACLES_REQUIRED` | Not started |
 
-After an adoption, an app that reads any value as required skips on an empty value or `0`, and
-fails as a configuration error on every other value except `1`. An app that accepts `true`, `yes`
+After an adoption, an app that reads any value as required skips on an empty value, and fails as
+a configuration error on every other value except `1`, `0` included. An app that accepts `true`, `yes`
 and `on` fails on those values as a configuration error.
 Each adoption says which values change and keeps the variable name.
