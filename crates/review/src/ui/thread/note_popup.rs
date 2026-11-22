@@ -9,7 +9,7 @@ use craft_ui::buttons::{Button, IconButton, PressFocus};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use craft_ui::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay,
-    Pad, PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, ThemeScope, clicked,
+    Gap, Pad, PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, Sizing, ThemeScope, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -517,7 +517,7 @@ impl NoteWindow {
         let props = ContainerProps::new()
             .mount(Mount::Layer(overlay))
             .surface(SurfaceKind::Floating)
-            .header(HeaderRegion::new().band(DragBand::Move).trailing(true));
+            .header(HeaderRegion::new().band(DragBand::Move));
         NoteWindow {
             common: Common::new(),
             props,
@@ -574,20 +574,24 @@ impl Container for NoteWindow {
         Some(self.open.reborrow())
     }
 
-    /// The title band: the note's kind and author and its age, on the note's colour.
+    /// The title band: the note's kind and author and its age, with Close at its end, all on the note's colour. Close
+    /// is the band's own control, which needs the document to allow commenting, as closing changes the note.
     fn header(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
         let look = self.look.clone();
-        let _ = NoteTitle { common: Common::new(), look: look.clone() }.label(look.title).show(ui);
-    }
-
-    /// Close, which needs the document to allow commenting, as closing changes the note.
-    fn controls(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        let close = IconButton::new(IconSpec::svg(IconId::new("close")))
-            .label(self.close_label.clone())
-            .enabled(self.allowed)
-            .press_focus(PressFocus::Keep)
-            .show(ui);
-        self.close |= clicked(&close);
+        let band = ui.painter().add(egui::Shape::Noop);
+        let shown = Row::new().fill_width().gap(Gap::None).show(ui, |ui, _| {
+            let _ = NoteTitle { common: Common::new(), look: look.clone() }.label(look.title.clone()).sizing(Sizing::FillWidth).show(ui);
+            let close = IconButton::new(IconSpec::svg(IconId::new("close")))
+                .label(self.close_label.clone())
+                .enabled(self.allowed)
+                .press_focus(PressFocus::Keep)
+                .show(ui);
+            self.close |= clicked(&close);
+        });
+        let radius = UiTokens::corner(Env::of(ui).tokens.shape.radius.surface);
+        let radius = CornerRadius { sw: 0, se: 0, ..radius };
+        let DataColor(fill) = look.fill;
+        ui.painter().set(band, egui::Shape::rect_filled(shown.output.rect, radius, fill));
     }
 
     fn closed(&mut self, _: CloseReason) {

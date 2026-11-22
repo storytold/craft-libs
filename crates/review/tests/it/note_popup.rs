@@ -280,3 +280,32 @@ fn the_reply_button_sits_at_the_end_edge_of_the_window() {
     assert!(window.right() - reply.rect.right() < 24.0, "Reply ends near the window's end edge: {:?} in {window:?}", reply.rect);
     assert!(reply.rect.left() > window.center().x, "Reply sits in the end half: {:?} in {window:?}", reply.rect);
 }
+
+/// The title band is the note's colour across the window's whole width, Close included, as production's.
+#[trial]
+fn the_title_band_runs_under_the_close_control() {
+    use craft_ui::testing::{Frames, install_spec};
+    let mut frames = Frames::uninstalled();
+    craft_ui::install(&frames.ctx, install_spec()).expect("the runtime installs");
+    frames.record_paint();
+    let mut drafts = NoteDrafts::default();
+    let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 200.0));
+    for _ in 0..4 {
+        frames.frame(vec![], |ui| {
+            let _ = NotePopup::new(1, "Note", rect, &NOTE, &mut drafts).color(Some([10, 20, 200])).show(ui);
+        });
+    }
+    let mut paint = frames.take_paint().expect("paint is recorded");
+    paint.textures_delta.clear();
+    fn band(shape: &egui::Shape, out: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Rect(r) if r.fill == egui::Color32::from_rgb(10, 20, 200) => out.push(r.rect),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| band(s, out)),
+            _ => {}
+        }
+    }
+    let mut bands = Vec::new();
+    paint.shapes.iter().for_each(|clipped| band(&clipped.shape, &mut bands));
+    let widest = bands.iter().map(|r| r.width()).fold(0.0, f32::max);
+    assert!((widest - rect.width()).abs() < 1.5, "the band covers the window's width, close control included: {bands:?}");
+}
