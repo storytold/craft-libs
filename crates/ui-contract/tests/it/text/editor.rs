@@ -702,7 +702,7 @@ fn an_empty_commit_with_nothing_marked_reaches_no_editor() {
         assert!(inputs.is_empty(), "{name}: an empty commit with nothing marked reaches the editor: {inputs:?}");
         rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
         let inputs = rig.take();
-        assert!(matches!(inputs.as_slice(), [EditorInput::Newline]), "{name}: the Enter after it is a newline: {inputs:?}");
+        assert!(matches!(inputs.as_slice(), [EditorInput::Newline { shift: false, .. }]), "{name}: the Enter after it is a newline: {inputs:?}");
 
         rig.frame(vec![preedit("k")]);
         assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "{name}: the editor composes");
