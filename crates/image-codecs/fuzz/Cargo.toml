@@ -16,7 +16,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 craft-image-codecs = { path = "..", features = ["heif", "avif-decode"] }
 # Called directly too: the codec turns its panics into errors (see decode_heif.rs).
-heic-rs = "=0.1.4"
+heic-rs = "=0.1.5"
 
 [profile.release]
 debug = 1

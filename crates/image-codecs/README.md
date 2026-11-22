@@ -190,8 +190,9 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   single pictures and grid-tiled photos, 8 to 12 bits, auxiliary alpha, ICC, EXIF and XMP. The
   container's `irot`/`imir`/`clap` are applied and EXIF Orientation is rewritten to 1 (HEIF's EXIF
   tag only repeats the container's, and applying both would turn the photo twice). Grayscale
-  decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
-  4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
+  decodes to RGB, and 4:2:2 (Canon and Sony "HIF") and 4:4:4 decode too. Image sequences, overlays
+  and identity derivations, multilayer HEVC and HEVC range-extension tools heic-rs lacks return
+  `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
 * **AVIF.** Encoding uses `ravif`, which is pure Rust, behind the non-default `avif` feature.
   Decoding (`codecs::avif_decode`, behind the non-default `avif-decode` feature) reads the HEIF
