@@ -295,8 +295,9 @@ impl<'a, K: Value + Eq + Hash + crate::contract::MemoProps + 'static> NamedPrese
             let naming = body.memory::<Option<Draft<K>>>();
             Row::new().wrap(true).show(ui, |ui, row| {
                 let mut field: Option<Response> = None;
-                if let Some(picker) = picker.take() {
-                    let out = picker.show(ui);
+                // The row's body runs more than once in a pass: each run shows its own copy of the picker.
+                if let Some(picker) = picker.as_mut() {
+                    let out = picker.reborrowed().show(ui);
                     field = Some(out.edit.response.clone());
                     if let Some(key) = out.picked {
                         if naming.as_ref().and_then(|draft| draft.target.as_ref()).is_some_and(|target| *target != key) {

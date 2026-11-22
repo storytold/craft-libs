@@ -252,6 +252,45 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
         self
     }
 
+    /// A picker with the same settings that borrows this one, so a composite whose body runs more than once in a
+    /// pass (a wrapping row measures before it shows) shows a fresh picker in each run, as [`Bind::reborrowed`]
+    /// hands on a binding. Bindings and the host's closures are borrowed; the rest is copied.
+    pub fn reborrowed(&mut self) -> PresetPicker<'_, K> {
+        PresetPicker {
+            label: self.label.clone(),
+            value: self.value.reborrowed(),
+            source: self.source,
+            state: self.state.reborrowed(),
+            field: self.field.clone(),
+            cell_shape: self.cell_shape.clone(),
+            view: self.view.clone(),
+            default_open: self.default_open.clone(),
+            browser: self.browser,
+            toolbar: self.toolbar,
+            search: self.search,
+            tools: self.tools.as_mut().map(|tools| BrowserTools::new(move |ui| tools.show(ui))),
+            browser_id: self.browser_id,
+            row_menu: self.row_menu.clone(),
+            tip: self.tip.as_deref().map(|tip| Box::new(move |ui: &mut Ui, key: &K| tip(ui, key)) as TipFn<'_, K>),
+            placeholder: self.placeholder.clone(),
+            display_name: self.display_name.clone(),
+            caption: self.caption.clone(),
+            caption_range: self.caption_range.clone(),
+            tooltip: self.tooltip.clone(),
+            head: self.head.as_mut().map(|head| PickerHead::new(move |ui, body| (head.0)(ui, body))),
+            keep_open: self.keep_open,
+            footer: self.footer.clone(),
+            thumb_range: self.thumb_range.clone(),
+            edit_face: self.edit_face,
+            create_row: self.create_row.clone(),
+            detach_row: self.detach_row.clone(),
+            face_thumb: self.face_thumb.clone(),
+            columns: self.columns,
+            resizable: self.resizable.clone(),
+            opened_at: self.opened_at.as_mut().map(|(at, open)| (*at, open.reborrowed())),
+        }
+    }
+
     /// A picker of patterns, built as [`new`](PresetPicker::new) is: the face shows the picked pattern's tile.
     pub fn pattern(label: impl Into<Label>, value: Bind<'a, Option<K>>, source: &'a PresetSource<'a, K>, state: Bind<'a, PresetState<K>>) -> Self {
         Self::new(label, value, source, state).field(PickerField::Thumbnail).cell_shape(CellShape::Square)
