@@ -7,7 +7,7 @@ use crate::list::ThumbAspect;
 use crate::patterns::presets::{
     CellShape, GroupHeads, PresetEvent, PresetFns, PresetFooterOptions, PresetRow, PresetRowMenu, PresetSource, PresetState, PresetTiles, PresetView,
 };
-use crate::primitives::IconSpec;
+use crate::primitives::{FacePaint, IconSpec};
 use crate::runtime::env::{Env, Label};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Selection, SelectionModel};
@@ -36,7 +36,8 @@ fn library_rows(_: &(), _: &Env) -> Vec<PresetRow<u32>> {
             n += 1;
             let color = swatch(n);
             rows.push(
-                PresetRow::item(n, format!("Preset {n}"), depth).preview(ThumbAspect::SQUARE, move |cx, rect| SwatchFace::new(color).paint(cx, rect)),
+                PresetRow::item(n, format!("Preset {n}"), depth)
+                    .preview_face(ThumbAspect::SQUARE, FacePaint::new(n.into(), move |cx, rect| SwatchFace::new(color).paint(cx, rect))),
             );
         }
     };

@@ -7,11 +7,9 @@ mod library;
 pub use library::{GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetLibrary, PresetNames};
 
 use crate::list::ThumbAspect;
-use crate::primitives::{ContentPainterCx, FacePaint, IconSpec};
+use crate::primitives::{FacePaint, IconSpec};
 use craft_behavior::IconId;
-use egui::Rect;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The shape of a grid cell's thumbnail.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
@@ -75,12 +73,6 @@ impl<'a, K> ThumbInfo<'a, K> {
     pub const fn new(key: &'a K, selected: bool, hovered: bool) -> Self {
         ThumbInfo { key, selected, hovered }
     }
-}
-
-/// The key of a face that no host named: one per call, counted down from the top so it cannot meet a host's own.
-fn anonymous_face_key() -> u64 {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    u64::MAX - NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A second band of a list row, in list view only: the brush's stroke preview.
@@ -204,14 +196,6 @@ impl<K> PresetRow<K> {
     pub fn icon(mut self, icon: IconId) -> Self {
         self.icon = Some(icon);
         self
-    }
-
-    /// Adds a band of `aspect` in list view, painted by `paint`. Each call makes a face of its own; a host that can
-    /// name the picture's identity gives a keyed face through [`preview_face`](Self::preview_face).
-    // PLAN: wg.W04's `FacePaint::new` needs a key and this builder has none to give; a counted key keeps every caller as it is.
-    #[must_use]
-    pub fn preview(self, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static) -> Self {
-        self.preview_face(aspect, FacePaint::new(anonymous_face_key(), paint))
     }
 
     /// Adds a band of `aspect` in list view, painted by `face`, which the host keys by the picture's identity.
