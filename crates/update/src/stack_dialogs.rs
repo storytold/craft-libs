@@ -56,7 +56,7 @@ craft_ui::words! {
         checking: "updateDialog.checking" = "Checking for updates…";
         up_to_date: template "updateDialog.upToDate" = "{app} {running} is the newest version.";
         failed: "updateDialog.failed" = "The update check failed.";
-        /// The check dialog's reason when GitHub's request limit was reached ([`crate::Status::RateLimited`]).
+        /// The check dialog's reason when GitHub's request limit was reached ([`crate::updater::Status::RateLimited`]).
         rate_limited: "updateDialog.rateLimited" = "GitHub's request limit was reached. Try again later.";
         check_again: "updateDialog.checkAgain" = "Check Again";
         check_now: "updateDialog.checkNow" = "Check Now";
