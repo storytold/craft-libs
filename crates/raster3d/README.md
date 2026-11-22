@@ -162,6 +162,9 @@ Changes from those files:
   a texture coordinate that overflows `f32` when scaled to texels is taken as the largest finite
   one, so the sample stays finite. A channel whose bilinear interpolation between large finite
   texels overflows `f32` is interpolated in `f64`.
+- A receiver more than its filter reach plus one texel outside a shadow map is unshadowed before
+  the filter runs. EffectCraft's tap jitter scaled the map coordinate by 8, which overflowed past
+  `f32::MAX / 8` and made the pixel NaN.
 - A masked fragment that passes its cutoff is drawn with the layer's opacity alone and writes its
   depth, and the cutoff tests the material's alpha without the opacity. EffectCraft at
   `2f16feb12f` kept the fragment's alpha below 1, so the clear color showed through a masked

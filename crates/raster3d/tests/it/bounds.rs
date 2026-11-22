@@ -948,6 +948,31 @@ fn a_shadows_only_material_that_receives_no_shadows_draws_nothing() {
     assert_eq!(render(|mat| mat.receives_shadows = false), hidden);
 }
 
+#[test]
+fn receivers_far_off_a_shadow_map_with_a_huge_focal_are_unshadowed() {
+    // A parallel light along the view direction, a hidden caster in front and a lit surface
+    // behind it, with the map's view moved about 100 units off the surface and a focal length
+    // that puts the surface's map coordinates near `f32::MAX` (finite at `f32::MAX / 400`,
+    // infinite at `f32::MAX`).
+    let mut s = quad_scene(16, 16, &[([4.0, 4.0, 12.0, 12.0], 100.0, WHITE), ([0.0, 0.0, 16.0, 16.0], 500.0, WHITE)]);
+    s.materials[0] = Material { casts_shadows: true, visible: false, ..Material::default() };
+    s.materials[1] = Material { double_sided: true, ..Material::default() };
+    s.opaque_count = 0;
+    s.lights = vec![shadow_light(0)];
+    try_shadow_maps(&mut s, false, &Limits::default()).unwrap();
+    let mut unshadowed = s.clone();
+    unshadowed.materials[1].receives_shadows = false;
+    let unshadowed = bits4(&try_render(&unshadowed, &Limits::default()).unwrap().color);
+    assert_ne!(bits4(&try_render(&s, &Limits::default()).unwrap().color), unshadowed, "the caster shadows the surface");
+    for focal in [f32::MAX / 400.0, f32::MAX] {
+        let mut s = s.clone();
+        s.shadows[0].view[0][3] += 100.0;
+        s.shadows[0].focal = focal;
+        let r = try_render(&s, &Limits::default());
+        assert_eq!(r.map(|img| bits4(&img.color)), Ok(unshadowed.clone()), "focal {focal}");
+    }
+}
+
 /// A light of `kind` at the origin along +z that asks for a shadow map.
 fn shadow_light(kind: u32) -> Light {
     Light {
