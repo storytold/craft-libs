@@ -1098,6 +1098,7 @@ impl Tile<'_> {
         }
         let mut details: Vec<String> = Vec::new();
         details.extend(self.detail.iter().map(|detail| detail.as_str().to_owned()));
+        details.extend(self.summary_action.iter().map(|action| action.as_str().to_owned()).filter(|action| !action.is_empty()));
         if let Some(n) = self.rating.filter(|n| *n > 0) {
             let stars = cx.words::<ChoiceWords>();
             details.push(stars.stars.text(u64::from(n), &cx.format().integer(u64::from(n))));
