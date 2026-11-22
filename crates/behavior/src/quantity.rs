@@ -281,7 +281,7 @@ mod tests {
 
         let picas = Reader::new().bare(1.0 / 12.0).unit("pt", 1.0 / 12.0).unit("pc", 1.0);
         near(&picas, "12", 1.0);
-        near(&picas, "1pt+12", 2.0 / 12.0);
+        near(&picas, "1pt+12", 13.0 / 12.0);
         near(&picas, "1pc+12", 2.0);
         near(&picas, "12*2", 2.0);
 
