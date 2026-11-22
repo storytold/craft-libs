@@ -7,6 +7,10 @@
 //! check reads the shared choice first, and a requested check reports [`Status::Managed`] while
 //! [`Updater::managed`] says which choice it is.
 //!
+//! A copy a package manager updates ([`crate::distribution`]) still checks, and its prompt shows
+//! the package manager's hint in place of Download or Update and Restart; nothing installs. The
+//! launcher's choice comes first.
+//!
 //! An update ends with the app closing. On Windows the update installs only after the app has
 //! exited, so the updater says it is ready rather than installed, and the first start afterwards
 //! reports what came of it: [`Status::Updated`] or [`Status::InstallFailed`].
@@ -17,6 +21,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::dialog::{StartupPrompt, StartupPromptResponse};
+use crate::distribution::Distribution;
 use crate::pins::{Choice, Pins};
 use crate::release::Release;
 use crate::self_update::{Outcome, Restart};
@@ -193,6 +198,9 @@ pub struct Updater {
     managed: Option<Choice>,
     /// Puts the prompt and its messages in the interface language ([`crate::translate`]).
     translate: Translate,
+    /// The package manager that updates this copy ([`crate::distribution::distribution`]); tests
+    /// replace it with `with_distribution`.
+    distribution: Option<Distribution>,
 }
 
 impl Updater {
@@ -224,6 +232,7 @@ impl Updater {
             pins_path: None,
             managed: None,
             translate: english,
+            distribution: crate::distribution::distribution(),
         }
     }
 
@@ -242,7 +251,9 @@ impl Updater {
     /// The startup prompt for `release`, in the interface language. `installs_itself` says whether
     /// this copy can install it itself ([`can_install_itself`]).
     fn prompt_for(&self, release: Release, installs_itself: bool) -> StartupPrompt {
-        StartupPrompt::with_self_update(self.app, release, self.version.clone(), installs_itself).with_translator(self.translate)
+        let mut prompt = StartupPrompt::with_self_update(self.app, release, self.version.clone(), installs_itself).with_translator(self.translate);
+        prompt.distribution = self.distribution.clone();
+        prompt
     }
 
     /// Opens the prompt offering `release`. A failed update offered again says why the last
@@ -271,6 +282,13 @@ impl Updater {
     #[cfg(test)]
     fn with_probe(mut self, probe: InstallProbe) -> Self {
         self.probe = Some(probe);
+        self
+    }
+
+    /// Replaces the package manager read from the environment (tests).
+    #[cfg(test)]
+    fn with_distribution(mut self, distribution: Option<Distribution>) -> Self {
+        self.distribution = distribution;
         self
     }
 
@@ -336,10 +354,14 @@ impl Updater {
     /// The check at start, once. Later calls do nothing. It first reads what the last update came
     /// to, once: [`Self::status`] is then [`Status::Updated`] or [`Status::InstallFailed`], and
     /// the app shows its [`CheckResultDialog`](crate::dialog::CheckResultDialog) while the status
-    /// is not [`Status::Idle`]. The check itself stays quiet unless it finds a release.
+    /// is not [`Status::Idle`]. A copy a package manager updates never installs an update itself,
+    /// so it leaves those records to the copy that wrote them. The check itself stays quiet unless
+    /// it finds a release.
     pub fn check_at_start(&mut self, ctx: &egui::Context) {
         if !std::mem::replace(&mut self.started, true) {
-            self.read_outcome();
+            if self.distribution.is_none() {
+                self.read_outcome();
+            }
             self.begin(ctx, false);
         }
     }
@@ -834,6 +856,10 @@ impl Updater {
     }
 
     fn start_install(&mut self, ctx: &egui::Context) {
+        // A package manager updates this copy: nothing installs here, whatever the prompt asked.
+        if self.distribution.is_some() {
+            return;
+        }
         // The launcher may have pinned the app while the prompt was open; that closes it.
         if self.install.is_none() && !self.installed && self.read_choice() {
             return;
@@ -1402,6 +1428,58 @@ mod tests {
             u.tick(&ctx);
             assert_eq!(message(&u), want);
         }
+    }
+
+    pub(super) fn nix() -> Option<Distribution> {
+        Some(Distribution { manager: "Nix".into(), hint: "Rebuild to update.".into() })
+    }
+
+    /// A package manager updates the copy: a release found at start, or offered by the app,
+    /// opens the prompt with its hint, and nothing installs, even where the copy would install
+    /// the update itself (an inherited `APPIMAGE`, say).
+    #[test]
+    fn a_managed_copy_is_shown_the_hint_and_installs_nothing() {
+        let ctx = egui::Context::default();
+        for offered in [false, true] {
+            let mut u = updater(Ok(Some(newer()))).with_probe(Arc::new(|_, _| true)).with_distribution(nix());
+            if offered {
+                offer_now(&mut u);
+            } else {
+                u.check_at_start(&ctx);
+                settle(&mut u, &ctx);
+            }
+            assert_eq!(u.prompt.as_ref().map(|p| p.distribution.clone()), Some(nix()), "offered: {offered}");
+            assert_eq!(u.status(), &Status::Idle);
+            u.request_install(&ctx, true);
+            assert!(u.install.is_none() && !u.installed, "nothing installs a managed copy (offered: {offered})");
+            // Not even an attempt: one would say the copy cannot update itself here.
+            assert_eq!(u.prompt.as_ref().and_then(StartupPrompt::message), None, "offered: {offered}");
+            assert_eq!(frame(&mut u, &ctx, true), Action::None);
+            assert!(u.install.is_none() && u.prompt_open(), "a frame starts nothing either (offered: {offered})");
+        }
+    }
+
+    /// The production path: with the wrapper's variables set (in a child process), the prompt's
+    /// constructors and `Updater::new` read them, and the prompt the check opens shows the hint.
+    #[test]
+    fn the_wrappers_variables_reach_the_prompt() {
+        const NAME: &str = "updater::tests::the_wrappers_variables_reach_the_prompt";
+        const CHILD: &str = "CRAFT_UPDATE_MANAGED_PROMPT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            crate::distribution::tests::run_alone(NAME, |cmd| {
+                cmd.env(CHILD, "1")
+                    .env(crate::distribution::MANAGED_BY_VAR, " Nix ")
+                    .env(crate::distribution::MANAGED_HINT_VAR, "Rebuild to update.");
+            });
+            return;
+        }
+        assert_eq!(StartupPrompt::new(&PHOTOCRAFT, newer(), "0.1.0").distribution, nix());
+        assert_eq!(StartupPrompt::with_self_update(&PHOTOCRAFT, newer(), "0.1.0", true).distribution, nix());
+        let ctx = egui::Context::default();
+        let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(|| Ok(Some(newer())))).with_pins_path(no_pins());
+        u.check_at_start(&ctx);
+        settle(&mut u, &ctx);
+        assert_eq!(u.prompt.as_ref().map(|p| p.distribution.clone()), Some(nix()));
     }
 
     #[test]
@@ -2065,6 +2143,22 @@ mod tests {
         let mut next = reading(&paths, "0.1.0");
         start_answered(&mut next, &ctx, Ok(None));
         assert_eq!(next.status(), &Status::Idle, "neither record is read twice");
+    }
+
+    /// A managed copy installs nothing itself, so the outcome records belong to a copy that does
+    /// (one sharing the data folder): the managed copy's start leaves them for it.
+    #[test]
+    fn a_managed_start_leaves_the_outcome_records_in_place() {
+        let ctx = egui::Context::default();
+        let (_dir, paths, u) = with_records("0.1.0");
+        self_update::record_failure(&paths, "the Windows Installer stopped with error 1603");
+        let mut managed = u.with_distribution(nix());
+        start_answered(&mut managed, &ctx, Ok(None));
+        assert_eq!(managed.status(), &Status::Idle);
+
+        let mut unmanaged = reading(&paths, "0.1.0");
+        start_answered(&mut unmanaged, &ctx, Ok(None));
+        assert_eq!(unmanaged.status(), &Status::InstallFailed("the Windows Installer stopped with error 1603".into()));
     }
 
     /// A failed update that the check at start offers again says in its prompt why it failed.

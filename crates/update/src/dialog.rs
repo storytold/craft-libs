@@ -3,6 +3,7 @@
 use egui::{Align, Align2, Color32, Layout, RichText, Vec2};
 
 use crate::app::App;
+use crate::distribution::Distribution;
 use crate::release::Release;
 use crate::translate::{Note, Translate, button, english};
 use crate::updater::Status;
@@ -47,6 +48,9 @@ pub struct StartupPrompt {
     pub save_wanted: bool,
     /// Puts the card's words in the interface language ([`crate::translate`]); English by default.
     pub translate: Translate,
+    /// A package manager updates this copy ([`crate::distribution`]): the prompt shows its hint
+    /// and offers neither Download nor an update, whatever `is_self_updating` says.
+    pub distribution: Option<Distribution>,
 }
 
 impl StartupPrompt {
@@ -59,7 +63,8 @@ impl StartupPrompt {
     }
 
     /// [`StartupPrompt::new`] with `is_self_updating` already known, for example found by a
-    /// worker thread, so that no installed file is read here.
+    /// worker thread, so that no installed file is read here. Both take `distribution` from
+    /// [`crate::distribution::distribution`].
     pub fn with_self_update(app: &'static App, release: Release, running_version: impl Into<String>, is_self_updating: bool) -> Self {
         Self {
             app,
@@ -75,6 +80,7 @@ impl StartupPrompt {
             is_saving: false,
             save_wanted: false,
             translate: english,
+            distribution: crate::distribution::distribution(),
         }
     }
 
@@ -169,6 +175,25 @@ impl StartupPrompt {
                                 ui.spinner();
                                 ui.label(RichText::new(status).size(12.0).color(text_primary));
                             });
+                        } else if let Some(distribution) = &self.distribution {
+                            let desc = t(
+                                "{app} {version} is available. {app} was installed with {manager}, so it can't update itself.",
+                                &[("app", self.app.name), ("version", &version), ("manager", &distribution.manager)],
+                            );
+                            ui.label(RichText::new(desc).size(12.5).color(text_muted));
+                            // The distribution's own words, as given and in full. Selectable, so the mouse can
+                            // copy a command; egui leaves selectable text out of the Tab order, so the
+                            // keyboard can't, but a screen reader reads it as a label. Only a hint taller
+                            // than the space inside the card (the window height less the header, footer and
+                            // margins) scrolls, so Close and LATER stay on screen.
+                            let above = ui.cursor().top() - ui.min_rect().top();
+                            let room = (ui.ctx().content_rect().height() - above - PROMPT_CHROME).max(HINT_MIN_HEIGHT);
+                            egui::ScrollArea::vertical().id_salt("craft_update.prompt_hint").max_height(room).auto_shrink([false, true]).show(
+                                ui,
+                                |ui| {
+                                    ui.add(egui::Label::new(RichText::new(&distribution.hint).size(12.5).color(text_primary)).selectable(true));
+                                },
+                            );
                         } else {
                             let desc = t(
                                 "{app} {version} is available with the latest features and bug fixes.",
@@ -219,7 +244,9 @@ impl StartupPrompt {
                                         response = StartupPromptResponse::Later;
                                     }
                                 } else {
-                                    if self.is_self_updating || self.is_ready {
+                                    if self.distribution.is_some() {
+                                        // Nothing to download or install here: the package manager updates it.
+                                    } else if self.is_self_updating || self.is_ready {
                                         let label = if self.offer_save {
                                             "Save and Update"
                                         } else if self.is_ready {
@@ -560,6 +587,13 @@ impl CheckResultDialog {
     }
 }
 
+/// The prompt's height below the hint, with the card's margins and border: the footer and the
+/// spacing around it. A hint gets the window's height less this and what is above it.
+const PROMPT_CHROME: f32 = 120.0;
+
+/// The least a hint scrolls in, in a window too small for the card.
+const HINT_MIN_HEIGHT: f32 = 48.0;
+
 /// The tallest an error or failure reason draws in a card; a longer one scrolls, so the card's
 /// buttons stay on screen.
 const REASON_MAX_HEIGHT: f32 = 160.0;
@@ -673,6 +707,7 @@ pub(crate) mod tests {
             is_saving: false,
             save_wanted: false,
             translate: english,
+            distribution: None,
         }
     }
 
@@ -1007,6 +1042,59 @@ pub(crate) mod tests {
         }
     }
 
+    /// A long hint (taller than a failure reason may draw) is neither elided nor clipped, and LATER
+    /// stays on screen.
+    #[test]
+    fn a_long_hint_is_drawn_whole() {
+        let ctx = dark_context();
+        let mut prompt = prompt_for(false);
+        let hint = "Run the package manager's update command, then rebuild the system. ".repeat(9);
+        let hint = hint.trim();
+        prompt.distribution = Some(Distribution { manager: "Nix".into(), hint: hint.into() });
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let (galley_rect, clip, elided) = text_shape(&output, hint).expect("the hint is painted as one text");
+        assert!(galley_rect.height() > REASON_MAX_HEIGHT, "the test's hint is taller than a reason may draw");
+        assert!(!elided, "the hint is not cut short");
+        assert!(screen().contains_rect(galley_rect) && clip.contains_rect(galley_rect), "the hint is not clipped: {galley_rect:?} in {clip:?}");
+        assert!(text_pos(&output, "LATER").is_some_and(|pos| screen().contains(pos)), "LATER is on screen");
+    }
+
+    /// A hint taller than the card has room for in the window scrolls: Close and LATER stay on screen, and
+    /// a screen reader still has the whole hint.
+    #[test]
+    fn a_hint_taller_than_the_window_keeps_close_and_later_on_screen() {
+        let ctx = dark_context();
+        ctx.enable_accesskit();
+        let mut prompt = prompt_for(false);
+        let hint = "Run the package manager's update command, then rebuild the system. ".repeat(20);
+        let hint = hint.trim();
+        prompt.distribution = Some(Distribution { manager: "Nix".into(), hint: hint.into() });
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let tree = output.platform_output.accesskit_update.as_ref().expect("an accessibility tree");
+        let node = |name: &str| tree.nodes.iter().find(|(_, node)| node.label() == Some(name)).map(|(_, node)| node.clone());
+        for name in ["Close", "LATER"] {
+            let bounds = node(name).and_then(|node| node.bounds()).unwrap_or_else(|| panic!("{name} is in the tree"));
+            let rect = Rect::from_min_max(egui::pos2(bounds.x0 as f32, bounds.y0 as f32), egui::pos2(bounds.x1 as f32, bounds.y1 as f32));
+            assert!(screen().contains_rect(rect), "{name} at {rect:?} is off screen");
+        }
+        let read = tree.nodes.iter().any(|(_, node)| node.role() == egui::accesskit::Role::Label && node.value() == Some(hint));
+        assert!(read, "the whole hint is a label in the accessibility tree");
+    }
+
+    /// The rect, clip rect and elision of the text shape that paints `text`.
+    fn text_shape(output: &FullOutput, text: &str) -> Option<(Rect, Rect, bool)> {
+        fn find(shape: &egui::Shape, text: &str) -> Option<(Rect, bool)> {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+                egui::Shape::Text(t) if t.galley.text() == text => Some((t.galley.rect.translate(t.pos.to_vec2()), t.galley.elided)),
+                _ => None,
+            }
+        }
+        output.shapes.iter().find_map(|c| find(&c.shape, text).map(|(rect, elided)| (rect, c.clip_rect, elided)))
+    }
+
     /// Where the frame painted `text` (inside its galley, so a pointer there is over it).
     pub(crate) fn text_pos(output: &FullOutput, text: &str) -> Option<egui::Pos2> {
         fn find(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
@@ -1155,6 +1243,59 @@ pub(crate) mod tests {
         let (_, output) = frame(&ctx, &mut prompt, Vec::new());
         let painted = painted_text(&output);
         assert!(painted.contains("DOWNLOAD") && !painted.contains("SAVE AND UPDATE"), "{painted}");
+    }
+
+    fn managed(prompt: StartupPrompt) -> StartupPrompt {
+        let hint = "Update your Nix sources and rebuild to get the new version.";
+        StartupPrompt { distribution: Some(Distribution { manager: "Nix".into(), hint: hint.into() }), ..prompt }
+    }
+
+    /// A copy a package manager updates: the release notes and the hint, and no button that
+    /// downloads or installs, whatever the copy could do itself or the app could save.
+    #[test]
+    fn a_managed_prompt_shows_the_hint_and_offers_nothing_to_install() {
+        for (self_updating, offer_save) in [(false, false), (true, false), (true, true)] {
+            let ctx = dark_context();
+            ctx.enable_accesskit();
+            let mut prompt = managed(StartupPrompt { offer_save, ..prompt_for(self_updating) });
+            frame(&ctx, &mut prompt, Vec::new());
+            let (response, output) = frame(&ctx, &mut prompt, Vec::new());
+            assert_eq!(response, StartupPromptResponse::Pending);
+            let painted = painted_text(&output);
+            for expected in [
+                "v0.1.0 to 0.2.0",
+                "PhotoCraft 0.2.0 is available. PhotoCraft was installed with Nix, so it can't update itself.",
+                "Update your Nix sources and rebuild to get the new version.",
+                "What's new",
+                "LATER",
+            ] {
+                assert!(painted.contains(expected), "missing {expected:?} in {painted:?}");
+            }
+            for absent in ["DOWNLOAD", "UPDATE AND RESTART", "SAVE AND UPDATE", "latest features"] {
+                assert!(!painted.contains(absent), "{absent:?} in {painted:?}");
+            }
+            assert!(painted.is_ascii(), "the prompt paints a non-ASCII character: {painted:?}");
+            // A screen reader reads the whole hint, as a label.
+            let hint = prompt.distribution.as_ref().map(|d| d.hint.as_str());
+            let tree = output.platform_output.accesskit_update.as_ref().expect("an accessibility tree");
+            let read = tree.nodes.iter().any(|(_, node)| node.role() == egui::accesskit::Role::Label && node.value() == hint);
+            assert!(read, "the hint is a label in the accessibility tree");
+        }
+    }
+
+    /// The sentence around the hint is the app's to translate; the package manager's name and
+    /// hint are drawn as given.
+    #[test]
+    fn a_managed_prompt_translates_its_sentence_but_not_the_hint() {
+        let ctx = dark_context();
+        let mut prompt = managed(prompt_for(false)).with_translator(pseudo);
+        frame(&ctx, &mut prompt, Vec::new());
+        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
+        let painted = painted_text(&output);
+        let hint = "Update your Nix sources and rebuild to get the new version.";
+        assert_all_translated(&painted, &["P", "PhotoCraft", hint]);
+        assert!(painted.lines().any(|line| line == hint), "the hint is drawn as given: {painted}");
+        assert!(painted.contains("[PhotoCraft, 0.2.0, Nix | ]"), "{painted}");
     }
 
     /// While the app saves, the card says that and stays ASCII (#343). No button takes the place

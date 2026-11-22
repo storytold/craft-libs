@@ -121,8 +121,12 @@ fn marker(paths: &Paths) -> PathBuf {
     paths.data.join("self-update.txt")
 }
 
-/// How this copy is installed, if it's one the app knows how to replace.
+/// How this copy is installed, if it's one the app knows how to replace. A copy a package
+/// manager updates ([`crate::distribution`]) is never one, whatever else is detected.
 pub fn current(app: &App) -> Option<Install> {
+    if crate::distribution::distribution().is_some() {
+        return None;
+    }
     let exe = std::env::current_exe().ok()?;
     current_at(app, &exe, std::env::var_os(DEV_VAR).is_some())
 }
@@ -213,10 +217,12 @@ fn is_nextest_binary(root: &Path, exe: &Path) -> bool {
     })
 }
 
-/// Whether this installed copy can update itself. [`release_installs`] says whether a given
-/// release has a file to update it from.
+/// Whether this installed copy can update itself: never while a package manager updates it
+/// ([`crate::distribution`]). [`release_installs`] says whether a given release has a file to
+/// update it from.
 pub fn is_self_updating(app: &App) -> bool {
-    std::env::current_exe().is_ok_and(|exe| can_self_update_at(app, &exe, std::env::var_os(DEV_VAR).is_some()))
+    crate::distribution::distribution().is_none()
+        && std::env::current_exe().is_ok_and(|exe| can_self_update_at(app, &exe, std::env::var_os(DEV_VAR).is_some()))
 }
 
 /// [`is_self_updating`] for a known executable and opt-in setting. On Windows the update helper
@@ -843,6 +849,11 @@ pub fn prepare_update_with_options(
     // The option only changes Windows MSI helpers.
     #[cfg(not(windows))]
     let _ = options;
+    // A copy a package manager updates installs nothing itself, whichever `install` the caller
+    // passes: nothing is downloaded or changed.
+    if let Some(distribution) = crate::distribution::distribution() {
+        return Err(format!("{} was installed with {}, so it can't update itself", app.name, distribution.manager));
+    }
     let cur_v = running_version.and_then(|v| current_version(app, v));
     if let (Some(rel_v), Some(cur_v)) = (release.version.as_ref(), cur_v.as_ref())
         && !version::offers_update(rel_v, cur_v)
@@ -1092,8 +1103,12 @@ pub enum Outcome {
 /// recorded failure wins over a record of a finished update, unless this program was put in place
 /// after the failure: the copy that failed has been replaced, and the failure is dropped. A
 /// finished update counts only when the version it installed is `running`, the version this copy
-/// counts as.
+/// counts as. A copy a package manager updates ([`crate::distribution`]) never installs itself,
+/// so it reads nothing and leaves the records to the copy that wrote them.
 pub fn take_outcome(paths: &Paths, running: &str) -> Option<Outcome> {
+    if crate::distribution::distribution().is_some() {
+        return None;
+    }
     let program = std::env::current_exe().ok();
     take_outcome_of(paths, running, program.as_deref())
 }
@@ -1497,6 +1512,9 @@ fn windows_helper(app: &App, paths: &Paths, release: &Release, pid: u32, exe: &P
 /// Finishes an update when this program was started as the update helper; `args` are its
 /// arguments without the program name. `None` when they don't start with [`FINISH_FLAG`]. The
 /// app is started again even when the step fails: the old copy is then still in place.
+///
+/// It does not check [`crate::distribution::distribution`]: it only completes an update that
+/// [`prepare_update_with_options`] already prepared, and that refuses a managed copy.
 #[cfg(windows)]
 pub fn finish(app: &App, args: &[OsString]) -> Option<Result<(), String>> {
     if args.first().is_none_or(|a| a != FINISH_FLAG) {
@@ -1805,6 +1823,81 @@ fn step_after_wait(app: &App, reference: &Path, pid: u32, exe: &Path, step: &Fin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wrapper's variables reach the process and keep a copy that would otherwise update itself
+    /// from doing so: detection reports no copy to replace, and the install entry point refuses
+    /// before it downloads or changes anything. The variables are set in a child process, with
+    /// [`DEV_VAR`] and an `APPIMAGE` path that make the test binary an AppImage on Linux.
+    #[test]
+    fn a_managed_copy_never_updates_itself_whatever_else_it_detects() {
+        const NAME: &str = "self_update::tests::a_managed_copy_never_updates_itself_whatever_else_it_detects";
+        const CHILD: &str = "CRAFT_UPDATE_MANAGED_TEST_CHILD";
+        let Some(expect_managed) = std::env::var_os(CHILD) else {
+            for managed in [true, false] {
+                crate::distribution::tests::run_alone(NAME, |cmd| {
+                    cmd.env(CHILD, if managed { "1" } else { "0" })
+                        .env(DEV_VAR, "1")
+                        .env("APPIMAGE", std::env::temp_dir().join("craft-update-managed-test.AppImage"));
+                    if managed {
+                        cmd.env(crate::distribution::MANAGED_BY_VAR, "Nix").env(crate::distribution::MANAGED_HINT_VAR, "Rebuild to update.");
+                    }
+                });
+            }
+            return;
+        };
+        let app = &crate::suite::PHOTOCRAFT;
+        let managed = expect_managed == "1";
+        assert_eq!(crate::distribution::distribution().map(|d| d.manager), managed.then(|| "Nix".to_owned()));
+        // The baseline, which ignores the variables: detection finds the AppImage (Linux outside
+        // a Flatpak, where the test sets one up), so the gates below have something to refuse.
+        let exe = std::env::current_exe().unwrap();
+        let detects = cfg!(target_os = "linux") && !crate::process::in_sandbox();
+        if detects {
+            assert!(matches!(current_at(app, &exe, true), Some(Install::AppImage(_))), "the AppImage is detected");
+            assert!(can_self_update_at(app, &exe, true));
+        }
+        let current = current(app);
+        if managed {
+            assert_eq!(current, None, "a managed copy has no install to replace");
+            assert!(!is_self_updating(app));
+        } else if detects {
+            assert!(matches!(current, Some(Install::AppImage(_))), "{current:?}");
+            assert!(is_self_updating(app));
+        }
+        // The install entry point, handed an install directly: a managed copy is refused before
+        // the download; otherwise it gets as far as the release's missing file.
+        let dir = tempfile::tempdir().unwrap();
+        let release = Release { tag: "v9.0.0".into(), version: version::parse("9.0.0"), ..Release::default() };
+        let error = update(
+            app,
+            &Install::AppImage(dir.path().join("test.AppImage")),
+            &release,
+            Platform { os: crate::Os::Linux, arch: crate::Arch::X64 },
+            &Http::new(crate::TEST_AGENT).unwrap(),
+            &Paths::under(dir.path()),
+            &Stop::default(),
+            &mut |_| {},
+            &|| Ok(()),
+            Some("0.1.0"),
+        )
+        .unwrap_err();
+        if managed {
+            assert!(error.contains("installed with Nix"), "{error}");
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing is written for a managed copy");
+        } else {
+            assert!(error.contains("has no"), "{error}");
+        }
+        // Another copy's recorded failure: a managed copy leaves it in place; any other takes it.
+        let records = Paths::under(dir.path());
+        record_failure(&records, "the disk was full");
+        let outcome = take_outcome(&records, "0.1.0");
+        if managed {
+            assert_eq!(outcome, None);
+            assert!(failure_file(&records).exists(), "the record is left for the copy that wrote it");
+        } else {
+            assert_eq!(outcome, Some(Outcome::Failed("the disk was full".into())));
+        }
+    }
 
     #[cfg(unix)]
     #[test]
