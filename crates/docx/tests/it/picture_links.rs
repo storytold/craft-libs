@@ -213,3 +213,96 @@ fn a_vml_picture_keeps_its_crop_when_saved() {
     }
     assert!(lost.is_empty(), "VML picture crops were lost: {lost:?}");
 }
+
+// Original Transitional DOCX/VML: ISO 29500 VML shape/group href attributes, with
+// independent literal targets at each level. No reference-app file or click oracle.
+#[test]
+fn vml_objects_keep_their_own_hyperlinks() {
+    fn check_images(doc: &Document, object: &InlineObject, original_png: &[u8], out: &mut Vec<(String, f32, f32)>) {
+        match object {
+            InlineObject::Image { media, w, h, alt, crop, .. } => {
+                assert_eq!(doc.media.get(media).expect("the original embedded picture").as_slice(), original_png);
+                assert_eq!(*crop, [0.0; 4], "a hyperlink must not invent a crop");
+                out.push((alt.clone(), *w, *h));
+            }
+            InlineObject::Group { children, .. } => {
+                for child in children {
+                    check_images(doc, &child.obj, original_png, out);
+                }
+            }
+            other => panic!("the original picture fixture produced another object: {other:?}"),
+        }
+    }
+    fn top_links(doc: &Document) -> Vec<Option<String>> {
+        let paragraph = doc.body[1].as_para().expect("the VML paragraph");
+        paragraph.object_offsets().into_iter().map(|off| paragraph.props_of_char(off).link.clone()).collect()
+    }
+
+    let vml = r##"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml">
+<v:shape id="TopFirst" style="width:24pt;height:12pt" alt="first" href="https://example.com/TopFirst"><v:imagedata r:id="rIdPic"/></v:shape>
+<v:shape id="Unlinked" style="width:16pt;height:8pt" alt="unlinked"><v:imagedata r:id="rIdPic"/></v:shape>
+<v:shape id="TopLast" style="width:12pt;height:6pt" alt="last" href="https://example.com/TopLast"><v:imagedata r:id="rIdPic"/></v:shape>
+<v:group id="Outer" style="width:40pt;height:20pt" coordsize="40,20" href="https://example.com/Outer">
+<v:shape id="Child" style="left:3pt;top:4pt;width:6pt;height:4pt" alt="child" href="https://example.com/Child"><v:imagedata r:id="rIdPic"/></v:shape>
+<v:group id="Nested" style="left:20pt;top:5pt;width:10pt;height:10pt" coordsize="10,10" href="https://example.com/Nested">
+<v:shape id="Fragment" style="left:1pt;top:2pt;width:2pt;height:3pt" alt="fragment" href="#Spot"><v:imagedata r:id="rIdPic"/></v:shape>
+</v:group></v:group></w:pict></w:r></w:p>"##;
+    // A known DrawingML link is a positive control in the same package, with the
+    // same generated media and relationship table as the independently linked VML.
+    let body = format!("<w:p>{}</w:p>{vml}", picture_run(10, r#"<a:hlinkClick r:id="rIdWeb"/>"#));
+    let original_png = png();
+    let doc = craft_docx::read(&package(&body)).expect("the original Transitional package must read");
+    let saved = craft_docx::write(&doc).expect("the supported picture/group content must save");
+    let reopened = craft_docx::read(&saved).expect("the normalized DOCX must reopen");
+    let expected_images = [("first", 24.0, 12.0), ("unlinked", 16.0, 8.0), ("last", 12.0, 6.0), ("child", 6.0, 4.0), ("fragment", 2.0, 3.0)];
+
+    // All payload, ordering, geometry and positive/unlinked controls run before
+    // the missing-target assertion; neither a dropped object nor bad media is red proof.
+    for current in [&doc, &reopened] {
+        assert_eq!(current.body.len(), 2);
+        assert_eq!(picture_links(current), [Some("https://example.com/picture".to_string())]);
+        let paragraph = current.body[1].as_para().expect("the VML paragraph remains a paragraph");
+        assert_eq!(paragraph.objects.len(), 4, "three top-level pictures and their following group");
+        let InlineObject::Group { w, h, .. } = &paragraph.objects[3] else {
+            panic!("the last VML object must remain a group");
+        };
+        assert!((*w - 40.0).abs() < 0.001 && (*h - 20.0).abs() < 0.001);
+        let mut images = Vec::new();
+        for object in &paragraph.objects {
+            check_images(current, object, &original_png, &mut images);
+        }
+        assert_eq!(images.len(), expected_images.len(), "every original picture must remain");
+        for ((alt, w, h), (expected_alt, expected_w, expected_h)) in images.iter().zip(expected_images) {
+            assert_eq!(alt, expected_alt, "picture order/identity changed");
+            assert!((w - expected_w).abs() < 0.001 && (h - expected_h).abs() < 0.001, "{alt}: {w} x {h}");
+        }
+        assert_eq!(top_links(current)[1], None, "the unlinked neighbor must stay unlinked");
+    }
+    let rels = part(&saved, "word/_rels/document.xml.rels");
+    assert!(rels.contains(r#"Target="https://example.com/picture""#), "the DrawingML control's relationship must survive");
+
+    let expected_top = [Some("https://example.com/TopFirst"), None, Some("https://example.com/TopLast"), Some("https://example.com/Outer")];
+    let mut lost = Vec::new();
+    for (phase, current) in [("read", &doc), ("reopened", &reopened)] {
+        for (index, (actual, expected)) in top_links(current).iter().zip(expected_top).enumerate() {
+            if actual.as_deref() != expected {
+                lost.push(format!("{phase} top-level object {index}: {actual:?} instead of {expected:?}"));
+            }
+        }
+    }
+    // These are necessary persistence checks using today's APIs, not a claim that
+    // relationship presence proves nested path-to-target association or activation.
+    for (label, target) in [
+        ("first", "https://example.com/TopFirst"),
+        ("last", "https://example.com/TopLast"),
+        ("outer group", "https://example.com/Outer"),
+        ("group child", "https://example.com/Child"),
+        ("nested group", "https://example.com/Nested"),
+        ("fragment data", "#Spot"),
+    ] {
+        if !rels.contains(&format!(r#"Target="{target}""#)) {
+            lost.push(format!("saved {label} target: {target}"));
+        }
+    }
+    assert!(lost.is_empty(), "VML object hyperlinks were lost: {lost:?}");
+}
