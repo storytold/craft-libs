@@ -139,10 +139,11 @@ fn a_command_reveal_stays_until_the_pointer_moves() {
 
     reveal_start(&windows);
     settled(&mut windows, &mut mode);
-    shown(&mut windows, &mut mode, vec![press(HERE)]);
-    shown(&mut windows, &mut mode, vec![moved(THERE)]);
+    // The pin is where the last move left the pointer: THERE.
+    shown(&mut windows, &mut mode, vec![press(THERE)]);
+    shown(&mut windows, &mut mode, vec![moved(HERE)]);
     assert_eq!(settled_slots(&mut windows, &mut mode, 1), ["tools"], "a held button freezes the pin");
-    shown(&mut windows, &mut mode, vec![release(THERE)]);
+    shown(&mut windows, &mut mode, vec![release(HERE)]);
     assert!(settled(&mut windows, &mut mode).slots.is_empty(), "the pin ends once the button is up and the pointer has moved");
 
     reveal_start(&windows);
