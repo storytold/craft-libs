@@ -310,7 +310,9 @@ fn a_sheet_of_pages_places_each_page_inside_the_paper() {
     fixture.room(Vec2::new(1400.0, 1000.0));
     fixture.settle();
     assert!(fixture.by_label("Image box").is_none(), "a sheet of pages has no image box to drag");
-    let room = fixture.by_label("Print preview image").expect("the preview is in the access tree").rect;
+    let well = fixture.by_label("Print preview image").expect("the preview is in the access tree").rect;
+    // The paper stands inset in the well by 4% of its width.
+    let room = well.shrink(well.width() * 0.04);
     let scale = (room.width() / LETTER.x).min(room.height() / LETTER.y);
     let origin = room.center() - LETTER * scale / 2.0;
     let screen = |at: Pos2| origin + at.to_vec2() * scale;
@@ -516,4 +518,31 @@ fn a_document_print_dialog_has_compact_inline_rows() {
     let all = texts.iter().find(|run| run.text == "All pages").expect("the first option is painted");
     let current = texts.iter().find(|run| run.text == "Current page").expect("the second option is painted");
     assert!((all.rect.center().y - current.rect.center().y).abs() < 2.0, "the options stand on one line: {:?} {:?}", all.rect, current.rect);
+}
+
+/// The paper of the preview stands inset in its well, as production's does: the well shows round the sheet on every side.
+#[trial]
+fn the_paper_stands_inset_in_the_preview_well() {
+    let mut settings = Settings::default();
+    let mut fields = DialogFields::default();
+    let printers = vec![Printer::new("Office")];
+    let mut fixture = Fixture::new(move |ui| {
+        let page = SheetPage::new([pos2(50.0, 100.0), pos2(250.0, 100.0), pos2(250.0, 400.0), pos2(50.0, 400.0)], "1");
+        let sheet = PrintSheet::pages(LETTER, vec![page], "Letter".into());
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.theme(craft_theme::Mode::Dark, craft_theme::Contrast::Standard).settle();
+    let room = fixture.by_label("Print preview image").expect("the preview is in the access tree").rect;
+    let shapes = fixture.frame_shapes();
+    let paper = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::Rect(rect) if rect.fill == Color32::WHITE && rect.rect.intersects(room) => Some(rect.rect),
+            _ => None,
+        })
+        .max_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("a white sheet is painted");
+    assert!(paper.left() > room.left() + 2.0 && room.right() > paper.right() + 2.0, "the well shows beside the sheet: {room:?} {paper:?}");
+    assert!(paper.top() > room.top() + 2.0 && room.bottom() > paper.bottom() + 2.0, "the well shows above and below the sheet: {room:?} {paper:?}");
 }

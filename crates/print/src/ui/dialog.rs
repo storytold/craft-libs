@@ -327,6 +327,9 @@ pub enum PrintFinish {
     Done,
 }
 
+/// The margin round the paper in the preview's well, as a share of the well's width (production's is about 4%).
+const PAPER_INSET: f32 = 0.04;
+
 /// Where the paper stands in the preview's room: the paper's top-left corner and the screen points per paper point.
 #[derive(Clone, Copy)]
 struct Placement {
@@ -436,6 +439,8 @@ impl<'a> PrintPreview<'a> {
         if !(paper.x > 0.0 && paper.y > 0.0) {
             return None;
         }
+        // The paper stands inset in its well, as production's does: a margin of the well's own colour round the sheet.
+        let room = room.shrink(room.width() * PAPER_INSET);
         let scale = (room.width() / paper.x).min(room.height() / paper.y);
         if !(scale.is_finite() && scale > 0.0) {
             return None;
@@ -468,7 +473,8 @@ impl Component for PrintPreview<'_> {
             SheetContent::Message(message) => cx.layout_at(&TextRun::new(cx.env.resolve(message).as_str()).wrap(Wrap::Wrap), width).size().y,
             _ => 0.0,
         };
-        Vec2::new(width, (width * aspect).max(message))
+        let inner = width * (1.0 - 2.0 * PAPER_INSET);
+        Vec2::new(width, (inner * aspect + width * 2.0 * PAPER_INSET).max(message))
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Pos2>> {
