@@ -93,7 +93,7 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   irradiance map that does not exist, a texture or shadow-map span past its array, a value that is
   not finite, a material or texel alpha, a material opacity, metallic, roughness or occlusion
   strength, a shadow darkness or an environment
-  light's key outside 0 to 1, a parallel or spot light direction or an environment light direction
+  light's key outside 0 to 1, a negative shadow diffusion, a parallel or spot light direction or an environment light direction
   (other than zero) whose length differs from 1 by more than 0.001, a spot light whose inner cone
   cosine is below its outer one, a light kind
   or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns
@@ -200,6 +200,9 @@ Changes from those files:
   triangle in the raster and panicked on it in the shadow pass.
 - The environment light's map is built by `try_env_shadow_map`, which returns an error for inputs
   that are out of range.
+- A negative shadow diffusion on a light or the environment light is an error. EffectCraft
+  subtracted it from the penumbra, so a shadow edge could be narrower than its minimum width or
+  fall back to a reach of 2 texels.
 - `render`, `setup`, `shadow_raster` and `shadow_maps` are split into smaller functions with the
   same order of operations.
 - The camera basis of the shadow maps is computed in this crate from the same operations as
