@@ -690,9 +690,8 @@ pub fn log_lum(c: [f32; 3]) -> f32 {
 }
 
 /// Spatial planes of one (pre-exposure) image, each tagged with the radius it was computed at.
-/// `key` identifies the image; see [`crate::StageCache`].
 #[derive(Clone, Default)]
-pub(crate) struct Planes {
+pub struct Planes {
     pub key: u64,
     /// The image's key without its noise reduction (`Plan::pre_nr_key`).
     pub pre_nr: u64,
