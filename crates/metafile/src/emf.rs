@@ -77,7 +77,7 @@ pub(crate) fn parse(input: Bytes) -> Result<(Canvas, Option<Frame>), Error> {
 }
 
 /// Device pixels per millimetre on each axis, from `szlDevice` (72) and the device's size:
-/// `szlMicrometers` (100) when the header has that extension (a header of 108 bytes or more) and
+/// `szlMicrometers` (100) when the fixed header includes that extension and
 /// it is set, which is a thousand times finer, else `szlMillimeters` (80).
 fn device_px_per_mm(input: Bytes) -> Option<(f64, f64)> {
     let facts = crate::units::emf_device(input)?;

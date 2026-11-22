@@ -8,8 +8,9 @@ use crate::{Kind, MAX_STACK, bytes::Bytes, sniff, wmf::PLACEABLE_KEY};
 pub enum UnitFacts {
     /// A placeable WMF with positive frame extents.
     WmfPlaceableFrame,
-    /// Without a placeable frame, a WMF whose drawing records predominantly use a metric map
-    /// mode. Ties use the last map mode before the scan stops.
+    /// Without a placeable frame, a WMF whose drawing records predominantly use legacy map
+    /// modes 2–6 (LOMETRIC, HIMETRIC, LOENGLISH, HIENGLISH, TWIPS). This compatibility group
+    /// does not imply a particular physical unit. Ties use the last map mode seen.
     WmfMetricMap,
     /// Without a placeable frame, a WMF whose drawing records use logical units.
     WmfLogical {
@@ -66,10 +67,24 @@ pub fn unit_facts(bytes: &[u8]) -> Option<UnitFacts> {
     })
 }
 
+// MS-EMF §2.3.4.2: optional description and pixel-format data follow
+// the fixed fields. The total record size by itself cannot identify an extension.
+fn emf_fixed_header_size(b: Bytes<'_>) -> Option<usize> {
+    let mut end = usize::try_from(b.u32(4)?).ok()?.min(b.0.len());
+    if b.u32(60)? != 0 {
+        end = end.min(usize::try_from(b.u32(64)?).ok()?);
+    }
+    // Only inspect the extension-1 descriptor if it fits before any description.
+    if end >= 100 && b.u32(88)? != 0 {
+        end = end.min(usize::try_from(b.u32(92)?).ok()?);
+    }
+    Some(end)
+}
+
 pub(crate) fn emf_device(b: Bytes<'_>) -> Option<EmfDevice> {
     let positive = |v: i32| u32::try_from(v).ok().filter(|&v| v > 0);
     let pixels = (positive(b.i32(72)?)?, positive(b.i32(76)?)?);
-    let physical_size = if b.u32(4)? >= 108
+    let physical_size = if emf_fixed_header_size(b)? >= 108
         && let (Some(w), Some(h)) = (b.u32(100), b.u32(104))
         && w > 0
         && h > 0
@@ -227,5 +242,27 @@ mod tests {
         set(&mut bytes, 76, -1);
         assert_eq!(unit_facts(&bytes), Some(UnitFacts::Emf { has_frame: false, device: None }));
         assert_eq!(unit_facts(b"not a metafile"), None);
+    }
+    #[test]
+    fn emf_variable_payloads_do_not_supply_micrometres() {
+        let mut bytes = vec![0; 148];
+        let set = |buf: &mut [u8], i: usize, value: u32| buf[i..i + 4].copy_from_slice(&value.to_le_bytes());
+        for (at, value) in [(0, 1), (4, 112), (40, 0x464d_4520), (60, 11), (64, 88), (72, 800), (76, 600), (80, 200), (84, 150)] {
+            set(&mut bytes, at, value);
+        }
+        for (dst, src) in bytes[88..110].chunks_exact_mut(2).zip("app\0title\0\0".encode_utf16()) {
+            dst.copy_from_slice(&src.to_le_bytes());
+        }
+        let mm = Some(EmfDevice { pixels: (800, 600), physical_size: EmfPhysicalSize::Millimetres(200, 150) });
+        assert_eq!(emf_device(Bytes(&bytes)), mm);
+
+        // The same numeric bytes are part of a pixel descriptor in extension 1,
+        // but are fixed calibration fields when extension 2 precedes that descriptor.
+        for (at, value) in [(4, 148), (60, 0), (64, 0), (88, 40), (92, 100), (100, 201_000), (104, 151_000)] {
+            set(&mut bytes, at, value);
+        }
+        assert_eq!(emf_device(Bytes(&bytes)), mm);
+        set(&mut bytes, 92, 108);
+        assert_eq!(emf_device(Bytes(&bytes)), Some(EmfDevice { pixels: (800, 600), physical_size: EmfPhysicalSize::Micrometres(201_000, 151_000) }));
     }
 }
