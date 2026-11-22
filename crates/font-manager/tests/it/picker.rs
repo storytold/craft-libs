@@ -475,3 +475,14 @@ fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled
         "a disabled picker paints its warning icon in text.disabled {text_disabled:?}, not {tints:?}"
     );
 }
+
+#[trial]
+fn a_click_on_a_rows_sample_picks_its_family() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR]), vec![]);
+    open(&mut fx);
+    let inter = fx.by_label("Inter").expect("the Inter row");
+    // The middle of the row is its sample.
+    fx.click(&inter);
+    fx.settle();
+    assert_eq!(seen.borrow().picks, [("Inter".to_owned(), None)], "the click picks the row");
+}
