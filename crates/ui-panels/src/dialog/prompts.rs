@@ -11,7 +11,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
-use craft_behavior::Mixed;
+use craft_behavior::{IconId, Mixed};
 use craft_i18n::{Count, Format};
 use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
@@ -188,6 +188,8 @@ pub struct StandardPrompt {
     #[prop(into)]
     message: Option<Label>,
     paragraphs: Vec<Label>,
+    note: Option<Label>,
+    icon: Option<IconId>,
     buttons: Vec<(PromptChoice, Label)>,
     details: Option<(Label, Label)>,
     tone: Option<(Tone, Label)>,
@@ -225,6 +227,8 @@ impl StandardPrompt {
             title: None,
             message: None,
             paragraphs: Vec::new(),
+            note: None,
+            icon: None,
             buttons: Vec::new(),
             details: None,
             tone: None,
@@ -306,6 +310,20 @@ impl StandardPrompt {
     #[must_use]
     pub fn paragraph(mut self, paragraph: impl Into<Label>) -> Self {
         self.paragraphs.push(paragraph.into());
+        self
+    }
+
+    /// A muted note after the paragraphs: secondary text.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<Label>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
+
+    /// An icon of the catalog beside the message, in the accent tone.
+    #[must_use]
+    pub fn icon(mut self, icon: IconId) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -499,6 +517,12 @@ impl StandardPrompt {
         }
         if let Some((tone, text)) = &self.tone {
             prompt = prompt.tone(*tone, text.clone());
+        }
+        if let Some(note) = &self.note {
+            prompt = prompt.note(note.clone());
+        }
+        if let Some(icon) = &self.icon {
+            prompt = prompt.icon(icon.clone());
         }
         if !self.lines.is_empty() {
             prompt = prompt.lines(self.lines.iter().cloned());

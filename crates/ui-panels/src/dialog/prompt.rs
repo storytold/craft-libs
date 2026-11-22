@@ -4,14 +4,15 @@ use super::frame::DialogOutput;
 use super::modal::Dialog;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
-use crate::display::Text;
-use crate::layout_components::Stack;
+use crate::display::{Icon, Shade, Text};
+use crate::layout_components::{Row, Stack};
+use crate::primitives::IconSpec;
 use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton, Section};
-use craft_behavior::Mixed;
+use craft_behavior::{IconId, Mixed};
 use craft_keymap::{Chord, mnemonic};
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
@@ -151,6 +152,8 @@ type Below<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 pub(super) struct Extras<'a> {
     tone: Option<(Tone, Label)>,
     paragraphs: Vec<Label>,
+    /// A muted note after the paragraphs.
+    note: Option<Label>,
     lines: Vec<Label>,
     details: Option<(Label, Label)>,
     below: Option<Below<'a>>,
@@ -158,16 +161,19 @@ pub(super) struct Extras<'a> {
 
 impl Extras<'_> {
     fn is_empty(&self) -> bool {
-        self.tone.is_none() && self.paragraphs.is_empty() && self.lines.is_empty() && self.details.is_none() && self.below.is_none()
+        self.tone.is_none() && self.paragraphs.is_empty() && self.note.is_none() && self.lines.is_empty() && self.details.is_none() && self.below.is_none()
     }
 
     fn show(&mut self, ui: &mut Ui) {
-        let Extras { tone, paragraphs, lines, details, below } = self;
+        let Extras { tone, paragraphs, note, lines, details, below } = self;
         if let Some((tone, text)) = tone {
             Notice::new(*tone, text.clone()).layout(NoticeLayout::Inline).show(ui);
         }
         for paragraph in paragraphs.iter() {
             Text::new(paragraph.clone()).show(ui);
+        }
+        if let Some(note) = note {
+            Text::new(note.clone()).shade(Shade::Muted).show(ui);
         }
         for line in lines.iter() {
             Text::new(line.clone()).show(ui);
@@ -200,6 +206,8 @@ pub struct Prompt<'a> {
     message: Label,
     answers: Vec<FooterButton>,
     extras: Extras<'a>,
+    /// The icon beside the message, in the accent tone.
+    icon: Option<IconId>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
@@ -218,6 +226,7 @@ impl<'a> Prompt<'a> {
             message: message.into(),
             answers: Vec::new(),
             extras: Extras::default(),
+            icon: None,
             open: None,
             escape: None,
             alert: false,
@@ -242,6 +251,20 @@ impl<'a> Prompt<'a> {
     #[must_use]
     pub fn tone(mut self, tone: Tone, text: impl Into<Label>) -> Self {
         self.extras.tone = Some((tone, text.into()));
+        self
+    }
+
+    /// An icon of the catalog beside the message, in the accent tone.
+    #[must_use]
+    pub fn icon(mut self, icon: IconId) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// A muted note after the paragraphs: secondary text.
+    #[must_use]
+    pub fn note(mut self, text: impl Into<Label>) -> Self {
+        self.extras.note = Some(text.into());
         self
     }
 
@@ -275,7 +298,7 @@ impl<'a> Prompt<'a> {
 
     /// Shows the prompt.
     pub fn show(self, ui: &mut Ui) -> PromptOutput {
-        let Prompt { title, message, answers, extras, open, escape, alert } = self;
+        let Prompt { title, message, answers, extras, icon, open, escape, alert } = self;
         let (escape_at, enter_at) = (escape_answer(&answers, escape), default_answer(&answers));
         // A blocked default answer leaves focus off the buttons: landing on the first other one would let Enter answer
         // with it (Discard under a blocked Recover).
@@ -290,7 +313,17 @@ impl<'a> Prompt<'a> {
         let mut extras = extras;
         let shown = dialog.show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
-                Text::new(message.clone()).show(ui);
+                match &icon {
+                    Some(icon) => {
+                        Row::new().show(ui, |ui, _| {
+                            Icon::new(IconSpec::svg(icon.clone())).tone(Tone::Accent).show(ui);
+                            Text::new(message.clone()).show(ui);
+                        });
+                    }
+                    None => {
+                        Text::new(message.clone()).show(ui);
+                    }
+                }
                 if !extras.is_empty() {
                     extras.show(ui);
                 }

@@ -391,3 +391,23 @@ fn an_undo_a_dialogs_field_leaves_runs_no_command_under_the_dialog() {
     assert_eq!(undo_with_nothing_to_undo(false), [EditCommands::Undo.id()], "in the window, the field's leftover Undo is the app's");
     assert!(undo_with_nothing_to_undo(true).is_empty(), "under the dialog it reaches no command");
 }
+
+/// A prompt can carry an icon beside its message and a muted note under it: the message starts after the icon, the
+/// note under it at the content's start.
+#[trial]
+fn a_prompt_shows_an_icon_beside_its_message_and_a_note_under_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let _ = StandardPrompt::custom("Open this link?")
+            .icon(craft_behavior::IconId::new("info"))
+            .note("Links can lead to unsafe sites.")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Open")
+            .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel")
+            .show(ui);
+    });
+    fixture.settle();
+    let at = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect).unwrap_or(Rect::NOTHING);
+    let (message, note) = (at("Open this link?"), at("Links can lead to unsafe sites."));
+    assert!(message.is_positive() && note.is_positive(), "both texts are painted: {message:?} {note:?}");
+    assert!(message.left() > note.left() + 8.0, "the message starts after the icon: {message:?} vs {note:?}");
+    assert!(note.top() > message.bottom() - 1.0, "the note is under the message");
+}
