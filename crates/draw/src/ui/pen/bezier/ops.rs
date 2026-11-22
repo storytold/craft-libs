@@ -137,9 +137,9 @@ impl PathEdit {
     ///   `by`, then the subpath reflowed.
     /// - `InsertAnchor`: [`EditSubpath::insert_at`], the new knot with its handles moved by `by`; no
     ///   reflow and no smoothing, so a straight segment gets a corner knot.
-    /// - `PullAnchor`: [`EditSubpath::insert_at`], then the new knot's out handle at `out` and its in
-    ///   handle at `in_ctrl` (a corner), or mirrored through the anchor (smooth). Nothing changes when
-    ///   a handle is not finite.
+    /// - `PullAnchor`: [`EditSubpath::insert_at`], then the new anchor moved by `by`, its out handle at
+    ///   `out` and its in handle at `in_ctrl` (a corner), or mirrored through the moved anchor (smooth).
+    ///   Nothing changes when the offset, moved anchor or a resulting handle is not finite.
     /// - `ToggleCurvature`: a smooth knot becomes a corner with retracted handles, a corner
     ///   becomes smooth, then the subpath reflows.
     /// - `DuplicateSubpath`: a copy of the subpath goes last and moves, with its handles, by `by`;
@@ -206,16 +206,23 @@ impl PathEdit {
                 k.in_ctrl += *by;
                 k.out_ctrl += *by;
             }
-            PathEdit::PullAnchor { segment, t, out, in_ctrl, .. } => {
+            PathEdit::PullAnchor { segment, t, by, out, in_ctrl, .. } => {
                 let finite = |p: &Point| p.x.is_finite() && p.y.is_finite();
-                if !finite(out) || !in_ctrl.as_ref().is_none_or(finite) {
+                if !by.x.is_finite() || !by.y.is_finite() || !finite(out) || !in_ctrl.as_ref().is_none_or(finite) {
                     return false;
                 }
                 let Some(sp) = path.subpaths.get_mut(segment.subpath) else { return false };
                 let Some(at) = sp.insert_at(segment.knot, *t) else { return false };
                 let k = &mut sp.knots[at];
+                let anchor = k.anchor + *by;
+                let incoming = in_ctrl.unwrap_or(anchor - (*out - anchor));
+                if !finite(&anchor) || !finite(&incoming) {
+                    *path = before;
+                    return false;
+                }
+                k.anchor = anchor;
                 k.out_ctrl = *out;
-                k.in_ctrl = in_ctrl.unwrap_or(k.anchor - (*out - k.anchor));
+                k.in_ctrl = incoming;
                 k.smooth = in_ctrl.is_none();
             }
             PathEdit::Convert { knot, out, .. } => {

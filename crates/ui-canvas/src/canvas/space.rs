@@ -37,6 +37,7 @@ pub struct CanvasSpace {
     canvas: Option<egui::Id>,
     pasteboard: PasteboardColor,
     precise: bool,
+    space_held: bool,
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
@@ -60,6 +61,7 @@ impl CanvasSpace {
             canvas: None,
             pasteboard: PasteboardColor::Default,
             precise: false,
+            space_held: false,
             picture: None,
             zoom_anchor: None,
         }
@@ -105,6 +107,21 @@ impl CanvasSpace {
     /// The one source for the canvas's tool (`ToolContext::precise`) and its controls.
     pub fn precise(&self) -> bool {
         self.precise
+    }
+
+    /// This space with Space held or released for this pass. A `Canvas` supplies the same real and injected key
+    /// state its tool reads; a space built with [`new`](Self::new) starts with Space released.
+    #[must_use]
+    pub fn with_space_held(mut self, held: bool) -> Self {
+        self.space_held = held;
+        self
+    }
+
+    /// Whether Space is held this pass, including an injected held key. A canvas control that owns a drag can
+    /// read it without turning a key press into a repeat or changing who owns the pointer. This does not claim
+    /// the key or start a pan; the canvas's tool host still handles momentary tools.
+    pub fn space_held(&self) -> bool {
+        self.space_held
     }
 
     /// This space with the keys the canvas left to its body in the pass.

@@ -684,7 +684,9 @@ impl<'a> Canvas<'a> {
         // A press that stopped an autoscroll is the autoscroll's until its release.
         let press = if self.settled.is_some_and(|settled| settled.swallowing) { PressState::IDLE } else { self.background_press(cx).0 };
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
-        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
+        let space = self
+            .space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock)
+            .map(|space| space.with_space_held(tool_host::space_held(&cx.response.ctx)));
         ToolPass {
             id: cx.response.id,
             rect: cx.response.rect,

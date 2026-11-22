@@ -410,6 +410,13 @@ fn keys_down(ctx: &Context, holds: &[Key]) -> Vec<Key> {
     down
 }
 
+/// Space for canvas controls, sampled from the same real and injected held keys as `ToolContext::held`.
+pub(super) fn space_held(ctx: &Context) -> bool {
+    let viewport = WindowHost::of(ctx).current();
+    let holds = WindowHost::of(ctx).injected_holds(viewport);
+    keys_down(ctx, &holds).contains(&Key::Space)
+}
+
 /// The tool input a canvas publishes to its body.
 #[derive(Clone, PartialEq, crate::contract::MemoProps)]
 #[memo_props(every_pass = "a context the canvas rebuilds each pass")]
