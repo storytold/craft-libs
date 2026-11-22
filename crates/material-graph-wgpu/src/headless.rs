@@ -12,6 +12,7 @@ impl Headless {
             .map_err(|error| format!("no GPU adapter: {error}"))?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).map_err(|error| format!("no GPU device: {error}"))?;
+        eprintln!("Material graph test adapter: {:?}", adapter.get_info());
         Ok(Self { device, queue })
     }
 
