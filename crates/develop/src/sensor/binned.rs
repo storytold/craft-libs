@@ -16,7 +16,7 @@
 //! speckle once reconstructed. [`RawImage::develop_binned`] instead gives such a channel the block's
 //! maximum sample of the colour, so that plain value thresholds see it as clipped.
 
-use super::{Normalized, RawData, RawDevelopExt, RawImage, Rect, Result, Rgb32f, cfa_valid};
+use super::{Normalized, RawData, RawDevelopExt, RawImage, Rect, Result, Rgb32f, cfa_valid, deferred_linearization_table};
 
 // Cap the precomputed colour bytes, not image size or the supported block size.
 const PHASE_COLOUR_BYTES: usize = 4 * 1024 * 1024;
@@ -77,8 +77,13 @@ fn bin_with_phase_budget(raw: &RawImage, k: usize, clip: f32, keep_max: bool, ph
     if bw == 0 || bh == 0 {
         return Ok(None);
     }
-    // Opcode lists 1/2 need the normalised copy; plain files are normalised row by row.
-    let norm: Option<Normalized> = if raw.opcodes.list1.is_empty() && raw.opcodes.list2.is_empty() { None } else { Some(raw.normalized()?) };
+    // Opcode lists and a deferred table need the full normalization path. Plain files are
+    // normalized row by row so a preview does not allocate another full-resolution buffer.
+    let norm: Option<Normalized> = if raw.opcodes.list1.is_empty() && raw.opcodes.list2.is_empty() && deferred_linearization_table(raw).is_none() {
+        None
+    } else {
+        Some(raw.normalized()?)
+    };
     let cfa = cfa.shifted(a.x, a.y);
     let range = raw.white_at(0) - raw.black.mean();
     let scale = if range > 0.0 { 1.0 / range } else { 1.0 };
@@ -235,6 +240,78 @@ mod tests {
             level_sources: Default::default(),
             notices: Default::default(),
         }
+    }
+
+    /// Omit the writer's WhiteLevel entry from this generated little-endian TIFF without moving
+    /// offsets or payloads. This forces the actual decoder to infer white from the table maximum.
+    fn omit_white_level(dng: &mut [u8]) {
+        assert_eq!(&dng[..4], b"II*\0");
+        let ifd = u32::from_le_bytes(dng[4..8].try_into().unwrap()) as usize;
+        let count = u16::from_le_bytes(dng[ifd..ifd + 2].try_into().unwrap());
+        let entries = ifd + 2;
+        let end = entries + 12 * usize::from(count);
+        let white = (entries..end)
+            .step_by(12)
+            .find(|&i| u16::from_le_bytes(dng[i..i + 2].try_into().unwrap()) == 50_717)
+            .expect("the generated DNG has a WhiteLevel entry");
+        dng.copy_within(white + 12..end + 4, white);
+        dng[ifd..ifd + 2].copy_from_slice(&(count - 1).to_le_bytes());
+    }
+
+    #[test]
+    fn deferred_linearization_runs_after_opcode_list_one_before_normalizing() {
+        use craft_raw::opcodes::Area;
+        use craft_raw::{DngCompression, DngWriteOptions};
+
+        let mosaic = Normalized { width: 4, height: 4, cpp: 1, data: vec![1.0; 16], cfa: Some(bayer("RGGB")) };
+        let mut stored = raw_from(&mosaic, 0.0, 1.0);
+        stored.white = vec![65535.0]; // deliberately different from the table maximum
+        stored.linearization_table = Some(vec![0, 20, 100, 200]);
+        stored.opcodes.list1.push(Opcode::MapTable {
+            area: Area { top: 0, left: 0, bottom: 4, right: 4, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 },
+            table: vec![0, 2, 2, 3],
+        });
+        let options = DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() };
+        let mut dng = craft_raw::write_dng(&stored, &options).unwrap();
+        omit_white_level(&mut dng);
+        let raw = craft_raw::decode(&dng).unwrap();
+        assert_eq!(raw.data, RawData::U16(vec![1; 16]));
+        assert!(!raw.linearized);
+        assert_eq!(raw.linearization_table.as_deref(), Some([0, 20, 100, 200].as_slice()));
+        assert_eq!(raw.white, vec![200.0]);
+
+        // Stored 1 → OpcodeList1 code 2 → table value 100 → 100/200 = 0.5.
+        // No LUT gives 0.01; applying it before List1 instead gives 3/200 = 0.015.
+        let normalized = raw.normalized().unwrap();
+        assert_eq!(normalized.data, vec![0.5; 16]);
+        let (preview, clipped) = raw.develop_binned_masked(2, 0.25).unwrap().unwrap();
+        assert_eq!(preview.data, vec![[0.5; 3]; 4]);
+        assert_eq!(clipped, vec![0b111; 4]);
+
+        let mut no_table = raw.clone();
+        no_table.linearization_table = None;
+        assert!(no_table.normalized().unwrap().data.iter().all(|&v| (v - 0.01).abs() < 1e-6));
+
+        // A stale table on a float input must not turn linear samples into integer codes.
+        let mut floats = raw.clone();
+        floats.opcodes.list1.clear();
+        floats.data = RawData::F32(vec![50.0; 16]);
+        assert_eq!(floats.normalized().unwrap().data, vec![0.25; 16]);
+
+        // Public callers can also construct a pending integer table without List1.
+        let mut pending = raw;
+        pending.opcodes.list1.clear();
+        let (preview, _) = pending.develop_binned_masked(2, 0.25).unwrap().unwrap();
+        assert!(preview.data.iter().flatten().all(|&v| (v - 0.1).abs() < 1e-6));
+
+        // Without List1, decode already applied the table. Develop must not apply it again.
+        stored.opcodes.list1.clear();
+        let mut dng = craft_raw::write_dng(&stored, &options).unwrap();
+        omit_white_level(&mut dng);
+        let decoded = craft_raw::decode(&dng).unwrap();
+        assert!(decoded.linearized);
+        assert_eq!(decoded.data, RawData::U16(vec![20; 16]));
+        assert!(decoded.normalized().unwrap().data.iter().all(|&v| (v - 0.1).abs() < 1e-6));
     }
 
     #[test]
