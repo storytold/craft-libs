@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 
-use crate::Rgba8;
+use super::Rgba8;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Histogram {

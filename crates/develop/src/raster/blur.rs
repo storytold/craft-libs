@@ -1,7 +1,7 @@
 //! Gaussian-like blur by three successive box filters (running sums, O(1) per pixel per pass).
 
-use crate::resample::Pixel;
-use crate::{Image, par_rows};
+use super::resample::Pixel;
+use super::{Image, par_rows};
 
 /// The largest blur sigma (pixels) the box radii are made for. A box wider than any image (the
 /// encoders' limit is 65535 px) blurs to the same flat result, and a larger sigma made the box
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(radii_for(f32::NAN, 1400, 900), None);
         assert_eq!(radii_for(0.2, 1400, 900), None);
         assert_eq!(radii_for(5.0, 0, 900), None);
-        let p = crate::Plane { width: 4, height: 3, data: (0..12).map(|i| i as f32).collect() };
+        let p = super::Plane { width: 4, height: 3, data: (0..12).map(|i| i as f32).collect() };
         let t = std::time::Instant::now();
         for sigma in [1e9, f32::INFINITY, f32::NAN] {
             let b = gaussian(&p, sigma);

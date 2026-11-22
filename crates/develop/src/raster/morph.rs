@@ -9,7 +9,7 @@
 //! window to the image. NaNs are skipped like [`f32::min`] does: a window yields NaN only when every
 //! value in it is NaN.
 
-use crate::Plane;
+use super::Plane;
 
 /// Square min filter (erosion) of radius `r`: each output pixel is the minimum over the
 /// `(2r+1)²` window around it, clipped to the image. `r == 0` returns a copy.

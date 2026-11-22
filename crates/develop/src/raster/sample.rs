@@ -11,8 +11,8 @@
 
 use std::sync::OnceLock;
 
-use crate::Rgb32f;
-use crate::resample::Filter;
+use super::Rgb32f;
+use super::resample::Filter;
 
 /// Phases of a pixel the kernel's taps are tabulated for.
 const PHASES: usize = 1024;

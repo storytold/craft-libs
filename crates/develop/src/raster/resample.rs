@@ -1,6 +1,6 @@
 //! Separable resampling with precomputed filter weights.
 
-use crate::{Image, par_rows};
+use super::{Image, par_rows};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Filter {
