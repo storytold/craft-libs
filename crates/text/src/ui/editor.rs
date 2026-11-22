@@ -620,7 +620,11 @@ impl Component for TextEditor<'_> {
         if let Some(text) = copied {
             cx.clipboard().put(&[ClipItem::Text(text.into())]);
         }
-        cx.cursor(if vertical { CursorIcon::VerticalText } else { CursorIcon::Text }, CursorPriority::Hover);
+        // The I-beam is the editor's over its text and while its own press is held; elsewhere the canvas's tool or the
+        // rest of the UI sets the pointer.
+        if !matches!(press.phase, PressPhase::Idle) {
+            cx.cursor(if vertical { CursorIcon::VerticalText } else { CursorIcon::Text }, CursorPriority::Hover);
+        }
         if done.changed {
             cx.propose(selection);
         } else if selection != before {
