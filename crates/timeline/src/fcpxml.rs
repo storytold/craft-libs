@@ -146,6 +146,7 @@ struct Imp<'a, 'c, 'r> {
     media_nodes: HashMap<String, Node<'a>>,
     media_items: HashMap<String, ItemId>,
     media_active: HashSet<String>,
+    pending_audio: HashMap<ItemId, Vec<PendingAudio>>,
     depth_hits: usize,
     // Depths at which a cached resource was truncated. A retry may improve neither limit
     // at the expense of the other, and reuses the same item so earlier references stay valid.
@@ -173,8 +174,18 @@ struct ClipPlacement {
     primary: bool,
 }
 
+/// An audio reference whose nested sequence did not yet expose sound.
+struct PendingAudio {
+    parent: ItemId,
+    child: ItemId,
+    audio: TrackItem,
+    preferred: usize,
+    video: Option<ClipId>,
+}
+
 /// Placement context of a storyline element.
 struct Ctx {
+    sequence: ItemId,
     seq_rate: FrameRate,
     frame: (u32, u32),
 }
@@ -209,6 +220,7 @@ pub fn import_with_report_limit(text: &str, opts: &ImportOptions, report: &mut R
         media_nodes: HashMap::new(),
         media_items: HashMap::new(),
         media_active: HashSet::new(),
+        pending_audio: HashMap::new(),
         depth_hits: 0,
         media_truncated_at: HashMap::new(),
         reimports_left: MAX_REIMPORTS,
@@ -282,6 +294,7 @@ pub fn import_with_report_limit(text: &str, opts: &ImportOptions, report: &mut R
     if imp.b.p.items.is_empty() {
         return Err(Error::Empty);
     }
+    imp.restore_deferred_audio();
     let mut imported = imp.b.finish();
     imported.bound_with_report_limit(report, report_limit);
     Ok(imported)
@@ -343,13 +356,18 @@ impl<'a> Imp<'a, '_, '_> {
     /// not be inserted underneath it, even when the resource names are not directly active.
     fn cache_reaches_active(&mut self, root: ItemId) -> bool {
         let active: HashSet<ItemId> = self.media_active.iter().filter_map(|id| self.media_items.get(id).copied()).collect();
-        if active.is_empty() {
+        self.cache_reaches_any(root, &active)
+    }
+
+    /// Refuse an edge when it could reach its parent, or when the shared work budget is exhausted.
+    fn cache_reaches_any(&mut self, root: ItemId, targets: &HashSet<ItemId>) -> bool {
+        if targets.is_empty() {
             return false;
         }
         let mut seen = HashSet::from([root]);
         let mut pending = vec![root];
         while let Some(id) = pending.pop() {
-            if active.contains(&id) {
+            if targets.contains(&id) {
                 return true;
             }
             let Some(seq) = self.b.p.sequence(id) else { continue };
@@ -358,7 +376,7 @@ impl<'a> Imp<'a, '_, '_> {
                     return true;
                 }
                 self.cache_edges_left -= 1;
-                if active.contains(&item.item) {
+                if targets.contains(&item.item) {
                     return true;
                 }
                 if seen.insert(item.item) {
@@ -367,6 +385,65 @@ impl<'a> Imp<'a, '_, '_> {
             }
         }
         false
+    }
+
+    /// Restore sound only after ordinary imports have had their shallower rebuild opportunities.
+    fn restore_deferred_audio(&mut self) {
+        let mut pending: Vec<_> = std::mem::take(&mut self.pending_audio).into_values().flatten().collect();
+        pending.sort_by_key(|p| p.audio.id.0);
+        while !pending.is_empty() {
+            let mut waiting = Vec::new();
+            let mut progressed = false;
+            for intent in pending {
+                if self.cache_edges_left == 0 {
+                    self.report
+                        .warn_limited(self.report_limit, "FCPXML deferred audio exceeds the cache traversal budget; remaining audio was skipped");
+                    return;
+                }
+                self.cache_edges_left -= 1;
+                if !self.b.p.sequence(intent.child).is_some_and(|s| s.audio_tracks.iter().any(|t| !t.items.is_empty())) {
+                    waiting.push(intent);
+                    continue;
+                }
+                if self.cache_reaches_any(intent.child, &HashSet::from([intent.parent])) {
+                    self.report.warn_limited(
+                        self.report_limit,
+                        "FCPXML deferred audio could form a recursive graph or exceeds the cache traversal budget; audio was skipped",
+                    );
+                    continue;
+                }
+                progressed |= self.place_deferred_audio(intent);
+            }
+            if !progressed {
+                break;
+            }
+            pending = waiting;
+        }
+    }
+
+    /// Move just the owning sequence through the existing placement path; do not clone its tracks.
+    fn place_deferred_audio(&mut self, intent: PendingAudio) -> bool {
+        let Some(stored) = self.b.p.sequence_mut(intent.parent) else { return false };
+        let empty = empty_sequence(stored.settings.clone());
+        let mut seq = std::mem::replace(stored, empty);
+        let audio_id = intent.audio.id;
+        let placed = self.b.place(&mut seq, TrackKind::Audio, intent.preferred, intent.audio);
+        if let Some(track) = placed {
+            if let Some(id) = intent.video
+                && let Some(video) = seq.video_tracks.iter_mut().flat_map(|t| &mut t.items).find(|v| v.id == id)
+            {
+                let link = video.link.unwrap_or_else(|| self.b.link_id());
+                video.link = Some(link);
+                if let Some(audio) = seq.audio_tracks[track].items.iter_mut().find(|a| a.id == audio_id) {
+                    audio.link = Some(link);
+                }
+            }
+        } else {
+            self.report
+                .warn_limited(self.report_limit, format!("FCPXML Audio lane exceeds the {MAX_IMPORTED_TRACKS}-track import limit; clip was skipped"));
+        }
+        self.b.put_sequence(intent.parent, seq);
+        placed.is_some()
     }
 
     /// Nested sequence from a `<media>` resource.
@@ -434,10 +511,12 @@ impl<'a> Imp<'a, '_, '_> {
             settings.sample_rate = sr;
         }
         let id = reuse.unwrap_or_else(|| self.b.reserve_sequence(name, settings.clone(), bin));
+        // A rebuild replaces this parent's clips and their pending audio, not its item identity.
+        self.pending_audio.remove(&id);
         let mut seq = empty_sequence(settings);
         let tc_start = attr_time(s, "tcStart").unwrap_or(Tick::ZERO);
         seq.start_timecode = rate.frame_at(tc_start);
-        let ctx = Ctx { seq_rate: rate, frame: (w, h) };
+        let ctx = Ctx { sequence: id, seq_rate: rate, frame: (w, h) };
         self.b.ensure_tracks(&mut seq, TrackKind::Video, 1);
         self.b.ensure_tracks(&mut seq, TrackKind::Audio, 1);
         if let Some(spine) = child(s, "spine") {
@@ -564,6 +643,7 @@ impl<'a> Imp<'a, '_, '_> {
         let mut placed: Vec<(TrackKind, ClipId)> = Vec::new();
         let name = el.attribute("name").unwrap_or("Clip").to_string();
         // Media and source in.
+        let mut incomplete_audio = false;
         let media: Option<(ItemId, Tick, bool, bool)> = match tag {
             "asset-clip" => el.attribute("ref").and_then(|r| self.asset(r, None)).map(|a| (a.item, a.start, a.has_video, a.has_audio)),
             "video" => {
@@ -596,7 +676,9 @@ impl<'a> Imp<'a, '_, '_> {
             "ref-clip" => el.attribute("ref").and_then(|r| {
                 let item = self.media(r)?;
                 let tc = self.b.p.sequence(item).map(|s| s.settings.frame_rate.tick_of(s.start_timecode)).unwrap_or(Tick::ZERO);
-                Some((item, tc, true, self.b.p.sequence(item).is_some_and(|s| s.audio_tracks.iter().any(|t| !t.items.is_empty()))))
+                let has_audio = self.b.p.sequence(item).is_some_and(|s| s.audio_tracks.iter().any(|t| !t.items.is_empty()));
+                incomplete_audio = !has_audio && (self.media_truncated_at.contains_key(r) || self.pending_audio.contains_key(&item));
+                Some((item, tc, true, has_audio))
             }),
             "gap" => None,
             "title" | "audio" | "sync-clip" | "mc-clip" | "live-drawing" => {
@@ -613,9 +695,11 @@ impl<'a> Imp<'a, '_, '_> {
             let src_enable = el.attribute("srcEnable").unwrap_or("all");
             let want_v = has_v && src_enable != "audio" && lane >= 0;
             let want_a = has_a && src_enable != "video";
+            let defer_audio = incomplete_audio && src_enable != "video";
             let link = if want_v && want_a { Some(self.b.link_id()) } else { None };
             for (kind, want) in [(TrackKind::Video, want_v), (TrackKind::Audio, want_a)] {
-                if !want {
+                let deferred = kind == TrackKind::Audio && defer_audio;
+                if !want && !deferred {
                     continue;
                 }
                 let mut ti = self.b.clip(item, kind, &name, t0, dur, src_in.max(Tick::ZERO));
@@ -643,6 +727,16 @@ impl<'a> Imp<'a, '_, '_> {
                         }
                     }
                 };
+                if deferred {
+                    self.pending_audio.entry(ctx.sequence).or_default().push(PendingAudio {
+                        parent: ctx.sequence,
+                        child: item,
+                        audio: ti,
+                        preferred: pref,
+                        video: vclip,
+                    });
+                    continue;
+                }
                 let id = ti.id;
                 if self.b.place(seq, kind, pref, ti).is_none() {
                     self.report.warn_limited(
