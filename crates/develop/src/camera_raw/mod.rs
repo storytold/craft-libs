@@ -819,6 +819,11 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, d: &Dehaze) {
     });
 }
 
+fn sharpening_detail(detail: f32) -> f32 {
+    let detail = if detail.is_nan() { CameraRaw::default().sharpen_detail } else { detail.clamp(0.0, 100.0) };
+    detail / 100.0
+}
+
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, d: &Detail) {
     // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
     let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
@@ -934,6 +939,18 @@ mod tests {
     /// [`super::per_pixel`] with the default inputs.
     fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
         super::per_pixel(p, &DevelopInputs::default(), w, h, float, points)
+    }
+
+    #[test]
+    fn sharpening_detail_stays_in_range_at_the_shared_entry_point() {
+        for value in [0.0_f32, 25.0, 37.5, 100.0] {
+            assert_eq!(sharpening_detail(value).to_bits(), (value / 100.0).to_bits());
+        }
+        assert_eq!(sharpening_detail(-1.0), 0.0);
+        assert_eq!(sharpening_detail(101.0), 1.0);
+        assert_eq!(sharpening_detail(f32::NAN), sharpening_detail(CameraRaw::default().sharpen_detail));
+        assert_eq!(sharpening_detail(f32::NEG_INFINITY), 0.0);
+        assert_eq!(sharpening_detail(f32::INFINITY), 1.0);
     }
 
     /// #9273: Dehaze clears the haze evenly over a sky, right up to a dark building, instead of

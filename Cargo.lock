@@ -3464,9 +3464,11 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 dependencies = [
+ "image",
  "proptest",
  "serde",
  "thiserror 2.0.21",
+ "tiff",
 ]
 
 [[package]]

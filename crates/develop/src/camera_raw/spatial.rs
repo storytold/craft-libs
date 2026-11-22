@@ -203,7 +203,7 @@ impl Detail {
         });
         let color = (nc > 0.0).then(|| ColorNoise { radii: gauss_radii((nc / 100.0 * 6.0 * ps).max(0.3)), keep: ncd / 100.0 * 0.3 });
         let sharpen = (p.sharpen_amount > 0.0).then(|| {
-            let det = p.sharpen_detail / 100.0;
+            let det = super::sharpening_detail(p.sharpen_detail);
             // Masking: an edge mask from the gradient of a smoothed luminance.
             let mask = (p.sharpen_masking > 0.0).then(|| {
                 let t = p.sharpen_masking / 100.0 * 0.08;
