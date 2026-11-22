@@ -43,10 +43,14 @@ pub(crate) fn column_layout(right_to_left: bool) -> Layout {
     stack_layout(right_to_left)
 }
 
-/// Runs `body` in a child `Ui`. `disabled` disables the child and everything below it. `direction` gives the
-/// child a cloned style carrying that direction and an explicit layout, never the parent's.
-pub(crate) fn scope<R>(ui: &mut Ui, disabled: bool, direction: Option<bool>, body: impl FnOnce(&mut Ui) -> R) -> R {
+/// Runs `body` in a child `Ui`, with the id salt `id_salt` when given. `disabled` disables the child and everything
+/// below it. `direction` gives the child a cloned style carrying that direction and an explicit layout, never the
+/// parent's.
+pub(crate) fn scope<R>(ui: &mut Ui, id_salt: Option<egui::Id>, disabled: bool, direction: Option<bool>, body: impl FnOnce(&mut Ui) -> R) -> R {
     let mut builder = UiBuilder::new();
+    if let Some(salt) = id_salt {
+        builder = builder.id_salt(salt);
+    }
     if let Some(right_to_left) = direction {
         let mut style = (**ui.style()).clone();
         style.right_to_left = right_to_left;

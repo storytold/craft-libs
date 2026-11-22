@@ -471,7 +471,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                     }
                 }
             }
-            CollectionEvent::Activate(key) => picked = Some(key),
+            // A row's sample is part of the row: a click on it picks too.
+            CollectionEvent::Activate(key) | CollectionEvent::Item(key, RowEvent::ThumbClicked { .. }) => picked = Some(key),
             CollectionEvent::Item(key, RowEvent::Trailing { part, .. }) if part == STAR => {
                 if let Some(Slot::Family { row, .. }) = slot_of(&slots, &key) {
                     stars.push((row.family.clone(), !row.starred));
