@@ -509,6 +509,12 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     /// What the dialog is set up with besides the cards.
     #[prop]
     setup: S::Setup,
+    /// The resolution print presets open at, in pixels per inch, over the setup's.
+    #[prop(quantity = "resolution in pixels per inch")]
+    print_resolution: Option<f64>,
+    /// The resolution screen presets open at, in pixels per inch, over the setup's.
+    #[prop(quantity = "resolution in pixels per inch")]
+    screen_resolution: Option<f64>,
 }
 
 impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
@@ -526,6 +532,8 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             answers: Vec::new(),
             opening: None,
             setup: S::Setup::default(),
+            print_resolution: None,
+            screen_resolution: None,
         }
     }
 }
@@ -558,20 +566,6 @@ impl<'a> NewDocumentDialog<'a, DocumentOptions> {
     #[must_use]
     pub fn background_color(mut self, color: Srgba) -> Self {
         self.setup.background = color.to_rgb_array();
-        self
-    }
-
-    /// The resolution print presets open at, in pixels per inch.
-    #[must_use]
-    pub fn print_resolution(mut self, pixels_per_inch: f64) -> Self {
-        self.setup.print_ppi = pixels_per_inch;
-        self
-    }
-
-    /// The resolution screen presets open at, in pixels per inch.
-    #[must_use]
-    pub fn screen_resolution(mut self, pixels_per_inch: f64) -> Self {
-        self.setup.screen_ppi = pixels_per_inch;
         self
     }
 
@@ -612,8 +606,11 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             remember,
             answers,
             opening,
-            setup,
+            mut setup,
+            print_resolution,
+            screen_resolution,
         } = self;
+        S::set_resolutions(&mut setup, print_resolution, screen_resolution);
         let recent_is_bound = recent_bound.is_some();
         let recent: Vec<S> = match recent_bound.as_mut() {
             Some(bind) => read_bind(bind).unwrap_or_default(),
@@ -782,7 +779,12 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
     /// app's name). The settings open at once (the clipboard's size, the default name from the root's words), so
     /// automation lists and sets them before the first pass.
     pub fn new(ctx: &egui::Context, mut options: S, build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static) -> Self {
-        let setup = build(&mut options).setup;
+        let setup = {
+            let built = build(&mut options);
+            let mut setup = built.setup;
+            S::set_resolutions(&mut setup, built.print_resolution, built.screen_resolution);
+            setup
+        };
         options.open(&setup, Env::of_root(ctx).words::<NewDocumentWords>().untitled.as_str());
         HostedNewDocument {
             id: dialog_id("new-document"),

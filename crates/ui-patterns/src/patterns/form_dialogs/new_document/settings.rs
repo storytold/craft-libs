@@ -42,6 +42,11 @@ pub trait DocumentSettings: Clone + PartialEq + Debug + Default + Serialize + De
     fn note_set(&mut self, field: &str, memory: &mut Self::Memory) {
         let _ = (field, memory);
     }
+    /// Sets the resolutions print and screen presets open at in `setup`, in pixels per inch, each the host gave
+    /// ([`NewDocumentDialog::print_resolution`](super::NewDocumentDialog::print_resolution)); nothing by default.
+    fn set_resolutions(setup: &mut Self::Setup, print: Option<f64>, screen: Option<f64>) {
+        let _ = (setup, print, screen);
+    }
     /// Fills what the dialog adds to the settings it opens on: the clipboard's size and the default name `untitled`.
     fn open(&mut self, setup: &Self::Setup, untitled: &str);
     /// The card of a built-in `preset`.
@@ -299,6 +304,11 @@ impl DocumentSettings for DocumentOptions {
 
     fn fitted(self) -> Self {
         DocumentOptions::fitted(self)
+    }
+
+    fn set_resolutions(setup: &mut Self::Setup, print: Option<f64>, screen: Option<f64>) {
+        setup.print_ppi = print.unwrap_or(setup.print_ppi);
+        setup.screen_ppi = screen.unwrap_or(setup.screen_ppi);
     }
 
     fn open(&mut self, setup: &Self::Setup, untitled: &str) {
