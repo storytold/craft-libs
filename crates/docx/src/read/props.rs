@@ -297,7 +297,8 @@ impl PropCtx {
             return None;
         }
         // A named theme must resolve; a missing theme must not turn a failed lookup into auto.
-        if e.attr("w:themeFill").is_some() {
+        // The valid none sentinel instead leaves the plain fill in charge.
+        if e.attr("w:themeFill").is_some_and(|theme| theme != "none") {
             return self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade").map(|color| (Some(color), false));
         }
         // themeFill supersedes fill, so only validate a fallback that is actually used.

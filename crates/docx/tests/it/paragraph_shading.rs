@@ -136,3 +136,26 @@ fn automatic_style_shading_survives_save() {
     assert_eq!(fills(&doc), expected);
     assert_eq!(fills(&reopen(&doc)), expected);
 }
+
+#[test]
+fn review_paragraph_shading_theme_none_uses_its_plain_fill() {
+    // ST_ThemeColor's none is no theme color, rather than an unresolved named theme.
+    let color = Rgb(0xC0, 0x20, 0x30);
+    for with_theme in [false, true] {
+        let body = [
+            paragraph("Shaded", "", "inherit"),
+            paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="C02030" w:themeFill="none"/>"#, "plain color"),
+            paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="auto" w:themeFill="none"/>"#, "plain automatic"),
+            paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="ZZZZZZ" w:themeFill="none"/>"#, "invalid plain fill"),
+            paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="C02030" w:themeFill="accent1"/>"#, "named theme"),
+            paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="C02030" w:themeFill="unknown"/>"#, "invalid named theme"),
+            paragraph("Shaded", r#"<w:shd w:val="clear" w:fill="ZZZZZZ" w:themeFill="accent1"/>"#, "theme precedes fallback"),
+        ]
+        .concat();
+        let doc = craft_docx::read(&package(&body, with_theme)).unwrap();
+        let named = Some(if with_theme { ACCENT } else { YELLOW });
+        let expected = [Some(YELLOW), Some(color), None, Some(YELLOW), named, Some(YELLOW), named];
+        assert_eq!(fills(&doc), expected, "themeFill none uses plain RGB/auto; with_theme={with_theme}");
+        assert_eq!(fills(&reopen(&doc)), expected, "saved plain RGB/auto; with_theme={with_theme}");
+    }
+}

@@ -976,8 +976,8 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
         Some("lr-tb" | "lr" | "tb-lr") => s.rtl = Some(false),
         _ => {}
     }
-    if let Some(bg) = get(a, "fo:background-color") {
-        s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
+    if let Some(bg) = table_background_of(a) {
+        s.para_shading = Some(bg);
     }
 }
 

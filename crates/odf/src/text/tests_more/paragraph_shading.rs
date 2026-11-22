@@ -162,3 +162,47 @@ fn default_and_standard_paragraph_shading_round_trip() {
         assert_eq!(texts(&back), texts(&doc));
     }
 }
+
+#[test]
+fn review_paragraph_shading_invalid_background_keeps_inherited_color() {
+    let yellow = (Some(Rgb(0xf1, 0xcc, 0x45)), false);
+    let blue = (Some(Rgb(0x24, 0x8a, 0xb6)), false);
+    for (default, expected_default) in [("#f1cc45", yellow), ("not-a-color", (None, false))] {
+        let styles = format!(
+            r##"<office:document-styles {NS_T}><office:styles>
+<style:default-style style:family="paragraph"><style:paragraph-properties fo:background-color="{default}"/></style:default-style>
+<style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties fo:background-color="not-a-color"/></style:style>
+<style:style style:name="Base" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties fo:background-color="#f1cc45"/></style:style>
+<style:style style:name="Inherited" style:family="paragraph" style:parent-style-name="Base"/>
+<style:style style:name="Invalid" style:family="paragraph" style:parent-style-name="Base"><style:paragraph-properties fo:background-color="not-a-color"/></style:style>
+<style:style style:name="Clear" style:family="paragraph" style:parent-style-name="Base"><style:paragraph-properties fo:background-color="transparent"/></style:style>
+<style:style style:name="Color" style:family="paragraph" style:parent-style-name="Clear"><style:paragraph-properties fo:background-color="#248ab6"/></style:style>
+<style:style style:name="Retained" style:family="paragraph" style:parent-style-name="Base"><style:paragraph-properties fo:background-color="#248ab6"/><style:paragraph-properties fo:background-color="not-a-color"/><style:paragraph-properties/></style:style>
+</office:styles></office:document-styles>"##
+        );
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:automatic-styles>
+<style:style style:name="AutoInvalid" style:family="paragraph" style:parent-style-name="Base"><style:paragraph-properties fo:background-color="not-a-color"/></style:style>
+</office:automatic-styles><office:body><office:text>
+<text:p text:style-name="Base">valid parent</text:p><text:p text:style-name="Clear">valid transparent</text:p>
+<text:p text:style-name="Color">valid color</text:p><text:p text:style-name="Inherited">absent inherits</text:p>
+<text:p text:style-name="Invalid">invalid common style</text:p><text:p text:style-name="AutoInvalid">invalid automatic style</text:p>
+<text:p text:style-name="Retained">invalid and absent keep an earlier valid value</text:p>
+<text:p text:style-name="Standard">invalid Standard</text:p><text:p>document default</text:p>
+</office:text></office:body></office:document-content>"##
+        );
+        let doc = import(&package(&content, Some(&styles))).unwrap();
+        let got = fills(&doc);
+        let want = [yellow, (None, true), blue, yellow, yellow, yellow, blue, expected_default, expected_default];
+        assert_eq!(&got[..4], &want[..4], "valid transparent, color and absent controls");
+        assert_eq!(got, want, "invalid paragraph backgrounds must not become explicit transparent: {default}");
+        let invalid = &doc.body[4].as_para().unwrap().props;
+        let style = doc.styles.get(invalid.style.as_deref().unwrap()).unwrap();
+        assert!(style.para.shading.is_none() && !style.para.shading_auto, "an invalid value leaves the style inherited");
+        let back = import(&export_model(&doc).unwrap()).unwrap();
+        assert_eq!(fills(&back), want, "saved invalid background recovery: {default}");
+        for (a, b) in doc.body.iter().zip(&back.body) {
+            assert_eq!(a.as_para().unwrap().text, b.as_para().unwrap().text);
+        }
+    }
+}
