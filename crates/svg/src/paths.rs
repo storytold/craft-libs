@@ -1985,6 +1985,102 @@ mod tests {
     }
 
     #[test]
+    fn zero_sized_basic_shapes_are_not_imported() {
+        // Original examples from SVG 1.1 basic-shape zero-size rules, sections 9.2-9.4.
+        // These shapes are not drawable; a line/path with a zero-area bbox is different.
+        let mut retained = Vec::new();
+        for (label, shape) in [
+            ("rect width=0", r#"<rect width="0" height="8"/>"#),
+            ("rect height=0", r#"<rect width="8" height="0"/>"#),
+            ("circle r=0", r#"<circle cx="2" cy="3" r="0"/>"#),
+            ("ellipse rx=0", r#"<ellipse cx="2" cy="3" rx="0" ry="4"/>"#),
+            ("ellipse ry=0", r#"<ellipse cx="2" cy="3" rx="4" ry="0"/>"#),
+            ("default-zero dimensions", r#"<rect/><circle/><ellipse rx="4"/>"#),
+        ] {
+            let got = read(&format!(r#"<svg viewBox="0 0 20 20">{shape}</svg>"#));
+            assert!(got.warnings.is_empty());
+            if !got.shapes.is_empty() {
+                retained.push(label);
+            }
+        }
+
+        // Keep ordinary positive shapes and exact-zero (not epsilon) eligibility.
+        let positive = read(
+            r#"<svg viewBox="0 0 20 20"><rect x="1" y="2" width="4" height="6"/><circle cx="10" cy="10" r="2"/><ellipse cx="10" cy="10" rx="3" ry="2"/></svg>"#,
+        );
+        assert_eq!(positive.shapes.len(), 3);
+        for (i, expected) in
+            [kurbo::Rect::new(1.0, 2.0, 5.0, 8.0), kurbo::Rect::new(8.0, 8.0, 12.0, 12.0), kurbo::Rect::new(7.0, 8.0, 13.0, 12.0)].iter().enumerate()
+        {
+            let actual = bounds(&positive, i);
+            assert!(near(actual.x0, expected.x0) && near(actual.y0, expected.y0));
+            assert!(near(actual.x1, expected.x1) && near(actual.y1, expected.y1));
+        }
+        let near_positive = read(r#"<svg><rect width="0.000001" height="8"/><circle r="0.000001"/><ellipse rx="0.000001" ry="2"/></svg>"#);
+        assert_eq!(near_positive.shapes.len(), 3);
+        for shape in &near_positive.shapes {
+            let bbox = shape.path.bounding_box();
+            assert!(bbox.width() > 0.0 && bbox.height() > 0.0);
+        }
+        let square = read(r#"<svg><rect width="8" height="6" rx="0" ry="2"/></svg>"#);
+        assert_eq!(square.shapes.len(), 1);
+        assert_eq!(square.shapes[0].path.elements().len(), 5);
+        assert!(!square.shapes[0].path.elements().iter().any(|e| matches!(e, PathEl::CurveTo(..))));
+
+        // A vertical/horizontal/point line and a raw path keep their exact geometry.
+        let lines = read(
+            r#"<svg><line x1="2" y1="1" x2="2" y2="9" stroke="black"/><line x1="1" y1="2" x2="9" y2="2" stroke="black"/><line x1="3" y1="4" x2="3" y2="4" stroke="black"/><path d="M5 6L5 10"/></svg>"#,
+        );
+        assert_eq!(lines.shapes.len(), 4);
+        for (shape, (from, to)) in lines.shapes.iter().zip([
+            (Point::new(2.0, 1.0), Point::new(2.0, 9.0)),
+            (Point::new(1.0, 2.0), Point::new(9.0, 2.0)),
+            (Point::new(3.0, 4.0), Point::new(3.0, 4.0)),
+            (Point::new(5.0, 6.0), Point::new(5.0, 10.0)),
+        ]) {
+            assert_eq!(shape.path.elements(), &[PathEl::MoveTo(from), PathEl::LineTo(to)]);
+        }
+
+        // Referenced geometry goes through the same eligibility rule as direct geometry.
+        let uses = read(
+            r##"<svg viewBox="0 0 20 20"><defs><rect id="zero" width="0" height="8"/><rect id="positive" width="3" height="4"/></defs><use href="#zero"/><use href="#positive" x="2" y="3"/></svg>"##,
+        );
+        if uses.shapes.iter().any(|shape| shape.label == r#"<rect id="zero">"#) {
+            retained.push("use zero rect");
+        }
+        let positive_use = uses.shapes.iter().find(|shape| shape.label == r#"<rect id="positive">"#).unwrap();
+        assert_eq!(positive_use.path.bounding_box(), kurbo::Rect::new(2.0, 3.0, 5.0, 7.0));
+
+        // Invalid ordinary attributes still fail even if another dimension is zero.
+        for (shape, message) in [
+            (r#"<rect width="0" height="-1"/>"#, "width/height cannot be negative"),
+            (r#"<rect width="0" height="8" rx="-1"/>"#, "corner radii cannot be negative"),
+            (r#"<rect width="0" height="8" ry="bad"/>"#, "invalid ry"),
+            (r#"<circle r="-1"/>"#, "radius cannot be negative"),
+            (r#"<circle cx="bad" r="0"/>"#, "invalid cx"),
+            (r#"<ellipse rx="0" ry="-1"/>"#, "radii cannot be negative"),
+            (r#"<ellipse cy="bad" rx="0" ry="2"/>"#, "invalid cy"),
+        ] {
+            let error = import::<()>(&format!("<svg>{shape}</svg>"), "zero.svg").unwrap_err();
+            assert!(error.0.contains(message), "{}", error.0);
+        }
+
+        let clipped = read(
+            r##"<svg viewBox="0 0 20 20"><defs><clipPath id="zero"><rect width="0" height="8"/><rect width="8" height="0"/><circle r="0"/><ellipse rx="0" ry="4"/><ellipse rx="4" ry="0"/></clipPath></defs><rect width="8" height="8" clip-path="url(#zero)"/></svg>"##,
+        );
+        assert_eq!(clipped.shapes.len(), 1);
+        assert_eq!(clipped.clips.len(), 1);
+        assert!(clipped.warnings.is_empty());
+        if !clipped.clips[0].pieces.is_empty() {
+            // Record the baseline defect without sending degenerate pieces to boolean clipping.
+            retained.push("clip pieces");
+        } else {
+            assert!(clipped.clipped_path(&clipped.shapes[0]).unwrap().elements().is_empty());
+        }
+        assert!(retained.is_empty(), "zero-sized basic shapes retained: {retained:?}");
+    }
+
+    #[test]
     fn reads_all_common_basic_shapes() {
         let got = read(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
