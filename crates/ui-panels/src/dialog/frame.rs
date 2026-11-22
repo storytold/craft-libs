@@ -7,7 +7,9 @@ use crate::contract::{
     Show as _, ShowContainer as _, WordSetCx as _, WrapWidth,
 };
 use crate::contract::{NoValue, Outcome};
+use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
+use crate::style::Ink;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterBar, FooterButton, HeaderAction, HeaderStrength, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -139,8 +141,11 @@ pub struct FooterHost<'s, 'a> {
 /// Fills the header region: the title, the muted `note` after it when there is one and, for a closable shell, the
 /// close action.
 #[doc(hidden)]
-pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction], note: Option<&Label>) {
+pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction], note: Option<&Label>, icon: Option<&craft_behavior::IconId>) {
     let mut row = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL);
+    if let Some(icon) = icon {
+        row = row.icon(IconSpec::svg(icon.clone()).ink(Ink::Accent));
+    }
     if let Some(note) = note {
         row = row.note(note.clone());
     }
@@ -323,7 +328,7 @@ impl Component for DialogFrame<'_> {
 
 impl Container for DialogFrame<'_> {
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        header(ui, cx, close_action(self.closable), None);
+        header(ui, cx, close_action(self.closable), None, None);
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

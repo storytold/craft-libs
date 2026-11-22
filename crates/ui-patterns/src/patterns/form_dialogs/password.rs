@@ -461,6 +461,7 @@ impl<'a> PasswordDialog<'a> {
             PasswordPurpose::Set => (words.set_title.clone(), None, common.ok.clone()),
         };
         let mut dialog = Dialog::new(title)
+            .title_icon(IconId::new("lock"))
             .buttons([FooterButton::new(ok, DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
             .close_on_enter(true)
             .close_guard(move |_, cx| {
@@ -491,10 +492,7 @@ impl<'a> PasswordDialog<'a> {
             let mut entries = cx.memory::<Entries>().clone();
             Stack::new().show(ui, |ui, _| {
                 if let Some(message) = &message {
-                    Row::new().show(ui, |ui, _| {
-                        Icon::new(IconSpec::svg(IconId::new("lock"))).show(ui);
-                        Text::new(message.clone()).show(ui);
-                    });
+                    Text::new(message.clone()).show(ui);
                 }
                 if let Some(note) = &note {
                     Text::new(note.clone()).shade(Shade::Muted).show(ui);

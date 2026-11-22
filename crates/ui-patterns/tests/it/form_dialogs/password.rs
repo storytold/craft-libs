@@ -116,6 +116,21 @@ fn an_open_prompt_waits_for_a_typed_password_in_a_bare_field() {
     fixture.click(&open).idle(4);
     assert!(answers.borrow().is_empty(), "Open does not answer an empty password: {:?}", answers.borrow());
     let field = fixture.by_label("Password").expect("the password field");
-    let title = fixture.texts().iter().find(|run| run.text == "Password required").map(|run| run.rect.min.x).expect("the title");
+    // The lock stands before the title, so the message (the content's first line) marks where the content starts.
+    let title = fixture.texts().iter().find(|run| run.text.contains("poster.pdf")).map(|run| run.rect.min.x).expect("the message");
     assert!((field.rect.min.x - title).abs() < 6.0, "the field {:?} starts where the dialog's content does ({title})", field.rect);
+}
+
+/// The lock stands by the title, as production's does; the message under it starts at the content's edge.
+#[trial]
+fn the_lock_icon_stands_by_the_title_not_the_message() {
+    let mut fixture = Fixture::new(|ui| {
+        let _ = PasswordDialog::new(PasswordPurpose::open("poster.pdf")).show(ui);
+    });
+    fixture.idle(30);
+    let at = |starts: &str| fixture.texts().iter().find(|run| run.text.starts_with(starts)).map(|run| run.rect).unwrap_or(egui::Rect::NOTHING);
+    let (title, message) = (at("Password required"), at("\u{201c}poster.pdf"));
+    let message = if message.is_positive() { message } else { at("poster.pdf") };
+    assert!(title.is_positive() && message.is_positive(), "both texts are painted: {title:?} {message:?}");
+    assert!(title.left() > message.left() + 8.0, "the title starts after the lock: {title:?} vs the message {message:?}");
 }

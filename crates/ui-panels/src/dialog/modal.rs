@@ -82,6 +82,8 @@ pub struct Dialog<'a> {
     /// A muted note after the title.
     #[prop(into)]
     title_note: Option<Label>,
+    /// An icon of the catalog before the title, in the accent ink.
+    title_icon: Option<craft_behavior::IconId>,
     /// The footer stands in a column at the end edge, beside the whole body.
     side: bool,
     /// While the body reports its fields unchanged ([`Dialog::report_changed`]), a Close button stands in place of the
@@ -125,6 +127,7 @@ impl<'a> Dialog<'a> {
             enter: false,
             closable: true,
             title_note: None,
+            title_icon: None,
             side: false,
             close_unchanged: false,
             closed: None,
@@ -244,6 +247,13 @@ impl<'a> Dialog<'a> {
     #[must_use]
     pub(super) fn alert(mut self) -> Self {
         self.alert = true;
+        self
+    }
+
+    /// An icon of the catalog before the title, in the accent ink (a lock before "Password required").
+    #[must_use]
+    pub fn title_icon(mut self, icon: craft_behavior::IconId) -> Self {
+        self.title_icon = Some(icon);
         self
     }
 
@@ -483,7 +493,7 @@ impl Container for Dialog<'_> {
         if self.holds_outer_gesture() {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable), self.title_note.as_ref());
+        frame::header(ui, cx, frame::close_action(self.closable), self.title_note.as_ref(), self.title_icon.as_ref());
         self.keep_window_draggable(ui);
     }
 
