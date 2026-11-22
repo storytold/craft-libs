@@ -493,6 +493,10 @@ mod tests {
         };
         let mut e = Element::new(1, RATE);
         let mut pair = Element::new(2, RATE);
+        // CRAFT_HOSTILE_DIVISOR=N (pull requests) processes every N-th run of 30 rounds, so every
+        // mix of `i % 2`, `i % 3` and `i % 5` still runs. Every round's data is still drawn, so
+        // the ones processed are the full sweep's.
+        let step = craft_media_testkit::hostile::divisor();
         for i in 0..600 {
             let mut data = good.clone();
             for _ in 0..1 + next() % 6 {
@@ -505,6 +509,9 @@ mod tests {
             if i % 5 == 0 {
                 data = (0..1 + next() % 40).map(|_| next() as u8).collect();
                 data[0] |= 0x80;
+            }
+            if (i / 30) % step != 0 {
+                continue;
             }
             run(&mut e, &data, 1);
             let p = Payload { data: &data, start: 0, end: 8 * data.len(), crc: i % 2 == 0 };

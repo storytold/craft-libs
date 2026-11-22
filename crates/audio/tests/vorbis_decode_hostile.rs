@@ -55,13 +55,19 @@ fn every_truncated_header_is_an_error() {
 fn damaged_headers_never_panic() {
     let p = parts(2);
     let mut seed = 99u32;
-    for which in [0usize, 2] {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) parses every N-th damaged header, from a different
+    // offset for each header. Every header is still drawn, so the ones parsed are the full sweep's.
+    let step = craft_media_testkit::hostile::divisor();
+    for (k, which) in [0usize, 2].into_iter().enumerate() {
         let len = p.headers[which].len();
-        for _ in 0..800 {
+        for round in 0..800 {
             let mut h = p.headers.clone();
             for _ in 0..1 + xorshift(&mut seed) % 3 {
                 let at = xorshift(&mut seed) as usize % len;
                 h[which][at] = xorshift(&mut seed) as u8;
+            }
+            if (round + k) % step != 0 {
+                continue;
             }
             if let Ok(mut d) = Decoder::new(&h[0], &h[1], &h[2]) {
                 // A setup that survives must also survive audio packets.

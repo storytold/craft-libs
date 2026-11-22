@@ -134,14 +134,17 @@ fn track_decoder_uses_streaminfo_layout_and_packet_length() {
 fn hostile_input_is_an_error_not_a_panic() {
     let src = signal(2, 6000, 16, 11);
     let file = encode(&src, 44_100, 16, 1152, 5);
-    for n in 0..file.len().min(3000) {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut, and every N-th flip with the
+    // bit rotating from byte to byte, so the flips still reach every byte.
+    let step = craft_media_testkit::hostile::divisor();
+    for n in (0..file.len().min(3000)).step_by(step) {
         let _ = decode(&file[..n]);
     }
     // A cut file is truncated, not silently shorter.
     assert!(decode(&file[..file.len() - 5]).is_err());
     // Every bit flip in the first frames is caught by a CRC or another check, never a panic.
     for i in 0..file.len().min(2500) {
-        for bit in 0..8 {
+        for bit in (0..8).filter(|bit| (i + bit) % step == 0) {
             let mut c = file.clone();
             c[i] ^= 1 << bit;
             let _ = decode(&c);

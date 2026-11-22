@@ -26,7 +26,11 @@ fn mutated_access_units_never_panic() {
     let mut rand = move |n: usize| ((rng.next() * 0.5 + 0.5) * n as f32) as usize % n.max(1);
     let mut decoded = 0usize;
     let mut errors = 0usize;
-    for (asc, aus) in corpus() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) decodes every N-th run of the 6 mutation kinds, a
+    // different run for each config, so each config still gets every kind. Every access unit is
+    // still drawn, so the ones decoded are the full sweep's.
+    let step = craft_media_testkit::hostile::divisor();
+    for (k, (asc, aus)) in corpus().into_iter().enumerate() {
         let mut dec = Decoder::new(&asc).unwrap();
         for round in 0..3000 {
             let mut au = aus[rand(aus.len())].clone();
@@ -51,6 +55,9 @@ fn mutated_access_units_never_panic() {
                     au.truncate(cut);
                     au.extend_from_slice(&other[rand(other.len())..]);
                 }
+            }
+            if (round / 6 + k) % step != 0 {
+                continue;
             }
             match dec.decode(&au) {
                 Ok(pcm) => {

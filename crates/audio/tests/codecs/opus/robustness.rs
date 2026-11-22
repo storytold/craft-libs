@@ -22,16 +22,25 @@ fn check_finite(out: &[f32]) {
 #[test]
 fn random_garbage_never_panics() {
     let mut rng = Rng(0x1234_5678_9abc_def0);
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) decodes every N-th run of the 32 TOC
+    // configurations, a different run for each decoder, so each decoder still sees every TOC.
+    // Every packet is still drawn, so the ones decoded are the full sweep's packets.
+    let step = craft_media_testkit::hostile::divisor();
+    let mut k = 0;
     for &rate in &[48000u32, 24000, 16000, 12000, 8000] {
         for channels in 1..=2 {
             let mut dec = StreamDecoder::new(rate, channels).unwrap();
             let mut out = Vec::new();
+            k += 1;
             for i in 0..3000 {
                 let len = (rng.next() % 400) as usize;
                 let mut pkt: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
                 if let Some(t) = pkt.first_mut() {
                     // Cycle through every TOC configuration.
                     *t = ((i % 32) as u8) << 3 | (*t & 7);
+                }
+                if (i / 32 + k) % step != 0 {
+                    continue;
                 }
                 out.clear();
                 let _ = dec.decode_interleaved(Some(&pkt), &mut out);
