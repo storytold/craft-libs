@@ -68,6 +68,44 @@ pub trait ClipboardBackend: Send {
     }
 }
 
+/// A boxed backend is the backend it holds, so a host can choose one at run time
+/// (`Clipboard::new(services.clipboard)`).
+impl<B: ClipboardBackend + ?Sized> ClipboardBackend for Box<B> {
+    fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError> {
+        (**self).write(flavors)
+    }
+    fn read(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Flavor>, ClipboardError> {
+        (**self).read(mimes, limit)
+    }
+    fn read_image(&mut self, limit: u64) -> Result<Option<ClipboardImage>, ClipboardError> {
+        (**self).read_image(limit)
+    }
+    fn read_files(&mut self, limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        (**self).read_files(limit)
+    }
+    fn has(&mut self, mimes: &[&str]) -> bool {
+        (**self).has(mimes)
+    }
+    fn read_later(&mut self, mimes: &[&str], limit: u64) -> Result<Option<Box<dyn FnOnce() -> Option<Flavor> + Send>>, ClipboardError> {
+        (**self).read_later(mimes, limit)
+    }
+    fn readable_any_time(&self) -> bool {
+        (**self).readable_any_time()
+    }
+    fn offer(&mut self, flavors: Vec<Flavor>) {
+        (**self).offer(flavors);
+    }
+    fn formats(&mut self) -> Vec<String> {
+        (**self).formats()
+    }
+    fn owns(&mut self) -> Option<bool> {
+        (**self).owns()
+    }
+    fn take_arrived(&mut self) -> bool {
+        (**self).take_arrived()
+    }
+}
+
 /// The desktop's clipboard through arboard and the platform's own offer code: X11 and Wayland,
 /// macOS, Windows. Not on wasm.
 ///

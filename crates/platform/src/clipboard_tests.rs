@@ -48,6 +48,17 @@ fn only_a_clipboard_outside_paste_events_is_readable_any_time() {
     assert!(!Clipboard::new(EventClipboard::new(|| 0, |_| Ok(0))).readable_any_time());
 }
 
+// A host picks its backend at run time and hands it over boxed; the box answers what the backend
+// overrides, not the trait's defaults.
+#[test]
+fn a_boxed_backend_answers_as_the_backend_it_holds() {
+    let event: Box<dyn ClipboardBackend> = Box::new(EventClipboard::new(|| 0, |_| Ok(0)));
+    assert!(!Clipboard::new(event).readable_any_time());
+    let mut memory: Box<dyn ClipboardBackend> = Box::new(MemoryClipboard::default());
+    memory.write(&[Flavor::text("held")]).unwrap();
+    assert_eq!(memory.formats(), vec![TEXT.to_owned()]);
+}
+
 /// A backend that takes longer to drop than the probe's old 250 ms wait, as an X11 handle does
 /// while it hands the copy to the clipboard manager.
 struct SlowToDrop(Arc<std::sync::atomic::AtomicBool>);
