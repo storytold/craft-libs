@@ -243,7 +243,9 @@ impl Strip<'_> {
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
         // scope escape.
         let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
-        let mnemonic = self.menu_bar && !self.menu_bar_by_claim && self.os != Os::Mac && mods == Mods::ALT && key.is_letter();
+        // A shortcut comes before a mnemonic: an Alt+letter the keymap binds to an enabled command runs it.
+        let mnemonic =
+            self.menu_bar && !self.menu_bar_by_claim && self.os != Os::Mac && mods == Mods::ALT && key.is_letter() && !self.shortcut_text(input);
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         let canvas_edit = self.canvas.is_some_and(|canvas| {
             self.edit_chords.iter().any(|(command, chord)| canvas.edits.contains(*command) && self.layout.matches(chord, input, self.os))

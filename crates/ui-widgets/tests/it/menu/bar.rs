@@ -274,6 +274,30 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }
 
+/// An Alt+letter the keymap binds to an enabled command runs that command and opens no menu, as a shortcut comes before
+/// a mnemonic; without the binding the same chord opens the menu.
+#[trial]
+fn a_bound_alt_letter_runs_its_command_instead_of_the_mnemonic() {
+    use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, Scope};
+    use craft_ui::runtime::frame::take_output;
+    const RULERS: &str = "barTrial.rulers";
+    let mut rig = rig(Direction::Ltr);
+    let binding = Binding::parse("Alt+F").expect("the trial's chord parses");
+    let catalog = AppCatalog::new(vec![CommandDef::new(RULERS, "Rulers", Scope::app()).with_default(binding)], 1).expect("the trial's catalog");
+    rig.fixture.commands(CommandInput::new().catalog(catalog)).settle();
+    take_output(rig.fixture.ctx());
+    rig.fixture.key(Key::F, Modifiers::ALT);
+    rig.fixture.settle();
+    let fired: Vec<String> = take_output(rig.fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+    assert_eq!(fired, [RULERS], "the bound Alt+F runs its command once");
+    assert!(!rig.open("New"), "and does not also open File");
+
+    rig.fixture.commands(CommandInput::new()).settle();
+    rig.fixture.key(Key::F, Modifiers::ALT);
+    rig.fixture.settle();
+    assert!(rig.open("New"), "unbound, Alt+F opens File");
+}
+
 /// `MenuBarOutput::opened` is true in the one pass where a menu opened while none was open: a held menu, a switch from
 /// one title to another and the passes a frame reruns report false.
 #[trial]
