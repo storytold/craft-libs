@@ -151,7 +151,11 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
             let strip: Option<TabStripOutput<T>> = (!tabs.is_empty()).then(|| {
                 let keys: Vec<T> = tabs.iter().map(|tab| tab.key.clone()).collect();
                 let source = keyed(&keys, |key: &T| key.clone()).with_text(|key: &T| Cow::Owned(label_of(key).as_str().to_owned()));
-                let strip: TabStrip<'_, T> = TabStrip::new(strip_label).kind(TabKind::Ribbon).roles(role_of);
+                let strip: TabStrip<'_, T> = TabStrip::new(strip_label)
+                    .kind(TabKind::Ribbon)
+                    .roles(role_of)
+                    // The strip takes its own height, not the room's: a minimised ribbon's slot is sized from it.
+                    .natural_height(true);
                 // PLAN: `TabStrip::trailing(&[StripEnd])` is rb.R3 (ribbon-w1) and is not in this tree yet; this call compiles once it lands.
                 let mut strip = strip.trailing(trailing);
                 if let Some(key) = current.clone() {
