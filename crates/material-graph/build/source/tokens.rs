@@ -5,6 +5,8 @@ pub enum Token {
     Ident(String),
     /// A string literal's contents as written.
     Text(String),
+    /// A raw string literal's contents: `r"\n"` is two characters, `"\n"` one, so the two never compare equal.
+    Raw(String),
     /// A number or character literal, a lifetime.
     Literal(String),
     Punct(char),
@@ -32,6 +34,11 @@ impl Token {
             Token::Ident(s) | Token::Literal(s) => out.push_str(s),
             Token::Text(s) => {
                 out.push('"');
+                out.push_str(s);
+                out.push('"');
+            }
+            Token::Raw(s) => {
+                out.push_str("r\"");
                 out.push_str(s);
                 out.push('"');
             }
@@ -178,7 +185,7 @@ pub fn tokenize(source: &str) -> Vec<Token> {
                     cur.at += 1;
                 }
                 match cur.raw_string() {
-                    Some(text) => out.push(Token::Text(text)),
+                    Some(text) => out.push(Token::Raw(text)),
                     None => {
                         cur.at = at;
                         out.push(Token::Ident(cur.take_while(is_ident)));
@@ -222,6 +229,12 @@ mod tests {
     fn strings_do_not_hide_or_invent_code() {
         assert_eq!(idents(r#"a("b // c"); d"#), ["a", "d"]);
         assert_eq!(idents(r##"a(r#"b " c"#); d(br"e"); f(b"g\""); h"##), ["a", "d", "f", "h"]);
+    }
+
+    #[test]
+    fn a_raw_string_is_not_its_escaped_spelling() {
+        assert_ne!(tokenize(r#""\n""#), tokenize(r##"r"\n""##));
+        assert_eq!(tokenize(r##"r"a""##), tokenize(r###"r#"a"#"###));
     }
 
     #[test]

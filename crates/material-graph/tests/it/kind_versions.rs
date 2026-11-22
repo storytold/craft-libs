@@ -28,7 +28,9 @@ fn rust_files(dir: &Path, root: &Path, out: &mut Vec<SourceFile>) {
             rust_files(&path, root, out);
         } else if path.extension().is_some_and(|e| e == "rs") {
             let name = path.strip_prefix(root).unwrap().display().to_string().replace('\\', "/");
-            out.push(SourceFile { name, text: std::fs::read_to_string(&path).unwrap(), included: Vec::new() });
+            let text = std::fs::read_to_string(&path).unwrap();
+            let included = source::included_files(&text, path.parent().unwrap());
+            out.push(SourceFile { name, text, included });
         }
     }
 }
