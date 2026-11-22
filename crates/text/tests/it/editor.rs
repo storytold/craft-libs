@@ -193,6 +193,38 @@ fn command_enter_commits_one_session_and_a_session_without_edits_commits_nothing
     assert_eq!(editor.text(), "abcd");
 }
 
+/// A calendar opened above a field editor must not commit the field when its month changes.
+#[trial]
+fn a_field_editor_keeps_its_draft_when_its_popup_is_used() {
+    use craft_ui::contract::overlay::{Anchor, Dismiss};
+    use craft_ui::pickers::{CalendarPopover, DatePrecision, PickedDate};
+    use craft_ui::runtime::focus::{FocusPolicy, Initial};
+
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let shown_ends = ends.clone();
+    let mut host = Host { text: "abc".into(), ..Host::default() };
+    let mut selection = TextSelection::caret_at(3);
+    let mut open = true;
+    let mut picked = Some(PickedDate::day(2025, 3, 14));
+    let mut fixture = Fixture::new(move |ui| {
+        let bounds = Rect::from_min_size(pos2(20.0, 20.0), vec2(200.0, 20.0));
+        let output = TextEditor::new("Text", &mut host, Bind::bound(&mut selection)).mode(EditorMode::FieldLine).show_at(ui, bounds);
+        shown_ends.borrow_mut().extend(output.ended);
+        CalendarPopover::new("Calendar", Bind::bound(&mut open), Bind::bound(&mut picked))
+            .precisions(&[DatePrecision::Day])
+            .overlay(|overlay| {
+                overlay.anchor(Anchor::Rect(bounds)).focus(FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor))
+                    .dismiss(Dismiss::new().focus_left(false))
+            })
+            .show(ui, |_, _| {});
+    });
+    fixture.settle();
+    fixture.click_at(pos2(30.0, 30.0)).settle();
+    let next = fixture.by_label("Next").expect("the calendar is open");
+    fixture.click(&next).settle();
+    assert!(ends.borrow().is_empty(), "using the popup must not end the field editor");
+}
+
 /// A primary press on the canvas background commits and keeps the marked text as typed; a press on the text and a
 /// secondary press on the background (the canvas menu acts on the live edit) leave the session open.
 #[trial]
