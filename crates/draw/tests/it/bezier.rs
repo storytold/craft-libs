@@ -1292,7 +1292,6 @@ fn a_cancelled_press_reports_nothing_on_release() {
     assert_eq!(st.paths, before);
 }
 
-
 // Add Anchor owns one drag while Space temporarily translates the new anchor and its handles. Letting Space go
 // resumes pulling the handles from that translated anchor; the canvas never takes this owned drag to pan.
 #[trial]
@@ -1335,7 +1334,10 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
         let knot = st.paths[0].subpaths[0].knots[1];
         let by = Vec2::new(30.0, 20.0);
         assert!(close(knot.anchor - pulled.anchor, by), "the held key moves the new anchor with the pointer: {knot:?}");
-        assert!(close(knot.out_ctrl - pulled.out_ctrl, by) && close(knot.in_ctrl - pulled.in_ctrl, by), "both handles travel with the anchor: {knot:?}");
+        assert!(
+            close(knot.out_ctrl - pulled.out_ctrl, by) && close(knot.in_ctrl - pulled.in_ctrl, by),
+            "both handles travel with the anchor: {knot:?}"
+        );
         assert!(knot.smooth);
         assert_eq!(st.view.expect("the canvas showed").center, view.center, "an overlay-owned drag must not turn into a pan");
         assert_eq!(st.paths[0].subpaths[0].knots.len(), 5, "Space adds no second knot");
@@ -1394,7 +1396,12 @@ fn space_still_pans_when_add_anchor_has_no_drag() {
     h.fixture.frame(vec![space_key(false)]).settle();
     let st = h.state.borrow();
     let after = st.view.expect("the canvas showed");
-    assert!(after.center.x > before.center.x && after.center.y > before.center.y && (after.center - before.center).hypot() > 1.0, "ordinary Space still pans: {:?} -> {:?}", before.center, after.center);
+    assert!(
+        after.center.x > before.center.x && after.center.y > before.center.y && (after.center - before.center).hypot() > 1.0,
+        "ordinary Space still pans: {:?} -> {:?}",
+        before.center,
+        after.center
+    );
     assert_eq!(st.paths, paths, "panning does not edit the paths");
     assert_eq!(st.selection, selection);
     assert!(st.changes.is_empty() && st.inserts.is_empty() && st.deletes.is_empty());
