@@ -9,7 +9,7 @@ use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::buttons::ControlPlace;
@@ -200,7 +200,8 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
 
 /// A picker as the character controls host it: a given value, the filters (so the class column shows beside the
 /// families) and a preview text. The field's list keys go to the family list: Enter on a typed part of a name picks the
-/// best match, and Down moves the family row, which previews, before Enter picks it.
+/// best match, and Down moves the family row, which previews, before Enter picks it. While no family row shows, Enter is
+/// the field's: it commits a typed family name and leaves the class column as it was.
 #[trial]
 fn with_the_class_column_shown_the_field_keys_move_and_pick_in_the_family_list() {
     #[derive(Default)]
@@ -212,11 +213,13 @@ fn with_the_class_column_shown_the_field_keys_move_and_pick_in_the_family_list()
     let seen = Rc::clone(&reported);
     let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT]);
     let mut settings = FontPickerSettings::default();
-    let mut filters = FontFilters::default();
+    let filters = Rc::new(RefCell::new(FontFilters::default()));
+    let held = Rc::clone(&filters);
     let mut fx = Fixture::new(move |ui| {
-        let out = FontPicker::new("Font family", Bind::given("Inter".to_owned()), &catalog)
+        let mut filters = held.borrow_mut();
+        let out = FontPicker::new("Font family", Bind::given("Ubuntu".to_owned()), &catalog)
             .settings(Bind::bound(&mut settings))
-            .filters(Bind::bound(&mut filters))
+            .filters(Bind::bound(&mut *filters))
             .preview_text("Sample")
             .show(ui);
         let mut seen = seen.borrow_mut();
@@ -252,6 +255,16 @@ fn with_the_class_column_shown_the_field_keys_move_and_pick_in_the_family_list()
     fx.key(Key::Enter, Modifiers::NONE);
     fx.settle();
     assert_eq!(reported.borrow().picks.last(), Some(&keyed), "Enter picks the family row the keys reached");
+
+    // The host's filters list monospaced families only, Hack alone, so the exact name "Inter" matches no row.
+    filters.borrow_mut().class = Some(FontClass::Monospace);
+    type_in(&mut fx, "Inter");
+    assert!(present(&fx, words.all_classes.as_str()), "the class column shows");
+    assert!(fx.by_label("Favorite Inter").is_none() && fx.by_label("Favorite Hack").is_none(), "no family row shows");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks.last().map(String::as_str), Some("Inter"), "the field commits the typed name");
+    assert_eq!(filters.borrow().class, Some(FontClass::Monospace), "the class column is unchanged");
 }
 
 /// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.

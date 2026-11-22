@@ -453,7 +453,8 @@ impl Overlay {
     }
 
     /// The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
-    /// list names it each pass it is shown; the opener keeps keys no layer names a list for.
+    /// list names it each pass it is shown; the opener keeps the keys while the named list is not shown, and in a
+    /// dropdown that names none.
     pub fn list(mut self, list: Id) -> Overlay {
         self.focus = self.focus.list(list);
         self

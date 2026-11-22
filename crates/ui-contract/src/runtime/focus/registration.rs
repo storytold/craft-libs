@@ -181,8 +181,8 @@ impl Group {
 }
 
 /// The innermost open `KeepAnchor` layer opened from the stop `opener`, the collection the layer names for its
-/// opener's list keys (`FocusPolicy::list`) and the layer's policy. `None` while no such layer is open or it names no
-/// collection.
+/// opener's list keys (`FocusPolicy::list`) and the layer's policy. `None` while no such layer is open, or it names no
+/// collection or one that registered no stop in the last pass (a list not shown leaves the keys with the opener).
 pub(crate) fn dropdown_target(ctx: &Context, opener: StopKey) -> Option<(Id, Id, FocusPolicy)> {
     with(ctx, |state| {
         let layer =
@@ -190,7 +190,8 @@ pub(crate) fn dropdown_target(ctx: &Context, opener: StopKey) -> Option<(Id, Id,
                 state.last_scopes.get(*id).is_some_and(|scope| scope.policy.initial == Initial::KeepAnchor && scope.opener == Some(opener))
             })?;
         let policy = state.last_scopes.get(&layer)?.policy;
-        policy.list.map(|list| (layer, list, policy))
+        let shown = |list: &Id| state.last_stops.iter().any(|rec| rec.stop.id == *list);
+        policy.list.filter(shown).map(|list| (layer, list, policy))
     })
 }
 
