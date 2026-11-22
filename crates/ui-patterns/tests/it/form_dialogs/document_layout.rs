@@ -110,3 +110,31 @@ fn an_unchanged_dialog_shows_close_until_a_field_changes() {
     fixture.settle();
     assert!(fixture.by_label("OK").is_some() && fixture.by_label("Cancel").is_some(), "after an edit: OK and Cancel");
 }
+
+/// A document dialog shows its preview as production does: a small picture of the page at the start, and beside it the
+/// pager captioned "Preview: page 2 of 3", not a well across the dialog with the pager centred under it.
+#[trial]
+fn a_document_dialog_shows_a_small_picture_with_its_pager_beside_it() {
+    use craft_ui::patterns::form_dialogs::{PanePager, PreviewState};
+    let mut fixture = Fixture::new(|ui| {
+        let mut fields = DialogFields::new();
+        let rows = vec![Param::number("size", "Size", 1.0, 1.0, 0)];
+        let texture = egui::load::SizedTexture::new(egui::TextureId::default(), vec2(210.0, 297.0));
+        let pager = PanePager { shown: 2, count: 3, back: true, next: true, ..PanePager::default() };
+        
+        ParamDialog::new("thumb", "Add watermark", rows)
+            .layout(ParamLayout::Document)
+            .previews(true)
+            .preview(PreviewState::Ready(texture))
+            .preview_pager(pager)
+            
+            .values(Bind::bound(&mut fields))
+            .show(ui);
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    let pane = fixture.by_label("Preview").expect("the pane is shown").rect;
+    assert!(pane.width() < 150.0, "the picture is small: {pane:?}");
+    let caption = caption(&fixture, "Preview: page 2 of 3");
+    assert!(caption.min.x >= pane.max.x, "the pager stands beside the picture: {caption:?} {pane:?}");
+}

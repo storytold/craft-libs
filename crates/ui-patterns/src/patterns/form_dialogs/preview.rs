@@ -45,6 +45,9 @@ const ZOOM_EPSILON: f32 = 1e-4;
 /// that touches both edges can round to a hair over.
 const PAN_TOLERANCE: f32 = 0.01;
 
+/// The height of a thumbnail pane in its widths: a page's proportion, near enough.
+const THUMBNAIL_HEIGHT_IN_WIDTHS: f32 = 4.0 / 3.0;
+
 /// The share of the well an arrow key pans the view by.
 const PAN_SHARE: f32 = 0.1;
 
@@ -57,6 +60,9 @@ craft_ui::words! {
         rendering: "preview.rendering" = "Rendering preview";
         page_of: template "preview.pageOf" = "Page {p} of {n}";
         sheet_of: template "preview.sheetOf" = "Sheet {p} of {n}";
+        /// The caption of the pager beside a document dialog's small preview picture.
+        preview_page_of: template "preview.previewPageOf" = "Preview: page {p} of {n}";
+        preview_sheet_of: template "preview.previewSheetOf" = "Preview: sheet {p} of {n}";
         no_pages: "preview.noPages" = "No pages";
         no_sheets: "preview.noSheets" = "No sheets";
         previous: "preview.previous" = "Previous";
@@ -275,6 +281,10 @@ pub struct PreviewPane<'a> {
     /// one its container gives, at least the plot height.
     #[prop(quantity = "aspect ratio")]
     aspect: Option<f32>,
+    /// A small picture of the first page beside its caption, as a document dialog shows it, not a well across the
+    /// dialog: the pane is a fixed sample-sized box and the view is fitted.
+    #[prop]
+    thumbnail: bool,
     /// The view after this pass, when the user changed it.
     moved: Option<PreviewView>,
     /// The well took the second press of a double click this pass.
@@ -312,6 +322,7 @@ impl PreviewPane<'_> {
             view: view.clone(),
             click_centres: true,
             aspect: None,
+            thumbnail: false,
             moved: None,
             double_clicked: false,
             clicked: None,
@@ -452,6 +463,10 @@ impl Component for PreviewPane<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if self.thumbnail {
+            let width = cx.tokens.size.thumb.sample.lg;
+            return Vec2::new(width, width * THUMBNAIL_HEIGHT_IN_WIDTHS);
+        }
         let width = cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY);
         Vec2::new(width, self.aspect.filter(|aspect| *aspect > 0.0).map_or(0.0, |aspect| width / aspect))
     }
@@ -739,6 +754,11 @@ pub struct PanePager {
 impl PanePager {
     /// The caption: "Page {p} of {n}" or "Sheet {p} of {n}", or "No pages" or "No sheets" when `count` is 0.
     pub fn caption(&self, env: &Env) -> Label {
+        self.caption_in(env, false)
+    }
+
+    /// [`caption`](PanePager::caption), as "Preview: page {p} of {n}" when `previewing`.
+    pub fn caption_in(&self, env: &Env, previewing: bool) -> Label {
         let words = env.words::<PreviewWords>();
         if self.count == 0 {
             return match self.unit {
@@ -751,9 +771,11 @@ impl PanePager {
             None => env.format().integer(self.shown as u64),
         };
         let count = env.format().integer(self.count as u64);
-        let template = match self.unit {
-            PagerUnit::Page => &words.page_of,
-            PagerUnit::Sheet => &words.sheet_of,
+        let template = match (self.unit, previewing) {
+            (PagerUnit::Page, false) => &words.page_of,
+            (PagerUnit::Sheet, false) => &words.sheet_of,
+            (PagerUnit::Page, true) => &words.preview_page_of,
+            (PagerUnit::Sheet, true) => &words.preview_sheet_of,
         };
         Label::from(template.fill(&[("p", &shown), ("n", &count)]))
     }
@@ -761,9 +783,14 @@ impl PanePager {
     /// Shows the row; the step a press made in this pass. A second pass of a frame finds no press, so a step is
     /// reported once.
     pub fn show(self, ui: &mut Ui) -> Option<PagerStep> {
+        self.show_in(ui, false)
+    }
+
+    /// [`show`](PanePager::show), with the caption of [`caption_in`](PanePager::caption_in).
+    pub fn show_in(self, ui: &mut Ui, previewing: bool) -> Option<PagerStep> {
         let env = Env::of(ui);
         let words = env.words::<PreviewWords>();
-        let caption = self.caption(&env);
+        let caption = self.caption_in(&env, previewing);
         let mut step = None;
         Row::new().show(ui, |ui, _| {
             let back = IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(self.back).show(ui);

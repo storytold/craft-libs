@@ -771,6 +771,12 @@ impl<'a> ParamDialog<'a> {
                         });
                     });
                 }
+                (Some(state), ParamLayout::Document) => {
+                    Stack::new().show(ui, |ui, _| {
+                        show_rows(ui, values);
+                        shown_preview = show_thumbnail_preview(ui, &preview_label, state, &mut extras, click_centres, &host_notes);
+                    });
+                }
                 (Some(state), layout) => {
                     let zoom = match layout {
                         ParamLayout::Document => ZoomRow::Hidden,
@@ -796,8 +802,11 @@ impl<'a> ParamDialog<'a> {
             if let Some(BelowRows(draw)) = &below {
                 draw(ui, values);
             }
-            for note in &host_notes {
-                Text::new(note.clone()).show(ui);
+            // A document dialog's notes stand beside its small picture.
+            if !(preview.is_some() && layout == ParamLayout::Document) {
+                for note in &host_notes {
+                    Text::new(note.clone()).show(ui);
+                }
             }
             *cx.memory::<Live>() = live.clone();
             latest = Some(values.clone());
@@ -1077,6 +1086,43 @@ enum ZoomRow {
     Below,
     /// No zoom row: the pane zooms with the wheel alone, as a document dialog's does.
     Hidden,
+}
+
+/// A document dialog's preview: a small picture of the page at the start, and beside it the pager ("Preview: page 1 of
+/// 3") with the host's `notes` under it. There is no well across the dialog and no zoom row.
+fn show_thumbnail_preview(
+    ui: &mut Ui,
+    label: &Label,
+    state: &PreviewState,
+    extras: &mut PaneExtras<'_>,
+    click_centres: bool,
+    notes: &[Label],
+) -> ShownPreview {
+    let picture = match state {
+        PreviewState::Ready(texture) => Some(texture.size),
+        PreviewState::Pending(_) | PreviewState::Failed(_) => None,
+    };
+    let mut shown = ShownPreview::default();
+    Row::new().show(ui, |ui, _| {
+        let mut pane = PreviewPane::state(label.clone(), state.clone(), &PreviewView::fixed()).click_centres(click_centres).thumbnail(true);
+        if let Some(tint) = extras.tint {
+            pane = pane.tint(tint);
+        }
+        // `ParamDialog::show` leaves no overlay in a measuring run, which paints nothing.
+        if let Some(overlay) = extras.overlay.take() {
+            pane = pane.overlay(overlay.into_paint());
+        }
+        let pane = pane.show(ui);
+        let mut step = None;
+        Stack::new().show(ui, |ui, _| {
+            step = extras.pager.as_ref().and_then(|pager| pager.clone().show_in(ui, true));
+            for note in notes {
+                Text::new(note.clone()).show(ui);
+            }
+        });
+        shown = ShownPreview { clicked: pane.clicked, centre: picture.map(|size| pane.shown.centre(size)), step };
+    });
+    shown
 }
 
 /// The pane, the zoom row where `zoom_row` puts it and the pager centred under them. Only a `Ready` picture has a zoom
