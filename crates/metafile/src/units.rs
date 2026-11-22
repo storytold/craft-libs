@@ -250,7 +250,7 @@ mod tests {
         for (at, value) in [(0, 1), (4, 112), (40, 0x464d_4520), (60, 11), (64, 88), (72, 800), (76, 600), (80, 200), (84, 150)] {
             set(&mut bytes, at, value);
         }
-        for (dst, src) in bytes[88..110].chunks_exact_mut(2).zip("app\0title\0\0".encode_utf16()) {
+        for (dst, src) in bytes[88..110].as_chunks_mut::<2>().0.iter_mut().zip("app\0title\0\0".encode_utf16()) {
             dst.copy_from_slice(&src.to_le_bytes());
         }
         let mm = Some(EmfDevice { pixels: (800, 600), physical_size: EmfPhysicalSize::Millimetres(200, 150) });
