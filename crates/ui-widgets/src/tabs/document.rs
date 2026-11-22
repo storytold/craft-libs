@@ -7,7 +7,8 @@ pub(crate) mod stories;
 
 use super::{Tab, TabStrip};
 use crate::contract::{
-    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, ReorderRule, ShowCollection as _, ShowContainer as _,
+    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, Props as _, ReorderRule, ShowCollection as _,
+    ShowContainer as _,
 };
 use crate::layout_components::Row;
 use crate::runtime::drag::OsFile;
@@ -35,12 +36,15 @@ pub struct DocumentTab<D> {
     pub detail: Option<Label>,
     /// The accessible name of the close button, for a tab whose close cancels the opening.
     pub close_label: Option<Label>,
+    /// The tab's tooltip, such as the whole title of a tab that shows the name alone; a shortened tab shows it in
+    /// place of its label.
+    pub tooltip: Option<Label>,
 }
 
 impl<D> DocumentTab<D> {
     /// A closable, unmodified tab for document `id` named `label`.
     pub fn new(id: D, label: impl Into<Label>) -> Self {
-        DocumentTab { id, label: label.into(), modified: false, closable: true, progress: None, detail: None, close_label: None }
+        DocumentTab { id, label: label.into(), modified: false, closable: true, progress: None, detail: None, close_label: None, tooltip: None }
     }
 
     /// Unsaved changes.
@@ -75,6 +79,13 @@ impl<D> DocumentTab<D> {
     #[must_use]
     pub fn close_label(mut self, label: impl Into<Label>) -> Self {
         self.close_label = Some(label.into());
+        self
+    }
+
+    /// The tab's tooltip.
+    #[must_use]
+    pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
+        self.tooltip = Some(text.into());
         self
     }
 }
@@ -260,6 +271,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 }
                 if let Some(close) = &document.close_label {
                     tab = tab.close_label(close.clone());
+                }
+                if let Some(tooltip) = &document.tooltip {
+                    tab = tab.tooltip(tooltip.clone());
                 }
                 tab
             })

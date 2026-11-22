@@ -136,6 +136,28 @@ fn a_double_click_on_the_empty_strip_asks_for_a_new_document() {
     assert!(!seen.contains(&DocumentTabsEvent::EmptyDoubleClick), "{seen:?}");
 }
 
+/// A tab that shows the name alone gives its whole title as its tooltip, also when the strip cuts its name.
+#[trial]
+fn a_document_tab_shows_its_own_tooltip() {
+    use craft_ui::contract::tooltip::DELAY;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    const WHOLE: &str = "Poster.vc @ 50% (CMYK/Preview)";
+    for width in [640.0, 60.0] {
+        let mut fixture = Fixture::new(|ui| {
+            let tabs = [DocumentTab::new(0_usize, "Poster.vc").tooltip(WHOLE)];
+            let _ = DocumentTabs::new("Documents", &tabs).show(ui);
+        });
+        fixture.room(egui::Vec2::new(width, 120.0)).settle();
+        let tab = tab_rect(fixture.tree(), "Poster.vc");
+        let cut = fixture.texts().iter().any(|run| run.elided);
+        assert_eq!(cut, width < 100.0, "the strip cuts the name at {width} pt only");
+        fixture.frame(vec![moved(tab.center())]).advance(DELAY).settle();
+        let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+        assert!(texts.iter().any(|text| text == WHOLE), "the whole title shows over the tab at {width} pt: {texts:?}");
+        assert!(!fixture.texts().iter().any(|run| run.text == "Poster.vc" && !run.elided && cut), "and not the name alone: {texts:?}");
+    }
+}
+
 /// The bounds of every tab node named `name`, from the reading start.
 fn tab_rects(tree: &AccessTree, name: &str) -> Vec<Rect> {
     let mut rects: Vec<Rect> =
