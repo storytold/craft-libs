@@ -110,7 +110,7 @@ pub(crate) struct Memory {
     /// A cancel a service requested for the running pass.
     requested: Option<(u64, PressCancel)>,
     /// Whether any arena of the viewport holds an open press; sensing registers it, as the layer above.
-    press_probe: Option<fn(&Context) -> bool>,
+    press_probe: Option<fn(&Context, ViewportId) -> bool>,
     /// The pass in which a container last held a press on its own surface (`hold_surface_press`); the end sweep
     /// drops it after a pass with none.
     surface_held: Option<u64>,
@@ -504,15 +504,21 @@ fn withheld_roots(ctx: &Context, viewport: ViewportId) -> SmallVec<[Id; 2]> {
 }
 
 /// Registers how the viewport tells that a press is captured. Sensing owns the arenas' machines.
-pub(crate) fn register_press_probe(ctx: &Context, probe: fn(&Context) -> bool) {
+pub(crate) fn register_press_probe(ctx: &Context, probe: fn(&Context, ViewportId) -> bool) {
     PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| memory.press_probe = Some(probe));
 }
 
 /// Whether a press of the running viewport is open, in an arena or on a container's own surface: Escape cancels it
 /// before anything else.
 pub(crate) fn press_captured(ctx: &Context) -> bool {
-    let (probe, surface) = PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| (memory.press_probe, memory.surface_held));
-    surface.is_some() || probe.is_some_and(|probe| probe(ctx))
+    press_captured_in(ctx, pass::current_viewport(ctx))
+}
+
+/// Whether a press of `viewport` is open, as [`press_captured`] tells for the running one; the key stage reads it
+/// before the viewport's pass runs.
+pub(crate) fn press_captured_in(ctx: &Context, viewport: ViewportId) -> bool {
+    let (probe, surface) = PerViewport::<Memory>::with(ctx, viewport, |memory| (memory.press_probe, memory.surface_held));
+    surface.is_some() || probe.is_some_and(|probe| probe(ctx, viewport))
 }
 
 /// Records that a container holds a press on its own surface in the running pass, so the press counts as captured

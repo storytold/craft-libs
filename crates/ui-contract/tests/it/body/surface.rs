@@ -95,6 +95,13 @@ fn a_surface_click_reports_on_release_and_a_drag_a_cancel_or_a_release_elsewhere
     rig.frame(vec![key_press(Key::Escape, Modifiers::NONE)]);
     assert!(!rig.frame(vec![pointer::release(at)]), "a cancelled press is no click");
 
+    // With Cmd or Ctrl held too, as a tool borrowed with Cmd holds it through its drag.
+    let mut rig = Rig::new();
+    let at = rig.surface();
+    rig.press(at);
+    rig.frame(vec![key_press(Key::Escape, Modifiers::COMMAND)]);
+    assert!(!rig.frame(vec![pointer::release(at)]), "a press cancelled by Cmd+Escape is no click");
+
     // A blur cancels it too.
     let mut rig = Rig::new();
     let at = rig.surface();

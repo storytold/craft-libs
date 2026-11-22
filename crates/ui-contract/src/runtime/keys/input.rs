@@ -23,6 +23,8 @@ struct Strip<'a> {
     pages: bool,
     /// The focused component reads every press as a chord (`OwnerClass::Recorder`).
     records: bool,
+    /// A press or a drag session is open: an Escape cancels it whatever the modifiers.
+    press_captured: bool,
     claims: &'a [Chord],
     edits: &'a dyn Fn(EditCommand) -> bool,
     /// The chords bound to the edit commands.
@@ -243,8 +245,8 @@ impl Strip<'_> {
         let bare_tab = key == Key::Tab && !mods.cmd && !mods.ctrl && !mods.alt;
         // Alt and Shift ride along, as with Enter: a canvas tool reads them; Cmd and Ctrl chords are the app's. While
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
-        // scope escape.
-        let escape = key == Key::Escape && !mods.cmd && !mods.ctrl && !(self.records && !mods.is_none());
+        // scope escape. Over an open press any Escape is the press's cancel: a borrowed tool's drag holds Cmd.
+        let escape = key == Key::Escape && (self.press_captured || (!mods.cmd && !mods.ctrl && !(self.records && !mods.is_none())));
         // A shortcut comes before a mnemonic: an Alt+letter the keymap binds to an enabled command runs it.
         let mnemonic =
             self.menu_bar && !self.menu_bar_by_claim && self.os != Os::Mac && mods == Mods::ALT && key.is_letter() && !self.shortcut_text(input);
@@ -528,6 +530,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     // S-L177: an Alt chord's text is withheld only when the press can run its command; a bound command that is
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
     let bound = |chord: &Chord| commands::runs_now(ctx, chord);
+    let press_captured = crate::runtime::pointer::press_captured_in(ctx, viewport) || crate::runtime::drag::running(ctx);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
@@ -538,6 +541,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             keeps_tab: keys.is_some_and(|keys| keys.keep == focus::KeepKeys::Tab),
             pages: record.pages,
             records: keys.is_some_and(|keys| matches!(keys.owner, OwnerClass::Recorder)),
+            press_captured,
             claims: &claims,
             edits: &edits,
             edit_chords: &edit_chords,

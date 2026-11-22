@@ -1054,8 +1054,8 @@ fn sweep_undrawn(ctx: &Context) {
     }
 }
 
-fn any_press_open(ctx: &Context) -> bool {
-    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
+fn any_press_open(ctx: &Context, viewport: ViewportId) -> bool {
+    PerViewport::<Arenas>::with(ctx, viewport, |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
 }
 
 /// The arena's outcome of the running pass, idle when the root has not run yet.
