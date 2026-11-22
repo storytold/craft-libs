@@ -44,6 +44,8 @@ use std::sync::Arc;
 use bytes::Bytes;
 use canvas::Raw;
 use geom::{Op, P};
+mod eof;
+pub use eof::ends_early;
 pub use place::{MAX_BITMAP_SIDE, PlacedClip, PlacedItem, bez_path, crop_window};
 pub use size::size;
 pub use text::{Font, HAlign, SYMBOL_CHARSET, Text, VAlign};
