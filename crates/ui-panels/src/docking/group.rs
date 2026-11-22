@@ -71,6 +71,15 @@ impl GripMarks {
     }
 }
 
+/// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
+/// tall enough that the theme's marks keep `space.gap.tight` above and below them, so they never touch the strip's
+/// edge (photocraft#16426).
+pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
+    let GripShape { mark, length, width, .. } = tokens.shape.grip;
+    let marks = if mark == GripMark::Ticks { length } else { width };
+    tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight)
+}
+
 /// What a group grip reports: its response, the second press of a double click and whether it started a group
 /// drag this pass.
 #[derive(Debug)]

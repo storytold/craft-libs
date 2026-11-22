@@ -62,7 +62,7 @@ impl IconicSizes {
         IconicSizes {
             column: DockSizes::style(cx),
             cell: size.rail.button,
-            grip: size.hit.target,
+            grip: super::group::grip_strip(cx.tokens),
             separator: cx.tokens.space.gap.tight,
             labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
         }

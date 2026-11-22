@@ -82,7 +82,7 @@ pub struct DockSizes {
     pub rail_step: f32,
     /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
     /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
-    /// shows itself (the least hit size).
+    /// shows itself: the least hit size, or the theme's grip marks with `space.gap.tight` above and below them.
     pub grip: f32,
 }
 
@@ -128,7 +128,7 @@ impl DockSizes {
             column: size.dock.column,
             rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
             rail_step: size.rail.button + cx.tokens.space.gap.tight,
-            grip: size.hit.target,
+            grip: super::group::grip_strip(cx.tokens),
         }
     }
 

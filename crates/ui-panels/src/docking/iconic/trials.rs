@@ -486,14 +486,20 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         });
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
-    let (panel, grip, shape) =
-        StyleCx::with_root(fixture.ctx(), |cx| (cx.tokens.color.surface.panel, cx.tokens.color.line.grip, cx.tokens.shape.grip));
+    let (panel, grip, shape, tight) = StyleCx::with_root(fixture.ctx(), |cx| {
+        (cx.tokens.color.surface.panel, cx.tokens.color.line.grip, cx.tokens.shape.grip, cx.tokens.space.gap.tight)
+    });
     assert_eq!(shape, craft_theme::GripShape::DEFAULT, "the fixture's theme sets no grip shape");
     for group in [0, 1] {
         let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip");
         let shapes = fixture.frame_shapes();
         let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
+        let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+        assert!(
+            run.top() - strip.top() >= tight - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
+            "group {group}: the marks keep space.gap.tight ({tight}) off the strip's edges: {run:?} in {strip:?}"
+        );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
         let (_, hover_ink) = grip_ticks(&hovered, strip).expect("the grip paints its ticks under the pointer");
