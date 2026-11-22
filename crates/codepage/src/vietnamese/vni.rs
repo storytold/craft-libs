@@ -729,6 +729,22 @@ pub fn decode_vni(input: &[u8], mode: DecodeMode) -> Result<Cow<'_, str>, Decode
     Ok(Cow::Owned(out))
 }
 
+#[inline]
+pub(super) fn transcode_vni_unchecked(s: &str) -> Cow<'_, str> {
+    if s.is_ascii() || !s.chars().all(|c| u32::from(c) <= 0xFF) {
+        return Cow::Borrowed(s);
+    }
+
+    let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
+    match decode_vni(&bytes, DecodeMode::Practical) {
+        Ok(decoded) => {
+            let nfc = super::apply_vietnamese_nfc_cow(decoded);
+            if nfc.as_ref() == s { Cow::Borrowed(s) } else { Cow::Owned(nfc.into_owned()) }
+        }
+        Err(_) => Cow::Borrowed(s),
+    }
+}
+
 /// Transcode a VNI Windows string to Unicode NFC.
 ///
 /// Pass-through strings that are not decoded (ASCII, inputs recognized by the Unicode heuristic, or non-Latin-1 inputs)
@@ -737,23 +753,7 @@ pub fn transcode_vni(s: &str) -> Cow<'_, str> {
     if s.is_ascii() || is_already_unicode_vietnamese(s) {
         return Cow::Borrowed(s);
     }
-
-    let mut bytes = Vec::with_capacity(s.len());
-    for c in s.chars() {
-        let code = c as u32;
-        if code > 0xFF {
-            return Cow::Borrowed(s);
-        }
-        bytes.push(code as u8);
-    }
-
-    match decode_vni(&bytes, DecodeMode::Practical) {
-        Ok(decoded) => {
-            let nfc = super::normalize_nfc(&decoded);
-            if nfc.as_ref() == s { Cow::Borrowed(s) } else { Cow::Owned(nfc.into_owned()) }
-        }
-        Err(_) => Cow::Borrowed(s),
-    }
+    transcode_vni_unchecked(s)
 }
 
 #[cfg(test)]

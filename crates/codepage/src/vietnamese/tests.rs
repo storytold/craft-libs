@@ -1186,6 +1186,8 @@ fn test_regression_invariants_for_vietnamese_transcoding_and_nfc() {
     // 6. Why: AutoCAD `%%%` literal percent escapes and valid inline codes (`%%d`)
     // keep all-caps inference, while CP1252 fallback characters (`0x9C` -> `œ`)
     // preserve their original case under `.VnTimeH`.
+    assert_eq!(decode_tcvn3(b"A%%%%%d \xD2", false, DecodeMode::Practical).unwrap(), "A%%%%%d Ề");
+    assert_eq!(super::transcode_tcvn3_h("b\u{009C}n").as_ref(), "BœN");
     // 7. Why (UAX #15 starter retention & precomposed decomposition in CP1258):
     // - Bytes `43 EC F2` (`C` + `\u{0301}` + `\u{0323}`) reorder to `C` + `\u{0323}` +
     //   `\u{0301}`; the normalizer must keep `C` as starter across the uncomposed
@@ -1279,4 +1281,54 @@ fn cp1258_nfc_matches_unicode_oracle_exhaustively() {
 
     // 247 defined bytes x (1 single + 5 single-mark + 25 mark-pair) sequences.
     assert!(checked > 7_600, "expected the full CP1258 x mark x mark domain, checked {checked}");
+}
+
+#[test]
+fn test_linear_normalization_and_scanning_invariants() {
+    // 1. Why: A hostile run of 50,000 interleaved combining marks (`U+0301` ccc=230,
+    // `U+0323` ccc=220) after `'C'` must normalize in strictly O(n) time using the
+    // 4-bucket streaming UAX #15 pipeline without any quadratic sorting or shifts.
+    let mut hostile = String::with_capacity(1 + 25_000 * 4);
+    hostile.push('C');
+    for _ in 0..25_000 {
+        hostile.push_str("\u{0301}\u{0323}");
+    }
+    let normalized = normalize_cp1258_nfc(&hostile);
+    let mut expected = String::with_capacity(hostile.len());
+    expected.push('Ć');
+    for _ in 0..25_000 {
+        expected.push('\u{0323}');
+    }
+    for _ in 0..24_999 {
+        expected.push('\u{0301}');
+    }
+    assert_eq!(normalized.as_ref(), expected);
+
+    // 2. Why: Lazy starter decomposition (only when followed by combining marks)
+    // must preserve exact UAX #15 equivalence on mixed precomposed/decomposed runs.
+    assert_eq!(normalize_cp1258_nfc("Éa\u{0301}C\u{0301}\u{0323}Ç\u{0301}Ä\u{0301}").as_ref(), "ÉáĆ\u{0323}ḈÄ\u{0301}");
+
+    // 3. Why: Long multi-token TCVN3 input must scan in a single linear pass under
+    // `.VnTime` while still decoding both Region 1 (`kh«ng Ýt h¬n`) and Region 2 (`bÕn`).
+    let mut long_tcvn3 = "kh«ng Ýt h¬n ".repeat(3_000);
+    long_tcvn3.push_str("bÕn");
+    let mut expected_tcvn3 = "không ít hơn ".repeat(3_000);
+    expected_tcvn3.push_str("bến");
+    assert_eq!(transcode_vietnamese(&long_tcvn3, Some(".VnTime")), expected_tcvn3);
+
+    // 4. Why: Symmetric VNI font-hint guard — `0xCD` ('Í' in VNI) is unmapped in TCVN3,
+    // so an undecodable TCVN3 inversion coincidence (`a\xD0 a\xD0`) must not veto `VNI-Times`.
+    let vni_payload = b"t\xCDn a\xD0 a\xD0 12345678";
+    let vni_meta = EncodingMetadata { font_name: Some("VNI-Times"), codepage_hint: None };
+    assert_eq!(
+        detect_encoding(vni_payload, Some(&vni_meta)),
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::FontHint }
+    );
+
+    // 5. Why: Non-Latin-1 pass-through on `transcode_vni` must return `Cow::Borrowed`
+    // without allocating a temporary `Vec<u8>`.
+    let emoji = "Plan 🙂";
+    let out = transcode_vni(emoji);
+    assert!(matches!(out, Cow::Borrowed(_)));
+    assert_eq!(out, emoji);
 }

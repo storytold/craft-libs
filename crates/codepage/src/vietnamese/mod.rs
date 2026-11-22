@@ -189,9 +189,9 @@ fn transcode_str_inner<'a>(s: &'a str, font_hint: Option<&str>) -> TranscodeResu
     }
 
     let text = match encoding {
-        LegacyEncoding::Tcvn3 => transcode_tcvn3(s),
-        LegacyEncoding::Tcvn3H => transcode_tcvn3_h(s),
-        LegacyEncoding::Vni => transcode_vni(s),
+        LegacyEncoding::Tcvn3 => tcvn3::transcode_tcvn3_unchecked(s),
+        LegacyEncoding::Tcvn3H => tcvn3::transcode_tcvn3_h_unchecked(s),
+        LegacyEncoding::Vni => vni::transcode_vni_unchecked(s),
         LegacyEncoding::Windows1258 => transcode_windows1258(s),
     };
 
@@ -206,9 +206,8 @@ fn transcode_str_inner<'a>(s: &'a str, font_hint: Option<&str>) -> TranscodeResu
 /// encoding should call [`transcode_explicit`] instead.
 ///
 /// Returns `Cow::Borrowed(s)` with zero allocations when `s` is unchanged (including pure ASCII
-/// for non-`Tcvn3H` hints; a `Tcvn3H` hint allocates `Cow::Owned` when uppercasing lowercase ASCII).
-/// Note that `transcode_vni` may build a temporary byte buffer before returning `Cow::Borrowed(s)`
-/// on pass-through; the strict zero-allocation guarantee applies to the non-`Tcvn3H` ASCII fast path.
+/// for non-`Tcvn3H` hints and non-Latin-1 inputs; a `Tcvn3H` hint allocates `Cow::Owned` when
+/// uppercasing lowercase ASCII).
 pub fn transcode_vietnamese<'a>(s: &'a str, font_hint: Option<&str>) -> Cow<'a, str> {
     transcode_str_inner(s, font_hint).text
 }
@@ -271,12 +270,15 @@ pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<C
     // 2. Fast path: check valid UTF-8
     // Genuine UTF-8: never apply heuristic or metadata legacy decoding to valid UTF-8
     // when force_encoding is None. This preserves modern UTF-8 text from accidental corruption.
-    if let Ok(s) = std::str::from_utf8(input) {
-        if options.normalize_nfc {
-            return Ok(normalize_nfc(s));
+    let utf8_err = match std::str::from_utf8(input) {
+        Ok(s) => {
+            if options.normalize_nfc {
+                return Ok(normalize_nfc(s));
+            }
+            return Ok(Cow::Borrowed(s));
         }
-        return Ok(Cow::Borrowed(s));
-    }
+        Err(e) => e,
+    };
 
     // 3. Non-UTF8 bytes: detect encoding via content heuristics or metadata
     let detection = detect_encoding(input, options.metadata);
@@ -289,11 +291,7 @@ pub fn decode_text<'a>(input: &'a [u8], options: &DecodeOptions<'a>) -> Result<C
     }
 
     // 4. Neither valid UTF-8 nor a recognized Vietnamese legacy encoding
-    let valid_up_to = match std::str::from_utf8(input) {
-        Ok(_) => 0,
-        Err(e) => e.valid_up_to(),
-    };
-    Err(DecodeError::InvalidUtf8 { offset: valid_up_to })
+    Err(DecodeError::InvalidUtf8 { offset: utf8_err.valid_up_to() })
 }
 
 /// Canonical Unicode Normalization Form C (NFC) helper preserving borrowed Cow where possible.
@@ -309,6 +307,11 @@ fn apply_nfc_cow_with<'a>(cow: Cow<'a, str>, normalizer: fn(&str) -> Cow<'_, str
             Cow::Owned(composed) => Cow::Owned(composed),
         },
     }
+}
+
+#[inline]
+pub(crate) fn apply_vietnamese_nfc_cow<'a>(cow: Cow<'a, str>) -> Cow<'a, str> {
+    apply_nfc_cow_with(cow, normalize_nfc)
 }
 
 #[inline]
@@ -382,28 +385,44 @@ pub fn validate_and_normalize(text: &str) -> Result<Cow<'_, str>, &'static str> 
     Ok(normalize_nfc(text))
 }
 
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty() && haystack.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 /// Check whether a legacy font name suggests a Serif typeface (vs Sans-Serif).
 #[inline]
 pub fn is_serif_legacy_font(font: &str) -> bool {
-    let lower = font.trim().to_ascii_lowercase();
-    lower.contains("time")
-        || lower.contains("century")
-        || lower.contains("roman")
-        || lower.contains("book")
-        || lower.contains("cambria")
-        || lower.contains("palatin")
+    let trimmed = font.trim();
+    contains_ignore_ascii_case(trimmed, "time")
+        || contains_ignore_ascii_case(trimmed, "century")
+        || contains_ignore_ascii_case(trimmed, "roman")
+        || contains_ignore_ascii_case(trimmed, "book")
+        || contains_ignore_ascii_case(trimmed, "cambria")
+        || contains_ignore_ascii_case(trimmed, "palatin")
+}
+
+/// Map a combining mark in the Vietnamese / Windows-1258 repertoire to its
+/// `(bucket_index, canonical_combining_class)` pair (`[202, 216, 220, 230]`).
+#[inline]
+const fn ccc_bucket(c: char) -> Option<(usize, u8)> {
+    match c {
+        '\u{0327}' => Some((0, 202)), // cedilla
+        '\u{031B}' => Some((1, 216)), // horn
+        '\u{0323}' => Some((2, 220)), // dot below
+        '\u{0300}' | '\u{0301}' | '\u{0302}' | '\u{0303}' | '\u{0306}' | '\u{0308}' | '\u{0309}' | '\u{030A}' | '\u{030C}' => Some((3, 230)),
+        _ => None,
+    }
 }
 
 /// Canonical Combining Class (UAX #15) of every combining mark in the Vietnamese and
 /// Windows-1258 repertoires. Starters (and characters outside this repertoire) return `0`.
+#[cfg(test)]
 #[inline]
 const fn combining_class(c: char) -> u8 {
-    match c {
-        '\u{0327}' => 202, // cedilla
-        '\u{031B}' => 216, // horn
-        '\u{0323}' => 220, // dot below
-        '\u{0300}' | '\u{0301}' | '\u{0302}' | '\u{0303}' | '\u{0306}' | '\u{0308}' | '\u{0309}' | '\u{030A}' | '\u{030C}' => 230,
-        _ => 0,
+    match ccc_bucket(c) {
+        Some((_, cls)) => cls,
+        None => 0,
     }
 }
 
@@ -784,73 +803,92 @@ const fn keep_precomposed(_: char) -> Option<(char, char)> {
     None
 }
 
+/// Flush one combining-mark cluster (4 fixed CCC buckets `[202, 216, 220, 230]`) in strictly O(k) time.
+fn flush_cluster(
+    starter: &mut Option<char>,
+    buckets: &mut [Vec<char>; 4],
+    remaining: &mut Vec<char>,
+    composer: fn(char, char) -> Option<char>,
+    out: &mut String,
+) {
+    const CLASSES: [u8; 4] = [202, 216, 220, 230];
+    let mut last_class = 0_u8;
+    remaining.clear();
+
+    for (bucket, class) in buckets.iter_mut().zip(CLASSES) {
+        for mark in bucket.drain(..) {
+            if let Some(st) = *starter
+                && last_class < class
+                && let Some(composed) = composer(st, mark)
+            {
+                *starter = Some(composed);
+            } else {
+                last_class = class;
+                remaining.push(mark);
+            }
+        }
+    }
+
+    if let Some(st) = starter.take() {
+        out.push(st);
+    }
+    for mark in remaining.drain(..) {
+        out.push(mark);
+    }
+}
+
 /// Canonical UAX #15 normalization (decompose, order by Canonical Combining Class,
 /// recompose around the last starter) restricted to a closed character repertoire.
 ///
-/// The three steps are kept separate on purpose. Skipping decomposition loses
-/// canonical equivalence (`É` + `U+0323` must equal `E` + `U+0323` + `U+0301`), and
-/// collapsing the starter with the last mark loses recomposition after a failed pair
-/// (`C` + `U+0323` + `U+0301` is `Ć` + `U+0323`, because ccc 220 does not block ccc 230).
+/// Runs in strictly O(n) time and O(n) worst-case space by streaming cluster-by-cluster
+/// into 4 reusable CCC buckets (`[202, 216, 220, 230]`), preserving stability for marks
+/// of equal class and lazily decomposing a starter only when followed by combining marks.
 fn normalize_with<'a>(s: &'a str, decompose: fn(char) -> Option<(char, char)>, composer: fn(char, char) -> Option<char>) -> Cow<'a, str> {
     // Why: every precomposed character in the repertoire already has NFC_QC=Yes, so only an
     // explicit combining mark can force reordering or recomposition. `É` alone normalizes to
     // itself, while `É` + `U+0323` still takes the full pipeline below.
-    if s.is_ascii() || !s.chars().any(|c| combining_class(c) != 0) {
+    if s.is_ascii() || !s.chars().any(|c| ccc_bucket(c).is_some()) {
         return Cow::Borrowed(s);
     }
 
-    // Step 1: canonical decomposition.
-    let mut chars: Vec<char> = Vec::with_capacity(s.len());
+    let mut out = String::with_capacity(s.len());
+    let mut buckets: [Vec<char>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    let mut remaining: Vec<char> = Vec::new();
+    let mut starter: Option<char> = None;
+    let mut has_marks = false;
+
     for c in s.chars() {
-        match decompose(c) {
-            Some((base, mark)) => {
-                chars.push(base);
-                chars.push(mark);
+        if let Some((bucket_idx, _)) = ccc_bucket(c) {
+            if !has_marks {
+                if let Some(st) = starter
+                    && let Some((base, mark0)) = decompose(st)
+                {
+                    starter = Some(base);
+                    if let Some((b0, _)) = ccc_bucket(mark0) {
+                        buckets[b0].push(mark0);
+                    }
+                }
+                has_marks = true;
             }
-            None => chars.push(c),
+            buckets[bucket_idx].push(c);
+        } else {
+            if has_marks {
+                flush_cluster(&mut starter, &mut buckets, &mut remaining, composer, &mut out);
+                has_marks = false;
+            } else if let Some(st) = starter.take() {
+                out.push(st);
+            }
+            starter = Some(c);
         }
     }
 
-    // Step 2: canonical ordering inside each run of marks. The sort is stable, so marks with
-    // equal classes keep their original order as UAX #15 requires, and a hostile run costs
-    // O(n log n) instead of the quadratic work of an insertion sort.
-    let mut idx = 0;
-    while idx < chars.len() {
-        if combining_class(chars[idx]) == 0 {
-            idx += 1;
-            continue;
-        }
-        let start = idx;
-        while idx < chars.len() && combining_class(chars[idx]) != 0 {
-            idx += 1;
-        }
-        chars[start..idx].sort_by_key(|&c| combining_class(c));
+    if has_marks {
+        flush_cluster(&mut starter, &mut buckets, &mut remaining, composer, &mut out);
+    } else if let Some(st) = starter {
+        out.push(st);
     }
 
-    // Step 3: canonical recomposition. The starter survives a mark it cannot compose
-    // with, so a later mark of a higher class can still compose with it (UAX #15 D115).
-    let mut out: Vec<char> = Vec::with_capacity(chars.len());
-    let mut starter: Option<usize> = None;
-    let mut last_class = 0_u8;
-    for c in chars {
-        let class = combining_class(c);
-        if class != 0
-            && let Some(pos) = starter
-            && last_class < class
-            && let Some(composed) = composer(out[pos], c)
-        {
-            out[pos] = composed;
-            continue;
-        }
-        if class == 0 {
-            starter = Some(out.len());
-        }
-        last_class = class;
-        out.push(c);
-    }
-
-    let normalized: String = out.into_iter().collect();
-    if normalized == s { Cow::Borrowed(s) } else { Cow::Owned(normalized) }
+    if out == s { Cow::Borrowed(s) } else { Cow::Owned(out) }
 }
 
 /// Normalize a Vietnamese string to precomposed Unicode Normalization Form C (NFC)

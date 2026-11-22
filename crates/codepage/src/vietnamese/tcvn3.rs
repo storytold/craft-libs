@@ -565,19 +565,29 @@ const fn is_unicode_vowel(c: char) -> bool {
 /// TCVN3 `"đã"` and has no ASCII letter at all).
 fn token_has_contextual_tcvn3_marker(token: &str) -> bool {
     let word = token.trim_matches(|c: char| c.is_ascii_punctuation());
-    if word.contains('\u{00B7}') && word.chars().count() >= 2 && word.chars().all(is_tcvn3_letter) {
-        return true;
-    }
-    if !word.chars().any(|c| c.is_ascii_alphabetic()) {
-        return false;
-    }
-    word.chars().any(is_unambiguous_tcvn3_latin1_marker)
-}
+    let mut char_count = 0_usize;
+    let mut has_middle_dot = false;
+    let mut all_tcvn3_letters = true;
+    let mut has_ascii_alpha = false;
+    let mut has_marker = false;
 
-/// Returns `true` when a Latin-1 widened string contains a TCVN3 marker inside an
-/// alphabetic token, per [`token_has_contextual_tcvn3_marker`].
-pub(super) fn has_unambiguous_tcvn3_latin1_markers(s: &str) -> bool {
-    s.split_whitespace().any(token_has_contextual_tcvn3_marker)
+    for c in word.chars() {
+        char_count += 1;
+        if c == '\u{00B7}' {
+            has_middle_dot = true;
+        }
+        if !is_tcvn3_letter(c) {
+            all_tcvn3_letters = false;
+        }
+        if c.is_ascii_alphabetic() {
+            has_ascii_alpha = true;
+        }
+        if is_unambiguous_tcvn3_latin1_marker(c) {
+            has_marker = true;
+        }
+    }
+
+    (has_middle_dot && char_count >= 2 && all_tcvn3_letters) || (has_ascii_alpha && has_marker)
 }
 
 /// Checks whether a standalone Latin-1 word under a lowercase `.VnTime` hint
@@ -646,15 +656,29 @@ pub(super) fn should_bypass_unicode_guard_for_tcvn3(s: &str, is_uppercase_font: 
     if !s.chars().all(|c| u32::from(c) <= 0xFF) {
         return false;
     }
-    if has_unambiguous_tcvn3_latin1_markers(s) {
-        return true;
+    s.split_whitespace().any(|tok| token_has_contextual_tcvn3_marker(tok) || (!is_uppercase_font && is_false_unicode_tcvn3_token(tok)))
+}
+
+#[inline]
+pub(super) fn transcode_tcvn3_unchecked(s: &str) -> Cow<'_, str> {
+    if s.is_ascii() || !s.chars().all(|c| u32::from(c) <= 0xFF) {
+        return Cow::Borrowed(s);
     }
-    !is_uppercase_font && s.split_whitespace().any(is_false_unicode_tcvn3_token)
+
+    let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
+    let all_caps = is_tcvn3_bytes_all_caps(&bytes);
+    match decode_tcvn3(&bytes, all_caps, DecodeMode::Practical) {
+        Ok(decoded) => {
+            let nfc = super::apply_vietnamese_nfc_cow(decoded);
+            if nfc.as_ref() == s { Cow::Borrowed(s) } else { Cow::Owned(nfc.into_owned()) }
+        }
+        Err(_) => Cow::Borrowed(s),
+    }
 }
 
 /// Transcode a TCVN3 (ABC) standard string to Unicode NFC.
 pub fn transcode_tcvn3(s: &str) -> Cow<'_, str> {
-    if s.is_ascii() {
+    if s.is_ascii() || !s.chars().all(|c| u32::from(c) <= 0xFF) {
         return Cow::Borrowed(s);
     }
     // Why: Bypass the Unicode heuristic when a `.VnTime` hint accompanies
@@ -663,15 +687,28 @@ pub fn transcode_tcvn3(s: &str) -> Cow<'_, str> {
     if !should_bypass_unicode_guard_for_tcvn3(s, false) && is_already_unicode_vietnamese(s) {
         return Cow::Borrowed(s);
     }
+
+    transcode_tcvn3_unchecked(s)
+}
+
+#[inline]
+pub(super) fn transcode_tcvn3_h_unchecked(s: &str) -> Cow<'_, str> {
+    if s.is_ascii() {
+        if !s.bytes().any(|b| b.is_ascii_lowercase()) {
+            return Cow::Borrowed(s);
+        }
+        return Cow::Owned(s.to_ascii_uppercase());
+    }
+    // Why: Check Latin-1 representability before allocating `bytes` so strings
+    // with non-Latin-1 characters (e.g. `"Plan 🙂"`) stay zero-allocation.
     if !s.chars().all(|c| u32::from(c) <= 0xFF) {
         return Cow::Borrowed(s);
     }
 
     let bytes: Vec<u8> = s.chars().map(|c| c as u8).collect();
-    let all_caps = is_tcvn3_bytes_all_caps(&bytes);
-    match decode_tcvn3(&bytes, all_caps, DecodeMode::Practical) {
+    match decode_tcvn3(&bytes, true, DecodeMode::Practical) {
         Ok(decoded) => {
-            let nfc = super::normalize_nfc(&decoded);
+            let nfc = super::apply_vietnamese_nfc_cow(decoded);
             if nfc.as_ref() == s { Cow::Borrowed(s) } else { Cow::Owned(nfc.into_owned()) }
         }
         Err(_) => Cow::Borrowed(s),
@@ -687,13 +724,8 @@ pub fn transcode_tcvn3(s: &str) -> Cow<'_, str> {
 /// Vietnamese without TCVN3 markers.
 pub fn transcode_tcvn3_h(s: &str) -> Cow<'_, str> {
     if s.is_ascii() {
-        if !s.bytes().any(|b| b.is_ascii_lowercase()) {
-            return Cow::Borrowed(s);
-        }
-        return Cow::Owned(s.to_ascii_uppercase());
+        return transcode_tcvn3_h_unchecked(s);
     }
-    // Why: Check Latin-1 representability before allocating `bytes` so strings
-    // with non-Latin-1 characters (e.g. `"Plan 🙂"`) stay zero-allocation.
     if !s.chars().all(|c| u32::from(c) <= 0xFF) {
         return Cow::Borrowed(s);
     }
@@ -701,16 +733,5 @@ pub fn transcode_tcvn3_h(s: &str) -> Cow<'_, str> {
         return Cow::Borrowed(s);
     }
 
-    let mut bytes = Vec::with_capacity(s.len());
-    for c in s.chars() {
-        bytes.push(c as u8);
-    }
-
-    match decode_tcvn3(&bytes, true, DecodeMode::Practical) {
-        Ok(decoded) => {
-            let nfc = super::normalize_nfc(&decoded);
-            if nfc.as_ref() == s { Cow::Borrowed(s) } else { Cow::Owned(nfc.into_owned()) }
-        }
-        Err(_) => Cow::Borrowed(s),
-    }
+    transcode_tcvn3_h_unchecked(s)
 }

@@ -392,7 +392,14 @@ pub fn detect_encoding(input: &[u8], metadata: Option<&EncodingMetadata<'_>>) ->
                         &[LegacyEncoding::Tcvn3, LegacyEncoding::Vni]
                     });
                 }
-                if enc == LegacyEncoding::Vni && tcvn_valid && !vni_valid {
+                // Why: Symmetric guard for VNI hints — an undecodable TCVN3 coincidence
+                // (e.g. a VNI payload containing 0xCD 'Í', which is unmapped in TCVN3)
+                // must not veto a valid `VNI-*` font hint.
+                if enc == LegacyEncoding::Vni
+                    && tcvn_valid
+                    && !vni_valid
+                    && super::tcvn3::decode_tcvn3(input, false, super::DecodeMode::Strict).is_ok()
+                {
                     return DetectionResult::Ambiguous(&[LegacyEncoding::Vni, LegacyEncoding::Tcvn3]);
                 }
             }
