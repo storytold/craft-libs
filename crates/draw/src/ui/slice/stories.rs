@@ -112,7 +112,7 @@ fn slice_bar_locked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// fields keep what was typed while it shows.
 fn dialog_story<D: StackDialog + 'static>(ui: &mut Ui, data: &mut StoryData, opener: &'static str, make: impl FnOnce() -> D) -> StoryOutput {
     let open = data.note::<Option<D>>("dialog", None);
-    if Button::new(opener).show(ui).response.clicked() {
+    if craft_ui::contract::clicked(&Button::new(opener).show(ui)) {
         *open = Some(make());
     }
     if let Some(dialog) = open.as_mut() {

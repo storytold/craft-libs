@@ -39,7 +39,8 @@ pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped}
 pub(crate) use board::{keymap_built, queued_for};
 
 use crate::contract::{MemoKey, MemoProps, PlainData, Revision, Tracked};
-use crate::runtime::egui::{areas, pass};
+use crate::runtime::egui::areas::{self, LayerKey};
+use crate::runtime::egui::pass;
 use crate::runtime::env::Label;
 use crate::runtime::memory::Facts;
 use crate::runtime::overlay;
@@ -633,7 +634,7 @@ pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
 #[derive(Clone, Debug, PartialEq)]
 struct ShownFact {
     command: CommandRef,
-    layer: egui::LayerId,
+    layer: LayerKey,
     rect: egui::Rect,
     label: Label,
     holder: bool,
@@ -651,13 +652,13 @@ impl Shift for ShownFact {
 }
 
 /// Registers `command` as shown for the next pass of the running viewport.
-fn register_shown(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, label: Label, command: &CommandRef, holder: bool) {
+fn register_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef, holder: bool) {
     Facts::register(ctx, ShownFact { command: command.clone(), layer, rect, label, holder });
 }
 
 /// Records that a container at `rect` holds `commands`, for this pass and viewport. Not [`CommandInput::holds`], which
 /// turns hold bindings on.
-pub fn holds(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, commands: &[CommandRef], label: Label) {
+pub fn holds(ctx: &Context, layer: LayerKey, rect: egui::Rect, commands: &[CommandRef], label: Label) {
     for command in commands {
         register_shown(ctx, layer, rect, label.clone(), command, true);
     }
@@ -666,7 +667,7 @@ pub fn holds(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, commands: &[
 /// Records that the bound component of `command` was shown at `rect` in `layer`, with `label`, for this pass and
 /// viewport: the report step calls it for a component wholly inside its clip.
 // PLAN: the caller is the report step (menus-w3); until it lands nothing in this crate calls it.
-pub(crate) fn note_shown(ctx: &Context, layer: egui::LayerId, rect: egui::Rect, label: Label, command: &CommandRef) {
+pub(crate) fn note_shown(ctx: &Context, layer: LayerKey, rect: egui::Rect, label: Label, command: &CommandRef) {
     register_shown(ctx, layer, rect, label, command, false);
 }
 

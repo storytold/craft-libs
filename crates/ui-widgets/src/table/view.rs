@@ -247,7 +247,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for Table<'_, K> {
     }
 
     fn rename_editor(&mut self, ui: &mut Ui, draft: Bind<'_, String>, label: Rect, name: &str) -> Option<EditResponse<String>> {
-        Some(crate::text::rename_field(ui, draft, label, name))
+        Some(crate::text::rename_field(draft, name).show_at(ui, label))
     }
 
     fn hosts_header(&self, column: &ColumnKey) -> bool {

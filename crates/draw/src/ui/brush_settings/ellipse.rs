@@ -153,7 +153,7 @@ pub struct TipEllipse<'a> {
     common: Common,
     value: Bind<'a, TipAngle>,
     /// The least roundness a dot drag, an Alt+arrow step and the drawn ellipse reach; 0 draws the flat tip as a line.
-    #[prop]
+    #[prop(quantity = "minor axis over major")]
     least_roundness: f64,
 }
 

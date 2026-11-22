@@ -961,11 +961,11 @@ impl<'a> LayerFilterBar<'a> {
                         .popup(PopupKind::Menu)
                         .show(ui);
                     let mut open = cx.memory::<FilterPopup>().open;
-                    if button.clicked() {
+                    if craft_ui::contract::clicked(&button) {
                         open = !open;
                     }
                     Popover::new(words.filter.clone(), Bind::bound(&mut open)).opened_by(&button).show(ui, |ui, _| {
-                        if Button::new(words.clear_all.clone()).enabled(ticked).show(ui).clicked() {
+                        if craft_ui::contract::clicked(&Button::new(words.clear_all.clone()).enabled(ticked).show(ui)) {
                             next.objects.clear();
                             next.states.clear();
                         }

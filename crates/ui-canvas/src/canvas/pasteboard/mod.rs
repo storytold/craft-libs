@@ -10,7 +10,7 @@ use super::space::canvas_space;
 use crate::contract::overlay::{Dismiss, LayerRole, Outside};
 use crate::contract::{
     Access, Bind, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
-    Props as _, Rename, Role,
+    Props as _, Rename, Role, Show as _,
 };
 use crate::primitives::{Checker, CheckerArea, PaintShape, PaintSlot, Rule, StrokeWidth, TextRun, paint_surround};
 use crate::runtime::env::Label;
@@ -208,7 +208,7 @@ impl Outcome for PasteboardOutput {
 /// page edges and names paint in place, over the pictures. The canvas must be given a view; without one nothing is
 /// shown.
 #[derive(crate::contract::Component, crate::contract::Props)]
-#[component(canvas_control, content_painter)]
+#[component(canvas_control, content_painter, overlay)]
 pub struct Pasteboard<'a> {
     #[common]
     common: Common,
@@ -569,7 +569,7 @@ impl Component for Pasteboard<'_> {
             let (open, field) = (state.open.as_ref()?, field?);
             let size = field.size();
             let at = Rect::from_min_size(ui.max_rect().min, size);
-            Some(crate::text::rename_field(ui, Bind::bound(&mut draft), at, &open.name))
+            Some(crate::text::rename_field(Bind::bound(&mut draft), &open.name).show_at(ui, at))
         });
         let Some(open) = state.open else { return };
         // `None`: the popup is not shown yet (it opens at the end of the pass that began the rename).

@@ -7,8 +7,8 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, Entry, Outcome as _, ScrollAnchor, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn,
-    ToggleEdit, WordSetCx as _, request_rename,
+    Bind, CollectionEvent, ColumnSpec, Entry, ScrollAnchor, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
+    WordSetCx as _, request_rename,
 };
 use crate::layout_components::Stack;
 use crate::menu::Menu;
@@ -629,7 +629,7 @@ fn list_follows_end(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let count = data.value("count", 12_usize);
     let mut shown = StoryOutput::default();
     Stack::new().show(ui, |ui, _| {
-        if Button::new("Add a row").show(ui).response().clicked() {
+        if crate::contract::clicked(&Button::new("Add a row").show(ui)) {
             *count += 1;
         }
         let names = names(*count);

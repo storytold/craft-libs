@@ -481,7 +481,7 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
 /// `textless_paste` reads it in that pass only.
 #[trial]
 fn a_paste_with_no_text_is_the_paste_chord_and_reads_as_textless() {
-    let picture = Event::PasteImage(Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::WHITE)));
+    let picture = Event::PasteImage(Arc::new(crate::testing::pictures::sample_picture(1, [1, 1])));
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, picture.clone()).1.is_empty(), "the picture's paste fires the app's Paste");
     let read = Rc::new(Cell::new(false));
     let seen = Rc::clone(&read);

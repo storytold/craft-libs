@@ -132,7 +132,7 @@ fn long_page_names(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// A double press on a page's name opens its rename field.
-#[story(Pasteboard<'static>, covers = [Default], drive = Drive::Custom(rename_first_name))]
+#[story(Pasteboard<'static>, covers = [Open], drive = Drive::Custom(rename_first_name))]
 fn renaming_a_page_name(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 0.0);
     let border = border_of(data, PageBorder::DropShadow);

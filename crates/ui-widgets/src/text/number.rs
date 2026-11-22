@@ -175,7 +175,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     fixed_decimals: Option<usize>,
     /// The number the held name stands for: while the value is a name, the field shows this number in parentheses in
     /// place of the name's label; the presets row keeps the label.
-    #[prop]
+    #[prop(quantity = "field value")]
     #[allow(dead_code)]
     // PLAN: `Ruled::format`'s named arm (rule.rs, appearance-w3) must show this number; the field passes it on once `Ruled` carries it
     name_number: Option<f64>,

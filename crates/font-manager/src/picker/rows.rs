@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Preview, Selection};
 use craft_font_catalog::Catalog;
+use craft_theme::Srgba;
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::overlay::Dismiss;
@@ -374,8 +375,8 @@ fn face_thumb<'a>(
             return;
         }
         let ink = if on_white {
-            cx.painter.rect_filled(rect, 0.0, Color32::WHITE);
-            DataColor::new(Color32::BLACK)
+            cx.painter.rect_filled(rect, 0.0, Color32::from(Srgba::WHITE));
+            DataColor::new(Color32::from(Srgba::BLACK))
         } else {
             DataColor::new(cx.ink())
         };

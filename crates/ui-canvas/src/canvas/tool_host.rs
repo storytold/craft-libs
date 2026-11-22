@@ -953,10 +953,10 @@ fn cancel_reason(reason: PressCancel) -> CancelReason {
     match reason {
         PressCancel::Escape => CancelReason::Escape,
         PressCancel::FocusLost => CancelReason::Blur,
-        PressCancel::Disabled => CancelReason::Dismissed,
         PressCancel::Host => CancelReason::HostChanged,
-        PressCancel::Gesture => CancelReason::Dismissed,
-        _ => CancelReason::Removed,
+        PressCancel::Removed => CancelReason::Removed,
+        // A part turned disabled, or a second finger landing on the canvas, dismisses the gesture.
+        _ => CancelReason::Dismissed,
     }
 }
 

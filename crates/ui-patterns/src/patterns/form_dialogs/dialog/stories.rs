@@ -1,7 +1,8 @@
 //! Stories of `ParamDialog`.
 
 use super::{HostedParamDialog, ParamDialog, ParamLayout, ParamPresets};
-use crate::contract::Bind;
+use crate::buttons::Button;
+use crate::contract::{Bind, Show as _};
 use crate::dialog::StackDialog as _;
 use crate::dialog::stories::hosted_with;
 use crate::patterns::form_dialogs::{DialogFields, Param, ParamKind};
@@ -117,7 +118,7 @@ fn hosted_param_dialog_with_a_refused_ok(ui: &mut Ui, data: &mut StoryData) -> S
 /// The open state of a story's dialog, which starts closed: a button opens it.
 fn opener<'d>(ui: &mut Ui, data: &'d mut StoryData) -> &'d mut bool {
     let open = data.value("open", false);
-    if ui.button("Open").clicked() {
+    if crate::contract::clicked(&Button::new("Open").show(ui)) {
         *open = true;
     }
     open
