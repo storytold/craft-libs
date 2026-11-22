@@ -148,3 +148,61 @@ fn caption_events_from_the_window_procedure_drive_the_maximize_button() {
     button = maximize(&windows);
     assert!(!button.clicked() && !button.is_pointer_button_down_on(), "a press that ended away from the button is no click");
 }
+
+/// The root window of an app on Windows that draws its own frame and hands the runtime its native window
+/// (`embed::before_ui`), so the hit sink is installed: the platform's hit test finds a corner resize 3 points inside the
+/// window's corner and the move area on the title bar, so the OS starts both at the press. A drag on the corner then
+/// sends no resize of the app's.
+#[trial]
+fn with_the_hit_sink_the_window_region_answers_the_platforms_hit_test() {
+    use craft_host::target::{Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::runtime::InstallSpec;
+    use craft_ui::shell::{CaptionFamily, Captions, Frame, ShellRegion, Title, TitleBar};
+    use craft_ui::testing::pointer::{moved, press, release};
+    use craft_ui::testing::windows::NoWindows;
+    use craft_window::policy::{Decision, Desktop, DesktopKind};
+    use egui::ViewportCommand;
+    use std::cell::Cell;
+    use std::sync::Arc;
+
+    let shell = ShellInfo::default()
+        .os(Os::Windows)
+        .caps(Caps::native(Os::Windows))
+        .window(WindowInfo::new(WindowKind::Main).chrome(WindowChrome::Integrated));
+    let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+    let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let host = WindowHost::of(&windows.ctx);
+    let _sink = host.install_hit_sink(ViewportId::ROOT);
+    let (window, bar) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+    let frame = |events: Vec<egui::Event>| -> Vec<ViewportCommand> {
+        windows
+            .frame(events, vec![], |ui| {
+                let shown = ShellRegion::window().id_salt("root").show(ui, |ui, _| {
+                    bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
+                });
+                window.set(shown.output.response.rect);
+            })
+            .commands
+            .into_iter()
+            .map(|(_, command)| command)
+            .collect()
+    };
+    for _ in 0..3 {
+        frame(vec![]);
+    }
+    let regions = host.caption_regions(ViewportId::ROOT).expect("the window registered its parts");
+    let corner = window.get().max - vec2(3.0, 3.0);
+    assert_eq!(regions.hit(corner), Some(WindowHit::Resize(ResizeEdge::BottomRight)), "the corner is a resize for the platform: {regions:?}");
+    let band = bar.get().center();
+    assert_eq!(regions.hit(band), Some(WindowHit::Move), "the title bar is the move area for the platform: {regions:?}");
+    let mut sent = frame(vec![moved(corner)]);
+    sent.extend(frame(vec![press(corner)]));
+    for step in 1..=4 {
+        sent.extend(frame(vec![moved(corner + vec2(10.0, 10.0) * step as f32)]));
+    }
+    sent.extend(frame(vec![release(corner + vec2(40.0, 40.0))]));
+    assert!(sent.iter().all(|command| !matches!(command, ViewportCommand::BeginResize(_))), "the platform resizes the window, not the app: {sent:?}");
+}

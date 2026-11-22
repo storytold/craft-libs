@@ -4457,6 +4457,7 @@ dependencies = [
  "craft-window",
  "eframe",
  "egui",
+ "raw-window-handle",
  "serde",
  "web-time",
 ]
