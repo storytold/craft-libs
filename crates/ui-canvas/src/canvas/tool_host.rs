@@ -19,7 +19,8 @@
 //!    shown in the canvas body (a crop frame, a transform box: `KeyUse::session`) takes these keys first.
 //! 5. The deletes and the plain keys are the app's unless the tool claims them ([`CanvasTool::claims`]). The host
 //!    reads the claims at the end of every pass, after the pointer events and keys, and holds the claimed chords from
-//!    the app's shortcuts in the next pass: a plain Delete with nothing to delete runs the app's Edit > Clear.
+//!    the app's shortcuts in the next pass, while the canvas or nothing in the window has focus: a plain Delete with
+//!    nothing to delete runs the app's Edit > Clear.
 //!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
 //!    arrows toward and away from the reading end.
 //! 6. The tool paints over the canvas and requests its cursor at tool priority, within the view on the canvas's layer.

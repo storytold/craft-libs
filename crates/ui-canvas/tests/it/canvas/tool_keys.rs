@@ -1,6 +1,6 @@
 //! Enter and Escape reach a tool holding a pending edit before the canvas has focus (Photoshop commits a transform
 //! with Enter without a click on the canvas first); a focused field beside the canvas keeps its own Enter. On the
-//! focused canvas, a tool takes the deletes it claims in its state at the end of the last pass: the plain ones, and
+//! focused canvas or with nothing focused, a tool takes the deletes it claims in its state at the end of the last pass: the plain ones, and
 //! with Alt held while it keeps the keyboard (Photoshop's polygonal lasso removes its last point while Alt holds the
 //! freehand switch). Unclaimed deletes are the app's (Edit > Clear, Fill). Enter and Escape reach a tool as `Submit`
 //! and `Cancel` with Alt carried, and Shift+Delete is no delete (Photoshop opens Fill, which the app binds). A
@@ -94,6 +94,17 @@ fn a_tool_whose_release_opens_an_outline_takes_alt_backspace_in_the_next_frame()
     canvas.fixture().frame(vec![key_press(Key::Backspace, Modifiers::ALT)]).frame(vec![key_release(Key::Backspace, Modifiers::ALT)]);
     canvas.fixture().hold(Modifiers::NONE).settle();
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: false }], "the outline the release opened takes Alt+Backspace");
+}
+
+/// With nothing focused, the deletes a tool claims are its own, as the arrows, Enter and Escape are: they never reach
+/// the app's Edit > Clear while the tool has something to delete.
+#[trial]
+fn a_tool_takes_the_deletes_it_claims_with_nothing_focused() {
+    let mut canvas = ToolFixture::new("Document", Outline::new(true));
+    canvas.fixture().settle();
+    assert_eq!(canvas.fixture().focused(), None, "nothing has focus");
+    canvas.fixture().key(Key::Delete, Modifiers::NONE).key(Key::Backspace, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }, Seen::Delete { forward: false }]);
 }
 
 /// A tool that takes every key the host offers it, and the lone Alt tap while `taps`.

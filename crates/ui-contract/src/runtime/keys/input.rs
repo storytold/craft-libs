@@ -425,10 +425,12 @@ enum PressUse {
 }
 
 /// The chords the focused component of `record` claims: its stop's, the state-dependent ones (`keys::claim`) of the
-/// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`.
+/// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`. With nothing
+/// focused, the window's document canvas's state-dependent claims hold instead.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
-    let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar].contains(&Some(owner));
+    let canvas = record.canvas.filter(|_| !record.foreign);
+    let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar, canvas].contains(&Some(owner));
     claims.extend(stage.claims.iter().filter(|(owner, _)| holds(*owner)).map(|(_, chord)| *chord));
     // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
     // mode, so no collection navigation or scroll owner takes it as a move to the end.

@@ -729,6 +729,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         keys,
         menu_bar: std::mem::take(&mut state.menu_bar),
         menu_bar_by_claim: std::mem::take(&mut state.menu_bar_by_claim),
+        canvas: if stop.is_none() { state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.id) } else { None },
         foreign: false,
         host_focus: false,
         host_text: false,
