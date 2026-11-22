@@ -18,7 +18,7 @@ use craft_ui::dialog::stories::hosted;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 
 use super::{
-    PlaneCheck, PlaneEdge, StampLimits, StampStroke, TornPlane, VanishingPlane, VanishingPlanes, VanishingPointBar, VanishingPointEditor,
+    PasteImage, PlaneCheck, PlaneEdge, StampLimits, StampStroke, TornPlane, VanishingPlane, VanishingPlanes, VanishingPointBar, VanishingPointEditor,
     VanishingPointOpen, VanishingPointSession, VanishingPointSettings, VanishingPointSource, VanishingPointWorkspace, VanishingPreviewRequest,
     VanishingScene, VanishingTool,
 };
@@ -193,10 +193,11 @@ fn stamp_with_its_source(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 #[story(VanishingPointWorkspace, covers = [], drive = Drive::Never)]
-fn paste_on_the_selected_plane(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn a_paste_selected_for_transform(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show_workspace(ui, data, true, |workspace| {
-        workspace.tool(VanishingTool::EditPlane).selected_plane(Some(0));
-        workspace.settings.paste = true;
+        workspace.session.pastes.push(PasteImage::default());
+        workspace.tool(VanishingTool::Transform).selected_plane(Some(0));
+        workspace.editor.selected_paste = Some(0);
     })
 }
 
@@ -232,7 +233,7 @@ fn planes_alone_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 fn bar(ui: &mut Ui, tool: VanishingTool, clipboard: bool) -> StoryOutput {
     let settings = VanishingPointSettings::default();
-    VanishingPointBar::new(tool, &settings, VanishingPointSession::default().paste, clipboard).has_strokes(clipboard).show(ui).into()
+    VanishingPointBar::new(tool, &settings, clipboard.then(PasteImage::default), clipboard).has_strokes(clipboard).show(ui).into()
 }
 
 #[story(VanishingPointBar<'static>, covers = [Default], drive = Drive::Never)]

@@ -22,6 +22,9 @@ pub enum VanishingPointCommands {
     /// Stamp.
     #[command(modal = "in_dialogs", label = "Stamp Tool", icon = "stamp", kind = "tool", default = "S")]
     Stamp,
+    /// Transform.
+    #[command(modal = "in_dialogs", label = "Transform Tool", icon = "move", kind = "tool", default = "T")]
+    Transform,
     /// Hand.
     #[command(modal = "in_dialogs", label = "Hand Tool", icon = "hand", kind = "tool", default = "H")]
     Hand,
@@ -31,9 +34,12 @@ pub enum VanishingPointCommands {
     /// Opens the form that adds a plane from its four corners.
     #[command(modal = "in_dialogs", label = "New Plane…", icon = "plus")]
     NewPlane,
+    /// Pastes the clipboard image onto the selected plane, once more each time.
+    #[command(modal = "in_dialogs", label = "Paste", icon = "copy", default = "Cmd+V")]
+    Paste,
 }
 
-/// A button of the strip: the editor's three tools, Hand and Zoom.
+/// A button of the strip: the editor's four tools, Hand and Zoom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum VanishingPointStripTool {
@@ -52,6 +58,7 @@ pub(super) enum Pick {
     EditPlane,
     CreatePlane,
     Stamp,
+    Transform,
     Hand,
     Zoom,
 }
@@ -65,6 +72,7 @@ impl Pick {
             (VanishingPointStripTool::Editor, VanishingTool::EditPlane) => Pick::EditPlane,
             (VanishingPointStripTool::Editor, VanishingTool::CreatePlane) => Pick::CreatePlane,
             (VanishingPointStripTool::Editor, VanishingTool::Stamp) => Pick::Stamp,
+            (VanishingPointStripTool::Editor, VanishingTool::Transform) => Pick::Transform,
         }
     }
 
@@ -74,6 +82,7 @@ impl Pick {
             Pick::EditPlane => (VanishingPointStripTool::Editor, Some(VanishingTool::EditPlane)),
             Pick::CreatePlane => (VanishingPointStripTool::Editor, Some(VanishingTool::CreatePlane)),
             Pick::Stamp => (VanishingPointStripTool::Editor, Some(VanishingTool::Stamp)),
+            Pick::Transform => (VanishingPointStripTool::Editor, Some(VanishingTool::Transform)),
             Pick::Hand => (VanishingPointStripTool::Hand, None),
             Pick::Zoom => (VanishingPointStripTool::Zoom, None),
         }
@@ -87,6 +96,7 @@ impl VanishingPointCommands {
             Pick::EditPlane => VanishingPointCommands::EditPlane,
             Pick::CreatePlane => VanishingPointCommands::CreatePlane,
             Pick::Stamp => VanishingPointCommands::Stamp,
+            Pick::Transform => VanishingPointCommands::Transform,
             Pick::Hand => VanishingPointCommands::Hand,
             Pick::Zoom => VanishingPointCommands::Zoom,
         }
@@ -98,6 +108,7 @@ impl VanishingPointCommands {
             VanishingPointCommands::EditPlane => Pick::EditPlane,
             VanishingPointCommands::CreatePlane => Pick::CreatePlane,
             VanishingPointCommands::Stamp => Pick::Stamp,
+            VanishingPointCommands::Transform => Pick::Transform,
             VanishingPointCommands::Hand => Pick::Hand,
             VanishingPointCommands::Zoom => Pick::Zoom,
             _ => return None,

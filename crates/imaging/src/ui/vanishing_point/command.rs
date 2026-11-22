@@ -4,8 +4,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::bar::PASTE_WIDTH;
-use super::editor::{StampLimits, StampSettings, StampStroke, VanishingPointSession, VanishingPointSettings, clamp_in};
+use super::bar::{PASTE_ANGLE, PASTE_WIDTH};
+use super::editor::{PasteImage, StampLimits, StampSettings, StampStroke, VanishingPointSession, VanishingPointSettings, clamp_in};
 use super::planes::{MAX_PLANES, PlaneEdge, TornPlane, VanishingPlane};
 
 /// A plane of the command: its corners, or how it was torn off an earlier plane.
@@ -23,8 +23,10 @@ pub enum VanishingCommandPlane {
     Torn(TornPlane),
 }
 
-/// The pasted image of the command: the plane it lands on, its top-left in plane coordinates and its width.
+/// A pasted image of the command: the plane it lands on, its unturned box's top-left in plane coordinates, its width,
+/// and its turn and mirroring when it has them.
 #[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct VanishingCommandPaste {
     /// The plane's index.
@@ -33,6 +35,27 @@ pub struct VanishingCommandPaste {
     pub at: [f64; 2],
     /// The image's width as a fraction of the plane's width.
     pub width: f64,
+    /// Degrees, clockwise on the plane, about the image's centre.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub angle: f64,
+    /// Mirrored left to right.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub flip_h: bool,
+    /// Mirrored top to bottom.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub flip_v: bool,
+    /// The clone strokes painted before it (at most all of them): it lands over those and under the later ones. Left
+    /// out, 0: the paste lands first, under every stroke.
+    #[serde(skip_serializing_if = "is_none_before")]
+    pub after: usize,
+}
+
+fn is_none_before(after: &usize) -> bool {
+    *after == 0
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// A clone stroke of the command; hardness and opacity are in percent.
@@ -59,7 +82,7 @@ pub struct VanishingCommandStroke {
 pub struct VanishingPointCommand {
     /// Every plane, in index order.
     pub planes: Vec<VanishingCommandPlane>,
-    /// The pasted image; at most one entry, only with Paste on and a clipboard image.
+    /// The pasted images, bottom to top; none without a clipboard image.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub paste: Vec<VanishingCommandPaste>,
     /// The clone strokes, in order.
@@ -71,14 +94,22 @@ pub struct VanishingPointCommand {
 }
 
 impl VanishingPointCommand {
-    /// The command for `session` under `settings`. The paste goes on the `selected` plane, else the first, and only
-    /// when Paste is on and the source has an image (`has_paste`).
-    pub(super) fn new(session: &VanishingPointSession, settings: &VanishingPointSettings, selected: Option<usize>, has_paste: bool) -> Self {
-        let plane = selected.filter(|i| *i < session.planes.len()).or_else(|| (!session.planes.is_empty()).then_some(0));
-        let paste = plane
-            .filter(|_| settings.paste && has_paste)
-            .map(|plane| VanishingCommandPaste { plane, at: session.paste.at, width: session.paste.width })
-            .into_iter()
+    /// The command for `session` under `settings`: every paste on an existing plane, when the source has an image
+    /// (`has_paste`).
+    pub(super) fn new(session: &VanishingPointSession, settings: &VanishingPointSettings, has_paste: bool) -> Self {
+        let paste = session
+            .pastes
+            .iter()
+            .filter(|p| has_paste && p.plane < session.planes.len())
+            .map(|p| VanishingCommandPaste {
+                plane: p.plane,
+                at: p.at,
+                width: p.width,
+                angle: p.angle,
+                flip_h: p.flip_h,
+                flip_v: p.flip_v,
+                after: p.after.min(session.strokes.len()),
+            })
             .collect();
         Self { planes: command_planes(session), paste, clone: command_strokes(session), new_layer: settings.new_layer }
     }
@@ -201,17 +232,24 @@ pub(super) fn read_strokes(value: &Value, limits: StampLimits) -> Result<Vec<Sta
     Ok(strokes)
 }
 
-/// The paste's top-left the control channel sets: each axis limited to -1..=2 (a non-finite value falls back to the
-/// default placement). `None` when the value is not `[x, y]`.
-pub(super) fn read_paste_at(value: &Value) -> Option<[f64; 2]> {
-    let at = [value.get(0)?.as_f64()?, value.get(1)?.as_f64()?];
-    let default = VanishingPointSession::default().paste.at;
-    Some([0, 1].map(|k| if at[k].is_finite() { at[k].clamp(-1.0, 2.0) } else { default[k] }))
-}
-
-/// The paste's width, as a fraction of the plane's width, the control channel sets: limited to the bar's range.
-/// `None` when the value is not a finite number.
-pub(super) fn read_paste_width(value: &Value) -> Option<f64> {
-    let width = value.as_f64().filter(|w| w.is_finite())?;
-    Some(clamp_in(&PASTE_WIDTH, width * 100.0) / 100.0)
+/// Reads the `pastes` list the control channel sets: per paste `plane` (an index below `planes`), `at` (each axis
+/// limited to -2..=3), `width` (a fraction of the plane's width, limited to the bar's range), `angle` (degrees,
+/// -180..=180), `flipH` and `flipV`; missing fields take a new paste's values.
+pub(super) fn read_pastes(value: &Value, planes: usize) -> Result<Vec<PasteImage>, String> {
+    let list = value.as_array().ok_or("pastes: a list")?;
+    let mut out = Vec::with_capacity(list.len());
+    for (k, entry) in list.iter().enumerate() {
+        let mut paste: PasteImage = serde_json::from_value(entry.clone()).map_err(|e| format!("paste {k}: {e}"))?;
+        if paste.plane >= planes {
+            return Err(format!("paste {k}: no plane {}", paste.plane));
+        }
+        if !(paste.at.iter().all(|v| v.is_finite()) && paste.width.is_finite() && paste.angle.is_finite()) {
+            return Err(format!("paste {k}: finite numbers"));
+        }
+        paste.at = paste.at.map(|v| v.clamp(-2.0, 3.0));
+        paste.width = clamp_in(&PASTE_WIDTH, paste.width * 100.0) / 100.0;
+        paste.angle = clamp_in(&PASTE_ANGLE, paste.angle);
+        out.push(paste);
+    }
+    Ok(out)
 }

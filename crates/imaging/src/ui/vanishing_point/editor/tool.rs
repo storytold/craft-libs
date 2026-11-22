@@ -1,12 +1,15 @@
 //! [`VanishingPointTool`]: the presses of the plane editor that fall on no node.
 
 use craft_behavior::{CancelReason, Cursor, CursorIcon, PaintedCursor};
-use craft_ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
 
 use super::work::{Pressed, Work};
 use super::{Shared, VanishingTool};
 use crate::ui::vanishing_point::words::VanishingPointWords;
+
+/// How near a corner of the selected paste a Transform press scales it, in screen points.
+const CORNER_REACH: f32 = 8.0;
 
 /// The editor as the `CanvasTool` of one pass; the planes' nodes are [`VanishingPlanes`](super::VanishingPlanes)'
 /// parts, which take their own presses.
@@ -14,12 +17,14 @@ use crate::ui::vanishing_point::words::VanishingPointWords;
 /// - **Create Plane**: four clicks in any order make a plane (`VanishingScene::normalized`), selected; then Edit Plane
 ///   takes over (as Photoshop). A rubber band runs from the last corner to the pointer. Nothing past
 ///   [`MAX_PLANES`](super::super::MAX_PLANES).
-/// - **Edit Plane**: a click selects the plane under it (`VanishingScene::plane_at`) or none; a press on the pasted
-///   image moves it on the plane.
+/// - **Edit Plane**: a click selects the plane under it (`VanishingScene::plane_at`) or none; a press on a pasted
+///   image selects it and moves it, onto another plane too.
+/// - **Transform**: a press on the selected paste's corner scales it about its centre, one just outside its corners
+///   turns it, one on a paste selects and moves it.
 /// - **Stamp**: Alt-click sets the source; a press, drag, release paints a `StampStroke` with the settings (Aligned
 ///   keeps the first stroke's offset). A press the stroke limits or a missing source refuse reports its message
 ///   through [`VanishingPointEditor::take_status`](super::VanishingPointEditor::take_status).
-/// - **Keys**: Delete and Backspace remove the selected plane; Esc drops the pending corners.
+/// - **Keys**: Delete and Backspace remove the selected paste, else the selected plane; Esc drops the pending corners.
 /// - **Events**: `VanishingPointEvent::Planes` Begin, Update, Commit for a drag and `Set` for a click that made or
 ///   deleted a plane; `Paste` for the image's drag; `Stamp` for a stroke (each Update carries the stroke so far). Esc
 ///   during a drag reports Cancel and puts back what the press found.
@@ -55,8 +60,10 @@ impl CanvasTool for VanishingPointTool<'_> {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:658 `press`.
         let (Some(p), words) = (Self::doc(cx, pointer), cx.words::<VanishingPointWords>()) else { return ToolAction::Ignored };
         let gesture = cx.gesture_id();
+        let reach = cx.space().map_or(0.0, |space| space.view.doc_len(CORNER_REACH));
         let pressed = self.run(|work| {
             work.gesture = gesture;
+            work.reach = reach;
             work.background_down(p, pointer.mods, &words)
         });
         match pressed {
@@ -96,8 +103,17 @@ impl CanvasTool for VanishingPointTool<'_> {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:1045 `keys` (Delete, Backspace), :1068 `escape`.
         let words = cx.words::<VanishingPointWords>();
         match key {
-            ToolKey::Delete { .. } => {
-                self.run(|work| work.editor.delete_selected(work.session, work.scene, words.edit_planes_step.as_str()).is_some())
+            ToolKey::Delete { .. } => self.run(|work| {
+                work.editor.delete_selected_paste(work.session, words.delete_paste_step.as_str())
+                    || work.editor.delete_selected(work.session, work.scene, words.edit_planes_step.as_str()).is_some()
+            }),
+            ToolKey::Nudge { direction, mods, .. } => {
+                let Some(space) = cx.space() else { return false };
+                let by = space.view.unmap_vec(*direction) * if mods.shift { NUDGE_FAR } else { NUDGE };
+                self.run(|work| {
+                    work.nudge_paste([by.x, by.y], words.paste_step.as_str())
+                        || (work.editor.tool != VanishingTool::Stamp && work.nudge_plane([by.x, by.y], words.edit_planes_step.as_str()))
+                })
             }
             ToolKey::Cancel => self.run(|work| work.editor.drop_pending()),
             _ => false,
@@ -105,7 +121,28 @@ impl CanvasTool for VanishingPointTool<'_> {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.run(|work| work.editor.selected().is_some()) { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        self.run(|work| {
+            let moves = work.editor.drag.is_none()
+                && (work.editor.selected_paste().is_some() || (work.editor.selected().is_some() && work.editor.tool != VanishingTool::Stamp));
+            match (work.editor.selected_paste().or(work.editor.selected()), moves) {
+                (Some(_), true) => ToolClaims::NONE.deletes().nudges(),
+                (Some(_), false) => ToolClaims::NONE.deletes(),
+                (None, _) => ToolClaims::NONE,
+            }
+        })
+    }
+
+    fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
+        // What the arrows move: the selected paste, else the selected plane.
+        let words = cx.words::<VanishingPointWords>();
+        let (name, quad) = self.run(|work| match work.editor.selected_paste() {
+            Some(i) => work.paste_quad(i).map(|q| (words.paste_name.as_str().to_owned(), q)),
+            None => work.editor.selected().and_then(|i| work.session.planes.get(i)).map(|p| (words.plane_name.as_str().to_owned(), p.corners)),
+        })?;
+        let bounds = quad
+            .iter()
+            .fold(craft_behavior::kurbo::Rect::from_points((quad[0][0], quad[0][1]), (quad[0][0], quad[0][1])), |r, q| r.union_pt((q[0], q[1])));
+        Some(ToolAccess::new(name).bounds(bounds))
     }
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {
@@ -120,6 +157,7 @@ impl CanvasTool for VanishingPointTool<'_> {
         self.run(|work| match work.editor.tool {
             VanishingTool::Stamp if over.is_some_and(|p| work.on_plane(p)) => Cursor::System(CursorIcon::None),
             VanishingTool::EditPlane => Cursor::System(CursorIcon::Default),
+            VanishingTool::Transform => Cursor::System(CursorIcon::Move),
             _ => crosshair(),
         })
     }
