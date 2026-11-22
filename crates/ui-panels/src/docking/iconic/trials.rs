@@ -441,8 +441,8 @@ pub(crate) fn grip_ticks(shapes: &[egui::Shape], strip: Rect) -> Option<(Vec<Rec
 }
 
 /// Checks the ticks of a grip strip: ten upright marks, one point wide, four tall, one point apart, centred on the
-/// strip and darker than the panel `panel`.
-pub(crate) fn assert_grip_ticks(ticks: &[Rect], ink: egui::Color32, strip: Rect, panel: craft_theme::Rgba, what: &str) {
+/// strip and in the theme's `grip` ink, which stands apart from the panel `panel` (photocraft#16406).
+pub(crate) fn assert_grip_ticks(ticks: &[Rect], ink: egui::Color32, strip: Rect, panel: craft_theme::Rgba, grip: craft_theme::Rgba, what: &str) {
     assert_eq!(ticks.len(), 10, "{what}: ten ticks: {ticks:?}");
     for tick in ticks {
         assert!((tick.width() - 1.0).abs() < 0.01 && (tick.height() - 4.0).abs() < 0.01, "{what}: a tick is 1 x 4 points: {tick:?}");
@@ -451,14 +451,15 @@ pub(crate) fn assert_grip_ticks(ticks: &[Rect], ink: egui::Color32, strip: Rect,
     let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
     assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
     assert!((run.center().y - strip.center().y).abs() <= 0.5, "{what}: centred in the strip's height: {run:?} in {strip:?}");
-    let [r, g, b, _] = panel.0;
-    assert!(ink.r() < r && ink.g() < g && ink.b() < b && ink.r() >= r / 2, "{what}: the ticks are a little darker than the panel {panel:?}: {ink:?}");
+    let [r, g, b, a] = grip.0;
+    assert_eq!(ink, egui::Color32::from_rgba_unmultiplied(r, g, b, a), "{what}: the ticks are in the theme's line.grip {grip:?}");
+    assert_ne!(grip.0[..3], panel.0[..3], "{what}: the grip ink {grip:?} stands apart from the panel {panel:?}");
 }
 
-/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks a little
-/// darker than the panel, the same under the pointer.
+/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks in the
+/// theme's grip ink, the same under the pointer.
 #[trial]
-fn a_groups_grip_is_a_row_of_upright_ticks_darker_than_the_panel() {
+fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
     let mut fixture =
         Fixture::hosted(|ui| {
             let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
@@ -471,12 +472,12 @@ fn a_groups_grip_is_a_row_of_upright_ticks_darker_than_the_panel() {
         });
     fixture.room(SCREEN).settle();
     let id = fixture.root_id().expect("the column shows");
-    let panel = StyleCx::with_root(fixture.ctx(), |cx| cx.tokens.color.surface.panel);
+    let (panel, grip) = StyleCx::with_root(fixture.ctx(), |cx| (cx.tokens.color.surface.panel, cx.tokens.color.line.grip));
     for group in [0, 1] {
         let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip");
         let shapes = fixture.frame_shapes();
         let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
-        assert_grip_ticks(&ticks, ink, strip, panel, &format!("group {group}"));
+        assert_grip_ticks(&ticks, ink, strip, panel, grip, &format!("group {group}"));
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
         let (_, hover_ink) = grip_ticks(&hovered, strip).expect("the grip paints its ticks under the pointer");

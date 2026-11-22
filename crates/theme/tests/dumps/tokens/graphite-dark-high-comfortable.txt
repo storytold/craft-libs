@@ -23,6 +23,7 @@ line.control_edge = #77777cff
 line.knob_edge = #00000000
 line.frame = #0d0d0dff
 line.mark = #a3a3a7ff
+line.grip = #3a3a3eff
 line.focus = #5394feff
 accent.solid = #5394feff
 accent.hover = #5796feff

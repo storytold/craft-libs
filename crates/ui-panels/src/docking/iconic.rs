@@ -411,7 +411,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
-            // The references' grip: a row of upright ticks a little darker than the panel.
+            // The references' grip: a row of upright ticks, in the theme's grip ink.
             grip: GripMarks::style(cx),
         }
     }

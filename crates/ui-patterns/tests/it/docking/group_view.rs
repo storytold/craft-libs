@@ -101,7 +101,7 @@ impl DockPanels<usize> for RailPanels {
 }
 
 /// A tool rail the host shows itself has the dock's grip under its column bar, as the references' toolbar: a strip of
-/// ten upright ticks, a little darker than the panel, above the host's view, which keeps the height it measured at; a
+/// ten upright ticks in the theme's grip ink, above the host's view, which keeps the height it measured at; a
 /// drag on the strip moves the rail's group.
 #[trial]
 fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {

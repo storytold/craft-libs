@@ -201,3 +201,29 @@ fn a_later_pull_never_breaks_an_earlier_pair() {
     assert!(!fails(&r, T::LineFocus, T::SurfaceRaised), "the earlier pair keeps passing: {:?}", r.warnings);
     assert!(fails(&r, T::TextNormal, T::SurfaceRaised), "{:?}", r.warnings);
 }
+
+/// photocraft#16406: a grip's marks stand a little apart from the panel in every built-in theme, lighter in dark mode
+/// and darker in light mode, and quieter than muted text; a theme that pins `line.grip` gets its own colour.
+#[test]
+fn the_grip_ink_lies_a_little_apart_from_the_panel_and_a_theme_can_pin_it() {
+    use crate::contrast::relative_luminance as lum;
+    let standard =
+        |mode| Appearance { mode, contrast: Contrast::Standard, size: Size::Comfortable, text_size: TextSize::ALL[0], reduced_motion: false };
+    for def in crate::builtins().iter().cloned().chain([grey_blue(), violet()]) {
+        for mode in [Mode::Dark, Mode::Light] {
+            let r = resolve(&def, standard(mode), None);
+            let c = &r.tokens.color;
+            let (grip, panel, muted) = (lum(c.line.grip), lum(c.surface.panel), lum(c.text.muted));
+            let what = format!("{} {:?}", def.name, r.variant_used);
+            match r.variant_used {
+                Mode::Dark => assert!(grip > panel, "{what}: the grip {:?} is lighter than the panel {:?}", c.line.grip, c.surface.panel),
+                Mode::Light => assert!(grip < panel, "{what}: the grip {:?} is darker than the panel {:?}", c.line.grip, c.surface.panel),
+            }
+            assert!((grip - panel).abs() < (muted - panel).abs(), "{what}: the grip {:?} is quieter than muted text {:?}", c.line.grip, c.text.muted);
+        }
+    }
+    let mut pinned = grey_blue();
+    pinned.pins.dark = Pins::from_iter([(T::LineGrip, hex("#5a6b7c"))]);
+    let r = resolve(&pinned, standard(Mode::Dark), None);
+    assert_eq!(r.tokens.color.line.grip, hex("#5a6b7c"), "a theme's pinned line.grip is used");
+}

@@ -41,12 +41,9 @@ pub struct GroupGripStyle {
 const GRIP_TICKS: u16 = 10;
 /// How tall a grip's tick is, in points.
 const GRIP_TICK_LENGTH: f32 = 4.0;
-/// The share of the panel's lightness a grip's ticks keep: the references' marks are a little darker than the panel
-/// they sit on in every interface colour (`#454545` on `#535353`, `#272727` on `#323232`, `#9e9e9e` on `#b8b8b8`).
-const GRIP_INK_SHARE: f32 = 0.83;
-
 /// The row of marks a dock grip shows, as the references draw it: ten upright ticks, a thin stroke wide, four points
-/// tall and a thin stroke apart, centred on the grip, a little darker than the panel. They keep their ink under the
+/// tall and a thin stroke apart, centred on the grip, in the theme's `line.grip` (photocraft#16406: the references' 0.83
+/// of the panel was almost invisible on our darker panels). They keep their ink under the
 /// pointer, as the references' do. A toolbar's grip under its column bar and the grip above each icon group of a
 /// collapsed column paint the same marks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,7 +58,7 @@ pub(super) struct GripMarks {
 impl GripMarks {
     /// The marks in the tokens of `cx`.
     pub(super) fn style(cx: &StyleCx<'_>) -> Self {
-        GripMarks { ink: cx.color(grip_ink(cx.tokens.color.surface.panel)), side: cx.tokens.stroke.thin, length: GRIP_TICK_LENGTH }
+        GripMarks { ink: cx.color(cx.tokens.color.line.grip), side: cx.tokens.stroke.thin, length: GRIP_TICK_LENGTH }
     }
 
     /// Paints the row centred on `centre`.
@@ -69,13 +66,6 @@ impl GripMarks {
         let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(self.side) };
         ui.draw().grip_ticks(&look, centre, GRIP_TICKS, self.side, self.length);
     }
-}
-
-/// The ink of a grip's ticks on a `panel` surface: the panel's channels at [`GRIP_INK_SHARE`].
-fn grip_ink(panel: Rgba) -> Rgba {
-    let [r, g, b, a] = panel.0;
-    let darker = |channel: u8| (f32::from(channel) * GRIP_INK_SHARE).round().clamp(0.0, 255.0) as u8;
-    Rgba([darker(r), darker(g), darker(b), a])
 }
 
 /// What a group grip reports: its response, the second press of a double click and whether it started a group
