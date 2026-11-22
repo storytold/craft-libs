@@ -174,11 +174,6 @@ fn stretched(raw: &RawImage, rgb: Rgb32f) -> Rgb32f {
 }
 
 #[cfg(test)]
-pub(crate) fn bayer(s: &'static str) -> Cfa {
-    Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, origin_x: 0, origin_y: 0, pattern: vec![0, 1, 1, 2] })
-}
-
-#[cfg(test)]
 mod checked_arithmetic_tests {
     use super::*;
 
