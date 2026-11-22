@@ -969,6 +969,7 @@ video-vp9-decode = ["video", "craft-video/vp9-decode"]
 video-vp9-encode = ["video", "craft-video/vp9-encode"]
 
 wasm = ["dep:craft-wasm"]
+
 wayland = ["dep:craft-wayland"]
 
 web-api = ["dep:craft-web-api"]
