@@ -31,7 +31,7 @@
 //! `\n`, so one skip is one line. Each line is written with one call while stderr is locked, so
 //! lines from tests running in parallel do not mix; their order is not fixed.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 
 /// The default name of the variable that makes a skip fail the test.
@@ -40,9 +40,11 @@ pub const REQUIRED_VAR: &str = "CRAFT_TEST_REQUIRED";
 /// The variable `craft-fonts-build` reads, named by [`craft_fonts`] when it fails a test.
 pub const FONTS_REQUIRED_VAR: &str = "CRAFT_FONTS_REQUIRED";
 
-/// A value of the required variable that is not unset, empty or `1`.
+/// A required variable name that cannot be read, or a value that is not unset, empty or `1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequiredError {
+    /// The variable name is empty or holds `=` or a NUL character.
+    BadName { variable: String },
     /// The value is not valid Unicode.
     NotUnicode { variable: String },
     /// The value is valid Unicode but not empty or `1`.
@@ -53,6 +55,7 @@ impl fmt::Display for RequiredError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const FIX: &str = "set it to 1 to fail a test that lacks a prerequisite, or leave it unset or empty to skip the test";
         match self {
+            Self::BadName { variable } => write!(f, "{variable:?} cannot name a variable: it is empty or holds `=` or a NUL character"),
             Self::NotUnicode { variable } => write!(f, "{variable} is not valid Unicode; {FIX}"),
             Self::BadValue { variable, value } => write!(f, "{variable}={value:?} is not empty or 1; {FIX}"),
         }
@@ -63,9 +66,18 @@ impl std::error::Error for RequiredError {}
 
 /// Whether the variable `var` makes a missing prerequisite fail the test. Unset and empty return
 /// `Ok(false)`, and `1` returns `Ok(true)`. Any other value, including `0` and a value that is not
-/// valid Unicode, returns an error that names the variable.
+/// valid Unicode, returns an error that names the variable. A name that is empty or holds `=` or a
+/// NUL character returns an error before the environment is read.
 pub fn required(var: &str) -> Result<bool, RequiredError> {
-    parse_required(var, std::env::var_os(var).as_deref())
+    required_with(var, |name| std::env::var_os(name))
+}
+
+/// [`required`] with the variable lookup passed in.
+fn required_with(variable: &str, lookup: impl FnOnce(&str) -> Option<OsString>) -> Result<bool, RequiredError> {
+    if variable.is_empty() || variable.contains(['=', '\0']) {
+        return Err(RequiredError::BadName { variable: variable.to_owned() });
+    }
+    parse_required(variable, lookup(variable).as_deref())
 }
 
 fn parse_required(variable: &str, value: Option<&OsStr>) -> Result<bool, RequiredError> {
@@ -267,6 +279,21 @@ mod tests {
         assert_eq!(parse_required(REQUIRED_VAR, Some(&value)), Err(RequiredError::NotUnicode { variable: REQUIRED_VAR.into() }));
         let message = RequiredError::NotUnicode { variable: REQUIRED_VAR.into() }.to_string();
         assert!(message.starts_with("CRAFT_TEST_REQUIRED is not valid Unicode; "), "{message}");
+    }
+
+    #[test]
+    fn bad_variable_names_are_rejected_before_reading() {
+        for name in ["", "A=B", "A\0B"] {
+            let result = required_with(name, |_| panic!("the variable was read"));
+            assert_eq!(result, Err(RequiredError::BadName { variable: name.to_owned() }), "{name:?}");
+            assert_eq!(required(name), Err(RequiredError::BadName { variable: name.to_owned() }), "{name:?}");
+
+            let failed = std::panic::catch_unwind(|| skip("probe absent", name));
+            let message = failed.expect_err("a bad name fails the test");
+            let message = message.downcast_ref::<String>().expect("a formatted message");
+            assert!(message.starts_with("probe absent, and "), "{message}");
+            assert!(message.ends_with(" cannot name a variable: it is empty or holds `=` or a NUL character"), "{message}");
+        }
     }
 
     /// Absence is never silent, and which of the two loud forms it takes is decided by the

@@ -230,6 +230,9 @@ The variable is read only when something is missing.
 | Any other value, such as `0`, `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
 | Not Unicode | The test fails with the reason and the variable's name. No skip line is printed. |
 
+A variable name that is empty or holds `=` or a NUL character also fails the test, before the
+environment is read.
+
 `skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
 or a `RequiredError` that names the variable.
 
