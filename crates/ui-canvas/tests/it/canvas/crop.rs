@@ -849,13 +849,19 @@ fn a_document_crop_moved_past_its_bounds_takes_in_the_area_there() {
     rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
     let r = rig.rect();
     assert!(r.x1 > canvas.x1 + 1.0 && (r.width() - RECT.width()).abs() < 1e-6, "classic: the frame moves past the canvas: {r:?}");
-    // Image mode moves the image under the frame: a drag to the right takes the frame past the canvas's left edge.
-    let mut setup = Setup::image(0.0, false);
-    setup.bounds = Some(canvas);
-    let mut rig = Rig::new(CropBox::upright(RECT), setup);
-    rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
-    let r = rig.rect();
-    assert!(r.x0 < canvas.x0 - 1.0 && (r.width() - RECT.width()).abs() < 1e-6, "image mode: the frame moves past the canvas: {r:?}");
+    // Image mode moves the image under the frame: a drag to the right takes the frame past the canvas's left edge, with
+    // Auto Center Preview off and on (the view then follows the frame).
+    for auto_center in [false, true] {
+        let mut setup = Setup::image(0.0, auto_center);
+        setup.bounds = Some(canvas);
+        let mut rig = Rig::new(CropBox::upright(RECT), setup);
+        rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+        let r = rig.rect();
+        assert!(
+            r.x0 < canvas.x0 - 1.0 && (r.width() - RECT.width()).abs() < 1e-6,
+            "image mode, auto centre {auto_center}: the frame moves past the canvas: {r:?}"
+        );
+    }
     // A turned frame keeps inside the canvas.
     let mut setup = Setup::new();
     setup.bounds = Some(canvas);
