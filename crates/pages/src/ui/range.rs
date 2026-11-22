@@ -9,7 +9,7 @@ use craft_behavior::{Codec, NotAValue, NumberCodec};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::{
-    Bind, EditResponse, Entry, FieldLayout, LabelKind, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel, Trigger,
+    Bind, EditResponse, Entry, FieldLayout, LabelKind, LabelScheme, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel, Trigger,
     Validity,
 };
 use craft_ui::display::Text;
@@ -339,8 +339,23 @@ impl PageRangeOptions {
         let current_page = Label::from(words.current_page.fill(&[("page", page.as_str())]));
         let mut from = None;
         let mut to = None;
+        // A document dialog (`LabelScheme::Inline`) shows the options as production does: one wrapping line, the subset
+        // at its end. Elsewhere the radio buttons stack and the subset is a row of its own.
+        let inline = env.view().get::<LabelScheme>() == LabelScheme::Inline;
+        let entries = [
+            Entry::new(Subset::All, words.all_in_range.clone()),
+            Entry::new(Subset::Even, words.even_only.clone()),
+            Entry::new(Subset::Odd, words.odd_only.clone()),
+        ];
+        let mut subset = None;
+        let mut pick_subset = |ui: &mut Ui| {
+            let picked = Select::new(words.subset.clone(), Bind::given(range.subset), &entries).show(ui);
+            if let Some(chosen) = picked.value().copied() {
+                subset = Some(chosen);
+            }
+        };
         let group = RadioGroup::new(label, Bind::given(range.scope)).show(ui, |ui, cx| {
-            Stack::new().show(ui, |ui, _| {
+            let mut body = |ui: &mut Ui| {
                 cx.labelled(ui, "all", words.all_pages.clone(), after.clone(), Radio::new(PageScope::All));
                 if choices.current() {
                     cx.labelled(ui, "current", current_page.clone(), after.clone(), Radio::new(PageScope::Current));
@@ -361,8 +376,20 @@ impl PageRangeOptions {
                         Text::new(words.to.clone()).show(ui);
                         to = whole(&field(&words.to, shown_to).show(ui).edit, shown_to);
                     });
+                    if inline && choices.subset() {
+                        Row::new().show(ui, |ui, _| {
+                            Text::new(words.subset.clone()).show(ui);
+                            pick_subset(ui);
+                        });
+                    }
                 });
-            });
+            };
+            if inline {
+                // One line: the radio buttons side by side as far as the room goes.
+                Row::new().wrap(true).show(ui, |ui, _| body(ui));
+            } else {
+                Stack::new().show(ui, |ui, _| body(ui));
+            }
         });
         if let Some(scope) = group.output.value().copied() {
             next.scope = scope;
@@ -374,18 +401,11 @@ impl PageRangeOptions {
         if let Some(value) = to {
             next.to = Some(value);
         }
-        if choices.subset() {
-            let entries = [
-                Entry::new(Subset::All, words.all_in_range.clone()),
-                Entry::new(Subset::Even, words.even_only.clone()),
-                Entry::new(Subset::Odd, words.odd_only.clone()),
-            ];
-            Field::new(words.subset.clone()).show(ui, |ui, _| {
-                let picked = Select::new(words.subset.clone(), Bind::given(range.subset), &entries).show(ui);
-                if let Some(subset) = picked.value().copied() {
-                    next.subset = subset;
-                }
-            });
+        if choices.subset() && !inline {
+            Field::new(words.subset.clone()).show(ui, |ui, _| pick_subset(ui));
+        }
+        if let Some(chosen) = subset {
+            next.subset = chosen;
         }
         PageRangeOptionsOutput { response: group.output.response.clone(), changed: (next != range).then_some(next) }
     }

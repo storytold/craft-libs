@@ -328,6 +328,10 @@ impl Line<'_> {
     /// Shows `body` in a field named by the row: its label beside the control, its tooltip over both.
     fn show(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
         let mut field = Field::new(self.name.clone()).id_salt(self.key).enabled(self.enabled);
+        // In a document dialog a custom row is a group of controls (page range options, say): its name heads it.
+        if matches!(self.param.kind, ParamKind::Custom(_)) && Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline {
+            field = field.layout(FieldLayout::Above);
+        }
         if let Some(tip) = self.param.tooltip_text() {
             field = field.tooltip(tip.clone());
         }
