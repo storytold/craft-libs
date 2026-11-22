@@ -265,6 +265,16 @@ fn config_qualifiers(r: &Reader<'_>, off: usize) -> (String, String) {
     (s, locale)
 }
 
+/// A type's configuration is part of its header, not the entry offsets or payload.
+fn type_config(r: &Reader<'_>, at: usize, header_size: usize) -> Option<(String, String)> {
+    let config = Reader::new(r.slice(at.checked_add(20)?, header_size.checked_sub(20)?)?);
+    let size = config.u32_le(0)? as usize;
+    if size < 4 || config.slice(0, size).is_none() {
+        return None;
+    }
+    Some(config_qualifiers(&config, 0))
+}
+
 struct Pkg<'a> {
     name: &'a str,
     id: u32,
@@ -282,6 +292,9 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
     let (t, h, size) = chunk(&r, 0).ok_or_else(|| Error::Truncated("resource table header".into()))?;
     if t != RES_TABLE {
         return Err(Error::Malformed(format!("not a resource table (chunk type {t:#x})")));
+    }
+    if h < 12 {
+        return Err(Error::Truncated("resource table header".into()));
     }
     let data = data.get(..size).ok_or_else(|| Error::Truncated("resource table payload".into()))?;
     let r = Reader::new(data);
@@ -307,6 +320,7 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
             },
             RES_PACKAGE => {
                 if table.packages.len() >= MAX_PACKAGES {
+                    table.truncated = true;
                     table.warnings.push("too many packages; the rest were skipped".into());
                 } else {
                     parse_package(data, pos, cs, &global, &mut table, limits);
@@ -399,11 +413,17 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 }
             }
             (RES_TYPE, Some(tid)) if ch >= 24 => {
-                let (cfg, _) = config_qualifiers(&r, c + 20);
+                let Some((cfg, locale)) = type_config(&r, c, ch) else {
+                    table.truncated = true;
+                    table.warnings.push(format!("package {name}: incomplete type configuration at offset {c}"));
+                    // The child extent was already validated by chunk().
+                    c += sz;
+                    continue;
+                };
                 match package.types.iter_mut().find(|t| t.id == tid) {
                     Some(t) => {
                         if !t.configs.contains(&cfg) && t.configs.len() < 4096 {
-                            t.configs.push(cfg);
+                            t.configs.push(cfg.clone());
                         }
                     }
                     None => {
@@ -412,12 +432,12 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                                 id: tid,
                                 name: type_name(&p, local_tid),
                                 entry_count: r.u32_le(c + 12).unwrap_or(0),
-                                configs: vec![cfg],
+                                configs: vec![cfg.clone()],
                             })
                         }
                     }
                 }
-                parse_type(&r, c, ch, sz, &p, tid, global, table, limits);
+                parse_type(&r, c, (ch, sz), (cfg, locale), &p, tid, global, table, limits);
             }
             (RES_TYPE_SPEC | RES_TYPE, None) if ch >= 16 => {
                 table.truncated = true;
@@ -450,12 +470,21 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_type(r: &Reader<'_>, c: usize, ch: usize, sz: usize, p: &Pkg<'_>, type_id: u8, global: &StringPool, table: &mut Table, limits: Limits) {
+fn parse_type(
+    r: &Reader<'_>,
+    c: usize,
+    (ch, sz): (usize, usize),
+    (cfg, locale): (String, String),
+    p: &Pkg<'_>,
+    type_id: u8,
+    global: &StringPool,
+    table: &mut Table,
+    limits: Limits,
+) {
     let tid = r.u8(c + 8).unwrap_or(0);
     let flags = r.u8(c + 9).unwrap_or(0);
     let count = r.u32_le(c + 12).unwrap_or(0) as usize;
     let entries_start = r.u32_le(c + 16).unwrap_or(0) as usize;
-    let (cfg, locale) = config_qualifiers(r, c + 20);
     let end = c + sz;
     let tname = type_name(p, tid);
     let sparse = flags & 0x01 != 0;
@@ -584,6 +613,12 @@ impl Table {
 mod tests {
     use super::*;
     use crate::fixtures as fx;
+
+    #[test]
+    fn incomplete_table_prefix_is_rejected() {
+        let bytes = fx::resources_arsc();
+        assert!(matches!(parse(&bytes[..7], Limits::default()), Err(Error::Truncated(_))));
+    }
 
     #[test]
     fn decodes_table() {
