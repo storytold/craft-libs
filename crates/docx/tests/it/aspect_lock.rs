@@ -15,11 +15,14 @@ fn png() -> Vec<u8> {
     out
 }
 
-/// An inline picture. `locked` is the graphic-frame lock; every picture also carries
-/// `a:picLocks noChangeAspect="1"`, which is a different element. `cropped` sets `a:srcRect`.
-fn picture(id: u32, descr: &str, locked: bool, cropped: bool) -> String {
-    let frame =
-        if locked { r#"<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>"# } else { "<wp:cNvGraphicFramePr/>" };
+/// An inline picture. `aspect` is the raw `noChangeAspect` value, spaces included; `None` omits
+/// the lock. Every picture also carries `a:picLocks noChangeAspect="1"`, a different element.
+/// `cropped` sets `a:srcRect`.
+fn picture(id: u32, descr: &str, aspect: Option<&str>, cropped: bool) -> String {
+    let frame = match aspect {
+        Some(v) => format!(r#"<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="{v}"/></wp:cNvGraphicFramePr>"#),
+        None => "<wp:cNvGraphicFramePr/>".to_string(),
+    };
     let src = if cropped { r#"<a:srcRect l="25000"/>"# } else { "" };
     format!(
         r#"<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="914400" cy="457200"/><wp:docPr id="{id}" name="Picture {id}" descr="{descr}"/>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="square.png"/><pic:cNvPicPr><a:picLocks noChangeAspect="1"/></pic:cNvPicPr></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/>{src}<a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
@@ -81,7 +84,8 @@ fn picture_state(doc: &craft_wordmodel::Document, descr: &str) -> (bool, bool) {
 fn an_inline_picture_keeps_its_graphic_frame_aspect_lock() {
     // Plain and cropped pictures that lock the frame, and one that does not (it still has
     // `a:picLocks`). A save must keep the lock only where the file had it.
-    let body = format!("<w:p>{}{}{}</w:p>", picture(1, "plain", true, false), picture(2, "cropped", true, true), picture(3, "free", false, false),);
+    let body =
+        format!("<w:p>{}{}{}</w:p>", picture(1, "plain", Some("1"), false), picture(2, "cropped", Some("1"), true), picture(3, "free", None, false),);
     let doc = craft_docx::read(&package(&body)).unwrap();
     assert_eq!(picture_state(&doc, "plain"), (true, false));
     assert_eq!(picture_state(&doc, "cropped"), (true, true));
@@ -97,4 +101,18 @@ fn an_inline_picture_keeps_its_graphic_frame_aspect_lock() {
     assert_eq!(picture_state(&back, "plain"), (true, false));
     assert_eq!(picture_state(&back, "cropped"), (true, true));
     assert_eq!(picture_state(&back, "free"), (false, false));
+}
+
+/// Space around the token is not part of it: ` false ` stays unlocked and is not saved as
+/// `noChangeAspect="1"`, and ` 1 ` stays locked.
+#[test]
+fn surrounding_space_on_an_aspect_lock_does_not_change_its_value() {
+    let body = format!("<w:p>{}{}</w:p>", picture(1, "off", Some(" false "), false), picture(2, "on", Some(" 1 "), false),);
+    let doc = craft_docx::read(&package(&body)).unwrap();
+    assert_eq!(picture_state(&doc, "off"), (false, false));
+    assert_eq!(picture_state(&doc, "on"), (true, false));
+
+    let xml = document_xml(&craft_docx::write(&doc).unwrap());
+    assert!(!frame_locks_aspect(&xml, "off"), "{xml}");
+    assert!(frame_locks_aspect(&xml, "on"));
 }
