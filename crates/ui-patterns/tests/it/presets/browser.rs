@@ -192,6 +192,9 @@ fn multi_selection_ranges_toggles_and_reports_select_only_for_a_plain_pick() {
         );
         assert_eq!(selects(), 0, "a secondary press is no pick in {view:?}");
 
+        // The secondary press opened the row menu over the rows: Escape closes it before the next pick.
+        fixture.key(Key::Escape, Modifiers::NONE);
+        fixture.idle(2);
         click_preset(&mut fixture, 3, Modifiers::COMMAND);
         events.borrow_mut().clear();
         secondary_click_preset(&mut fixture, 3);
