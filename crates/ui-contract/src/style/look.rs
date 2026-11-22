@@ -35,6 +35,12 @@ impl DataColor {
     }
 }
 
+impl From<Color32> for DataColor {
+    fn from(color: Color32) -> Self {
+        DataColor(color)
+    }
+}
+
 /// The surface a container or part sits on, which picks fill, edge, shadow and ink.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

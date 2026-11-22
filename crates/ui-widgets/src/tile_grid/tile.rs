@@ -320,6 +320,12 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop(flag)]
     flat_thumbnail: bool,
+    /// The paper colour of a page card (document data); replaces the sunken well and draws a crisp frame border.
+    #[prop(into)]
+    paper: Option<DataColor>,
+    /// The zoom of the icon in the picture area, a factor on the style's face size (default: 1, or 2 on a paper card).
+    #[prop(quantity = "zoom factor")]
+    icon_zoom: Option<f32>,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -397,6 +403,8 @@ impl<'a> Tile<'a> {
             card: false,
             card_text: CardText::File,
             flat_thumbnail: false,
+            paper: None,
+            icon_zoom: None,
             detail: None,
             accessible_name: None,
             rating: None,
@@ -741,9 +749,9 @@ impl Component for Tile<'_> {
         // An icon tile's picture is its icon. Any other picture is a card of a grid at zoom 1: as wide as the thumbnail
         // side, with what the density adds around it. A narrower room shrinks the picture to fit.
         let side = match (&self.icon, cx.proposal) {
-            (Some(_), _) => cx.style.face.side,
-            (None, Proposal::Min) => sizes.thumbs[0],
-            (None, _) => sizes.thumbs[1],
+            (Some(_), _) if !self.card => self.icon_zoom.map_or(cx.style.face.side, |zoom| cx.style.face.side * zoom),
+            (Some(_) | None, Proposal::Min) => sizes.thumbs[0],
+            (Some(_) | None, _) => sizes.thumbs[1],
         };
         let width = cx.room.map_or(side + column, |room| room.min(side + column));
         Vec2::new(width, ((width - column).max(0.0) / ratio) + caption)
@@ -862,7 +870,9 @@ impl Component for Tile<'_> {
             if ring > 0.0 {
                 draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
             }
-            if style.sizes.card {
+            if let Some(paper) = self.paper {
+                draw.data_fill(&PaintShape::Rect(picture, flat), paper);
+            } else if style.sizes.card {
                 ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
             } else {
                 let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
@@ -871,7 +881,7 @@ impl Component for Tile<'_> {
         }
         // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
         // has no well and takes no frame.
-        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some());
+        let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some() || self.paper.is_some());
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
         }
@@ -887,8 +897,19 @@ impl Component for Tile<'_> {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
             if let Some(face) = face {
-                let icon = Rect::from_center_size(picture.center(), Vec2::splat(style.face.side));
-                draw.icon(icon, &face.color(cx.resolve(&style.face.color)));
+                let zoom = self.icon_zoom.unwrap_or(if self.paper.is_some() && style.sizes.card { 2.0 } else { 1.0 });
+                let side = style.face.side * zoom;
+                let icon = Rect::from_center_size(picture.center(), Vec2::splat(side));
+                let color = match (face.color, self.paper) {
+                    (Some(color), _) => color,
+                    (None, Some(paper)) => {
+                        let base = cx.resolve(&style.face.color);
+                        let ink = craft_theme::ensure_contrast(Rgba::from(base.egui()), Rgba::from(paper.0), 3.0);
+                        StyleColor(Color32::from(Srgba::from(ink)))
+                    }
+                    (None, None) => cx.resolve(&style.face.color),
+                };
+                draw.icon(icon, &face.color(color));
             }
             if self.dimmed || self.rejected || self.hidden {
                 draw.fill(&PaintShape::Rect(picture, flat), style.dim);
