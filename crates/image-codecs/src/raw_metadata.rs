@@ -1,4 +1,4 @@
-//! Explicit verbatim EXIF and JPEG APP metadata helpers for callers that preserve stored orientation.
+//! Explicit PNG density, verbatim EXIF and JPEG APP metadata helpers for encoded images.
 //! Normal encoder APIs still normalize metadata for upright pixels; callers opt in to these helpers.
 use crate::{CodecError, Format};
 
@@ -100,15 +100,88 @@ fn jpeg_exif_payload(jpeg: &[u8]) -> Option<std::ops::Range<usize>> {
     }
 }
 
+const PNG_IHDR_END: usize = 33;
+
+/// A complete PNG pHYs chunk in pixels per metre, including the length, type and CRC.
+///
+/// Both axes must be nonzero. The caller chooses the conversion from PPI to raw pixels per metre.
+/// The payload follows [PNG Third Edition, pHYs](https://www.w3.org/TR/png-3/#11pHYs).
+pub fn png_pixels_per_meter_chunk((x, y): (u32, u32)) -> Result<[u8; 21], CodecError> {
+    if x == 0 || y == 0 {
+        return Err(error(Format::Png, "PNG density requires two nonzero axes"));
+    }
+    let mut chunk = [0; 21];
+    chunk[..4].copy_from_slice(&9u32.to_be_bytes());
+    chunk[4..8].copy_from_slice(b"pHYs");
+    chunk[8..12].copy_from_slice(&x.to_be_bytes());
+    chunk[12..16].copy_from_slice(&y.to_be_bytes());
+    chunk[16] = 1;
+    let crc = crc32fast::hash(&chunk[4..17]);
+    chunk[17..].copy_from_slice(&crc.to_be_bytes());
+    Ok(chunk)
+}
+
+/// Insert one pHYs chunk after IHDR and remove the old density chunks through IEND.
+///
+/// The PNG signature and chunk boundaries must be intact through a zero-length IEND.
+/// The rewrite preserves all other bytes, including trailing bytes, and leaves existing CRCs
+/// and image data as supplied. It bounds the returned file by `max_bytes` and never inflates pixels.
+pub fn with_png_pixels_per_meter(png: &[u8], resolution: (u32, u32), max_bytes: usize) -> Result<Vec<u8>, CodecError> {
+    let density = png_pixels_per_meter_chunk(resolution)?;
+    let header = png
+        .get(..PNG_IHDR_END)
+        .filter(|h| h.starts_with(b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR"))
+        .ok_or_else(|| CodecError::malformed(Format::Png, "PNG signature or IHDR is missing"))?;
+
+    let mut at = PNG_IHDR_END;
+    let mut removed = 0;
+    let end = loop {
+        let chunk = png_chunk_at(png, at).ok_or_else(|| CodecError::malformed(Format::Png, "truncated PNG chunk or missing IEND"))?;
+        if chunk.len() - 12 > i32::MAX as usize {
+            return Err(CodecError::malformed(Format::Png, "PNG chunk length exceeds 31 bits"));
+        }
+        at += chunk.len();
+        match &chunk[4..8] {
+            b"pHYs" => removed += chunk.len(),
+            b"IEND" if chunk.len() == 12 => break at,
+            b"IEND" => return Err(CodecError::malformed(Format::Png, "nonempty IEND")),
+            _ => {}
+        }
+    };
+    let size = (png.len() - removed)
+        .checked_add(density.len())
+        .filter(|&size| size <= max_bytes)
+        .ok_or_else(|| CodecError::LimitExceeded("PNG density rewrite byte budget".into()))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded("PNG density rewrite allocation".into()))?;
+    out.extend_from_slice(header);
+    out.extend_from_slice(&density);
+    let (datastream, trailing) = png.split_at(end);
+    let mut at = PNG_IHDR_END;
+    while let Some(chunk) = png_chunk_at(datastream, at) {
+        if &chunk[4..8] != b"pHYs" {
+            out.extend_from_slice(chunk);
+        }
+        at += chunk.len();
+    }
+    out.extend_from_slice(trailing);
+    Ok(out)
+}
+
+fn png_chunk_at(png: &[u8], at: usize) -> Option<&[u8]> {
+    let rest = png.get(at..)?;
+    let size = u32::from_be_bytes(*rest.first_chunk()?) as usize;
+    rest.get(..size.checked_add(12)?)
+}
+
 /// Replace the existing PNG eXIf chunk, preserving the other chunks and recomputing its CRC.
 /// No chunk is inserted when one is absent.
 pub fn replace_png_exif(png: &mut Vec<u8>, exif: &[u8]) -> Result<(), CodecError> {
     let len = u32::try_from(exif.len()).map_err(|_| error(Format::Png, "EXIF too large"))?;
     let mut p = 8usize;
-    while let Some(bytes) = p.checked_add(4).and_then(|end| png.get(p..end)) {
-        let size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-        let Some(end) = p.checked_add(12).and_then(|v| v.checked_add(size)).filter(|end| *end <= png.len()) else { break };
-        if png.get(p + 4..p + 8) == Some(b"eXIf") {
+    while let Some(existing) = png_chunk_at(png, p) {
+        let end = p + existing.len();
+        if &existing[4..8] == b"eXIf" {
             let mut chunk = Vec::new();
             chunk.extend_from_slice(&len.to_be_bytes());
             chunk.extend_from_slice(b"eXIf");
@@ -303,6 +376,54 @@ mod tests {
         let before = no_marker.clone();
         replace_jpeg_exif(&mut no_marker, &[9; 26]);
         assert_eq!(no_marker, before);
+    }
+
+    #[test]
+    fn png_density_chunk_uses_raw_values_and_the_expected_crc() {
+        let expected = b"\0\0\0\x09pHYs\0\0\x2e\x23\0\0\x17\x12\x01\x95\x42\xe6\xdb";
+        assert_eq!(&png_pixels_per_meter_chunk((11_811, 5_906)).unwrap(), expected);
+        assert!(png_pixels_per_meter_chunk((0, 5_906)).is_err());
+        assert!(png_pixels_per_meter_chunk((11_811, 0)).is_err());
+    }
+
+    #[test]
+    fn png_density_edit_replaces_duplicates_and_keeps_encoded_bytes() {
+        let image = crate::Image::from_u8(2, 1, crate::ChannelLayout::Rgb, vec![19, 33, 51, 98, 80, 61]).unwrap();
+        let png = crate::encode(&image, Format::Png, &crate::EncodeOptions::default()).unwrap();
+        let old_density = b"\0\0\0\x09pHYs\0\0\x2e\x23\0\0\x17\x12\x01\x95\x42\xe6\xdb";
+        let trail = b"container trailer";
+        let iend = png.len() - 12;
+        // The second obsolete density occurs too late. The rewrite leaves one legal chunk.
+        let input = [&png[..33], old_density, &png[33..iend], old_density, &png[iend..], trail].concat();
+        let resolution = (200_003, 93_511);
+        let added = png_pixels_per_meter_chunk(resolution).unwrap();
+        let expected = [&png[..33], &added, &png[33..], trail].concat();
+        let edited = with_png_pixels_per_meter(&input, resolution, expected.len()).unwrap();
+        assert_eq!(edited, expected);
+        assert_eq!(crate::png_probe::pixels_per_meter(&edited), Some(resolution));
+        let original = crate::decode(&png).unwrap();
+        let changed = crate::decode(&edited[..edited.len() - trail.len()]).unwrap();
+        assert_eq!(changed.data(), original.data());
+        assert!(matches!(with_png_pixels_per_meter(&input, resolution, expected.len() - 1), Err(CodecError::LimitExceeded(_))));
+        assert_eq!(with_png_pixels_per_meter(&edited, resolution, edited.len()).unwrap(), edited);
+    }
+
+    #[test]
+    fn png_density_edit_rejects_truncation_and_limits_insertion() {
+        let image = crate::Image::from_u8(1, 1, crate::ChannelLayout::Rgb, vec![10, 20, 30]).unwrap();
+        let png = crate::encode(&image, Format::Png, &crate::EncodeOptions::default()).unwrap();
+        let resolution = (2_835, 2_836);
+        for end in 0..png.len() {
+            assert!(with_png_pixels_per_meter(&png[..end], resolution, usize::MAX).is_err(), "prefix {end}");
+        }
+        let mut damaged = png.clone();
+        damaged[0] = 0;
+        assert!(with_png_pixels_per_meter(&damaged, resolution, usize::MAX).is_err());
+        assert!(with_png_pixels_per_meter(&png, (0, 300), usize::MAX).is_err());
+        assert!(matches!(with_png_pixels_per_meter(&png, resolution, png.len() + 20), Err(CodecError::LimitExceeded(_))));
+        let edited = with_png_pixels_per_meter(&png, resolution, png.len() + 21).unwrap();
+        assert_eq!(edited.len(), png.len() + 21);
+        assert_eq!(crate::png_probe::pixels_per_meter(&edited), Some(resolution));
     }
 
     #[test]
