@@ -268,7 +268,7 @@ impl ListRow<'_> {
         if self.sub_row {
             return 0;
         }
-        self.depth.map_or(0, |depth| tree_steps(depth, self.group.is_some()))
+        self.depth.map_or(0, |depth| self.leaves.steps(depth, self.group.is_some()))
     }
 
     /// The widths of the trailing items and the leading text's slot: as `text_width` measures a text, the icon side for
@@ -509,6 +509,28 @@ impl ListRow<'_> {
 /// disclosure column. A source that indents a row's sub-rows (`ItemSource::sub_row`) counts from it.
 pub fn tree_steps(depth: usize, group: bool) -> usize {
     if depth > 0 && !group { depth + 1 } else { depth }
+}
+
+/// How a tree lines up its leaves with its groups.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TreeLeaves {
+    /// A leaf at the top level starts where a group's disclosure does: the Layers panel, whose top-level layers keep
+    /// no disclosure column.
+    #[default]
+    Compact,
+    /// Every leaf keeps the disclosure column, so its label lines up with the labels of the groups beside it: a font
+    /// menu's families with and without styles.
+    Aligned,
+}
+
+impl TreeLeaves {
+    /// The indent steps of a tree row at `depth` under this rule: [`tree_steps`], and for `Aligned` one step more for
+    /// a top-level leaf.
+    pub fn steps(self, depth: usize, group: bool) -> usize {
+        let aligned = self == TreeLeaves::Aligned && depth == 0 && !group;
+        tree_steps(depth, group) + usize::from(aligned)
+    }
 }
 
 /// The width of a character of a trailing text under fixed sizes.

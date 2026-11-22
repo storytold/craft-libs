@@ -36,7 +36,7 @@ pub use placement::indent_steps;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use placement::placement_under_fixed_sizes;
-pub use placement::tree_steps;
+pub use placement::{TreeLeaves, tree_steps};
 pub use style::{ListRowStyle, RowStyleCx};
 pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
@@ -214,6 +214,9 @@ pub struct ListRow<'a> {
     #[prop(into)]
     pub(super) accessible_name: Option<String>,
     pub(super) spacer: bool,
+    /// A spacer that draws a rule across the row: the line between groups of options (`separator`).
+    #[style_key]
+    pub(super) separator: bool,
     pub(super) cells: Vec<(ColumnKey, Rect)>,
     /// Each column's alignment and whether its figures are tabular, from `columns(..)`.
     pub(super) aligns: Vec<(ColumnKey, HAlign, bool)>,
@@ -265,6 +268,8 @@ pub struct ListRow<'a> {
     /// The host declares and paints the disclosure part of this group row (a face has no parts of its own): the row
     /// keeps the disclosure column and paints no disclosure.
     pub(super) disclosure_by_host: bool,
+    /// How the row's tree lines up its leaves, from the collection (`List::tree_leaves`).
+    pub(super) leaves: TreeLeaves,
     /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
     #[style_key]
     #[prop(flag)]
@@ -322,6 +327,7 @@ impl<'a> ListRow<'a> {
             progress: None,
             accessible_name: None,
             spacer: false,
+            separator: false,
             cells: Vec::new(),
             aligns: Vec::new(),
             muted: Vec::new(),
@@ -345,6 +351,7 @@ impl<'a> ListRow<'a> {
             depth: None,
             group: None,
             disclosure_by_host: false,
+            leaves: TreeLeaves::Compact,
             option: false,
             command: false,
             check: None,
@@ -368,6 +375,21 @@ impl<'a> ListRow<'a> {
         let mut row = Self::new(Label::Empty);
         row.spacer = true;
         row
+    }
+
+    /// A line between groups of rows, as a menu's separator: a spacer (no item, no sense, no AccessKit node; mark its
+    /// position `ItemSource::is_section`) as high as the divider rule and the room around it, drawing the rule.
+    pub fn separator() -> Self {
+        let mut row = Self::spacer();
+        row.separator = true;
+        row
+    }
+
+    /// How the row's tree lines up its leaves: the collection gives it (`List::tree_leaves`).
+    #[must_use]
+    pub(crate) fn leaves(mut self, leaves: TreeLeaves) -> Self {
+        self.leaves = leaves;
+        self
     }
 
     /// The rects of the row's columns, which the item context lists (`ItemCx::cells`): toggle cells and text cells

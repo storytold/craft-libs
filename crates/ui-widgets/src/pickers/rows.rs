@@ -20,7 +20,7 @@ impl<'e, 'l, T> EntryRows<'e, 'l, T> {
     }
 
     /// The row of the entry at `at`: its label and icon as an option, checked when it is the `chosen` entry, a caption
-    /// for a heading, a spacer for a separator, the host's picture as the thumbnail and its dress over the rest.
+    /// for a heading, a separator row for a separator, the host's picture as the thumbnail and its dress over the rest.
     pub(super) fn row<'r>(
         &self,
         at: usize,
@@ -34,7 +34,7 @@ impl<'e, 'l, T> EntryRows<'e, 'l, T> {
         let entries: &'e [Entry<T>] = self.entries;
         let entry = &entries[at];
         let Some(value) = entry.value() else {
-            return if entry.is_heading() { ListRow::new(self.labels[at].clone()).heading() } else { ListRow::spacer() };
+            return if entry.is_heading() { ListRow::new(self.labels[at].clone()).heading() } else { ListRow::separator() };
         };
         let row = ListRow::new(self.labels[at].clone()).option().check(chosen == Some(at)).enabled(entry.is_enabled());
         let row = match entry.icon_spec() {
