@@ -1,7 +1,7 @@
 //! `PasswordDialog`: the password for a protected file, a permissions password, or a new password with its strength.
 
 use crate::buttons::ToggleButton;
-use crate::contract::{Bind, BodyCx, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, BodyCx, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use crate::dialog::{Dialog, DialogOutput};
 use crate::display::{Icon, Progress, Shade, Text};
 use crate::form::{Field, FieldGroup, Help};
@@ -260,12 +260,13 @@ pub struct PasswordFields<'a> {
     input: Bind<'a, String>,
     confirm: Option<Bind<'a, String>>,
     error: Option<Label>,
+    bare: bool,
 }
 
 impl<'a> PasswordFields<'a> {
     /// The masked field named `label` over `input`.
     pub fn new(label: impl Into<Label>, input: Bind<'a, String>) -> Self {
-        PasswordFields { label: label.into(), input, confirm: None, error: None }
+        PasswordFields { label: label.into(), input, confirm: None, error: None, bare: false }
     }
 
     /// Adds the Re-type field over `confirm`, with the mismatch help and the strength help and meter.
@@ -282,10 +283,18 @@ impl<'a> PasswordFields<'a> {
         self
     }
 
+    /// The first field stands across the width with no caption before it, its name its placeholder: a prompt that asks
+    /// for one password, as production's does.
+    #[must_use]
+    pub fn bare(mut self, bare: bool) -> Self {
+        self.bare = bare;
+        self
+    }
+
     /// Shows the fields. With a confirmation field the first one takes the strength help once something is typed,
     /// else the error line; without one, the error line.
     pub fn show(self, ui: &mut Ui) -> PasswordFieldsOutput {
-        let PasswordFields { label, mut input, mut confirm, error } = self;
+        let PasswordFields { label, mut input, mut confirm, error, bare } = self;
         let env = Env::of(ui);
         let words = env.words::<PasswordWords>();
         let mut valid = false;
@@ -296,6 +305,9 @@ impl<'a> PasswordFields<'a> {
             let strength = (retyped.is_some() && !typed.is_empty()).then(|| PasswordStrength::of(&typed));
             FieldGroup::new(words.fields.clone()).show(ui, |ui, _| {
                 let mut field = Field::new(label.clone());
+                if bare {
+                    field = field.layout(FieldLayout::Inside);
+                }
                 if let Some(strength) = strength {
                     let (word, tone) = match strength {
                         PasswordStrength::Weak => (&words.weak, Tone::Bad),
@@ -309,6 +321,9 @@ impl<'a> PasswordFields<'a> {
                 field.show(ui, |ui, _| {
                     Row::new().show(ui, |ui, _| {
                         let mut text = TextField::new(label.clone(), input.reborrowed());
+                        if bare {
+                            text = text.placeholder(label.clone());
+                        }
                         if !revealed {
                             text = text.masked();
                         }
@@ -368,9 +383,9 @@ fn bound_text(bind: &mut Bind<'_, String>, cx: &mut BodyCx<'_>) -> String {
     bind.reborrow().read(cx).and_then(|value| value.same().cloned()).unwrap_or_default()
 }
 
-/// Whether password entries may be accepted: with a confirmation, a non-empty entry that the confirmation repeats.
+/// Whether password entries may be accepted: a non-empty entry, and with a confirmation one that it repeats.
 fn entries_valid(input: &str, confirm: Option<&str>) -> bool {
-    confirm.is_none_or(|confirm| !input.is_empty() && input == confirm)
+    !input.is_empty() && confirm.is_none_or(|confirm| input == confirm)
 }
 
 /// What the dialog keeps while it is open: the entries and whether the fields found them valid after the last pass.
@@ -450,7 +465,7 @@ impl<'a> PasswordDialog<'a> {
             .close_on_enter(true)
             .close_guard(move |_, cx| {
                 let entries = cx.memory::<Entries>();
-                let valid = entries.valid.unwrap_or(!setting);
+                let valid = entries.valid.unwrap_or(false);
                 if valid {
                     *entries = Entries::default();
                 }
@@ -462,7 +477,7 @@ impl<'a> PasswordDialog<'a> {
                 }
             })
             .settle_buttons(move |cx, buttons| {
-                let valid = cx.memory::<Entries>().valid.unwrap_or(!setting);
+                let valid = cx.memory::<Entries>().valid.unwrap_or(false);
                 if let Some(accept) = buttons.first_mut() {
                     accept.set_enabled(valid);
                 }
@@ -471,7 +486,7 @@ impl<'a> PasswordDialog<'a> {
             dialog = dialog.opened(open);
         }
         let typed = RefCell::new(String::new());
-        let valid = Cell::new(!setting);
+        let valid = Cell::new(false);
         let shown = dialog.show(ui, |ui, cx| {
             let mut entries = cx.memory::<Entries>().clone();
             Stack::new().show(ui, |ui, _| {
@@ -486,7 +501,8 @@ impl<'a> PasswordDialog<'a> {
                 }
                 let first = if setting { words.type_password.clone() } else { words.password.clone() };
                 // A new password has no wrong-password line: its first field shows the strength instead.
-                let mut fields = PasswordFields::new(first, Bind::bound(&mut entries.input)).error(if setting { None } else { error.clone() });
+                let mut fields =
+                    PasswordFields::new(first, Bind::bound(&mut entries.input)).bare(!setting).error(if setting { None } else { error.clone() });
                 if setting {
                     fields = fields.confirm(Bind::bound(&mut entries.confirm));
                 }

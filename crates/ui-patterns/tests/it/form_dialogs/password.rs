@@ -97,3 +97,25 @@ fn a_password_is_rated_by_its_length_and_its_character_classes() {
     assert!(long >= top, "twelve characters over three classes fill the meter");
     assert!(short < long, "the rating rose from weak to strong");
 }
+
+/// Opening a protected file asks for the password in a bare field, as production's prompt does: Open waits for a typed
+/// password, and the field stands at the dialog's content start with no caption column before it (its name is its
+/// placeholder).
+#[trial]
+fn an_open_prompt_waits_for_a_typed_password_in_a_bare_field() {
+    let answers = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&answers);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = PasswordDialog::new(PasswordPurpose::open("poster.pdf")).show(ui);
+        if let Some(answer) = shown.answer {
+            seen.borrow_mut().push(answer.secret.expose().to_owned());
+        }
+    });
+    fixture.idle(30);
+    let open = fixture.by_label("Open").expect("the Open button");
+    fixture.click(&open).idle(4);
+    assert!(answers.borrow().is_empty(), "Open does not answer an empty password: {:?}", answers.borrow());
+    let field = fixture.by_label("Password").expect("the password field");
+    let title = fixture.texts().iter().find(|run| run.text == "Password required").map(|run| run.rect.min.x).expect("the title");
+    assert!((field.rect.min.x - title).abs() < 6.0, "the field {:?} starts where the dialog's content does ({title})", field.rect);
+}
