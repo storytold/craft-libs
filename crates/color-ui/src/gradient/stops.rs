@@ -148,6 +148,7 @@ impl Stop for OpacityStop {
 }
 
 /// The location of stop `i` of `row`.
+#[cfg(feature = "ui")]
 pub(crate) fn location(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
     match row {
         StopRow::Color => stops.color[i].location,
@@ -156,6 +157,7 @@ pub(crate) fn location(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
 }
 
 /// The midpoint after stop `i` of `row`.
+#[cfg(feature = "ui")]
 pub(crate) fn midpoint(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
     match row {
         StopRow::Color => stops.color[i].midpoint,
@@ -164,6 +166,7 @@ pub(crate) fn midpoint(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
 }
 
 /// The locations of `row`'s stops as the bar shows them.
+#[cfg(feature = "ui")]
 pub(crate) fn locations(stops: &GradientStops, row: StopRow) -> Vec<f32> {
     match row {
         StopRow::Color => stops.color.iter().map(|s| s.location).collect(),
@@ -172,6 +175,7 @@ pub(crate) fn locations(stops: &GradientStops, row: StopRow) -> Vec<f32> {
 }
 
 /// Where the midpoint after stop `i` of `row` is, 0..=1 of the bar.
+#[cfg(feature = "ui")]
 pub(crate) fn midpoint_at(stops: &GradientStops, row: StopRow, i: usize) -> f32 {
     let at = locations(stops, row);
     at[i] + (at[i + 1] - at[i]) * midpoint(stops, row, i)
