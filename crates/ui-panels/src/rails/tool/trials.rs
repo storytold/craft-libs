@@ -183,7 +183,7 @@ fn captions_take_room_only_while_the_rail_shows_them() {
     fixture.room(Vec2::new(width, 800.0)).settle();
     let [none, off, on] = measured.get();
     assert!(near(off.y, none.y), "a caption takes no room while captions are off: {off:?} against {none:?}");
-    assert!(on.y >= off.y + 1.0, "a shown caption adds its row: {on:?} against {off:?}");
+    assert!(on.y > off.y && !near(on.y, off.y), "a shown caption adds its row: {on:?} against {off:?}");
     let (rail, caption) = (rect(&fixture, "Tools"), rect(&fixture, CAPTION));
     assert!(rail.contains_rect(caption), "the caption {caption:?} is cut at the rail's width {rail:?}");
     assert!(above(caption, rect(&fixture, "Move")), "the caption heads its group");

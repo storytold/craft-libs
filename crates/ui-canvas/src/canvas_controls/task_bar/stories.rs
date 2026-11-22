@@ -128,11 +128,14 @@ fn host_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     configured(ui, data, &turned_frame(), None, |bar| bar.more_rows(rows.clone()))
 }
 
+/// How far the beside-a-point story moves the frame to the right, in document points: near the canvas's right edge.
+const NEAR_RIGHT_EDGE: Vec2 = Vec2::new(300.0, 0.0);
+
 /// A bar beside the frame's right end, near the canvas's right edge so it flips to the other side, keeping clear of a
 /// point.
 #[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
 fn beside_a_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let corners = turned_frame().map(|corner| corner + Vec2::new(300.0, 0.0));
+    let corners = turned_frame().map(|corner| corner + NEAR_RIGHT_EDGE);
     let point = corners[0];
     configured(ui, data, &corners, None, |bar| bar.side(Side::End, Align::Start).keep_clear(point))
 }

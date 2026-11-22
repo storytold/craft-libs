@@ -92,15 +92,17 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default())).sheet(&sheet).ready(true).show(ui).into()
 }
 
+/// The artwork outlines of the sections story's document, in document points: the page inset half an inch and the
+/// image box of [`sheet`].
+const SECTIONS_OUTLINES: [Rect; 2] =
+    [Rect::from_min_max(pos2(36.0, 36.0), pos2(576.0, 756.0)), Rect::from_min_max(pos2(72.0, 72.0), pos2(540.0, 384.0))];
+
 /// The sections beside the shown one, with a preset row, a one-line header and a document on three sheets.
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_sections(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { printer: "Office_1".to_owned(), ..Settings::default() };
     let printers = printers();
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-    let outlines =
-        vec![Rect::from_min_size(pos2(36.0, 36.0), Vec2::new(540.0, 720.0)), Rect::from_min_size(pos2(72.0, 72.0), Vec2::new(468.0, 312.0))];
-    let sheet = sheet(ui, true).count(3).outlines(outlines);
+    let sheet = sheet(ui, true).count(3).outlines(SECTIONS_OUTLINES.to_vec());
     let rows = [PresetRow::item("Default".to_owned(), "Default", 0), PresetRow::item("Proof".to_owned(), "Proof", 0)];
     let built_in = ["Default".to_owned()];
     let header = [Param::number("pagesPerSheet", "Pages per sheet", 1.0, 1.0, 0)];

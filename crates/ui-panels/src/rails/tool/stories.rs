@@ -71,7 +71,6 @@ fn captioned_slots() -> Vec<ToolSlot<u8>> {
 fn in_columns(ui: &mut Ui, columns: u8, cells: usize, height: Option<f32>, rail: ToolRail<'_, u8>) -> ToolRailOutput<u8> {
     let width = DockGrid::rail(cells).resolved(&DockSizes::of_scope(ui)).width(u16::from(columns));
     let room = Flow::new(ui.available_rect_before_wrap(), Env::of(ui).direction.is_rtl()).span(0.0, width);
-    // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
     ui.scope_builder(UiBuilder::new().max_rect(room), |ui| {
         if let Some(height) = height {
             ui.set_max_height(height);

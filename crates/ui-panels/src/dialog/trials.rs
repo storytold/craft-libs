@@ -16,7 +16,7 @@ use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, o
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
 use craft_behavior::ColumnWidth;
-use egui::{Key, Modifiers, Rect, Ui};
+use egui::{Key, Modifiers, Rect, Ui, Vec2};
 use std::cell::Cell;
 
 #[trial]
@@ -370,6 +370,21 @@ fn a_reopened_dialog_focuses_its_first_enabled_field_again() {
     assert!(on_second(&fixture), "and takes it again after a reopen");
 }
 
+/// The window of the title-band trial: room around the dialog to move it in.
+const BAND_ROOM: Vec2 = Vec2::new(900.0, 700.0);
+/// Where a drag in the body starts, from the middle of the dialog's bottom edge: inside the body, far from the title.
+const IN_BODY: Vec2 = Vec2::new(0.0, -6.0);
+/// The drag that starts in the body.
+const BODY_DRAG: Vec2 = Vec2::new(60.0, 40.0);
+/// The drag of the title band.
+const BAND_DRAG: Vec2 = Vec2::new(80.0, 50.0);
+/// A drag of the title band far past every edge of the window.
+const PAST_THE_EDGE: Vec2 = Vec2::new(5000.0, 5000.0);
+/// The window of the tall-body trial: lower than the body.
+const SHORT_ROOM: Vec2 = Vec2::new(600.0, 320.0);
+/// One wheel turn down the body.
+const WHEEL_DOWN: Vec2 = Vec2::new(0.0, -400.0);
+
 #[trial]
 fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
     let open = std::rc::Rc::new(Cell::new(true));
@@ -380,7 +395,7 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
             Text::new("Body text").show(ui);
         },
     );
-    fixture.room(egui::vec2(900.0, 700.0));
+    fixture.room(BAND_ROOM);
     fixture.settle();
     let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect;
     let band = |fixture: &Fixture| {
@@ -388,17 +403,17 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
     };
     let start = dialog(&fixture);
 
-    let from = start.center_bottom() - egui::vec2(0.0, 6.0);
-    fixture.drag_at(from, egui::vec2(60.0, 40.0)).settle();
+    let from = start.center_bottom() + IN_BODY;
+    fixture.drag_at(from, BODY_DRAG).settle();
     assert_eq!(dialog(&fixture), start, "a drag that starts in the body moves nothing");
 
     let title = band(&fixture);
-    fixture.drag(&title, egui::vec2(80.0, 50.0)).settle();
+    fixture.drag(&title, BAND_DRAG).settle();
     let moved = dialog(&fixture);
-    assert_eq!(moved.min - start.min, egui::vec2(80.0, 50.0), "a drag of the band moves the dialog by it");
+    assert_eq!(moved.min - start.min, BAND_DRAG, "a drag of the band moves the dialog by it");
 
     let title = band(&fixture);
-    fixture.drag(&title, egui::vec2(5000.0, 5000.0)).settle();
+    fixture.drag(&title, PAST_THE_EDGE).settle();
     let screen = fixture.ctx().content_rect();
     assert!(screen.contains_rect(dialog(&fixture)), "a drag past the edge stops at it: {:?} in {screen:?}", dialog(&fixture));
 
@@ -425,7 +440,7 @@ fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
             }
         },
     );
-    fixture.room(egui::vec2(600.0, 320.0));
+    fixture.room(SHORT_ROOM);
     fixture.settle();
     let first = |fixture: &Fixture| fixture.by_label("Line 0").map(|target| target.rect);
     let at_top = first(&fixture).expect("the first line is shown");
@@ -437,7 +452,7 @@ fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
     let over = fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect.center();
     let wheel = egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, -400.0),
+        delta: WHEEL_DOWN,
         phase: egui::TouchPhase::Move,
         modifiers: Modifiers::NONE,
         source: egui::MouseWheelSource::Wheel,
