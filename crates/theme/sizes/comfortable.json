@@ -135,9 +135,9 @@
         "tight": 3.0
       },
       "inset": {
-        "page_gap": 14.0,
-        "page_margin": 28.0,
-        "page_side": 70.0,
+        "page_gap": 16.0,
+        "page_margin": 20.0,
+        "page_side": 50.0,
         "screen": 20.0
       },
       "pad": {

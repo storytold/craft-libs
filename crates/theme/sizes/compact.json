@@ -136,8 +136,8 @@
       },
       "inset": {
         "page_gap": 12.0,
-        "page_margin": 24.0,
-        "page_side": 56.0,
+        "page_margin": 16.0,
+        "page_side": 40.0,
         "screen": 16.0
       },
       "pad": {
