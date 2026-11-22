@@ -24,7 +24,7 @@ pub(super) struct Outline<'s, K> {
     /// The keys of the tail rows.
     tail: Vec<K>,
     collapsible: bool,
-    /// Under `Rule` a header is a divider: it is a row of the outline but no stop.
+    /// Under `Rule` a header is a divider: it is a row of the outline the grid draws, but it never takes the lead.
     heads: GroupHeads,
 }
 
@@ -97,11 +97,7 @@ impl<K: Clone + PartialEq> DisplayOrder<K> for Outline<'_, K> {
     }
 
     fn section_stop(&self, at: usize) -> bool {
-        match self.slot(at) {
-            Slot::Header(_) => self.heads == GroupHeads::Titled,
-            Slot::Tail(_) => true,
-            Slot::Tile(_) => false,
-        }
+        self.is_section(at)
     }
 
     fn section_stops_before(&self, at: usize) -> usize {
@@ -110,7 +106,8 @@ impl<K: Clone + PartialEq> DisplayOrder<K> for Outline<'_, K> {
 
     fn enabled(&self, at: usize) -> bool {
         match self.slot(at) {
-            Slot::Header(_) | Slot::Tail(_) => true,
+            Slot::Header(_) => self.heads == GroupHeads::Titled,
+            Slot::Tail(_) => true,
             Slot::Tile(tile) => self.inner.enabled(tile),
         }
     }

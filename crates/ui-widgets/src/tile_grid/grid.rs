@@ -570,8 +570,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 continue;
             }
             if rule {
-                // A divider takes no press and no stop: it is placed for its paint only.
+                // A divider takes no press and no stop: its part only carries the heading node.
                 self.placed.push(Placed { group, rect, pinned: false, toggle: false });
+                cx.part(section_part(&declared.key), rect);
                 continue;
             }
             let column = self
