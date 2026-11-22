@@ -1,7 +1,7 @@
 use super::drawing::{DrawingInfo, MemberInfo, nv_props, shape_name, spin_attrs, write_fill, xfrm_spin_only};
 use super::field::{FieldData, field_run};
 use super::section::comment_reference_style;
-use super::{Anchor, CharProps, Fill, Float, InlineObject, MAX_DEPTH, NoteKind, PartRels, ShapeKind, TextColor, W, Wrap, Writer, emu, n, rpr};
+use super::{Anchor, CharProps, Fill, Float, InlineObject, MAX_DEPTH, NoteKind, PartRels, ShapeKind, TextColor, W, Wrap, Writer, emu, n, rpr, rt};
 
 impl Writer<'_> {
     /// Write an inline object (`Bookmark`, `Comment`, `Equation`, `Field`, `Shape`, etc.).
