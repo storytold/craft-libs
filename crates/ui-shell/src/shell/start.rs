@@ -528,15 +528,16 @@ impl StartScreen<'_> {
                 let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui));
             }
             host_sections(ui, StartPlace::BeforeRecent);
+            // The pinned folders stand above the recent files, as production's Folders section does.
+            if let Some(pinned) = pinned {
+                pinned_section(&page, ui, pinned);
+            }
             if max_recent > 0 {
                 let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
                 let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
                 let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
                 sort_recent(&mut files, current_sort, &collator);
                 recent_section(&page, ui, &view, &sort, current_view, &files);
-            }
-            if let Some(pinned) = pinned {
-                pinned_section(&page, ui, pinned);
             }
             if !templates.is_empty() {
                 templates_section(&page, ui, templates);
@@ -635,6 +636,11 @@ fn recent_section(
         .controls(|ui, _| {
             let _ = Segmented::new(words.view.clone(), view.borrow_mut().reborrowed(), &modes).show(ui);
             let _ = Select::new(words.sort.clone(), sort.borrow_mut().reborrowed(), &orders).show(ui);
+            // Clear empties the list, as the menu's Clear Recent Files does; with no files there is nothing to clear.
+            let clear = Button::new(words.clear_recent.clone()).icon(IconId::new("trash")).enabled(!files.is_empty()).id_salt("clear").show(ui);
+            if clicked(&clear) {
+                page.push(StartAction::ClearRecent);
+            }
         })
         .show(ui, |ui, cx| {
             let mut lead = cx.keep::<Leads>().recent.clone().filter(|path| files.iter().any(|file| &file.path == path));

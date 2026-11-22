@@ -20,6 +20,8 @@ craft_ui::words! {
         grid_view: "startScreen.gridView" = "Grid";
         list_view: "startScreen.listView" = "List";
         sort: "startScreen.sort" = "Sort";
+        /// The button at the Recent heading's end that empties the list.
+        clear_recent: "startScreen.clearRecent" = "Clear";
         sort_opened: "startScreen.sortOpened" = "Last Opened";
         sort_name: "startScreen.sortName" = "Name";
         sort_created: "startScreen.sortCreated" = "Created";

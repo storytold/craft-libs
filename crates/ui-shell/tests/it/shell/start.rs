@@ -388,3 +388,26 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
     fixture.key(Key::ArrowLeft, Modifiers::NONE).idle(2);
     assert_eq!(*log.borrow(), vec![StartAction::FoldPinned(PathBuf::from("/tmp/Empty"))], "an empty folder's disclosure folds it");
 }
+
+/// The pinned folders stand above the recent files, as production's Folders section does, and the Recent heading carries
+/// a Clear button that asks the app to clear the list.
+#[trial]
+fn folders_come_before_recent_and_recent_has_a_clear_button() {
+    let log: Log = Rc::default();
+    let seen = log.clone();
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let folders = vec![PinnedFolder::new("/tmp/Work", "Work")];
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
+        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).pinned(&folders).show(ui);
+        seen.borrow_mut().extend(out.actions);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
+    let top = |fixture: &Fixture, text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect.min.y);
+    let pinned = top(&fixture, "Pinned Folders").expect("the pinned folders heading");
+    let recent = top(&fixture, "Recent").expect("the recent heading");
+    assert!(pinned < recent, "the folders ({pinned}) come before the recent files ({recent})");
+    let clear = fixture.by_label("Clear").expect("the Recent heading's Clear button");
+    fixture.click(&clear).idle(2);
+    assert!(log.borrow().iter().any(|action| matches!(action, StartAction::ClearRecent)), "Clear asks the app to clear the list");
+}
