@@ -148,10 +148,14 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     #[prop]
     opens: Side,
     /// The tool whose row wears the target mark.
+    #[prop]
     mark: Option<&'a T>,
-    /// A request of the pass: scrolls the tool's row into the list's view.
+    /// A request of the pass: scrolls the tool's row into the list's view. Send it in the pass that needs it, not every
+    /// pass.
+    #[prop]
     reveal: Option<&'a T>,
-    /// The rows of the menu the header's menu button opens; no button without rows.
+    /// With rows, an icon button after the title opens a menu of them.
+    #[prop]
     menu: Vec<PanelRow>,
     dropped: Option<ToolDropped>,
     opener: Option<Response>,
@@ -168,18 +172,6 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// returns to it when the drawer closes. The drawer still hangs from the rail.
     pub fn opened_by(mut self, opener: &Response) -> Self {
         self.opener = Some(opener.clone());
-        self
-    }
-
-    /// The tool whose row wears the target mark; `None` marks none.
-    pub fn mark(mut self, tool: Option<&'a T>) -> Self {
-        self.mark = tool;
-        self
-    }
-
-    /// A request: scrolls the row of `tool` into the list's view. Send it in the pass that needs it, not every pass.
-    pub fn reveal(mut self, tool: Option<&'a T>) -> Self {
-        self.reveal = tool;
         self
     }
 }
@@ -262,13 +254,6 @@ fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
 }
 
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
-    /// With rows, an icon button after the title opens a menu of `rows`.
-    #[must_use]
-    pub fn menu(mut self, rows: Vec<PanelRow>) -> Self {
-        self.menu = rows;
-        self
-    }
-
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
         self.show_with(ui, |_| {})

@@ -428,7 +428,10 @@ pub struct AppShell<'a, S> {
     body_label: Option<Label>,
     title: Option<Placed<'a, S>>,
     slots: Vec<Placed<'a, S>>,
-    /// Where the options bar sits; the top slot without a binding.
+    /// The options bar follows the bound place: the top or the bottom slot, or, while floating, a movable modeless layer over
+    /// the body that takes no room. A drag of a [`BarGrip`](super::BarGrip) writes the place on the release. Without the
+    /// call the bar is the top slot, as [`options_bar`](Self::options_bar) shows it.
+    #[prop(name = "options_place")]
     place: Bind<'a, OptionsBarPlace>,
     /// The body, shown in what the slots leave.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>, &mut S)")]
@@ -503,14 +506,6 @@ impl<'a, S> AppShell<'a, S> {
             named: Some(|words| words.options.clone()),
             add: Box::new(add),
         });
-        self
-    }
-
-    /// The options bar follows `place`: the top or the bottom slot, or, while floating, a movable modeless layer over
-    /// the body that takes no room. A drag of a [`BarGrip`](super::BarGrip) writes the place on the release. Without the
-    /// call the bar is the top slot, as [`options_bar`](Self::options_bar) shows it.
-    pub fn options_place(mut self, place: Bind<'a, OptionsBarPlace>) -> Self {
-        self.place = place;
         self
     }
 

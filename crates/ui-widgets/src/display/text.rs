@@ -80,7 +80,8 @@ pub struct Text {
     spans: Vec<DocRun<'static>>,
     /// The interface spans that replace the label's text, in the type role, shade and tone of the text; empty for plain text.
     styled: Vec<Span<'static>>,
-    /// The text whose width stands for the label's ideal and least width.
+    /// Sets the text's ideal and least width to those of this text, so a readout keeps its width while its value changes.
+    #[prop(into)]
     sample: Option<Label>,
     /// Whether every span is italic, a value set apart from the words around it.
     italic: bool,
@@ -120,13 +121,6 @@ impl Text {
         let mut text = Text::new(label);
         text.styled = spans;
         text
-    }
-
-    /// Sets the text's ideal and least width to those of `sample`, so a readout keeps its width while its value changes.
-    #[must_use]
-    pub fn sample(mut self, sample: impl Into<Label>) -> Self {
-        self.sample = Some(sample.into());
-        self
     }
 
     /// Sets the text in italics: a value set apart from the words around it. The resolved label is what is set, so a

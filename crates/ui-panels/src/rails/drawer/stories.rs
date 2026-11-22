@@ -80,5 +80,15 @@ fn toolbar_drawer_menu_footer_and_runs(ui: &mut Ui, data: &mut StoryData) -> Sto
 fn toolbar_drawer_marked_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let marked = 4_u8;
     let groups = [DrawerGroup::new("Drawing", tools(&[0, 1, 2])), DrawerGroup::new("Retouching", tools(&[3, 4]))];
-    staged(ui, data, &groups, &toolbar(), |drawer, fresh| drawer.mark(Some(&marked)).reveal(fresh.then_some(&marked)), |_| {})
+    staged(
+        ui,
+        data,
+        &groups,
+        &toolbar(),
+        |drawer, fresh| {
+            let drawer = drawer.mark(&marked);
+            if fresh { drawer.reveal(&marked) } else { drawer }
+        },
+        |_| {},
+    )
 }

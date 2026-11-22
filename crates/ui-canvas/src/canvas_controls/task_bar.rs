@@ -92,6 +92,9 @@ pub struct TaskBar<'a> {
     /// The side of the anchor the bar hangs on; `None` gives the kind's side: above for `Selection`, below for `Task`.
     side: Option<Side>,
     align: Align,
+    /// A moved bar whose offset place would cover this point (a document point, like the anchor) shows at its unmoved
+    /// place and keeps its offset.
+    #[prop]
     keep_clear: Option<Point>,
     /// What an outside press does to the bar.
     #[prop]
@@ -253,14 +256,6 @@ impl<'a> TaskBar<'a> {
     pub fn side(mut self, side: Side, align: Align) -> Self {
         self.side = Some(side);
         self.align = align;
-        self
-    }
-
-    /// A moved bar whose offset place would cover `point` (a document point, like the anchor) shows at its unmoved
-    /// place and keeps its offset.
-    #[must_use]
-    pub fn keep_clear(mut self, point: Point) -> Self {
-        self.keep_clear = Some(point);
         self
     }
 

@@ -206,7 +206,9 @@ pub struct ListRow<'a> {
     pub(super) thumbnails_only: bool,
     /// The full-height bar at the start of the row's content (`stripe`).
     pub(super) stripe: Option<(crate::style::DataColor, crate::primitives::StrokeWidth)>,
-    /// The row's place in a run of rows that share one outline (`run`).
+    /// One outline per run in the divider stroke and `radius.control`, inside each row's rect, for the row at this place
+    /// in a run of rows.
+    #[prop]
     pub(super) run: Option<RowRun>,
     /// The row is the divider that sets a group off (`GroupHeads::Rule`): a rule across the row, no title, no disclosure
     /// and no focus stop; the label stays its accessible name.
@@ -286,6 +288,9 @@ pub struct ListRow<'a> {
     /// The type role of the leading text: `Caption` unless set.
     #[prop]
     pub(super) lead_role: TypeRole,
+    /// The row is as tall as a row with a thumbnail of this size and draws no thumbnail; its icon stands in the thumbnail's
+    /// place.
+    #[prop(name = "thumb_height")]
     pub(super) thumb: ThumbSize,
     pub(super) thumb_aspect: ThumbAspect,
     pub(super) first: Option<ThumbPaint<'a>>,
@@ -330,28 +335,11 @@ pub struct ListRow<'a> {
 }
 
 impl<'a> ListRow<'a> {
-    /// One outline per run in the divider stroke and `radius.control`, inside each row's rect, for the row at `run`'s
-    /// place in a run of rows.
-    #[must_use]
-    pub fn run(mut self, run: RowRun) -> Self {
-        self.run = Some(run);
-        self
-    }
-
     /// A full-height bar at the start of the row's content, after its toggle cells and before the indent. It takes no
     /// room from the label and mirrors in right-to-left. It is not the `striped` list tint.
     #[must_use]
     pub fn stripe(mut self, color: crate::style::DataColor, width: crate::primitives::StrokeWidth) -> Self {
         self.stripe = Some((color, width));
-        self
-    }
-
-    /// The row is as tall as a row with a `size` thumbnail and draws no thumbnail; its icon stands in the thumbnail's
-    /// place.
-    #[must_use]
-    pub fn thumb_height(mut self, size: ThumbSize) -> Self {
-        // Without a first thumbnail nothing is placed or painted, but the row's height follows `thumb`.
-        self.thumb = size;
         self
     }
 

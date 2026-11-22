@@ -140,6 +140,8 @@ pub struct CommandPalette<'a> {
     entries: &'a [HelpEntry],
     index: &'a SearchIndex,
     open: Bind<'a, bool>,
+    /// The pick counts that rank the results, 0 for a command never picked.
+    #[prop]
     uses: Option<&'a dyn Fn(&CommandRef) -> u32>,
     /// The commands last run, newest first.
     #[prop]
@@ -174,13 +176,6 @@ impl<'a> CommandPalette<'a> {
             suggested: None,
             fallback: None,
         }
-    }
-
-    /// The pick counts that rank the results, 0 for a command never picked.
-    #[must_use]
-    pub fn uses(mut self, uses: &'a dyn Fn(&CommandRef) -> u32) -> Self {
-        self.uses = Some(uses);
-        self
     }
 
     /// Puts `command` first in `recents`, once, keeping the newest `RECENT_KEPT`.

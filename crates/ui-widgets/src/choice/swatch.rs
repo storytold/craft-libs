@@ -157,7 +157,9 @@ pub struct Swatch<T: Value + 'static = ()> {
     #[style_key]
     #[prop(flag)]
     well: bool,
-    /// The marks drawn on the well.
+    /// Paints these marks on the well: the edge mark, a locked corner square, a web-safe centre diamond, the
+    /// transparent checker half and the source-colour corner triangle, each from tokens.
+    #[prop]
     marks: CellMarks,
     /// The well shows its colour as a ring: a band of the colour round the edge, open in the middle.
     #[style_key]
@@ -214,13 +216,6 @@ impl<T: Value + 'static> Swatch<T> {
             checked: false,
             activation: None,
         }
-    }
-
-    /// Paints the marks of `marks` on the well: the edge mark, a locked corner square, a web-safe centre diamond, the
-    /// transparent checker half and the source-colour corner triangle, each from tokens.
-    #[must_use]
-    pub fn marks(self, marks: CellMarks) -> Self {
-        Self { marks, ..self }
     }
 }
 

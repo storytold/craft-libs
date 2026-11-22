@@ -344,6 +344,8 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 's
     #[prop]
     drop_zone: Option<DropZone>,
     actions: Vec<Label>,
+    /// Paints the tip that shows on hover over a tile or row.
+    #[prop(boxed = "Fn(&mut Ui, &K) + 'a")]
     tip: Option<TipFn<'a, K>>,
     drops: Vec<PresetDrop<'a, K>>,
     /// The search field is its scope's default stop (`Initial::Default`): a picker's popover opens with the focus in
@@ -412,13 +414,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
     #[must_use]
     pub fn takes_drop(mut self, drop: PresetDrop<'a, K>) -> Self {
         self.drops.push(drop);
-        self
-    }
-
-    /// Paints the tip that shows on hover over a tile or row.
-    #[must_use]
-    pub fn tip(mut self, f: impl Fn(&mut Ui, &K) + 'a) -> Self {
-        self.tip = Some(Box::new(f));
         self
     }
 

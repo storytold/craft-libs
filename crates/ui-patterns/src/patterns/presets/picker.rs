@@ -183,6 +183,8 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + MemoProps + 'static> {
     /// Whether a secondary click or the context-menu key opens the browser's row menu.
     #[prop]
     row_menu: PresetRowMenu,
+    /// Paints the tip that shows on hover over a tile or row of the picker's browser.
+    #[prop(boxed = "Fn(&mut Ui, &K) + 'a")]
     tip: Option<TipFn<'a, K>>,
     /// Shown, muted, while the value is no preset of the rows.
     #[prop(into)]
@@ -245,13 +247,6 @@ struct Session {
 }
 
 impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
-    /// Paints the tip that shows on hover over a tile or row of the picker's browser.
-    #[must_use]
-    pub fn tip(mut self, f: impl Fn(&mut Ui, &K) + 'a) -> Self {
-        self.tip = Some(Box::new(f));
-        self
-    }
-
     /// A picker with the same settings that borrows this one, so a composite whose body runs more than once in a
     /// pass (a wrapping row measures before it shows) shows a fresh picker in each run, as [`Bind::reborrowed`]
     /// hands on a binding. Bindings and the host's closures are borrowed; the rest is copied.

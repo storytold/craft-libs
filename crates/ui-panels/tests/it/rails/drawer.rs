@@ -178,8 +178,14 @@ fn a_revealed_tool_scrolls_into_view_and_wears_the_mark() {
             let toolbar = [slot(0, &[UNDO])];
             let rail = Rect::from_min_size(Pos2::ZERO, Vec2::new(48.0, ROOM.y));
             let target = CUT;
-            let reveal = pending.replace(false).then_some(&target);
-            ToolbarDrawer::new(rail, &groups, &toolbar, None).reveal(reveal).mark(marked.then_some(&target)).show(ui);
+            let mut drawer = ToolbarDrawer::new(rail, &groups, &toolbar, None);
+            if pending.replace(false) {
+                drawer = drawer.reveal(&target);
+            }
+            if marked {
+                drawer = drawer.mark(&target);
+            }
+            drawer.show(ui);
         });
         fixture.room(ROOM).idle(60);
         // The drawer is a popover over the window, which is larger than the room: its list scrolls inside it.
