@@ -571,6 +571,8 @@ pub(crate) trait ErasedPass<'a> {
     fn apply_values(&mut self) -> steps::ValueEdit;
     fn register_reset(&mut self);
     fn value_flags(&self) -> crate::style::Flags;
+    /// The shown value when it is a `bool`.
+    fn shown_bool(&self) -> Option<bool>;
     fn content_env(&self, values: &mut AppValues);
     fn paint(&mut self, ui: &mut Ui, env: &Env);
     fn paint_over(&mut self, ui: &mut Ui, env: &Env);

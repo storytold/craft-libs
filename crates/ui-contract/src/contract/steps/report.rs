@@ -180,6 +180,11 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         access.value = folded.as_ref().and_then(|folded| folded.value.clone());
     }
     let focusable = takes_focus(resolved) && (input.sense.contains(Sense::FOCUS) || folded.is_some());
+    // A button over a two-state value (a shown `bool`, a toggle command's checked state) is pressed or not, and says
+    // so off as well as on.
+    let two_state = (role == crate::runtime::egui::access::NodeRole::Button)
+        .then(|| p.shown_bool().or_else(|| core.command.as_deref().and_then(|command| command.checked)))
+        .flatten();
     let own = Own {
         id,
         component: facts.name,
@@ -195,7 +200,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         shortcut,
         display: facts.input == craft_behavior::Input::Display,
         flags,
-        selected: resolved.selected,
+        selected: resolved.selected.or(two_state),
         enabled: resolved.enabled,
         read_only: resolved.read_only,
         focusable,

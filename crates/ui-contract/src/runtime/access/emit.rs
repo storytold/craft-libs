@@ -32,7 +32,7 @@ pub(crate) struct Own<'a> {
     /// A display component describes itself with its tooltip.
     pub display: bool,
     pub flags: Flags,
-    /// `Common.selected`: the component's chosen state outside a collection.
+    /// `Common.selected`: the component's chosen state outside a collection; for a button, else its two-state value.
     pub selected: Option<bool>,
     pub enabled: bool,
     pub read_only: bool,
@@ -126,9 +126,9 @@ fn expanded_of(flags: Flags, explicit: Option<bool>) -> Option<bool> {
     explicit.or_else(|| flags.intersects(Flags::OPEN | Flags::EXPANDED).then_some(true))
 }
 
-/// The state flags of a node, and `selected`, the `Common.selected` of a component's own node. A node that is neither
-/// checked nor selected by its role, and shows no checked value, reports `selected` as pressed: a tool's button is down
-/// while it is the tool, and up otherwise.
+/// The state flags of a node, and `selected`, the `Common.selected` of a component's own node or a button's two-state
+/// value. A node that is neither checked nor selected by its role, and shows no checked value, reports `selected` as
+/// pressed: a tool's button is down while it is the tool, and a toggle button while it is on, and up otherwise.
 fn write_states(spec: &mut NodeSpec, flags: Flags, selected: Option<bool>, enabled: bool, read_only: bool) {
     spec.disabled = !enabled;
     let pressed = selected.filter(|_| !is_checkable(spec.role) && !is_selectable(spec.role) && !flags.intersects(Flags::CHECKED | Flags::MIXED));

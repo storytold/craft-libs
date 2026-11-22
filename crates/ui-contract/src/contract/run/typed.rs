@@ -374,6 +374,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         steps::value_flags(self.comp, self.cx)
     }
 
+    fn shown_bool(&self) -> Option<bool> {
+        steps::shown_bool(self.cx)
+    }
+
     fn content_env(&self, values: &mut AppValues) {
         self.comp.content_env(self.cx, values);
     }
