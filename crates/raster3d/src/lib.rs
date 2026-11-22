@@ -24,8 +24,14 @@
 //!
 //! Every `try_` function checks the scene against [`Limits`] and returns a [`RenderError`]
 //! before it allocates the target: malformed indices, references and spans, values that are not
-//! finite, sizes, triangle counts, light counts and coverage work over the limits. Rows run on
-//! several threads with rayon.
+//! finite, sizes, triangle counts, light counts and coverage work over the limits. Buffers whose
+//! size grows with the raster, the vertex or triangle count or a shadow map's texels are
+//! reserved fallibly and give [`RenderError::OutOfMemory`] when the reservation fails. A
+//! triangle's clipped polygon (at most nine corners) and the shadow pass's lists of lights and
+//! maps (a few entries per light of the scene) are allocated as usual. Rows and shadow maps are
+//! computed on several threads only with the `parallel` feature. The results are the same either
+//! way, except the `needed` count of [`RenderError::TooMuchWork`] for shadow maps past the limit,
+//! which depends on where each thread stops counting.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -34,6 +40,9 @@ mod resolve;
 mod scene;
 mod shade;
 mod shadow;
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 pub use raster::{GUARD_BAND, Target, try_render};
 pub use resolve::{Image, try_encode, try_render_cpu, try_resolve};
@@ -128,7 +137,8 @@ pub enum RenderError {
     TooManyShadowTexels,
     /// Rasterizing or rendering shadow maps would take more coverage or depth tests than
     /// [`Limits::max_work`]. The count stops at the first triangle past the limit (for shadow
-    /// maps, counted on several threads, within one triangle per thread), so `needed` is at least
+    /// maps counted on several threads with the `parallel` feature, within one triangle per
+    /// thread), so `needed` is at least
     /// `limit + 1` and may be below the scene's total.
     #[error("the render needs at least {needed} tests, over the limit of {limit}")]
     TooMuchWork { needed: u64, limit: u64 },
@@ -143,6 +153,9 @@ pub enum RenderError {
     /// of its range).
     #[error("pixel {0} has a color that is not finite or an alpha out of range")]
     BadPixel(usize),
+    /// Memory for a target, an image, a shadow map or a working buffer could not be reserved.
+    #[error("not enough memory for the render")]
+    OutOfMemory,
 }
 
 /// Caps on sizes and work, checked before the target is allocated.
@@ -192,5 +205,106 @@ impl Limits {
             return Err(RenderError::TooLarge(w, h));
         }
         usize::try_from(pixels).map_err(|_| RenderError::TooLarge(w, h))
+    }
+}
+
+/// An empty `Vec` with room for `len` items, or [`RenderError::OutOfMemory`] when the
+/// reservation fails.
+fn try_with_capacity<T>(len: usize) -> Result<Vec<T>, RenderError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| RenderError::OutOfMemory)?;
+    Ok(v)
+}
+
+/// A `Vec` of `len` copies of `value`, reserved fallibly.
+fn filled<T: Clone>(len: usize, value: T) -> Result<Vec<T>, RenderError> {
+    let mut v = try_with_capacity(len)?;
+    v.resize(len, value);
+    Ok(v)
+}
+
+/// Runs `f(chunk index, chunk of a, chunk of b)` over `a` and `b` split into chunks of `len`
+/// items, on several threads with the `parallel` feature. `len` is at least 1. Returns the error
+/// of the chunk with the lowest index that fails, so the result is the same either way.
+fn for_each_chunk_pair<A, B, F>(a: &mut [A], b: &mut [B], len: usize, f: F) -> Result<(), RenderError>
+where
+    A: Send,
+    B: Send,
+    F: Fn(usize, &mut [A], &mut [B]) -> Result<(), RenderError> + Sync + Send,
+{
+    let len = len.max(1);
+    #[cfg(feature = "parallel")]
+    let first = a
+        .par_chunks_mut(len)
+        .zip(b.par_chunks_mut(len))
+        .enumerate()
+        .filter_map(|(i, (a, b))| f(i, a, b).err().map(|e| (i, e)))
+        .min_by_key(|&(i, _)| i);
+    #[cfg(not(feature = "parallel"))]
+    let first = a.chunks_mut(len).zip(b.chunks_mut(len)).enumerate().find_map(|(i, (a, b))| f(i, a, b).err().map(|e| (i, e)));
+    first.map_or(Ok(()), |(_, e)| Err(e))
+}
+
+/// Runs `f` on each item, on several threads with the `parallel` feature, otherwise in the order
+/// of `items`.
+fn for_each_item<T, F>(items: &[T], f: F)
+where
+    T: Sync,
+    F: Fn(&T) + Sync + Send,
+{
+    #[cfg(feature = "parallel")]
+    items.par_iter().for_each(f);
+    #[cfg(not(feature = "parallel"))]
+    items.iter().for_each(f);
+}
+
+/// `f` of each item, in the order of `items`, on several threads. The output is reserved
+/// fallibly.
+#[cfg(feature = "parallel")]
+fn map_collect<T, U, F>(items: &[T], f: F) -> Result<Vec<U>, RenderError>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync + Send,
+{
+    let mut out = try_with_capacity(items.len())?;
+    out.par_extend(items.par_iter().map(f));
+    Ok(out)
+}
+
+/// `f` of each item, in the order of `items`. The output is reserved fallibly.
+#[cfg(not(feature = "parallel"))]
+fn map_collect<T, U, F>(items: &[T], f: F) -> Result<Vec<U>, RenderError>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync + Send,
+{
+    let mut out = try_with_capacity(items.len())?;
+    out.extend(items.iter().map(f));
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_buffer_that_cannot_be_reserved_is_out_of_memory() {
+        assert_eq!(filled(usize::MAX / 2, [0.0f32; 4]).err(), Some(RenderError::OutOfMemory));
+        assert_eq!(try_with_capacity::<f32>(usize::MAX / 2).err(), Some(RenderError::OutOfMemory));
+        assert_eq!(map_collect(&[1u8, 2, 3], |&x| u32::from(x) * 2), Ok(vec![2, 4, 6]));
+        assert_eq!(filled(3, 1.5f32), Ok(vec![1.5; 3]));
+    }
+
+    #[test]
+    fn the_first_failing_chunk_gives_the_error() {
+        let (mut a, mut b) = (vec![0u8; 10], vec![0u8; 10]);
+        let r = for_each_chunk_pair(&mut a, &mut b, 2, |i, a, _| {
+            a.fill(1);
+            if i >= 2 { Err(RenderError::BadPixel(i)) } else { Ok(()) }
+        });
+        assert_eq!(r, Err(RenderError::BadPixel(2)));
+        assert_eq!(for_each_chunk_pair(&mut a, &mut b, 2, |_, _, _| Ok(())), Ok(()));
     }
 }

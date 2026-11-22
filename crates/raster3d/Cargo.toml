@@ -7,9 +7,17 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+parallel = ["dep:rayon"]
+
 [lints]
 workspace = true
 
 [dependencies]
-rayon = { workspace = true }
+rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# The differential tests run a verbatim copy of the app's previous code, which uses rayon.
+rayon = { workspace = true }

@@ -1,11 +1,9 @@
 //! The box resolve of a supersampled target and the sRGB encoding of its pixels.
 
-use rayon::prelude::*;
-
 use crate::raster::{Target, try_render};
 use crate::scene::Scene;
 use crate::shade::linear_to_srgb;
-use crate::{Limits, RenderError};
+use crate::{Limits, RenderError, filled, for_each_chunk_pair, map_collect};
 
 /// An image of premultiplied RGBA pixels, row-major from the top row.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,13 +41,13 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
     let (w, h) = (t.width / k, t.height / k);
     // Fits: at most `expected`.
     let out = area(w, h).unwrap_or(0);
-    let mut img = Image { width: w, height: h, data: vec![[0.0; 4]; out] };
-    let mut depth = vec![f32::INFINITY; out];
+    let mut img = Image { width: w, height: h, data: filled(out, [0.0; 4])? };
+    let mut depth = filled(out, f32::INFINITY)?;
     if out == 0 {
         return Ok((img, depth));
     }
     let n = (u64::from(k) * u64::from(k)) as f32;
-    img.data.par_chunks_mut(w as usize).zip(depth.par_chunks_mut(w as usize)).enumerate().for_each(|(y, (row, drow))| {
+    for_each_chunk_pair(&mut img.data, &mut depth, w as usize, |y, row, drow| {
         for x in 0..w as usize {
             let mut acc = [0.0f32; 4];
             let (mut dz, mut dn) = (0.0f32, 0.0f32);
@@ -75,7 +73,8 @@ pub fn try_resolve(t: &Target, k: u32) -> Result<(Image, Vec<f32>), RenderError>
                 (row[x], drow[x]) = mean_f64(t, k as usize, x, y);
             }
         }
-    });
+        Ok(())
+    })?;
     Ok((img, depth))
 }
 
@@ -118,20 +117,16 @@ pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
     if let Some(i) = img.data.iter().position(bad) {
         return Err(RenderError::BadPixel(i));
     }
-    let encoded: Vec<[f32; 4]> = img
-        .data
-        .par_iter()
-        .map(|&p| {
-            let mut p = p;
-            let a = p[3];
-            if a > 1e-6 {
-                for c in &mut p[..3] {
-                    *c = linear_to_srgb(*c / a) * a;
-                }
+    let encoded: Vec<[f32; 4]> = map_collect(&img.data, |&p| {
+        let mut p = p;
+        let a = p[3];
+        if a > 1e-6 {
+            for c in &mut p[..3] {
+                *c = linear_to_srgb(*c / a) * a;
             }
-            p
-        })
-        .collect();
+        }
+        p
+    })?;
     // A finite color far outside 0 to 1 can still overflow the curve's segments.
     if let Some(i) = encoded.iter().position(|p| !p.iter().all(|c| c.is_finite())) {
         return Err(RenderError::BadPixel(i));

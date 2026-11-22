@@ -11,7 +11,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   premultiplied linear RGBA and the camera-space depth of the nearest opaque surface, infinity where
   nothing is drawn. `Scene::clip` maps world to clip space with reversed depth (a larger
   normalized device z is nearer); `Scene::view` maps world to camera space, and its third row gives
-  the depth. Rows are rasterized on several threads with rayon.
+  the depth. Rows are rasterized one band of 16 rows at a time, or on several threads with the
+  `parallel` feature.
 - **Clipping.** Triangles are clipped against the depth range `0 ≤ z ≤ w` before the perspective
   divide, the clip volume WebGPU uses
   (<https://www.w3.org/TR/webgpu/#coordinate-systems>), and against a guard band of
@@ -105,9 +106,18 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   not divide both sides and for buffers of the wrong length. `try_encode` returns an error for a
   pixel that is not finite, an alpha below 0 or above 1 (beyond 1e-4 of rounding), or a color whose
   division by alpha or encoding overflows, and changes no pixel then. The renderer holds 40 bytes per raster
-  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. The search for a
+  pixel and up to seven clipped triangles of about 140 bytes per scene triangle. Targets, images,
+  shadow maps and the working buffers that grow with the raster or the vertex or triangle count
+  are reserved fallibly: when a reservation fails, the `try_` function returns `OutOfMemory`. A
+  triangle's clipped polygon, at most nine corners, and the shadow pass's lists of lights and
+  maps, a few entries per light, are allocated as usual. The search for a
   surviving fragment under discarded opaque pixels visits each opaque triangle's bounding box
   once more, so it runs no more coverage tests than the visibility pass.
+- **Features.** `parallel` rasterizes bands of rows, resolves and encodes rows and pixels, and
+  renders shadow maps on several threads with rayon. The default build is serial and builds for
+  `wasm32-unknown-unknown`. Every output and error is the same either way, except the `needed`
+  count of `TooMuchWork` when shadow maps pass the work limit, since each thread stops counting
+  at its own point.
 
 ## Origin
 
@@ -130,6 +140,9 @@ Changes from those files:
   level range that overflowed, a zero raster width and a resolve factor of 0. It returned a cropped
   image for a factor that did not divide the size, NaN or infinite pixels for values that were not
   finite, and black environment light for levels that did not exist.
+- Targets, images, shadow maps and the working buffers that grow with the raster or the vertex
+  or triangle count are reserved fallibly, and a failed reservation gives `OutOfMemory`. EffectCraft's allocations
+  stopped the process when memory ran out.
 - Triangles are clipped against the guard band, and clipped in `f64` when the depth clip in `f32`
   overflows. EffectCraft clipped only the depth range, so a triangle with corners far past the
   viewport that crossed the depth range could be dropped. Triangles leaving the band can shade
@@ -204,6 +217,7 @@ Changes from those files:
   same order of operations.
 - The camera basis of the shadow maps is computed in this crate from the same operations as
   EffectCraft's `camera::basis_view`.
+- Bands, rows, pixels and shadow maps run on several threads only with the `parallel` feature.
 
 ## Migration
 

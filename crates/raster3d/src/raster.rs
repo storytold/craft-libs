@@ -1,17 +1,15 @@
 //! The triangle rasterizer.
 //!
 //! Triangles are clipped against the depth range (`0 ≤ z ≤ w`) and a guard band in x and y,
-//! set up in screen space and scanned per band of rows in parallel with edge
-//! functions (pixel centers, top-left fill rule) and perspective-correct barycentrics. Opaque
-//! triangles resolve visibility first (reversed depth: larger ndc z is nearer) and each pixel is
-//! shaded once; transparent triangles (already sorted back to front) are then shaded per
-//! fragment and blended over, depth-tested against the opaque surfaces.
-
-use rayon::prelude::*;
+//! set up in screen space and scanned per band of rows (in parallel with the `parallel`
+//! feature) with edge functions (pixel centers, top-left fill rule) and perspective-correct
+//! barycentrics. Opaque triangles resolve visibility first (reversed depth: larger ndc z is
+//! nearer) and each pixel is shaded once; transparent triangles (already sorted back to front)
+//! are then shaded per fragment and blended over, depth-tested against the opaque surfaces.
 
 use crate::scene::{Scene, Vertex, validate, validate_shadow_refs};
 use crate::shade::{Frag, shade};
-use crate::{Limits, RenderError};
+use crate::{Limits, RenderError, filled, for_each_chunk_pair, try_with_capacity};
 
 /// Half-width of the clip guard band in units of clip w: a triangle reaching past
 /// `|x| > GUARD_BAND × w` or `|y| > GUARD_BAND × w` is clipped there before the perspective
@@ -266,6 +264,8 @@ fn setup(s: &Scene, clip: &[[f32; 4]], range: std::ops::Range<usize>, work: &mut
         }
         if let Some(scr) = project(s, clip, t) {
             let first = out.len();
+            // The fan adds at most `scr.len() - 2` triangles.
+            out.try_reserve(scr.len()).map_err(|_| RenderError::OutOfMemory)?;
             fan(s, &scr, (t / 3) as u32, &mut out);
             for st in &out[first..] {
                 let area = (st.bbox[2] - st.bbox[0]) as u64 * (st.bbox[3] - st.bbox[1]) as u64;
@@ -344,25 +344,28 @@ const BAND: i32 = 16;
 
 /// The clip coordinates of every vertex, or the first vertex whose clip position is not finite.
 fn clip_positions(s: &Scene) -> Result<Vec<[f32; 4]>, RenderError> {
-    s.vertices
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let c = mat_mul(&s.clip, v.pos);
-            if c.iter().all(|x| x.is_finite()) { Ok(c) } else { Err(RenderError::BadClipPosition(i)) }
-        })
-        .collect()
+    let mut out = try_with_capacity(s.vertices.len())?;
+    for (i, v) in s.vertices.iter().enumerate() {
+        let c = mat_mul(&s.clip, v.pos);
+        if !c.iter().all(|x| x.is_finite()) {
+            return Err(RenderError::BadClipPosition(i));
+        }
+        out.push(c);
+    }
+    Ok(out)
 }
 
 /// The screen triangles of each band of `BAND` rows, by index into `ts`.
-fn bin(ts: &[STri], bands: i32) -> Vec<Vec<u32>> {
-    let mut b = vec![vec![]; bands.max(0) as usize];
+fn bin(ts: &[STri], bands: i32) -> Result<Vec<Vec<u32>>, RenderError> {
+    let mut b: Vec<Vec<u32>> = filled(bands.max(0) as usize, vec![])?;
     for (i, t) in ts.iter().enumerate() {
         for band in (t.bbox[1] / BAND)..((t.bbox[3] + BAND - 1) / BAND).min(bands) {
-            b[band as usize].push(i as u32);
+            let list = &mut b[band as usize];
+            list.try_reserve(1).map_err(|_| RenderError::OutOfMemory)?;
+            list.push(i as u32);
         }
     }
-    b
+    Ok(b)
 }
 
 /// One band of rows being rendered: its first row, its row count and the raster width.
@@ -404,9 +407,9 @@ impl Band<'_> {
     }
 
     /// The nearest opaque triangle covering each pixel of the band.
-    fn visibility(&self, opaque: Pass) -> Visibility {
+    fn visibility(&self, opaque: Pass) -> Result<Visibility, RenderError> {
         let (w, y0, rows) = (self.w, self.y0, self.rows);
-        let mut vis: Visibility = vec![(u32::MAX, EMPTY, [0.0; 3]); rows * w];
+        let mut vis: Visibility = filled(rows * w, (u32::MAX, EMPTY, [0.0; 3]))?;
         for &ti in opaque.bins {
             let t = &opaque.tris[ti as usize];
             for y in t.bbox[1].max(y0)..t.bbox[3].min(y0 + rows as i32) {
@@ -421,15 +424,15 @@ impl Band<'_> {
                 }
             }
         }
-        vis
+        Ok(vis)
     }
 
     /// Shade each pixel's visible opaque fragment. A discarded fragment (alpha test, back face)
     /// gives way to the nearest surviving fragment under the pixel, and the pixel's visibility
     /// depth becomes that fragment's ([`EMPTY`] when none survives).
-    fn shade_opaque(&self, opaque: Pass, vis: &mut Visibility, crow: &mut [[f32; 4]], drow: &mut [f32]) {
+    fn shade_opaque(&self, opaque: Pass, vis: &mut Visibility, crow: &mut [[f32; 4]], drow: &mut [f32]) -> Result<(), RenderError> {
         let s = self.s;
-        let mut discarded = vec![false; self.rows * self.w];
+        let mut discarded = filled(self.rows * self.w, false)?;
         for i in 0..self.rows * self.w {
             let (ti, _, l) = vis[i];
             if ti == u32::MAX {
@@ -445,9 +448,9 @@ impl Band<'_> {
             }
         }
         if !discarded.contains(&true) {
-            return;
+            return Ok(());
         }
-        for (i, best) in self.fallback(opaque, vis, &discarded).into_iter().enumerate() {
+        for (i, best) in self.fallback(opaque, vis, &discarded)?.into_iter().enumerate() {
             if !discarded[i] {
                 continue;
             }
@@ -460,6 +463,7 @@ impl Band<'_> {
                 None => vis[i].1 = EMPTY,
             }
         }
+        Ok(())
     }
 
     /// For each discarded pixel of the band, the nearest surviving opaque fragment of a screen
@@ -468,9 +472,9 @@ impl Band<'_> {
     /// visited in index order over their bounding boxes, so this pass tests no more pixels than
     /// [`Band::visibility`], and among fragments at equal depth the first triangle's is kept.
     #[allow(clippy::type_complexity)]
-    fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Vec<Option<(f32, [f32; 4], f32)>> {
+    fn fallback(&self, opaque: Pass, vis: &Visibility, discarded: &[bool]) -> Result<Vec<Option<(f32, [f32; 4], f32)>>, RenderError> {
         let (s, w, y0, rows) = (self.s, self.w, self.y0, self.rows);
-        let mut best: Vec<Option<(f32, [f32; 4], f32)>> = vec![None; rows * w];
+        let mut best: Vec<Option<(f32, [f32; 4], f32)>> = filled(rows * w, None)?;
         for &tj in opaque.bins {
             let t2 = &opaque.tris[tj as usize];
             for y in t2.bbox[1].max(y0)..t2.bbox[3].min(y0 + rows as i32) {
@@ -491,7 +495,7 @@ impl Band<'_> {
                 }
             }
         }
-        best
+        Ok(best)
     }
 
     /// Transparent fragments in order, blended over the opaque result where they are nearer.
@@ -518,21 +522,22 @@ impl Band<'_> {
 }
 
 /// Rasterize and shade set-up screen triangles into a target of `pixels` pixels.
-fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Target {
+fn raster(s: &Scene, opaque: &[STri], trans: &[STri], pixels: usize) -> Result<Target, RenderError> {
     let (w, h) = (s.width as usize, s.height as usize);
     let bands = (h as i32 + BAND - 1) / BAND;
-    let ob = bin(opaque, bands);
-    let tb = bin(trans, bands);
-    let mut color = vec![[0.0f32; 4]; pixels];
-    let mut depth = vec![f32::INFINITY; pixels];
-    color.par_chunks_mut(w * BAND as usize).zip(depth.par_chunks_mut(w * BAND as usize)).enumerate().for_each(|(band, (crow, drow))| {
+    let ob = bin(opaque, bands)?;
+    let tb = bin(trans, bands)?;
+    let mut color = filled(pixels, [0.0f32; 4])?;
+    let mut depth = filled(pixels, f32::INFINITY)?;
+    for_each_chunk_pair(&mut color, &mut depth, w * BAND as usize, |band, crow, drow| {
         let b = Band { s, y0: band as i32 * BAND, rows: crow.len() / w, w };
         let (op, tp) = (Pass { tris: opaque, bins: &ob[band] }, Pass { tris: trans, bins: &tb[band] });
-        let mut vis = b.visibility(op);
-        b.shade_opaque(op, &mut vis, crow, drow);
+        let mut vis = b.visibility(op)?;
+        b.shade_opaque(op, &mut vis, crow, drow)?;
         b.blend_transparent(tp, &vis, crow);
-    });
-    Target { width: s.width, height: s.height, color, depth }
+        Ok(())
+    })?;
+    Ok(Target { width: s.width, height: s.height, color, depth })
 }
 
 /// Rasterize and shade the scene at its raster size.
@@ -546,7 +551,7 @@ pub fn try_render(s: &Scene, limits: &Limits) -> Result<Target, RenderError> {
     let mut work = 0;
     let opaque = setup(s, &clip, 0..s.opaque_count as usize, &mut work, limits.max_work)?;
     let trans = setup(s, &clip, s.opaque_count as usize..s.indices.len(), &mut work, limits.max_work)?;
-    let t = raster(s, &opaque, &trans, pixels);
+    let t = raster(s, &opaque, &trans, pixels)?;
     // Finite inputs near the top of the f32 range can still overflow in shading.
     if let Some(i) = t.color.iter().zip(&t.depth).position(|(c, d)| !c.iter().all(|v| v.is_finite()) || d.is_nan()) {
         return Err(RenderError::BadPixel(i));

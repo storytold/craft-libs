@@ -5,12 +5,10 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use rayon::prelude::*;
-
 use crate::raster::f32_crossing;
 use crate::scene::{EnvInfo, Scene, ShadowMap, TexInfo, unit, validate};
 use crate::shade::sample;
-use crate::{Limits, RenderError};
+use crate::{Limits, RenderError, filled, for_each_item, map_collect, try_with_capacity};
 
 /// Hard cap on the shadow depth texels (`f32`) of one scene, about 104 MB. It holds one point
 /// light's full 2048-texel cube (6 × 2048² ≈ 25.2 M texels).
@@ -204,10 +202,10 @@ fn triangle_texels(m: &ShadowMap, tri: [MapCorner; 3]) -> u64 {
 
 /// The depth tests rendering `maps` takes: one per caster and map, plus each map triangle's
 /// bounding-box texels. When the casters times the maps already exceed `limit`, that product.
-/// The maps are counted on several threads into one total, and each stops at the first caster
-/// after the total passes `limit`. Returns [`RenderError::BadShadowInputs`] when the total stays
-/// within `limit` and a caster's corners in a map are not finite, since the rasterizer would skip
-/// that caster.
+/// The maps are counted into one total, on several threads with the `parallel` feature, and each
+/// stops at the first caster after the total passes `limit`. Returns
+/// [`RenderError::BadShadowInputs`] when the total stays within `limit` and a caster's corners in
+/// a map are not finite, since the rasterizer would skip that caster.
 fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> Result<u64, RenderError> {
     let pairs = (maps.len() as u64).saturating_mul(casters.len() as u64);
     if pairs > limit {
@@ -216,7 +214,7 @@ fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> 
     let finite = |c: &MapCorner| c.0.iter().all(|v| v.is_finite()) && c.1.is_finite() && c.2.is_finite();
     let total = AtomicU64::new(0);
     let not_finite = AtomicBool::new(false);
-    maps.par_iter().for_each(|m| {
+    for_each_item(maps, |m| {
         for &t in casters {
             if total.load(Ordering::Relaxed) > limit {
                 return;
@@ -243,9 +241,9 @@ fn shadow_work(s: &Scene, maps: &[ShadowMap], casters: &[usize], limit: u64) -> 
 }
 
 /// Rasterize the shadow-casting triangles' light-space depth into `m`'s texels.
-fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
+fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Result<Vec<f32>, RenderError> {
     let n = m.size as usize;
-    let mut d = vec![f32::INFINITY; n * n];
+    let mut d = filled(n * n, f32::INFINITY)?;
     for &t in casters {
         let ids = [s.indices[3 * t] as usize, s.indices[3 * t + 1] as usize, s.indices[3 * t + 2] as usize];
         let mat = &s.materials[s.vertices[ids[0]].material as usize];
@@ -277,7 +275,7 @@ fn shadow_raster(s: &Scene, m: &ShadowMap, casters: &[usize]) -> Vec<f32> {
             raster_triangle(s, m, [scr[0], scr[k], scr[k + 1]], alpha.as_ref(), &mut d);
         }
     }
-    d
+    Ok(d)
 }
 
 /// Long side of a quality shadow map: one map texel per pixel of the `width × height` raster
@@ -376,10 +374,15 @@ fn env_shadow_map(e: EnvInfo, centre: [f64; 3], radius: f64, size: u32) -> Shado
 }
 
 /// The triangles whose material casts shadows.
-fn caster_list(s: &Scene) -> Vec<usize> {
-    (0..s.indices.len() / 3)
-        .filter(|&t| s.materials.get(s.vertices[s.indices[3 * t] as usize].material as usize).is_some_and(|m| m.casts_shadows))
-        .collect()
+fn caster_list(s: &Scene) -> Result<Vec<usize>, RenderError> {
+    let mut out = vec![];
+    for t in 0..s.indices.len() / 3 {
+        if s.materials.get(s.vertices[s.indices[3 * t] as usize].material as usize).is_some_and(|m| m.casts_shadows) {
+            out.try_reserve(1).map_err(|_| RenderError::OutOfMemory)?;
+            out.push(t);
+        }
+    }
+    Ok(out)
 }
 
 /// The bounding sphere of the scene's vertices: (center, radius + 1).
@@ -455,7 +458,7 @@ pub fn try_shadow_maps(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
 }
 
 fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<(), RenderError> {
-    let casters = caster_list(s);
+    let casters = caster_list(s)?;
     // The environment light casts a shadow when marked and its image has a dominant direction;
     // with nothing to cast one, its mark is cleared either way.
     let env_shadow = !casters.is_empty() && s.env.is_some_and(|e| e.shadow >= 0 && e.sun != [0.0; 3]);
@@ -527,9 +530,11 @@ fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
     if needed > limits.max_work {
         return Err(RenderError::TooMuchWork { needed, limit: limits.max_work });
     }
-    let texels: Vec<Vec<f32>> = maps.par_iter().map(|m| shadow_raster(s, m, &casters)).collect();
-    let mut all = Vec::with_capacity(texels.iter().map(Vec::len).sum());
+    let texels = map_collect(&maps, |m| shadow_raster(s, m, &casters))?;
+    let total = texels.iter().map(|t| t.as_ref().map_or(0, Vec::len)).fold(0, usize::saturating_add);
+    let mut all = try_with_capacity(total)?;
     for (m, t) in maps.iter_mut().zip(texels) {
+        let t = t?;
         m.offset = u32::try_from(all.len()).map_err(|_| RenderError::TooManyShadowTexels)?;
         all.extend(t);
     }
