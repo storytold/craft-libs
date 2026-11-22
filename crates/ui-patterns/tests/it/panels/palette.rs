@@ -348,7 +348,8 @@ fn painted(fixture: &Fixture, text: &str) -> usize {
 fn a_result_list_is_capped_at_the_limit_and_keeps_the_active_result_in_the_last_row() {
     let entries: Vec<HelpEntry> = (0..60).map(|n| entry(&format!("cap{n}"), &format!("Alpha {n:02}"))).collect();
     let mut rig = rig(entries.clone(), Some(Vec::new()), false, |_| ());
-    rig.fixture.settle();
+    // Room for every listed row in the capped box: the list builds only the rows in view.
+    rig.fixture.room(Vec2::new(800.0, 4000.0)).settle();
     rig.fixture.type_text("alpha").settle();
     assert_eq!(names(&rig.fixture).len(), 50, "sixty matches list fifty");
 
@@ -414,19 +415,26 @@ fn recents_keep_twenty_and_the_empty_query_lists_the_newest_eight_that_have_an_e
 #[trial]
 fn a_press_outside_closes_the_palette() {
     let clicks = Rc::new(Cell::new(0));
-    let counted = clicks.clone();
+    let shown = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let (counted, placed) = (clicks.clone(), shown.clone());
     let entries = vec![HelpEntry::new(TrialCommand::Rotate, "Rotate")];
     let mut rig = rig(entries, None, false, move |ui| {
-        if clicked(&Button::new("Below").show(ui)) {
+        let response = Button::new("Below").show(ui);
+        placed.set(response.rect);
+        if clicked(&response) {
             counted.set(counted.get() + 1);
         }
     });
     rig.fixture.settle();
     assert!(rig.open.get(), "the palette starts open");
-    let below = rig.fixture.by_label("Below").expect("the button under the palette");
-    rig.fixture.click(&below).settle();
+    // What a modal layer covers is hidden from assistive technology, so the press goes where the button is shown.
+    let below = shown.get();
+    assert!(below.is_positive(), "the button under the palette");
+    rig.fixture.click_at(below.center()).settle();
     assert!(!rig.open.get(), "a press outside closed the palette");
-    assert_eq!(clicks.get(), 1, "the press reached the window below");
+    assert_eq!(clicks.get(), 0, "the press that closes the palette presses nothing under it");
+    rig.fixture.click_at(below.center()).settle();
+    assert_eq!(clicks.get(), 1, "with the palette closed, the same press reaches the window below");
 }
 
 #[trial]
