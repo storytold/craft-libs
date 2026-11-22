@@ -2,7 +2,7 @@
 //! on a row hands the pick back to the adapter, which accepts it in its next run.
 
 use crate::contract::{
-    CollectionEvent, Component, Cx, Overlay, OverlayUi, Overlays as _, Show as _, ShowCollection as _, WordSetCx as _, lead_position,
+    CollectionEvent, Component, Cx, Overlay, OverlayUi, Overlays as _, Props as _, Show as _, ShowCollection as _, WordSetCx as _, lead_position,
 };
 use crate::display::{Divider, Text};
 use crate::list::{List, ListRow};
@@ -59,10 +59,11 @@ pub(crate) fn show<C: Component, V: 'static>(ui: &mut OverlayUi<'_>, cx: &mut Cx
         labels.iter().for_each(|label| label.as_str().hash(&mut hasher));
         hasher.finish()
     };
-    let focus = Overlay::dropdown().focus.list_enter(enter);
+    let list_id = cx.id.with("completions");
+    let focus = Overlay::dropdown().focus.list_enter(enter).list(list_id);
     let overlay = Overlay::dropdown().focus(focus);
     let events = ui.show(popup, overlay, |ui, _| {
-        let list = List::options(name.clone()).rows_stamp(stamp).show_items(ui, &Candidates { labels: &labels }, &mut |at, _| {
+        let list = List::options(name.clone()).id(list_id).rows_stamp(stamp).show_items(ui, &Candidates { labels: &labels }, &mut |at, _| {
             let row = ListRow::new(labels[*at].clone()).option().role(TypeRole::Mono).lead_role(TypeRole::Mono);
             match (&marks[*at], &widest) {
                 (Some(mark), Some(widest)) => row.lead_text(mark.clone(), widest.clone()),

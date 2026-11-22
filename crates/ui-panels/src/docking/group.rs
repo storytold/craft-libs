@@ -21,7 +21,7 @@ use crate::runtime::memory::sub;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
-use craft_theme::{ControlSize, Rgba, Tokens};
+use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::fmt::Debug;
@@ -37,45 +37,57 @@ pub struct GroupGripStyle {
     marks: GripMarks,
 }
 
-/// How many ticks a grip's row of marks has, at every display scale.
-const GRIP_TICKS: u16 = 10;
-/// How tall a grip's tick is, in points.
-const GRIP_TICK_LENGTH: f32 = 4.0;
-/// The share of the panel's lightness a grip's ticks keep: the references' marks are a little darker than the panel
-/// they sit on in every interface colour (`#454545` on `#535353`, `#272727` on `#323232`, `#9e9e9e` on `#b8b8b8`).
-const GRIP_INK_SHARE: f32 = 0.83;
-
-/// The row of marks a dock grip shows, as the references draw it: ten upright ticks, a thin stroke wide, four points
-/// tall and a thin stroke apart, centred on the grip, a little darker than the panel. They keep their ink under the
-/// pointer, as the references' do. A toolbar's grip under its column bar and the grip above each icon group of a
-/// collapsed column paint the same marks.
+/// The row of marks a dock grip shows, centred on the grip, in the theme's `line.grip` (photocraft#16406: the
+/// references' 0.83 of the panel was almost invisible on our darker panels). Its shape is the theme's `shape.grip`
+/// (photocraft#16426): ticks or dots, how many, how large and how far apart; by default eleven upright ticks, a thin
+/// stroke wide, five points tall and a thin stroke apart. The marks keep their ink under the pointer. A toolbar's grip
+/// under its column bar and the grip above each icon group of a collapsed column paint the same marks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GripMarks {
     ink: StyleColor,
-    /// The width of a tick and the gap between two of them.
-    side: f32,
-    /// The height of a tick.
-    length: f32,
+    shape: GripShape,
 }
 
 impl GripMarks {
     /// The marks in the tokens of `cx`.
     pub(super) fn style(cx: &StyleCx<'_>) -> Self {
-        GripMarks { ink: cx.color(grip_ink(cx.tokens.color.surface.panel)), side: cx.tokens.stroke.thin, length: GRIP_TICK_LENGTH }
+        GripMarks { ink: cx.color(cx.tokens.color.line.grip), shape: cx.tokens.shape.grip }
+    }
+
+    /// How tall the row is, in points: a tick's length, or a dot's side.
+    pub(super) fn height(&self) -> f32 {
+        let GripShape { mark, length, width, .. } = self.shape;
+        match mark {
+            GripMark::Ticks => length,
+            GripMark::Dots => width,
+        }
+    }
+
+    /// Paints the row in the grip strip `strip`: centred across it, and [`GRIP_ABOVE`] below its middle, so the strip
+    /// keeps that much more room above the marks than below them.
+    pub(super) fn paint_in(&self, ui: &PaintUi<'_>, strip: Rect) {
+        self.paint(ui, strip.center() + Vec2::new(0.0, GRIP_ABOVE / 2.0));
     }
 
     /// Paints the row centred on `centre`.
-    pub(super) fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
-        let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(self.side) };
-        ui.draw().grip_ticks(&look, centre, GRIP_TICKS, self.side, self.length);
+    fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
+        let GripShape { count, width, gap, .. } = self.shape;
+        let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(width) };
+        ui.draw().grip_ticks(&look, centre, count.max(1), gap, self.height());
     }
 }
 
-/// The ink of a grip's ticks on a `panel` surface: the panel's channels at [`GRIP_INK_SHARE`].
-fn grip_ink(panel: Rgba) -> Rgba {
-    let [r, g, b, a] = panel.0;
-    let darker = |channel: u8| (f32::from(channel) * GRIP_INK_SHARE).round().clamp(0.0, 255.0) as u8;
-    Rgba([darker(r), darker(g), darker(b), a])
+/// The room a grip strip keeps above its marks beyond `space.gap.tight`, in points, in every theme: the marks stand a
+/// little below the strip's middle, clear of the column bar or icon group above (photocraft#16426).
+const GRIP_ABOVE: f32 = 2.0;
+
+/// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
+/// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
+/// they never touch the strip's edge (photocraft#16426).
+pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
+    let GripShape { mark, length, width, .. } = tokens.shape.grip;
+    let marks = if mark == GripMark::Ticks { length } else { width };
+    tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
 }
 
 /// What a group grip reports: its response, the second press of a double click and whether it started a group
@@ -160,7 +172,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if self.ticks {
-            cx.style.marks.paint(ui, cx.rect.center());
+            cx.style.marks.paint_in(ui, cx.rect);
         }
     }
 

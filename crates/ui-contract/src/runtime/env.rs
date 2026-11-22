@@ -473,8 +473,13 @@ impl Scoped {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
         let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
+        // The view stands on the line of the row around it only to fill it, as a levelled unit does: a fill-width row in
+        // it (a bar in a shell slot) takes the line's height and centres on it, as shown without the view; its children
+        // take no slots on the line (photocraft#16405).
+        let line = self.row_line.map(|line| RowLine { places: false, ..line });
         self.start_room();
         (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
+        self.row_line = line;
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
