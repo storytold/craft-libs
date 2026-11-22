@@ -230,7 +230,7 @@ fn a_wheel_over_an_open_popup_goes_to_the_popup_and_not_to_the_region_under_it()
     let mut show_frame = |ui: &mut Ui| {
         let ctx = ui.ctx().clone();
         let field_rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 20.0));
-        field.set(Probe::new(&field_seen).size(field_rect.size()).sense(Sense::CLICK | Sense::FOCUS).show(ui).id);
+        field.set(Probe::new(&field_seen).size(field_rect.size()).sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS).show(ui).id);
         if open.get() {
             let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(anchor), Side::Below, Align::Start));
             let props = ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content);
@@ -253,7 +253,9 @@ fn a_wheel_over_an_open_popup_goes_to_the_popup_and_not_to_the_region_under_it()
     let mut frames = Frames::new();
     frames.idle(2, &mut show_frame);
     pointer::click(&mut frames, Pos2::new(50.0, 10.0), &mut show_frame);
+    // Each wheel starts its own gesture, which splits by position.
     let wheel_at = |frames: &mut Frames, at: Pos2, show_frame: &mut dyn FnMut(&mut Ui)| -> Vec<Id> {
+        frames.advance(GESTURE_GAP);
         frames.frame(vec![pointer::moved(at)], &mut *show_frame);
         shares.borrow_mut().clear();
         frames.frame(vec![pointer::wheel(-30.0)], &mut *show_frame);
