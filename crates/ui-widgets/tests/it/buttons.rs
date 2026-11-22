@@ -773,23 +773,27 @@ fn a_command_button_shows_its_chord_until_the_room_is_short() {
     assert_eq!(plain_chord, plain_hidden, "a command with no chord shows none");
 }
 
-/// A toggle button says whether it is pressed both ways: on is pressed and off is not pressed, where a button with no
-/// toggle has no pressed state. Guards against an off toggle reading as a plain button.
+/// A toggle button says whether it is pressed both ways: on is pressed and off is not pressed, bound to a value or
+/// given a shared one (a mode of several objects), where a button with no toggle has no pressed state. Guards against
+/// an off toggle reading as a plain button.
 #[trial]
 fn a_toggle_button_reports_pressed_on_and_off() {
+    use craft_behavior::Mixed;
     use craft_ui::testing::access::NodeKey;
     for on in [true, false] {
-        let ids = Rc::new(Cell::new((Id::NULL, Id::NULL)));
+        let ids = Rc::new(Cell::new((Id::NULL, Id::NULL, Id::NULL)));
         let seen = ids.clone();
         let mut fixture = Fixture::new(move |ui| {
             let mut value = on;
             let toggle = ToggleButton::new("Snap to grid", Bind::bound(&mut value)).show(ui).response.id;
-            seen.set((toggle, Button::new("Save").show(ui).response.id));
+            let shared = ToggleButton::new("Unite", Bind::given(Mixed::Same(on))).show(ui).response.id;
+            seen.set((toggle, shared, Button::new("Save").show(ui).response.id));
         });
         fixture.settle();
-        let (toggle, plain) = ids.get();
+        let (toggle, shared, plain) = ids.get();
         let tree = fixture.tree();
-        assert_eq!(tree.toggled_of(NodeKey::of(toggle)), Some(craft_behavior::Mixed::Same(on)), "a toggle that is {on}");
+        assert_eq!(tree.toggled_of(NodeKey::of(toggle)), Some(Mixed::Same(on)), "a toggle that is {on}");
+        assert_eq!(tree.toggled_of(NodeKey::of(shared)), Some(Mixed::Same(on)), "a toggle given {on}");
         assert_eq!(tree.toggled_of(NodeKey::of(plain)), None, "a plain button has no pressed state");
     }
 }
