@@ -1469,8 +1469,9 @@ Pointer values and the press lifecycle (8.1, 8.2), egui-free: the runtime conver
 - `craft_behavior::press::Buttons`: `pub struct Buttons: u8 (flag set)`. The pointer buttons held.
   - `pub const fn of(button: PointerButton) -> Buttons`. The flag of one button.
 - `craft_behavior::press::MULTI_CLICK_TIME`: `pub const MULTI_CLICK_TIME: f64`. The longest gap between presses that still count as one multi-click, in seconds.
+- `craft_behavior::press::MULTI_TAP_SLOP`: `pub const MULTI_TAP_SLOP: f32`. How far a finger of a multi-finger tap may move from where it landed, in points: fingers drift more than a
 - `craft_behavior::press::MULTI_TAP_TIME`: `pub const MULTI_TAP_TIME: f64`. The longest the fingers of a multi-finger tap may stay down, in seconds.
-- `craft_behavior::press::MultiTap`: `pub struct MultiTap { pub fingers: u8, pub at: Pos2 }`. Two or more fingers came down and all lifted within the tap time without moving past the slop.
+- `craft_behavior::press::MultiTap`: `pub struct MultiTap { pub fingers: u8, pub at: Pos2 }`. Two or more fingers came down and all lifted within [`MULTI_TAP_TIME`] without moving past [`MULTI_TAP_SLOP`].
   - `pub const fn new(fingers: u8, at: Pos2) -> Self`. A tap of `fingers` around `at`.
 - `craft_behavior::press::MultiTouch`: `pub struct MultiTouch { pub translation: Vec2, pub zoom: f32, pub rotation: f32, pub center: Pos2 }`. A two-finger gesture.
   - `pub const fn new(translation: Vec2, zoom: f32, rotation: f32, center: Pos2) -> Self`. A gesture around `center`.
@@ -2071,7 +2072,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn new(key: ColumnKey, descending: bool) -> Self`. Rows sorted by `key`, descending when `descending`.
   - `pub const fn ascending(key: ColumnKey) -> Self`. Rows sorted by `key`, ascending.
   - `pub const fn descending(key: ColumnKey) -> Self`. Rows sorted by `key`, descending.
-- `craft_ui::contract::ColumnSpec`: `pub struct ColumnSpec { pub key: ColumnKey, pub header: Label, pub width: ColumnWidth, pub resizable: bool, pub sortable: bool, pub movable: bool, pub frozen: bool, pub kind: ColumnKind, pub align: ColumnAlign, pub tabular: bool, pub first_descending: bool, pub icon: Option<craft_behavior::IconId>, pub tip: Option<Label>, pub max_share: Option<f32>, pub hideable: bool, pub remove: Option<ColumnRemove> }`. One column of a collection.
+- `craft_ui::contract::ColumnSpec`: `pub struct ColumnSpec { pub key: ColumnKey, pub header: Label, pub width: ColumnWidth, pub resizable: bool, pub sortable: bool, pub movable: bool, pub frozen: bool, pub kind: ColumnKind, pub align: ColumnAlign, pub tabular: bool, pub first_descending: bool, pub icon: Option<craft_behavior::IconId>, pub tip: Option<Label>, pub max_share: Option<f32>, pub min_width: f32, pub hideable: bool, pub remove: Option<ColumnRemove> }`. One column of a collection.
   - `pub fn removable(mut self, name: impl Into<Label>, enabled: bool) -> Self`. The column gets a remove control named `name` at its header's end, disabled unless `enabled`.
   - `pub fn new(key: ColumnKey, header: impl Into<Label>, width: ColumnWidth) -> Self`. A content column with a header and a width; the other settings off.
   - `pub fn toggle(key: ColumnKey, header: impl Into<Label>, toggle: ToggleColumn) -> Self`. A toggle column as wide as a toggle cell, with a header; the other settings off.
@@ -2084,6 +2085,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn numeric(mut self) -> Self`. A column of numbers: content at the end edge, tabular figures.
   - `pub fn hideable(mut self) -> Self`. The user can hide the column from the header menu.
   - `pub fn at_most(mut self, share: f32) -> Self`. A `Content` column takes at most `share` of the collection's width.
+  - `pub fn at_least(mut self, width: f32) -> Self`. A `Content` column is at least `width` wide.
   - `pub fn tip(mut self, tip: impl Into<Label>) -> Self`. The header's tooltip.
   - `pub fn icon(mut self, icon: craft_behavior::IconId) -> Self`. The icon the column's cells show. A cell of a column with no header text is named after it.
   - `pub fn first_descending(mut self) -> Self`. The first press on the header sorts descending.
@@ -2294,6 +2296,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Hosted`: `pub trait Hosted<H: Component>`. A hosted leaf of a host `H`, erased.
   - `fn measure(&mut self, cx: &MeasureCx<'_, H>, key: HostedKey, proposal: Proposal) -> Vec2`. The leaf's size at `proposal`, as `show` will show it under `key`.
   - `fn show(self: Box<Self>, ui: &mut PaintUi<'_>, key: HostedKey, rect: Rect)`. Shows the leaf at `rect` under `key` and hands its output on.
+  - `fn role(&self) -> Role`. The leaf's kind of component, for a host that places some kinds apart (a link only as wide as its text).
 - `craft_ui::contract::HostedKey`: `pub type HostedKey = (&'static str, usize)`. The key a hosted leaf is measured and shown under: the slot's name and its index among the host's slots.
 - `craft_ui::contract::Hover`: `pub struct Hover { pub over: bool, pub entered: bool, pub left: bool, pub clicked: bool }`. A command-bound control's report of the pointer's stay over it.
 - `craft_ui::contract::HoverLead`: `pub enum HoverLead { Off, Lead, LeadAndSelection }`. What the pointer moving over the rows changes.
@@ -2974,6 +2977,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn fill(&self, shape: &PaintShape, color: StyleColor)`. Fills `shape`.
   - `pub fn stroke(&self, shape: &PaintShape, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>)`. Strokes `shape` at a theme width or a width from the document, in a theme colour or a colour from data (a
   - `pub fn data_fill(&self, shape: &PaintShape, color: DataColor)`. Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar). A component that paints its
+  - `pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor)`. Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour
   - `pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect)`. Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture
   - `pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect)`. Paints `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), untinted, as data: a
   - `pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius)`. Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
