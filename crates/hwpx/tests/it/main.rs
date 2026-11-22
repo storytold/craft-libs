@@ -30,7 +30,8 @@ fn the_sweep_seed_reads_whole() {
 }
 
 /// Damaged packages (every truncation and many mutations, of the package and of its section
-/// XML) give a document or an error, never a panic or a hang.
+/// XML) give a document or an error, never a panic or a hang. The rounds go through the shared
+/// budget (`CRAFT_HOSTILE_DIVISOR`).
 #[test]
 fn damaged_packages_never_panic() {
     let seed = package(HEAD, SECTION);
@@ -63,8 +64,13 @@ fn deep_nesting_is_bounded() {
 /// its place in the sorted folder, not its name (samples may be private).
 #[test]
 fn local_samples_read() {
+    let required = match std::env::var("CRAFT_HWP_SAMPLES_REQUIRED").unwrap_or_default().as_str() {
+        "" => false,
+        "1" => true,
+        other => panic!("CRAFT_HWP_SAMPLES_REQUIRED is {other:?}: leave it unset or empty, or set it to 1"),
+    };
     let Some(dir) = std::env::var_os("CRAFT_HWP_SAMPLES").filter(|d| !d.is_empty()) else {
-        assert!(std::env::var("CRAFT_HWP_SAMPLES_REQUIRED").as_deref() != Ok("1"), "CRAFT_HWP_SAMPLES_REQUIRED=1 but CRAFT_HWP_SAMPLES is not set");
+        assert!(!required, "CRAFT_HWP_SAMPLES_REQUIRED=1 but CRAFT_HWP_SAMPLES is not set");
         println!("SKIPPED: CRAFT_HWP_SAMPLES is not set (a folder of .hwpx files to read)");
         return;
     };
@@ -72,7 +78,7 @@ fn local_samples_read() {
         .map(|r| r.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("hwpx"))).collect())
         .unwrap_or_default();
     files.sort();
-    if std::env::var("CRAFT_HWP_SAMPLES_REQUIRED").as_deref() == Ok("1") {
+    if required {
         assert!(!files.is_empty(), "no .hwpx file in CRAFT_HWP_SAMPLES");
     }
     for (k, f) in files.iter().enumerate() {

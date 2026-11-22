@@ -1,4 +1,6 @@
 //! Tests of the reader on HWPX written here by hand from the published element names.
+//!
+//! 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 
 use super::super::read as read_bytes;
 
@@ -269,7 +271,8 @@ fn pictures_are_named_by_what_they_hold() {
 }
 
 /// A header of 100,000 styles: a style is found by its id directly, and a later definition of an
-/// id replaces the first in place.
+/// id replaces the first in place. Large on purpose (about 1 s in a debug build): a lookup that
+/// went through the styles before it would take minutes here.
 #[test]
 fn many_styles_are_found_by_id() {
     let n = 100_000;
@@ -287,7 +290,8 @@ fn many_styles_are_found_by_id() {
 }
 
 /// A manifest of 100,000 items (all naming one picture), all in the spine: its section is found,
-/// and the picture by its last id.
+/// and the picture by its last id. Large on purpose (about 2 s in a debug build): a lookup that went
+/// through the whole manifest for each entry would take minutes here.
 #[test]
 fn hwpx_many_manifest_items_open() {
     let n = 100_000;
@@ -315,7 +319,8 @@ fn hwpx_many_manifest_items_open() {
 }
 
 /// Pictures named by file stem only (no manifest item) are found by the stem directly: 30,000
-/// of them, among as many entries.
+/// of them, among as many entries. Large on purpose (several seconds in a debug build, most of it
+/// building and opening the package): a search through every entry for each would take minutes.
 #[test]
 fn hwpx_pictures_named_by_stem_are_found_directly() {
     let n = 30_000;
@@ -364,7 +369,8 @@ fn a_hidden_first_page_number_is_taken_from_an_inherited_footer() {
 
 /// Table cells a file declares but doesn't hold are made up to a budget for the whole document;
 /// past it, declared rows without cells are left out. A table can declare 10,000 rows of 64
-/// columns with one cell; that alone would make 640,000 cells.
+/// columns with one cell; that alone would make 640,000 cells. The budget is spent for real here
+/// (under 1 s in a debug build).
 #[test]
 fn declared_but_missing_table_cells_are_bounded() {
     let tbl = |col: u32, text: &str| {

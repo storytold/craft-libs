@@ -41,9 +41,14 @@ assert!(craft_hwpx::read(b"not a package").is_err());
 | Document | Used for |
 |---|---|
 | Hancom's OWPML model, [`hwpx-owpml-model`](https://github.com/hancom-io/hwpx-owpml-model) at commit 1453388 (Apache-2.0) | element and attribute names, enumeration values, namespace URIs and package paths; names only, no code taken |
-| KS X 6101 (OWPML), the Korean standard for HWPX | the package and part structure |
-| Hancom's "한글 문서 파일 형식 5.0" (Hangul document file format 5.0), revision 1.3 | units (HWPUNIT) and the meaning of shapes shared with HWP 5.0 |
+| Hancom's "한글 문서 파일 형식 5.0" (Hangul document file format 5.0), revision 1.3 | what HWPX shares with HWP 5.0, such as its unit (HWPUNIT, 1/7200 inch); the attribution sentence above comes with it |
 | Hancom's free viewer, compared from outside (a document opened, its window looked at) | layout rules the documents don't state; no program was disassembled or analysed |
+
+The rules settled by comparing with the viewer were found before this crate existed, in WordCraft;
+each is listed with its date and what it was checked on in WordCraft's [clean-room
+record](https://github.com/WhyEichiO/wordcraft-hwp-hwpx-ViewerEditor/blob/f68cfa0b4b948e07173e23703d4260d268f361a6/docs/hwp/cleanroom.md)
+(section 3 says how comparisons were made, section 4 what was checked, section 7 what is still a
+guess). This crate adds no new ones.
 
 No other HWP or HWPX implementation was read. Test documents are written by hand in the tests;
 real documents are never committed.

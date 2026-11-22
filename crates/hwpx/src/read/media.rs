@@ -1,4 +1,6 @@
 //! Picture bytes: their kind and pixel size, read from the first bytes.
+//!
+//! 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 
 /// Extensions of the picture kinds kept under their own name.
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "emf", "wmf", "svg", "webp"];
