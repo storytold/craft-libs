@@ -72,7 +72,44 @@ pub enum WellShape {
     Round,
 }
 
-/// Corner radii, edge style, knob shape and well shape.
+/// The marks a dock grip's row is made of.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GripMark {
+    /// Upright ticks, [`GripShape::width`] wide and [`GripShape::length`] tall.
+    #[default]
+    Ticks,
+    /// Square dots, [`GripShape::width`] on a side.
+    Dots,
+}
+
+/// The row of marks a dock grip shows (the grip above an icon group, under a tool rail's column bar, at a floating
+/// panel's edge): what the marks are, how many, how large and how far apart, in points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GripShape {
+    /// Ticks or dots.
+    pub mark: GripMark,
+    /// How many marks the row has, at every display scale.
+    pub count: u16,
+    /// How tall a tick is; dots ignore it.
+    pub length: f32,
+    /// How wide a tick is, or a dot's side.
+    pub width: f32,
+    /// The space between two marks.
+    pub gap: f32,
+}
+
+impl GripShape {
+    /// Eleven upright ticks, 1 point wide, 5 points tall and 1 point apart.
+    pub const DEFAULT: GripShape = GripShape { mark: GripMark::Ticks, count: 11, length: 5.0, width: 1.0, gap: 1.0 };
+}
+
+impl Default for GripShape {
+    fn default() -> Self {
+        GripShape::DEFAULT
+    }
+}
+
+/// Corner radii, edge style, knob shape, well shape and grip marks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
@@ -83,6 +120,8 @@ pub struct ShapeTokens {
     pub knob: KnobShape,
     /// How colour wells that stand on their own are drawn.
     pub wells: WellShape,
+    /// The marks of the dock grips.
+    pub grip: GripShape,
 }
 
 /// Gaps between neighbouring elements, in logical pixels.

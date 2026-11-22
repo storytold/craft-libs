@@ -101,7 +101,7 @@ impl DockPanels<usize> for RailPanels {
 }
 
 /// A tool rail the host shows itself has the dock's grip under its column bar, as the references' toolbar: a strip of
-/// ten upright ticks in the theme's grip ink, above the host's view, which keeps the height it measured at; a
+/// the theme's upright ticks in its grip ink, above the host's view, which keeps the height it measured at; a
 /// drag on the strip moves the rail's group.
 #[trial]
 fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {
@@ -124,7 +124,7 @@ fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {
     assert!(sizes.grip > 0.0 && column.top() < strip.top(), "the strip lies under the column bar: {strip:?} in {column:?}");
     assert!((view.height() - RAIL_HEIGHT).abs() < 0.5, "the host's view keeps the height it measured at: {view:?}");
 
-    // The strip's ticks: one mesh inside it of ten upright marks.
+    // The strip's ticks: one mesh inside it of the theme's upright marks.
     let shapes = fixture.frame_shapes();
     let ticks: Vec<Rect> = shapes
         .iter()
@@ -134,7 +134,7 @@ fn a_tool_rail_shown_by_its_host_has_a_grip_strip_that_drags_it() {
             (!quads.is_empty() && quads.iter().all(|quad| strip.expand(0.01).contains_rect(*quad))).then_some(quads)
         })
         .expect("the strip paints its ticks");
-    assert_eq!(ticks.len(), 10, "ten ticks: {ticks:?}");
+    assert_eq!(ticks.len(), usize::from(craft_theme::GripShape::DEFAULT.count), "the theme's number of ticks: {ticks:?}");
     assert!(ticks.iter().all(|tick| tick.height() > tick.width()), "the ticks stand upright: {ticks:?}");
     let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
     assert!((run.center().x - strip.center().x).abs() <= 0.5, "the ticks are centred across the rail: {run:?} in {strip:?}");
