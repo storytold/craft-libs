@@ -630,6 +630,38 @@ mod tests {
         assert!(decode(&codestream(256, 32, &body), 256, 32, 32, 1008.0, &Limits::default()).is_err());
     }
 
+    /// `LIGHTCRAFT_NEF_CORPUS` holds LightCraft's pinned CC0 Z f pair (raw.pixls.us DSC_0043, High Efficiency, and
+    /// DSC_0040, Lossless compressed: the same scene a minute apart at another exposure). The exposure difference is
+    /// the same for every colour, so a wrong colour transform shows as R and B moving against green.
+    #[test]
+    fn optional_cc0_high_efficiency_matches_its_lossless_twin() {
+        let Some(directory) = std::env::var_os("LIGHTCRAFT_NEF_CORPUS") else { return };
+        let read = |name: &str| std::fs::read(std::path::Path::new(&directory).join(name));
+        let (Ok(he), Ok(lossless)) = (read("nef-nikon-zf-he.nef"), read("nef-nikon-zf-lossless.nef")) else {
+            panic!("LIGHTCRAFT_NEF_CORPUS holds none of the pinned files");
+        };
+        let (a, b) = (crate::decode(&he).unwrap(), crate::decode(&lossless).unwrap());
+        assert_eq!((a.width, a.height, a.bits), (b.width, b.height, b.bits));
+        // per CFA site, black-subtracted: a quantile of the interior
+        let site = |img: &crate::RawImage, dy: usize, dx: usize, q: f64| {
+            let crate::RawData::U16(d) = &img.data else { panic!("NEF: 16-bit samples") };
+            let black = f64::from(img.black.values[0]);
+            let mut v: Vec<f64> = (400 + dy..img.height - 400)
+                .step_by(8)
+                .flat_map(|y| (400 + dx..img.width - 400).step_by(8).map(move |x| (y, x)))
+                .map(|(y, x)| f64::from(d[y * img.width + x]) - black)
+                .collect();
+            v.sort_by(f64::total_cmp);
+            v[(v.len() as f64 * q) as usize]
+        };
+        for q in [0.5, 0.99] {
+            let ratios = [(0, 0), (0, 1), (1, 0), (1, 1)].map(|(dy, dx)| site(&a, dy, dx, q) / site(&b, dy, dx, q));
+            let (lo, hi) = ratios.iter().fold((f64::MAX, 0.0f64), |(lo, hi), &r| (lo.min(r), hi.max(r)));
+            assert!(lo > 1.0 && hi < 1.6, "quantile {q}: HE / lossless {ratios:?}");
+            assert!(hi / lo < 1.05, "quantile {q}: HE / lossless differs by colour: {ratios:?}");
+        }
+    }
+
     #[test]
     fn synthesis_restores_a_constant_line() {
         // a flat signal has no high-pass energy: every level must give the flat signal back
