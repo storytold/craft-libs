@@ -284,6 +284,18 @@ fn vml_objects_keep_their_own_hyperlinks() {
         }
     }
 
+    fn check_group_geometry(current: &Document) {
+        let InlineObject::Group { children, .. } = &current.body[1].as_para().unwrap().objects[3] else { panic!() };
+        assert_eq!(children.len(), 3);
+        assert!((children[0].x - 3.0).abs() < 0.001 && (children[0].y - 4.0).abs() < 0.001);
+        assert!((children[2].x - 20.0).abs() < 0.001 && (children[2].y - 5.0).abs() < 0.001);
+        let InlineObject::Group { children, float, ch_w, ch_h, .. } = &children[2].obj else { panic!("the linked nested group must remain a group") };
+        assert_eq!((*ch_w, *ch_h), (10.0, 10.0));
+        assert_eq!(float.spin(), craft_wordmodel::geom::Spin::new(30.0, true, false));
+        assert_eq!(children.len(), 1);
+        assert!((children[0].x - 1.0).abs() < 0.001 && (children[0].y - 2.0).abs() < 0.001);
+    }
+
     let vml = r##"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml">
 <v:shape id="TopFirst" style="width:24pt;height:12pt" alt="first" href="https://example.com/TopFirst"><v:imagedata r:id="rIdPic"/></v:shape>
 <v:shape id="Unlinked" style="width:16pt;height:8pt" alt="unlinked"><v:imagedata r:id="rIdPic"/></v:shape>
@@ -367,15 +379,7 @@ fn vml_objects_keep_their_own_hyperlinks() {
     .collect();
     for current in [&doc, &reopened] {
         assert_eq!(model_links(current), expected, "each target must remain on its own object path");
-        let InlineObject::Group { children, .. } = &current.body[1].as_para().unwrap().objects[3] else { panic!() };
-        assert_eq!(children.len(), 3);
-        assert!((children[0].x - 3.0).abs() < 0.001 && (children[0].y - 4.0).abs() < 0.001);
-        assert!((children[2].x - 20.0).abs() < 0.001 && (children[2].y - 5.0).abs() < 0.001);
-        let InlineObject::Group { children, float, ch_w, ch_h, .. } = &children[2].obj else { panic!("the linked nested group must remain a group") };
-        assert_eq!((*ch_w, *ch_h), (10.0, 10.0));
-        assert_eq!(float.spin(), craft_wordmodel::geom::Spin::new(30.0, true, false));
-        assert_eq!(children.len(), 1);
-        assert!((children[0].x - 1.0).abs() < 0.001 && (children[0].y - 2.0).abs() < 0.001);
+        check_group_geometry(current);
     }
     let xml = craft_xml::parse(part(&saved, "word/document.xml").as_bytes()).unwrap();
     let relationships = craft_xml::parse(rels.as_bytes()).unwrap();
