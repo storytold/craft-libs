@@ -250,21 +250,30 @@ fn layer_to_image(layer: &Layer<AnyChannels<FlatSamples>>) -> Result<Image, Code
     Ok(img)
 }
 
-fn stage_image(mut image: Image, header: &exr::meta::header::Header, limits: &Limits) -> Result<Image, CodecError> {
+/// The display window's size when it holds the part's data window, which [`stage_image`] then
+/// places the pixels on. `None` (a data window larger than or outside the display window) keeps
+/// the data window's size.
+fn contained_stage(header: &exr::meta::header::Header) -> Option<(i64, i64)> {
     let data = header.own_attributes.layer_position;
     let display = header.shared_attributes.display_window;
     let (dw, dh) = (header.layer_size.0 as i64, header.layer_size.1 as i64);
     let (sw, sh) = (display.size.0 as i64, display.size.1 as i64);
-    if data.0 == display.position.0 && data.1 == display.position.1 && dw == sw && dh == sh {
+    let contained = data.0 >= display.position.0
+        && data.1 >= display.position.1
+        && i64::from(data.0) + dw <= i64::from(display.position.0) + sw
+        && i64::from(data.1) + dh <= i64::from(display.position.1) + sh;
+    contained.then_some((sw, sh))
+}
+
+fn stage_image(mut image: Image, header: &exr::meta::header::Header, limits: &Limits) -> Result<Image, CodecError> {
+    let data = header.own_attributes.layer_position;
+    let display = header.shared_attributes.display_window;
+    if data == display.position && header.layer_size == display.size {
         return Ok(image);
     }
-    if data.0 < display.position.0
-        || data.1 < display.position.1
-        || i64::from(data.0) + dw > i64::from(display.position.0) + sw
-        || i64::from(data.1) + dh > i64::from(display.position.1) + sh
-    {
+    let Some((sw, sh)) = contained_stage(header) else {
         return Ok(image);
-    }
+    };
     let (w, h) = (u32::try_from(sw).map_err(err)?, u32::try_from(sh).map_err(err)?);
     limits.check_bytes(w, h, 16)?;
     let x = usize::try_from(data.0 - display.position.0).map_err(err)?;
@@ -340,7 +349,14 @@ pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32), CodecEr
     if info.color_rank() == 0 {
         return Err(CodecError::unsupported(F, "no R/G/B or Y channels"));
     }
-    Ok((info.width, info.height))
+    match meta.headers.get(pick).and_then(contained_stage) {
+        Some((w, h)) => {
+            let (w, h) = (u32::try_from(w).map_err(err)?, u32::try_from(h).map_err(err)?);
+            limits.check_bytes(w, h, 16)?;
+            Ok((w, h))
+        }
+        None => Ok((info.width, info.height)),
+    }
 }
 
 /// Decode one part of a multi-part file by its index into [`info`]'s list. A file with
