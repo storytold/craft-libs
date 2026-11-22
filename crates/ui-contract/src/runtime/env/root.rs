@@ -51,6 +51,8 @@ pub struct RootEnv {
     /// The definition of `theme` when it is a library theme: no built-in has its id, so the tokens resolve from this.
     /// Set only with `theme`, by `library_theme`; `theme(id)` clears it.
     pub(super) theme_def: Option<Arc<ThemeDef>>,
+    /// The user's accent over the theme (`ThemeDef::with_accent`); `None` keeps the theme's own.
+    pub(super) accent: Option<craft_theme::Rgba>,
     /// Root app values.
     pub values: AppValues,
     /// Today's date in the host's time zone; the runtime reads no wall clock.
@@ -80,6 +82,7 @@ impl Default for RootEnv {
             tooltips: true,
             theme: ThemeId::suite_default(),
             theme_def: None,
+            accent: None,
             values: AppValues::default(),
             today: None,
             wheel: WheelSpeed::default(),
@@ -154,10 +157,11 @@ impl RootEnv {
     }
 
     /// Overrides `seeds.accent` of whichever theme resolves, built-in or library, in both modes; the accent ramp derives
-    /// from the seed. `None` keeps the theme's own.
-    pub fn accent(self, seed: Option<craft_theme::Rgba>) -> Self {
-        let _ = seed;
-        todo!("sh.K20")
+    /// from the seed, and the theme's fixed accent colours give way to it ([`ThemeDef::with_accent`]). `None` keeps the
+    /// theme's own.
+    pub fn accent(mut self, seed: Option<craft_theme::Rgba>) -> Self {
+        self.accent = seed;
+        self
     }
 
     /// What the choices resolve to on `ctx`'s pass: the one place `System` is replaced by the OS's answer, as
