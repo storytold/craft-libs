@@ -17,7 +17,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use super::picker::{ChannelRow, ChannelRule};
-use super::{ColorDisc, DiscLook, DiscRadius};
+use super::{ColorDisc, DiscHit, DiscLook, DiscRadius};
 use crate::harmony::{Guide, GuideOptions, Harmony, Variation};
 use craft_ui::choice::{CellMarks, SwatchTable, SwatchTableOutput};
 
@@ -102,6 +102,11 @@ pub struct HarmonyWheelOutput {
     pub response: Response,
     /// The colour whose marker was pressed; it becomes the selected one.
     pub pressed: Option<usize>,
+    /// A primary click on the wheel (no drag): the marker it grabbed and the point under the release.
+    pub clicked: Option<DiscHit>,
+    /// A secondary click inside the wheel: the marker in grab reach, else the marker whose spoke is near, with the
+    /// point.
+    pub context: Option<DiscHit>,
     /// The edits of the colours this pass, each with the colour's index: a marker dragged (new hue and saturation) or,
     /// for the selected colour, the Brightness slider (new brightness); the value is `[h degrees, s, b]` with `None`
     /// where the edit kept the value. The host applies each value with [`move_on_wheel`](crate::harmony::move_on_wheel),
@@ -130,6 +135,8 @@ pub struct HarmonyWheel<'a> {
     label: Label,
     colors: &'a [Srgba],
     selected: Option<usize>,
+    /// `None` until [`base`](Self::base) sets it: the selected colour is the base.
+    base: Option<Option<usize>>,
     look: DiscLook,
     radius: DiscRadius,
 }
@@ -137,12 +144,20 @@ pub struct HarmonyWheel<'a> {
 impl<'a> HarmonyWheel<'a> {
     /// A wheel named `label` over `colors`.
     pub fn new(label: impl Into<Label>, colors: &'a [Srgba]) -> Self {
-        HarmonyWheel { label: label.into(), colors, selected: None, look: DiscLook::Smooth, radius: DiscRadius::Saturation }
+        HarmonyWheel { label: label.into(), colors, selected: None, base: None, look: DiscLook::Smooth, radius: DiscRadius::Saturation }
     }
 
     /// Marks the colour at this index as selected; none by default.
     pub fn selected_marker(mut self, selected: Option<usize>) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// The colour drawn large, the set's base (`None`: none); the selected colour by default, as the Color Guide shows
+    /// it. The selected colour, when it is not the base, gets the selection ring.
+    #[must_use]
+    pub fn base(mut self, base: Option<usize>) -> Self {
+        self.base = Some(base);
         self
     }
 
@@ -162,9 +177,10 @@ impl<'a> HarmonyWheel<'a> {
 
     /// Shows the wheel and the Brightness row.
     pub fn show(self, ui: &mut Ui) -> HarmonyWheelOutput {
-        let HarmonyWheel { label, colors, selected, look, radius } = self;
+        let HarmonyWheel { label, colors, selected, base, look, radius } = self;
         let words = Env::of(ui).words::<HarmonyWords>();
         let selected = selected.filter(|&i| i < colors.len());
+        let base = base.unwrap_or(selected).filter(|&i| i < colors.len());
         let hsb = selected.map(|i| colors[i].to_hsb());
         // The disc shows one channel outwards; the selected colour's other channel is the disc's level and the slider's value.
         let (level, slider_name) = match radius {
@@ -172,17 +188,19 @@ impl<'a> HarmonyWheel<'a> {
             DiscRadius::Brightness => (hsb.map_or(1.0, |c| c.s), words.saturation.clone()),
         };
         let names: Vec<Label> = colors.iter().map(|c| Label::from(c.to_hex())).collect();
-        let mut pressed = None;
+        let (mut pressed, mut clicked, mut context) = (None, None, None);
         let mut edits = Vec::new();
         let shown = Stack::new().show(ui, |ui, _| {
             edits.clear();
-            pressed = None;
             let mut disc = ColorDisc::new(label.clone(), colors, Bind::kept());
+            if let Some(base) = base {
+                disc = disc.base(base);
+            }
             if let Some(selected) = selected {
-                disc = disc.base(selected).chosen(selected);
+                disc = disc.chosen(selected);
             }
             let disc = disc.look(look).radius(radius).level(level).names(names.clone()).show(ui);
-            pressed = disc.pressed;
+            (pressed, clicked, context) = (disc.pressed, disc.clicked, disc.context);
             let grabbed = disc.grabbed;
             for event in disc.edit.events {
                 let marker = event.value().map(|m| m.marker).or(grabbed).or(selected);
@@ -222,7 +240,7 @@ impl<'a> HarmonyWheel<'a> {
                 }
             });
         });
-        HarmonyWheelOutput { response: shown.output, pressed, edits }
+        HarmonyWheelOutput { response: shown.output, pressed, clicked, context, edits }
     }
 }
 

@@ -7,8 +7,8 @@ use std::rc::Rc;
 use craft_behavior::{EditEvent, Selection};
 use craft_color_ui::palette::{SwatchColor, SwatchGroup};
 use craft_color_ui::ui::{
-    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary,
-    SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
+    ColorPanel, ColorPanelLayout, ColorPanelMode, ColorPanelShown, ColorPanelState, HarmonyWheel, PanelTarget, PickedColor, SwatchEdit, SwatchKey,
+    SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
 use craft_theme::Srgba;
@@ -520,4 +520,22 @@ fn the_info_panel_shows_the_rulers_measure_while_it_has_one() {
     for value in ["45.0°", "200.00", "141.42"] {
         assert!(fixture.by_label(value).is_some(), "the protractor's {value} shows");
     }
+}
+
+/// A click on a harmony wheel's marker reports that marker, as the disc under it does.
+#[trial]
+fn a_click_on_a_harmony_wheel_marker_reports_it() {
+    let colors = [Srgba::rgb(0.86, 0.24, 0.16), Srgba::rgb(0.16, 0.86, 0.24)];
+    let clicked = Rc::new(Cell::new(None));
+    let seen = Rc::clone(&clicked);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = HarmonyWheel::new("Harmony", &colors).selected_marker(Some(0)).base(Some(0)).show(ui);
+        if let Some(hit) = out.clicked {
+            seen.set(Some(hit.marker));
+        }
+    });
+    fixture.settle();
+    let marker = fixture.by_label(&colors[1].to_hex()).expect("the second marker is in the tree");
+    fixture.click(&marker).idle(1);
+    assert_eq!(clicked.get(), Some(Some(1)), "the click names the second marker");
 }

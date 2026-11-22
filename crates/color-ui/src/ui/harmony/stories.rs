@@ -51,6 +51,13 @@ fn triad() -> HarmonyPanelState {
     HarmonyPanelState { rule: Harmony::Triad, ..HarmonyPanelState::default() }
 }
 
+/// Recolor's wheel: the base colour drawn large, the selected one ringed.
+#[story(HarmonyWheel<'static>, covers = [], drive = Drive::Never, title = "Base")]
+fn harmony_wheel_base(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let colors = Harmony::Triad.apply(BASE);
+    HarmonyWheel::new("Harmony", &colors).selected_marker(Some(1)).base(Some(0)).show(ui).into()
+}
+
 #[story(HarmonyWheel<'static>, covers = [], drive = Drive::Never)]
 fn harmony_wheel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let colors = Harmony::Triad.apply(BASE);
