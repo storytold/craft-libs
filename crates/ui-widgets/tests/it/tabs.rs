@@ -590,3 +590,23 @@ fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
     assert!(menus.get() > 0, "the secondary click asks for the tab's menu");
     assert_eq!(shown.get(), 0, "the secondary click does not show the tab");
 }
+
+/// A modified document tab marks itself with the suite's dot, not an asterisk after its name: no `*` is painted and the
+/// tab is as wide as an unmodified one plus the dot's room.
+#[trial]
+fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let tab = |modified: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let tabs = [DocumentTab::new(0, "Report.pdf").modified(modified)];
+            let _ = DocumentTabs::new("Docs", &tabs).selected(0).show(ui);
+        });
+        fixture.room(egui::vec2(600.0, 100.0)).settle();
+        let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
+        let width = fixture.by_role(Role::TAB).first().map_or(0.0, |tab| tab.rect.width());
+        (stars, width)
+    };
+    let (plain, modified) = (tab(false), tab(true));
+    assert_eq!(modified.0, 0, "no asterisk is painted");
+    assert!(modified.1 > plain.1, "the dot takes room beside the name: {} vs {}", modified.1, plain.1);
+}

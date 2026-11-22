@@ -60,8 +60,6 @@ const TEXT: PartKey = PartKey::new("text");
 const CLOSE: PartKey = PartKey::new("close");
 const PROGRESS: PartKey = PartKey::new("progress");
 
-/// The modified mark.
-const MARK: &str = "*";
 
 const CLOSE_REASON: &str = "The Close command closes the focused tab";
 
@@ -124,9 +122,7 @@ struct Placed {
     icon: Option<Rect>,
     label: Rect,
     detail: Option<Rect>,
-    /// The modified mark, right after the last text.
-    mark: Option<Rect>,
-    /// The marker dot, after the mark or the last text.
+    /// The marker dot, after the last text: a modified tab's too.
     marker: Option<Rect>,
     progress: Option<Rect>,
 }
@@ -211,9 +207,10 @@ impl<'a> Tab<'a> {
         TextRun::new(text).role(style.label.role)
     }
 
-    /// The modified mark, in the label's type.
-    fn mark_run(&self, style: &TabStyle) -> TextRun<'static> {
-        TextRun::new(MARK).role(style.label.role)
+    /// Whether the marker dot shows: the tab's content has something to show, or the document is modified (the one
+    /// modified mark of the suite is the dot).
+    fn dotted(&self) -> bool {
+        self.marked || self.modified
     }
 
     fn name(&self, label: &str, words: &TabWords) -> String {
@@ -304,10 +301,7 @@ impl Component for Tab<'_> {
         if let Some(detail) = self.detail_text() {
             natural += sizes.gap + width(&TextRun::new(detail).role(cx.style.detail.role));
         }
-        if self.modified {
-            natural += width(&self.mark_run(cx.style));
-        }
-        if self.marked {
+        if self.dotted() {
             natural += sizes.gap + cx.style.marker;
         }
         if self.shows_close() {
@@ -351,10 +345,9 @@ impl Component for Tab<'_> {
         let natural = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
         let label_natural = natural(&self.label_run(cx.style, cx.resolved.label));
         let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(cx.style.detail.role)));
-        let mark_width = if self.modified { natural(&self.mark_run(cx.style)) } else { 0.0 };
-        let marker_width = if self.marked { sizes.gap + cx.style.marker } else { 0.0 };
-        // The mark and the marker keep their room; the label is cut first, then the detail.
-        let kept = mark_width + marker_width;
+        let marker_width = if self.dotted() { sizes.gap + cx.style.marker } else { 0.0 };
+        // The marker keeps its room; the label is cut first, then the detail.
+        let kept = marker_width;
         let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
         let label_width = label_natural.min((band.width() - kept - detail_gap - detail_natural).max(0.0));
         let detail_width = detail_natural.min((band.width() - kept - label_width - detail_gap).max(0.0));
@@ -369,14 +362,8 @@ impl Component for Tab<'_> {
         } else {
             (None, rest)
         };
-        let (mark, after) = if self.modified {
-            let (mark, after) = after.take_start(mark_width);
-            (Some(line(mark, sizes.label_line)), after)
-        } else {
-            (None, after)
-        };
         let label = line(label, sizes.label_line);
-        let marker = self.marked.then(|| {
+        let marker = self.dotted().then(|| {
             let slot = after.take_start(sizes.gap).1.take_start(cx.style.marker).0;
             Rect::from_center_size(Pos2::new(slot.center().x, label.center().y), Vec2::splat(cx.style.marker))
         });
@@ -411,7 +398,7 @@ impl Component for Tab<'_> {
         if let Some(bar) = progress {
             let _ = cx.part(PROGRESS, bar);
         }
-        self.placed = Some(Placed { close, icon, label, detail, mark, marker, progress });
+        self.placed = Some(Placed { close, icon, label, detail, marker, progress });
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -458,9 +445,6 @@ impl Component for Tab<'_> {
         draw.text(placed.label, &label);
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
-        }
-        if let Some(at) = placed.mark {
-            draw.text(at, &self.mark_run(style).color(cx.resolve(&style.label.color)));
         }
         if let Some(at) = placed.marker {
             paint_marker(&draw, at.center(), &MarkerStyle { side: style.marker, color: style.marker_color, edge: style.marker_edge });
