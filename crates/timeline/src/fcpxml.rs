@@ -1796,7 +1796,11 @@ mod tests {
         let parent = imp.b.reserve_sequence("Parent", settings.clone(), None);
         let mut seq = empty_sequence(settings);
         let deferred = imp.b.clip(child, TrackKind::Audio, "Deferred", Tick(0), Tick(5), Tick(0));
-        let video = imp.b.clip(child, TrackKind::Video, "Deferred video", Tick(0), Tick(5), Tick(0));
+        let mut video = imp.b.clip(child, TrackKind::Video, "Deferred video", Tick(0), Tick(5), Tick(0));
+        // Explicit fixture coordinates make full-value equality meaningful (automatic points are NaN).
+        for name in ["position", "anchor"] {
+            video.effect_mut(crate::fx::MOTION).unwrap().param_mut(name).unwrap().value = ParamValue::Vec2(Vec2::new(960.0, 540.0));
+        }
         let video_id = video.id;
         assert_eq!(imp.b.place(&mut seq, TrackKind::Video, 0, video), Some(0));
         let ordinary0 = imp.b.clip(leaf, TrackKind::Audio, "Ordinary 0", Tick(0), Tick(10), Tick(0));
@@ -1823,6 +1827,7 @@ mod tests {
         assert_eq!(intents.len(), 1);
         assert!(imp.b.p.sequence(intents[0].child).unwrap().audio_tracks.iter().any(|t| !t.items.is_empty()));
         let original = imp.b.p.sequence(parent).unwrap().clone();
+        assert_eq!(imp.b.p.sequence(parent), Some(&original), "the fixture supports full-value clone equality");
         let state = imp.audio_replay.get(&parent).unwrap();
         let ledger = (state.order.clone(), state.unplaced.clone(), state.paired.clone(), state.video_index.clone());
         // Old linear charging admits this run; full indexed planning must also pay the final sort.
