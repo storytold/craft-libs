@@ -4,6 +4,7 @@
 
 mod bounds;
 mod differential;
+mod headless;
 mod moved;
 
 /// A verbatim copy of the app's previous code, run by `differential`.

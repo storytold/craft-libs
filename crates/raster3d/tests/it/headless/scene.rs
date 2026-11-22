@@ -1,4 +1,4 @@
-//! The headless test scene, shared by `tests/headless.rs` and `examples/headless_scene.rs`.
+//! The headless test scene, shared by `tests/it/headless.rs` and `examples/headless_scene.rs`.
 //!
 //! `craft-pbr` makes its environment light: a procedural environment, its GGX-prefiltered levels
 //! and an irradiance map from its SH9 coefficients. A parallel light, a spot light and the

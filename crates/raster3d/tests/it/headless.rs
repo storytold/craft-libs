@@ -5,13 +5,13 @@
 //! constants in `headless/scene.rs`. Only x86_64 Linux and wasm32 compare them, since those are the
 //! targets they were measured on; every target runs the other checks.
 //!
-//! Natively: `cargo test -p craft-raster3d --test headless`. As a wasm32 test module, with
+//! Natively: `cargo test -p craft-raster3d --test it headless::`. As a wasm32 test module, with
 //! `wasm-bindgen-test-runner` of the `wasm-bindgen` version in `Cargo.lock` on the path and
 //! Node.js installed:
 //!
 //! ```text
 //! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-//!   cargo test -p craft-raster3d --no-default-features --target wasm32-unknown-unknown --test headless
+//!   cargo test -p craft-raster3d --no-default-features --target wasm32-unknown-unknown --test it headless::
 //! ```
 //!
 //! The ignored test checks the `headless_scene` example built as a wasm32 module: it is valid, has
@@ -23,12 +23,9 @@
 //! ```text
 //! cargo build -p craft-raster3d --no-default-features --release --target wasm32-unknown-unknown --example headless_scene
 //! CRAFT_RASTER3D_HEADLESS_WASM=target/wasm32-unknown-unknown/release/examples/headless_scene.wasm \
-//!   cargo test -p craft-raster3d --test headless -- --ignored
+//!   cargo test -p craft-raster3d --test it headless:: -- --ignored
 //! ```
-// Unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md › Robustness).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-#[path = "headless/scene.rs"]
 mod scene;
 
 use craft_raster3d::Scene;
