@@ -630,11 +630,11 @@ mod tests {
         // between references too far apart drew contour lines across such ramps (Shadows +100 on
         // a D4 raw): the output must rise steadily, without ripples.
         let (w, h) = (640, 48);
-        let mut px = grey(w, h, |x, _| super::util::linear_to_srgb((x as f32 / (w - 1) as f32 * 8.0 - 9.0).exp2()));
+        let mut px = grey(w, h, |x, _| crate::camera_raw::util::linear_to_srgb((x as f32 / (w - 1) as f32 * 8.0 - 9.0).exp2()));
         for (s, hl) in [(100.0, 0.0), (0.0, -100.0), (-100.0, 100.0)] {
             let mut p = px.clone();
             apply(&mut p, w, h, s, hl, SRGB);
-            let row: Vec<f32> = (0..w).map(|x| super::util::srgb_to_linear(p[24 * w + x][0]).max(1e-6).log2()).collect();
+            let row: Vec<f32> = (0..w).map(|x| crate::camera_raw::util::srgb_to_linear(p[24 * w + x][0]).max(1e-6).log2()).collect();
             let steps: Vec<f32> = row.windows(2).map(|d| d[1] - d[0]).collect();
             assert!(steps.iter().all(|d| *d > 0.0), "{s} {hl}: the ramp reverses");
             let jumps: Vec<f32> = steps.windows(2).map(|d| (d[1] - d[0]).abs()).collect();
