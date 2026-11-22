@@ -40,7 +40,7 @@ mod suitcase;
 pub mod system;
 mod visual_order;
 
-pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch, is_private_family};
 pub use embedding::{SubsetEmbedding, subset_embedding};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use face_data::FaceData;
