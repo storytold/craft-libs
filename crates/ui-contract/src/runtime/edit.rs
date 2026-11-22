@@ -36,8 +36,12 @@ pub(crate) fn gesture_key(id: Id) -> Id {
 
 /// The note the component `id` set on its running gesture with [`Cx::propose_with`](crate::contract::Cx::propose_with),
 /// when it is an `N`; `None` while no gesture of the component runs. `V` is the component's value type, under which
-/// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note.
+/// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note. A
+/// component not shown in the pass before has no running gesture: it lost its press, as its own value step finds.
 pub fn gesture_note<V: Value, N: Clone + 'static>(ctx: &Context, id: Id) -> Option<N> {
+    if !crate::runtime::memory::shown_last_pass(ctx, id) {
+        return None;
+    }
     MemoryStage::peek_with::<Gesture<V>, _>(ctx, gesture_key(id), |gesture| {
         if !gesture.is_running() {
             return None;
