@@ -248,6 +248,20 @@ impl Rig {
         (!points.is_empty()).then(|| egui::Rect::from_points(&points))
     }
 
+    /// The shield's meshes this frame: those with a translucent vertex.
+    fn shield_meshes(&mut self) -> Vec<egui::Mesh> {
+        let room = egui::Rect::from_min_size(Pos2::ZERO, ROOM);
+        let show = &mut self.show;
+        let shapes = self.frames.frame_shapes(|ui| layout::in_region(ui, room, |ui| show(ui)));
+        shapes
+            .into_iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| (1..255).contains(&v.color.a())) => Some((*mesh).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn view(&self) -> CanvasView {
         self.setup.borrow().view
     }
@@ -804,7 +818,7 @@ fn a_shift_corner_follows_the_diagonal_and_snaps_along_it() {
 }
 
 #[trial]
-fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
+fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag() {
     // The canvas as the bounds, as the Crop tool sets them with Delete Cropped Pixels on.
     let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
     for (what, base) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false))] {
@@ -821,13 +835,55 @@ fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
         let r = rig.rect();
         assert!(r.x1 > canvas.x1 + 1.0 && r.y1 > canvas.y1 + 1.0, "{what}: the corner follows past the canvas: {r:?}");
     }
-    // A classic move still stops at the canvas.
+}
+
+/// photocraft#16404: moving an upright document crop past the canvas takes in the area there, as an edge drag does; a
+/// turned frame's move still stays inside the canvas (#10869).
+#[trial]
+fn a_document_crop_moved_past_its_bounds_takes_in_the_area_there() {
+    let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
+    // Classic Mode moves the frame with the pointer: to the right, past the canvas's right edge.
     let mut setup = Setup::new();
     setup.bounds = Some(canvas);
     let mut rig = Rig::new(CropBox::upright(RECT), setup);
     rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
     let r = rig.rect();
-    assert!(r.x1 <= canvas.x1 + 1e-6 && (r.width() - RECT.width()).abs() < 1e-6, "a move stays inside: {r:?}");
+    assert!(r.x1 > canvas.x1 + 1.0 && (r.width() - RECT.width()).abs() < 1e-6, "classic: the frame moves past the canvas: {r:?}");
+    // Image mode moves the image under the frame: a drag to the right takes the frame past the canvas's left edge, with
+    // Auto Center Preview off and on (the view then follows the frame).
+    for auto_center in [false, true] {
+        let mut setup = Setup::image(0.0, auto_center);
+        setup.bounds = Some(canvas);
+        let mut rig = Rig::new(CropBox::upright(RECT), setup);
+        rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+        let r = rig.rect();
+        assert!(
+            r.x0 < canvas.x0 - 1.0 && (r.width() - RECT.width()).abs() < 1e-6,
+            "image mode, auto centre {auto_center}: the frame moves past the canvas: {r:?}"
+        );
+    }
+    // A turned frame moves past the canvas too (photocraft#16460): in Classic Mode past the right edge, in image mode
+    // (the image turned under an upright frame on screen) past the left edge.
+    let mut setup = Setup::new();
+    setup.bounds = Some(canvas);
+    let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
+    rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+    let b = rig.crop().turned_bounds();
+    assert!(b.x1 > canvas.x1 + 1.0, "classic: a turned frame moves past the canvas: {b:?}");
+    assert!((rig.rect().width() - RECT.width()).abs() < 1e-6, "classic: a turned frame keeps its size: {:?}", rig.rect());
+    for auto_center in [false, true] {
+        let mut setup = Setup::image(10.0, auto_center);
+        setup.bounds = Some(canvas);
+        let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
+        rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+        let b = rig.crop().turned_bounds();
+        assert!(b.x0 < canvas.x0 - 1.0, "image mode, auto centre {auto_center}: a turned frame moves past the canvas: {b:?}");
+        assert!(
+            (rig.rect().width() - RECT.width()).abs() < 1e-6,
+            "image mode, auto centre {auto_center}: a turned frame keeps its size: {:?}",
+            rig.rect()
+        );
+    }
 }
 
 #[trial]
@@ -867,4 +923,19 @@ fn an_object_crop_is_bounded_by_its_source_and_a_press_outside_it_reaches_what_l
     assert!(rig.seen.borrow().applied, "Enter applies");
     rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
     assert!(rig.seen.borrow().discarded, "Escape discards");
+}
+
+/// photocraft#16410: the shield is one unfeathered mesh. Its pieces used to be feathered one by one, so each faded
+/// out along the edges it shares with the next and the canvas showed through as a line under the translucent shield,
+/// from the frame's corners to the canvas's edges.
+#[trial]
+fn the_shield_is_one_unfeathered_mesh_with_no_seam_between_its_pieces() {
+    for (what, setup) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false)), ("turned", Setup::image(10.0, false))] {
+        let angle = if what == "turned" { 10.0 } else { 0.0 };
+        let mut rig = Rig::new(CropBox::new(RECT, angle), setup);
+        let meshes = rig.shield_meshes();
+        assert_eq!(meshes.len(), 1, "{what}: the shield is one mesh: {} meshes", meshes.len());
+        let alpha = meshes[0].vertices[0].color.a();
+        assert!(meshes[0].vertices.iter().all(|v| v.color.a() == alpha), "{what}: no vertex of the shield fades out (a feathered edge)");
+    }
 }

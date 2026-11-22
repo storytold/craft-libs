@@ -70,8 +70,8 @@ pub(super) struct Rules {
     pub image: bool,
     pub auto_center: bool,
     pub fills_uncovered: bool,
-    /// An edge or corner drag may take the frame past `bounds`: the crop grows the canvas there, as in the reference
-    /// application (a document crop, not one bounded by a placed picture's source).
+    /// An edge or corner drag, and a move, may take the frame past `bounds`, turned or not: the crop grows the canvas
+    /// there, as in the reference application (a document crop, not one bounded by a placed picture's source).
     pub resize_grows: bool,
     /// The canvas's snapping, with this pass's tolerance.
     pub snap: Option<Snap>,
@@ -109,8 +109,13 @@ impl Rules {
                 }
                 (CropBox::upright(drawn(*anchor, *cur, self.ratio, mods)), true, self.ratio.is_some() || mods.shift)
             }
-            Kind::Move if self.image => (at.moved(drag.from - to), false, false),
-            Kind::Move => (at.moved(to - drag.from), false, false),
+            Kind::Move => {
+                // A moved document crop may take in the area past the canvas, as an edge drag does (photocraft#16404),
+                // also once turned (photocraft#16460): only the turn itself keeps the frame inside the image (#10869).
+                grows = self.resize_grows;
+                let by = if self.image { drag.from - to } else { to - drag.from };
+                (at.moved(by), false, false)
+            }
             Kind::Resize(part) => {
                 let by = to - drag.from;
                 let hold = self.hold(mods);

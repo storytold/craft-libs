@@ -280,11 +280,11 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
 }
 
 /// The sample of a family row: `text` in the regular face of `family` at `points`, named "{shown}: {text}" as the font
-/// manager names its samples, so the row keeps the family's name to itself; the interface face for a family the
-/// catalog lacks.
+/// manager names its samples, so the row keeps the family's name to itself; no face for a family the catalog
+/// lacks.
 fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, points: f32) -> FontSample<'a> {
     let face =
-        infos.families.get(family).map_or(SampleFace::Interface, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
+        infos.families.get(family).map_or(SampleFace::Missing, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
     FontSample::new(format!("{shown}: {text}"), text, face, points)
 }
 
@@ -383,22 +383,29 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let banner_family = lead.unwrap_or_else(|| family.clone());
     // The library picker always shows the banner, with the sample word when the host gives no text.
     let banner_text = picker.preview_text.or((!plain).then_some(words.sample.as_str()));
+    // Every row's sample is the banner's text: the host's text, else the sample word.
+    let sample_text = picker.preview_text.unwrap_or(words.sample.as_str());
     let name = words.list.clone();
     let mut stars: Vec<(String, bool)> = Vec::new();
     let mut over_rows = false;
     let mut under_pointer: Option<SlotKey> = None;
-    let events = ui.show(popup, Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)), |ui, _| {
+    // The field's list keys go to the family list, not to the class column beside it.
+    let families = cx.id.with("families");
+    let overlay = Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)).list(families);
+    let events = ui.show(popup, overlay, |ui, _| {
         let mut events = Vec::new();
         Stack::new().show(ui, |ui, _| {
             if let Some(text) = banner_text {
                 let shown_name = banner_shown_name(&slots, &infos, &banner_family, &language_code, settings.as_ref());
-                let face = infos.families.get(&banner_family).map_or(SampleFace::Interface, |info| SampleFace::Face {
+                let face = infos.families.get(&banner_family).map_or(SampleFace::Missing, |info| SampleFace::Face {
                     catalog,
                     owner: Owner::Installed,
                     face: &info.regular,
                 });
                 let label = words.preview_of.fill(&[("family", shown_name.as_str())]);
-                FontPreviewBanner::new(label, &shown_name, text, face).show(ui);
+                // What the family's row shows: the text, or its name or first glyphs when the face can't draw it.
+                let shown_text = infos.sample_text(catalog, &banner_family, text, &shown_name);
+                FontPreviewBanner::new(label, &shown_name, &shown_text, face).show(ui);
             }
             if let Some(filters) = filters.as_mut() {
                 filter_bar(ui, filters, &mut hide_classes, &words);
@@ -430,6 +437,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                     let selection =
                         current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, |at| Selection::single(slots[at].key()));
                     let rows = List::<SlotKey>::options(name.clone())
+                        .id(families)
                         .tree(true)
                         .tree_leaves(leaves)
                         .columns(columns.clone())
@@ -464,15 +472,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 if size == ThumbSize::None {
                                     return line;
                                 }
-                                let samples =
-                                    infos.sample_text(catalog, &row.family, words.sample.as_str(), words.sample_arabic.as_str(), &row.shown);
-                                line = line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, samples.latin, points), |_| {});
-                                // The Arabic sample ends the name's band, so the sample column keeps one width; it
-                                // drops out before it would narrow the name.
-                                match samples.arabic {
-                                    Some(arabic) => line.optional_field(sample(catalog, &infos, &row.family, &row.shown, arabic, points), |_| {}),
-                                    None => line,
-                                }
+                                let text = infos.sample_text(catalog, &row.family, sample_text, &row.shown);
+                                line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, text, points), |_| {})
                             }
                         });
                     over_rows = rows.response.contains_pointer();

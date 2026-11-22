@@ -62,7 +62,7 @@ impl IconicSizes {
         IconicSizes {
             column: DockSizes::style(cx),
             cell: size.rail.button,
-            grip: size.hit.target,
+            grip: super::group::grip_strip(cx.tokens),
             separator: cx.tokens.space.gap.tight,
             labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
         }
@@ -411,7 +411,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
-            // The references' grip: a row of upright ticks a little darker than the panel.
+            // The references' grip: a row of upright ticks, in the theme's grip ink.
             grip: GripMarks::style(cx),
         }
     }
@@ -563,7 +563,7 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
         }
         let style = &cx.style;
         for (_, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
-            style.grip.paint(ui, strip.center());
+            style.grip.paint_in(ui, *strip);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
         // edges are the window's.

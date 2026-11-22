@@ -9,7 +9,7 @@ use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::buttons::ControlPlace;
@@ -226,6 +226,75 @@ fn classifies_japanese_and_cjk_families() {
     // A `hei` (黑) suffix is a CJK sans, but not against an explicit script marker: `Xhei Script` is a script.
     assert_eq!(FontClass::classify("SimHei", 0, NONE, false), Some(FontClass::SansSerif));
     assert_eq!(FontClass::classify("Xhei Script", 0, NONE, false), Some(FontClass::Script));
+}
+
+/// A picker as the character controls host it: a given value, the filters (so the class column shows beside the
+/// families) and a preview text. The field's list keys go to the family list: Enter on a typed part of a name picks the
+/// best match, and Down moves the family row, which previews, before Enter picks it. While no family row shows, Enter is
+/// the field's: it commits a typed family name and leaves the class column as it was.
+#[trial]
+fn with_the_class_column_shown_the_field_keys_move_and_pick_in_the_family_list() {
+    #[derive(Default)]
+    struct Reported {
+        picks: Vec<String>,
+        previews: Vec<String>,
+    }
+    let reported = Rc::new(RefCell::new(Reported::default()));
+    let seen = Rc::clone(&reported);
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT]);
+    let mut settings = FontPickerSettings::default();
+    let filters = Rc::new(RefCell::new(FontFilters::default()));
+    let held = Rc::clone(&filters);
+    let mut fx = Fixture::new(move |ui| {
+        let mut filters = held.borrow_mut();
+        let out = FontPicker::new("Font family", Bind::given("Ubuntu".to_owned()), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .filters(Bind::bound(&mut *filters))
+            .preview_text("Sample")
+            .show(ui);
+        let mut seen = seen.borrow_mut();
+        if let Preview::Shows(family) = out.preview {
+            seen.previews.push(family);
+        }
+        seen.picks.extend(out.picked);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let words = FontPickerWords::default();
+    let type_in = |fx: &mut Fixture, text: &str| {
+        let field = fx.by_label("Font family").expect("the family field");
+        fx.click(&field);
+        fx.settle();
+        fx.type_text(text);
+        fx.settle();
+    };
+
+    type_in(&mut fx, "Ha");
+    assert!(present(&fx, words.all_classes.as_str()), "the class column shows");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks, ["Hack"], "Enter on a partial name picks the best match");
+
+    // "n" matches Inter and Ubuntu.
+    type_in(&mut fx, "n");
+    reported.borrow_mut().previews.clear();
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.settle();
+    let keyed = reported.borrow().previews.last().cloned().expect("Down moves the family row, which previews its family");
+    assert!(["Inter", "Ubuntu"].contains(&keyed.as_str()), "the row is a family that matches: {keyed}");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks.last(), Some(&keyed), "Enter picks the family row the keys reached");
+
+    // The host's filters list monospaced families only, Hack alone, so the exact name "Inter" matches no row.
+    filters.borrow_mut().class = Some(FontClass::Monospace);
+    type_in(&mut fx, "Inter");
+    assert!(present(&fx, words.all_classes.as_str()), "the class column shows");
+    assert!(fx.by_label("Favorite Inter").is_none() && fx.by_label("Favorite Hack").is_none(), "no family row shows");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks.last().map(String::as_str), Some("Inter"), "the field commits the typed name");
+    assert_eq!(filters.borrow().class, Some(FontClass::Monospace), "the class column is unchanged");
 }
 
 /// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.
@@ -529,6 +598,56 @@ fn library_rig() -> (Fixture, Rc<RefCell<Library>>) {
     fx.settle();
     open(&mut fx);
     (fx, state)
+}
+
+/// "أبجد هوز", which neither Inter nor Hack draws.
+const ARABIC_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
+
+/// An open library list over Inter and Hack, with Gotham served, `family` current and `text` as the preview text.
+fn sample_rig(family: &'static str, text: &'static str) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let served = vec!["Gotham".to_owned()];
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .served(&served)
+            .preview_text(text)
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// Each row has one sample, the picker's sample text, in its own face; a face that lacks the text's letters shows its
+/// name instead, in its row and in the banner; and a family without a face shows no sample at all, not the text in the interface face.
+#[trial]
+fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
+    let fx = sample_rig("Inter", "Hello");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: Hello")).is_some(), "{family}'s sample is the preview text");
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family} has no sample word");
+    }
+
+    let fx = sample_rig("Gotham", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Gotham").is_some(), "the banner shows the served family");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: {family}")).is_some(), "{family} lacks Arabic: its sample is its name");
+    }
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "no face draws the text: neither the rows nor the banner of a family without a face paint it"
+    );
+
+    let fx = sample_rig("Inter", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Inter").is_some(), "the banner shows Inter");
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "the banner of a face without the text's letters shows what its row shows, not the text"
+    );
 }
 
 /// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
