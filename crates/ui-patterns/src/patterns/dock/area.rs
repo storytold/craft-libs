@@ -138,6 +138,7 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
     rail_footer: Option<P>,
+    top_inset: f32,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -156,6 +157,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked: false,
             flyout: None,
             rail_footer: None,
+            top_inset: 0.0,
         }
     }
 
@@ -163,6 +165,15 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// moves, floats or closes.
     pub fn read_only(label: impl Into<Label>, layout: &Layout<P>, panels: &'a mut dyn DockPanels<P>, config: DockConfig) -> Self {
         DockArea { locked: true, ..Self::new(label, Bind::given(Workspace::new(layout.clone())), panels, config) }
+    }
+
+    /// Keeps floating windows below the top `inset` points of the window: the height of the bars (notices) the
+    /// windows float over. A window's place is clamped to the float bounds, so one at the top of the area sits just
+    /// below the bars and moves with them as they show and close. A negative or non-finite inset is none.
+    #[must_use]
+    pub fn top_inset(mut self, inset: f32) -> Self {
+        self.top_inset = if inset.is_finite() { inset.max(0.0) } else { 0.0 };
+        self
     }
 
     /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
@@ -205,6 +216,7 @@ struct Drops<'a, P> {
     config: &'a DockConfig,
     specs: &'a HashMap<P, PanelSpec>,
     rtl: bool,
+    top_inset: f32,
 }
 
 impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
@@ -212,7 +224,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
     fn take(&self, cx: &mut Cx<'_, DockRoot<'_, DockDropped<P>>>) -> Option<DockDropped<P>> {
         let ctx = cx.core.ctx.clone();
         let sizes = *cx.style.sizes();
-        let bounds = cx.env.get::<ShellEntry>().0.as_ref().map_or(cx.rect, ShellCx::float_bounds);
+        let bounds = inset_top(cx.env.get::<ShellEntry>().0.as_ref().map_or(cx.rect, ShellCx::float_bounds), self.top_inset);
         let space = float_space(bounds, &sizes, self.config, self.specs);
         let mut target = DockDropTarget::new(&ctx, self.dock, self.layout, self.permissions);
         target.rtl = self.rtl;
@@ -365,7 +377,7 @@ struct Pass<'s, P> {
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// Shows the area across the room offered.
     pub fn show(self, ui: &mut Ui) -> DockAreaOutput<P> {
-        let DockArea { label, mut workspace, panels, config, hide, maximized, auto_collapse, locked, mut flyout, rail_footer } = self;
+        let DockArea { label, mut workspace, panels, config, hide, maximized, auto_collapse, locked, mut flyout, rail_footer, top_inset } = self;
         let ctx = ui.ctx().clone();
         let (rtl, window) = {
             let env = Env::of(ui);
@@ -391,7 +403,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             .collect();
         let policy = |panel: &P| rights.get(panel).copied().unwrap_or(Permissions::ALL);
         let specs: HashMap<P, PanelSpec> = current.layout.panels().into_iter().map(|panel| (panel.clone(), panels.spec(panel))).collect();
-        let drops = Drops { dock: id, layout: &current.layout, permissions: &policy, config: &config, specs: &specs, rtl };
+        let drops = Drops { dock: id, layout: &current.layout, permissions: &policy, config: &config, specs: &specs, rtl, top_inset };
         let shows = Arrangement { dock: id, revision: current.revision() };
         end_replaced_drags::<P>(&ctx, shows);
         let dropped: RefCell<Option<Action<P>>> = RefCell::new(None);
@@ -419,6 +431,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 sizes,
                 rtl,
                 rail_footer: rail_footer.as_ref(),
+                top_inset,
             };
             let mut result = show_area(ui, body, &input, &rights, &mut *panels, flyout.as_mut());
             for edit in &result.edit {
@@ -518,6 +531,13 @@ struct Input<'i, P> {
     sizes: DockSizes,
     rtl: bool,
     rail_footer: Option<&'i P>,
+    top_inset: f32,
+}
+
+/// `bounds` without its top `inset` points, never past its bottom.
+fn inset_top(bounds: Rect, inset: f32) -> Rect {
+    let top = (bounds.min.y + inset).min(bounds.max.y);
+    Rect::from_min_max(egui::pos2(bounds.min.x, top), bounds.max)
 }
 
 fn open_of<P: Clone + Send + Sync + 'static + PartialEq + Debug>(
@@ -542,14 +562,14 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl, rail_footer } = *input;
+    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl, rail_footer, top_inset } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let keys: HashMap<PanelKey, P> = current.layout.panels().into_iter().map(|panel| (PanelKey::of(panel), panel.clone())).collect();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
     let Shown { view, floating } = hide::shown(&current.layout, maximized, hide, shell.as_ref(), &protected);
     let layout: &Layout<P> = &view.layout;
-    let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
+    let bounds = inset_top(shell.as_ref().map_or(body.rect, ShellCx::float_bounds), top_inset);
     let space = float_space(bounds, &sizes, config, specs);
     let scene = Scene {
         dock: id,
