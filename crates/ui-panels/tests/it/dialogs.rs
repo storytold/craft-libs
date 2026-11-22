@@ -395,6 +395,43 @@ fn the_unsaved_question_orders_its_buttons_by_platform_and_answers_by_role() {
     }
 }
 
+/// The unsaved-changes dialog exposes Role::ALERT_DIALOG, with its title as its accessible name and its consequence
+/// message and save-failure reason in its AccessKit description.
+#[trial]
+fn the_unsaved_dialog_exposes_alert_dialog_role_and_folds_reason_into_description() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+
+    // 1. Without reason: Role::ALERT_DIALOG, label is "Unsaved changes", description contains the closing question.
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
+    fixture.idle(6);
+    let dialogs = fixture.by_role(Role::ALERT_DIALOG);
+    assert_eq!(dialogs.len(), 1, "the unsaved changes dialog exposes Role::ALERT_DIALOG");
+    let dialog = dialogs[0];
+    assert_eq!(fixture.tree().name_of(dialog.node), Some("Unsaved changes"), "accessible name is the dialog title");
+    let desc_without_reason = fixture.tree().description_of(dialog.node).expect("dialog has an accessible description").to_owned();
+    assert!(desc_without_reason.contains("poster.psd"), "description mentions the document name: {desc_without_reason}");
+    assert!(desc_without_reason.contains("before closing"), "description conveys closing consequence: {desc_without_reason}");
+
+    // Cancel to close
+    assert!(host.borrow_mut().cancel::<UnsavedChangesDialog>(fixture.ctx()));
+    fixture.idle(4);
+
+    // 2. With reason: Role::ALERT_DIALOG, description contains both the closing question and the save-failure reason.
+    let reason_text = "Disk full or permission denied";
+    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").reason(reason_text));
+    fixture.idle(6);
+    let dialogs = fixture.by_role(Role::ALERT_DIALOG);
+    assert_eq!(dialogs.len(), 1, "reopened unsaved dialog with reason exposes Role::ALERT_DIALOG");
+    let dialog = dialogs[0];
+    assert_eq!(fixture.tree().name_of(dialog.node), Some("Unsaved changes"));
+    let desc_with_reason = fixture.tree().description_of(dialog.node).expect("dialog has an accessible description");
+    assert!(desc_with_reason.contains("poster.psd"), "description mentions document name: {desc_with_reason}");
+    assert!(desc_with_reason.contains(reason_text), "description includes save failure reason: {desc_with_reason}");
+    assert_eq!(desc_with_reason, format!("{desc_without_reason} {reason_text}"));
+}
+
 /// Apply, an auxiliary action, stands after Cancel on Windows; the Alternate role does not move it.
 #[trial]
 fn windows_puts_an_auxiliary_apply_after_cancel() {
