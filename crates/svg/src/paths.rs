@@ -684,12 +684,12 @@ fn import_node<'a, 'input, K: Kind>(
     }
     if !state.display_none
         && !state.visibility_hidden
-        && let Some(path) = geometry_for(node, context.path_name)?
+        && let Some((path, drawable)) = geometry_for(node, context.path_name)?
     {
         context.charge_segments(&path)?;
         let transformed = transform_path(&path, state.transform);
         validate_import_path(&transformed, context.path_name)?;
-        context.shapes.push(Shape {
+        context.shapes.extend(drawable.then(|| Shape {
             path: transformed,
             kind: state.kind.clone(),
             label: label(node),
@@ -699,7 +699,7 @@ fn import_node<'a, 'input, K: Kind>(
             fill_rule: if style.get("fill-rule").is_some_and(|value| value == "evenodd") { FillRule::EvenOdd } else { FillRule::NonZero },
             clips: state.clips.clone(),
             layer: state.layer.as_deref().map(str::to_string),
-        });
+        }));
     }
     for child in node.children().filter(|n| n.is_element()) {
         import_node(child, state.clone(), depth + 1, context)?;
@@ -891,7 +891,7 @@ fn clip_region<K>(
             }
             continue;
         }
-        let Some(path) = geometry_for(child, context.path_name)? else {
+        let Some((path, drawable)) = geometry_for(child, context.path_name)? else {
             continue;
         };
         let mut child_space = space;
@@ -908,13 +908,13 @@ fn clip_region<K>(
         if context.clip_pieces > MAX_SVG_CLIP_PIECES {
             return Err(svg_error(context.path_name, "SVG clip paths exceed the 100,000-piece limit"));
         }
-        pieces.push((path, rule));
+        pieces.extend(drawable.then_some((path, rule)));
     }
     context.clips.push(Clip { pieces });
     Ok(Some(context.clips.len() - 1))
 }
 
-fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option<BezPath>, Error> {
+fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option<(BezPath, bool)>, Error> {
     let tag = node.tag_name().name();
     let number = |name: &str, default: f64| -> Result<f64, Error> {
         match node.attribute(name) {
@@ -922,6 +922,8 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             None => Ok(default),
         }
     };
+    // Non-rendering basic shapes still carry their original geometry through validation.
+    let mut drawable = true;
     let path = match tag {
         "svg" | "g" | "defs" | "symbol" | "clipPath" | "mask" | "pattern" | "title" | "desc" | "metadata" | "style" | "stop" | "namedview"
         | "guide" | "perspective" => return Ok(None),
@@ -942,7 +944,8 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if rx < 0.0 || ry < 0.0 {
                 return Err(svg_error(path_name, "<rect> corner radii cannot be negative"));
             }
-            return Ok((w != 0.0 && h != 0.0).then(|| rounded_rect(x, y, w, h, rx.min(w / 2.0), ry.min(h / 2.0))));
+            drawable = w != 0.0 && h != 0.0;
+            rounded_rect(x, y, w, h, rx.min(w / 2.0), ry.min(h / 2.0))
         }
         "circle" => {
             let cx = number("cx", 0.0)?;
@@ -951,7 +954,8 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if r < 0.0 {
                 return Err(svg_error(path_name, "<circle> radius cannot be negative"));
             }
-            return Ok((r != 0.0).then(|| ellipse_path(cx, cy, r, r)));
+            drawable = r != 0.0;
+            ellipse_path(cx, cy, r, r)
         }
         "ellipse" => {
             let cx = number("cx", 0.0)?;
@@ -961,7 +965,8 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if rx < 0.0 || ry < 0.0 {
                 return Err(svg_error(path_name, "<ellipse> radii cannot be negative"));
             }
-            return Ok((rx != 0.0 && ry != 0.0).then(|| ellipse_path(cx, cy, rx, ry)));
+            drawable = rx != 0.0 && ry != 0.0;
+            ellipse_path(cx, cy, rx, ry)
         }
         "line" => {
             let mut p = BezPath::new();
@@ -981,7 +986,7 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             return Err(svg_error(path_name, &format!("unsupported SVG element <{tag}>; import stopped to avoid silently dropping art")));
         }
     };
-    Ok(Some(path))
+    Ok(Some((path, drawable)))
 }
 
 /// Path data with every smooth segment (`S`, `T`) that has no control point to reflect made to
@@ -1984,6 +1989,62 @@ mod tests {
         fails("<svg><g></svg>", "invalid XML");
     }
 
+    fn assert_zero_sized_geometry_validation() {
+        // Omission must not bypass validation performed on the old transformed geometry.
+        fn rejects_as(svg: &str, message: &str) -> bool {
+            import::<()>(svg, "zero.svg").is_err_and(|error| error.0.starts_with("zero.svg: ") && error.0.contains(message))
+        }
+        let mut validation_bypassed = Vec::new();
+        let coordinates = "geometry coordinates must be finite and within ±1e9 mm";
+        for (label, svg, message) in [
+            (
+                "clip transform",
+                r##"<svg><defs><clipPath id="c"><rect width="0" height="8" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
+                "<rect> transform: transform has invalid numeric arguments",
+            ),
+            ("transformed coordinates", r#"<svg><circle cx="1e10" r="0"/></svg>"#, coordinates),
+            ("rect coordinates", r#"<svg><rect x="1e10" width="0" height="8"/></svg>"#, coordinates),
+            ("ellipse coordinates", r#"<svg><ellipse cy="-1e10" rx="4" ry="0"/></svg>"#, coordinates),
+            ("inherited coordinates", r#"<svg><g transform="translate(10000000000 0)"><rect width="0" height="8"/></g></svg>"#, coordinates),
+            (
+                "use coordinates",
+                r##"<svg><defs><rect id="zero" width="0" height="8"/></defs><use href="#zero" transform="translate(10000000000 0)"/></svg>"##,
+                coordinates,
+            ),
+            (
+                "clip coordinates",
+                r##"<svg><defs><clipPath id="c"><circle cy="1e10" r="0"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
+                coordinates,
+            ),
+            (
+                "clip validation precedence",
+                r##"<svg><defs><clipPath id="c"><rect width="0" height="-1" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
+                "width/height cannot be negative",
+            ),
+        ] {
+            if !rejects_as(svg, message) {
+                validation_bypassed.push(label);
+            }
+        }
+
+        // Raw coordinates outside the bound may become valid in document millimetres.
+        // Keep a positive rectangle in each control so the actual transform is observable.
+        for (transform, width, height, expected) in [
+            ("translate(-10000000000 0)", 4, 6, kurbo::Rect::new(0.0, 0.0, 4.0, 6.0)),
+            ("scale(0.0000000001)", 100_000_000, 600_000_000, kurbo::Rect::new(1.0, 0.0, 1.01, 0.06)),
+        ] {
+            let got = read(&format!(
+                r#"<svg><g transform="{transform}"><rect id="positive" x="10000000000" width="{width}" height="{height}"/><rect x="10000000000" width="0" height="8"/><circle cx="10000000000" r="0"/><ellipse cx="10000000000" rx="0" ry="2"/></g></svg>"#
+            ));
+            assert!(got.warnings.is_empty());
+            let positive = got.shapes.iter().find(|shape| shape.label == r#"<rect id="positive">"#).unwrap();
+            let actual = positive.path.bounding_box();
+            assert!(near(actual.x0, expected.x0) && near(actual.y0, expected.y0));
+            assert!(near(actual.x1, expected.x1) && near(actual.y1, expected.y1));
+        }
+        assert!(validation_bypassed.is_empty(), "zero-sized shape validation bypassed: {validation_bypassed:?}");
+    }
+
     #[test]
     fn zero_sized_basic_shapes_are_not_imported() {
         // Original examples from SVG 1.1 basic-shape zero-size rules, sections 9.2-9.4.
@@ -2077,59 +2138,7 @@ mod tests {
         } else {
             assert!(clipped.clipped_path(&clipped.shapes[0]).unwrap().elements().is_empty());
         }
-        // Omission must not bypass validation performed on the old transformed geometry.
-        fn rejects_as(svg: &str, message: &str) -> bool {
-            import::<()>(svg, "zero.svg").is_err_and(|error| error.0.starts_with("zero.svg: ") && error.0.contains(message))
-        }
-        let mut validation_bypassed = Vec::new();
-        let coordinates = "geometry coordinates must be finite and within ±1e9 mm";
-        for (label, svg, message) in [
-            (
-                "clip transform",
-                r##"<svg><defs><clipPath id="c"><rect width="0" height="8" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
-                "<rect> transform: transform has invalid numeric arguments",
-            ),
-            ("transformed coordinates", r#"<svg><circle cx="1e10" r="0"/></svg>"#, coordinates),
-            ("rect coordinates", r#"<svg><rect x="1e10" width="0" height="8"/></svg>"#, coordinates),
-            ("ellipse coordinates", r#"<svg><ellipse cy="-1e10" rx="4" ry="0"/></svg>"#, coordinates),
-            ("inherited coordinates", r#"<svg><g transform="translate(10000000000 0)"><rect width="0" height="8"/></g></svg>"#, coordinates),
-            (
-                "use coordinates",
-                r##"<svg><defs><rect id="zero" width="0" height="8"/></defs><use href="#zero" transform="translate(10000000000 0)"/></svg>"##,
-                coordinates,
-            ),
-            (
-                "clip coordinates",
-                r##"<svg><defs><clipPath id="c"><circle cy="1e10" r="0"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
-                coordinates,
-            ),
-            (
-                "clip validation precedence",
-                r##"<svg><defs><clipPath id="c"><rect width="0" height="-1" transform="scale(nope)"/></clipPath></defs><rect width="8" height="8" clip-path="url(#c)"/></svg>"##,
-                "width/height cannot be negative",
-            ),
-        ] {
-            if !rejects_as(svg, message) {
-                validation_bypassed.push(label);
-            }
-        }
-
-        // Raw coordinates outside the bound may become valid in document millimetres.
-        // Keep a positive rectangle in each control so the actual transform is observable.
-        for (transform, width, height, expected) in [
-            ("translate(-10000000000 0)", 4, 6, kurbo::Rect::new(0.0, 0.0, 4.0, 6.0)),
-            ("scale(0.0000000001)", 100_000_000, 600_000_000, kurbo::Rect::new(1.0, 0.0, 1.01, 0.06)),
-        ] {
-            let got = read(&format!(
-                r#"<svg><g transform="{transform}"><rect id="positive" x="10000000000" width="{width}" height="{height}"/><rect x="10000000000" width="0" height="8"/><circle cx="10000000000" r="0"/><ellipse cx="10000000000" rx="0" ry="2"/></g></svg>"#
-            ));
-            assert!(got.warnings.is_empty());
-            let positive = got.shapes.iter().find(|shape| shape.label == r#"<rect id="positive">"#).unwrap();
-            let actual = positive.path.bounding_box();
-            assert!(near(actual.x0, expected.x0) && near(actual.y0, expected.y0));
-            assert!(near(actual.x1, expected.x1) && near(actual.y1, expected.y1));
-        }
-        assert!(validation_bypassed.is_empty(), "zero-sized shape validation bypassed: {validation_bypassed:?}");
+        assert_zero_sized_geometry_validation();
         assert!(retained.is_empty(), "zero-sized basic shapes retained: {retained:?}");
     }
 
