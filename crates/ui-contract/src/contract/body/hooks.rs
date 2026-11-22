@@ -1788,10 +1788,10 @@ impl BodyHooks<'_> {
     fn measure_room<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Result<bool, Vec2> {
         let props = &self.props;
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
-        // measured itself. A pane as tall as its content takes its height in the flow.
+        // measured itself. A pane as large as its content takes its extent in the flow.
         let flows = match &props.mount {
             Mount::Inline => true,
-            Mount::Pane(pane) => pane.content_height,
+            Mount::Pane(pane) => pane.content_extent,
             _ => false,
         };
         if !flows && at.ui.is_sizing_pass() {
