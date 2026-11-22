@@ -442,6 +442,8 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
             let shape = if cx.style.round { HitShape::circle(at.center(), at.width() / 2.0) } else { HitShape::Rect(at) };
             let part =
                 cx.part(WELL.at(i as u64), shape).sense(sense).priority(HitPriority::new(HitLevel::Body, u8::from(front))).flags(flags).focusable();
+            // Focus arrives at the active well, so arriving makes no other well active.
+            let part = if well == active { part.selected() } else { part };
             if self.popover {
                 part.pointer_only("Enter opens the picker");
             }

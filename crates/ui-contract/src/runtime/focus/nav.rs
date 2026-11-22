@@ -649,9 +649,19 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
         return Vec::new();
     }
     let stops = &state.stops[first.min(state.stops.len())..];
+    // A first stop in a roving group arrives at the group's arrival member, as Tab does.
+    let lists = state.this();
+    let entry = stops.first().map(|rec| {
+        rec.stop
+            .group
+            .and_then(|group| lists.group(group))
+            .filter(|group| !group.row)
+            .and_then(|group| lists.arrival(&group))
+            .unwrap_or_else(|| rec.clone())
+    });
     let pick = match policy.initial {
-        Initial::First => stops.first(),
-        Initial::Default => stops.iter().find(|rec| rec.stop.default).or_else(|| stops.first()),
+        Initial::First => entry.as_ref(),
+        Initial::Default => stops.iter().find(|rec| rec.stop.default).or(entry.as_ref()),
         Initial::FirstField => stops.iter().find(|rec| rec.stop.text).or_else(|| stops.iter().find(|rec| rec.stop.default)),
         Initial::Key(name) => stops.iter().find(|rec| rec.stop.name == Some(name)),
         _ => None,

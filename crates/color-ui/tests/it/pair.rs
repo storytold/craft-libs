@@ -1,4 +1,5 @@
-//! `SwatchPair` wells take the theme's well shape (`shape.wells`): a round well is round to the pointer too.
+//! `SwatchPair` wells take the theme's well shape (`shape.wells`): a round well is round to the pointer too. Focus
+//! arrives at the active well, so a panel opening with the pair first activates no other well.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -6,7 +7,7 @@ use std::rc::Rc;
 use craft_behavior::Mixed;
 use craft_color_ui::ui::{PairWell, SwatchPair, SwatchPairOutput, Well};
 use craft_theme::{Srgba, ThemeId};
-use craft_ui::contract::{Bind, Role, Show as _};
+use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Ui, Vec2, vec2};
 
@@ -114,4 +115,34 @@ fn a_pair_well_drags_its_payload_and_takes_a_drop_a_mixed_well_does_neither() {
 fn the_well_corner_follows_the_theme_well_shape() {
     assert_eq!(clicks("craft.adwaita"), [Some(Well::Primary), None], "round wells");
     assert_eq!(clicks("craft.pro"), [Some(Well::Primary), Some(Well::Primary)], "square wells");
+}
+
+/// A popover that opens with the pair as its first stop puts the focus on the active well, as Tab into the pair does:
+/// the arrival makes no other well active (a Color panel opened over the Stroke chip leaves Stroke active).
+#[trial]
+fn a_popover_opening_on_the_pair_focuses_the_active_well_and_activates_none() {
+    use craft_ui::buttons::Button;
+    use craft_ui::popover::Popover;
+    let activated = Rc::new(Cell::new(false));
+    let seen = activated.clone();
+    let mut open = false;
+    let mut fixture = Fixture::new(move |ui| {
+        let button = Button::new("Colours").show(ui).response;
+        if button.clicked() {
+            open = true;
+        }
+        let _ = Popover::new("Colours", Bind::bound(&mut open)).opened_by(&button).show(ui, |ui, _| {
+            let wells = [PairWell::new("Fill", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Stroke", Srgba::rgb(0.0, 0.0, 0.0))];
+            let shown = SwatchPair::<()>::new("Fill and stroke", wells, Bind::given(Well::Secondary)).show(ui);
+            seen.set(seen.get() || !shown.choice.events.is_empty());
+        });
+    });
+    fixture.room(vec2(400.0, 300.0)).settle();
+    let opener = fixture.by_label("Colours").expect("the opener");
+    fixture.click(&opener).settle();
+    let tree = fixture.tree();
+    let focused = craft_ui::testing::access::focused_key(tree);
+    assert_eq!(tree.role_of(focused), Some(Role::RADIO_BUTTON), "a well takes the focus");
+    assert_eq!(tree.toggled_of(focused), Some(Mixed::Same(true)), "the focus arrives at the active well");
+    assert!(!activated.get(), "the arrival activates no well");
 }
