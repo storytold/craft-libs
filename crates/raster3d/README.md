@@ -118,7 +118,8 @@ The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resol
 `2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane,
 whose depth-range crossings lie more than 1/4096 of an edge from its inside corner, whose texture
 coordinates times the texture's width or height stay below 2^23 in magnitude, whose normals'
-squared lengths and casters' light-space coordinates times a map's focal length fit `f32`, whose
+squared lengths, squared distances from fragments to point and spot lights, and casters'
+light-space coordinates times a map's focal length fit `f32`, whose
 shadow-casting spot lights' outer cones are at most 1.40 radians wide, whose resolve blocks hold
 at most 2^24 subsamples, whose shadows-only materials receive
 shadows, whose fragments under discarded opaque pixels stay inside the depth range, whose blended
@@ -159,8 +160,9 @@ Changes from those files:
   texels in `f64`, after a repeated or mirrored axis reduces it by its period. EffectCraft scaled
   it in `f32`, which dropped the half-texel shift there, and from 2^24 saturated the texel index,
   which picked a texel off the wrap period.
-- A normal whose squared length overflows `f32` is normalized in `f64`. EffectCraft divided it by
-  an infinite length, so the surface took no direct light.
+- A normal whose squared length overflows `f32`, and the direction to a point or spot light whose
+  squared distance overflows `f32`, are normalized in `f64`. EffectCraft divided them by an
+  infinite length, so the surface took no direct light.
 - A caster corner or a receiver whose light-space coordinate times the map's focal length overflows
   `f32` is projected in `f64`. EffectCraft's map coordinates for it were infinite.
 - A spot light whose outer cone's half angle plus 0.05 radians is over 1.45 radians gets six maps,

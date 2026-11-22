@@ -419,6 +419,12 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     }
     let d = sub(l.pos, p);
     let len = dot(d, d).sqrt();
+    // The squared distance to a far light overflows f32; such a direction is taken in f64.
+    if len.is_infinite() && d.iter().all(|c| c.is_finite()) {
+        let d = d.map(f64::from);
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        return (d.map(|c| (c / len) as f32), len as f32);
+    }
     if len < 1e-6 { ([0.0, 0.0, -1.0], 0.0) } else { (scale(d, 1.0 / len), len) }
 }
 

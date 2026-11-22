@@ -1117,6 +1117,23 @@ fn large_finite_normals_shade_as_their_unit_normals() {
 }
 
 #[test]
+fn a_point_light_whose_squared_distance_overflows_f32_still_lights() {
+    // A point light without falloff lights a surface the same from 1e20 units as from 1,000 units
+    // in about the same direction; 1e20 squared overflows f32.
+    let mut s = quad_scene(8, 8, &[([0.0, 0.0, 8.0, 8.0], 500.0, WHITE)]);
+    s.materials[0].unlit = false;
+    let mut point = spot([4.0, 4.0, -1000.0], [0.0, 0.0, 1.0], 1.0, 1.0);
+    (point.kind, point.shadow) = (2, -1);
+    s.lights = vec![point];
+    let (near, _) = try_render_cpu(&s, &Limits::default()).unwrap();
+    s.lights[0].pos[2] = -1e20;
+    let (far, _) = try_render_cpu(&s, &Limits::default()).unwrap();
+    let px = 4 * 8 + 4;
+    assert!(near.data[px][0] > 0.1, "{:?}", near.data[px]);
+    assert!((far.data[px][0] - near.data[px][0]).abs() < 1e-3 * near.data[px][0], "{:?} {:?}", far.data[px], near.data[px]);
+}
+
+#[test]
 fn coordinates_from_two_to_the_twenty_third_texels_keep_the_half_texel_shift() {
     let texels = [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
     // Repeated, 2^23 across two texels is a whole period, so it samples as at 0: halfway between
