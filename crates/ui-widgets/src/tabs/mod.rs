@@ -4,15 +4,15 @@ mod words;
 
 // Tab and the strip rules.
 mod rules;
-mod tab;
+pub(crate) mod tab;
 
 pub use rules::{CloseSide, FitMode, OverflowMenu, OverflowPlace, TabKind, close_side};
 pub use tab::{Tab, TabOutput, TabPartEvent, TabRole, TabStyle};
 pub use words::TabWords;
 
 // The strip and the document tabs.
-mod document;
-mod strip;
+pub(crate) mod document;
+pub(crate) mod strip;
 
 pub use document::{DocumentTab, DocumentTabs, DocumentTabsEvent, DocumentTabsOutput};
 pub use strip::{StripEnd, StripLayout, TabRoles, TabStrip, TabStripOutput, TabStripStyle, TornOff};

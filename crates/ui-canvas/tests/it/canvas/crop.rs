@@ -804,6 +804,33 @@ fn a_shift_corner_follows_the_diagonal_and_snaps_along_it() {
 }
 
 #[trial]
+fn a_document_crop_grows_past_its_bounds_on_an_edge_or_corner_drag_only() {
+    // The canvas as the bounds, as the Crop tool sets them with Delete Cropped Pixels on.
+    let canvas = Rect::new(50.0, 50.0, 350.0, 250.0);
+    for (what, base) in [("classic", Setup::new()), ("image mode", Setup::image(0.0, false))] {
+        let mut setup = base;
+        setup.bounds = Some(canvas);
+        // An edge dragged past the canvas takes the frame with it: the crop grows the canvas there.
+        let mut rig = Rig::new(CropBox::upright(RECT), setup.clone());
+        rig.drag(rig.at(RECT.x1, 150.0), rig.at(380.0, 150.0), Modifiers::NONE);
+        let r = rig.rect();
+        assert!((r.x1 - 380.0).abs() < 1e-6 && r.x0 == RECT.x0, "{what}: the right edge follows past the canvas: {r:?}");
+        // So does a corner.
+        let mut rig = Rig::new(CropBox::upright(RECT), setup.clone());
+        rig.drag(rig.at(RECT.x1, RECT.y1), rig.at(380.0, 280.0), Modifiers::NONE);
+        let r = rig.rect();
+        assert!(r.x1 > canvas.x1 + 1.0 && r.y1 > canvas.y1 + 1.0, "{what}: the corner follows past the canvas: {r:?}");
+    }
+    // A classic move still stops at the canvas.
+    let mut setup = Setup::new();
+    setup.bounds = Some(canvas);
+    let mut rig = Rig::new(CropBox::upright(RECT), setup);
+    rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+    let r = rig.rect();
+    assert!(r.x1 <= canvas.x1 + 1e-6 && (r.width() - RECT.width()).abs() < 1e-6, "a move stays inside: {r:?}");
+}
+
+#[trial]
 fn an_object_crop_is_bounded_by_its_source_and_a_press_outside_it_reaches_what_lies_beneath() {
     let source = Rect::new(50.0, 50.0, 350.0, 250.0);
     let mut setup = Setup::new();

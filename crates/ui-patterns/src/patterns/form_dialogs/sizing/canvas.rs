@@ -177,7 +177,7 @@ impl<'a> CanvasSize<'a> {
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> CanvasSizeOutput {
         let CanvasSize { values, open, bytes_per_pixel, held } = self;
-        let kit = Kit::new(ui);
+        let kit = Kit::for_canvas(ui);
         let words = kit.words();
 
         let title = words.canvas_size_title.clone();

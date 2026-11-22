@@ -72,9 +72,9 @@ fn under_a_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
     };
     let stage = Stack::new().fill().footer(row).footer_gap(Gap::Stack).show_at(ui, room, |ui, stack| {
-        let view = data.value("view", StoryDocument::STANDARD.view(stack.rect, pixels_per_point, 100.0));
+        let (view, view_at) = data.value_at("view", StoryDocument::STANDARD.view(stack.rect, pixels_per_point, 100.0));
         Canvas::new("Document")
-            .view(Bind::bound(view))
+            .view(view_at.bind(view))
             .show_at(ui, stack.rect, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD))
             .output
     });
@@ -121,10 +121,10 @@ fn press_menu_key(fixture: &mut Fixture) {
 fn document_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     let navigation = NavigationOptions { wheel: WheelScheme::Document, ..NavigationOptions::default() };
-    let view = data.value("view", scrolled_view(room, ui.pixels_per_point()));
+    let (view, view_at) = data.value_at("view", scrolled_view(room, ui.pixels_per_point()));
     Canvas::new("Document")
         .navigation(navigation)
-        .view(Bind::bound(&mut *view))
+        .view(view_at.bind(&mut *view))
         .show_at(ui, room, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD))
         .output
         .into()
@@ -143,10 +143,10 @@ fn scrolled_view(room: Rect, pixels_per_point: f32) -> craft_behavior::CanvasVie
 fn middle_autoscroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     let navigation = NavigationOptions { middle_button: MiddleButton::Autoscroll, ..NavigationOptions::default() };
-    let view = data.value("view", scrolled_view(room, ui.pixels_per_point()));
+    let (view, view_at) = data.value_at("view", scrolled_view(room, ui.pixels_per_point()));
     let shown = Canvas::new("Document")
         .navigation(navigation)
-        .view(Bind::bound(&mut *view))
+        .view(view_at.bind(&mut *view))
         .show_at(ui, room, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD));
     shown.output.into()
 }

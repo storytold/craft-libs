@@ -25,8 +25,8 @@ use egui::{ColorImage, CornerRadius, Rect, Response, Ui, Vec2};
 
 use super::GroupLevel;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 const TILE: PartKey = PartKey::new("tile");
 const UP: PartKey = PartKey::new("up");

@@ -3,7 +3,7 @@
 
 use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Bracket, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use crate::dialog::{DialogResult, FieldRefusal, HeldAnswer};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -19,10 +19,10 @@ use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-mod canvas;
-mod image;
-#[cfg(feature = "testing")]
-mod stories;
+pub(crate) mod canvas;
+pub(crate) mod image;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use canvas::{CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize};
 pub use image::{HostedImageSize, ImageSize, ImageSizeOutput, ImageSizeResult, ImageSizeValues};
@@ -138,11 +138,11 @@ impl Resample {
         }
     }
 
-    /// The list entries of the methods in `allowed`, in the order of [`Resample::ALL`]; all of them when `allowed` names
-    /// none.
+    /// The list entries of the methods in `allowed`, in the order given; all of them in the order of
+    /// [`Resample::ALL`] when `allowed` names none.
     pub fn entries(words: &SizingWords, allowed: &[Resample]) -> Vec<Entry<Resample>> {
-        let listed = |method: &Resample| allowed.is_empty() || allowed.contains(method);
-        Resample::ALL.iter().copied().filter(listed).map(|method| Entry::new(method, method.label(words))).collect()
+        let methods = if allowed.is_empty() { &Resample::ALL[..] } else { allowed };
+        methods.iter().map(|&method| Entry::new(method, method.label(words))).collect()
     }
 }
 
@@ -319,9 +319,13 @@ pub(super) struct Kit {
     resolutions: Vec<Entry<UnitKind>>,
 }
 
-/// The units the width and height are shown in.
+/// The length units in Canvas Size order.
 const LENGTH_UNITS: [UnitKind; 7] =
     [UnitKind::Pixels, UnitKind::Percent, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
+
+/// Image Size lists Percent first in both dimension menus.
+const IMAGE_LENGTH_UNITS: [UnitKind; 7] =
+    [UnitKind::Percent, UnitKind::Pixels, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
 /// The units the resolution is shown in.
 const RESOLUTION_UNITS: [UnitKind; 2] = [UnitKind::PixelsPerInch, UnitKind::PixelsPerCentimetre];
@@ -335,11 +339,21 @@ enum Dimension {
 }
 
 impl Kit {
+    /// The rows of Image Size.
     pub(super) fn new(ui: &Ui) -> Self {
+        Self::with_length_order(ui, &IMAGE_LENGTH_UNITS)
+    }
+
+    /// The rows of Canvas Size.
+    pub(super) fn for_canvas(ui: &Ui) -> Self {
+        Self::with_length_order(ui, &LENGTH_UNITS)
+    }
+
+    fn with_length_order(ui: &Ui, length_order: &[UnitKind]) -> Self {
         let env = Env::of(ui);
         let units = env.units();
         let entries = |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, units.name(*kind))).collect() };
-        let lengths = entries(&LENGTH_UNITS);
+        let lengths = entries(length_order);
         let mut widths = lengths.clone();
         widths.extend(entries(&[UnitKind::Columns]));
         Kit {
@@ -398,10 +412,11 @@ impl Kit {
         }
     }
 
-    /// The width and height rows, with the chain beside them when the model draws one.
+    /// The width and height rows, with the chain bracketed to them when the model draws one.
     pub(super) fn sides(&self, ui: &mut Ui, size: &mut LinkedSize) {
         let chain = size.has_chain();
-        Row::new().show(ui, |ui, _| {
+        let row = if chain { Row::new().bracket(if size.is_linked() { Bracket::Linked } else { Bracket::Unlinked }) } else { Row::new() };
+        row.show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 self.row(ui, size, Dimension::Width);
                 self.row(ui, size, Dimension::Height);
@@ -451,6 +466,7 @@ impl Kit {
                 .range(range.clone())
                 .unit_label(unit_name.clone())
                 .number_enabled(editable)
+                .sizing(Sizing::Content)
                 .id_salt("field")
                 .show(ui);
             if let Some(number) = shown.edit.value().copied().flatten() {

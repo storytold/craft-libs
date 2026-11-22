@@ -19,6 +19,7 @@ use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::{DocKey, OwnerClass, PartRef};
 use egui::{Context, Id, IdSet, ViewportId};
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -48,6 +49,9 @@ pub struct StopRec {
     #[doc(hidden)]
     pub stop: Stop,
     pub(crate) scope: Option<Id>,
+    /// The component takes its place in its set from its roving group's members of this pass, which the group's owner
+    /// writes into its node at its own report (`group_positions`). Marked at the component's report.
+    pub(crate) group_position: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +154,9 @@ pub(crate) struct State {
     /// Last pass's `docs`: a focus request made between passes resolves against the components that last showed.
     pub(super) last_docs: FastMap<DocKey, Id>,
     pub(super) revealed: Option<StopKey>,
+    /// The stop a request of the running pass named before any pass registered it: it takes the focus when it
+    /// registers later in the pass. A component asks for its own focus from `update`, and its stops register after.
+    pub(super) awaited: Option<StopKey>,
     pub(super) seen: FastMap<Id, u64>,
     /// A scope moved focus to its initial stop in the running pass.
     pub(super) entered: bool,
@@ -205,11 +212,20 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
 
 /// Registers a stop of the running pass in the innermost open scope, in registration order.
 pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
-    with(ctx, |state| {
+    let acts = with(ctx, |state| {
         let scope = state.open.last().map(|(id, _)| *id);
         state.stop_ids.insert(stop.id);
-        state.stops.push(StopRec { stop, scope });
+        let rec = StopRec { stop, scope, group_position: false };
+        let acts = if state.awaited == Some(rec.stop.key()) {
+            state.awaited = None;
+            state.focus_stop(rec.clone())
+        } else {
+            Vec::new()
+        };
+        state.stops.push(rec);
+        acts
     });
+    apply(ctx, acts);
 }
 
 /// Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: a focus stop
@@ -286,15 +302,22 @@ impl Transcript {
     }
 
     /// The transcript as a replay registers it with `outer` the innermost open scope: a record under the scope that
-    /// was open around the run goes under `outer`, and a replayed scope is no new scope (`entering` is false).
+    /// was open around the run goes under `outer`, a replayed scope is no new scope (`entering` is false), and its
+    /// opener is the focus service's, not the run's (`opener`).
     fn placed(&self, outer: Option<Id>) -> Transcript {
         let place = |scope: Option<Id>| if scope == self.outer { outer } else { scope };
         Transcript {
-            stops: self.stops.iter().map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope) }).collect(),
+            stops: self
+                .stops
+                .iter()
+                .map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope), group_position: rec.group_position })
+                .collect(),
             scopes: self
                 .scopes
                 .iter()
-                .map(|(id, scope)| (*id, ScopeRec { parent: place(scope.parent), entering: scope.entering.map(|_| false), ..scope.clone() }))
+                .map(|(id, scope)| {
+                    (*id, ScopeRec { parent: place(scope.parent), entering: scope.entering.map(|_| false), opener: None, ..scope.clone() })
+                })
                 .collect(),
             groups: self.groups.clone(),
             row_sets: self.row_sets.clone(),
@@ -303,10 +326,26 @@ impl Transcript {
     }
 }
 
+impl Transcript {
+    /// The first record in which the replays of `self` and `other` differ (`placed`): the kind, its index and both
+    /// sides, `None` on a side that has fewer records. `None` when they register the same.
+    pub(crate) fn first_difference(&self, other: &Self) -> Option<String> {
+        fn first<T: PartialEq + fmt::Debug>(kind: &str, left: &[T], right: &[T]) -> Option<String> {
+            let index =
+                left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))?;
+            Some(format!("{kind} {index}: left {:?} / right {:?}", left.get(index), right.get(index)))
+        }
+        let [a, b] = [self.placed(None), other.placed(None)];
+        first("stop", &a.stops, &b.stops)
+            .or_else(|| first("scope", &a.scopes, &b.scopes))
+            .or_else(|| first("roving group", &a.groups, &b.groups))
+            .or_else(|| first("row groups", &a.row_sets, &b.row_sets))
+    }
+}
+
 impl PartialEq for Transcript {
     fn eq(&self, other: &Self) -> bool {
-        let [a, b] = [self.placed(None), other.placed(None)];
-        (a.stops, a.scopes, a.groups, a.row_sets) == (b.stops, b.scopes, b.groups, b.row_sets)
+        self.first_difference(other).is_none()
     }
 }
 
@@ -343,9 +382,13 @@ pub(crate) fn transcript(ctx: &Context, mark: Mark) -> Transcript {
 /// as the run would have. A replayed scope is no new scope: it moves no focus when it shows again.
 pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx));
+    let focused = egui_focus::focused(ctx);
     with(ctx, |state| {
         let placed = transcript.placed(state.open.last().map(|(id, _)| *id));
-        for (id, scope) in placed.scopes {
+        for (id, mut scope) in placed.scopes {
+            // A replayed scope keeps the opener the last pass held: an overlay's scope, the one kind that notes an opener,
+            // took it in the pass that first showed the layer, which ran.
+            scope.opener = opener(state, id, None, focused);
             if scope.entering.is_none() {
                 state.seen.insert(id, frame);
             }
@@ -415,12 +458,29 @@ pub(crate) fn register_row_groups(ctx: &Context, owner: Id, rtl: bool, mut ids: 
     with(ctx, |state| state.row_sets.push(RowGroups { owner, rtl, ids }));
 }
 
-/// The place of the component `id`'s own stop among last pass's members of the roving group `group`.
-pub(crate) fn group_position(ctx: &Context, id: Id, group: Id) -> Option<crate::runtime::access::SetPosition> {
+/// Marks the component `id`'s own stop of this pass in the roving group `group` as taking its place in the set from
+/// the group's members (`group_positions`). A component with no such stop this pass keeps the place it reported.
+pub(crate) fn takes_group_position(ctx: &Context, id: Id, group: Id) {
     with(ctx, |state| {
-        let members = || state.last_stops.iter().filter(|rec| rec.stop.group == Some(group) && rec.stop.part.is_none());
-        let index = members().position(|rec| rec.stop.id == id)?;
-        Some(crate::runtime::access::SetPosition::new(index).of(members().count()))
+        if let Some(rec) = state.stops.iter_mut().rev().find(|rec| rec.stop.id == id && rec.stop.part.is_none() && rec.stop.group == Some(group)) {
+            rec.group_position = true;
+        }
+    });
+}
+
+/// The places of the members of the roving group `group` that take theirs from the group (`takes_group_position`),
+/// among this pass's members: the components with their own stop in it, in registration order. The group's owner
+/// asks at its report, after its body's members have run.
+pub(crate) fn group_positions(ctx: &Context, group: Id) -> Vec<(Id, crate::runtime::access::SetPosition)> {
+    with(ctx, |state| {
+        let members: Vec<&StopRec> = state.stops.iter().filter(|rec| rec.stop.group == Some(group) && rec.stop.part.is_none()).collect();
+        let count = members.len();
+        members
+            .iter()
+            .enumerate()
+            .filter(|(_, rec)| rec.group_position)
+            .map(|(index, rec)| (rec.stop.id, crate::runtime::access::SetPosition::new(index).of(count)))
+            .collect()
     })
 }
 
@@ -443,13 +503,23 @@ pub(crate) fn push_scope_from(
     let focused = egui_focus::focused(ctx);
     with(ctx, |state| {
         let parent = state.open.last().map(|(parent, _)| *parent);
-        let opener = noted.or_else(|| focused.and_then(|root| state.focused.get(&root).copied().or(Some((root, None)))));
-        let opener = state.last_scopes.get(&id).map_or(opener, |last| last.opener.or(opener));
+        let opener = opener(state, id, noted, focused);
         state.scopes.insert(id, ScopeRec { policy, parent, label, opener, closing, entering });
         state.scope_order.push(id);
         let first = state.stops.len();
         state.open.push((id, first));
     });
+}
+
+/// The opener of the scope `id` registered in the running pass, by a run or a replay alike: taken once, when the scope
+/// first appears, as the stop `noted` or else the stop of the focused widget `focused`; then kept from the pass before,
+/// with what focus entering it noted there (`note_entry`). It is never taken again from the focus of a later pass,
+/// which may be a stop inside the scope itself.
+fn opener(state: &State, id: Id, noted: Option<StopKey>, focused: Option<Id>) -> Option<StopKey> {
+    match state.last_scopes.get(&id) {
+        Some(last) => last.opener,
+        None => noted.or_else(|| focused.map(|root| state.focused.get(&root).copied().unwrap_or((root, None)))),
+    }
 }
 
 /// The innermost scope open in the running pass: the scope whose body is being shown.
@@ -493,12 +563,17 @@ pub fn takes_letters(keys: &KeyUse) -> bool {
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this
-/// pass, and the stop that held it is remembered for [`give_back_bar`]. Focus already inside the bar leaves the
-/// remembered stop as it is.
+/// pass, and the stop that held it is remembered for [`give_back_bar`]. With nothing focused, that is the window's
+/// document canvas, the key target then: a shortcut pressed on the bar (Space, the canvas's momentary Hand) matches
+/// there and gives the keyboard back to it, as Escape does. Focus already inside the bar leaves the remembered stop
+/// as it is.
 #[doc(hidden)]
 pub fn take_for_bar(ctx: &Context, bar: Id, target: FocusTarget) {
     let held = focused_stop(ctx).filter(|(id, _)| *id != bar);
+    let in_bar = held.is_none() && is_focused(ctx, bar);
     with(ctx, |state| {
+        let canvas = || state.stops.iter().chain(&state.last_stops).find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.key());
+        let held = held.or_else(|| (!in_bar).then(canvas).flatten());
         if held.is_some() || state.bar_return.is_none() {
             state.bar_return = held.map(|held| (bar, held));
         }
@@ -624,6 +699,12 @@ pub(crate) fn request_now(ctx: &Context, target: FocusTarget) {
     apply(ctx, acts);
 }
 
+/// Whether egui key focus is on the widget `root` for another component's stop: an arena member, whose stop's widget
+/// is its root's (`Stop::root`).
+pub(crate) fn held_for_member(ctx: &Context, root: Id) -> bool {
+    egui_focus::focused(ctx) == Some(root) && focused_stop(ctx).is_some_and(|(id, _)| id != root)
+}
+
 /// Whether `at` (screen points) lies in a popup layer opened above the layer of the widget that holds egui focus: a
 /// press or a wheel there is the popup's, not the focused widget's. The layer under `at` is the layer test's; the
 /// focused widget's layer is egui's last-pass record of it, since a stop records no layer of its own.
@@ -666,6 +747,7 @@ pub(crate) fn stop_rec(ctx: &Context, key: StopKey) -> Option<StopRec> {
 /// The registration of the stop focus is on.
 #[doc(hidden)]
 pub fn focused_rec(ctx: &Context) -> Option<StopRec> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Focus);
     let focused = egui_focus::focused(ctx);
     with(ctx, |state| {
         state.focus_now = focused;
@@ -703,7 +785,8 @@ pub(crate) enum FocusOrigin {
     /// it counts as an arrival by key, and a text part selects its whole text so typing replaces it.
     Open,
     /// The focused stop went away and handed focus to its neighbour: neither the keyboard nor a request chose it, so
-    /// it is no arrival by key (a deleted guide selects no other guide).
+    /// it is no arrival by key (a deleted guide selects no other guide) and no scroll owner reveals it (a closed canvas
+    /// text editor does not pan the canvas to the stop before it).
     Removal,
 }
 
@@ -850,6 +933,7 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     };
     let tab_to_egui = input.nav.tab_to_egui;
     let (acts, announcements, host_focus) = with(ctx, |state| {
+        state.awaited = None;
         let host_focus = state.record.host_focus;
         state.tab_to_egui = tab_to_egui;
         let (acts, announcements) = nav::begin(state, input);
@@ -911,6 +995,11 @@ pub(crate) fn scope_chain(ctx: &Context, rec: &StopRec) -> Vec<Id> {
         }
         chain
     })
+}
+
+/// Where key focus is, as the tracked input `Focus` compares it: the focused widget and whether its ring shows.
+pub(crate) fn focus_state(ctx: &Context) -> (Option<Id>, bool) {
+    (egui_focus::focused(ctx), with(ctx, |state| state.visible))
 }
 
 /// Whether focus sits inside a menu and arrived by keyboard.

@@ -52,7 +52,7 @@ pub(crate) struct Own<'a> {
 /// A popup an anchor shows this pass.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PopupShown {
-    /// The popup's layer id: the id of its root node.
+    /// The popup's layer id (its root node is [`layer_root`]'s).
     pub id: Id,
     pub kind: PopupKind,
     pub open: bool,
@@ -257,7 +257,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     let expanded = expanded_of(own.flags, access.expanded.or_else(|| popup.filter(|_| !own.popups_by_part).map(|popup| popup.open)));
     let mut relations = access.relations.clone();
     relations.labelled_by.extend(name.labelled_by.iter().copied());
-    relations.controls.extend(own.popups.iter().filter(|popup| popup.open).map(|popup| popup.id));
+    relations.controls.extend(own.popups.iter().filter(|popup| popup.open).map(|popup| layer_root(popup.id)));
     let numeric = access.numeric.as_ref();
     let mut spec = NodeSpec::new(own.role);
     spec.rect = Some(own.rect);
@@ -419,19 +419,34 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     }
 }
 
-/// The root node of an overlay layer: the layer's content attaches below it, and a modal layer's root is modal. An
-/// exiting layer's root is hidden from the first pass it fades out, so nothing under it is reported while it still
-/// paints; the ids stay the same if the layer reopens.
-pub(crate) fn report_layer(ctx: &Context, id: Id, content: Id, rect: Rect, modal: bool, exiting: bool) {
-    adapter::register_parent(ctx, content, id);
+/// The id of the root node of the overlay layer `id`. The root has an id of its own: the layer's container component
+/// takes the layer's id for its widget and node, inside the layer's content, which attaches below the root.
+pub fn layer_root(id: Id) -> Id {
+    sub(id, "layer")
+}
+
+/// Writes the root node of the overlay layer `id`, whose content takes `rect`, and returns its id. The layer's content
+/// hangs below it. An exiting layer's root is hidden from the first pass it fades out, so nothing under it is reported
+/// while it still paints; the ids stay the same if the layer reopens. Called before the layer's `Area` shows, which
+/// egui hangs below the root. The root is a plain container: a modal layer's flag sits on its container component's
+/// node ([`report_modal`]), which carries the role, since screen readers drop a container without one.
+pub(crate) fn report_layer(ctx: &Context, id: Id, rect: Rect, exiting: bool) -> Id {
+    let root = layer_root(id);
     let mut spec = NodeSpec::layer_root();
     spec.rect = Some(rect);
-    spec.modal = modal;
     spec.hidden = exiting;
-    write_node(ctx, id, &spec);
-    if exiting {
-        // The content `Ui` can attach to the viewport rather than to the root (a popup body that names its own
-        // parent), so it is hidden itself.
-        adapter::hide(ctx, content);
-    }
+    write_node(ctx, root, &spec);
+    root
+}
+
+/// Marks the node of the modal overlay layer `id` modal: the node its container component wrote with the layer's id
+/// and its role. Called after the layer's body ran, so the node exists when the component reported it.
+pub(crate) fn report_modal(ctx: &Context, id: Id) {
+    adapter::set_modal(ctx, id);
+}
+
+/// Hides the node of the content `Ui` of an exiting overlay layer: a popup body that names its own parent can hang
+/// its content outside the layer's root.
+pub(crate) fn hide_exiting_content(ctx: &Context, content: Id) {
+    adapter::hide(ctx, content);
 }

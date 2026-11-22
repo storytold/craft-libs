@@ -27,8 +27,8 @@ pub(crate) struct Fade {
 
 /// The layer whose open veil the components shown here lie under: set by `PaintUi` for the children a faded
 /// component shows while its paint runs, which its veil covers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct UnderVeil(pub Option<Layer>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
+pub(crate) struct UnderVeil(#[memo_props(hash = "an egui layer id is its order and id")] pub Option<Layer>);
 
 impl EnvValue for UnderVeil {
     fn root() -> Self {
@@ -55,7 +55,7 @@ pub(crate) fn fade(ui: &Ui, env: &Env, core: &mut CxCore<'_>) -> Option<Fade> {
 /// filling the clip the paint step set (the component's rect grown by its paint outset) with its surface's corners.
 /// Over the ground the component sits on, each colour under it shows mixed toward that ground by the disabled share.
 /// A range that painted nothing adds no veil; a later range of the same component moves the veil to its own end, so
-/// one veil covers all the component paints. The veil is a shape of the paint list, so a settled region's record,
+/// one veil covers all the component paints. The veil is a shape of the paint list, so a settled view's record,
 /// taken when the region closes, keeps it.
 pub(crate) fn unfade(ui: &Ui, core: &mut CxCore<'_>, fade: Option<Fade>) {
     core.fade = None;

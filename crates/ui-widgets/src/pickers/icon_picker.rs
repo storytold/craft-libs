@@ -3,8 +3,8 @@
 //! The pattern puts a `TextField::search` over a `TileGrid`. The field drives the grid: Up and Down move into the
 //! tiles, Enter picks the active tile, and focus stays in the field. A click on a tile picks it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::PickerWords;
 use crate::contract::{

@@ -4,8 +4,8 @@
 use super::view_words::UndoWords;
 use super::{ListRow, RowEvent};
 use crate::contract::{
-    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Props as _,
-    Role, RowState, SelectMode, Sizing,
+    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, HoverLead,
+    Props as _, Role, RowState, SelectMode, Sizing,
 };
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
@@ -141,7 +141,7 @@ impl<'a> UndoList<'a> {
         UndoList {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click).lead_follows_hover(true),
+            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click).hover_lead(HoverLead::LeadAndSelection),
             selection: None,
         }
         .label(label)

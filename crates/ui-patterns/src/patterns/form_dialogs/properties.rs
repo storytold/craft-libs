@@ -15,8 +15,8 @@ use egui::{Response, Ui};
 use std::borrow::Cow;
 use std::cell::RefCell;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// One row of a properties tab.
 #[derive(Clone, Debug, PartialEq)]

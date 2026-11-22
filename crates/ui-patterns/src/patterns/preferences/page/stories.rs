@@ -1,6 +1,5 @@
 //! Stories of `PreferencesPage`.
 
-use crate::contract::Bind;
 use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, RowKind, RowSpec};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
@@ -70,7 +69,7 @@ impl PreferencesModel for Live {
 /// The page over the story's settings.
 fn page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut live = data.value("live", Live::default()).clone();
-    let shown = PreferencesPage::new(Bind::bound(data.value("state", PreferencesState::default()))).show(ui, &mut live);
+    let shown = PreferencesPage::new(data.bind("state", PreferencesState::default())).show(ui, &mut live);
     *data.value("live", Live::default()) = live;
     shown.into()
 }

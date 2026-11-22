@@ -1,7 +1,7 @@
 //! Stories of `ComboBox`.
 
 use super::ComboBox;
-use crate::contract::{Bind, Entry, Show as _, Validity};
+use crate::contract::{Entry, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::pointer::moved;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -17,20 +17,20 @@ fn options() -> Vec<Entry<String>> {
 #[story(ComboBox<'static>, covers = [Default], drive = Drive::Type("Garamond"))]
 fn combo_box(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
-    ComboBox::new("Font", Bind::bound(data.value("font", "Charter".to_owned())), &options).placeholder("Choose a font").show(ui).edit.into()
+    ComboBox::new("Font", data.bind("font", "Charter".to_owned()), &options).placeholder("Choose a font").show(ui).edit.into()
 }
 
 #[story(ComboBox<'static>, covers = [LongText], drive = Drive::Never)]
 fn combo_box_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
     let long = "A family name that runs far past the room the field has left beside its chevron".to_owned();
-    ComboBox::new("Font", Bind::bound(data.value("long", long)), &options).show(ui).edit.into()
+    ComboBox::new("Font", data.bind("long", long), &options).show(ui).edit.into()
 }
 
 #[story(ComboBox<'static>, covers = [Mixed], drive = Drive::Never)]
 fn combo_box_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
-    ComboBox::new("Font", Bind::bound_mixed(data.value("mixed", Mixed::<String>::Mixed)), &options).show(ui).edit.into()
+    ComboBox::new("Font", data.bind_mixed("mixed", Mixed::<String>::Mixed), &options).show(ui).edit.into()
 }
 
 #[story(ComboBox<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -38,7 +38,7 @@ fn combo_box_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
     let refuse_zapfino =
         |family: &String| if family == "Zapfino" { Validity::Refuse(Message::new("Zapfino is not installed")) } else { Validity::Ok };
-    ComboBox::new("Font", Bind::bound(data.value("invalid", "Zapfino".to_owned())).check(refuse_zapfino), &options).show(ui).edit.into()
+    ComboBox::new("Font", data.bind("invalid", "Zapfino".to_owned()).check(refuse_zapfino), &options).show(ui).edit.into()
 }
 
 /// Focuses the field and opens the list on every option with Alt+Down.
@@ -52,7 +52,7 @@ fn open_list(fixture: &mut Fixture) {
 fn combo_box_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut options = options();
     options.insert(2, Entry::separator());
-    ComboBox::new("Font", Bind::bound(data.value("open", "Charter".to_owned())), &options).show(ui).edit.into()
+    ComboBox::new("Font", data.bind("open", "Charter".to_owned()), &options).show(ui).edit.into()
 }
 
 /// Opens the list and rests the pointer on the Garamond row, which the list previews.
@@ -67,7 +67,7 @@ fn hover_option(fixture: &mut Fixture) {
 #[story(ComboBox<'static>, covers = [Open], drive = Drive::Custom(hover_option))]
 fn combo_box_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
-    let shown = ComboBox::new("Font", Bind::bound(data.value("preview_font", "Charter".to_owned())), &options).show(ui);
+    let shown = ComboBox::new("Font", data.bind("preview_font", "Charter".to_owned()), &options).show(ui);
     // The field keeps "Charter" while the hovered option is previewed. The preview is no edit, so the story says what
     // it shows in its readout, not in its data, which a drive reads as a changed value.
     let output = StoryOutput::from(shown.edit);

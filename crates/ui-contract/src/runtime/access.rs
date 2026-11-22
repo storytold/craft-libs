@@ -22,10 +22,12 @@ pub use crate::runtime::egui::access::bounds;
 #[doc(hidden)]
 pub use emit::SubDecl;
 #[doc(hidden)]
+pub use emit::layer_root;
+#[doc(hidden)]
 pub use emit::report_sub;
 #[doc(hidden)]
 pub use emit::sub_node_id;
-pub(crate) use emit::{FaceFacts, Own, PopupShown, report, report_layer};
+pub(crate) use emit::{FaceFacts, Own, PopupShown, hide_exiting_content, report, report_layer, report_modal};
 pub use live::announce;
 pub(crate) use live::{begin_pass as begin_live_pass, end_pass as end_live_pass};
 pub use scope::{FieldLabel, FieldLabelRole};
@@ -52,12 +54,17 @@ pub(crate) fn hide(ctx: &egui::Context, id: Id) {
     adapter::hide(ctx, id);
 }
 
+/// Writes `position` into the node of `id`, which reported itself in this pass: the place its roving group's owner
+/// gives it among the group's members of the pass.
+pub(crate) fn write_set_position(ctx: &egui::Context, id: Id, position: SetPosition) {
+    adapter::write_set_position(ctx, id, position.index, position.size);
+}
+
 /// Takes the node of `id` out of what assistive technology reports and keeps its children in their place: a
 /// component whose type has a node and that reports none this pass (`Access::role`), with children that have theirs.
 pub(crate) fn pass_through(ctx: &egui::Context, id: Id) {
     adapter::pass_through(ctx, id);
 }
-
 /// Reports `id` as the focused node of this pass.
 pub(crate) fn set_focus(ctx: &egui::Context, id: Id) {
     adapter::set_focus(ctx, id);

@@ -4,7 +4,7 @@
 use super::caption_icons::{CaptionIcon, CaptionIcons};
 use super::words::ShellWords;
 use super::{Caption, CaptionFamily, Captions, SlotSize};
-use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Role, Styled as _, WordSetCx as _};
+use crate::contract::{Access, Common, Component, Cx, MeasureCx, MemoProps, PaintUi, PartsCx, Role, Styled as _, WordSetCx as _};
 use crate::primitives::{Glyph, IconSpec, PaintShape, TextureCache};
 use crate::runtime::access::Name;
 use crate::runtime::env::Label;
@@ -14,9 +14,10 @@ use craft_behavior::{Metrics, PartKey, Sense};
 use craft_theme::{Stateful, States};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, ColorImage, CornerRadius, Painter, Pos2, Rect, Response, Stroke, StrokeKind, Vec2, pos2, vec2};
+use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The button's one part: the whole slot.
 const BUTTON: PartKey = PartKey::new("button");
@@ -231,7 +232,7 @@ pub struct CaptionButtonStyle {
 /// Its window role is exclusive: the Windows hit test answers a press on it as that caption, which is what snap
 /// layouts need.
 #[derive(crate::contract::Component, crate::contract::Props)]
-pub struct CaptionButton<'a> {
+pub struct CaptionButton {
     #[common]
     common: Common,
     caption: Caption,
@@ -248,10 +249,10 @@ pub struct CaptionButton<'a> {
     outermost: Option<CaptionEnd>,
     /// Glyphs from the desktop's icon theme for the round families.
     #[prop]
-    icons: Option<&'a CaptionIcons>,
+    icons: Option<Arc<CaptionIcons>>,
 }
 
-impl CaptionButton<'_> {
+impl CaptionButton {
     /// A button for `caption` in the look of `family`.
     pub fn new(caption: Caption, family: CaptionFamily) -> Self {
         CaptionButton {
@@ -286,7 +287,7 @@ impl CaptionButton<'_> {
     }
 }
 
-impl Component for CaptionButton<'_> {
+impl Component for CaptionButton {
     const ROLE: Role = Role::BUTTON;
     const STOPS: bool = false;
     const SHOWS_LABEL: bool = false;
@@ -378,7 +379,7 @@ impl Component for CaptionButton<'_> {
         } else {
             draw.fill(&PaintShape::Rect(cx.rect, CornerRadius::ZERO), fill);
         }
-        let mark = Mark { face: self.face, caption: self.caption, maximized: self.maximized, icon: self.icon(), icons: self.icons };
+        let mark = Mark { face: self.face, caption: self.caption, maximized: self.maximized, icon: self.icon(), icons: self.icons.clone() };
         let glyph = Rect::from_center_size(center, Vec2::splat(style.glyph.side));
         draw.icon(glyph, &IconSpec::glyph(&mark).color(cx.resolve(&style.glyph.color)));
     }
@@ -389,15 +390,19 @@ impl Component for CaptionButton<'_> {
 }
 
 /// A caption glyph drawn by hand, or from the icon theme where the family allows and the theme has it.
-struct Mark<'a> {
+#[derive(MemoProps)]
+struct Mark {
+    #[memo_props(hash = "a fieldless enum")]
     face: Face,
+    #[memo_props(hash = "a fieldless enum")]
     caption: Caption,
     maximized: bool,
+    #[memo_props(hash = "a fieldless enum")]
     icon: Option<CaptionIcon>,
-    icons: Option<&'a CaptionIcons>,
+    icons: Option<Arc<CaptionIcons>>,
 }
 
-impl Glyph for Mark<'_> {
+impl Glyph for Mark {
     fn paint(&self, painter: &Painter, _: &UiTokens, rect: Rect, color: Color32, _: bool) {
         if self.face == Face::Windows {
             self.windows(painter, rect, color);
@@ -412,7 +417,7 @@ impl Glyph for Mark<'_> {
     }
 }
 
-impl Mark<'_> {
+impl Mark {
     /// The 10 pt line glyphs of the Windows buttons.
     fn windows(&self, painter: &Painter, rect: Rect, color: Color32) {
         let scale = rect.width() / WINDOWS_GLYPH;
@@ -448,7 +453,7 @@ impl Mark<'_> {
 
     /// The theme's glyph as a mask tinted with `color`; `false` when there is none to show.
     fn themed(&self, painter: &Painter, rect: Rect, color: Color32) -> bool {
-        let (Some(icons), Some(icon)) = (self.icons, self.icon) else { return false };
+        let (Some(icons), Some(icon)) = (self.icons.as_deref(), self.icon) else { return false };
         let ppp = painter.pixels_per_point();
         let px = (rect.width() * ppp).round() as u32;
         let Some(mask) = icons.mask(icon, px) else { return false };

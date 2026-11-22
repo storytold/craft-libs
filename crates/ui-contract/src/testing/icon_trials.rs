@@ -111,6 +111,36 @@ fn texel(image: &ColorImage, x: usize, y: usize) -> Color32 {
     image.pixels[y * 24 + x]
 }
 
+/// On a strong fill or scrim (the surface's ink is `OnDark`: a brand rail) the accent parts paint in the icon's own
+/// colour, since `accent.solid` would vanish on the brand fill; the fixed parts stay as drawn, and on a panel the
+/// accent parts keep the accent ink.
+#[trial]
+fn an_accent_part_on_a_dark_surface_paints_in_the_icons_ink() {
+    register_app_icons(&LAYERED_SET);
+    let tokens = style::tokens(Mode::Light, Contrast::Standard);
+    let rect = Rect::from_min_max(pos2(10.0, 10.0), pos2(34.0, 34.0));
+    let mut frames = Frames::new();
+    let mut tints = |surface: Ink, spec_ink: Option<Ink>| {
+        let on = ink_color(&tokens, Ink::OnDark);
+        let mut spec = IconSpec::svg(IconId::from(std::borrow::Cow::Borrowed(LAYERED_NAME))).color(StyleColor(on));
+        if let Some(ink) = spec_ink {
+            spec = spec.ink(ink);
+        }
+        let record = RefCell::new(PaintRecord::default());
+        let shapes = frames.frame_shapes(|ui| {
+            let env = DrawEnv { tokens: &tokens, direction: Direction::Ltr, ink: surface };
+            Draw::new(ui.painter(), &record, env).icon(rect, &spec);
+        });
+        textured(&shapes).into_iter().map(|(_, tint)| tint).collect::<Vec<_>>()
+    };
+    let on = ink_color(&tokens, Ink::OnDark);
+    // design: allow[raw-colour/const](a fixed layer keeps the colours it is drawn in: the trial expects the white tint that leaves them unchanged)
+    let fixed = Color32::WHITE;
+    assert_eq!(tints(Ink::OnDark, None), [on, on, fixed], "on a brand rail the accent parts read in the icon's ink");
+    assert_eq!(tints(Ink::OnPanel, Some(Ink::OnDark)), [on, on, fixed], "an icon that asks for the on-dark ink does the same");
+    assert_eq!(tints(Ink::OnPanel, None), [on, rgba_color(tokens.color.accent.solid), fixed], "on a panel the accent ink is kept");
+}
+
 #[trial]
 fn an_accent_part_paints_in_the_accent_ink_a_fixed_part_as_drawn_and_both_take_the_disabled_ink_when_disabled() {
     register_app_icons(&LAYERED_SET);

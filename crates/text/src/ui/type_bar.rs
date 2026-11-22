@@ -29,8 +29,8 @@ use crate::ui::type_options::{TextAntiAlias, TextOrientation, TypeOptionWords};
 #[cfg(feature = "font-picker")]
 use crate::ui::character::FontPickerSource;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The type bar's tooltips, English by default (PhotoCraft's). Family, alignment and direction names are

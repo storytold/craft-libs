@@ -72,10 +72,10 @@ impl<'a> PathField<'a> {
             let before = held.read(cx).unwrap_or_default();
             let looks = must_exist && cx.env.shell().caps.contains(Caps::FILE_SYSTEM);
             let not_found = words.not_found.clone();
-            let check = move |path: &String| {
-                if looks && path_is_missing(path) { Validity::Warn(Message::new(not_found.clone())) } else { Validity::Ok }
-            };
-            let row = PathRow::new(label.clone(), Bind::given(before.clone()).check(check)).pick(request.clone()).show(ui);
+            let value = Bind::given(before.clone()).check_with((looks, not_found), |(looks, not_found), path| {
+                if *looks && path_is_missing(path) { Validity::Warn(Message::new(not_found.clone())) } else { Validity::Ok }
+            });
+            let row = PathRow::new(label.clone(), value).pick(request.clone()).show(ui);
             browsing = row.browsing;
             let answered = row.picked;
             let typed = row

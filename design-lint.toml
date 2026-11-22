@@ -7,3 +7,8 @@ deny-unused = true
 path = "crates/ui-panels/src/docking/iconic/trials.rs"
 rules = ["literal-size"]
 reason = "trial rooms, not looks"
+
+[[exempt]]
+path = "crates/ui-panels/src/rails/tool/trials.rs"
+rules = ["literal-size"]
+reason = "trial rooms, not looks"

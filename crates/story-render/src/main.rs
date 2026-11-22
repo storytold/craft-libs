@@ -137,7 +137,7 @@ fn options() -> Result<Options, String> {
 /// What a job renders.
 enum Shown {
     /// One story in a card's story body.
-    Story(&'static StoryRegistration),
+    Story(Box<StoryRegistration>),
     /// The Overview card of one story group, which the card's frames show.
     Card(Arc<Spec>),
 }
@@ -202,7 +202,7 @@ fn jobs(options: &Options) -> Vec<Job> {
                 name: component.name.clone(),
                 level: entry.level.title(),
                 crate_name: story.registration.crate_name,
-                shown: Shown::Story(story.registration),
+                shown: Shown::Story(Box::new(story.registration)),
                 surface: entry.surface,
                 story: story.registration.story.name.to_owned(),
                 title: story.registration.story.caption(&component.name),
@@ -265,7 +265,7 @@ fn settle(fixture: &mut Fixture) {
 /// The story in a card's body, with its dialog open when the card holds one behind its button, under the command
 /// states the gallery gives it. A story that shows an open popup ([`Required::Open`]) is shown after its own drive,
 /// which opens it, as the suite runs it: the fixture, and the rect the story showed in.
-fn story(registration: &'static StoryRegistration, surface: Surface, env: &RootEnv, options: &Options) -> (Fixture, Option<Rect>) {
+fn story(registration: StoryRegistration, surface: Surface, env: &RootEnv, options: &Options) -> (Fixture, Option<Rect>) {
     let body = StoryBody::new("sheet", registration, surface, options.room, Pad::Regular);
     let state = Rc::new(RefCell::new(CardState::default()));
     let flow = Rc::new(Cell::new(None));
@@ -318,7 +318,7 @@ fn card(spec: &Arc<Spec>, env: &RootEnv, options: &Options) -> (Fixture, Option<
     });
     settle(&mut fixture);
     let mut opened = false;
-    for state in cells.borrow_mut().values_mut().filter(|state| state.dialog.hidden) {
+    for state in cells.borrow_mut().states_mut().filter(|state| state.dialog.hidden) {
         state.show_dialog();
         opened = true;
     }
@@ -332,7 +332,7 @@ fn card(spec: &Arc<Spec>, env: &RootEnv, options: &Options) -> (Fixture, Option<
 fn render(job: &Job, renderer: &mut Renderer, env: &RootEnv, options: &Options) -> Result<RgbaImage, String> {
     let (mut fixture, shown, dialog) = match &job.shown {
         Shown::Story(registration) => {
-            let (fixture, shown) = story(registration, job.surface, env, options);
+            let (fixture, shown) = story(**registration, job.surface, env, options);
             (fixture, shown, false)
         }
         Shown::Card(spec) => card(spec, env, options),

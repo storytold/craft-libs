@@ -221,6 +221,8 @@ craft-gpu-wgpu = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
+craft-audio-dsp = { workspace = true, optional = true }
+craft-sbs = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -266,6 +268,28 @@ screen-testing = [
     "craft-theme-store?/screen-testing",
     "craft-timeline?/screen-testing",
     "craft-update?/screen-testing",
+]
+suite = [
+    "screen-testing",
+    "craft-ui/suite",
+    "craft-automation?/suite",
+    "craft-browse?/suite",
+    "craft-color-ui?/suite",
+    "craft-dialogs?/suite",
+    "craft-draw?/suite",
+    "craft-font-manager?/suite",
+    "craft-imaging?/suite",
+    "craft-layers?/suite",
+    "craft-menu?/suite",
+    "craft-pages?/suite",
+    "craft-print?/suite",
+    "craft-review?/suite",
+    "craft-table?/suite",
+    "craft-text?/suite",
+    "craft-theme-editor?/suite",
+    "craft-theme-store?/suite",
+    "craft-timeline?/suite",
+    "craft-update?/suite",
 ]
 aaf = ["dep:craft-aaf"]
 
@@ -324,6 +348,8 @@ audio-symphonia = ["audio", "craft-audio/symphonia"]
 audio-vmd-decode = ["audio", "craft-audio/vmd-decode"]
 audio-vorbis-decode = ["audio", "craft-audio/vorbis-decode"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
+
+audio-dsp = ["dep:craft-audio-dsp"]
 
 automation = ["dep:craft-automation", "keymap"]
 automation-agents = ["automation", "craft-automation/agents"]
@@ -747,6 +773,8 @@ rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
 
+sbs = ["dep:craft-sbs"]
+
 score = ["dep:craft-score"]
 
 scraft-format = ["dep:craft-scraft-format"]
@@ -882,6 +910,7 @@ timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
 tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]

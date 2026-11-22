@@ -107,8 +107,8 @@ pub struct Words {
     generation: u64,
 }
 
-/// A generation no `Words` built before has; English (the default) is 0.
-fn next_generation() -> u64 {
+/// A generation no `Words`, `Format` or `DateFormat` built before has; English (the default) is 0.
+pub(crate) fn next_generation() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

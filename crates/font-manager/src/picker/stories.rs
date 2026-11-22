@@ -212,23 +212,23 @@ fn font_picker_plain_missing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FontPicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn font_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let catalog = catalog();
-    FontPicker::new("Font family", Bind::bound_mixed(data.value("family", Mixed::<String>::Mixed)), &catalog).show(ui).into()
+    FontPicker::new("Font family", data.bind_mixed("family", Mixed::<String>::Mixed), &catalog).show(ui).into()
 }
 
 /// A family the catalog does not hold, which the check refuses.
 #[story(FontPicker<'static>, covers = [Invalid], drive = Drive::Never)]
 fn font_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let catalog = catalog();
-    let known = catalog.clone();
-    let check = move |family: &String| {
-        if known.styles(family).is_empty() { Validity::Refuse(Message::new("No such font is installed")) } else { Validity::Ok }
-    };
-    FontPicker::new("Font family", Bind::bound(data.value("family", "Gotham".to_owned())).check(check), &catalog).show(ui).into()
+    // The story's catalog is built once for the process, so the check reads it rather than taking it as an input.
+    let family = data.bind("family", "Gotham".to_owned()).check(|family| {
+        if self::catalog().styles(family).is_empty() { Validity::Refuse(Message::new("No such font is installed")) } else { Validity::Ok }
+    });
+    FontPicker::new("Font family", family, &catalog).show(ui).into()
 }
 
 /// A family name far longer than the field.
 #[story(FontPicker<'static>, covers = [LongText], drive = Drive::Never)]
 fn font_picker_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let catalog = catalog();
-    FontPicker::new("Font family", Bind::bound(data.value("family", LONG_FAMILY.to_owned())), &catalog).show(ui).into()
+    FontPicker::new("Font family", data.bind("family", LONG_FAMILY.to_owned()), &catalog).show(ui).into()
 }

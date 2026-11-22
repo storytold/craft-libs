@@ -32,7 +32,10 @@ fn docked() -> Layout<u32> {
         DockEdge::End,
         vec![Column::new(vec![g(&[2, 3], 1), g(&[4], 0)]).with_width(180.0), Column::new(vec![g(&[5], 0)]).with_width(120.0)],
     );
-    Layout::new(Some(hsplit(SplitSize::FixedSecond(300.0), middle, dock)), vec![Floating::stack(vec![g(&[6, 7], 1), g(&[8], 0)], WINDOW).unwrap()])
+    Layout::new(
+        Some(hsplit(SplitSize::FixedSecond(300.0), middle, dock)),
+        vec![Floating::stack(100, vec![g(&[6, 7], 1), g(&[8], 0)], WINDOW).unwrap()],
+    )
 }
 
 fn with_column(column: Column<u32>) -> Layout<u32> {
@@ -165,7 +168,7 @@ fn without(skip: Option<u32>) -> Layout<u32> {
     let windows: Vec<Group<u32>> = [group(&[6], 0), tall].into_iter().flatten().collect();
     Layout::new(
         Some(hsplit(SplitSize::FixedSecond(300.0), tabs(&[1], 0), end)),
-        vec![Floating::stack(windows, area(10.0, 10.0, 200.0, 300.0)).unwrap()],
+        vec![Floating::stack(101, windows, area(10.0, 10.0, 200.0, 300.0)).unwrap()],
     )
 }
 
@@ -203,7 +206,7 @@ fn a_layout_saved_with_the_physical_names_loads_and_writes_back_in_reading_order
             tabs(&[1, 2], 1),
             Node::dock(DockEdge::End, vec![Column::new(vec![g(&[3], 0)]).with_width(180.0)]),
         )),
-        vec![Floating::single(vec![4], 0, area(1.0, 2.0, 300.0, 200.0)).with_id(5)],
+        vec![Floating::single(5, vec![4], 0, area(1.0, 2.0, 300.0, 200.0))],
     );
     assert_eq!(layout, expected);
     let written = serde_json::to_value(&layout).unwrap();

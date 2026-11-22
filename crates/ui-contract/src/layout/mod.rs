@@ -24,7 +24,8 @@ pub use body::place_in_flow;
 #[cfg(feature = "testing")]
 pub(crate) use body::run_body;
 pub(crate) use body::{
-    InFlow, close_first_line, counting_fills, fill_share, fill_size, flow_fill_room, flow_region, flow_room, grid_cell, in_grid_content_column,
-    leaf_fill_room, members_line, open_first_lines, place_in_cell, report_held, report_least, report_shrink, row_alone_room, run_body_measured,
-    shares_y, shrink_cap, take_in_flow, view_room,
+    BodyLine, BracketTook, HeldKind, InFlow, at_flow_start, close_first_line, close_flow_start_in, counting_fills, fill_share, fill_size,
+    flow_fill_room, flow_region, flow_room, flow_start, grid_cell, held_kind, in_grid_content_column, leaf_fill_room, members_line, open_first_lines,
+    place_in_cell, report_bracket_control, report_held, report_least, report_shrink, row_alone_room, run_body_measured, shares_y, shrink_cap,
+    take_bracket, take_cell, take_in_flow, view_room,
 };

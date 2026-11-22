@@ -1148,3 +1148,91 @@ fn a_row_dragged_to_the_edge_scrolls_the_list_and_rests_without_frames() {
     assert!(!fixture.repaint_requested(), "a drag held over the middle rows asks for no frame");
     fixture.release_at(Pos2::new(grab.x, list.center().y));
 }
+
+/// Auto rows place by their measure in the first frame. In a column sized from its content along the height, where
+/// each pass runs the list's measuring run and its real run, the first frame runs once, measures each row once, builds each row at most
+/// twice, and places the rows and the list where the settled list has them. A click that selects a row and a rename
+/// request change a state the row's size reads after the pass measured it: the frame shows the row, and the list
+/// around it, at the new size.
+#[trial]
+fn auto_rows_are_measured_once_per_pass_and_a_restated_row_takes_its_new_size_in_the_same_frame() {
+    use craft_ui::contract::{ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Stack;
+    use craft_ui::list::ThumbSize;
+    use craft_ui::testing::pointer::{moved, press, release};
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            let keys = [0_usize, 1, 2];
+            let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+            List::new("Artboards").id(list_id()).rename(true).show_items(ui, &source, &mut |key, icx| {
+                let size = if icx.row.selected || icx.row.renaming { ThumbSize::Large } else { ThumbSize::Medium };
+                ListRow::new(NAMES[*key]).thumb(size, |_, _| {})
+            });
+        });
+    });
+    fixture.room(Vec2::new(300.0, 400.0));
+    let list = |fixture: &Fixture| fixture.by_label("Artboards").expect("the list's node").rect;
+    let row = |fixture: &Fixture, at: usize| fixture.by_label(NAMES[at]).expect("the row's node").rect;
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let runs = craft_ui::testing::last_pass_runs(fixture.ctx());
+    assert!(runs.iter().any(|(name, count)| name.contains("::List<") && *count >= 2), "the list has a measuring run and a real run: {runs:?}");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == NAMES.len() && measures.iter().all(|(_, count)| *count == 1), "each row is measured once: {measures:?}");
+    let builds = craft_ui::testing::row_builds(fixture.ctx());
+    assert!(builds.len() == NAMES.len() && builds.iter().all(|(_, count)| *count <= 2), "each row is built at most twice: {builds:?}");
+    let first = (list(&fixture), [row(&fixture, 0), row(&fixture, 1), row(&fixture, 2)]);
+    fixture.idle(3);
+    let settled = (list(&fixture), [row(&fixture, 0), row(&fixture, 1), row(&fixture, 2)]);
+    assert_eq!(first, settled, "the first frame places the rows and the list as the settled list does");
+
+    let at = settled.1[1].center();
+    fixture.frame(vec![moved(at)]);
+    fixture.frame(vec![press(at), release(at)]);
+    let clicked = (list(&fixture), row(&fixture, 1));
+    assert!(clicked.1.height() > settled.1[1].height(), "the selected row takes its taller size in the frame of the click");
+    fixture.idle(2);
+    assert_eq!(clicked, (list(&fixture), row(&fixture, 1)), "the frame of the click shows the list and the row at their settled sizes");
+
+    let below = row(&fixture, 1).top();
+    request_rename(fixture.ctx(), list_id(), &0_usize);
+    fixture.idle(1);
+    let renamed = (list(&fixture), row(&fixture, 1).top());
+    assert!(renamed.1 > below, "the renaming row takes its taller size in the frame the rename starts");
+    fixture.idle(2);
+    assert_eq!(renamed, (list(&fixture), row(&fixture, 1).top()), "the frame the rename starts shows the list and the rows settled");
+}
+
+/// PageDown on a segmented control in a row of a capped list, whose own roving group leaves the key untaken, pages the
+/// list's rows: the list is the scroll owner of its rows, and the move comes to it.
+#[trial]
+fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
+    use craft_ui::choice::Segmented;
+    use craft_ui::contract::{Bind, Entry, Sizing};
+    use craft_ui::testing::focus::AccessActionKind;
+    use egui::{Key, Modifiers};
+    const ROWS: usize = 40;
+    let list_id = Id::NULL.with("paged-rows");
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..ROWS).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let sizes: Vec<Vec<Entry<u8>>> =
+            keys.iter().map(|key| vec![Entry::new(1, format!("Small {key}")), Entry::new(2, format!("Large {key}"))]).collect();
+        let list = List::new("Layers").id(list_id).sizing(Sizing::Content).max_rows(6);
+        list.show_items(ui, &source, &mut |key, _| {
+            let size = Segmented::new(format!("Size {key}"), Bind::given(1_u8), &sizes[*key]);
+            ListRow::new(format!("Layer {key}")).trailing_field(size, |_| {})
+        });
+    });
+    fixture.room(Vec2::new(400.0, 400.0)).settle();
+    let in_view = |fixture: &Fixture, name: &str| {
+        let list = fixture.node_of(list_id).expect("the list's node").rect;
+        fixture.by_label(name).is_some_and(|row| list.expand(0.5).contains_rect(row.rect))
+    };
+    assert!(in_view(&fixture, "Layer 0") && !in_view(&fixture, "Layer 8"), "the list starts at its first rows");
+    let segment = fixture.by_label("Small 0").expect("the first row's segment");
+    fixture.access(AccessActionKind::Focus, &segment).settle();
+    assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), segment.node, "the first row's segment took the focus");
+    fixture.key(Key::PageDown, Modifiers::NONE).settle();
+    assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
+}

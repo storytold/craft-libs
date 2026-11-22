@@ -35,8 +35,21 @@ pub struct Opening {
 /// them over the dock's window this pass (the rule the group's mount falls back to a layer by) and reports where they
 /// are, and every panel allows it.
 pub(crate) fn allowed(ctx: &Context, config: &DockConfig, specs: &[PanelSpec]) -> bool {
+    opens_os_windows(ctx, config) && specs.iter().all(|spec| spec.allow_native)
+}
+
+/// Whether the dock opens its floating windows in OS windows: `config` asks for them, and the window host opens OS
+/// windows and reports where they are. A panel may still keep to the app window (`PanelSpec::allow_native`).
+#[doc(hidden)]
+pub fn opens_os_windows(ctx: &Context, config: &DockConfig) -> bool {
     let host = WindowHost::of(ctx);
-    config.native_windows && host.opens_windows() && host.positions_reported() && specs.iter().all(|spec| spec.allow_native)
+    config.native_windows && host.opens_windows() && host.positions_reported()
+}
+
+/// The display scale the OS window `viewport` lays out at: its monitor's scale with the app's zoom, as the window
+/// reported it (`WindowHost::facts`). `None` before it reported one.
+pub fn pixels_per_point(ctx: &Context, viewport: ViewportId) -> Option<f32> {
+    WindowHost::of(ctx).facts(viewport)?.scale.map(|scale| scale * ctx.zoom_factor())
 }
 
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool

@@ -1,15 +1,14 @@
 //! [`PatternFillDialog`].
 
-use super::editor::{ANGLE_RANGE, SwatchPainter};
+use super::editor::ANGLE_RANGE;
 use super::{PatternColors, PatternFillEditor, PatternFillOptions, PatternSwatch, PatternWords};
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::form_dialogs::FormDialog;
-use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Env;
-use egui::{Rect, Ui};
+use egui::Ui;
 use serde_json::{Value, json};
 
 /// Photoshop's Pattern Fill dialog (Layer, New Fill Layer, Pattern...; a Pattern Fill layer's thumbnail; Layer Content
@@ -25,7 +24,6 @@ pub struct PatternFillDialog {
     initial: PatternFillOptions,
     current: PatternFillOptions,
     swatches: Vec<PatternSwatch>,
-    thumbnails: Option<SwatchPainter>,
     changed: bool,
     canvas: Option<egui::Id>,
     /// Whether the dialog is open: bound to the form's open state, so the host's dialog closes with it.
@@ -40,18 +38,10 @@ impl PatternFillDialog {
             initial: options.clone(),
             current: options,
             swatches,
-            thumbnails: None,
             changed: false,
             canvas: None,
             open: true,
         }
-    }
-
-    /// Paints a swatch's tile (see [`PatternFillEditor::thumbnails`]).
-    #[must_use]
-    pub fn thumbnails(mut self, paint: impl Fn(&ContentPainterCx<'_>, Rect, &PatternSwatch) + Send + Sync + 'static) -> Self {
-        self.thumbnails = Some(SwatchPainter::new(paint));
-        self
     }
 
     /// The canvas whose primary drag moves the pattern while Link with Layer is on: the body passes
@@ -148,7 +138,7 @@ impl StackDialog for PatternFillDialog {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<PatternFillOptions>> {
         let words = Env::of(ui).words::<PatternWords>();
-        let PatternFillDialog { current, swatches, thumbnails, changed, canvas, open, .. } = self;
+        let PatternFillDialog { current, swatches, changed, canvas, open, .. } = self;
         let before = current.clone();
         let form = FormDialog::new(words.title.clone(), Bind::bound(&mut *current)).opened(Bind::bound(open));
         let shown = form.show(ui, |ui, _, value| {
@@ -159,11 +149,7 @@ impl StackDialog for PatternFillDialog {
                 if let (Some(canvas), true) = (*canvas, link) {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
-                let mut editor = PatternFillEditor::new(words.pattern.clone(), Bind::bound(&mut *value), swatches);
-                if let Some(painter) = thumbnails.clone() {
-                    editor = editor.thumbnails(move |cx, rect, swatch| painter.paint(cx, rect, swatch));
-                }
-                editor.show(ui);
+                PatternFillEditor::new(words.pattern.clone(), Bind::bound(&mut *value), swatches).show(ui);
             });
             true
         });

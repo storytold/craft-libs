@@ -165,7 +165,7 @@ pub fn easing_view(ctx: &Context, canvas: Id) -> Option<CanvasView> {
 /// tool host for a tool's view, the Navigator for a preview zoom. The canvas applies it in its next pass.
 pub(crate) fn steer(ctx: &Context, canvas: Id, steer: Steer) {
     with_session(ctx, ViewMotion::id(canvas), |slot: &mut ViewMotion| slot.steer = Some(steer));
-    frame::request_own_repaint(ctx);
+    frame::request_repaint(ctx);
 }
 
 /// The Zoom tool's press held still: past [`DELAY`](Self::DELAY) it zooms in continuously about the press point (out

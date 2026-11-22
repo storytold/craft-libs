@@ -4,16 +4,20 @@
 extern crate craft_ui_shell as craft_ui;
 
 pub(crate) mod body;
-mod commands;
-mod contract;
-mod dialog;
-mod measure;
-mod notices;
+pub(crate) mod commands;
+pub(crate) mod contract;
+pub(crate) mod dialog;
+pub(crate) mod measure;
+pub(crate) mod notices;
 
-mod shell;
+pub(crate) mod shell;
 
-use craft_ui::testing::registered;
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registered());
+    craft_ui::testing::run(
+        module_path!(),
+        env!("CARGO_PKG_NAME"),
+        &craft_ui::testing::Registry::of(&[register, craft_ui::testing::register, craft_ui_test_kit::testing::register]),
+    );
 }

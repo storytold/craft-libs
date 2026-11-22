@@ -31,22 +31,22 @@ workspace = true
 [dependencies]
 craft-ui-gallery = { path = "../ui-gallery", default-features = false }
 # The gallery's optional domain crates, with the gallery's features (`cl doctor` checks that the lists match).
-craft-automation = { workspace = true, features = ["screen-testing"] }
-craft-browse = { workspace = true, features = ["screen-testing"] }
-craft-color-ui = { workspace = true, features = ["screen-testing"] }
-craft-draw = { workspace = true, features = ["screen-testing"] }
-craft-imaging = { workspace = true, features = ["screen-testing"] }
-craft-layers = { workspace = true, features = ["screen-testing"] }
-craft-menu = { workspace = true, features = ["screen-testing"] }
-craft-pages = { workspace = true, features = ["screen-testing"] }
-craft-print = { workspace = true, features = ["screen-testing"] }
-craft-review = { workspace = true, features = ["screen-testing"] }
-craft-table = { workspace = true, features = ["screen-testing"] }
-craft-text = { workspace = true, features = ["screen-testing", "find"] }
-craft-theme-store = { workspace = true, features = ["screen-testing"] }
-craft-timeline = { workspace = true, features = ["screen-testing", "xml", "otio"] }
+craft-automation = { workspace = true, features = ["suite"] }
+craft-browse = { workspace = true, features = ["suite"] }
+craft-color-ui = { workspace = true, features = ["suite"] }
+craft-draw = { workspace = true, features = ["suite"] }
+craft-imaging = { workspace = true, features = ["suite"] }
+craft-layers = { workspace = true, features = ["suite"] }
+craft-menu = { workspace = true, features = ["suite"] }
+craft-pages = { workspace = true, features = ["suite"] }
+craft-print = { workspace = true, features = ["suite"] }
+craft-review = { workspace = true, features = ["suite"] }
+craft-table = { workspace = true, features = ["suite"] }
+craft-text = { workspace = true, features = ["suite", "find"] }
+craft-theme-store = { workspace = true, features = ["suite"] }
+craft-timeline = { workspace = true, features = ["suite", "xml", "otio"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-dialogs = { workspace = true, features = ["screen-testing"] }
-craft-font-manager = { workspace = true, features = ["screen-testing"] }
-craft-update = { workspace = true, features = ["screen-testing"] }
+craft-dialogs = { workspace = true, features = ["suite"] }
+craft-font-manager = { workspace = true, features = ["suite"] }
+craft-update = { workspace = true, features = ["suite"] }

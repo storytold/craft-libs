@@ -1,7 +1,8 @@
 //! The Keyboard Shortcuts dialog, driven pass by pass through `craft_ui::testing::Fixture`.
 mod fixture;
-mod import_offer;
-mod lists;
-mod recorder;
-mod rows;
-mod sets;
+pub(crate) mod import_offer;
+pub(crate) mod lists;
+pub(crate) mod recorder;
+pub(crate) mod rows;
+pub(crate) mod sets;
+pub(crate) mod tabs;

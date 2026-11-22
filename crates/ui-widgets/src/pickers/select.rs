@@ -31,8 +31,8 @@ use craft_theme::{Stateful, States};
 use egui::{Rect, Ui, Vec2};
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The part that shows the face over the whole field and opens the list on a click.
 const FACE: PartKey = PartKey::new("face");

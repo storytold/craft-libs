@@ -20,8 +20,8 @@ use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, Pres
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The role of a tab in its strip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

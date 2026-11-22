@@ -136,6 +136,11 @@ impl<'a> StyleCx<'a> {
         self.tokens.density()
     }
 
+    /// The component set of the scope, for a component that maps it to one of its named variants.
+    pub fn set(&self) -> craft_theme::ComponentSet {
+        self.env::<craft_theme::ComponentSet>()
+    }
+
     /// A style context for the scope the pipeline or an app colour hook runs in.
     #[expect(clippy::too_many_arguments, reason = "one argument per input the style cache key covers")]
     #[doc(hidden)]

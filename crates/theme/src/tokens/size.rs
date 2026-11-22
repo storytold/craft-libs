@@ -202,8 +202,6 @@ pub struct SizeTokens {
     pub panel_header: f32,
     /// Least width of a popup surface: a menu or a popup list.
     pub popup_min: f32,
-    /// The length of the fade at an edge of a scroll region past which its content continues.
-    pub scroll_fade: f32,
     /// Thumbnail sides.
     pub thumb: ThumbSizes,
     /// Canvas drag handles.
@@ -233,41 +231,8 @@ pub struct SizeTokens {
     pub pane: PaneSizes,
     /// The docks' columns.
     pub dock: DockColumnSizes,
-    /// Notice cards: toasts.
-    pub notice: NoticeSizes,
     /// Dialogs: their content width and their buttons.
     pub dialog: DialogSizes,
-    /// The rulers of a canvas.
-    pub ruler: RulerSizes,
-    /// The stage a story draws on.
-    pub story: StorySizes,
-}
-
-/// The stage a story draws on, in logical pixels: a story of a canvas control, and each column of a story grid.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct StorySizes {
-    /// The height of the stage a story of a canvas control shows its canvas on.
-    pub height: f32,
-    /// The least width of a story: of that stage, and of a column of a story grid.
-    pub width_min: f32,
-    /// The greatest width of that stage.
-    pub width_max: f32,
-}
-
-/// The sizes of a canvas ruler, in logical pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct RulerSizes {
-    /// The tick marks.
-    pub tick: RulerTickSizes,
-}
-
-/// The lengths of a ruler's tick marks, in logical pixels. The major tick spans the ruler's depth.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct RulerTickSizes {
-    /// The tick halfway between two labelled ticks.
-    pub mid: f32,
-    /// The tick between two other ticks.
-    pub minor: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.
@@ -284,13 +249,6 @@ pub struct PaneSizes {
 pub struct DockColumnSizes {
     /// The width an expanded column has until the user resizes it.
     pub column: f32,
-}
-
-/// The sizes of a notice card, in logical pixels.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct NoticeSizes {
-    /// The width every card of a toast stack has where the room allows.
-    pub width: f32,
 }
 
 /// The sizes of a dialog, in logical pixels.

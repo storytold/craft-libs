@@ -1,8 +1,8 @@
 //! The panel's model, what the host calls, and the view: the tabs and search across the top, the filters at the
 //! reading start, the family cards, the details sheet and the download consent.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::HashMap;
 use std::sync::Arc;

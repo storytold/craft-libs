@@ -70,6 +70,9 @@ pub(super) struct Rules {
     pub image: bool,
     pub auto_center: bool,
     pub fills_uncovered: bool,
+    /// An edge or corner drag may take the frame past `bounds`: the crop grows the canvas there, as in the reference
+    /// application (a document crop, not one bounded by a placed picture's source).
+    pub resize_grows: bool,
     /// The canvas's snapping, with this pass's tolerance.
     pub snap: Option<Snap>,
     pub os: Platform,
@@ -89,6 +92,7 @@ impl Rules {
     /// as it was (a draw not yet sized) or cannot be kept inside.
     pub fn proposal(&self, drag: &mut Drag, to: Point, mods: Mods, space: bool) -> Option<CropBox> {
         let at = drag.at_press;
+        let mut grows = false;
         let (next, resizing, held) = match &mut drag.kind {
             Kind::Draw { anchor, cur, last } => {
                 if space {
@@ -115,6 +119,7 @@ impl Rules {
                 } else {
                     at.resized(*part, by, hold, mods.alt)
                 };
+                grows = self.resize_grows;
                 (next, true, self.ratio.is_some() || mods.shift)
             }
             Kind::Turn { grab } => {
@@ -137,7 +142,7 @@ impl Rules {
         if !next.is_finite() {
             return None;
         }
-        match self.bounds {
+        match self.bounds.filter(|_| !grows) {
             Some(bounds) => next.within(bounds, resizing, held).or(Some(drag.last)),
             None => Some(next),
         }

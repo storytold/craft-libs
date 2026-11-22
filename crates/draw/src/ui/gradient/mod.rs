@@ -8,19 +8,19 @@
 //! there.
 
 mod fill;
-mod fill_editor;
+pub(crate) mod fill_editor;
 pub mod gradient_line;
 pub mod gradient_overlay;
 pub mod map;
-mod palette;
-mod swatch;
-mod tile;
+pub(crate) mod palette;
+pub(crate) mod swatch;
+pub(crate) mod tile;
 
 pub use fill::{GradientFill, GradientStyle};
 pub use fill_editor::{GradientFillEditor, GradientFillEditorOutput, GradientFillWords};
 pub use gradient_line::{GradientLine, LineGradient, LinePart};
 pub use gradient_overlay::{GradientLineWords, GradientOverlay, GradientOverlayOutput, GradientOverlayStyle};
 pub use map::{GradientMap, GradientMapEditor, GradientMapOutput};
-pub use palette::{GradientGroup, GradientItem, GradientPalette, GradientPaletteOutput, GradientRef};
+pub use palette::{GradientGroup, GradientItem, GradientPalette, GradientPaletteOutput, GradientRef, RampSampler};
 pub use swatch::{GradientSwatch, GradientSwatchOutput};
 pub use tile::{FocusOutline, GradientTile};

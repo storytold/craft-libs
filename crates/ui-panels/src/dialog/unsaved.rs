@@ -127,9 +127,9 @@ impl UnsavedChangesDialog {
                     CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if mac => {
-                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
+                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Alternate).chord(Chord::new(Mods::CMD, Key::D))
                     }
-                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Other),
+                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Alternate),
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
                 };
                 (answer, reply)

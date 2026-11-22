@@ -52,6 +52,8 @@ pub struct PaintUi<'a> {
     /// The fade `steps::fade` began (`DisabledLook::Faded`): the faces paint their enabled look, and the children
     /// shown from here lie under the component's veil.
     pub(crate) fade: Option<super::steps::Fade>,
+    /// The composite has a node (`CxCore::node`): its step 16 fills its parts' sub-nodes from the faces' records.
+    pub(crate) node: bool,
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
 }
@@ -249,15 +251,14 @@ impl PaintUi<'_> {
             flags: self.flags,
             enabled: self.enabled,
             faded: self.fade.is_some(),
+            reported: reported && self.node,
         };
-        let record = run::paint_face(self.ui, self.env, &source, part, face);
+        let (baseline, record) = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();
-        if let Some(baseline) = record.baseline {
+        if let Some(baseline) = baseline {
             own.baseline.get_or_insert(baseline);
         }
-        if reported {
-            own.faces.push(record);
-        }
+        own.faces.extend(record);
     }
 
     /// Reserves an empty shape at the end of the component's layer, clipped to `clip`, for shapes added later by code

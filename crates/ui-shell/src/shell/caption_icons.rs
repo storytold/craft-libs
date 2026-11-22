@@ -52,10 +52,14 @@ pub type RenderIconFn = dyn Fn(CaptionIcon, u32) -> Option<CaptionMask> + Send +
 
 /// The round buttons' glyphs from the desktop's icon theme (Linux: `window-*-symbolic`), drawn in the glyph colour
 /// as symbolic icons are. A glyph the theme lacks draws the family's own.
-#[derive(Clone)]
+#[derive(Clone, crate::contract::MemoProps)]
 pub struct CaptionIcons {
     theme: String,
     generation: u64,
+    #[memo_props(
+        covered_by = "generation",
+        reason = "the generation changes whenever `render` may answer differently (`new`), and icons read again take a new one (`for_desktop`)"
+    )]
     render: Arc<RenderIconFn>,
 }
 
@@ -82,14 +86,16 @@ impl CaptionIcons {
     /// The glyphs of `desktop`'s icon theme, or `None` for the family's own glyphs when the desktop names no theme.
     /// `previous` comes back while it is of the same theme, so the theme's files are read only when its name
     /// changes. A theme without the files still gives icons of its name (each mask `None`), so it is not searched
-    /// again on the next call.
+    /// again on the next call. Icons read again take the generation after `previous`'s, so they never key as the
+    /// icons they replace.
     pub fn for_desktop(desktop: &Desktop, previous: Option<CaptionIcons>) -> Option<CaptionIcons> {
         let name = desktop.icon_theme.as_deref()?;
+        let generation = previous.as_ref().map_or(0, |icons| icons.generation + 1);
         if let Some(previous) = previous.filter(|icons| icons.theme == name) {
             return Some(previous);
         }
         // The files are read once, here; a reinstalled theme is read again when the desktop's theme name changes.
-        Some(CaptionIcons::from_files(name, 0, theme_files(name)))
+        Some(CaptionIcons::from_files(name, generation, theme_files(name)))
     }
 
     /// The theme's name.

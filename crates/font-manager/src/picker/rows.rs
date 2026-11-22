@@ -22,10 +22,10 @@ use craft_ui::primitives::{ContentPainterCx, IconSpec};
 use craft_ui::runtime::env::Label;
 use egui::Rect;
 
-use super::rank::{Infos, Language, Listing, list, shown_name};
+use super::rank::{FamilyInfos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, STAR, Typing, infos, read,
-    ui_language, write,
+    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, STAR, Typing, infos_of,
+    read, ui_language, write,
 };
 use crate::panel::faces::{Owner, Shown, paint_sample, shown};
 use craft_ui::style::DataColor;
@@ -256,7 +256,7 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
 
 /// A thumbnail painting `text` in the regular face of `family`; nothing for a family the catalog lacks or an empty
 /// text, and nothing until the face is loaded.
-fn face_thumb<'a>(catalog: &'a Arc<Catalog>, infos: &'a Infos, family: &'a str, text: String) -> impl Fn(&ContentPainterCx<'_>, Rect) + 'a {
+fn face_thumb<'a>(catalog: &'a Arc<Catalog>, infos: &'a FamilyInfos, family: &'a str, text: String) -> impl Fn(&ContentPainterCx<'_>, Rect) + 'a {
     move |cx, rect| {
         let Some(info) = infos.families.get(family) else { return };
         if text.is_empty() {
@@ -270,7 +270,7 @@ fn face_thumb<'a>(catalog: &'a Arc<Catalog>, infos: &'a Infos, family: &'a str, 
 }
 
 /// The banner: `text` in the face of `family`, on one line cut at the end, in a picture as high as the large thumbnail.
-fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str, shown_name: &str, text: &str) {
+fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &FamilyInfos, family: &str, shown_name: &str, text: &str) {
     Picture::painter(shown_name.to_owned(), ThumbAspect::new(BANNER_ASPECT.0, BANNER_ASPECT.1), face_thumb(catalog, infos, family, text.to_owned()))
         .extent(PictureSize::Thumb(ThumbSize::Large))
         .show(ui);
@@ -278,7 +278,7 @@ fn banner(ui: &mut egui::Ui, catalog: &Arc<Catalog>, infos: &Infos, family: &str
 
 /// The name the banner shows for `family`: its row's shown name when the list holds one, else its name in the
 /// interface language, else the family key.
-fn banner_shown_name(slots: &[Slot], infos: &Infos, family: &str, language: &str, settings: Option<&FontPickerSettings>) -> String {
+fn banner_shown_name(slots: &[Slot], infos: &FamilyInfos, family: &str, language: &str, settings: Option<&FontPickerSettings>) -> String {
     let row = slots.iter().find_map(|slot| match slot {
         Slot::Family { row, .. } if row.family == family => Some(row.shown.clone()),
         _ => None,
@@ -338,7 +338,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let has_filters = filters.is_some();
     let narrowing = filters.clone().unwrap_or_default();
     let catalog = picker.catalog;
-    let infos = infos(catalog);
+    let infos = infos_of(&cx.response.ctx, cx.id, catalog);
     let language_code = ui_language(&cx.env);
     let (folder, collator) = (cx.env.folder(), cx.env.collator());
     let listing = Listing {

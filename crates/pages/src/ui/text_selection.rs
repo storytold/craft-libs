@@ -17,8 +17,8 @@ use egui::{CornerRadius, Pos2, Response, Vec2, pos2};
 
 use super::view::PlacedPage;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A page's text as the selection reads it, glyph by glyph in reading order. Rectangles are page points (origin
 /// top-left).

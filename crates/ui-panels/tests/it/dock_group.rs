@@ -2,7 +2,7 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Show as _, ShowContainer as _};
-use craft_ui::docking::{DockGroup, PanelKey, PanelTitle};
+use craft_ui::docking::{DockGroup, PanelKey, PanelTitle, Titles};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Vec2};
 use std::cell::Cell;
@@ -17,7 +17,7 @@ fn a_minimized_group_runs_no_body() {
         let counted = Rc::clone(&runs);
         let panels = vec![PanelTitle::new(PanelKey::new(1), "Color")];
         let mut fixture = Fixture::new(move |ui| {
-            let group = DockGroup::new(1usize, &panels, panels[0].key);
+            let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key);
             let group = if minimized { group.minimized() } else { group };
             let counted = Rc::clone(&counted);
             group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(240.0, 200.0)), move |ui, _| {

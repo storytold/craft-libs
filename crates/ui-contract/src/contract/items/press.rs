@@ -56,11 +56,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let at = xf.map_or(at, |map| map.to_layer(at)) - rect.min.to_vec2();
             if layout.mirrors() && rtl { flow.to_physical(Rect::from_min_size(at, Vec2::ZERO)).min } else { at }
         };
-        let mods_now = crate::runtime::pointer::frame(&ctx).mods;
+        let mods_now = crate::runtime::pointer::frame_raw(&ctx).mods;
         // A click on a row the collection does not take (a caption, a disabled row) is no pick: the layers around the
         // collection (a dropdown's list) stay open.
         if cx.core.activation.as_ref().is_some_and(|activation| !activation.by_key)
-            && let Some(pos) = crate::runtime::pointer::frame(&ctx).pos
+            && let Some(pos) = crate::runtime::pointer::frame_raw(&ctx).pos
             && local(pos).y >= 0.0
             && layout
                 .hit(local(pos), offset)
@@ -100,7 +100,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     self.drags.command = Some(self.source.key(at));
                     self.move_lead(at, LeadSource::Pointer);
                 } else if !secondary_on_toggle {
-                    let mods = crate::runtime::pointer::frame(&ctx).mods;
+                    let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
                     let key = self.source.key(at);
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
@@ -206,7 +206,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
         {
             // A modified click is a command on the thumbnail (load as selection, and so on), not a pick.
-            let mods = crate::runtime::pointer::frame(&ctx).mods;
+            let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
                     self.pick(comp, at, false, false);
@@ -277,7 +277,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Something over the collection, or a part of a row or of the collection that takes presses and is under the
         // pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
         // it.
-        let released = crate::runtime::pointer::frame(&ctx);
+        let released = crate::runtime::pointer::frame_raw(&ctx);
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()

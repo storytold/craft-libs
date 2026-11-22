@@ -15,14 +15,14 @@ use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize};
 use egui::{Response, Ui};
 use std::time::Duration;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Shown for an item whose value the host does not know.
 const MISSING: &str = "\u{2014}";
 
 /// The item the readout shows, chosen in its menu.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum StatusItem {
     /// The flattened size and the size with layers.
@@ -47,7 +47,7 @@ pub enum StatusItem {
 }
 
 /// The values the host knows this frame; an item without a value shows a dash.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct StatusValues {
     /// Flattened and layered sizes in bytes.
@@ -181,7 +181,7 @@ impl Outcome for StatusReadoutOutput {
 /// - The field shows the bound view's zoom in percent of device pixels, as the Navigator's zoom row does. A typed or
 ///   scrubbed zoom is clamped to the document's zoom range and written into the view about its centre.
 /// - The item is the caller's value, and a pick comes back in the output.
-#[derive(crate::contract::Pattern)]
+#[derive(crate::contract::Pattern, crate::contract::MemoProps)]
 pub struct StatusReadout<'a> {
     view: Bind<'a, CanvasView>,
     document: Size,
@@ -219,7 +219,7 @@ impl<'a> StatusReadout<'a> {
             };
             let field = Field::new(words.readout_zoom.clone())
                 .side(SideLabel::new().kind(LabelKind::Hidden))
-                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).show(ui));
+                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).status_bar().show(ui));
             let field = field.inner.map(|zoom| {
                 invalid_zoom = zoom.invalid_zoom;
                 events = zoom.view;

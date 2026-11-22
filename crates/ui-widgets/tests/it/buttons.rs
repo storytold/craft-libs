@@ -7,7 +7,7 @@ use craft_theme::ControlSize;
 use craft_theme::Variant;
 use craft_ui::buttons::{Arrangement, Button, ControlPlace, GroupLevel, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Picture;
 use craft_ui::list::ThumbAspect;
 use craft_ui::pickers::ComboBox;
@@ -608,4 +608,71 @@ fn a_split_bodys_request_close_closes_the_menu_layer_and_it_opens_again_with_its
     // for the click to open the menu with its body.
     open_menu(&mut fixture);
     assert!(fixture.by_label("Red").is_some(), "opened again, the menu shows its body");
+}
+
+/// An app icon with an accent part, named for this test.
+const ACCENT_ICON_NAME: &str = "zz_item4_accent_icon";
+static ACCENT_ICONS: craft_ui::primitives::AppIcons = craft_ui::primitives::AppIcons::new(
+    "buttons-test-accent",
+    None,
+    &[(
+        ACCENT_ICON_NAME,
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="3" width="10" height="18" fill="black"/><rect class="accent" x="15" y="3" width="6" height="18" fill="black"/></svg>"##,
+    )],
+);
+
+/// The tints of the textured quads a button with the accent icon paints, in paint order, inside a stack of `surface`.
+fn accent_icon_tints(surface: craft_ui::style::SurfaceKind) -> Vec<egui::Color32> {
+    accent_icon_tints_in(None, surface)
+}
+
+/// As `accent_icon_tints`, with the stack of `surface` nested inside a stack of `outer`.
+fn accent_icon_tints_in(outer: Option<craft_ui::style::SurfaceKind>, surface: craft_ui::style::SurfaceKind) -> Vec<egui::Color32> {
+    craft_ui::primitives::register_app_icons(&ACCENT_ICONS);
+    let mut fixture = Fixture::new(move |ui| {
+        let inner = |ui: &mut egui::Ui| {
+            let _ = craft_ui::layout_components::Stack::new().surface(surface).show(ui, |ui, _| {
+                let _ = Button::new("Pen").icon(IconId::new(ACCENT_ICON_NAME)).variant(Variant::GHOST).show(ui);
+            });
+        };
+        match outer {
+            Some(outer) => {
+                let _ = craft_ui::layout_components::Stack::new().surface(outer).show(ui, |ui, _| inner(ui));
+            }
+            None => inner(ui),
+        }
+    });
+    fixture.settle();
+    fixture
+        .frame_shapes()
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if shape.texture_id() != egui::TextureId::default() => Some(rect.fill),
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => mesh.vertices.first().map(|vertex| vertex.color),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An app icon on a brand or scrim surface paints its accent parts in the ink of strong fills, as its plain parts:
+/// the accent colour would vanish on the brand fill. On a panel the accent parts keep their own colour.
+#[trial]
+fn an_icons_accent_parts_on_a_brand_surface_paint_in_the_icons_ink() {
+    let brand = accent_icon_tints(craft_ui::style::SurfaceKind::Brand);
+    let panel = accent_icon_tints(craft_ui::style::SurfaceKind::Panel);
+    assert!(brand.len() >= 2 && panel.len() >= 2, "the icon paints an ink and an accent layer: {brand:?} {panel:?}");
+    let (ink, accent) = (brand.len() - 2, brand.len() - 1);
+    assert_eq!(brand[ink], brand[accent], "on the brand fill the accent parts read in the icon's ink: {brand:?}");
+    let (ink, accent) = (panel.len() - 2, panel.len() - 1);
+    assert_ne!(panel[ink], panel[accent], "on a panel the accent parts keep the accent colour: {panel:?}");
+}
+
+/// A panel nested inside a brand stack sets its own ink: the icon's accent parts keep the accent colour on it, not the
+/// strong-fill ink of the rail around it.
+#[trial]
+fn an_icons_accent_parts_on_a_panel_inside_a_brand_surface_keep_the_accent_colour() {
+    let tints = accent_icon_tints_in(Some(craft_ui::style::SurfaceKind::Brand), craft_ui::style::SurfaceKind::Panel);
+    assert!(tints.len() >= 2, "the icon paints an ink and an accent layer: {tints:?}");
+    let (ink, accent) = (tints.len() - 2, tints.len() - 1);
+    assert_ne!(tints[ink], tints[accent], "on a panel inside a brand stack the accent parts keep the accent colour: {tints:?}");
 }

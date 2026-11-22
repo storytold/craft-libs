@@ -26,11 +26,9 @@ use super::words::CropWords;
 /// The key of the Crop To... command form.
 const CROP_TO_KEY: &str = "draw.crop.cropTo";
 
-/// The chords the tool takes while a finite frame stands and no drag runs: Front Image, Swap, the
-/// overlay and its orientation. Every other key stays the app's.
-const FRAME_KEYS: &[Chord] = &[Chord::plain(Key::I), Chord::plain(Key::X), Chord::plain(Key::O), Chord::new(Mods::SHIFT, Key::O)];
-
-/// [`FRAME_KEYS`] and Show Cropped Area and Classic Mode, which act only while a crop is pending.
+/// The chords the tool takes while a crop is pending and no drag runs: Front Image, Swap, the overlay and its
+/// orientation, Show Cropped Area and Classic Mode. Over the untouched default frame (also a selection's) every key
+/// stays the app's, as in Photoshop: O and I pick their tools, X swaps the colours.
 const PENDING_KEYS: &[Chord] =
     &[Chord::plain(Key::I), Chord::plain(Key::X), Chord::plain(Key::O), Chord::new(Mods::SHIFT, Key::O), Chord::plain(Key::H), Chord::plain(Key::P)];
 
@@ -182,8 +180,9 @@ impl<'a> CropInput<'a> {
 ///   picked part when one has focus) 1 unit, Shift 10 (in image mode they move the image). While the
 ///   canvas has the keyboard: X swaps portrait and landscape (and W with H in W x H x Resolution); O
 ///   cycles the overlay, Shift+O its orientation, H toggles Show Cropped Area (taken but inert in
-///   Classic Mode), P toggles Classic Mode; I is Front Image. The tool keeps the plain keys only while a
-///   frame exists and no drag runs.
+///   Classic Mode), P toggles Classic Mode; I is Front Image. The tool keeps these keys only while a crop
+///   is pending (a frame drawn or changed) and no drag runs: over the untouched default frame they stay
+///   the app's, as in Photoshop.
 /// - Straighten: [`toggle_straighten`](Self::toggle_straighten) (the bar's button) arms one line;
 ///   Cmd (Ctrl) held is a temporary Straighten.
 /// - Box Undo and Redo: the app routes Edit > Undo and Redo to [`undo`](Self::undo) and
@@ -261,7 +260,7 @@ impl CropTool {
         // Straighten surface is there for a press on the pass after the key came down; a line in progress keeps the
         // state it started with, so letting go of the key mid-line does not turn it into a frame drag.
         if !self.dragging {
-            self.session.straighten_mut().set_held(pointer::frame(ui.ctx()).mods.cmd);
+            self.session.straighten_mut().set_held(pointer::mods(ui.ctx()).cmd);
         }
         let (ratio, default, straighten, dismissed) =
             (settings.ratio_value(document, &units), self.session.is_default(), self.session.straighten().on(), self.session.dismissed());
@@ -709,14 +708,14 @@ impl CanvasTool for CropToolPass<'_> {
         }
     }
 
-    /// The chords the tool takes while a finite frame stands and no gesture runs: I, X, O and Shift+O, and H
-    /// and P while a crop is pending. Every other key stays the app's.
+    /// The chords the tool takes while a crop is pending with a finite frame and no gesture runs: I, X, O,
+    /// Shift+O, H and P. Every other key, and every key over the untouched default frame, stays the app's.
     fn claims(&self) -> ToolClaims {
-        let open = !self.tool.dragging && self.tool.session.frame().is_some_and(|frame| frame.is_finite());
+        let open = !self.tool.dragging && self.tool.session.pending() && self.tool.session.frame().is_some_and(|frame| frame.is_finite());
         if !open {
             return ToolClaims::NONE;
         }
-        ToolClaims::NONE.keys(if self.tool.session.pending() { PENDING_KEYS } else { FRAME_KEYS })
+        ToolClaims::NONE.keys(PENDING_KEYS)
     }
 
     /// A press that reaches the tool is on no part of the frame: the overlay owns the whole canvas.
@@ -730,28 +729,26 @@ impl CanvasTool for CropToolPass<'_> {
 
     fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
 
-    /// O, Shift+O, H, P, X and I as the type's doc says; the frame's overlay takes Enter, Esc and the arrows before
-    /// the tool. Returns `false` for a key the tool leaves to the app.
+    /// O, Shift+O, H, P, X and I as the type's doc says, only while a crop is pending; the frame's overlay takes
+    /// Enter, Esc and the arrows before the tool. Returns `false` for a key the tool leaves to the app.
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
-        if self.tool.dragging {
+        if self.tool.dragging || !self.tool.session.pending() {
             return false;
         }
+        let Some(frame) = self.tool.session.frame().filter(CropBox::is_finite) else { return false };
         let (settings, document) = (self.input.settings, self.input.document);
-        let frame = self.tool.session.frame().filter(CropBox::is_finite);
-        let pending = self.tool.session.pending();
         let mut next = settings.clone();
         match key {
             ToolKey::Kept(chord) => {
                 let plain = chord.mods.is_none();
                 match chord.key {
                     Key::I if plain => next.front_image(document),
-                    Key::O if frame.is_some() && plain => next.cycle_guide(),
-                    Key::O if frame.is_some() && chord.mods == Mods::SHIFT => next.cycle_orientation(),
+                    Key::O if plain => next.cycle_guide(),
+                    Key::O if chord.mods == Mods::SHIFT => next.cycle_orientation(),
                     // Show Cropped Area is taken but inert in Classic Mode, where it acts as on.
-                    Key::H if frame.is_some() && pending && plain => next.shield.show_cropped_area ^= next.image_mode(),
-                    Key::P if frame.is_some() && pending && plain => next.shield.classic_mode = !next.shield.classic_mode,
+                    Key::H if plain => next.shield.show_cropped_area ^= next.image_mode(),
+                    Key::P if plain => next.shield.classic_mode = !next.shield.classic_mode,
                     Key::X if plain => {
-                        let Some(frame) = frame else { return false };
                         self.swap(frame, cx);
                         return true;
                     }
@@ -788,5 +785,5 @@ pub fn crop_to_form(words: &CropWords, frame: &CropBox) -> ParamDialog<'static> 
     ParamDialog::command(CROP_TO_KEY, words.crop_to.clone(), params)
 }
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

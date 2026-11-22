@@ -1,5 +1,7 @@
 //! Menu rows: the detail line under the label, the row's own tooltip, the sample slot and which shortcut a row shows.
 
+use craft_behavior::MotionMode;
+use craft_host::target::Os;
 use craft_i18n::Direction;
 use craft_ui::buttons::Button;
 use craft_ui::contract::tooltip::DELAY;
@@ -7,6 +9,7 @@ use craft_ui::contract::{CommandSet, Props as _, Show as _, ShowContainer as _, 
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::commands::CommandState;
+use craft_ui::runtime::env::Scale;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::Rect;
 use std::cell::Cell;
@@ -225,4 +228,54 @@ fn the_menu_highlight_moves_to_the_next_row_in_the_frame_the_pointer_reaches_it(
     let shapes = fixture.frame_shapes_with(vec![pointer::moved(redo.center())]);
     assert_eq!(fills_in(&shapes, redo), [lit], "the row the pointer reached paints the full highlight at once");
     assert!(fills_in(&shapes, undo).is_empty(), "the row the pointer left paints no highlight at once: {:?}", fills_in(&shapes, undo));
+}
+
+#[trial]
+fn the_open_submenu_parent_keeps_the_accent_when_the_pointer_enters_its_child() {
+    for scale in [1.0, 1.25, 1.5] {
+        let parent_state = Rc::new(Cell::new((false, false)));
+        let observed = Rc::clone(&parent_state);
+        let mut fixture = Fixture::new(move |ui| {
+            let opener = Button::new("Open").show(ui);
+            Menu::new("Filter").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+                MenuItem::new("Liquify").show(ui);
+                let blur = Menu::submenu_row(ui, "Blur", |ui, _| {
+                    for label in ["Average", "Gaussian Blur", "Motion Blur", "Shape Blur", "Smart Blur"] {
+                        MenuItem::new(label).show(ui);
+                    }
+                });
+                observed.set((blur.active, blur.submenu_open));
+                Menu::submenu_row(ui, "Distort", |ui, _| {
+                    MenuItem::new("Wave").show(ui);
+                });
+            });
+        });
+        fixture.os(Os::Windows).room(egui::vec2(660.0, 460.0)).scale(Scale::new(scale)).motion(MotionMode::Off).settle();
+        let opener = fixture.by_label("Open").expect("the opener");
+        fixture.click(&opener).settle();
+        let plain = fixture.by_label("Liquify").expect("the plain row").rect;
+        let parent = fixture.by_label("Blur").expect("the submenu row").rect;
+        let sibling = fixture.by_label("Distort").expect("the sibling submenu row").rect;
+
+        let shapes = fixture.frame_shapes_with(vec![pointer::moved(plain.center())]);
+        let accent = fills_in(&shapes, plain);
+        assert_eq!(accent.len(), 1, "the plain row paints one highlight at {scale}×");
+
+        let shapes = fixture.frame_shapes_with(vec![pointer::moved(parent.center())]);
+        assert_eq!(fills_in(&shapes, parent), accent, "the submenu row immediately uses the same highlight at {scale}×");
+        assert_eq!(parent_state.get(), (true, true), "the parent is active and open while hovered");
+        let child = fixture.by_label("Average").expect("the submenu opens on hover").rect;
+
+        fixture.frame(vec![pointer::moved(parent.center())]);
+        let crossing = egui::pos2(sibling.max.x - 2.0, sibling.center().y);
+        let shapes = fixture.frame_shapes_with(vec![pointer::moved(crossing)]);
+        assert_eq!(fills_in(&shapes, sibling), accent, "the crossed sibling highlights immediately at {scale}×");
+        assert_ne!(fills_in(&shapes, parent), accent, "while aiming through a sibling, the parent keeps its subdued tint");
+        assert!(fixture.by_label("Average").is_some() && fixture.by_label("Wave").is_none(), "aim still holds the original submenu open");
+
+        let shapes = fixture.frame_shapes_with(vec![pointer::moved(child.center())]);
+        assert_eq!(fills_in(&shapes, child), accent, "the child row immediately uses the same highlight at {scale}×");
+        assert_eq!(parent_state.get(), (false, true), "the parent remains open with the active row now in its submenu");
+        assert_eq!(fills_in(&shapes, parent), accent, "the parent keeps its accent while its child is active at {scale}×");
+    }
 }

@@ -8,8 +8,8 @@ use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
 use egui::Response;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a popup list: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]

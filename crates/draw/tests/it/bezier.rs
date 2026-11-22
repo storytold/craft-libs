@@ -421,7 +421,7 @@ fn hit_test_matches_the_overlays_press_priority() {
 
 // ---- the anchor tools and the Curvature tool ----
 
-// Arrows, select all and Escape belong to Direct, Convert and Curvature; Add, Delete and Auto Add/Delete have none.
+// Arrows and select all belong to Direct, Convert and Curvature; Add, Delete and Auto Add/Delete have none.
 
 #[trial]
 fn cmd_or_ctrl_with_page_down_on_a_focused_anchor_scrolls_the_canvas_and_picks_no_part() {
@@ -1200,6 +1200,23 @@ fn arrow_keys_nudge_the_selected_anchors_and_shift_nudges_farther() {
     let Some(PathEdit::MoveAnchors { by: far, .. }) = h.last_change() else { panic!("{:?}", h.last_change()) };
     assert!(far.x > small.x, "{small:?} {far:?}");
     assert_eq!(h.state.borrow().changes.len(), 2, "one edit per press");
+}
+
+// Escape on a focused anchor leaves the anchor selection and the targeted path under Direct, Convert and Curvature; it
+// goes on to the window. A key still reaches the overlay afterwards.
+#[trial]
+fn escape_on_a_focused_anchor_keeps_the_selection() {
+    for tool in [BezierTool::Direct, BezierTool::Convert, BezierTool::Curvature] {
+        let mut h = two_paths();
+        h.update(|st| (st.tool, st.selection) = (tool, sel(1, &[(0, 1)])));
+        h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+        let before = h.state.borrow().selection.clone();
+        assert!(before != PathSelection::default(), "{tool:?}: an anchor is selected");
+        h.fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+        assert_eq!(h.state.borrow().selection, before, "{tool:?}: Escape keeps the selection");
+        h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
+        assert!(h.last_change().is_some(), "{tool:?}: the overlay still has the keys");
+    }
 }
 
 // A press belongs to the tool it began under: switching the host's tool in the middle of a drag leaves the drag its

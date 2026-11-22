@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// A select over One to Four.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::new(3u8, "Three"), Entry::new(4u8, "Four")];
-    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
 /// The select with a button after it, which Tab reaches next.
@@ -91,7 +91,7 @@ fn tab_in_the_open_list_chooses_the_row_the_keys_reached_and_moves_on() {
 /// A select over a Latin entry, the two Turkic capital i's and a Greek one.
 fn turkic(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "Kitap"), Entry::new(2u8, "IRMAK"), Entry::new(3u8, "İSTANBUL"), Entry::new(4u8, "Ωμέγα")];
-    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
 /// The value after typing `typed` on the closed, focused select holding `held`, with Azerbaijani as the host's
@@ -128,7 +128,7 @@ fn type_ahead_folds_case_in_the_interface_language() {
 /// A select over two groups under headings: Shapes (One, Two) and Lines (Three).
 fn grouped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::heading("Shapes"), Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::heading("Lines"), Entry::new(3u8, "Three")];
-    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
 #[trial]
@@ -296,4 +296,28 @@ fn the_wheel_steps_the_open_select_a_line_an_entry_and_commits_when_it_stops() {
     assert_eq!(steps.iter().filter(|step| **step == "commit").count(), 1, "the wheel's end commits the run once: {steps:?}");
     assert!(!steps.contains(&"cancel"), "and puts nothing back: {steps:?}");
     assert_eq!(*value.borrow(), 4);
+}
+
+/// The pointer over a row of an open list moves the lead only: the held value stays the selected option in every
+/// frame, and Enter then chooses the row the pointer is on.
+#[trial]
+fn hovering_a_row_moves_the_lead_and_leaves_the_selected_option_held() {
+    use craft_ui::testing::pointer::moved;
+    let mut fixture = focused();
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "Alt+Down opens the list");
+    let options = fixture.by_role(Role::LIST_BOX_OPTION);
+    assert_eq!(options.len(), 4, "the list shows its four options");
+    let held = options[0].node;
+    let under_pointer = options[2].center();
+    for step in 0..3 {
+        fixture.frame(if step == 0 { vec![moved(under_pointer)] } else { Vec::new() });
+        let selected: Vec<_> =
+            fixture.by_role(Role::LIST_BOX_OPTION).into_iter().filter(|row| fixture.tree().selected_of(row.node) == Some(true)).collect();
+        assert!(selected.len() == 1 && selected[0].node == held, "frame {step}: the held row stays the selected option");
+    }
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(value(&mut fixture), 3, "the lead followed the pointer, so Enter chooses the row under it");
 }

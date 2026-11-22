@@ -23,8 +23,8 @@ use craft_ui::text::{NumberField, NumberOutput};
 use egui::{Pos2, Rect, Ui, Vec2, pos2, vec2};
 use std::cell::Cell;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The most columns PowerPoint takes; the
 /// dialog's limit without [`word`](TextColumnsDialog::word) and the default for a host that
@@ -431,27 +431,30 @@ impl TextColumnsDialog {
             let codec = NumberCodec::new(units.reader(None), 0);
             let most = self.most_columns();
             let message = Self::number_message(words, units, most);
-            let count_check = move |count: &Option<f64>| match count {
-                Some(n) if !(1.0..=f64::from(most)).contains(n) => Validity::Error(Message::new(message.clone())),
+            let count_check = |(most, message): &(u32, &str), count: &Option<f64>| match count {
+                Some(n) if !(1.0..=f64::from(*most)).contains(n) => Validity::Error(Message::new((*message).to_owned())),
                 _ => Validity::Ok,
             };
             let edit = Field::new(words.number.clone())
-                .show(ui, |ui, _| NumberField::new(words.number.clone(), Bind::given(shown).check(&count_check)).codec(codec.clone()).show(ui))
+                .show(ui, |ui, _| {
+                    NumberField::new(words.number.clone(), Bind::given(shown).check_with((most, message.as_str()), count_check))
+                        .codec(codec.clone())
+                        .show(ui)
+                })
                 .inner;
             self.edit_count(edit.map(|out| out.edit.events).unwrap_or_default());
             if self.word.is_none() {
                 let points = self.edited.spacing.map_or(Mixed::Mixed, |p| Mixed::Same(Some(f64::from(p))));
                 let range = 0.0..=f64::from(MAX_SPACING);
                 let message = self.spacing_message(words, units);
-                let in_range = range.clone();
-                let spacing_check = move |spacing: &Option<f64>| match spacing {
-                    Some(points) if !in_range.contains(points) => Validity::Error(Message::new(message.clone())),
+                let spacing_check = |(range, message): &(std::ops::RangeInclusive<f64>, &str), spacing: &Option<f64>| match spacing {
+                    Some(points) if !range.contains(points) => Validity::Error(Message::new((*message).to_owned())),
                     _ => Validity::Ok,
                 };
                 let lengths = self.unit.lengths();
                 let edit = Field::new(words.spacing.clone())
                     .show(ui, |ui, _| {
-                        let bind = Bind::given(points).check(&spacing_check);
+                        let bind = Bind::given(points).check_with((range.clone(), message.as_str()), spacing_check);
                         let field = NumberField::length(words.spacing.clone(), bind, lengths).range(range.clone());
                         field.show(ui).edit.events.map(|v| v.map(|p| p as f32))
                     })

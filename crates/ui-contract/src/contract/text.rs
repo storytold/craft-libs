@@ -327,8 +327,8 @@ fn facts(core: &CxCore<'_>, state: &mut TextState, widget: egui::Id, out: &adapt
         state.rows = None;
         return;
     }
-    let rows = adapter::Rows::of(&out.layout, &out.layout.full, rect.min);
-    let text = out.layout.full.clone();
+    let rows = adapter::Rows::of(&out.layout, out.layout.full(), rect.min);
+    let text = out.layout.full().to_owned();
     let selection = adapter::selection(&core.ctx, widget).map(|(caret, anchor)| (rows.pos(&text, anchor), rows.pos(&text, caret)));
     *core.text_access.borrow_mut() =
         Some(text_access::TextFacts { widget, text, masked, editable: !read_only, disabled: !enabled, lines: rows.lines.clone(), selection });
@@ -526,7 +526,7 @@ pub(crate) fn run<C: Component>(
     }
     if part.options.holds_drafts {
         // A window deactivation leaves the draft for the next Enter or a press elsewhere (L-52).
-        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| pointer.focus_lost) {
+        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_raw(&ctx, |pointer| pointer.focus_lost) {
             state.end = None;
         }
         // A press the focus service held for this part keeps focus; the draft shows as its value would.
@@ -551,12 +551,12 @@ pub(crate) fn run<C: Component>(
     cx.core.text_invalid = state.invalid;
     cx.core.text_unparsed = part.options.unparsed.clone().filter(|_| state.invalid);
     cx.core.escape_to_list = state.completions.open || list_open;
-    if state.draft.is_some() || (part.options.clear_on_escape && !out.layout.full.is_empty()) {
+    if state.draft.is_some() || (part.options.clear_on_escape && !out.layout.full().is_empty()) {
         keys::hold_escape(&ctx, id);
     }
     let completions = state.completions.items.clone();
     // The caret after every move of this pass, which a bound caret is written back from.
-    let caret = adapter::caret_byte(&ctx, widget, state.draft.as_deref().unwrap_or(&out.layout.full));
+    let caret = adapter::caret_byte(&ctx, widget, state.draft.as_deref().unwrap_or(out.layout.full()));
     *cx.core.memory.shown::<TextState>(state_id) = state;
     let mut outcome = resolved.outcome;
     outcome.layout = Some(out.layout);

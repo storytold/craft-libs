@@ -17,7 +17,7 @@ use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::hash::Hash;
 
 /// What a dock drag moves: one panel, or the whole group, floating window or column of a panel.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DragUnit<P> {
     /// The panel alone.
@@ -244,12 +244,12 @@ pub fn float_drop<P: Clone + PartialEq>(
 ) -> DockDropped<P> {
     let size = space.size_of(unit, source).min(space.area.size());
     let under = |size: Vec2| {
-        let min = (at - Vec2::new(size.x * 0.5, space.title_row * 0.5)).min(space.area.max - size).max(space.area.min);
+        let min = (at - Vec2::new(size.x * 0.5, space.chrome * 0.5)).min(space.area.max - size).max(space.area.min);
         Rect::from_min_size(min, size)
     };
     let (rect, edge, mark) = match strip.filter(|_| !matches!(unit, DragUnit::Window(_))) {
         Some(strip) => {
-            let shown = under((strip + Vec2::new(0.0, space.title_row)).min(space.area.size()));
+            let shown = under((strip + Vec2::new(0.0, space.chrome)).min(space.area.size()));
             let (rect, edge) = WindowColumn::around_strip(shown, size, space.area, rtl);
             (rect, Some(edge), shown)
         }
@@ -326,7 +326,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         }
         let unit = drag.unit(self.layout)?;
         let window = matches!(unit, DragUnit::Window(_));
-        if pointer::frame(self.ctx).mods.cmd {
+        if pointer::mods(self.ctx).cmd {
             return if window { None } else { self.float(&unit, at, drag.source(), drag.strip()) };
         }
         if window && !self.title_bar_docks {
@@ -409,16 +409,16 @@ impl<P: Clone + Eq + Hash + Send + 'static> DropTarget<GroupDrag<P>> for DockDro
     }
 }
 
-/// The arrangement a dock drag started on: the dock area and the revision of the workspace it showed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The arrangement a dock drag started on: the dock area and the generation of the workspace it showed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct Arrangement {
     pub dock: Id,
-    pub revision: u64,
+    pub generation: u64,
 }
 
 /// The env value a dock area puts into its body: the arrangement it shows. `None` outside a dock area.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, crate::contract::MemoProps)]
 struct InDock(Option<Arrangement>);
 
 impl EnvValue for InDock {
@@ -463,9 +463,9 @@ where
     cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::Named(label));
 }
 
-/// Ends a running tab or group drag that started on `shown`'s dock under another revision: another arrangement
+/// Ends a running tab or group drag that started on `shown`'s dock under another generation: another arrangement
 /// replaced the workspace, and the panel or group the drag names may be gone or elsewhere. The dock's own edits keep
-/// the revision, and so the drag.
+/// the generation, and so the drag.
 #[doc(hidden)]
 pub fn end_replaced_drags<P: Send + Sync + 'static>(ctx: &Context, shown: Arrangement) {
     let replaced = |started: Option<Arrangement>| started.is_some_and(|started| started.dock == shown.dock && started != shown);

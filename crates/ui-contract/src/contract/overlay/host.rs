@@ -1,9 +1,9 @@
 //! The overlay host: shows a layer on an egui layer, remembers it while shown and closes its family.
 
-use super::dismissal::dismissal;
+use super::dismissal::{dismissal, popup_dismissal};
 use super::opener::{Opening, Trigger};
 use super::place::{OverlayFit, Place};
-use super::placement::{anchor_rect, opened_overlay, placement};
+use super::placement::{anchor_rect, layer_covers_anchor, opened_overlay, placement};
 use super::props::{Outside, Overlay};
 use crate::runtime::access::{self};
 use crate::runtime::egui::areas::{self, LayerSpec};
@@ -13,6 +13,7 @@ use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{self, Driver};
 use crate::runtime::overlay::{self, Backdrop, CloseReason, OpenEntry, Rank};
+use crate::runtime::windows::{self, PopupOpen, PopupRoom, WindowSpec};
 use craft_behavior::{MotionKind, Playback};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
@@ -90,6 +91,7 @@ pub(crate) fn forget_layer(ctx: &Context, id: Id, owner: Id) {
     if taken.is_some_and(|memory| !memory.family_closed) {
         overlay::close_descendants(ctx, id);
     }
+    windows::close_popup(ctx, id);
 }
 
 /// Asks the layers opened from inside `layer` to close once the layer closes or starts to fade out, in the pass that
@@ -106,8 +108,14 @@ fn area_id(id: Id) -> Id {
     sub(id, "area")
 }
 
-/// The overlay host: shows `body` on an egui layer for `layer` and decides its dismissal.
+/// The overlay host: shows `body` on an egui layer for `layer` and decides its dismissal. A layer opened in a palette
+/// window shows in a popup window of its own ([`host_in_popup`]); a full-window layer covers its own window.
 pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
+    if !layer.overlay.is_full_window()
+        && let Some(popup) = windows::popup_room(ctx)
+    {
+        return host_in_popup(ctx, layer, popup, body);
+    }
     // A layer that appears starts with nothing it remembered while shown before, also when it opens again during its
     // exit fade or its host never saw it hide: the focus that was inside it does not close it as `focus_left`.
     let appears = overlay::appears(ctx, layer.id, layer.exiting);
@@ -126,6 +134,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     if let Some((_, opening)) = &opened {
         memory.opening.get_or_insert(*opening);
     }
+    let covers = layer_covers_anchor(ctx, layer.overlay, memory.opening);
     let layer = &Layer { overlay: opened.as_ref().map_or(layer.overlay, |(overlay, _)| overlay), ..*layer };
     let overlay = layer.overlay;
     let bounds = layer.region.map_or_else(|| areas::safe_rect(ctx), |region| region.intersect(areas::safe_rect(ctx)));
@@ -147,7 +156,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         Some(size) => Some(egui::vec2(size.x.max(min_width), size.y)),
         None => areas::layer_rect(ctx, area).map(|rect| rect.size()),
     };
-    let mut placed = placement(ctx, layer, size, bounds, anchor);
+    let mut placed = placement(ctx, layer, covers, size, bounds, anchor);
     let nudge = Nudge::of(ctx, layer, appears);
     if let Some(nudge) = &nudge {
         placed.at += nudge.offset();
@@ -172,7 +181,12 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     };
     let parent = overlay::drawing_parent(ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting };
+    let mut spec = LayerSpec { id: area, tier, at: placed.at, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    // A popup's or a modal's layer, and any layer while it fades out, has a root node, made before its `Area` shows so
+    // egui hangs the layer's content below it. A sizing pass of the `Area` reports nothing.
+    if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
+        spec.root = areas::content_rect(ctx, &spec).map(|rect| access::report_layer(ctx, layer.id, rect, layer.exiting));
+    }
     // The opener of the layer's scope is the stop focused when the layer first appears: egui's modal gate takes focus
     // from the widgets below a modal layer by the first pass that shows the layer. A dropdown that keeps its anchor's key
     // focus belongs to the component that opened it: a press moves the key focus onto that component only at the end of
@@ -199,8 +213,8 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         // from the opener's inherited env with the layer-local fields fresh, and outside the opener's scopes.
         let installed = Env::install_for(ui, layer.env.capture().env());
         let real = !ui.is_sizing_pass();
-        if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
-            access::report_layer(ctx, layer.id, ui.unique_id(), ui.max_rect(), overlay.rank.is_modal(), layer.exiting);
+        if spec.root.is_some() && layer.exiting {
+            access::hide_exiting_content(ctx, ui.unique_id());
         }
         // Every layer is a focus scope, one without a policy (`FocusPolicy::NONE`) included: its stops are the layer's,
         // not those of the scope it was opened in, so a trap around it leaves them out (a menu's companion bar).
@@ -217,6 +231,9 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         // checks them. Without the boundary a tooltip's text was checked against the body's kept transcript, which
         // asked for a discard pass every other frame while the tooltip showed.
         access::scope::outside(ctx, || layout_memory::boundary(ctx, true, || body(ui)));
+        if real && overlay.rank.is_modal() {
+            access::report_modal(ctx, layer.id);
+        }
         if real {
             focus::pop_scope(ctx);
         }
@@ -237,6 +254,10 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     overlay::record(ctx, entry);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
+    // The layer closes after its body ran: the run shows it open, so a record of the run is not replayed.
+    if dismissed.is_some() {
+        crate::runtime::replay::note_unsettled(ctx);
+    }
     if let Some(nudge) = &nudge {
         // `dismissal` above records the press beside the layer (`dismissal.rs`, `note_pressed_outside`), so the nudge
         // starts after it and moves the layer from the next pass on.
@@ -246,6 +267,151 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);
     LayerOut { dismissed }
+}
+
+/// A layer opened in a palette window, shown in a popup window of its own (`WindowSpec::popup`): placed in the
+/// opener's points within the work area around it, the window at that place in desktop points.
+///
+/// The layer's bookkeeping is split between the two windows. The popup's pass shows the layer at the window's origin
+/// and records it in the popup's stack, with its focus scope and the dismissal its own input decides (Escape, Enter,
+/// activations, focus, timeout). The opener's pass records an entry that stands for the window (`OpenEntry::popup`),
+/// so its family, its anchor and the presses in the opener are judged where they happen; a press in any other window
+/// of the app, and for a popup the app losing focus, close it too ([`popup_dismissal`]).
+///
+/// A layer whose size its container measured is placed before the window opens. A layer without one (a tooltip) is
+/// laid out in the popup's pass first, in the room its unplaced form has, and placed by the size it took there.
+/// A popup that takes keys (a menu, a flyout) takes the OS focus; a tooltip takes none and lets the pointer through.
+fn host_in_popup(ctx: &Context, layer: &Layer<'_>, popup: PopupRoom, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
+    let appears = overlay::appears(ctx, layer.id, layer.exiting);
+    let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
+    let opened = opened_overlay(ctx, layer.overlay, memory.opening);
+    if let Some((_, opening)) = &opened {
+        memory.opening.get_or_insert(*opening);
+    }
+    let covers = layer_covers_anchor(ctx, layer.overlay, memory.opening);
+    // The popup window lies outside any region of the opener: the work area is its room.
+    let layer = &Layer { overlay: opened.as_ref().map_or(layer.overlay, |(overlay, _)| overlay), region: None, ..*layer };
+    let overlay = layer.overlay;
+    let bounds = popup.room;
+    let anchor = anchor_rect(ctx, layer, bounds, &mut memory);
+    let min_width = overlay.least_width(anchor.width());
+    let measured = layer.size.map(|size| egui::vec2(size.x.max(min_width), size.y));
+    let unplaced = placement(ctx, layer, covers, measured, bounds, anchor);
+    let parent = overlay::drawing_parent(ctx);
+    let tier = overlay::layer_tier(ctx, overlay.rank);
+    let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
+    if overlay.rank.is_modal() && appears {
+        overlay::close_popups_outside(ctx, &[layer.id]);
+    }
+    // The body reports in its parent's space: the popup's points are the opener's screen less the layer's place.
+    let to_parent = overlay::parent_space(ctx, layer.id);
+    let tooltip = overlay.rank == Rank::Tooltip;
+    let spec = WindowSpec::popup().takes_focus(!tooltip && (scope.is_some() || overlay.rank.takes_keys())).passes_pointer(tooltip);
+    let known = measured.map(|size| Rect::from_min_size(unplaced.at, size));
+    let open = PopupOpen { id: layer.id, spec: &spec, rect: known.map(|rect| rect.translate(popup.origin.to_vec2())) };
+    let mut shown = None;
+    windows::show_popup(ctx, &open, |ui| {
+        let at = unplaced.at.to_vec2();
+        overlay::note_parent_space(ui.ctx(), layer.id, egui::emath::TSTransform::from_translation(-at) * to_parent);
+        shown = Some(show_in_popup(ui, layer, &unplaced, min_width, scope, &mut memory, &mut *body));
+    });
+    let (size, dismissed) = shown.unwrap_or((measured.unwrap_or_default(), None));
+    let placed = if known.is_some() { unplaced } else { placement(ctx, layer, covers, Some(size), bounds, anchor) };
+    let rect = Rect::from_min_size(placed.at, size);
+    if known.is_none() {
+        windows::place_popup(ctx, layer.id, rect.translate(popup.origin.to_vec2()));
+    }
+    let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(tier, area_id(layer.id)));
+    entry.parent = parent;
+    entry.anchor = matches!(overlay.place, Place::Anchored { .. }).then_some(anchor);
+    entry.side = placed.side;
+    entry.exiting = layer.exiting;
+    entry.scoped = scope.is_some();
+    entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
+    entry.window = true;
+    entry.popup = true;
+    overlay::record(ctx, entry);
+    let viewport = crate::runtime::egui::viewports::viewport_id(layer.id);
+    let dismissed = if layer.exiting { None } else { dismissed.or_else(|| popup_dismissal(ctx, layer, rect, anchor, viewport, appears)) };
+    close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
+    remember(layer, ctx, memory);
+    LayerOut { dismissed }
+}
+
+/// The popup window's pass of [`host_in_popup`]: the layer at the window's origin, offered the room `placed` leaves,
+/// its entry in the popup's stack and the dismissal the popup's own input decides. Returns the size the layer took
+/// and that dismissal.
+fn show_in_popup(
+    ui: &mut Ui,
+    layer: &Layer<'_>,
+    placed: &super::placement::Placed,
+    min_width: f32,
+    scope: Option<FocusPolicy>,
+    memory: &mut LayerMemory,
+    body: &mut dyn FnMut(&mut Ui),
+) -> (Vec2, Option<CloseReason>) {
+    let ctx = ui.ctx().clone();
+    let overlay = layer.overlay;
+    let window = ctx.content_rect();
+    let area = area_id(layer.id);
+    let tier = overlay::layer_tier(&ctx, overlay.rank);
+    let cover = match overlay.rank {
+        Rank::Modal { backdrop } => {
+            let scrim = match backdrop {
+                Backdrop::Scrim => crate::style::scrim_color(&layer.env.tokens).gamma_multiply(layer.fade),
+                Backdrop::None => egui::Color32::TRANSPARENT,
+            };
+            let cover_id = sub(layer.id, "cover");
+            let through = crate::runtime::sampler::through(&ctx, crate::runtime::egui::pass::current_viewport(&ctx), layer.id);
+            areas::show_cover_layer(&ctx, areas::CoverLayer { id: cover_id, tier, screen: window, scrim, through, absorbs: !layer.exiting });
+            Some(areas::layer_of(tier, cover_id))
+        }
+        _ => None,
+    };
+    // The layer's content starts from its opener's env, on the popup window's own root: its scale and window facts.
+    let opener = layer.env.capture().env();
+    let env = Env::root_of(&ctx).map_or_else(|| opener.clone(), |root| opener.rebase(&root));
+    let mut spec = LayerSpec { id: area, tier, at: window.min, interactable: overlay.rank != Rank::Tooltip && !layer.exiting, root: None };
+    // The layer's root node, made before its `Area` shows, as in `host`.
+    if layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. }) {
+        spec.root = areas::content_rect(&ctx, &spec).map(|rect| access::report_layer(&ctx, layer.id, rect, layer.exiting));
+    }
+    overlay::begin_layer(&ctx, layer.id, tier, layer.exiting, placed.side);
+    let shown = areas::show_layer(&ctx, &spec, |ui| {
+        areas::fade(ui, layer.fade * overlay.opacity);
+        let installed = Env::install_for(ui, env.clone());
+        let real = !ui.is_sizing_pass();
+        if spec.root.is_some() && layer.exiting {
+            access::hide_exiting_content(&ctx, ui.unique_id());
+        }
+        // The focused stop the scope returns to is in the opener's window; the opener's window takes the OS focus
+        // back when the popup closes (`windows::close_popup`).
+        if real {
+            let entering = !std::mem::replace(&mut memory.scope_entered, true);
+            focus::push_scope_from(&ctx, layer.id, overlay.focus, None, None, layer.exiting, Some(entering));
+        }
+        areas::bound(ui, placed.room, min_width.min(placed.room.x));
+        if overlay.fit == OverlayFit::Resizable {
+            ui.set_min_size(overlay.size_limits.min.min(placed.room));
+        }
+        access::scope::outside(&ctx, || layout_memory::boundary(&ctx, true, || body(ui)));
+        if real && overlay.rank.is_modal() {
+            access::report_modal(&ctx, layer.id);
+        }
+        if real {
+            focus::pop_scope(&ctx);
+        }
+        Env::restore(&ctx, installed);
+    });
+    overlay::end_layer(&ctx);
+    let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, shown.rect, shown.layer);
+    entry.side = placed.side;
+    entry.exiting = layer.exiting;
+    entry.cover = cover;
+    entry.scoped = scope.is_some();
+    overlay::record(&ctx, entry);
+    let dismissed = if layer.exiting { None } else { dismissal(&ctx, layer, shown.rect, Rect::NOTHING, scope, memory) };
+    (shown.rect.size(), dismissed)
 }
 
 /// The motion slot of a layer's nudge, under the layer's id.
@@ -342,6 +508,8 @@ impl Nudge {
 /// The layer-stack side of an OS-window mount: records the window as an entry of its viewport's stack (rank, key
 /// class, scope; no egui layer) and decides its dismissal after the body ran. `rect` is the window's inner rect.
 pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> LayerOut {
+    // The entry stands for a window of another viewport, whose pass no record of this one holds.
+    crate::runtime::replay::block(ctx);
     let overlay = layer.overlay;
     let mut memory = recall(layer, ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);

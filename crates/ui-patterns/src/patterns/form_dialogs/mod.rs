@@ -4,18 +4,18 @@ mod words;
 
 mod fields;
 mod param;
-mod rows;
+pub(crate) mod rows;
 
 pub use fields::{DialogFields, FieldValue};
 pub use param::{CustomContext, CustomRow, NumberUnit, Param, ParamKind, encode, open_fields, set_color_field};
 pub use rows::{ParamRows, ParamRowsOutput};
 pub use words::ParamWords;
 
-mod dialog;
-mod form;
+pub(crate) mod dialog;
+pub(crate) mod form;
 mod host_requests;
-mod path_row;
-mod preview;
+pub(crate) mod path_row;
+pub(crate) mod preview;
 
 pub use dialog::{
     BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ResetFooter, ResetPick, set_param_field,
@@ -31,26 +31,26 @@ mod size_model;
 
 pub use size_model::{LinkedSize, MAX_DOCUMENT_SIDE, SizeError, resize_from_scale, resize_from_side};
 
-mod list_manager;
-mod password;
-mod report;
+pub(crate) mod list_manager;
+pub(crate) mod password;
+pub(crate) mod report;
 
 pub use list_manager::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerOutput, ListManagerWords};
 pub use password::{PasswordAnswer, PasswordDialog, PasswordOutput, PasswordPurpose, PasswordStrength, PasswordWords, Secret};
 pub use report::{HostedReport, ReportDialog, ReportNote, ReportOutput, ReportWords};
 
-mod file_list;
+pub(crate) mod file_list;
 
 pub use file_list::{FileList, FileListMode, FileListPicker, FileListPickerOutput, FileListWords};
 
-mod sizing;
+pub(crate) mod sizing;
 
 pub use sizing::{
     CanvasExtension, CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize, HostedImageSize, ImageSize, ImageSizeOutput,
     ImageSizeResult, ImageSizeValues, Resample, SizingOutput, SizingWords,
 };
 
-mod new_document;
+pub(crate) mod new_document;
 
 pub use new_document::{
     BACKGROUND_COLOR_KEY, BackgroundContents, BitDepth, ColorMode, ColorProfiles, DocumentOptions, DocumentPreset, HostedNewDocument,
@@ -58,7 +58,7 @@ pub use new_document::{
     SQUARE_PIXELS,
 };
 
-mod about;
+pub(crate) mod about;
 
 pub use about::{
     AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort,
@@ -66,8 +66,8 @@ pub use about::{
 };
 
 mod color_choice;
-mod guides;
-mod properties;
+pub(crate) mod guides;
+pub(crate) mod properties;
 
 pub use guides::{
     GUIDE_LAYOUT_COLOR_KEY, GuideDialogWords, GuideGroup, GuideLayoutDialog, GuideLayoutError, GuideLayoutOptions, GuideLayoutOutput,
@@ -77,12 +77,12 @@ pub use guides::{
 pub use properties::{HostedPropertiesDialog, PropertiesDialog, PropertiesOutput, PropertiesTab, PropertyRow};
 
 // canvas-navigator-a
-mod navigator_options;
+pub(crate) mod navigator_options;
 
 pub use navigator_options::{NAVIGATOR_PROXY_COLOR_KEY, NavigatorOptionsDialog, NavigatorOptionsDialogOutput, NavigatorOptionsWords};
 // End of canvas-navigator-a.
 
-mod export;
+pub(crate) mod export;
 
 pub use export::{
     DdsCompression, DdsOptions, ExportAsDialog, ExportAsOutput, ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions,
@@ -92,12 +92,12 @@ pub use export::{
 };
 
 // Save PDF.
-mod pdf_export;
+pub(crate) mod pdf_export;
 
 pub use pdf_export::{PdfArtboards, PdfExportDialog, PdfExportOutput, PdfExportResult, PdfExportWords, PdfPresetEvent, PdfSection, RangeError};
 
-mod save_for_web;
-mod watermark;
+pub(crate) mod save_for_web;
+pub(crate) mod watermark;
 
 pub use save_for_web::{
     Animation, ColorTable, Dither, HostedSaveForWeb, MATTE_COLOR_KEY, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions,

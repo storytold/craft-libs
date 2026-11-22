@@ -16,8 +16,8 @@ use super::comments::{CardActions, CardEvent, CommentEdit, CommentRow, CommentsP
 use crate::comments::{CommentThread, ThreadId};
 use crate::revisions::Revision;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The most detail lines of a revision a card shows.
 const DETAIL_LINES: usize = 8;

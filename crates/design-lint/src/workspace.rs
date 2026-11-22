@@ -58,6 +58,7 @@ const CLOSED: &[&str] = &[
     "ReorderMove",      // built or matched in craft-ui-patterns
     "RowState",         // built or matched in craft-ui-widgets
     "RuleLook",         // built or matched in craft-ui-canvas
+    "RulerFace",        // matched by every ruler (craft-text, craft-pages, craft-ui-canvas): a new face must be drawn by each
     "ShellRegions",     // built or matched in craft-ui-shell
     "SizeLimits",       // built or matched in craft-ui-panels
     "StoryOutput",      // built or matched in craft-ui-widgets
@@ -137,14 +138,32 @@ const NO_GLOBAL_STATE_PREFIXES: &[&str] = &[
 ];
 
 /// The reviewed per-item allowlist of `contract/no-global-state`: a file and what it may hold, either the identifier of
-/// a `static` or `thread_local!` item or [`FS`] for `std::fs`. Each group names the settled fact or environment key that
-/// covers it, or the later task of craft-libs#2336 that removes the state. A new item in these files is flagged.
+/// a `static` or `thread_local!` item or [`FS`] for `std::fs`. Each group names the settled fact, environment key or test-data
+/// cache that covers it. A new item in these files is flagged.
 const NO_GLOBAL_STATE: &[(&str, &str)] = &[
-    // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
+    // Compile-time registry discovery reads the defining crate's source, never a view input.
+    ("crates/ui-macros/src/registry.rs", FS),
+    // The trait's home crate: it implements `MemoProps` by hand for std and framework value types, and for the
+    // framework's own keys the derive cannot write: a binding by its source's address, its check and the check's `fn`
+    // (values.rs), an icon's glyph by the type of its `dyn Glyph` (icon.rs), and the write-only `Outbox` (memo_view.rs).
     ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
-    // Settled fact: `ModalRules` holds a closure the derive cannot take; it keys on its plain fields and the revision
-    // the app moves with every rule change, which stands for the closure.
-    ("crates/menu/src/modal.rs", "MemoProps"),
+    ("crates/ui-contract/src/contract/values.rs", "MemoProps"),
+    ("crates/ui-contract/src/contract/memo_view.rs", "MemoProps"),
+    ("crates/ui-contract/src/primitives/icon.rs", "MemoProps"),
+    // Settled fact: a card's view of a story's state keys by the story value's revision, whether the start is taken, the
+    // dialog's flags and the reset count; the view of every shown story's state is one fixed-size digest of those keys.
+    // Both are props held as `&mut`, which the derive does not take.
+    // A card keys its owned story registration by the name and show function the card reads.
+    ("crates/ui-gallery/src/chrome/card.rs", "MemoProps"),
+    ("crates/ui-gallery/src/viewer/picks.rs", "MemoProps"),
+    // Settled fact: the names of a preset group key by a walk over the group and its folders (`dyn EachName`), which
+    // the derive cannot see through.
+    ("crates/ui-patterns/src/patterns/presets/model/library.rs", "MemoProps"),
+    // Settled fact: a name check keys by its inputs and its `fn` behind `dyn NameChecker`, as `Bind::check_with` does.
+    ("crates/ui-patterns/src/patterns/presets/named.rs", "MemoProps"),
+    // Settled fact: `PresetSource` erases its inputs behind a trait object; it keys on those inputs (themselves
+    // `MemoProps`) and on the addresses of its capture-free `fn`s, which stand for the code that reads them.
+    ("crates/ui-patterns/src/patterns/presets/source.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
     ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
     ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),
@@ -184,32 +203,8 @@ const NO_GLOBAL_STATE: &[(&str, &str)] = &[
     ("crates/imaging/src/ui/layer_style/hosted.rs", "PAINT"),
     // Settled fact: a test fake of the font store; it writes a temporary folder.
     ("crates/font-manager/src/store/fake.rs", FS),
-    // later task of #2336: the dock node id counter is hidden state.
-    ("crates/behavior/src/dock/node.rs", "NEXT"),
-    // later task of #2336: the brush trail id counter is hidden state.
-    ("crates/ui-canvas/src/canvas_controls/brush/trail.rs", "NEXT_ID"),
-    // later task of #2336: the outline hover generation counter is hidden state.
-    ("crates/ui-canvas/src/canvas_controls/outline/hover.rs", "GENERATIONS"),
-    // later task of #2336: the texture serial counter is hidden state.
-    ("crates/imaging/src/ui/transform_preview/textures.rs", "SERIAL"),
-    // later task of #2336: the mock image read cache is hidden state.
+    // A cache of pure test data: MockImage is used only by stories and trials.
     ("crates/imaging/src/ui/mock_image.rs", "READS"),
-    // later task of #2336: the ranking cache is hidden state.
-    ("crates/font-manager/src/picker/rank.rs", "CACHE"),
-    // later task of #2336: the face loader reads file sizes during the pass.
-    ("crates/font-manager/src/panel/faces.rs", FS),
-    // later task of #2336: the gallery's set of seen names is hidden state.
-    ("crates/ui-gallery/src/viewer/layout.rs", "NAMES"),
-    // later task of #2336: the LUT picker reads the process clock and scans folders during the pass.
-    ("crates/color-ui/src/ui/lut_picker.rs", "START"),
-    ("crates/color-ui/src/ui/lut_picker.rs", FS),
-];
-
-/// Files that may read a clock (`contract/motion:clock`) beyond the runtime's motion module. A file key, because
-/// color-ui has no layer map.
-const MOTION_CLOCK_FILES: &[&str] = &[
-    // later task of #2336: the LUT picker reads the process clock during the pass.
-    "crates/color-ui/src/ui/lut_picker.rs",
 ];
 
 /// Whether `what` (an item identifier or [`FS`]) may be declared or used in `file` for `contract/no-global-state`.
@@ -390,9 +385,6 @@ impl RuleScope for WorkspaceScope {
         let Some(krate) = self.crate_of(file) else { return false };
         if let Some(what) = key.strip_prefix("contract/no-global-state:") {
             return no_global_state_allows(what, file);
-        }
-        if key == "contract/motion:clock" && MOTION_CLOCK_FILES.iter().any(|f| file == Path::new(f)) {
-            return true;
         }
         if key == "test/layout" {
             return file.starts_with(krate.dir.join("tests").join("it"));

@@ -104,17 +104,17 @@ macro_rules! fill {
 
 mod codec;
 mod import_offer;
-mod keyboard;
+pub(crate) mod keyboard;
 mod pages;
-mod recorder;
+pub(crate) mod recorder;
 mod review;
 mod rows;
 mod sets;
 mod state;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 pub mod summary;
-mod view;
+pub(crate) mod view;
 mod words;
 
 pub use codec::ChordCodec;

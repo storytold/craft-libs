@@ -9,8 +9,8 @@
 //! carries panels reads the same payload with the panel key as `K`.
 
 mod end;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use end::StripEnd;
 

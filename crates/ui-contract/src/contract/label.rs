@@ -4,7 +4,7 @@
 
 pub use crate::runtime::access::scope::FieldLabelRole;
 
-mod leaf;
+pub(crate) mod leaf;
 mod place;
 mod props;
 mod step;

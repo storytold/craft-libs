@@ -1,8 +1,7 @@
 //! Stories of the Brush Preset picker.
 
 use craft_behavior::Mixed;
-use craft_ui::contract::Bind;
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::pictures::{SampleTip, paint_tip, paint_wave};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -29,7 +28,8 @@ fn paint(tip: SampleTip) -> BrushRowPaint {
     )
 }
 
-fn rows(env: &Env, parts: BrushCardParts) -> Vec<PresetRow<u32>> {
+fn rows(parts: &BrushCardParts, env: &Env) -> Vec<PresetRow<u32>> {
+    let parts = *parts;
     vec![
         brush_row(SOFT, "Soft Round", 0, SOFT_SIZE, parts, env, &paint(SampleTip::Soft)),
         brush_row(HARD, "Hard Round", 0, HARD_SIZE, parts, env, &paint(SampleTip::Hard)),
@@ -38,11 +38,10 @@ fn rows(env: &Env, parts: BrushCardParts) -> Vec<PresetRow<u32>> {
 
 #[story(BrushPresetPicker<'static, u32>, covers = [Default], drive = Drive::Never)]
 fn picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let env = Env::of(ui);
-    let (current, state) = data.value("brush", (Some(SOFT), BrushPickerState::<u32>::new()));
-    let rows = rows(&env, state.parts);
+    let ((current, state), brush_at) = data.value_at("brush", (Some(SOFT), BrushPickerState::<u32>::new()));
+    let source = PresetSource::new(state.parts, PresetFns::new(rows));
     let values = BrushPickerValues::new(SOFT_SIZE, Some(0.8));
-    BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), values)
+    BrushPresetPicker::new("Brush Preset picker", brush_at.bind(current), &source, brush_at.bind(state), values)
         .max_diameter(MAX_SIZE)
         .import()
         .show(ui)
@@ -53,50 +52,47 @@ fn picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// and Hardness in the head.
 #[story(BrushPresetPicker<'static, u32>, covers = [Open], drive = Drive::Never)]
 fn picker_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let env = Env::of(ui);
     let at = ui.max_rect().min;
-    let (current, state, open) = data.value("open", (Some(SOFT), BrushPickerState::<u32>::new(), true));
-    let rows = rows(&env, state.parts);
+    let ((current, state, open), open_at2) = data.value_at("open", (Some(SOFT), BrushPickerState::<u32>::new(), true));
+    let source = PresetSource::new(state.parts, PresetFns::new(rows));
     let values = BrushPickerValues::new(SOFT_SIZE, Some(0.8)).with_tip(TipAngle::new(30.0, 0.6));
-    BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), values)
+    BrushPresetPicker::new("Brush Preset picker", open_at2.bind(current), &source, open_at2.bind(state), values)
         .max_diameter(MAX_SIZE)
         .import()
-        .open_at(at, Bind::bound(open))
+        .open_at(at, open_at2.bind(open))
         .show(ui)
         .into()
 }
 
 #[story(BrushesPanel<'static, u32>, covers = [Default], drive = Drive::Never)]
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let env = Env::of(ui);
-    let (state, diameter) = data.value("panel", (PresetState::<u32>::new(), SOFT_SIZE));
-    let rows = rows(&env, BrushCardParts::ALL);
-    BrushesPanel::new("Brushes", &rows, Bind::bound(state), Bind::bound(diameter), MAX_SIZE).selected(SOFT).import(true).show(ui).into()
+    let ((state, diameter), panel_at) = data.value_at("panel", (PresetState::<u32>::new(), SOFT_SIZE));
+    let source = PresetSource::new(BrushCardParts::ALL, PresetFns::new(rows));
+    BrushesPanel::new("Brushes", &source, panel_at.bind(state), panel_at.bind(diameter), MAX_SIZE).selected(SOFT).import(true).show(ui).into()
 }
 
 #[story(BrushPresetPicker<'static, u32>, covers = [Mixed], drive = Drive::Never)]
 fn picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let env = Env::of(ui);
-    let (current, state) = data.value("mixed", (Mixed::<Option<u32>>::Mixed, BrushPickerState::<u32>::new()));
-    let rows = rows(&env, state.parts);
+    let ((current, state), mixed_at) = data.value_at("mixed", (Mixed::<Option<u32>>::Mixed, BrushPickerState::<u32>::new()));
+    let source = PresetSource::new(state.parts, PresetFns::new(rows));
     let values = BrushPickerValues::new(HARD_SIZE, None);
-    BrushPresetPicker::new("Brush Preset picker", Bind::bound_mixed(current), &rows, Bind::bound(state), values).show(ui).into()
+    BrushPresetPicker::new("Brush Preset picker", mixed_at.bind_mixed(current), &source, mixed_at.bind(state), values).show(ui).into()
 }
 
 #[story(BrushPresetPicker<'static, u32>, covers = [], drive = Drive::Never)]
 fn picker_sampled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let env = Env::of(ui);
-    let (current, state) = data.value("sampled", (Some(HARD), BrushPickerState::<u32>::new()));
-    let rows = rows(&env, state.parts);
-    BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), BrushPickerValues::new(HARD_SIZE, None))
+    let ((current, state), sampled_at) = data.value_at("sampled", (Some(HARD), BrushPickerState::<u32>::new()));
+    let source = PresetSource::new(state.parts, PresetFns::new(rows));
+    BrushPresetPicker::new("Brush Preset picker", sampled_at.bind(current), &source, sampled_at.bind(state), BrushPickerValues::new(HARD_SIZE, None))
         .show(ui)
         .into()
 }
 
 #[story(BrushPresetPicker<'static, u32>, covers = [], drive = Drive::Never)]
 fn picker_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (current, state) = data.value("empty", (None::<u32>, BrushPickerState::<u32>::new()));
-    BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &[], Bind::bound(state), BrushPickerValues::new(SOFT_SIZE, Some(1.0)))
+    let ((current, state), empty_at) = data.value_at("empty", (None::<u32>, BrushPickerState::<u32>::new()));
+    let source = PresetSource::new((), PresetFns::new(|_, _| Vec::new()));
+    BrushPresetPicker::new("Brush Preset picker", empty_at.bind(current), &source, empty_at.bind(state), BrushPickerValues::new(SOFT_SIZE, Some(1.0)))
         .show(ui)
         .into()
 }

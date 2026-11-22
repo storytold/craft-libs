@@ -298,6 +298,14 @@ impl Fixture {
         self
     }
 
+    /// Sets the user's binding overrides for every following pass, as an app's `FrameInput.commands` does: the keymap is
+    /// rebuilt when the `Arc` is another one.
+    pub fn overrides(&mut self, overrides: std::sync::Arc<craft_keymap::Overrides>) -> &mut Self {
+        self.commands = self.commands.clone().overrides(overrides);
+        self.frames.commands(self.commands.clone());
+        self
+    }
+
     /// The room the story is shown in.
     pub fn room(&mut self, room: Vec2) -> &mut Self {
         self.room = room;
@@ -341,6 +349,11 @@ impl Fixture {
     /// The density preset.
     pub fn density(&mut self, density: Size) -> &mut Self {
         self.set_root(|root| root.density = density)
+    }
+
+    /// The component set.
+    pub fn set(&mut self, set: craft_theme::ComponentSet) -> &mut Self {
+        self.root_value(set)
     }
 
     /// The interface scale.

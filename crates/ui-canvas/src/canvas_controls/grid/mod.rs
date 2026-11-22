@@ -2,8 +2,8 @@
 //! the document grid of Preferences > Guides, Grid & Slices. Display only: it senses nothing, so the host's menu item
 //! carries the state. Show it before guides and frames.
 
-#[cfg(feature = "testing")]
-pub(super) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::canvas::{CanvasSpace, GuideLine, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};

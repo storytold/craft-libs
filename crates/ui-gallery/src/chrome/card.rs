@@ -11,21 +11,22 @@ use craft_i18n::Direction;
 use craft_theme::{ControlSize, Mode};
 use craft_ui::buttons::Button;
 use craft_ui::contract::Show as _;
-use craft_ui::contract::{CommandSet, Commands as _, Gap, Pad, Props as _, ShowContainer as _, Sizing, StoryLayout, Surface, ThemeScope};
+use craft_ui::contract::{
+    CommandSet, Commands as _, Gap, MemoProps, MemoView, Outbox, Pad, Props as _, ShowContainer as _, Sizing, StoryLayout, Surface, ThemeScope,
+};
 use craft_ui::display::{InspectLayers, InspectOverlay, Shade, Text};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::env::with_env;
-use craft_ui::runtime::inspect::{self, Recorded};
+use craft_ui::runtime::inspect;
 use craft_ui::runtime::layout_memory;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, Panel};
 use craft_ui::style::SurfaceKind;
-use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration};
+use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration, least_stage_width};
 
 /// A story's show function.
 type StoryFn = fn(&mut Ui, &mut StoryData) -> StoryOutput;
 use egui::{Id, Rect, Ui};
-use std::sync::Arc;
 
 /// The header commands of a card.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
@@ -44,15 +45,20 @@ pub enum CardCommands {
 }
 
 /// The appearance values a card sets for its story beyond the window's.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, MemoProps)]
 #[non_exhaustive]
 pub struct Look {
     /// The mode the story's tokens resolve in.
+    #[memo_props(hash = "a fieldless enum of the theme")]
     pub mode: Option<Mode>,
     /// The layout direction.
+    #[memo_props(hash = "a fieldless enum of the i18n crate")]
     pub direction: Option<Direction>,
     /// The control size.
+    #[memo_props(hash = "a fieldless enum of the theme")]
     pub size: Option<ControlSize>,
+    /// The component set.
+    pub set: Option<craft_theme::ComponentSet>,
 }
 
 /// One story a card shows.
@@ -61,19 +67,30 @@ pub struct CardStory<'a> {
     /// The index of the story in the catalog: the key of its state.
     pub index: usize,
     /// The story.
-    pub story: &'static StoryRegistration,
+    pub story: StoryRegistration,
     /// The story's caption.
     pub caption: &'a str,
 }
 
+// The card reads only the story's name and show function; registry values are owned copies.
+impl MemoProps for CardStory<'_> {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        self.index.key(key);
+        self.caption.key(key);
+        self.story.story.name.key(key);
+        key.feed_hash(&self.story.story.show);
+    }
+}
+
 impl<'a> CardStory<'a> {
     /// The story at catalog index `index`, under `caption`.
-    pub fn new(index: usize, story: &'static StoryRegistration, caption: &'a str) -> Self {
+    pub fn new(index: usize, story: StoryRegistration, caption: &'a str) -> Self {
         CardStory { index, story, caption }
     }
 }
 
 /// What one card shows.
+#[derive(MemoProps)]
 #[non_exhaustive]
 pub struct Card<'a> {
     /// The id scope of the card: unique among the cards of a pass.
@@ -129,9 +146,48 @@ const COLUMNS: [ColumnWidth; 4] = [ColumnWidth::fill(1.0); 4];
 /// wide as its widest story, so each value sits a gap past its control, as the old gallery showed it.
 const FORM_ROWS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
+/// The states of the stories a card shows, by catalog index.
+type States<'a, 's> = &'s mut [(usize, &'a mut CardState)];
+
+/// The state of the story at catalog index `index`.
+fn state_of<'s>(states: &'s mut [(usize, &mut CardState)], index: usize) -> &'s mut CardState {
+    match states.iter_mut().find(|(at, _)| *at == index) {
+        Some((_, state)) => state,
+        None => unreachable!("the card holds the state of each of its stories"),
+    }
+}
+
+/// What a card's view reads: the card and the states of its stories. The card's own run reports through `events`.
+#[derive(MemoProps)]
+struct CardProps<'a> {
+    card: &'a Card<'a>,
+    states: Vec<(usize, &'a mut CardState)>,
+    events: Outbox<'a, CardEvents>,
+}
+
+fn card_view(props: &mut CardProps<'_>, ui: &mut Ui) -> Option<Rect> {
+    let CardProps { card, states, events } = props;
+    let shown = card.run(ui, states);
+    let rect = shown.rect;
+    events.send(shown);
+    rect
+}
+
 impl Card<'_> {
-    /// Shows the card in the room `ui` offers, with the states of its stories.
+    /// Shows the card in the room `ui` offers, with the states of its stories: a memoized view, which replays its last
+    /// run until the card, a state of its stories or what it shows around it changes. A replay reports no events.
     pub fn show(&self, ui: &mut Ui, cells: &mut Cells) -> CardEvents {
+        let indices: Vec<usize> = self.stories.iter().map(|story| story.index).collect();
+        let states = cells.states_of(&indices);
+        let mut sent = Vec::new();
+        let props = CardProps { card: self, states, events: Outbox::new(&mut sent) };
+        let rect = MemoView::new(("gallery.card", &self.key), props, card_view).show(ui).flatten();
+        let mut events = sent.pop().unwrap_or_default();
+        events.rect = rect;
+        events
+    }
+
+    fn run(&self, ui: &mut Ui, states: States<'_, '_>) -> CardEvents {
         let mut events = CardEvents::default();
         // A story on the card's own surface sits inside the card's padding; any other surface runs edge to edge under the
         // header band.
@@ -158,7 +214,7 @@ impl Card<'_> {
         if self.usable {
             commands.push(HeaderCommand::new(IconId::new("check"), CardCommands::Use).size(ControlSize::Sm));
         }
-        let away = self.stories.iter().any(|story| cells.get(&story.index).is_some_and(|state| state.changed() || state.dialog.shown));
+        let away = states.iter().any(|(_, state)| state.changed() || state.dialog.shown);
         if away {
             commands.push(HeaderCommand::new(IconId::new("undo"), CardCommands::Reset).size(ControlSize::Sm));
         }
@@ -171,16 +227,16 @@ impl Card<'_> {
                 }
             }
             events.pressed |= cx.surface_pressed();
-            self.stories_in(ui, cells);
+            self.stories_in(ui, &mut *states);
         });
         events.rect = Some(shown.response.rect);
         events
     }
 
     /// The card's stories in its layout; a lone story outside form rows without its caption.
-    fn stories_in(&self, ui: &mut Ui, cells: &mut Cells) {
+    fn stories_in(&self, ui: &mut Ui, states: States<'_, '_>) {
         if let ([story], false) = (self.stories, self.layout == StoryLayout::FormRows) {
-            self.body(ui, story, None, cells);
+            self.body(ui, story, None, states);
             return;
         }
         match self.layout {
@@ -189,7 +245,7 @@ impl Card<'_> {
                     for story in self.stories {
                         Text::new(story.caption.to_owned()).show(ui);
                         let body = self.story_body(story, None);
-                        body.show(ui, cells.entry(story.index).or_default());
+                        body.show(ui, state_of(states, story.index));
                         Text::new(body.value_text(ui).unwrap_or_default()).shade(Shade::Muted).show(ui);
                     }
                 });
@@ -198,19 +254,19 @@ impl Card<'_> {
                 let gap = Gap::Item.points(ui);
                 // The narrowest a column of stories may be is the least story width, as the old gallery's grids kept
                 // their cases.
-                let least = Env::of(ui).tokens.size.story.width_min;
+                let least = least_stage_width(&Env::of(ui).tokens);
                 let fit = ((ui.available_width() + gap) / (least + gap)).floor() as usize;
                 let columns = fit.clamp(1, usize::from(most).clamp(1, COLUMNS.len()));
                 Grid::new(&COLUMNS[..columns]).gap(Gap::Item).fill_width().show(ui, |ui, _| {
                     for story in self.stories {
-                        self.body(ui, story, Some(story.caption), cells);
+                        self.body(ui, story, Some(story.caption), states);
                     }
                 });
             }
             _ => {
                 Stack::new().fill_width().show(ui, |ui, _| {
                     for story in self.stories {
-                        self.body(ui, story, Some(story.caption), cells);
+                        self.body(ui, story, Some(story.caption), states);
                     }
                 });
             }
@@ -218,8 +274,8 @@ impl Card<'_> {
     }
 
     /// The body of `story`, with its state, under `caption` when given.
-    fn body(&self, ui: &mut Ui, story: &CardStory<'_>, caption: Option<&str>, cells: &mut Cells) -> BodyShown {
-        self.story_body(story, caption).show(ui, cells.entry(story.index).or_default())
+    fn body(&self, ui: &mut Ui, story: &CardStory<'_>, caption: Option<&str>, states: States<'_, '_>) -> BodyShown {
+        self.story_body(story, caption).show(ui, state_of(states, story.index))
     }
 
     /// The body of `story` under `caption` when given.
@@ -229,7 +285,7 @@ impl Card<'_> {
             look: self.look,
             gated: self.gated,
             caption: caption.map(str::to_owned),
-            inspect: self.inspect.map(|inspected| (region_key(inspected.tab, story.index), inspected.layers)),
+            inspect: self.inspect.as_ref().map(|inspected| (region_key(&inspected.tab, story.index), inspected.layers)),
             ..StoryBody::new(key, story.story, self.surface, self.room, Pad::None)
         }
     }
@@ -241,7 +297,7 @@ pub struct StoryBody {
     /// The id scope of the story: unique among the stories of a pass.
     pub key: String,
     /// The story.
-    pub story: &'static StoryRegistration,
+    pub story: StoryRegistration,
     /// The surface the story sits on.
     pub surface: Surface,
     /// The most a story that fills takes.
@@ -264,13 +320,14 @@ pub struct StoryBody {
 pub struct BodyShown {
     /// Where the story shows in flow: its surface; `None` while the button that opens the story's dialog shows.
     pub flow: Option<Rect>,
-    /// The story's output when the pass ran it for real: not in a sizing pass, nor held back behind its button.
+    /// The story's output when the pass ran it for real: not in a sizing pass or a replay of its view, nor held back
+    /// behind its button.
     pub output: Option<StoryOutput>,
 }
 
 impl StoryBody {
     /// The body of `story` on `surface`, in the window's look, with ungated wheel takers.
-    pub fn new(key: impl Into<String>, story: &'static StoryRegistration, surface: Surface, room: f32, panel_pad: Pad) -> Self {
+    pub fn new(key: impl Into<String>, story: StoryRegistration, surface: Surface, room: f32, panel_pad: Pad) -> Self {
         StoryBody { key: key.into(), story, surface, room, look: Look::default(), gated: false, panel_pad, caption: None, inspect: None }
     }
 
@@ -305,45 +362,40 @@ impl StoryBody {
         // A story that has not painted yet runs only in a pass that can still be discarded: what the shell's count finds
         // open would paint otherwise. The next frame's first pass runs it.
         let runs = state.dialog.painted || craft_ui::runtime::frame::discardable(ui.ctx());
-        // Whether the story ran for real in this pass (not in a measuring run, nor in place of a kept measurement), and
-        // whether a dialog of it showed then.
-        let ran = std::cell::Cell::new(None);
-        let value_key = self.value_key();
-        let data = &mut state.data;
-        // The record of the story's real run, when it is inspected.
-        let mut recorded = None;
-        // The story's output of its real run.
-        let mut real = None;
-        let surface = host.stack().show(ui, |ui, cx| {
-            if !runs {
-                return;
-            }
-            let shell = cx.shell();
-            let before = shell.as_ref().map_or(0, |shell| shell.dialogs_shown());
-            let (output, record) = host.content(ui, show, data, self.inspect.map(|(key, _)| key));
-            recorded = record.or(recorded.take());
-            if let Some(readout) = &output.readout {
-                Text::new(readout.clone()).shade(Shade::Muted).show(ui);
-            }
-            layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
-            if !ui.is_sizing_pass() {
-                ran.set(Some(shell.is_some_and(|shell| shell.dialogs_shown() > before)));
-                real = Some(output);
-            }
-        });
+        let mut reported = Vec::new();
+        let props = StoryProps {
+            show,
+            data: &mut state.data,
+            host,
+            runs,
+            region: self.inspect.map(|(key, _)| key),
+            value_key: self.value_key(),
+            reported: Outbox::new(&mut reported),
+        };
+        let surface = MemoView::new((host.id, "story"), props, story_view).show(ui);
+        // What a real run of the story in this pass reported; `None` when it did not run for real.
+        let run = reported.pop();
+        // Whether a dialog of the story showed in that run.
+        let ran = run.as_ref().and_then(|run| run.dialog);
+        // The story's output of that run.
+        let real = run.and_then(|run| run.output);
         if !runs {
             ui.ctx().request_repaint();
         }
-        if let (Some((key, layers)), Some(recorded)) = (self.inspect, recorded) {
+        if let Some((key, layers)) = self.inspect
+            && let Some(recorded) = inspect::recorded(ui.ctx(), key)
+        {
             let pointed = inspect::pointed(ui.ctx(), key);
             let overlay = InspectOverlay::new(recorded).layers(layers);
             let overlay = match pointed {
                 Some(index) => overlay.pointed(index),
                 None => overlay,
             };
-            overlay.show_at(ui, surface.output.rect);
+            if let Some(rect) = surface {
+                overlay.show_at(ui, rect);
+            }
         }
-        if let Some(shown) = ran.get() {
+        if let Some(shown) = ran {
             let dialog = &mut state.dialog;
             if shown && !dialog.painted {
                 close_at_start(state);
@@ -359,7 +411,7 @@ impl StoryBody {
             // only the measuring run or held the story back has not made them yet.
             state.note_start();
         }
-        BodyShown { flow: Some(surface.output.rect), output: real }
+        BodyShown { flow: surface, output: real }
     }
 
     /// The shown value as the story's component words it ([`StoryOutput::value_text`]), as this pass's run of the
@@ -380,11 +432,12 @@ fn close_at_start(state: &mut CardState) {
     if let Some(open) = state.data.present::<bool>("open") {
         *open = false;
     }
+    state.data.settle();
     state.start = None;
 }
 
 /// What a story runs in inside its card.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, MemoProps)]
 struct Host<'a> {
     caption: Option<&'a str>,
     id: Id,
@@ -415,30 +468,72 @@ impl Host<'_> {
         }
         stack
     }
+}
 
-    /// The caption, when the story has one.
-    fn caption_in(&self, ui: &mut Ui) {
-        if let Some(caption) = self.caption {
-            Text::new(caption.to_owned()).shade(Shade::Muted).show(ui);
-        }
-    }
+/// What a story's run reported: whether a dialog of it showed and the story's output, both `None` in a sizing run.
+struct StoryRun {
+    dialog: Option<bool>,
+    output: Option<StoryOutput>,
+}
 
-    /// The story under its caption, in the card's direction and control size; shown as the inspected region `region`
-    /// when given, with the region's record of a real run.
-    fn content(&self, ui: &mut Ui, show: StoryFn, data: &mut StoryData, region: Option<Id>) -> (StoryOutput, Option<Arc<Recorded>>) {
-        self.caption_in(ui);
-        let (look, gated) = (self.look, self.gated);
-        with_env(
-            ui,
-            |env| {
-                env.direction = look.direction;
-                env.size = look.size;
-                env.wheel = gated.then_some(craft_ui::runtime::env::WheelScope::Gated);
-            },
-            |ui| match region {
-                Some(key) => inspect::record(ui, key, |ui| show(ui, data)),
-                None => (show(ui, data), None),
-            },
-        )
-    }
+/// What a story's view shows: the story's surface with the story under its caption, in the card's direction and control
+/// size, as the inspected region `region` when given, and its readout under it. The surface is in the view, so a story
+/// that fills takes its content's height there, as the surface sizes from its content.
+#[derive(MemoProps)]
+struct StoryProps<'a> {
+    #[memo_props(hash = "a fn pointer names the story's code")]
+    show: StoryFn,
+    data: &'a mut StoryData,
+    host: Host<'a>,
+    /// Whether the story runs in this pass: the surface shows empty otherwise.
+    runs: bool,
+    region: Option<Id>,
+    /// Where the story's value text is handed forward (`layout_memory::emit_text`).
+    value_key: Id,
+    /// What the run reported: a replay sends nothing.
+    reported: Outbox<'a, StoryRun>,
+}
+
+fn story_view(props: &mut StoryProps<'_>, ui: &mut Ui) -> Rect {
+    let StoryProps { show, data, host, runs, region, value_key, reported } = props;
+    let (host, show, region, value_key) = (*host, *show, *region, *value_key);
+    host.stack()
+        .show(ui, |ui, cx| {
+            if !*runs {
+                return;
+            }
+            let shell = cx.shell();
+            let before = shell.as_ref().map_or(0, |shell| shell.dialogs_shown());
+            if let Some(caption) = host.caption {
+                Text::new(caption.to_owned()).shade(Shade::Muted).show(ui);
+            }
+            let look = host.look;
+            let output = with_env(
+                ui,
+                |env| {
+                    env.direction = look.direction;
+                    env.size = look.size;
+                    env.wheel = host.gated.then_some(craft_ui::runtime::env::WheelScope::Gated);
+                    if let Some(set) = look.set {
+                        env.values.set(set);
+                    }
+                },
+                |ui| match region {
+                    Some(key) => inspect::record(ui, key, |ui| show(ui, data)).0,
+                    None => show(ui, data),
+                },
+            );
+            // The run may have changed a value: settling moves the revision the view keys on, so it runs once more and
+            // replays.
+            data.settle();
+            if let Some(readout) = &output.readout {
+                Text::new(readout.clone()).shade(Shade::Muted).show(ui);
+            }
+            layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
+            let real = !ui.is_sizing_pass();
+            let dialog = real.then(|| shell.is_some_and(|shell| shell.dialogs_shown() > before));
+            reported.send(StoryRun { dialog, output: real.then_some(output) });
+        })
+        .output
+        .rect
 }

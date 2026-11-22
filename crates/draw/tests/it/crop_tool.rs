@@ -105,6 +105,8 @@ struct Host {
     past_edge_passes: usize,
     /// The passes whose host response carried snap lines.
     snap_passes: usize,
+    /// The canvas's id, from its last pass.
+    canvas: Option<egui::Id>,
 }
 
 struct Rig {
@@ -135,6 +137,7 @@ impl Rig {
             snap: None,
             past_edge_passes: 0,
             snap_passes: 0,
+            canvas: None,
         }));
         let shown = Rc::clone(&host);
         let mut fixture = Fixture::new(move |ui| {
@@ -157,7 +160,7 @@ impl Rig {
             let tool = &mut host.tool;
             let (ctx, settings, document) = (&host.ctx, &host.settings, &host.document);
             let mut hosted = None;
-            let _ = canvas.show(ui, |ui, body| {
+            let output = canvas.show(ui, |ui, body| {
                 let input = CropInput::new(ctx, settings, document);
                 let frame = showing.then(|| tool.show_frame(ui, body.rect, &input));
                 if let Some(canvas) = tool_pass(&body.env) {
@@ -166,6 +169,7 @@ impl Rig {
                     hosted = Some((response, pass.finish().events));
                 }
             });
+            host.canvas = Some(output.response.id);
             let (response, events) = hosted.unwrap_or_default();
             host.past_edge_passes += usize::from(response.past_edge.is_some());
             host.snap_passes += usize::from(!response.snapped.is_empty());
@@ -198,6 +202,14 @@ impl Rig {
 
     fn frame(&self) -> Option<CropBox> {
         self.host.borrow().tool.frame()
+    }
+
+    /// Gives the canvas the keyboard without a press, as a document window the app shows has it.
+    fn focus_canvas(&mut self) {
+        let canvas = self.host.borrow().canvas.expect("the canvas ran");
+        craft_ui::testing::wheel::focus(self.fixture.ctx(), canvas);
+        self.run();
+        assert_eq!(self.fixture.focused(), Some(canvas), "the canvas has the keyboard");
     }
 
     /// The turn of the view the canvas shows, in degrees; `None` before the tool set one.
@@ -355,15 +367,51 @@ fn the_default_frame_fits_the_ratio_and_follows_the_selection() {
 }
 
 #[trial]
-fn p_and_h_belong_to_the_crop_only_while_a_frame_is_pending() {
-    // The untouched default frame leaves P and H to the app.
+fn the_crop_keys_belong_to_the_crop_only_while_a_frame_is_pending() {
+    // The untouched default frame (400 x 300, so X would turn it) leaves every key to the app, as Photoshop does:
+    // P, H, O and I pick their tools, Shift+O cycles a tool group, X swaps the colours (photocraft#6536).
     let mut rig = Rig::new(classic());
     rig.run();
+    rig.focus_canvas();
+    let before = rig.host.borrow().settings.clone();
     rig.host.borrow_mut().events.clear();
-    rig.fixture.key(Key::P, Modifiers::NONE);
-    rig.fixture.key(Key::H, Modifiers::NONE);
+    let keys = [
+        (Key::P, Modifiers::NONE),
+        (Key::H, Modifiers::NONE),
+        (Key::O, Modifiers::NONE),
+        (Key::O, Modifiers::SHIFT),
+        (Key::I, Modifiers::NONE),
+        (Key::X, Modifiers::NONE),
+    ];
+    for (key, mods) in keys {
+        rig.fixture.key(key, mods);
+        rig.run();
+        let host = rig.host.borrow();
+        assert!(host.events.is_empty(), "{key:?} with {mods:?} was the crop's: {:?}", host.events);
+        assert_eq!(host.settings, before, "{key:?} with {mods:?} left the options alone");
+        assert!(host.tool.session().is_default(), "{key:?} with {mods:?} left the untouched default frame");
+    }
+
+    // A pending frame takes O (the overlay), I (Front Image) and X (portrait and landscape).
+    rig.drag((100.0, 80.0), (300.0, 220.0));
     rig.run();
-    assert!(!rig.host.borrow().events.iter().any(|event| matches!(event, CropEvent::Settings(_))), "neither key was the crop's");
+    assert!(rig.host.borrow().tool.session().pending());
+    rig.fixture.key(Key::O, Modifiers::NONE);
+    rig.run();
+    assert_ne!(rig.host.borrow().settings.guide, before.guide, "O cycles the overlay");
+    rig.fixture.key(Key::I, Modifiers::NONE);
+    rig.run();
+    assert_ne!(rig.host.borrow().settings.ratio, before.ratio, "I is Front Image");
+    let drawn = rig.frame().expect("a frame").rect.abs();
+    rig.fixture.key(Key::X, Modifiers::NONE);
+    rig.run();
+    let swapped = rig.frame().expect("a frame").rect.abs();
+    let turned = (swapped.width() - drawn.height()).abs() < 1.0 && (swapped.height() - drawn.width()).abs() < 1.0;
+    assert!(turned, "X swaps {drawn:?} into {swapped:?}");
+
+    // P and H on a pending frame.
+    let mut rig = Rig::new(classic());
+    rig.run();
 
     // A pending frame takes P (Classic Mode) and H (Show Cropped Area, inert in Classic Mode).
     rig.drag((100.0, 80.0), (300.0, 220.0));

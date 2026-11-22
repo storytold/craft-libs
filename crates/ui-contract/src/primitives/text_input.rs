@@ -337,6 +337,6 @@ impl<'a> EditorState<'a> {
 impl TextLayout {
     /// The layout's runs as the borrowed runs an editor line takes.
     pub fn editor_runs(&self) -> Vec<EditorRun<'_>> {
-        self.runs.iter().map(|run| EditorRun::new(run.bytes.clone(), run.rtl, &run.positions, &run.widths)).collect()
+        self.runs().iter().map(|run| EditorRun::new(run.bytes.clone(), run.rtl, &run.positions, &run.widths)).collect()
     }
 }

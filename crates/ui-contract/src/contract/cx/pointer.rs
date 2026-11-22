@@ -250,6 +250,22 @@ impl<C: Component> Pointer for Cx<'_, C> {
     }
 }
 
+impl<C: Component> Cx<'_, C> {
+    /// The value a primary-button sweep sets on this toggle. Only siblings in the same layout
+    /// participate. A control that uses this must sense both clicks and drags.
+    pub fn swept_toggle(&self, on: Option<bool>) -> Option<bool> {
+        let group = self.pointer_group?;
+        let target = crate::runtime::toggle_sweep::ToggleTarget {
+            id: self.id,
+            layer: self.response.layer_id,
+            visible: self.visible,
+            enabled: self.resolved.enabled && !self.resolved.read_only,
+            press: self.press().phase,
+        };
+        crate::runtime::toggle_sweep::value(&self.ctx, target, group, on)
+    }
+}
+
 /// The cursor requests of the hovered parts' declared cursors, in registration order.
 pub(crate) fn declared_cursor(core: &CxCore<'_>) -> Option<Cursor> {
     core.part_cursors.first().cloned()

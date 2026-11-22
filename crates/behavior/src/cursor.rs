@@ -46,7 +46,7 @@ pub enum CursorIcon {
 }
 
 /// An icon's egui-free key (5.2), so plain data such as [`PaintedCursor::Tool`] names icons without egui.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui_macros::PlainData)]
 pub struct IconId(Cow<'static, str>);
 
 impl IconId {
@@ -68,7 +68,7 @@ impl From<Cow<'static, str>> for IconId {
 }
 
 /// A mark beside a painted cursor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CursorBadge {
     /// A plus.
@@ -100,7 +100,7 @@ pub enum CursorBadge {
 }
 
 /// The kind of a [`CursorBadge::Count`] mark.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CountMark {
     /// A point is added.

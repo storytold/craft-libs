@@ -1,11 +1,11 @@
 //! The curve editor: the tone curve value and its point rules, the graph, the preview and the gradient ramp.
 
-mod editor;
-mod graph;
+pub(crate) mod editor;
+pub(crate) mod graph;
 mod model;
-mod preview;
-mod ramp;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod preview;
+pub(crate) mod ramp;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

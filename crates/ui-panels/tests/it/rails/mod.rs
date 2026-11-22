@@ -1,7 +1,7 @@
 //! The rail's own logic: which tool a slot shows, what the rail remembers, where a drop goes, and the flyout's hold
 //! and click, and a press dragged away.
 
-mod drawer;
+pub(crate) mod drawer;
 
 use craft_ui::contract::{Role, Show as _};
 use craft_ui::rails::{FlyoutButton, RailTool};

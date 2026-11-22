@@ -24,7 +24,7 @@ const TRIANGLE_BASE: f32 = 0.52;
 const TRIANGLE_DEPTH: f32 = 0.31;
 
 /// Which arrow a [`DisclosureGlyph`] draws.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ArrowForm {
     /// The filled triangle of everything that opens or unfolds in place: a section, a tree row, a row's trailing
@@ -41,7 +41,7 @@ pub enum ArrowForm {
 /// dropdown's arrow is the open chevron; a submenu's is the filled arrow to the end of the line. Components name these
 /// through [`DisclosureGlyph::new`], [`DisclosureGlyph::dropdown`], [`DisclosureGlyph::menu_button`] and
 /// [`DisclosureGlyph::submenu`] and never an icon of their own.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct DisclosureGlyph {
     /// The turn, 0 closed to 1 open.

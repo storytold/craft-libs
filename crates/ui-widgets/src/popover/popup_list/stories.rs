@@ -2,7 +2,7 @@
 
 use super::PopupList;
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _, ShowCollection as _, ShowContainer as _};
+use crate::contract::{Show as _, ShowCollection as _, ShowContainer as _};
 use crate::layout_components::Stack;
 use crate::list::{List, ListRow};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -38,7 +38,7 @@ fn popup_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = ["Round", "Square", "Chisel", "Fan"];
     let shown = Stack::new().fill().show(ui, |ui, _| {
         let opener = Button::new("Brush tip").show(ui);
-        PopupList::new("Brush tips", Bind::bound(data.value("open", true)))
+        PopupList::new("Brush tips", data.bind("open", true))
             .opened_by(&opener)
             .show(ui, |ui, _| {
                 List::<usize>::options("Brush tips").show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key]).option());

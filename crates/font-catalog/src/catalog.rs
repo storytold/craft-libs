@@ -307,6 +307,7 @@ type FamilyLoad = Arc<OnceLock<Arc<[LoadedFace]>>>;
 /// Each family's files load once ([`Catalog::load_family`]): other threads asking for the same
 /// family wait for that load, other families load at the same time.
 pub struct Catalog {
+    id: u64,
     env: FontEnv,
     config: RwLock<Config>,
     index: RwLock<Arc<Index>>,
@@ -331,7 +332,9 @@ impl Catalog {
     /// A catalog of the fonts installed on the system `env` describes, the font store, and the
     /// files the platform's font service lists (with the `system` feature).
     pub fn new(env: FontEnv) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             env,
             config: RwLock::new(Config { app_dirs: Vec::new(), listers: Vec::new(), font_service: cfg!(feature = "system") }),
             index: RwLock::new(Arc::new(Index::default())),
@@ -473,6 +476,13 @@ impl Catalog {
             }
         });
         Watch { stop }
+    }
+
+    /// The catalog's identity: unique among the catalogs of the process, fixed at construction. Clones of the `Arc`
+    /// share it. A holder of derived data keys it by the id and the [`generation`](Catalog::generation), which counts
+    /// changes of this catalog only.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Counts the catalog's changes: each scan, and each face added or removed.

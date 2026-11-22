@@ -10,13 +10,13 @@ use crate::contract::{
     Trigger,
 };
 use crate::display::Divider;
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::{Env, Label, with_env};
 use crate::runtime::focus::{FocusPolicy, Initial};
 use crate::runtime::frame;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::overlay::{Align, Side};
-use craft_behavior::{Arrows, Metrics, NavShape, Roving, Sense, Value};
+use craft_behavior::{Arrows, Metrics, MotionMode, NavShape, Roving, Sense, Value};
 use craft_keymap::{Chord, Key};
 use egui::{Response, Ui};
 
@@ -288,9 +288,14 @@ impl<'a> Menu<'a> {
         let label = label.into();
         let head = MenuItem::submenu(label.clone()).enabled(enabled).show(ui);
         let mut open = head.submenu_open;
-        let mut body = body;
-        let shown =
-            Menu::submenu(label, &head.response).anchor(Anchor::Rect(head.frame)).open(Bind::bound(&mut open)).show(ui, |ui, cx| body(ui, cx));
+        let show = |ui: &mut Ui| {
+            Menu::submenu(label, &head.response)
+                .id(head.response.id.with("submenu"))
+                .anchor(Anchor::Rect(head.frame))
+                .open(Bind::bound(&mut open))
+                .show(ui, body)
+        };
+        let shown = if head.sibling_submenu_open() { with_env(ui, |env| env.motion = Some(MotionMode::Off), show) } else { show(ui) };
         // `MenuItem::update` does not run in a measuring run, so `open` is false there and would clear the level's
         // open submenu the real run set.
         if crate::runtime::measure::effect(ui.ctx(), "menu::note_submenu") {
@@ -348,7 +353,7 @@ impl Component for Menu<'_> {
         level.resume(cx.core.ctx.cumulative_pass_nr());
         while let Some((mv, _)) = cx.intents().take_move() {
             if level.step_active(mv) {
-                frame::request_own_repaint(&cx.core.ctx);
+                frame::request_repaint(&cx.core.ctx);
             }
         }
         // Enter routed from the field arrives as the menu's own activation by key: the row it names runs, and the run
@@ -358,7 +363,7 @@ impl Component for Menu<'_> {
         {
             cx.keep_open();
             level.run(row);
-            frame::request_own_repaint(&cx.core.ctx);
+            frame::request_repaint(&cx.core.ctx);
         }
         // The rows run after this, so the pass that moved the pointer onto a row paints it, and the row it left, as the
         // level now has them.
@@ -388,7 +393,7 @@ impl Component for Menu<'_> {
             cx.claim(chord);
             if cx.take_claimed(chord) {
                 level.run(row);
-                frame::request_own_repaint(&cx.core.ctx);
+                frame::request_repaint(&cx.core.ctx);
             }
         }
     }

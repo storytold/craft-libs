@@ -5,11 +5,12 @@ pub(crate) mod face;
 pub mod icon_button;
 pub mod link;
 pub mod split_button;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 pub mod toggle_button;
 mod words;
 
+use crate::contract::MemoProps;
 use crate::runtime::env::EnvValue;
 
 pub use button::{Button, ButtonOutput, ButtonStyle};
@@ -21,7 +22,7 @@ pub use toggle_button::{ToggleButton, ToggleButtonStyle};
 
 /// How much of a ribbon group's content is shown. A group sets it for its content through `Overrides::values`, and
 /// styles and measurements keyed on the env follow a change.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
 pub enum GroupLevel {
@@ -47,7 +48,7 @@ pub enum GroupLevel {
 /// A page's side menu (a File page's list of pages) sets `SideMenu` for its rows: a `Button` there shows its label in
 /// the large body role (`TypeRole::BodyLarge`), with `space.pad.segment` above and below it and `space.pad.roomy`
 /// at its sides, so the menu reads as a list of places rather than a row of controls.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
 pub enum ControlPlace {
@@ -75,7 +76,7 @@ pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleC
 /// framework's: `size.icon.lg` (or the control's icon, when larger) for a stacked icon, the control's icon or glyph
 /// for the rest. An app whose ribbon draws its icons larger than its other controls sets it on the ribbon
 /// (`Ribbon::icons`); outside a ribbon it changes nothing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, MemoProps)]
 #[env(style)]
 #[non_exhaustive]
 pub struct RibbonLook {

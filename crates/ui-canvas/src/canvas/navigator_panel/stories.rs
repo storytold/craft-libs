@@ -1,7 +1,6 @@
 //! Stories of the Navigator panel.
 
 use super::NavigatorPanel;
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Size};
@@ -15,12 +14,12 @@ const CANVAS: Rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(800.0, 60
 
 #[story(NavigatorPanel<'static>, covers = [], drive = Drive::Never)]
 fn navigator_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let view = data.value("view", CanvasView::new(CANVAS, Point::new(1000.0, 750.0), 1.0));
-    NavigatorPanel::new("Navigator", Bind::bound(view), DOCUMENT).show(ui).into()
+    let (view, view_at) = data.value_at("view", CanvasView::new(CANVAS, Point::new(1000.0, 750.0), 1.0));
+    NavigatorPanel::new("Navigator", view_at.bind(view), DOCUMENT).show(ui).into()
 }
 
 #[story(NavigatorPanel<'static>, covers = [], drive = Drive::Never)]
 fn navigator_panel_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let view = data.value("view", CanvasView::new(CANVAS, Point::new(1000.0, 750.0), 1.0));
-    NavigatorPanel::new("Navigator", Bind::bound(view), DOCUMENT).enabled(false).show(ui).into()
+    let (view, view_at) = data.value_at("view", CanvasView::new(CANVAS, Point::new(1000.0, 750.0), 1.0));
+    NavigatorPanel::new("Navigator", view_at.bind(view), DOCUMENT).enabled(false).show(ui).into()
 }

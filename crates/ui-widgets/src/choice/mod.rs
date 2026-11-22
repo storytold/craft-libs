@@ -2,13 +2,13 @@
 
 pub mod check;
 pub mod radio;
-mod rating;
-mod segmented;
-mod switch;
+pub(crate) mod rating;
+pub(crate) mod segmented;
+pub(crate) mod switch;
 mod words;
 
-mod swatch;
-mod swatch_table;
+pub(crate) mod swatch;
+pub(crate) mod swatch_table;
 
 pub use check::{Checkbox, CheckboxStyle};
 pub use radio::{GroupStyle, Radio, RadioGroup, RadioKind, RadioStyle};
