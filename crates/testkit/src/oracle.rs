@@ -5,7 +5,10 @@
 //! 1. The file that an explicit-path variable names: `CRAFT_<PROGRAM>` for [`find`] (for example
 //!    `CRAFT_FFMPEG`), or the variable the caller passes to [`find_with`]. An empty value counts as
 //!    unset. When the value is not a file the OS can start, the lookup returns
-//!    [`OracleError::InvalidExplicitPath`] and does not search further.
+//!    [`OracleError::InvalidExplicitPath`]. When the OS refuses to start the file, for example a Unix
+//!    file with an execute bit set only for other users, the lookup returns [`OracleError::Start`].
+//!    Neither error leads to a search of `PATH` or the install folders. A drive-relative value on
+//!    Windows, such as `C:bin\tool.exe`, is resolved to a full path first.
 //! 2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is
 //!    resolved against the current directory at the time of the lookup. On Windows the search tries
 //!    `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists, in its order.
@@ -21,15 +24,22 @@
 //! returns the first refusal as [`OracleError::Start`].
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
-//! non-blank line of its standard output, or of its standard error when standard output is blank.
+//! non-blank line of its standard output, or of its standard error when standard output has none.
+//! A probe timeout too long to set a deadline returns [`OracleError::InvalidTimeout`] before any
+//! file is looked for.
 //! The exit status is not checked. The run is bounded by [`ProbeLimits`]: each output stream may
 //! hold at most `max_output_bytes`, and the child is killed and reaped when it passes `timeout` or
 //! the byte limit. On Unix the child runs in its own process group, and the whole group is killed,
 //! so a process it started that holds the output pipes ends too. On Windows the child's process
 //! tree is ended with `taskkill /T /F`, then the child is killed; when the child has already exited,
-//! the processes it started are not guaranteed to end. A successful lookup is cached for the process under
+//! the processes it started are not guaranteed to end. Ending the tree is best effort: when
+//! `SystemRoot` is unset or not absolute, or `taskkill.exe` does not start, only the child is killed.
+//! A process the child started that outlives it and holds an output pipe keeps that pipe's reader
+//! thread blocked until the process exits. The failed probe waits up to 2 seconds for the readers
+//! and then returns without them. A successful lookup is cached for the process under
 //! every input it read (the program, the version argument, the explicit variable and its value,
-//! `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A failed lookup is
+//! `PATH`, `PATHEXT`, the current directory, the install folders, the full path of each
+//! drive-relative input and the limits). A failed lookup is
 //! not cached.
 //!
 //! No function here panics. [`require_oracle!`](crate::require_oracle), [`require_ffmpeg!`](crate::require_ffmpeg)
@@ -42,7 +52,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -421,6 +431,9 @@ struct Key {
     windows: bool,
     cwd: Option<PathBuf>,
     known_dirs: Vec<PathBuf>,
+    /// The full paths of the drive-relative inputs, which on Windows can depend on another drive's
+    /// current directory.
+    drive_relative: Vec<Option<PathBuf>>,
     limits: ProbeLimits,
 }
 
@@ -436,9 +449,19 @@ impl Key {
             windows: s.windows,
             cwd: s.cwd.map(Path::to_path_buf),
             known_dirs: s.known_dirs.to_vec(),
+            drive_relative: drive_relative_anchors(s),
             limits,
         }
     }
+}
+
+/// [`anchored`] for each drive-relative input of `s`, such as `C:bin`: the explicit path, the `PATH`
+/// entries and the install folders, in that order. Other inputs are left out.
+fn drive_relative_anchors(s: &Search<'_>) -> Vec<Option<PathBuf>> {
+    let explicit = s.explicit.map(PathBuf::from);
+    let on_path = s.path_list.map(|list| std::env::split_paths(list).collect::<Vec<_>>()).unwrap_or_default();
+    let drive_relative = |p: &PathBuf| !p.is_absolute() && matches!(p.components().next(), Some(Component::Prefix(_)));
+    explicit.into_iter().chain(on_path).chain(s.known_dirs.iter().cloned()).filter(drive_relative).map(|p| anchored(&p, s.cwd)).collect()
 }
 
 fn cache() -> &'static Mutex<HashMap<Key, Oracle>> {
@@ -451,6 +474,9 @@ fn lookup(s: &Search<'_>, version_arg: &str, limits: ProbeLimits) -> Result<Orac
     let key = Key::new(s, version_arg, limits);
     if let Some(hit) = cache().lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
         return Ok(hit.clone());
+    }
+    if Instant::now().checked_add(limits.timeout).is_none() {
+        return Err(OracleError::InvalidTimeout { timeout: limits.timeout });
     }
     let mut refused = None;
     for path in locate(s)? {
@@ -488,9 +514,22 @@ fn valid_name(program: &str) -> bool {
     !program.is_empty() && program != "." && program != ".." && !program.contains(['/', '\\', ':', '\0'])
 }
 
-/// `dir` as an absolute path: a relative one is joined to `cwd`, or dropped without a `cwd`.
+/// `dir` as an absolute path: a relative one is joined to `cwd`, or dropped without a `cwd`. On
+/// Windows a drive-relative path such as `C:bin` is joined to `cwd` when `cwd` is on that drive, and
+/// is otherwise resolved against that drive's current directory.
 fn anchored(dir: &Path, cwd: Option<&Path>) -> Option<PathBuf> {
-    if dir.is_absolute() { Some(dir.to_path_buf()) } else { cwd.map(|c| c.join(dir)) }
+    if dir.is_absolute() {
+        return Some(dir.to_path_buf());
+    }
+    let mut parts = dir.components();
+    let Some(Component::Prefix(drive)) = parts.next() else {
+        return cwd.map(|c| c.join(dir));
+    };
+    let on_drive = |c: &Path| matches!(c.components().next(), Some(Component::Prefix(p)) if p.as_os_str().eq_ignore_ascii_case(drive.as_os_str()));
+    match cwd {
+        Some(c) if on_drive(c) => Some(c.join(parts.as_path())),
+        _ => std::path::absolute(dir).ok().filter(|p| p.is_absolute()),
+    }
 }
 
 /// The file names tried in each folder, in order.
@@ -558,10 +597,10 @@ fn locate<'s>(s: &'s Search<'_>) -> Result<Box<dyn Iterator<Item = PathBuf> + 's
     Ok(Box::new(files.filter(move |p| startable(p, s.windows))))
 }
 
-/// The first non-blank line of `stdout`, or of `stderr` when `stdout` is blank, trimmed.
+/// The first non-blank line of `stdout`, or of `stderr` when `stdout` has none, trimmed.
 fn version_line(stdout: &[u8], stderr: &[u8]) -> String {
-    let text = if stdout.iter().all(u8::is_ascii_whitespace) { stderr } else { stdout };
-    String::from_utf8_lossy(text).lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().to_owned()
+    let first = |text: &[u8]| String::from_utf8_lossy(text).lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_owned);
+    first(stdout).or_else(|| first(stderr)).unwrap_or_default()
 }
 
 /// A finished child's status and output.
@@ -1147,6 +1186,39 @@ mod tests {
         assert_eq!(version_line(b"qpdf version 11.9.0\nRun qpdf --copyright\n", b"ignored"), "qpdf version 11.9.0");
         assert_eq!(version_line(b"\n", b"pdftoppm version 24.02.0\n"), "pdftoppm version 24.02.0");
         assert_eq!(version_line(b"", b""), "");
+        // Standard output that holds only a no-break space has no non-blank line either.
+        assert_eq!(version_line("\u{a0}\n".as_bytes(), b"tool 1.0\n"), "tool 1.0");
+    }
+
+    #[test]
+    fn an_invalid_timeout_is_an_error_when_nothing_is_found() {
+        let limits = ProbeLimits { max_output_bytes: 1024, timeout: Duration::MAX };
+        let got = find_in("craft-testkit-no-such-oracle-binary", "-v", None, None, &[], limits);
+        assert!(matches!(got, Err(OracleError::InvalidTimeout { .. })), "{got:?}");
+    }
+
+    /// A drive-relative explicit path or `PATH` entry, such as `C:bin\tool.exe`, is joined to the
+    /// current directory when that directory is on the same drive.
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_relative_path_is_anchored_to_the_current_directory() {
+        let d = Scratch::new("drive-relative");
+        std::fs::create_dir(d.path().join("bin")).unwrap();
+        let exe = d.file(r"bin\tool.exe");
+        let Some(Component::Prefix(drive)) = d.path().components().next() else {
+            panic!("{} has no drive", d.path().display());
+        };
+        let mut given = drive.as_os_str().to_os_string();
+        given.push(r"bin\tool.exe");
+        let mut s = search("tool", Some(given.as_os_str()), None, &[]);
+        s.windows = true;
+        s.cwd = Some(d.path());
+        assert_eq!(locate(&s).unwrap(), exe);
+        let mut dir = drive.as_os_str().to_os_string();
+        dir.push("bin");
+        s.explicit = None;
+        s.path_list = Some(dir.as_os_str());
+        assert_eq!(locate(&s).unwrap(), exe);
     }
 
     #[test]
