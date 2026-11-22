@@ -515,7 +515,9 @@ impl<W: WindingNumber> Topology<W> {
     ///
     /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
     /// times the paths' largest coordinate magnitude is replaced by that value. The
-    /// other constructors pass `eps` through here, or follow the same rule.
+    /// other constructors pass `eps` through here, or follow the same rule. None of
+    /// them returns an error for an invalid `eps`; [`crate::binary_op_with_eps`]
+    /// returns [`crate::Error::InvalidEps`] for one instead.
     pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, NonClosedPath>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,

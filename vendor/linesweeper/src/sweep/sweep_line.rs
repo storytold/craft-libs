@@ -362,6 +362,8 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
     /// times the segments' largest coordinate magnitude is replaced by that value.
+    /// No error is returned for it; [`crate::binary_op_with_eps`] returns
+    /// [`crate::Error::InvalidEps`] for an invalid `eps` instead.
     pub fn new_with_correctness(
         segments: &'segs Segments,
         eps: f64,
