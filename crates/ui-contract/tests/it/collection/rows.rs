@@ -474,6 +474,41 @@ fn a_selected_lead_that_leaves_the_source_moves_the_lead_and_leaves_the_selectio
     assert_eq!(leads.last(), Some(&13), "the lead moves to the key now in its place");
 }
 
+/// A lead whose key leaves the source moves to the host's current item without a report: the host is there already
+/// (an Undo that removes the current page, whose host has picked another).
+#[trial]
+fn a_lead_that_leaves_the_source_takes_the_hosts_current_item_unreported() {
+    let rows = RefCell::new(vec![10_usize, 11, 12, 13]);
+    let current = Cell::new(12);
+    let events = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let rows = rows.borrow();
+        let source = keyed(&rows, |row| *row);
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let out = List::new(SelectMode::Single)
+                .arrows_move_only()
+                .current(current.get())
+                .id_salt("list")
+                .show_items(ui, &source, &mut |_, _| super::kit::Row::new());
+            events.borrow_mut().extend(out.events);
+        });
+    };
+    frames.idle(3, &mut show);
+    pointer::click(&mut frames, ORIGIN + Vec2::new(5.0, ROW_H * 2.5), &mut show);
+    let lead = |events: &RefCell<Vec<CollectionEvent<usize, Dismissed>>>| {
+        events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).last()
+    };
+    assert_eq!(lead(&events), Some(12), "the press made the current row the lead");
+    events.borrow_mut().clear();
+    rows.borrow_mut().retain(|row| *row != 12);
+    current.set(10);
+    frames.idle(2, &mut show);
+    assert_eq!(lead(&events), None, "the host's own move is not reported back");
+    press(&mut frames, Key::ArrowDown, Modifiers::NONE, &mut show);
+    assert_eq!(lead(&events), Some(11), "the lead stood on the current item: Down steps to the row after it");
+}
+
 /// 17.3, I1: the lead row above the view grows (an auto row it measures taller): the rows in view stay where they
 /// were, in the frame it grows, and the frame after runs no extra pass. Guards the collection's scroll anchor: its
 /// position follows the first row at or after the view's start.

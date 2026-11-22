@@ -259,7 +259,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
         self.open_lead(comp);
-        self.follow_lead_source();
+        self.follow_lead_source(comp);
         // A lead set in place (from the selection, `open_lead`, a row that left) has not rested yet: a lead that comes
         // back to a row it rested on before reports the rest again.
         if self.lead.rested != self.lead.key {

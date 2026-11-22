@@ -253,6 +253,12 @@ impl<'a> List<'a> {
         self
     }
 
+    /// The host's current item.
+    pub fn current(mut self, key: usize) -> Self {
+        self.items = self.items.current(Some(key));
+        self
+    }
+
     pub fn tree(mut self) -> Self {
         self.tree = true;
         self

@@ -260,16 +260,21 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             .any(|(owner, part)| owner == item && part.is_some_and(|part| pointer::part_senses(ctx, owner, part, Sense::CLICK)))
     }
 
-    /// A lead whose key left the source moves to the key now in its place, else the one before it. The selection is
+    /// A lead whose key left the source moves to the host's current item when the source holds it, with no report: the
+    /// host is there already. Otherwise it moves to the key now in its place, else the one before it. The selection is
     /// the host's: a row that left (deleted, or hidden by a filter) is not replaced by its neighbour. The user did not
     /// move the lead, so the new lead does not rest at once.
-    pub(super) fn follow_lead_source(&mut self) {
+    pub(super) fn follow_lead_source(&mut self, comp: &C) {
         let len = self.source.len();
         if let Some(key) = self.lead.key.clone()
             && self.index_of(&key).is_none()
         {
             self.lead.key = None;
-            if len > 0 {
+            let current = comp.items().current.as_deref().and_then(|key| key.downcast_ref::<C::Key>());
+            if let Some((at, key)) = current.and_then(|key| self.index_of(key).map(|at| (at, key.clone()))) {
+                self.lead.key = Some(key);
+                self.lead.at = at;
+            } else if len > 0 {
                 self.place_lead(self.lead.at.min(len - 1), LeadSource::Keys);
             }
         } else if let Some(at) = self.lead.key.as_ref().and_then(|key| self.index_of(key)) {
