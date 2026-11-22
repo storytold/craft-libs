@@ -106,3 +106,27 @@ fn an_unasked_line_makes_the_connection_unusable_before_sending() {
     assert!(client.is_broken(), "the unusable connection is closed");
     assert_eq!(server.join().unwrap(), None, "the call sent nothing");
 }
+
+// A server that refuses a connection at accept writes why and closes: the sign-in reads that waiting line as its
+// answer, so the caller learns the reason, and sends nothing.
+#[trial]
+fn a_refusal_waiting_at_sign_in_is_the_reason_connect_gives() {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut out = stream;
+        writeln!(out, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"})).unwrap();
+        out.flush().unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).ok().filter(|&read| read > 0).map(|_| line)
+    });
+    let stream = std::net::TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+    assert!(stream.peek(&mut [0]).unwrap() > 0, "the refusal is waiting before the sign-in");
+    let signed = ControlClient::over(stream).unwrap().sign_in(TOKEN);
+    assert_eq!(signed.err(), Some(ConnectError::Refused("connection limit reached".into())));
+    assert_eq!(server.join().unwrap(), None, "the sign-in sent nothing");
+}

@@ -68,17 +68,38 @@ impl ControlClient {
     /// Connect (read timeout [`CALL_TIMEOUT`]), send
     /// `{"id": 1, "method": "auth", "params": {"token": token}}` and read one reply line; `Err` with
     /// the reply's `error` text as `Refused` when it isn't `ok`, or the I/O error's message as `Transport`.
+    /// A line the server wrote before the request (a refusal at accept) is the reply, and nothing is sent.
     pub fn connect(addr: SocketAddr, token: &str) -> Result<Self, ConnectError> {
         let io = |e: std::io::Error| ConnectError::Transport(e.to_string());
         let stream = std::net::TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map_err(io)?;
-        stream.set_read_timeout(Some(CALL_TIMEOUT)).map_err(io)?;
-        stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(io)?;
-        let reader = BufReader::new(stream.try_clone().map_err(io)?);
-        let mut client = Self { stream, broken: false, reader, next_id: 2 };
-        // `exchange` marks the client broken on a transport failure only, so an error reply is a refusal.
-        let auth = client.exchange(1, AUTH_METHOD, json!({"token": token}), None);
-        auth.map_err(|e| if client.broken { ConnectError::Transport(e) } else { ConnectError::Refused(e) })?;
-        Ok(client)
+        Self::over(stream).map_err(io)?.sign_in(token)
+    }
+
+    /// A client over a connected `stream`, not yet signed in.
+    fn over(stream: std::net::TcpStream) -> std::io::Result<Self> {
+        stream.set_read_timeout(Some(CALL_TIMEOUT))?;
+        stream.set_write_timeout(Some(IO_TIMEOUT))?;
+        let reader = BufReader::new(stream.try_clone()?);
+        Ok(Self { stream, broken: false, reader, next_id: 2 })
+    }
+
+    /// Sends the sign-in and reads its answer. A server that refuses the connection at once (over its connection
+    /// limit) writes why before any request: that line answers the sign-in, which is then not sent, so only its
+    /// error counts.
+    fn sign_in(mut self, token: &str) -> Result<Self, ConnectError> {
+        let auth = if self.is_usable() {
+            self.round_trip(1, AUTH_METHOD, json!({"token": token}), None)
+        } else {
+            self.read_reply(1, None).and_then(|_| Err(Failure::Io("reply before the sign-in".into())))
+        };
+        match auth {
+            Ok(_) => Ok(self),
+            Err(Failure::Reply(why)) => Err(ConnectError::Refused(why)),
+            Err(Failure::Io(why)) => {
+                self.close();
+                Err(ConnectError::Transport(why))
+            }
+        }
     }
 
     /// Send `{"id": n, "method", "params"}` as one line (ids count up from 2) and read the reply
@@ -124,6 +145,13 @@ impl ControlClient {
         let io = |e: std::io::Error| Failure::Io(e.to_string());
         writeln!(self.stream, "{}", json!({"id": id, "method": method, "params": params})).map_err(io)?;
         self.stream.flush().map_err(io)?;
+        self.read_reply(id, cancelled)
+    }
+
+    /// Reads reply lines until the one with `id`, or with a null id (the server's answer to an unparseable line or a
+    /// refused connection).
+    fn read_reply(&mut self, id: u64, cancelled: Option<&dyn Fn() -> bool>) -> Result<Value, Failure> {
+        let io = |e: std::io::Error| Failure::Io(e.to_string());
         loop {
             if let Some(cancelled) = cancelled {
                 self.wait_for_reply(cancelled)?;
@@ -137,7 +165,7 @@ impl ControlClient {
                 return Err(Failure::Io(format!("reply longer than {MAX_REPLY_BYTES} bytes")));
             }
             let mut reply: Value = serde_json::from_str(&line).map_err(|e| Failure::Io(format!("bad reply: {e}")))?;
-            // A reply to an earlier request (a null id is the server's answer to an unparseable line).
+            // A reply to an earlier request.
             if reply.get("id").is_some_and(|got| !got.is_null() && got != &json!(id)) {
                 continue;
             }
