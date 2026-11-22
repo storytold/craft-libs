@@ -552,10 +552,14 @@ impl Component for ColorWheel<'_> {
         }
         for (index, color) in self.markers.iter().enumerate() {
             let node = access.node(MARKER.at(index as u64), Role::BUTTON);
-            node.name = Name::Text(match self.marker_names.get(index) {
-                Some(name) => cx.env.resolve(name).as_str().to_owned(),
-                None => color.to_hex(),
-            });
+            match self.marker_names.get(index) {
+                // A named marker speaks its colour as its value; an unnamed one is named by it.
+                Some(name) => {
+                    node.name = Name::Text(cx.env.resolve(name).as_str().to_owned());
+                    node.value(color.to_hex());
+                }
+                None => node.name = Name::Text(color.to_hex()),
+            }
         }
     }
 

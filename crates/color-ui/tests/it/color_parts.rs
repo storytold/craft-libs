@@ -202,8 +202,9 @@ impl WheelRig {
     }
 }
 
-/// A square wheel hands a press between the square and the ring to the square; its markers pick on a click and a press
-/// held on one still drags the ring; Shift snaps a ring drag to 45 degrees, in both variants.
+/// A square wheel hands a press between the square and the ring to the square; its named markers speak their colour,
+/// pick on a click, and a press held on one still drags the ring; Shift snaps a ring drag to 45 degrees, in both
+/// variants.
 #[trial]
 fn a_square_wheel_hands_the_inner_press_to_the_square_and_its_markers_pick() {
     let mut rig = WheelRig::new(WheelInner::Square, 3);
@@ -215,7 +216,10 @@ fn a_square_wheel_hands_the_inner_press_to_the_square_and_its_markers_pick() {
     assert_eq!(saturation, 100.0, "beside the square's right edge is full saturation");
     assert!((brightness - 50.0).abs() < 4.0, "level with the square's middle is half brightness: {brightness}");
 
-    let warm = rig.fixture.by_label("Warm").expect("marker").center();
+    let warm = rig.fixture.by_label("Warm").expect("marker");
+    let hex = Srgba::rgb(0.9, 0.2, 0.2).to_hex();
+    assert_eq!(rig.fixture.tree().value_of(warm.node), Some(hex.as_str()), "a named marker speaks its colour as its value");
+    let warm = warm.center();
     rig.fixture.click_at(warm);
     rig.fixture.idle(2);
     assert_eq!(rig.picked.get(), Some(0), "a click on a marker picks it");
