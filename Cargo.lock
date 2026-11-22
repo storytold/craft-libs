@@ -3936,6 +3936,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-shared-vec"
+version = "0.1.0"
+dependencies = [
+ "craft-shared-vec",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-sheet"
 version = "0.1.0"
 
