@@ -351,7 +351,7 @@ fn the_unit_keeps_its_place_at_the_end_of_the_field() {
         v.clear();
         for (at, value) in [5.0, 100.0].into_iter().enumerate() {
             let mut shown = Some(value);
-            let field = NumberField::new("N", Bind::bound(&mut shown)).range(0.0..=100.0).unit_kind(UnitKind::Percent).id_salt(at);
+            let field = NumberField::new("N", Bind::bound(&mut shown)).range(0.0..=100.0).unit_kind(UnitKind::Points).id_salt(at);
             v.push(field.show(ui).response.rect);
         }
     });
@@ -717,4 +717,18 @@ fn the_wheel_over_an_open_presets_list_scrolls_the_list_while_the_field_keeps_fo
     fixture.settle();
     assert!(first_row(&fixture).is_none_or(|row| row.top() < before.top()), "the list scrolled");
     assert_eq!(value.get(), committed, "the field's value stays");
+}
+
+/// A percent field shows one decimal and its sign right after the number ("100.0%"), not the sign apart at the end of
+/// the field.
+#[trial]
+fn a_percent_field_reads_one_decimal_then_the_sign() {
+    let mut fixture = craft_ui::testing::Fixture::new(|ui| {
+        NumberField::new("Scale", Bind::bound(&mut Some(100.0f64))).unit_kind(UnitKind::Percent).range(1.0..=1000.0).show(ui);
+    });
+    fixture.settle();
+    let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let number = painted("100.0").unwrap_or_else(|| panic!("the value shows one decimal: {:?}", fixture.texts().iter().map(|r| r.text.clone()).collect::<Vec<_>>()));
+    let sign = painted("%").unwrap_or_else(|| panic!("the field shows the sign"));
+    assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
 }

@@ -273,6 +273,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
+    /// Whether the field counts percent: it shows one decimal and its sign right after the number.
+    fn is_percent(&self) -> bool {
+        self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
+    }
+
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
     /// reads every length spelling).
     fn number_codec(&self, units: &Units) -> NumberCodec {
@@ -282,7 +287,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 None => units.reader(self.unit_kind),
             };
             let codec = NumberCodec::new(reader, self.decimals());
-            if self.fixed_decimals.is_some() { codec.fixed() } else { codec }
+            if self.fixed_decimals.is_some() || self.is_percent() { codec.fixed() } else { codec }
         })
     }
 
@@ -290,6 +295,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     fn shown_decimals(&self) -> RangeInclusive<usize> {
         match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
             (Some(codec), _, _, _) => 0..=codec.decimals(),
+            // A percentage reads "100.0%": one decimal, written in full.
+            (None, _, _, Some(UnitKind::Percent)) => 1..=1,
             (None, Some(fixed), _, _) => fixed..=fixed,
             (None, None, Some(max), _) => 0..=max.min(12),
             (None, None, None, Some(kind)) => kind.decimals(),
@@ -483,7 +490,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             cx.label_part(*slot);
         }
         let text = placed.text;
-        self.options.centred = true;
+        // A percentage reads "100.0%": the number stands against its sign, not in the middle of the room.
+        self.options.centred = !self.is_percent();
+        self.options.end_aligned = self.is_percent();
         self.options.mono = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();

@@ -84,6 +84,9 @@ pub struct TextOptions {
     pub mixed: bool,
     /// The text sits in the middle of the part instead of at its start (numbers).
     pub centred: bool,
+    /// The text sits at the part's end edge, against what follows it (a number and its attached unit sign). Ignored
+    /// while `centred`.
+    pub end_aligned: bool,
     /// A plain Left or Right with the whole text selected starts from the end of the text, not from the selection's
     /// start: a field whose last digits are what the user edits (a timecode's frames).
     pub arrows_from_end: bool,
@@ -139,6 +142,7 @@ impl Default for TextOptions {
             submits: false,
             mixed: false,
             centred: false,
+            end_aligned: false,
             arrows_from_end: false,
             unparsed: None,
             own_menu: false,

@@ -34,6 +34,8 @@ pub(crate) struct Edit<'a> {
     pub rtl: bool,
     /// The text sits in the middle of the rect.
     pub centred: bool,
+    /// The text sits at the end edge of the rect (unless `centred`).
+    pub end_aligned: bool,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -84,6 +86,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         preedit,
         rtl,
         centred,
+        end_aligned,
         caret_visible,
         underline,
         galley,
@@ -202,8 +205,10 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .align(match (centred, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, true) => egui::Align2::RIGHT_CENTER,
-                        (false, false) => egui::Align2::LEFT_CENTER,
+                        (false, rtl) => match (end_aligned, rtl) {
+                            (true, false) | (false, true) => egui::Align2::RIGHT_CENTER,
+                            (true, true) | (false, false) => egui::Align2::LEFT_CENTER,
+                        },
                     });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);
