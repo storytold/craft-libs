@@ -74,7 +74,6 @@ craft_ui::words! {
         decorative: "fontPicker.classDecorative" = "Decorative";
         show_styles: "fontPicker.showStyles" = "Show styles";
         hide_styles: "fontPicker.hideStyles" = "Hide styles";
-        sample_arabic: "fontPicker.sampleArabic" = "أبجد";
         format_open_type: "fontPicker.formatOpenType" = "OpenType";
         format_true_type: "fontPicker.formatTrueType" = "TrueType";
         format_variable: "fontPicker.formatVariable" = "Variable";
@@ -495,7 +494,8 @@ fn read<T: Value>(bind: &mut Option<Bind<'_, T>>, cx: &mut impl StageAccess) -> 
 
 /// The font family field. Typing filters the list to the families whose name (in any language) matches, the best
 /// match first, and opens it; a click on the name while the list is closed, the chevron and Alt+Down open it on every family (the click selects the name), Alt+Up closes it. Rows: a star, the
-/// family name in the interface face, a sample in the family's own face at the preview size and the class mark.
+/// family name in the interface face, the sample text (the preview text, else "Sample") in the family's own face at the
+/// preview size and the class mark.
 /// Recent families form a group at the top. Up, Down and Page keys move the keyboard row, which previews, Enter or a
 /// click on a row picks it, Enter on a typed name that is a family picks that family, Escape closes the list and
 /// restores the field, and Tab picks the keyboard row and moves on. While an input method composes, Enter, Escape
@@ -519,7 +519,7 @@ pub struct FontPicker<'a> {
     picked_style: Option<String>,
     rested: Option<String>,
     preview: Preview<String>,
-    /// The preview banner's text.
+    /// The preview banner's text and every row's sample (the sample word when not given).
     #[prop]
     preview_text: Option<&'a str>,
     /// Families the host can fetch but that are not installed, listed with the served mark.

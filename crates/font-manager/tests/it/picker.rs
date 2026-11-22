@@ -501,6 +501,56 @@ fn library_rig() -> (Fixture, Rc<RefCell<Library>>) {
     (fx, state)
 }
 
+/// "أبجد هوز", which neither Inter nor Hack draws.
+const ARABIC_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
+
+/// An open library list over Inter and Hack, with Gotham served, `family` current and `text` as the preview text.
+fn sample_rig(family: &'static str, text: &'static str) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let served = vec!["Gotham".to_owned()];
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .served(&served)
+            .preview_text(text)
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// Each row has one sample, the picker's sample text, in its own face; a face that lacks the text's letters shows its
+/// name instead, in its row and in the banner; and a family without a face shows no sample at all, not the text in the interface face.
+#[trial]
+fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
+    let fx = sample_rig("Inter", "Hello");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: Hello")).is_some(), "{family}'s sample is the preview text");
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family} has no sample word");
+    }
+
+    let fx = sample_rig("Gotham", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Gotham").is_some(), "the banner shows the served family");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: {family}")).is_some(), "{family} lacks Arabic: its sample is its name");
+    }
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "no face draws the text: neither the rows nor the banner of a family without a face paint it"
+    );
+
+    let fx = sample_rig("Inter", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Inter").is_some(), "the banner shows Inter");
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "the banner of a face without the text's letters shows what its row shows, not the text"
+    );
+}
+
 /// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
 /// to open (a recent row included), the sample after the name; and a rule, not blank room, ends the recent group.
 #[trial]

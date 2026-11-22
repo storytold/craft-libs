@@ -260,6 +260,60 @@ fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
     assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
 }
 
+/// A leaf that measures far taller than any row, to show the height a row gives its hosted fields.
+#[derive(craft_ui::contract::Component)]
+struct Tall {
+    #[common]
+    common: craft_ui::contract::Common,
+}
+
+impl craft_ui::contract::Component for Tall {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::IMAGE;
+    const SHOWS_LABEL: bool = false;
+    type Style = super::label::kit::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: TallStyleKey) -> super::label::kit::PlainStyle {
+        super::label::kit::PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(40.0, 1000.0)
+    }
+
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::empty()
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// A hosted field, required or optional, takes its own height up to its row's, as a cell field does: in a row taller
+/// than the base row (a large thumbnail) it gets the whole row, centred, not one base row.
+#[trial]
+fn hosted_fields_take_their_own_height_up_to_the_row() {
+    use craft_ui::list::ThumbSize;
+    let tall = |key: usize| {
+        ListRow::new(NAMES[key])
+            .thumb(ThumbSize::Large, |_, _| {})
+            .trailing_field(Tall { common: craft_ui::contract::Common::new() }.label(format!("Field {key}")), |_| {})
+            .optional_field(Tall { common: craft_ui::contract::Common::new() }.label(format!("Optional {key}")), |_| {})
+    };
+    let (fixture, _) = rows_rig(Vec2::new(800.0, 600.0), tall);
+    let (plain, _) = rows_rig(Vec2::new(800.0, 600.0), |key| ListRow::new(NAMES[key]));
+    let base = plain.by_label(NAMES[0]).expect("the plain row").rect.height();
+    let row = fixture.by_label(NAMES[0]).expect("the tall row").rect;
+    assert!(row.height() > base, "the thumbnail row is taller than the base row: {row:?}, base {base}");
+    for name in ["Field 0", "Optional 0"] {
+        let field = fixture.by_label(name).unwrap_or_else(|| panic!("{name} shows")).rect;
+        assert!((field.height() - row.height()).abs() < 0.5, "{name} takes the row's height: {field:?} in {row:?}");
+        assert!(field.top() >= row.top() - 0.5 && field.bottom() <= row.bottom() + 0.5, "{name} stays in its row");
+        assert!((field.center().y - row.center().y).abs() < 0.5, "{name} is centred on its row");
+    }
+}
+
 /// A list sized to its content makes room for each row's optional item and shows its label whole, whether the label
 /// is shorter or longer than its least width.
 #[trial]
