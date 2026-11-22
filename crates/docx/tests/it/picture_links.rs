@@ -125,3 +125,91 @@ fn a_linked_picture_is_saved_with_its_link_on_the_drawing_too() {
     let edited = out.finish().unwrap().into_inner();
     assert_eq!(picture_links(&craft_docx::read(&edited).unwrap())[0], Some("https://example.com/saved".to_string()));
 }
+
+// Original synthetic VML package for #2912, reported by denstu473; no reference-app asset.
+#[test]
+fn a_vml_picture_keeps_its_crop_when_saved() {
+    fn image_crop(doc: &Document, original_png: &[u8]) -> [f32; 4] {
+        let paragraph = doc.body[0].as_para().expect("the synthetic picture's paragraph");
+        assert_eq!(paragraph.objects.len(), 1, "the VML picture must be decoded before testing crop");
+        let InlineObject::Image { media, w, h, alt, crop, fx, .. } = &paragraph.objects[0] else {
+            panic!("the synthetic object must be an image");
+        };
+        assert!((*w - 24.0).abs() < 0.001 && (*h - 12.0).abs() < 0.001, "picture size changed: {w} x {h}");
+        assert_eq!(alt, "cropped square");
+        assert_eq!(doc.media.get(media).expect("the picture's embedded media").as_slice(), original_png);
+        assert_eq!(*fx, craft_wordmodel::picfx::PicFx::new(40_000, 0, 0));
+        *crop
+    }
+    fn crops_near(actual: [f32; 4], expected: [f32; 4], tolerance: f32) -> bool {
+        actual.into_iter().zip(expected).all(|(a, b)| (a - b).abs() <= tolerance)
+    }
+
+    let original_png = png();
+    let mut lost = Vec::new();
+    // Crop slots are left, top, right, bottom. These distinct fractions are exactly binary.
+    let positive = [0.125, 0.0625, 0.25, 0.5];
+    for (label, attributes, expected, saved_rect) in [
+        ("default", "", [0.0; 4], None),
+        (
+            "report fixed fractions",
+            r#"cropleft="8192f" croptop="3277f" cropright="16384f" cropbottom="6554f""#,
+            [8192.0f32 / 65_536.0, 3277.0 / 65_536.0, 16384.0 / 65_536.0, 6554.0 / 65_536.0],
+            Some(r#"<a:srcRect l="12500" t="5000" r="25000" b="10001"/>"#),
+        ),
+        (
+            "fixed fractions",
+            r#"cropleft="8192f" croptop="4096f" cropright="16384f" cropbottom="32768f""#,
+            positive,
+            Some(r#"<a:srcRect l="12500" t="6250" r="25000" b="50000"/>"#),
+        ),
+        (
+            "decimal fractions",
+            r#"cropleft="0.125" croptop="0.0625" cropright="0.25" cropbottom="0.5""#,
+            positive,
+            Some(r#"<a:srcRect l="12500" t="6250" r="25000" b="50000"/>"#),
+        ),
+        (
+            "percentage fractions",
+            r#"cropleft="12.5%" croptop="6.25%" cropright="25%" cropbottom="50%""#,
+            positive,
+            Some(r#"<a:srcRect l="12500" t="6250" r="25000" b="50000"/>"#),
+        ),
+        (
+            "bounded fractions",
+            r#"cropleft="-25%" croptop="125%" cropright="not-a-fraction" cropbottom="NaN""#,
+            [0.0, 1.0, 0.0, 0.0],
+            Some(r#"<a:srcRect l="0" t="100000" r="0" b="0"/>"#),
+        ),
+    ] {
+        // The local namespace keeps the existing package helper and every old fixture intact.
+        let body = format!(
+            r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape style="width:24pt;height:12pt" alt="cropped square"><v:imagedata r:id="rIdPic" gain="1" blacklevel="0.2" {attributes}/></v:shape></w:pict></w:r></w:p>"#
+        );
+        let doc = craft_docx::read(&package(&body)).unwrap();
+        let read_crop = image_crop(&doc, &original_png);
+        let saved = craft_docx::write(&doc).unwrap();
+        let xml = part(&saved, "word/document.xml");
+        let reopened = craft_docx::read(&saved).unwrap();
+        let reopened_crop = image_crop(&reopened, &original_png);
+
+        if let Some(saved_rect) = saved_rect {
+            if !crops_near(read_crop, expected, 0.000_001) {
+                lost.push(format!("{label}: read crop {read_crop:?}"));
+            }
+            if !xml.contains(saved_rect) {
+                lost.push(format!("{label}: saved srcRect"));
+            }
+            // DrawingML uses 100000 units per fraction; allow its rounding on a real re-read.
+            if !crops_near(reopened_crop, expected, 0.000_01) {
+                lost.push(format!("{label}: reopened crop {reopened_crop:?}"));
+            }
+        } else {
+            // The zero/default control must work before any positive-crop regression is reported.
+            assert_eq!(read_crop, [0.0; 4]);
+            assert!(!xml.contains("<a:srcRect"), "{xml}");
+            assert_eq!(reopened_crop, [0.0; 4]);
+        }
+    }
+    assert!(lost.is_empty(), "VML picture crops were lost: {lost:?}");
+}
