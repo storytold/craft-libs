@@ -325,9 +325,12 @@ impl Keymap {
     }
 
     /// Chords that cannot be assigned or bound, e.g. [`reserved::system`](crate::reserved::system).
-    /// Without this call the keymap reserves no chord.
+    /// Without this call the keymap reserves no chord. A default binding on a reserved chord is dropped.
     pub fn with_reserved(mut self, chords: Vec<Chord>) -> Keymap {
         self.reserved = chords;
+        let mut defaults = std::mem::take(&mut self.defaults);
+        defaults.iter_mut().for_each(|list| list.retain(|(trigger, _)| !self.is_reserved(&trigger.chord)));
+        self.defaults = defaults;
         self.reload();
         self
     }
