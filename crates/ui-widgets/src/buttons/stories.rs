@@ -432,13 +432,14 @@ fn button_with_detail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::new("Quick start").icon(IconId::new("eye")).detail("Learn the basics of drawing in five minutes").show(ui).into()
 }
 
-/// A link inside a sentence.
+/// A link inside a sentence short enough to stay on one line at every text size. It has no closing stop: a neutral
+/// end moves under right-to-left and changes the run's width.
 #[story(Link, covers = [], drive = Drive::Never, title = "In a sentence")]
 fn link_in_sentence(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
-        Text::new("Every shortcut is listed in").show(ui);
+        Text::new("See").show(ui);
         Link::new("the shortcuts guide").url("https://example.com/shortcuts").id_salt("guide").show(ui);
-        Text::new("and can be changed.").show(ui);
+        Text::new("to change a key").show(ui);
     });
     shown.into()
 }
