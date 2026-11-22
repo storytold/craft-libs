@@ -274,6 +274,8 @@ pub struct DateFormat {
     hour_cycle: Option<crate::HourCycle>,
     /// Write `0`–`9` whatever the locale's digits are.
     latin_digits: bool,
+    /// The day a week starts on when the app sets one apart from the locale.
+    week_start: Option<Weekday>,
     /// Formatters and names, built on first use and shared by clones.
     cache: Arc<Cache>,
 }
@@ -374,13 +376,18 @@ impl PartsWrite for Spliced {
 impl DateFormat {
     /// The format for `region`'s time locale and clock.
     pub fn new(region: &Region) -> DateFormat {
-        Self { locale: region.time.clone(), hour_cycle: region.hour_cycle, latin_digits: false, cache: Arc::default() }
+        Self { locale: region.time.clone(), hour_cycle: region.hour_cycle, latin_digits: false, week_start: None, cache: Arc::default() }
     }
 
     /// This format writing `0`–`9` for [`Digits::Latin`], else the locale's own digits. Formatters
     /// are rebuilt on first use.
     pub fn with_digits(self, digits: Digits) -> DateFormat {
         DateFormat { latin_digits: digits == Digits::Latin, cache: Arc::default(), ..self }
+    }
+
+    /// This format with weeks starting on `day` in place of the region's.
+    pub fn with_first_weekday(self, day: Weekday) -> DateFormat {
+        DateFormat { week_start: Some(day), ..self }
     }
 
     /// The format for a locale tag (`de-CH`), with the locale's clock.
@@ -559,6 +566,9 @@ impl DateFormat {
     /// The day a week starts on in the region: Sunday in the United States, Monday in most of
     /// Europe, Saturday in parts of the Middle East.
     pub fn first_weekday(&self) -> Weekday {
+        if let Some(day) = self.week_start {
+            return day;
+        }
         let first = self.cache.first_weekday.get_or_init(|| {
             let provider = data::dates_provider()?;
             let locale = self.icu_locale(false);

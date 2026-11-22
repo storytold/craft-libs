@@ -13,7 +13,7 @@ use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{EditEvent, Metrics, Mixed, Sense};
-use craft_i18n::DateFormat;
+use craft_i18n::{DateFormat, Weekday};
 use egui::{Response, Ui};
 use std::sync::Arc;
 
@@ -36,6 +36,8 @@ pub(super) struct CalendarAt<'a> {
     pub(super) min: Option<PickedDate>,
     pub(super) max: Option<PickedDate>,
     pub(super) today: Option<PickedDate>,
+    /// The first weekday the host sets, for the page's grid.
+    pub(super) first_weekday: Option<Weekday>,
     pub(super) dates: &'a DateFormat,
     pub(super) words: &'a PickerWords,
     pub(super) name: &'a Label,
@@ -58,7 +60,7 @@ struct Followed {
 
 /// The calendar: a precision switch when more than one is offered, the page, and Today and Clear.
 pub(super) fn calendar_body(ui: &mut Ui, body: &mut BodyCx<'_>, at: CalendarAt<'_>) -> Chosen {
-    let CalendarAt { current, settled, precisions, min, max, today, dates, words, name } = at;
+    let CalendarAt { current, settled, precisions, min, max, today, first_weekday, dates, words, name } = at;
     let Followed { view: kept, seen } = *body.memory::<Followed>();
     let mut view = match kept {
         Some(view) if seen == settled => view,
@@ -93,6 +95,9 @@ pub(super) fn calendar_body(ui: &mut Ui, body: &mut BodyCx<'_>, at: CalendarAt<'
     }
     if let Some(today) = today {
         calendar = calendar.today(today);
+    }
+    if let Some(day) = first_weekday {
+        calendar = calendar.first_weekday(day);
     }
     let page = calendar.show(ui);
     if let Some(next) = page.moved {
@@ -151,6 +156,9 @@ pub struct CalendarPopover<'a> {
     /// (`RootEnv::today`); without either neither shows.
     #[prop]
     today: Option<PickedDate>,
+    /// The day the calendar's weeks start on; the locale's when not set.
+    #[prop]
+    first_weekday: Option<Weekday>,
 }
 
 impl<'a> CalendarPopover<'a> {
@@ -170,6 +178,7 @@ impl<'a> CalendarPopover<'a> {
             min: None,
             max: None,
             today: None,
+            first_weekday: None,
         }
         .label(label)
     }
@@ -220,7 +229,10 @@ impl Container for CalendarPopover<'_> {
 
     /// The calendar. Its output's value is `NoValue`, so a pick goes to the binding as a set and closes the popover.
     fn header(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>) {
-        let dates = body.env.dates();
+        let dates = match self.first_weekday {
+            Some(day) => Arc::new((*body.env.dates()).clone().with_first_weekday(day)),
+            None => body.env.dates(),
+        };
         let words = body.words::<PickerWords>();
         let name = body.label();
         let read = self.value.reborrow().read(body);
@@ -236,6 +248,7 @@ impl Container for CalendarPopover<'_> {
             min: self.min,
             max: self.max,
             today,
+            first_weekday: self.first_weekday,
             dates: &dates,
             words: &words,
             name: &name,

@@ -25,7 +25,7 @@ use crate::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::text::{Adornment, FieldStyle, place, reserve};
 use craft_behavior::{CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Mixed, PartKey, Sense};
-use craft_i18n::{CalendarDate, DateFormat};
+use craft_i18n::{CalendarDate, DateFormat, Weekday};
 use egui::{Rect, Vec2};
 use popover::{CalendarAt, calendar_body};
 use std::sync::Arc;
@@ -213,16 +213,27 @@ pub struct DatePicker<'a> {
     /// (`RootEnv::today`); without either neither shows.
     #[prop]
     today: Option<PickedDate>,
+    /// The day the calendar's weeks start on; the locale's when not set.
+    #[prop]
+    first_weekday: Option<Weekday>,
 }
 
 impl<'a> DatePicker<'a> {
     /// A date picker named `label` over `value`, at every precision.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<PickedDate>>) -> Self {
-        DatePicker { common: Common::new(), value, precisions: &DatePrecision::ALL, min: None, max: None, today: None }.label(label)
+        DatePicker { common: Common::new(), value, precisions: &DatePrecision::ALL, min: None, max: None, today: None, first_weekday: None }.label(label)
     }
 
     fn offered(&self) -> &'a [DatePrecision] {
         offered(self.precisions)
+    }
+
+    /// `dates` with the calendar's first weekday when this picker sets one.
+    fn dates(&self, dates: Arc<DateFormat>) -> Arc<DateFormat> {
+        match self.first_weekday {
+            Some(day) => Arc::new((*dates).clone().with_first_weekday(day)),
+            None => dates,
+        }
     }
 
     fn codec(&self, dates: Arc<DateFormat>, mixed: bool) -> DateCodec {
@@ -296,7 +307,7 @@ impl Component for DatePicker<'_> {
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         crate::menu::text_menu(ui, cx, &TextOptions::new());
         let popup = cx.popup("calendar");
-        let dates = cx.env.dates();
+        let dates = self.dates(cx.env.dates());
         let words = cx.words::<PickerWords>();
         let current = cx.value().copied().flatten();
         // The page follows the value the hover preview began from: a day this picker proposes under the pointer is
@@ -315,6 +326,7 @@ impl Component for DatePicker<'_> {
             min: self.min,
             max: self.max,
             today,
+            first_weekday: self.first_weekday,
             dates: &dates,
             words: &words,
             name: &name,
