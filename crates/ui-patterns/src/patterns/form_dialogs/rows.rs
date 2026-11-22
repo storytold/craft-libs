@@ -373,7 +373,7 @@ impl Line<'_> {
     /// The help button after a row's control: a press is noted for the pass, which reports the row's link.
     fn help_button(&self, ui: &mut Ui) {
         let help = Env::of(ui).words::<ParamWords>().help.clone();
-        if clicked(&IconButton::new(IconId::new("help")).label(help).id_salt("help").show(ui)) {
+        if clicked(&IconButton::new(IconId::new("open")).label(help).id_salt("help").show(ui)) {
             self.helped.set(true);
         }
     }
