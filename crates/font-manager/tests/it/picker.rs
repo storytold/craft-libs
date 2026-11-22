@@ -504,7 +504,7 @@ fn family_names_line_up_after_the_star_and_before_the_sample() {
     let names: Vec<egui::Rect> = fx
         .texts()
         .iter()
-        .filter(|painted| (painted.text == "Inter" || painted.text == "Hack") && !banner.intersects(painted.rect))
+        .filter(|painted| (painted.text == "Inter" || painted.text == "Hack") && painted.rect.top() >= banner.bottom())
         .map(|painted| painted.rect)
         .collect();
     assert_eq!(names.len(), 3, "Hack in the recent group and in the list, Inter once: {names:?}");
@@ -512,7 +512,8 @@ fn family_names_line_up_after_the_star_and_before_the_sample() {
     let star = fx.by_label("Favorite Inter").expect("Inter's star").rect;
     let inter = names.iter().find(|rect| (rect.center().y - star.center().y).abs() < star.height()).expect("Inter's name beside its star");
     assert!(star.right() <= inter.left(), "the star comes first: {star:?} {inter:?}");
-    let sample = fx.texts().iter().all(|painted| painted.text != "Sample" || painted.rect.left() >= inter.right());
+    let sample =
+        fx.texts().iter().all(|painted| painted.text != "Sample" || painted.rect.top() < banner.bottom() || painted.rect.left() >= inter.right());
     assert!(sample, "no sample before a name");
     let recent = names.iter().map(|rect| rect.bottom()).fold(f32::INFINITY, f32::min);
     let rule = fx.shape_bounds().iter().any(|shape| shape.top() >= recent && shape.height() < 2.0 && shape.width() > star.width() * 4.0);

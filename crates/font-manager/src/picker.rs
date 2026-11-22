@@ -3,7 +3,7 @@
 //! drawn in their own face, favourites (stars), recent families at the top, class and feature filters above the
 //! list and a "similar fonts" filter. Behaviour follows Photoshop's font menu.
 
-mod banner;
+pub(crate) mod banner;
 pub(crate) mod rank;
 mod rows;
 #[cfg(feature = "suite")]
@@ -618,6 +618,9 @@ pub struct FontPickerStyle {
     /// The list's sample height and family row height at each preview size, none first: the thumbnail sides
     /// (`size.thumb.*`) and the height of a list row holding one.
     pub(crate) samples: [Sample; 4],
+    /// The width of the list's name column: [`NAME_SAMPLE`] in a row's text, so the list holds the names the field
+    /// holds.
+    pub(crate) name_column: f32,
 }
 
 /// The sample of a family row at one preview size: how high its band is, and how high the row holding it is.
@@ -662,7 +665,8 @@ impl Component for FontPicker<'_> {
             sample(ThumbSize::Large, thumb.lg),
         ];
         let warning = Stateful::new(warn).off(States::new(warn, warn, warn, off));
-        FontPickerStyle { surface: cx.field(), metrics: field.metrics(), field, warning, samples }
+        let name_column = cx.text_width(craft_theme::TypeRole::Body, NAME_SAMPLE);
+        FontPickerStyle { surface: cx.field(), metrics: field.metrics(), field, warning, samples, name_column }
     }
 
     /// The wheel steps the family through the list.

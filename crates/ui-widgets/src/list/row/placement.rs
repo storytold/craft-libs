@@ -268,7 +268,13 @@ impl ListRow<'_> {
         if self.sub_row {
             return 0;
         }
-        self.depth.map_or(0, |depth| self.leaves.steps(depth, self.group.is_some()))
+        self.depth.map_or(0, |depth| tree_steps(depth, self.group.is_some()))
+    }
+
+    /// Whether the row holds the disclosure column: a group, and under [`TreeLeaves::Aligned`] a top-level leaf, whose
+    /// column stays empty. The column is room the label never gives up, as an indent does.
+    fn keeps_disclosure(&self) -> bool {
+        self.group.is_some() || (self.leaves == TreeLeaves::Aligned && self.depth == Some(0) && !self.sub_row)
     }
 
     /// The widths of the trailing items and the leading text's slot: as `text_width` measures a text, the icon side for
@@ -400,7 +406,7 @@ impl ListRow<'_> {
         let inner = Flow::new(band, rtl);
         let leading = self.leading(sizes, widths);
         let leading_width = leading.map_or(0.0, |side| side + sizes.gap);
-        let disclosure = if self.group.is_some() { sizes.icon } else { 0.0 };
+        let disclosure = if self.keeps_disclosure() { sizes.icon } else { 0.0 };
         let marker = if self.clipped { sizes.icon } else { 0.0 };
         let check = if self.check.is_some() { sizes.icon + sizes.gap } else { 0.0 };
         let column = disclosure + marker + check;
@@ -452,7 +458,7 @@ impl ListRow<'_> {
         let column_start = base + indent + if self.leading_first { leading_width } else { 0.0 };
         let leading_start = base + indent + if self.leading_first { 0.0 } else { column };
         let label_start = base + indent + column + leading_width;
-        let disclosure_rect = (disclosure > 0.0).then(|| inner.span(column_start, disclosure));
+        let disclosure_rect = self.group.is_some().then(|| inner.span(column_start, disclosure));
         let marker_rect = (marker > 0.0).then(|| inner.span(column_start + disclosure, marker));
         let check_rect = (check > 0.0).then(|| inner.span(column_start + disclosure + marker, sizes.icon));
         let mut at = leading_start;
@@ -519,18 +525,9 @@ pub enum TreeLeaves {
     /// no disclosure column.
     #[default]
     Compact,
-    /// Every leaf keeps the disclosure column, so its label lines up with the labels of the groups beside it: a font
-    /// menu's families with and without styles.
+    /// A top-level leaf keeps an empty disclosure column, so its label lines up with the labels of the groups beside
+    /// it: a font menu's families with and without styles.
     Aligned,
-}
-
-impl TreeLeaves {
-    /// The indent steps of a tree row at `depth` under this rule: [`tree_steps`], and for `Aligned` one step more for
-    /// a top-level leaf.
-    pub fn steps(self, depth: usize, group: bool) -> usize {
-        let aligned = self == TreeLeaves::Aligned && depth == 0 && !group;
-        tree_steps(depth, group) + usize::from(aligned)
-    }
 }
 
 /// The width of a character of a trailing text under fixed sizes.

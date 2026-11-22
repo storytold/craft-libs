@@ -5,7 +5,6 @@
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Preview, Selection, SizeHint};
 use craft_font_catalog::Catalog;
@@ -14,7 +13,7 @@ use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::contract::overlay::Dismiss;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnSpec, Cx, Edit as _, LeadSource, Overlay, OverlayUi, Overlays as _, Props as _, Remember as _, Show as _,
-    ShowCollection as _, ShowContainer as _, Styled as _, ToggleColumn, WordSetCx as _, clicked,
+    ShowCollection as _, ShowContainer as _, ToggleColumn, WordSetCx as _, clicked,
 };
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -281,12 +280,13 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
     filters.class = usize::from(picked).checked_sub(1).and_then(|i| FontClass::ALL.get(i).copied());
 }
 
-/// The sample of a family row: `text` in the regular face of `family` at `points`, named by the family; the
-/// interface face for a family the catalog lacks.
-fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, text: String, points: f32) -> FontSample<'a> {
+/// The sample of a family row: `text` in the regular face of `family` at `points`, named "{shown}: {text}" as the font
+/// manager names its samples, so the row keeps the family's name to itself; the interface face for a family the
+/// catalog lacks.
+fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, points: f32) -> FontSample<'a> {
     let face =
         infos.families.get(family).map_or(SampleFace::Interface, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
-    FontSample::new(Label::from(family.to_owned()), text, face, points)
+    FontSample::new(format!("{shown}: {text}"), text, face, points)
 }
 
 /// The name the banner shows for `family`: its row's shown name when the list holds one, else its name in the
@@ -373,7 +373,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     if !plain {
         columns.push(ColumnSpec::toggle(STAR, words.favorites.clone(), ToggleColumn::default()).icon(IconId::new("star")));
     }
-    columns.push(ColumnSpec::new(NAME, words.list.clone(), ColumnWidth::fill(1.0)));
+    columns.push(ColumnSpec::new(NAME, words.list.clone(), ColumnWidth::Fixed(cx.style.name_column)));
     if size != ThumbSize::None {
         columns.push(ColumnSpec::new(SAMPLE, words.sample.clone(), ColumnWidth::Fixed(sample_size.side * SAMPLE_WIDTH)));
     }
@@ -425,12 +425,15 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                         return;
                     }
                     let source = Slots { slots: &slots, row: sample_size.row };
+                    // Names line up past the disclosure column only where a family has styles to open.
+                    let leaves = if (0..source.len()).any(|at| source.has_children(at)) { TreeLeaves::Aligned } else { TreeLeaves::Compact };
                     let selection =
                         current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, |at| Selection::single(slots[at].key()));
                     let rows = List::<SlotKey>::options(name.clone())
                         .tree(true)
-                        .tree_leaves(TreeLeaves::Aligned)
+                        .tree_leaves(leaves)
                         .columns(columns.clone())
+                        .header(false)
                         .selection(Bind::given(selection))
                         .rows_stamp(stamp.finish())
                         .show_items(ui, &source, &mut |_, item| match &slots[item.at] {
@@ -438,7 +441,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                             Slot::Heading(Heading::Recent) => ListRow::new(words.recently_used.clone()).section_heading(),
                             Slot::Heading(Heading::All) => ListRow::new(words.all_fonts.clone()).section_heading(),
                             Slot::Action(at) => ListRow::new(actions[*at].clone()).option().depth(0),
-                            Slot::Style { style, .. } => ListRow::new(style.clone()).cells(item.cells()).option().depth(1),
+                            Slot::Style { style, .. } => {
+                                ListRow::new(style.clone()).cells(item.cells()).in_label_column().option().depth(1).check(false)
+                            }
                             Slot::Family { row, open } => {
                                 let mut line = ListRow::new(row.shown.clone()).cells(item.cells()).option().depth(0).check(current == Some(item.at));
                                 if !plain {
@@ -461,10 +466,11 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 }
                                 let samples =
                                     infos.sample_text(catalog, &row.family, words.sample.as_str(), words.sample_arabic.as_str(), &row.shown);
-                                line = line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, samples.latin, points), |_| {});
-                                // The Arabic sample ends the name's band, so the sample column keeps one width.
+                                line = line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, samples.latin, points), |_| {});
+                                // The Arabic sample ends the name's band, so the sample column keeps one width; it
+                                // drops out before it would narrow the name.
                                 match samples.arabic {
-                                    Some(arabic) => line.trailing_space(sample(catalog, &infos, &row.family, arabic, points)),
+                                    Some(arabic) => line.optional_field(sample(catalog, &infos, &row.family, &row.shown, arabic, points), |_| {}),
                                     None => line,
                                 }
                             }

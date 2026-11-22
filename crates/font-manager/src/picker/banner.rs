@@ -5,13 +5,17 @@ use craft_behavior::Sense;
 use craft_theme::TypeRole;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::fonts::FontRef;
+use craft_ui::primitives::DocRun;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, Corners, DataColor, Metrics, StyleColor, StyleCx, SurfaceKind};
-use egui::{Pos2, Rect, Vec2};
+use egui::{Color32, Pos2, Rect, Vec2};
 
 use crate::panel::faces::{self, Shown};
 use crate::panel::specimen::SampleFace;
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The share of the sample band's height the sample's em takes, as in the list's rows.
 const SAMPLE_EM: f32 = 0.7;
@@ -81,10 +85,20 @@ impl Component for FontPreviewBanner<'_> {
         Sense::empty()
     }
 
-    /// As wide as the room; as high as the padding, the name line, the gap and the sample band.
+    /// As wide as the name or the sample, whichever is wider, in the room less the padding (it fills the width the flow
+    /// offers beyond that); as high as the padding, the name line, the gap and the sample band.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let style = cx.style;
-        Vec2::new(cx.room.unwrap_or(0.0), 2.0 * style.pad + style.name_line + style.gap + style.band)
+        let inner = cx.room.map(|room| (room - 2.0 * style.pad).max(0.0));
+        let font = match self.face.shown(cx) {
+            Shown::Ready(font) => font,
+            _ => FontRef::proportional(),
+        };
+        let runs = [DocRun::new(self.text, font, style.band * SAMPLE_EM, DataColor::new(Color32::PLACEHOLDER))];
+        let sample = cx.layout_doc(&faces::sample_text(&runs, inner)).size().x;
+        let name = TextRun::new(self.name).role(TypeRole::Caption);
+        let name = inner.map_or_else(|| cx.layout(&name), |width| cx.layout_at(&name, width)).size().x;
+        Vec2::new(2.0 * style.pad + sample.max(name), 2.0 * style.pad + style.name_line + style.gap + style.band)
     }
 
     fn fills(&self) -> Option<craft_behavior::Axis> {

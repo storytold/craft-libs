@@ -268,7 +268,8 @@ pub struct ListRow<'a> {
     /// The host declares and paints the disclosure part of this group row (a face has no parts of its own): the row
     /// keeps the disclosure column and paints no disclosure.
     pub(super) disclosure_by_host: bool,
-    /// How the row's tree lines up its leaves, from the collection (`List::tree_leaves`).
+    /// How the row's tree lines up its leaves: the collection gives it (`List::tree_leaves`).
+    #[prop]
     pub(super) leaves: TreeLeaves,
     /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
     #[style_key]
@@ -383,13 +384,6 @@ impl<'a> ListRow<'a> {
         let mut row = Self::spacer();
         row.separator = true;
         row
-    }
-
-    /// How the row's tree lines up its leaves: the collection gives it (`List::tree_leaves`).
-    #[must_use]
-    pub(crate) fn leaves(mut self, leaves: TreeLeaves) -> Self {
-        self.leaves = leaves;
-        self
     }
 
     /// The rects of the row's columns, which the item context lists (`ItemCx::cells`): toggle cells and text cells
