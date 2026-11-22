@@ -4,8 +4,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod color;
+pub mod colorops;
 pub mod curve;
 pub mod finish;
 pub mod inpaint;
+pub mod light_v3;
+// generated (`light_v3_params.rs`), kept in its own compact layout
+#[rustfmt::skip]
+pub mod light_v3_params;
 pub mod lut;
 pub mod tone;
