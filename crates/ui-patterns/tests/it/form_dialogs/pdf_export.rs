@@ -93,6 +93,24 @@ fn the_hosted_dialog_takes_the_artboards_and_refuses_what_a_standard_disables() 
     }
 }
 
+/// Automation sets the two passwords the settings never serialise, as typing them does, never lists them, and is
+/// refused them under a standard, as the rows are.
+#[trial]
+fn the_hosted_dialog_takes_the_passwords_and_never_lists_them() {
+    let ctx = Context::default();
+    let mut host = DialogHost::new();
+    let id = host.open(dialog());
+    let set = |host: &mut DialogHost, field: &str, value: Value| write_field(host, &ctx, id, field, value);
+    assert_eq!(set(&mut host, "security.openPassword", json!("open")), Ok(()));
+    assert_eq!(set(&mut host, "security.permissionsPassword", json!("own")), Ok(()));
+    assert!(set(&mut host, "security.openPassword", json!(7)).is_err(), "a password is text");
+    let security = host.get_mut_by_id::<HostedPdfExport>(id).expect("open").settings().security.clone();
+    assert_eq!((security.open_password.as_str(), security.permissions_password.as_str()), ("open", "own"));
+    assert_eq!(listed(&host, id, "security.openPassword"), Value::Null, "a password is never listed");
+    assert_eq!(set(&mut host, "standard", json!("pdfX3")), Ok(()));
+    assert!(set(&mut host, "security.openPassword", json!("other")).is_err(), "a standard takes no password");
+}
+
 /// OK files the settings for the app, which takes them once while the dialog waits for its answer.
 #[trial]
 fn ok_files_the_settings_once_for_the_app() {

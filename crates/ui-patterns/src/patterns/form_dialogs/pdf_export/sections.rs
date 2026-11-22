@@ -437,7 +437,7 @@ pub(super) fn enabled(settings: &PdfSettings, path: &str) -> bool {
         // PDF 1.3 files (PDF/X-1a and PDF/X-3 ones too) have no transparency: it is flattened.
         "flattenerPreset" => settings.pdf13(),
         "bleed.top" | "bleed.bottom" | "bleed.left" | "bleed.right" => !settings.bleed.use_document,
-        "security.printing" | "security.changes" | "security.copy" => plain,
+        "security.openPassword" | "security.permissionsPassword" | "security.printing" | "security.changes" | "security.copy" => plain,
         // What can be copied can be read out.
         "security.screenReader" => plain && !settings.security.copy,
         "security.plaintextMetadata" => plain && !matches!(settings.compatibility, Compatibility::Pdf13 | Compatibility::Pdf14),

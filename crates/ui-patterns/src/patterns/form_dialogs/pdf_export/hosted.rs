@@ -449,7 +449,8 @@ impl StackDialog for HostedPdfExport {
         Some(fields)
     }
 
-    /// Sets one of the fields `json_fields` lists, else a settings field; a write to a disabled setting is refused.
+    /// Sets one of the fields `json_fields` lists, else a settings field, or one of the two passwords, which the settings
+    /// never serialise and `json_fields` never lists; a write to a disabled setting is refused.
     fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
         let rejects = || FieldRefusal::Rejects(&value).message(field);
         match field {
@@ -477,6 +478,14 @@ impl StackDialog for HostedPdfExport {
                     let bleed = &mut self.settings.bleed;
                     (bleed.bottom, bleed.left, bleed.right) = (bleed.top, bleed.top, bleed.top);
                 }
+            }
+            "security.openPassword" | "security.permissionsPassword" => {
+                if !enabled(&self.settings, field) {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                let password = value.as_str().ok_or_else(rejects)?.to_owned();
+                let security = &mut self.settings.security;
+                *(if field == "security.openPassword" { &mut security.open_password } else { &mut security.permissions_password }) = password;
             }
             "name" | "description" if self.mode == PdfExportMode::PresetEditor => {
                 let text = value.as_str().ok_or_else(rejects)?.to_owned();
