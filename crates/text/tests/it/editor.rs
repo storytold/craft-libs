@@ -346,3 +346,51 @@ fn formatting_keys_follow_the_flow_and_fall_back_to_caret_moves() {
     assert!(!plain.host.borrow().styles.is_empty(), "the host was asked for the leading step");
     assert_eq!(plain.selection.borrow().caret, before.saturating_sub(LINE), "the step the host did not take moved the caret a line up");
 }
+
+/// #15555: a session the app ends (Cmd+Enter, then the editor is not shown) on a canvas with rulers hands the focus back
+/// to the canvas it came from, not to the stop before the editor (the rulers' corner, whose arrows move the zero point),
+/// and the view stays where it was. Without rulers the canvas is that stop anyway.
+#[trial]
+fn an_ended_session_returns_the_focus_to_the_canvas_and_the_view_stays() {
+    const EDITOR: craft_behavior::DocKey = craft_behavior::DocKey::new("trial.type-editor");
+    use craft_ui::canvas::Rulers;
+    use craft_ui::contract::Props as _;
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use craft_ui::testing::access::{focused_key, name};
+
+    for rulers in [true, false] {
+        let editing = Rc::new(Cell::new(false));
+        let view = Rc::new(Cell::new(None::<CanvasView>));
+        let (shown_editing, shown_view) = (Rc::clone(&editing), Rc::clone(&view));
+        let mut host = Host { text: "abc".to_owned(), ..Host::default() };
+        let mut selection = TextSelection::caret_at(3);
+        let mut zero = Point::ZERO;
+        let mut fixture = Fixture::new(move |ui| {
+            let room = ui.available_rect_before_wrap();
+            let given = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(100.0, 100.0), 1.0));
+            let strips = rulers.then(|| Rulers::new("Rulers", Bind::bound(&mut zero)));
+            let canvas = Canvas::new("Document").view(given).with_rulers(strips).show(ui, |ui, body| {
+                if shown_editing.get() {
+                    let bounds = Rect::from_min_size(body.rect.min + vec2(40.0, 40.0), vec2(200.0, 20.0));
+                    drop(TextEditor::new("Text", &mut host, Bind::bound(&mut selection)).doc_key(EDITOR).show_at(ui, bounds));
+                }
+            });
+            shown_view.set(Some(canvas.output.view.unwrap_or(given)));
+        });
+        fixture.room(vec2(600.0, 400.0)).settle();
+        let focused = |fixture: &Fixture| name(fixture.tree(), focused_key(fixture.tree())).map(str::to_owned);
+        // A press on the canvas focuses it, and the session that press starts asks for the editor's focus.
+        fixture.click_at(pos2(400.0, 300.0)).settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Document"), "rulers {rulers}: the press focused the canvas");
+        editing.set(true);
+        fixture.settle();
+        request(fixture.ctx(), FocusTarget::Doc(EDITOR));
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Text"), "rulers {rulers}: the editor took the focus");
+        let before = view.get();
+        editing.set(false);
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Document"), "rulers {rulers}: the focus went back to the canvas");
+        assert_eq!(view.get(), before, "rulers {rulers}: the view stays");
+    }
+}
