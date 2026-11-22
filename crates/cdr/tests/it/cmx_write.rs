@@ -312,6 +312,8 @@ fn table_entries(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<u8>> {
         p += 1;
         out.push(first.expect("field 1"));
     }
+    // The size counts the u16 count and the entries; the pad byte comes after it.
+    assert_eq!(p, end, "{id:?} chunk has bytes left after its entries");
     out
 }
 
