@@ -7,11 +7,11 @@ mod stories;
 
 use super::view::PageSource;
 use craft_behavior::{Input, Metrics, PartKey, Proposal, Sense};
-use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    Bind, BindMut, BodyCx, CommandSet, Common, Component, Container, ContainerProps, Cx, DisabledLook, FooterRegion, MeasureCx, Mount, NoValue,
-    Outcome, Pad, PaintUi, PartsCx, Props as _, Role, RowAlign, Show as _, ShowContainer, clicked,
+    Bind, CommandSet, Common, Component, Cx, DisabledLook, MeasureCx, NoValue,
+    Outcome, PaintUi, PartsCx, Props as _, Role, RowAlign, Show as _, ShowContainer,
 };
+use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{PagerStep, PanePager};
 use craft_ui::primitives::textures::{
@@ -20,9 +20,8 @@ use craft_ui::primitives::textures::{
 use craft_ui::primitives::{PaintShape, TextRun};
 use craft_ui::runtime::commands::Commands as _;
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::runtime::focus::{FocusPolicy, Initial, KeyUse};
-use craft_ui::runtime::overlay::CloseReason;
-use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use craft_ui::runtime::focus::KeyUse;
+use craft_ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, TypeRole};
 use egui::{CornerRadius, Rect, Response, Ui, Vec2};
 use std::cell::Cell;
 
@@ -93,17 +92,25 @@ pub struct PagePreview<'a> {
     pages: &'a [usize],
     at: &'a mut usize,
     paper: DataColor,
+    title: Option<Label>,
 }
 
 impl<'a> PagePreview<'a> {
     /// Previews `pages` (0-based) on the document's `paper`, showing `pages[*at]`.
     pub fn new(source: &'a dyn PageSource, pages: &'a [usize], at: &'a mut usize, paper: DataColor) -> Self {
-        PagePreview { source, pages, at, paper }
+        PagePreview { source, pages, at, paper, title: None }
+    }
+
+    /// The name the frame's header shows (the file's), with the page's place after it.
+    #[must_use]
+    pub fn title(mut self, title: impl Into<Label>) -> Self {
+        self.title = Some(title.into());
+        self
     }
 
     /// Shows the preview over the window and reports page changes and close requests.
     pub fn show(self, ui: &mut Ui) -> PagePreviewOutput {
-        let PagePreview { source, pages, at, paper } = self;
+        let PagePreview { source, pages, at, paper, title } = self;
         let Some(last) = pages.len().checked_sub(1) else {
             return PagePreviewOutput { response: ui.response(), stepped: false, closed: true };
         };
@@ -120,12 +127,32 @@ impl<'a> PagePreview<'a> {
             next: *at < last,
             ..PanePager::default()
         };
-        let title = pager.caption(&env);
+        let caption = pager.caption(&env);
         let step = Cell::new(0_isize);
         let side = if env.direction.is_rtl() { -1 } else { 1 };
         let mut open = true;
-        let layer = PreviewLayer::new(&words, title, pager, &step, Bind::bound(&mut open));
-        let shown = ShowContainer::show(layer, ui, |ui, cx| {
+        // The frame: a titled dialog (the file's name, with the page's place after it) and a close x in its header,
+        // the page as large as the window leaves, and the arrows under it.
+        let room = ui.ctx().content_rect().size();
+        let room = Vec2::new((room.x * 0.8).max(120.0), (room.y * 0.72).max(90.0));
+        let mut dialog = Dialog::new(title.clone().unwrap_or_else(|| caption.clone()))
+            .opened(Bind::bound(&mut open))
+            .command_scope(PagePreviewCommands::SCOPE)
+            .footer(|ui, _| {
+                let mut close = None;
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| match pager.clone().show(ui) {
+                    Some(PagerStep::Back) => close = Some(-1),
+                    Some(PagerStep::Next) => close = Some(1),
+                    None => {}
+                });
+                if let Some(by) = close {
+                    step.set(step.get() + by);
+                }
+            });
+        if title.is_some() {
+            dialog = dialog.title_note(caption);
+        }
+        let shown = ShowContainer::show(dialog, ui, |ui, cx| {
             while let Some((command, _)) = cx.take_command::<PagePreviewCommands>() {
                 let by = match command {
                     PagePreviewCommands::Previous => -1,
@@ -135,112 +162,13 @@ impl<'a> PagePreview<'a> {
                 };
                 step.set(step.get() + by);
             }
-            PagePicture::new(source, page, words.unavailable.as_str(), paper).label(source.page_label(page)).show_at(ui, cx.rect);
+            let (rect, _) = ui.allocate_exact_size(room, egui::Sense::hover());
+            PagePicture::new(source, page, words.unavailable.as_str(), paper).label(source.page_label(page)).show_at(ui, rect);
         });
         let target = (*at as isize + step.get()).clamp(0, last as isize) as usize;
         let stepped = target != *at;
         *at = target;
         PagePreviewOutput { response: shown.output.response, stepped, closed: shown.output.closed.is_some() || !open }
-    }
-}
-
-/// The style of the preview's layer: the surface comes from the container.
-#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
-#[non_exhaustive]
-pub struct PreviewLayerStyle {
-    #[style(metrics)]
-    metrics: Metrics,
-}
-
-/// What the preview's layer reports.
-#[derive(Debug)]
-struct PreviewLayerOutput {
-    response: Response,
-    closed: Option<CloseReason>,
-}
-
-impl Outcome for PreviewLayerOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
-}
-
-/// The preview's full-window layer: the scrim, the focus trap, the page in the body and the row under it.
-#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
-#[component(container)]
-struct PreviewLayer<'b> {
-    #[common]
-    common: Common,
-    #[container()]
-    props: ContainerProps,
-    words: &'b PagePreviewWords,
-    pager: PanePager,
-    step: &'b Cell<isize>,
-    open: Bind<'b, bool>,
-    closed: Option<CloseReason>,
-}
-
-impl<'b> PreviewLayer<'b> {
-    /// The layer named `title` (the pager's caption) with `pager` under the page; a pager press adds to `step`.
-    fn new(words: &'b PagePreviewWords, title: Label, pager: PanePager, step: &'b Cell<isize>, open: Bind<'b, bool>) -> Self {
-        let props = ContainerProps::new()
-            .mount(Mount::FullWindow)
-            .surface(SurfaceKind::Scrim)
-            .pad(Pad::Roomy)
-            .footer(FooterRegion::new())
-            .focus(FocusPolicy::DIALOG.initial(Initial::Default))
-            .command_scope(PagePreviewCommands::SCOPE);
-        PreviewLayer { common: Common::new(), props, words, pager, step, open, closed: None }.label(title)
-    }
-}
-
-impl Component for PreviewLayer<'_> {
-    const ROLE: Role = Role::DIALOG;
-    const PARTS: bool = false;
-    const STOPS: bool = false;
-    type Style = PreviewLayerStyle;
-    type Output = PreviewLayerOutput;
-
-    fn style(_: &StyleCx<'_>, _: PreviewLayerStyleKey) -> PreviewLayerStyle {
-        PreviewLayerStyle::default()
-    }
-
-    fn sense(&self) -> Sense {
-        Sense::empty()
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> PreviewLayerOutput {
-        PreviewLayerOutput { response: cx.response.clone(), closed: self.closed }
-    }
-}
-
-impl Container for PreviewLayer<'_> {
-    fn open(&mut self) -> Option<BindMut<'_, bool>> {
-        Some(self.open.reborrow())
-    }
-
-    /// Previous, the page's place, next and Close, centred under the page.
-    fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let (words, step) = (self.words, self.step);
-        let pager = self.pager.clone();
-        let mut close = false;
-        Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
-            match pager.clone().show(ui) {
-                Some(PagerStep::Back) => step.set(step.get() - 1),
-                Some(PagerStep::Next) => step.set(step.get() + 1),
-                None => {}
-            }
-            close = clicked(&Button::new(words.close.clone()).default_stop().show(ui));
-        });
-        if close {
-            cx.request_close();
-        }
-    }
-
-    fn closed(&mut self, why: CloseReason) {
-        self.closed.get_or_insert(why);
     }
 }
 

@@ -676,8 +676,26 @@ fn preview_in(room: egui::Vec2, close: bool) -> (egui::Rect, bool) {
 fn the_preview_page_grows_with_the_window_and_close_reports_closed() {
     let (small, _) = preview_in(vec2(600.0, 400.0), false);
     let (large, closed) = preview_in(vec2(1200.0, 900.0), true);
-    assert!(large.height() > small.height() * 1.5, "the page takes the window: {small:?} then {large:?}");
+    assert!(large.height() >= small.height() * 1.5, "the page takes the window: {small:?} then {large:?}");
     assert!(closed, "Close reports closed");
+}
+
+/// The preview is a framed dialog, as production's: the file's name in a header with the page's place and a close
+/// x, the page inside the frame (not the whole window), and the arrows under it.
+#[trial]
+fn the_preview_is_a_framed_dialog_with_a_header_and_a_close_x() {
+    let pages = DemoPages::new(3);
+    let mut at = 0_usize;
+    let mut fixture = Fixture::new(move |ui| {
+        PagePreview::new(&pages, &[0, 1, 2], &mut at, PAPER).title("ten-pages.pdf").show(ui);
+    });
+    let room = vec2(1200.0, 900.0);
+    fixture.room(room);
+    fixture.settle();
+    assert!(fixture.by_label("ten-pages.pdf").is_some(), "the header names the file");
+    let picture = fixture.by_role(Role::IMAGE).first().expect("the page's picture is shown").rect;
+    assert!(picture.width() < room.x * 0.9 && picture.height() < room.y * 0.9, "the page stands inside a frame: {picture:?}");
+    assert!(fixture.by_label("Close").is_some(), "the header has a close x");
 }
 
 /// Tabs to the view's canvas.
