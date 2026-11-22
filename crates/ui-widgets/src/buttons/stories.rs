@@ -418,11 +418,10 @@ fn button_chord_narrow_room(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let width = |chord| Button::command(EditCommands::Copy).chord(chord).measure_in(ui, Proposal::Ideal).x;
     // Halfway between the button without its chord and with it: room for the whole label, not for the chord too.
     let room = (width(ButtonChord::Hidden) + width(ButtonChord::Trailing)) / 2.0;
-    ui.scope(|ui| {
+    crate::testing::memory::scoped(ui, |ui| {
         ui.set_max_width(room.min(ui.available_width()));
         Button::command(EditCommands::Copy).chord(ButtonChord::Trailing).show(ui)
     })
-    .inner
     .into()
 }
 

@@ -27,7 +27,7 @@ use crate::layout_components::{Row, Stack};
 use crate::runtime::env::{Env, Label};
 use crate::text::RangeAlert;
 
-use crate::runtime::memory::{Lifetime, MemoryStage};
+use crate::runtime::memory::{Lifetime, MemoryStage, with_session};
 
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
@@ -314,6 +314,14 @@ impl<'a> ParamPresets<'a> {
     }
 }
 
+/// The footer rows of a [`ParamDialog`] between passes: whether each was on when the last pass ended, which its
+/// button label shows, and the key of the row whose button was pressed, which the next pass flips.
+#[derive(Clone, Debug, Default)]
+struct FooterRows {
+    on: Vec<bool>,
+    flip: Option<String>,
+}
+
 /// What `ParamDialog::below` draws under the rows.
 pub struct BelowRows<'a>(BelowRowsFn<'a>);
 
@@ -516,9 +524,9 @@ impl<'a> ParamDialog<'a> {
         // The footer rows' buttons follow the extra buttons. A button's label cannot change inside the pass that
         // draws it, so it shows the state the previous pass left.
         let footer_rows: Vec<&Param> = params.iter().filter(|param| param.footer_on().is_some()).collect();
-        let footer_id = egui::Id::unique(("paramDialog.footer", key.as_str()));
-        let flip_id = footer_id.with("flip");
-        let footer_states: Vec<bool> = if footer_rows.is_empty() { Vec::new() } else { ui.data(|data| data.get_temp(footer_id)).unwrap_or_default() };
+        let footer_id = crate::runtime::memory::unique(("paramDialog.footer", key.as_str()));
+        let footer_states: Vec<bool> =
+            if footer_rows.is_empty() { Vec::new() } else { with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on.clone()) };
         let footer_buttons = footer_rows.iter().enumerate().map(|(at, param)| {
             let on = footer_states.get(at).copied().unwrap_or(false);
             let label = param.footer_on().filter(|_| on).unwrap_or_else(|| param.label.clone());
@@ -551,7 +559,7 @@ impl<'a> ParamDialog<'a> {
             apply_answers(&params, values, cx.take_answers());
             // A footer row pressed in the previous pass flips once; a measuring run leaves it for the real one.
             if !footer_rows.is_empty() && !crate::runtime::measure::active(ui.ctx()) {
-                if let Some(flip) = ui.data_mut(|data| data.remove_temp::<String>(flip_id)) {
+                if let Some(flip) = with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip.take()) {
                     let on = values.bool(&flip).unwrap_or(false);
                     values.set(flip, FieldValue::Bool(!on));
                 }
@@ -604,7 +612,7 @@ impl<'a> ParamDialog<'a> {
             *cx.memory::<Live>() = live.clone();
             if !footer_rows.is_empty() {
                 let states: Vec<bool> = footer_rows.iter().map(|param| values.bool(&param.key).unwrap_or(false)).collect();
-                ui.data_mut(|data| data.insert_temp(footer_id, states));
+                with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on = states);
             }
             // OK and Enter wait while a row's text does not parse.
             rows.as_ref().is_none_or(|rows| !rows.unparsed)
@@ -619,7 +627,7 @@ impl<'a> ParamDialog<'a> {
         if let Some(ResetPick::Extra(at)) = pick
             && let Some(param) = at.checked_sub(extra_buttons.len()).and_then(|at| footer_rows.get(at))
         {
-            ui.data_mut(|data| data.insert_temp(flip_id, param.key.clone()));
+            with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip = Some(param.key.clone()));
             crate::runtime::frame::request_repaint(ui.ctx());
         }
         let result = shown.accepted.map(|fields| Self::result(key, &params, remember, remember_for, fields));
