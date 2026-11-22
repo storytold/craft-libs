@@ -1,8 +1,7 @@
 //! A small PNG writer for the images a compiled graph stores, which the decompiler embeds in the graph text as PNG
 //! resources: 8/16-bit grey, RGB and RGBA, each row with the PNG filter of the smallest residual sum, then DEFLATE.
 //!
-//! The bytes are part of the decompiler's output, so they must stay the same from release to release: the encoder is
-//! our own and fixed, not a dependency whose compression could change under us.
+//! Keep encoding deterministic because the PNG bytes form part of the decompiled graph's cache key.
 
 mod checksum;
 mod deflate;
@@ -52,7 +51,7 @@ const IDAT_MAX: usize = 1 << 20;
 
 /// Encode raw samples (row-major, interleaved, 16-bit big-endian). `bit_depth` is 8 or 16 (anything else becomes 8).
 /// Missing samples are written as zero, extra ones ignored. Each row gets the PNG filter with the smallest sum of
-/// absolute (signed) residuals, then the image is DEFLATE-compressed (lazy matching, about zlib level 6).
+/// absolute (signed) residuals, then the image is DEFLATE-compressed with fast matching.
 pub(crate) fn encode_raw(w: usize, h: usize, color: ColorType, bit_depth: u8, samples: &[u8]) -> Vec<u8> {
     let depth = if bit_depth == 16 { 16 } else { 8 };
     let bpp = color.channels() * (depth / 8) as usize;
@@ -80,7 +79,7 @@ pub(crate) fn encode_raw(w: usize, h: usize, color: ColorType, bit_depth: u8, sa
         filtered.extend_from_slice(&best);
         std::mem::swap(&mut cur, &mut prev);
     }
-    let z = deflate::zlib_compress(&filtered, Level::Default);
+    let z = deflate::zlib_compress(&filtered, Level::Fast);
 
     let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
     let mut ihdr = Vec::new();

@@ -15,7 +15,7 @@ use bits::BitWriter;
 use block::Block;
 use lz77::{Params, TokenSink};
 
-/// Compression effort. The PNG writer uses [`Level::Default`]; the others stay for the round-trip tests at every level.
+/// Compression effort. The PNG writer uses [`Level::Fast`]; the other levels are exercised by round-trip tests.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Level {
