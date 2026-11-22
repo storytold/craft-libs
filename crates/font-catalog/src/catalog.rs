@@ -399,10 +399,25 @@ impl Catalog {
     pub fn scan_in_background(self: &Arc<Self>) {
         if self.ready.get().is_none() && !self.scanning.swap(true, Ordering::AcqRel) {
             let me = Arc::clone(self);
-            if std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.ensure()).is_err() {
+            if std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.background_scan()).is_err() {
                 self.scanning.store(false, Ordering::Release);
             }
         }
+    }
+
+    /// The background thread's scan. A scan that panics leaves the catalog unscanned and not
+    /// scanning, so the next [`Catalog::scan_in_background`] or lookup scans again.
+    fn background_scan(&self) {
+        struct Done<'a>(&'a Catalog);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                if self.0.ready.get().is_none() {
+                    self.0.scanning.store(false, Ordering::Release);
+                }
+            }
+        }
+        let _done = Done(self);
+        self.ensure();
     }
 
     fn ensure(&self) {
