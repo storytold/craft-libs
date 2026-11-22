@@ -222,7 +222,7 @@ fn x_and_y_count_from_the_rulers_zero_and_a_relative_offset_ignores_it() {
 fn texts_of(read: Option<Mixed<TransformRow>>) -> Vec<String> {
     let mut linked = true;
     let mut fixture = Fixture::new(move |ui| {
-        let row = match read.clone() {
+        let row = match read {
             Some(read) => Bind::given(read),
             None => Bind::kept(),
         };

@@ -273,28 +273,24 @@ impl<'a> TransformFields<'a> {
 
     /// The rulers X and Y read from: absolute X and Y are measured from the rulers' zero in their units (pixels from the
     /// origin by default); relative X and Y ignore the zero.
-    #[must_use]
     pub fn rulers(mut self, rulers: CanvasRulers) -> Self {
         self.rulers = rulers;
         self
     }
 
     /// The look of the reference point the fields show.
-    #[must_use]
     pub fn reference_look(mut self, look: ReferencePointLook) -> Self {
         self.reference_look = look;
         self
     }
 
     /// The press rule of the X, Y, W, H and angle captions; a press on a link caption reports its field.
-    #[must_use]
     pub fn caption_press(mut self, press: LabelPress) -> Self {
         self.caption_press = press;
         self
     }
 
     /// The order of the panel form's fields; the bar form ignores it.
-    #[must_use]
     pub fn arrangement(mut self, arrangement: FieldArrangement) -> Self {
         self.arrangement = arrangement;
         self

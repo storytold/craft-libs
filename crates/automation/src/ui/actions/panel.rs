@@ -422,7 +422,6 @@ impl<'a> ActionsPanel<'a> {
     }
 
     /// Which step cells the rows show.
-    #[must_use]
     pub fn step_cells(mut self, cells: StepCells) -> Self {
         self.step_cells = cells;
         self

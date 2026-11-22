@@ -153,7 +153,6 @@ impl<'a> FilterTree<'a> {
     }
 
     /// How the categories and filters are laid out; the folders by default.
-    #[must_use]
     pub fn layout(mut self, layout: FilterTreeLayout) -> Self {
         self.layout = layout;
         self

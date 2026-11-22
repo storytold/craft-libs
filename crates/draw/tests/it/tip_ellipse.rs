@@ -30,8 +30,7 @@ fn dragged_to_centre(least: Option<f64>) -> f64 {
     let rect = fixture.by_role(Role::SLIDER).first().copied().expect("the tip widget shows").rect;
     let quarter = rect.height() / 4.0;
     fixture.drag_at(rect.center() + Vec2::new(0.0, quarter), Vec2::new(0.0, -quarter));
-    let roundness = angle.borrow().roundness;
-    roundness
+    angle.borrow().roundness
 }
 
 /// The roundness after Alt+Down pressed far more often than the start needs to reach any least.
@@ -41,8 +40,7 @@ fn stepped_down(least: Option<f64>) -> f64 {
     for _ in 0..12 {
         fixture.key(Key::ArrowDown, Modifiers::ALT);
     }
-    let roundness = angle.borrow().roundness;
-    roundness
+    angle.borrow().roundness
 }
 
 #[trial]

@@ -22,8 +22,11 @@ fn set(commands: &[String]) -> ForeignSet {
     kys::read(&format!("{HEAD}{}{TAIL}", commands.concat())).expect("a set")
 }
 
+/// The command each foreign entry was matched to and the code each was given.
+type Remembered = (BTreeMap<String, Option<CommandRef>>, BTreeMap<String, Option<String>>);
+
 /// What the dialog last asked the app to keep.
-fn answers(rig: &Rig) -> Option<(BTreeMap<String, Option<CommandRef>>, BTreeMap<String, Option<String>>)> {
+fn answers(rig: &Rig) -> Option<Remembered> {
     rig.outcomes().into_iter().rev().find_map(|outcome| match outcome {
         Outcome::Remembered { targets, codes, .. } => Some((targets, codes)),
         _ => None,
