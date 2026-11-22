@@ -1,7 +1,7 @@
-//! This crate against the app's previous code (`crate::reference`), on the same scenes. For
-//! valid scenes whose triangles stay inside the guard band, every shadow texel, raster pixel,
-//! depth, resolved pixel and encoded pixel matches bit for bit. Each test prints the 64-bit
-//! FNV-1a hash of each output from both sides.
+//! This crate against the app's previous code (`crate::reference`), on the same scenes. For the
+//! scenes in this module, every shadow texel, raster pixel, depth, resolved pixel and encoded
+//! pixel matches bit for bit; the README's Origin section lists the scenes that differ. Each test
+//! prints the 64-bit FNV-1a hash of each output from both sides.
 
 use craft_raster3d::{Limits, Scene, try_encode, try_render, try_render_cpu, try_resolve, try_shadow_maps};
 
