@@ -7,7 +7,7 @@
 //! rule documented there; files it can't decode are reported as [`RawError::Unsupported`] and their embedded previews still work.
 //! High Efficiency NEFs (HE / HE★, Z 8, Z 9, Z 6III, Z f) keep compression 34713 but carry a wavelet codestream that
 //! starts with the JPEG XS markers SOC + CAP (ISO/IEC 21122-1, `FF10 FF50`) and have no `0x0096` table
-//! (storytold/lightcraft#193); [`crate::nef_he`] decodes the variant measured on the Z f and refuses the others.
+//! (storytold/lightcraft#193); [`crate::nef_he`] decodes the layout measured on the Z f, Z 8 and Z 9 and refuses the others.
 //! Strips labelled 34713 without a `0x0096`
 //! linearization table are packed uncompressed data in several measured layouts ([`PackedLayout`]) or, when the strip
 //! is exactly three bytes per pixel, Nikon small raw ([`small_raw`]); the D1X's genuinely Huffman-coded strip stays
@@ -1344,8 +1344,9 @@ mod tests {
         assert!(why.contains("linearization table"), "{why}");
     }
 
-    /// storytold/lightcraft#193: a High Efficiency NEF (Z f, Z 8: compression 34713, no `0x0096` table, a JPEG XS codestream) is
-    /// named as such instead of being blamed on the missing table, and the header probe reports the same reason.
+    /// storytold/lightcraft#193: a High Efficiency NEF whose codestream is not the measured layout (compression 34713, no
+    /// `0x0096` table, the JPEG XS start markers) is named as such instead of being blamed on the missing table, and the
+    /// header probe reports the same reason.
     #[test]
     fn high_efficiency_nef_is_named() {
         let mut strip = vec![0xff, 0x10, 0xff, 0x50, 0x00, 0x22];

@@ -36,7 +36,7 @@ pef = []
 srw = []
 ## Canon CR2: sliced lossless JPEG, and sRAW / mRAW (subsampled YCbCr) as linear RGB.
 cr2 = []
-## Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy), small raw.
+## Nikon NEF and NRW: uncompressed, packed, Nikon's Huffman coding (lossless and lossy), High Efficiency, small raw.
 nef = []
 ## Panasonic RW2, Leica RWL and the older Panasonic / Leica RAW: every raw format (packed, 4, 6, 8 and 16-bit words).
 rw2 = []

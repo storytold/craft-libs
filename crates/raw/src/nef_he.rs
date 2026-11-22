@@ -1,8 +1,15 @@
 //! Nikon High Efficiency NEF (HE / HE★) sensor data.
 //!
 //! The strip is one wavelet codestream in JPEG XS framing (ISO/IEC 21122-1 markers SOC, CAP, PIH, CDT, WGT, SLH, EOC)
-//! with Nikon's own colour transform. Everything here was measured on CC0 files (raw.pixls.us Z f HE, DSC_0043,
-//! against the same body's Lossless compressed DSC_0040) and on HE★ files from the same body: no other
+//! with the colour transform and square-root coding of the standard's CFA tools.
+//!
+//! Sources: the bytes of CC0 files from raw.pixls.us (Z f, Z 8 and Z 9, HE and HE★) against our own decode of the
+//! same bodies' Lossless compressed files; Descampe et al., "JPEG XS - A New Standard for Visually Lossless
+//! Low-Latency Lightweight Image Coding", Proc. IEEE 109(9), 2021 (truncation, eq. 3; the uniform quantizer, eq. 2;
+//! bitplane count prediction and coding, eqs. 8-14; slices, precincts and packets); Richter et al., "Bayer CFA
+//! Pattern Compression With JPEG XS", IEEE TIP 30, 2021, section VI (the non-linearity and the Star-Tetrix
+//! transform); RFC 9134 (the SOC and EOC codes); the symbol list in the free sample of ISO/IEC 21122-1:2022
+//! (clause 3.3). The standard itself was not read, so field layouts are the ones the files show. No other
 //! implementation was read. What the files show:
 //!
 //! - PIH: four components of half the sensor size (one value per 2×2 cell), code groups of 4, significance groups
@@ -17,6 +24,10 @@
 //! - The components are the Star-Tetrix lifting transform (Richter et al., IEEE TIP 30, 2021) of
 //!   `24.24 * sqrt(sample - black)` over the mosaic (see [`mosaic`]); the scale and the luma offset are measured on
 //!   the CC0 Z 9 Lossless / HE★ pair.
+//!
+//! Levels against the lossless twins, as means of 16×16 blocks: on the Z 9 pair (same exposure) within 1.5 % from
+//! 100 to 4500 above black and 1 to 4 % high in the few hundred blocks from 4500 to 8000; on the Z 8 pair (another
+//! frame) the sky at 10000 to 15000 keeps the ratio of the midtones. No pair has enough blocks near clipping.
 //!
 //! Open: the meaning of the 13 bytes PIH carries past its usual end, the exact luma offset, and other bodies.
 //! Variants that differ from the measured layout are refused as [`HIGH_EFFICIENCY`](crate::nef) so their
