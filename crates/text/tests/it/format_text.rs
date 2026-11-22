@@ -99,7 +99,7 @@ fn the_size_field_keeps_room_for_its_value_in_a_narrow_panel() {
     });
     fixture.idle(10);
     let size = fixture.by_label("Font size").expect("the size field is shown");
-    assert!(size.rect.width() >= 56.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    assert!(size.rect.width() >= 64.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
     assert!(fixture.texts().iter().any(|run| run.text == "Mixed"), "a mixed size reads Mixed: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
 }
 
@@ -121,7 +121,7 @@ fn the_size_field_reads_its_value_in_a_272_point_pane() {
     let size = fixture.by_label("Font size").expect("the size field is shown");
     let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
     assert!(texts.iter().any(|text| text == "14") && texts.iter().any(|text| text == "pt"), "the size reads 14pt: {texts:?} in {:?}", size.rect);
-    assert!(size.rect.width() >= 56.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    assert!(size.rect.width() >= 64.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
     let align = fixture.by_label("Alignment").expect("the alignment menu is shown");
     assert!(align.rect.right() <= 218.5, "the alignment menu stays in the panel: {:?}", align.rect);
 }
@@ -142,8 +142,8 @@ fn the_size_field_reads_mixed_in_a_272_point_pane() {
     fixture.idle(10);
     let size = fixture.by_label("Font size").expect("the size field is shown");
     let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
-    assert!(texts.iter().any(|text| text == "Mixed"), "the size reads Mixed: {texts:?} in {:?}", size.rect);
-    assert!(size.rect.width() >= 56.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    assert!(texts.iter().filter(|text| *text == "Mixed").count() >= 2, "the size reads Mixed beside the line spacing: {texts:?} in {:?}", size.rect);
+    assert!(size.rect.width() >= 64.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
     let align = fixture.by_label("Alignment").expect("the alignment menu is shown");
     assert!(align.rect.right() <= 218.5, "the alignment menu stays in the panel: {:?}", align.rect);
 }

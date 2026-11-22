@@ -129,6 +129,10 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
     #[prop]
     automatic: bool,
+    /// A mixed field shows the word "Mixed" as its placeholder, not the dash (a size field over a selection of
+    /// several sizes).
+    #[prop]
+    mixed_word: bool,
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
@@ -194,6 +198,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             popup_slider: None,
             snap_typed: false,
             automatic: false,
+            mixed_word: false,
             commit_decimals: None,
             fixed_decimals: None,
             max_decimals: None,
@@ -497,7 +502,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
-            if shown.is_none() || non_finite(shown) {
+            if self.mixed_word && shown.is_none() {
+                self.options.placeholder = Some(cx.words::<TextWords>().mixed.clone());
+            } else if shown.is_none() || non_finite(shown) {
                 self.options.placeholder = Some(BLANK.into());
             } else if self.automatic {
                 self.options.placeholder = Some(cx.words::<TextWords>().automatic.clone());

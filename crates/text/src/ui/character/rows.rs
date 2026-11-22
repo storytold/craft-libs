@@ -84,7 +84,7 @@ impl Lengths<'_> {
         let LengthRow { label, side, value, range, presets, disabled } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
         let field = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let field = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth);
+            let field = length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().mixed_word(true).sizing(Sizing::FillWidth);
             let out = disabled_for(field, &label, disabled.as_ref()).show(ui);
             (out.edit.events, out.preset)
         });

@@ -354,7 +354,7 @@ impl<'a> FormatText<'a> {
 
                 let color = mixed(character.color.map(Srgba::from));
                 let side = SideLabel::new().kind(LabelKind::Hidden).layout(FieldLayout::Beside);
-                let well = Field::new(cw.text_color.clone()).side(side).show(ui, |ui, _| {
+                let well = Field::new(cw.text_color.clone()).side(side).sizing(Sizing::Content).show(ui, |ui, _| {
                     let swatch = Swatch::new(cw.text_color.clone(), color).picker(COLOR_KEY);
                     disabled_for(swatch, &cw.text_color, reason(FormatControl::Color)).show(ui).pick_color
                 });

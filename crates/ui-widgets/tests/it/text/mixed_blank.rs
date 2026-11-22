@@ -37,3 +37,14 @@ fn enter_on_empty_text_leaves_a_mixed_field_mixed() {
     assert_eq!(*value.borrow(), Mixed::Mixed, "empty text is not a colour");
     assert_eq!(events.get(), 0, "no event for empty text");
 }
+
+/// A mixed number field that asks for it reads "Mixed" where it otherwise shows the dash.
+#[trial]
+fn a_mixed_number_field_can_read_mixed() {
+    use craft_ui::text::NumberField;
+    let mut fixture = Fixture::new(|ui| {
+        NumberField::new("Size", Bind::given(Mixed::<Option<f64>>::Mixed)).mixed_word(true).show(ui);
+    });
+    fixture.settle();
+    assert!(fixture.texts().iter().any(|run| run.text == "Mixed"), "reads Mixed: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+}
