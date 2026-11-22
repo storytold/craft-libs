@@ -28,8 +28,9 @@ fn mutated_access_units_never_panic() {
     let mut errors = 0usize;
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) decodes every N-th run of the 6 mutation kinds, a
     // different run for each config, so each config still gets every kind. Every access unit is
-    // still drawn, so the ones decoded are the full sweep's.
-    let step = craft_media_testkit::hostile::divisor();
+    // still drawn, so the ones decoded are the full sweep's. N is capped at the 500 runs, so a
+    // large N still leaves each config one.
+    let step = craft_media_testkit::hostile::divisor().min(3000 / 6);
     for (k, (asc, aus)) in corpus().into_iter().enumerate() {
         let mut dec = Decoder::new(&asc).unwrap();
         for round in 0..3000 {

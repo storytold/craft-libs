@@ -57,7 +57,8 @@ fn damaged_headers_never_panic() {
     let mut seed = 99u32;
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) parses every N-th damaged header, from a different
     // offset for each header. Every header is still drawn, so the ones parsed are the full sweep's.
-    let step = craft_media_testkit::hostile::divisor();
+    // N is capped at the 800 rounds, so a large N still parses each header once.
+    let step = craft_media_testkit::hostile::divisor().min(800);
     for (k, which) in [0usize, 2].into_iter().enumerate() {
         let len = p.headers[which].len();
         for round in 0..800 {

@@ -135,7 +135,7 @@ fn hostile_input_is_an_error_not_a_panic() {
     let src = signal(2, 6000, 16, 11);
     let file = encode(&src, 44_100, 16, 1152, 5);
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut, and every N-th flip with the
-    // bit rotating from byte to byte, so the flips still reach every byte.
+    // bit rotating from byte to byte, so for N up to 8 the flips still reach every byte.
     let step = craft_media_testkit::hostile::divisor();
     for n in (0..file.len().min(3000)).step_by(step) {
         let _ = decode(&file[..n]);

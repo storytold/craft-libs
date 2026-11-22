@@ -24,8 +24,9 @@ fn random_garbage_never_panics() {
     let mut rng = Rng(0x1234_5678_9abc_def0);
     // CRAFT_HOSTILE_DIVISOR=N (pull requests) decodes every N-th run of the 32 TOC
     // configurations, a different run for each decoder, so each decoder still sees every TOC.
+    // N is capped at the 93 full runs, so a large N still leaves each decoder one.
     // Every packet is still drawn, so the ones decoded are the full sweep's packets.
-    let step = craft_media_testkit::hostile::divisor();
+    let step = craft_media_testkit::hostile::divisor().min(3000 / 32);
     let mut k = 0;
     for &rate in &[48000u32, 24000, 16000, 12000, 8000] {
         for channels in 1..=2 {
