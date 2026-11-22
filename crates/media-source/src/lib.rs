@@ -31,6 +31,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod cancel;
 mod decoded;
+#[cfg(feature = "y4m")]
+pub mod y4m;
 
 pub use decoded::{compositor_frame, compositor_frame_within};
 

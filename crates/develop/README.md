@@ -12,10 +12,18 @@ craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "<commi
 
 | Module | From LightCraft (`a75497d6`) | Contents |
 |---|---|---|
+| `auto` | `crates/pipeline` | Auto tone (`AutoTone`, `auto_tone`, `scene_log_mean`), auto B&W mix (`auto_bw_mix`), and auto white balance (`auto_wb`, `auto_wb_with`). |
 | `color::spline` | `crates/color/src/spline.rs` | Re-exports `craft_color_transform::curve` (`MonotoneCurve`, `Lut1`). |
+| `colorops` | `crates/pipeline` | OkLCh colour tools (`ColorOps`, `WheelK`, `PointK`, `band_hues`, `band_weights`, `calibration_matrix`, `calibrate`). |
+| `crystal` | `crates/pipeline` | Process V7+ crystal-layer film grain (`CrystalGrain`, `CrystalLook`, `CrystalTile`). |
 | `curve` | `crates/pipeline` | The parametric tone curve and its regions. |
 | `finish` | `crates/pipeline` | Pure-Rust finishing helpers: sharpening masks/limits, vignette parameters, value grain, gamut mapping, and curve saturation refinement. |
+| `light_v3` / `light_v3_params` | `crates/pipeline` | Process V4+ calibrated Contrast and Blacks operators (`LightOps`, `PreviewOps`, `Operator`, `Fit`, `Mode`). |
+| `local` | `crates/pipeline` | White balance (`wb_matrix_for`, `checked_wb`, `effective_wb`, `legacy_white`), guided filters, median/detail-free base, noise reduction (`denoise`, `apply_nr`), and spatial plane sigmas. |
 | `lut` | `crates/pipeline` | 3D lookup tables and the `.cube` reader. |
+| `nrc_joint` | `crates/pipeline` | Process V6+ joint-guided linear colour noise reduction (`JointNoise`, `denoise`). |
+| `profiles` | `crates/pipeline` | Base rendering profiles (`effective`). |
+| `raster` | `crates/raster` | `Image<T>` (`Rgb32f`, `Rgba8`, `Plane`), separable blur, resampling, point sampling, morphology, and `Histogram`. |
 | `tone` | `crates/pipeline` | Global tone mapping (`ToneMap` and `CameraTone`) from scene luminance to display-linear luminance, SDR and HDR. |
 | `inpaint` | `crates/inpaint` | Content-aware hole filling for spot removal: `complete` (multi-scale patch completion with PatchMatch) and `membrane_fill` (a smooth harmonic fill, its seed and fallback). Interleaved `f32` buffers of any channel count, a fixed-seed RNG, the same result on any number of threads. |
 
