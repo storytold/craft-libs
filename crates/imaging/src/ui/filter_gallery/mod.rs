@@ -243,7 +243,9 @@ impl FilterGalleryWorkspace {
     /// Undoes or redoes, keeping the selection on a layer that remains. The pass reports the selection as a `Select`
     /// event when it moved.
     fn step(&mut self, step: Step) {
+        let next_layer = self.session.next_layer;
         if self.history.step(&mut self.session, step) {
+            self.session.next_layer = next_layer.max(self.session.next_layer);
             self.selected = self.selected.min(self.session.effects.len().saturating_sub(1));
             self.revision += 1;
         }

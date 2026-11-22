@@ -231,8 +231,8 @@ fn a_browse_press_in_the_settings_is_reported_once() {
     assert_eq!(requests.borrow().len(), 1, "no later pass reports the press again");
 }
 
-// Undo restores snapshots with their ids, so an id is never issued twice; moves and edits keep a layer's id, a copy gets
-// its own, and equality ignores ids.
+// Undo restores snapshots with their ids, and the session's counter does not go back with them, so an id is never issued
+// twice; moves and edits keep a layer's id, a copy gets its own, and equality ignores ids.
 #[trial]
 fn layer_ids_survive_moves_and_a_copy_gets_its_own() {
     let mut session = FilterGallerySession::new("cutout", &Catalog);
@@ -255,9 +255,15 @@ fn layer_ids_survive_moves_and_a_copy_gets_its_own() {
     let incoming = FilterGallerySession::new("neon", &Catalog);
     assert!(session.apply(EffectChange::Replace { effects: incoming.effects.clone() }, &Catalog, &mut selected));
     assert_ne!(session.effects[0].id, incoming.effects[0].id, "a replacement gets fresh ids");
-    let (one, two) = (FilterGallerySession::new("cutout", &Catalog), FilterGallerySession::new("cutout", &Catalog));
-    assert_ne!(one.effects[0].id, two.effects[0].id);
-    assert_eq!(one, two, "equality is by content");
+    let mut one = FilterGallerySession::new("cutout", &Catalog);
+    assert!(one.apply(EffectChange::Add, &Catalog, &mut 0));
+    assert_ne!(one.effects[0].id, one.effects[1].id);
+    assert_eq!(one.effects[0], one.effects[1], "layer equality is by content");
+    let mut two = FilterGallerySession::new("cutout", &Catalog);
+    assert!(two.apply(EffectChange::Add, &Catalog, &mut 0) && two.apply(EffectChange::Delete, &Catalog, &mut 1));
+    assert!(two.apply(EffectChange::Add, &Catalog, &mut 0));
+    assert_ne!(one.effects[1].id, two.effects[1].id);
+    assert_eq!(one, two, "session equality is by content");
 
     let mut rig = rig(FilterGallerySession::new("cutout", &Catalog), true);
     let add = rig.fixture.by_label("New effect layer").expect("the stack offers New");

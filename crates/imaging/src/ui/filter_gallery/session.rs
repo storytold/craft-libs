@@ -1,28 +1,16 @@
 //! Filter Gallery's session: the effect-layer stack.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use craft_ui::dialog::FieldRefusal;
 use craft_ui::patterns::form_dialogs::{DialogFields, set_param_field};
 use serde_json::{Value, json};
 
 use super::catalog::FilterCatalog;
 
-/// The ids handed out so far. Outside the session so that its equality and the history snapshots never hold it: an
-/// undo restores old layers with their ids and never reissues one.
-static NEXT_LAYER: AtomicU64 = AtomicU64::new(1);
-
-/// The identity of an effect layer: it stays with the layer through every change but a deletion, so a host can follow
-/// a layer across edits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The identity of an effect layer within its session: it stays with the layer through every change but a deletion, so
+/// a host can follow a layer across edits. The default is no session's id: a layer read from saved fields has it until
+/// a session takes the layer in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LayerId(u64);
-
-impl LayerId {
-    /// A new id, from the crate's counter.
-    fn fresh() -> Self {
-        Self(NEXT_LAYER.fetch_add(1, Ordering::Relaxed))
-    }
-}
 
 /// One effect layer: a filter, its fields (the catalog's parameters) and its eye. It serialises as
 /// `{filter, params, visible}`, with a choice by its option's name, as the engine's effects do. Two layers are equal
@@ -38,8 +26,8 @@ pub struct EffectLayer {
     pub fields: DialogFields,
     /// Whether the layer's eye is on.
     pub visible: bool,
-    /// The layer's identity; not saved: a layer read from saved fields gets a fresh one.
-    #[serde(skip, default = "LayerId::fresh")]
+    /// The layer's identity; not saved: the session issues one when it takes a layer read from saved fields in.
+    #[serde(skip)]
     pub id: LayerId,
 }
 
@@ -50,10 +38,10 @@ impl PartialEq for EffectLayer {
 }
 
 impl EffectLayer {
-    /// A visible layer of `filter` with the catalog's defaults (none for a key the catalog lacks), under a fresh id.
-    fn of(filter: &str, catalog: &dyn FilterCatalog) -> Self {
+    /// A visible layer of `filter` with the catalog's defaults (none for a key the catalog lacks), under `id`.
+    fn of(filter: &str, catalog: &dyn FilterCatalog, id: LayerId) -> Self {
         let fields = catalog.filter(filter).map(|found| found.defaults()).unwrap_or_default();
-        Self { filter: filter.to_owned(), fields, visible: true, id: LayerId::fresh() }
+        Self { filter: filter.to_owned(), fields, visible: true, id }
     }
 }
 
@@ -140,18 +128,36 @@ pub enum SessionField {
 
 /// What OK applies and the history snapshots: the effect layers, bottom first (the top row of the
 /// stack is applied last). The selected layer is view state outside the history; undo
-/// clamps it.
-#[derive(Clone, Debug, PartialEq)]
+/// clamps it. Two sessions are equal when their layers are.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct FilterGallerySession {
     /// The effect layers, bottom first.
     pub effects: Vec<EffectLayer>,
+    /// The number of the next layer id; never goes down, an undo included, so no id is issued twice.
+    pub(super) next_layer: u64,
+}
+
+impl PartialEq for FilterGallerySession {
+    fn eq(&self, other: &Self) -> bool {
+        self.effects == other.effects
+    }
 }
 
 impl FilterGallerySession {
     /// One effect layer of `filter` with its defaults (a new gallery: the last filter used).
     pub fn new(filter: &str, catalog: &dyn FilterCatalog) -> Self {
-        Self { effects: vec![EffectLayer::of(filter, catalog)] }
+        let mut session = Self { effects: Vec::new(), next_layer: 1 };
+        let id = session.fresh_id();
+        session.effects.push(EffectLayer::of(filter, catalog, id));
+        session
+    }
+
+    /// A new layer id.
+    fn fresh_id(&mut self) -> LayerId {
+        let id = LayerId(self.next_layer);
+        self.next_layer += 1;
+        id
     }
 
     /// The index of the layer `id` now, or `None` once it is deleted.
@@ -238,7 +244,7 @@ impl FilterGallerySession {
         let changed = match change {
             EffectChange::SetFilter { index, filter } => match self.effects.get_mut(index) {
                 Some(effect) if effect.filter != filter && catalog.filter(&filter).is_some() => {
-                    *effect = EffectLayer { visible: effect.visible, id: effect.id, ..EffectLayer::of(&filter, catalog) };
+                    *effect = EffectLayer { visible: effect.visible, ..EffectLayer::of(&filter, catalog, effect.id) };
                     true
                 }
                 _ => false,
@@ -253,14 +259,14 @@ impl FilterGallerySession {
             // The stack never empties: a gallery always has one layer to show.
             EffectChange::Replace { mut effects } if !effects.is_empty() && effects != self.effects => {
                 for effect in &mut effects {
-                    effect.id = LayerId::fresh();
+                    effect.id = self.fresh_id();
                 }
                 self.effects = effects;
                 true
             }
             EffectChange::Add => {
                 let mut copy = self.effects[current].clone();
-                copy.id = LayerId::fresh();
+                copy.id = self.fresh_id();
                 self.effects.insert(current + 1, copy);
                 *selected = current + 1;
                 true
