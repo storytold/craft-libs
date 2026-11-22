@@ -18,15 +18,28 @@
 
 use super::{Normalized, RawData, RawDevelopExt, RawImage, Rect, Result, Rgb32f, cfa_valid};
 
-/// Can `k × k` blocks be binned (single-plane CFA data, every `k × k` window containing R, G
-/// and B; Bayer: `k` even, so that every block has the same layout)?
+/// Does at least one `k × k` block fit the active area, with single-plane CFA data and R, G
+/// and B present in every block phase? Bayer also requires an even `k`.
 pub fn can_bin(raw: &RawImage, k: usize) -> bool {
-    let Some(cfa) = &raw.cfa else { return false };
-    if k < 2 || raw.cpp != 1 || (raw.pixel_aspect - 1.0).abs() >= 0.01 || !cfa_valid(cfa) || (cfa.is_bayer() && !k.is_multiple_of(2)) {
+    if k < 2 || k > raw.active_area.width || k > raw.active_area.height {
         return false;
     }
-    // every window position relative to the pattern
-    (0..cfa.height).all(|j| (0..cfa.width).all(|i| block_layout(cfa, i, j, k).1.iter().all(|&n| n > 0)))
+    let Some(cfa) = &raw.cfa else { return false };
+    if raw.cpp != 1 || (raw.pixel_aspect - 1.0).abs() >= 0.01 || !cfa_valid(cfa) || (cfa.is_bayer() && !k.is_multiple_of(2)) {
+        return false;
+    }
+    // Repeating a CFA period cannot add a colour to the phase's coverage.
+    (0..cfa.height).all(|j| {
+        (0..cfa.width).all(|i| {
+            let mut colours = 0u8;
+            for dy in 0..k.min(cfa.height) {
+                for dx in 0..k.min(cfa.width) {
+                    colours |= 1 << cfa.color_at(i + dx, j + dy).min(2);
+                }
+            }
+            colours == 0b111
+        })
+    })
 }
 
 /// Like [`RawDevelopExt::develop`] at `1/k` of the size (camera RGB, white = 1.0, default crop applied,
@@ -206,6 +219,22 @@ mod tests {
         let xb = x.develop_binned(3, 0.99).unwrap().unwrap();
         assert_eq!((xb.width, xb.height), (8, 6));
         assert!((xb.get(4, 3)[2] - 0.3).abs() < 2e-3);
+    }
+
+    #[test]
+    fn binning_requires_a_complete_block_in_the_active_area() {
+        let img = Rgb32f::filled(12, 10, [0.25, 0.5, 0.75]);
+        let mut raw = raw_from(&mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap()), 0.0, 4096.0);
+        raw.active_area = Rect::new(2, 2, 8, 6);
+        raw.crop = Rect::new(0, 0, 8, 6);
+        assert!(raw.can_bin(6));
+        let binned = raw.develop_binned(6, 0.99).unwrap().unwrap();
+        assert_eq!((binned.width, binned.height), (1, 1));
+        assert_eq!(binned.data, vec![[0.25, 0.5, 0.75]]);
+        assert!(!can_bin(&raw, 8));
+        assert!(!raw.can_bin(8));
+        assert!(raw.develop_binned(8, 0.99).unwrap().is_none());
+        assert!(raw.develop_binned_masked(8, 0.99).unwrap().is_none());
     }
 
     /// Issue #548: specular points that clip one green sample in some 8 × 8 blocks of a grey surface.
