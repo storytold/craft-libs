@@ -142,6 +142,23 @@ pub enum PageListEvent {
     ContextMenu(ContextMenuRequest<usize>),
 }
 
+impl PageListEvent {
+    /// A name typed in place for `row`, which the list gives trimmed and never empty.
+    pub fn rename(row: usize, text: impl Into<String>) -> Self {
+        Self::Rename { row, text: text.into() }
+    }
+
+    /// A click on `row`'s lock, `locked` after the click.
+    pub const fn lock(row: usize, locked: bool) -> Self {
+        Self::Lock { row, locked }
+    }
+
+    /// New, duplicating `duplicate` when a row was dropped on it; `options` with Alt held.
+    pub const fn new_row(duplicate: Option<usize>, options: bool) -> Self {
+        Self::New { duplicate, options }
+    }
+}
+
 /// The list's result.
 #[derive(Debug)]
 #[must_use = "the app applies the list's events"]
