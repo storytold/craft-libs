@@ -25,7 +25,8 @@ use super::blending::BlendingOp;
 use super::contour::{ContourAction, ContourField, ContourKey, ContourRequest, ContourSampler, contour_source};
 use super::labels::LayerStyleWords;
 use crate::layer_style::{
-    Contour, EffectField, EffectId, EffectInstance, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams, StyleValue,
+    Contour, EffectField, EffectId, EffectInstance, EffectKind, EffectSpec, FieldKind, FieldUnit, LayerStyle, LayerStyleDraft, StyleParams,
+    StyleValue,
 };
 
 /// The angle field shows whole degrees.
