@@ -128,7 +128,9 @@ fn dragging_is_none_off_the_ruler_after_escape_and_once_the_ruler_stops_showing(
     assert!(TextRuler::dragging(fixture.ctx(), id).is_some(), "a drag on the ruler is reported");
     fixture.frame(vec![egui::Event::PointerMoved(from + Vec2::new(20.0, 200.0))]).idle(1);
     assert_eq!(TextRuler::dragging(fixture.ctx(), id), None, "off the ruler");
-    fixture.release_at(from + Vec2::new(20.0, 200.0)).settle();
+    // Back on the ruler before the release: a stop released off the ruler is cleared, and the next drags need it.
+    fixture.frame(vec![egui::Event::PointerMoved(from + Vec2::new(20.0, 0.0))]);
+    fixture.release_at(from + Vec2::new(20.0, 0.0)).settle();
 
     let from = stop_centres(&fixture)[0];
     fixture.drag_hold_at(from, Vec2::new(20.0, 0.0)).idle(2);
