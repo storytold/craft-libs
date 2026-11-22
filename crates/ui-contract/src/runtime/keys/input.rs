@@ -146,7 +146,7 @@ impl Strip<'_> {
                 true
             }
             KeyEvent::Clip { command, text, .. } if (self.edits)(command) => {
-                batch.clips.push(command);
+                batch.clips.push((command, batch.place));
                 if text.is_some() {
                     batch.paste = text;
                 }
@@ -294,7 +294,7 @@ impl Strip<'_> {
                 false
             }
             PressUse::Edit(command) => {
-                batch.clips.push(command);
+                batch.clips.push((command, batch.place));
                 false
             }
             PressUse::CanvasSpace => {

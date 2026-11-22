@@ -120,11 +120,13 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let root = target.as_ref().filter(|rec| rec.stop.root != rec.stop.id && !rec.stop.text).map(|rec| rec.stop.root);
     let record = focus::record(ctx, crate::runtime::egui::pass::current_viewport(ctx));
     let (menu, menu_bar) = (record.menu, record.menu_bar);
-    // The web sends a chord's key press and its clipboard event: the command reaches the component once.
+    // The web sends a chord's key press and its clipboard event: the command reaches the component once, in the
+    // press's place among the frame's events, so an editor reads a paste in order with the keys and texts around it.
     let mut clips = batch.clips.clone();
-    clips.dedup();
-    for command in &clips {
-        push(&mut routed, focused, Intent::Edit(*command), false);
+    clips.dedup_by_key(|(command, _)| *command);
+    for (command, place) in clips {
+        let source = Some(Source { place, shift: false });
+        routed.entry(focused).or_default().items.push(Item { intent: Intent::Edit(command), horizontal: false, source });
     }
     let queued = current(ctx, |stage| std::mem::take(&mut stage.queued_edits));
     for command in queued {

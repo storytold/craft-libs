@@ -152,7 +152,8 @@ struct Batch {
     texts: Vec<Typed>,
     /// How many text events the strip left in egui's input.
     egui_texts: usize,
-    clips: Vec<EditCommand>,
+    /// Each clipboard command of the pass, with its place among the frame's events.
+    clips: Vec<(EditCommand, usize)>,
     access: Vec<Action>,
     escapes: Vec<EscapePress>,
     claimed: Vec<Chord>,

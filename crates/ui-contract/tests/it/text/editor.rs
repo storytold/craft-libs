@@ -1,7 +1,7 @@
 //! The editor contract: a component with an editor part receives one ordered input stream, a read-only editor
 //! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
 
-use craft_behavior::{EditorInput, Granularity, PartKey, Sense, SurroundingUnit, TextPos};
+use craft_behavior::{EditCommand, EditorInput, Granularity, PartKey, Sense, SurroundingUnit, TextPos};
 use craft_host::target::ShellInfo;
 use craft_ui::contract::{Common, Component, Cx, EditorHandle, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp};
@@ -350,6 +350,21 @@ fn shift_enter_reaches_an_editor_as_a_newline_with_shift_in_order() {
             [EditorInput::Newline { shift: true, .. }, EditorInput::Newline { shift: false, .. }, EditorInput::Newline { shift: true, .. }]
         ),
         "each Enter keeps its own Shift, in order: {inputs:?}"
+    );
+}
+
+/// A paste reaches an editor in its place among the frame's typing: text typed before it comes before it and text
+/// typed after it comes after. Guards against the clipboard command being routed after all of the frame's keys and
+/// texts.
+#[trial]
+fn a_paste_reaches_an_editor_in_order_with_the_typing_around_it() {
+    let mut rig = Rig::new();
+    rig.focus();
+    rig.frame(vec![Event::Text("a".into()), Event::Paste("b".into()), Event::Text("c".into())]);
+    let inputs = rig.take();
+    assert!(
+        matches!(inputs.as_slice(), [EditorInput::Text(a), EditorInput::Edit(EditCommand::Paste), EditorInput::Text(c)] if &**a == "a" && &**c == "c"),
+        "the paste sits between the texts it came between: {inputs:?}"
     );
 }
 
