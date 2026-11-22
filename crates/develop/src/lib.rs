@@ -5,6 +5,7 @@
 
 pub mod color;
 pub mod colorops;
+pub mod crystal;
 pub mod curve;
 pub mod finish;
 pub mod inpaint;
@@ -13,4 +14,5 @@ pub mod light_v3;
 #[rustfmt::skip]
 pub mod light_v3_params;
 pub mod lut;
+pub mod raster;
 pub mod tone;
