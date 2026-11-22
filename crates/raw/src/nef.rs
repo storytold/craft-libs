@@ -558,7 +558,7 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
     if starts_with(&JPEG_XS_START) || matches!(mode, Some(13 | 14)) {
         // the black level the image reports (the same rule as in `decode`), or the samples and it would disagree
         let black = match mn.and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
-            Some(v @ [_, _, _, _]) if rggb && v.iter().all(|x| *x < 16384.0) => v.iter().sum::<f64>() / 4.0,
+            Some(v @ [_, _, _, _]) if rggb && info.bits() == 14 && v.iter().all(|x| *x < 16384.0) => v.iter().sum::<f64>() / 4.0,
             _ => return Err(RawError::Unsupported(HIGH_EFFICIENCY.into())),
         };
         let src = strip_bytes(bytes, info)?;

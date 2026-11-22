@@ -429,7 +429,7 @@ pub(crate) fn decode(src: &[u8], width: usize, height: usize, rows: usize, black
         p = end;
         index += 1;
     }
-    if needed == precincts && src.get(p..p + 2) != Some(&[0xff, 0x11][..]) {
+    if rows >= height && src.get(p..p + 2) != Some(&[0xff, 0x11][..]) {
         return Err(corrupt("no end of codestream after the last precinct"));
     }
     let planes = components(&coder.packets, &lines, cw, needed);
