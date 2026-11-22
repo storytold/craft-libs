@@ -26,6 +26,9 @@ fn description() -> Description {
 /// A synthetic 8x8 grayscale JPEG, a ramp from 0 to 252.
 const JPEG_RAMP: &str = "ffd8ffe000104a46494600010100000100010000ffdb0043000201010101010201010102020202020403020202020504040304060506060605060606070908060709070606080b08090a0a0a0a0a06080b0c0b0a0c090a0a0affc0000b080008000801011100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda0008010100003f00aff0dbfe0db8ff0057ff001417a7fcbb7ff5abffd9";
 
+/// A synthetic 16x8 grayscale JPEG, a ramp from 0 to 254.
+const JPEG_WIDE: &str = "ffd8ffe000104a46494600010100000100010000ffdb0043000302020302020303030304030304050805050404050a070706080c0a0c0c0b0a0b0b0d0e12100d0e110e0b0b1016101113141515150c0f171816141812141514ffc0000b080008001001011100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda0008010100003f00c7d37fe09b7d3fe257ff0090ebabd37fe09b7d3fe257ff0090ebffd9";
+
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect()
 }
@@ -48,8 +51,17 @@ fn an_embedded_colour_image_takes_its_second_jpeg_as_alpha() {
     // the alpha follows the ramp, dark and transparent at the start, bright and opaque at the end
     assert!(rgba[3] < 13, "{:?}", &rgba[..4]);
     assert!(rgba[63 * 4 + 3] > 230, "{:?}", &rgba[63 * 4..]);
-    // an alpha of another size is refused
-    assert!(super::bitmaps::jpeg_with_alpha_to_png(&ramp, &[0xff, 0xd8, 0xff, 0xe0, 0, 1]).is_err());
+}
+
+#[test]
+fn an_alpha_of_another_size_or_a_broken_alpha_is_refused() {
+    // a valid grey JPEG, 16 x 8 against the 8 x 8 ramp: refused for its size, not for being unreadable
+    let wide = hex(JPEG_WIDE);
+    assert_eq!(crate::decode::jpeg::decode(&wide).map(|i| (i.width, i.height)), Ok((16, 8)));
+    assert!(super::bitmaps::jpeg_with_alpha_to_png(&hex(JPEG_RAMP), &wide).is_err());
+    assert!(super::bitmaps::jpeg_with_alpha_to_png(&wide, &hex(JPEG_RAMP)).is_err());
+    // an alpha that is not a JPEG
+    assert!(super::bitmaps::jpeg_with_alpha_to_png(&hex(JPEG_RAMP), &[0xff, 0xd8, 0xff, 0xe0, 0, 1]).is_err());
 }
 
 #[test]

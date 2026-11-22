@@ -29,12 +29,13 @@ pub fn files() -> Option<Vec<PathBuf>> {
     Some(files)
 }
 
+/// A folder or entry that cannot be read stops the test: an incomplete corpus must not pass as a clean one.
 fn discover(root: &Path, files: &mut Vec<PathBuf>) {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(read) = std::fs::read_dir(&dir) else { continue };
-        for entry in read.flatten() {
-            let path = entry.path();
+        let read = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot read the corpus folder {}: {e}", dir.display()));
+        for entry in read {
+            let path = entry.unwrap_or_else(|e| panic!("cannot read an entry of the corpus folder {}: {e}", dir.display())).path();
             if path.is_dir() {
                 stack.push(path);
             } else if path.is_file() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case(PROJECT_EXT)) {

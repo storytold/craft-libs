@@ -169,6 +169,6 @@ pub fn compressed_file(meshes: &[TestMesh], materials: &[&str]) -> Vec<u8> {
         out.u16(chunk.len() as u16).u16(!(chunk.len() as u16));
         out.0.extend_from_slice(chunk);
     }
-    out.zeros(4); // Adler-32, not checked
+    out.0.extend_from_slice(&adler2::adler32_slice(&raw).to_be_bytes()); // Adler-32 of the raw bytes: a conforming zlib reader accepts the stream
     out.0
 }

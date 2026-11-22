@@ -182,7 +182,7 @@ mod tests {
         assert!(decode(&good, 1, 2, 2, &PixelFormat::Lum16, 9).is_err(), "raw size");
         let unpadded = 24 + grey.len();
         for len in 0..unpadded {
-            let _ = decode(&good[..len], 1, 2, 2, &PixelFormat::Lum16, 8);
+            assert!(decode(&good[..len], 1, 2, 2, &PixelFormat::Lum16, 8).is_err(), "a tile cut at {len} bytes");
         }
         for at in 24..good.len() {
             let mut bad = good.clone();

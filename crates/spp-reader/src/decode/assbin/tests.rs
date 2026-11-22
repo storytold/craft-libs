@@ -55,7 +55,7 @@ fn rejects_shortened_dumps() {
 #[test]
 fn every_truncation_is_an_error_not_a_panic() {
     let data = file(&two_meshes(), &["Vase", "Cup"]);
-    for len in 0..data.len() - 16 {
+    for len in 0..data.len() {
         assert!(AssbinScene::parse(&data[..len]).is_err(), "length {len}");
     }
 }

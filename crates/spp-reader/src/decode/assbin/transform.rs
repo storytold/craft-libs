@@ -45,7 +45,9 @@ impl Transform {
 
     /// Transforms a normal by the inverse transpose of the upper 3x3 part, using the cofactor
     /// matrix (inverse transpose times determinant); the result is normalised by the caller.
-    /// A singular part gives a zero vector, which [`normalize`] leaves as it is.
+    /// A singular part can still give a nonzero vector: the cofactor matrix of a rank-two part keeps the direction the
+    /// transform does not flatten (a flattened z axis leaves +Z as it is and sends +X to zero). A zero vector is left
+    /// as it is by [`normalize`].
     pub fn normal(&self, n: Vec3) -> Vec3 {
         let [[m00, m01, m02, _], [m10, m11, m12, _], [m20, m21, m22, _], _] = self.m;
         // The 2x2 minor `| a b ; c d |`.
@@ -113,6 +115,9 @@ mod tests {
         assert_eq!(flatten.determinant(), 0.0);
         let n = normalize(flatten.normal([1.0, 0.0, 0.0]));
         assert!(n.iter().all(|c| c.is_finite()), "{n:?}");
+        // rank two: the flattened direction collapses, the other one stays
+        assert_eq!(flatten.normal([1.0, 0.0, 0.0]), [0.0; 3]);
+        assert_eq!(flatten.normal([0.0, 0.0, 1.0]), [0.0, 0.0, 1.0]);
         assert_eq!(normalize([0.0; 3]), [0.0; 3]);
     }
 
