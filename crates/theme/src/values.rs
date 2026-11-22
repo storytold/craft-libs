@@ -230,6 +230,9 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         }
         // The contrast pass moves it to the non-text minimum on the control surfaces.
         T::LineMark => Neutral(8),
+        // Two steps from the panel, whatever panel the theme pins: lighter in dark mode, darker in light mode, so a grip
+        // is seen without standing out like an icon (photocraft#16406).
+        T::LineGrip => Anchored(pick(5, 4)),
         T::LineFocus => Accent(9),
         T::AccentSolid => Accent(9),
         T::AccentHover => Accent(SOLID_HOVER),

@@ -2430,6 +2430,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn continue_move(mut self, grab: Vec2) -> Overlay`. The move band takes over the held primary press in this pass, with the pointer at `grab` inside the layer
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
+  - `pub fn list(mut self, list: Id) -> Overlay`. The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
   - `pub fn opened_by(mut self, anchor: &Response, trigger: Trigger) -> Overlay`. Records an opener. An anchored layer hangs from the rect of the opener that opened it, on the side and
@@ -2750,6 +2751,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn continue_move(mut self, grab: Vec2) -> Overlay`. The move band takes over the held primary press in this pass, with the pointer at `grab` inside the layer
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
+  - `pub fn list(mut self, list: Id) -> Overlay`. The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
   - `pub fn opened_by(mut self, anchor: &Response, trigger: Trigger) -> Overlay`. Records an opener. An anchored layer hangs from the rect of the opener that opened it, on the side and
@@ -3975,7 +3977,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
   - `pub const fn contains(self, command: EditCommand) -> bool`. Whether the set has `command`.
 - `craft_ui::runtime::focus::EndKey`: `pub enum EndKey { LastItem, EndMode }`. What a bare End means for a focused component.
 - `craft_ui::runtime::focus::EnterRule`: `pub enum EnterRule { Pass, Submit }`. What Enter does in a scope after the focused component declined it.
-- `craft_ui::runtime::focus::FocusPolicy`: `pub struct FocusPolicy { pub kind: ScopeKind, pub trap: bool, pub restore: bool, pub initial: Initial, pub enter: EnterRule, pub cancel: CancelRule, pub pages: bool, pub list_enter: bool }`. A focus scope's rules.
+- `craft_ui::runtime::focus::FocusPolicy`: `pub struct FocusPolicy { pub kind: ScopeKind, pub trap: bool, pub restore: bool, pub initial: Initial, pub enter: EnterRule, pub cancel: CancelRule, pub pages: bool, pub list_enter: bool, pub list: Option<Id> }`. A focus scope's rules.
   - `pub const NONE: FocusPolicy`. A scope that changes nothing.
   - `pub const PANE: FocusPolicy`. A pane: an F6 stop.
   - `pub const DIALOG: FocusPolicy`. A dialog: Tab stays inside, Enter submits, Escape closes.
@@ -3987,6 +3989,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
   - `pub const fn initial(mut self, initial: Initial) -> Self`. Where focus goes first.
   - `pub const fn cancel(mut self, cancel: CancelRule) -> Self`. What Escape does.
   - `pub const fn list_enter(mut self, on: bool) -> Self`. Whether Enter on a text opener activates the layer's list.
+  - `pub const fn list(mut self, list: Id) -> Self`. The collection in the layer that takes the opener's list keys.
   - `pub const fn pages(mut self, on: bool) -> Self`. Whether Ctrl+Tab cycles pages.
 - `craft_ui::runtime::focus::FocusTarget`: `pub enum FocusTarget { Id(Id), Part(Id, PartRef), Doc(DocKey) }`. What `runtime::focus::request` focuses.
 - `craft_ui::runtime::focus::Initial`: `pub enum Initial { Keep, First, FirstField, Default, Key(&'static str), KeepAnchor }`. Where focus goes the first time a scope is pushed.

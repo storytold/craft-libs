@@ -273,9 +273,11 @@ impl Component for ComboBox<'_> {
         let rows = EntryRows::new(options, &labels);
         let mut over_rows = false;
         let mut under_pointer: Option<usize> = None;
-        let events = ui.show(popup, Overlay::dropdown(), |ui, _| {
+        let list = cx.id.with("options");
+        let events = ui.show(popup, Overlay::dropdown().list(list), |ui, _| {
             let selection = current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, Selection::single);
             let shown = List::<usize>::options(name.clone())
+                .id(list)
                 .selection(Bind::given(selection))
                 .filter(&query, |key| labels[*key].clone())
                 .ranked(true)

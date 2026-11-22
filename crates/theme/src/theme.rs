@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::color::Rgba;
 use super::ramp::Mode;
-use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, Status, WellShape};
+use super::tokens::{ColorToken, ColorTokens, Edge, GripMark, GripShape, KnobShape, RadiusSet, Status, WellShape};
 use crate::{AppId, IconPackId, ThemeId};
 
 /// A theme: seeds to derive from, values that override the derivation, and an optional shape.
@@ -240,6 +240,37 @@ pub struct ShapeSeed {
     pub knob: Option<KnobShape>,
     /// The shape of colour wells that stand on their own; square when unset.
     pub wells: Option<WellShape>,
+    /// The dock grips' marks; each value left unset keeps [`GripShape::DEFAULT`]'s.
+    pub grip: Option<GripSeed>,
+}
+
+/// A theme's grip marks: each `None` keeps [`GripShape::DEFAULT`]'s value.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GripSeed {
+    /// Ticks or dots.
+    pub mark: Option<GripMark>,
+    /// How many marks.
+    pub count: Option<u16>,
+    /// How tall a tick is, in points.
+    pub length: Option<f32>,
+    /// How wide a tick is, or a dot's side, in points.
+    pub width: Option<f32>,
+    /// The space between two marks, in points.
+    pub gap: Option<f32>,
+}
+
+impl GripSeed {
+    /// The grip shape: these values over [`GripShape::DEFAULT`].
+    pub fn shape(&self) -> GripShape {
+        let d = GripShape::DEFAULT;
+        GripShape {
+            mark: self.mark.unwrap_or(d.mark),
+            count: self.count.unwrap_or(d.count),
+            length: self.length.unwrap_or(d.length),
+            width: self.width.unwrap_or(d.width),
+            gap: self.gap.unwrap_or(d.gap),
+        }
+    }
 }
 
 /// Per-tier additions to the corner radii, in logical pixels.

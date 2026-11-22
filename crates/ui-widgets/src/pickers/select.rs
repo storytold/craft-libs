@@ -320,8 +320,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let held = self.position(cx.value());
         let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
         let mut header_menu = self.header_menu.as_mut();
-        let events = ui.show(popup, Overlay::dropdown(), |ui, body| {
-            let list = ui.scope_id().with("options");
+        let list = cx.id.with("options");
+        let events = ui.show(popup, Overlay::dropdown().list(list), |ui, body| {
             let mut query = String::new();
             if searchable || header_menu.is_some() {
                 let _ = Row::new().show(ui, |ui, _| {

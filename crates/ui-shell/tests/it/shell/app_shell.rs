@@ -766,3 +766,49 @@ fn popups_stop_above_the_bottom_slots_in_each_window() {
         }
     }
 }
+
+/// What a memoized options bar shows: one text button, as an app's tool options.
+#[derive(MemoProps)]
+struct MemoBar {
+    version: u64,
+}
+
+thread_local! {
+    /// The rect the memoized bar's button took when it last ran.
+    static MEMO_BUTTON: Cell<Rect> = const { Cell::new(Rect::NOTHING) };
+}
+
+fn memo_bar(_: &mut MemoBar, ui: &mut Ui) {
+    let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        let rect = Button::new("Straighten").show(ui).rect;
+        MEMO_BUTTON.with(|button| button.set(rect));
+    });
+}
+
+/// photocraft#16405: an options bar the app shows through a memoized view sits on the slot's line as one shown directly
+/// does: its text button is drawn whole, centred in the slot, not cut off at the bottom.
+#[trial]
+fn a_memoized_options_bar_centres_its_button_in_the_slot() {
+    for ppp in [1.0, 1.25, 1.5] {
+        let seen = Rc::new(Cell::new(None::<Rect>));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = AppShell::new(WindowKey::main())
+                .options_bar(true, |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("options", MemoBar { version: 0 }, memo_bar).show(ui);
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+            if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "options").map(|(_, rect)| *rect) {
+                out.set(Some(slot));
+            }
+        });
+        fixture.ctx().set_pixels_per_point(ppp);
+        fixture.room(Vec2::new(600.0, 300.0)).settle();
+        let slot = seen.get().expect("the options slot shows");
+        let button = MEMO_BUTTON.with(Cell::get);
+        assert!(button.height() > 0.0, "{ppp}: the button shows: {button:?}");
+        assert!(button.max.y <= slot.max.y + 0.01 && button.min.y >= slot.min.y - 0.01, "{ppp}: the button {button:?} lies inside the slot {slot:?}");
+        assert!((button.center().y - slot.center().y).abs() <= 1.0, "{ppp}: the button {button:?} sits on the slot's middle {slot:?}");
+    }
+}
