@@ -649,6 +649,50 @@ fn a_toggle_glyph_rests_muted_and_reads_normal_under_the_pointer() {
     );
 }
 
+/// How many shapes a one-row list paints wholly inside the cell of an off eye cell made by `cell`, at rest and with
+/// the pointer over the cell.
+fn off_eye_drawn(cell: fn(craft_ui::list::ToggleCell) -> craft_ui::list::ToggleCell) -> (usize, usize) {
+    use craft_behavior::{ColumnKey, ColumnWidth};
+    use craft_ui::contract::{ColumnSpec, ToggleColumn};
+    use craft_ui::list::ToggleCell;
+    use craft_ui::testing::pointer;
+    use std::cell::Cell;
+    const EYE: ColumnKey = ColumnKey::new("eye");
+    const NAME: ColumnKey = ColumnKey::new("name");
+    let eye = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let held = eye.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::toggle(EYE, "", ToggleColumn::sweepable()), ColumnSpec::new(NAME, "", ColumnWidth::fill(1.0))];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = List::new("Layers").columns(columns).show_items(ui, &source, &mut |key, icx| {
+            held.set(icx.cell(&EYE).unwrap_or(egui::Rect::NOTHING));
+            ListRow::new(NAMES[*key]).cells(icx.cells()).toggle(cell(ToggleCell::eye(EYE, false)))
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let cell = eye.get();
+    let drawn = |fixture: &mut Fixture| fixture.frame_shapes().iter().filter(|shape| cell.contains_rect(shape.visual_bounding_rect())).count();
+    let rest = drawn(&mut fixture);
+    fixture.frame(vec![pointer::moved(cell.center())]).idle(2);
+    (rest, drawn(&mut fixture))
+}
+
+/// An off eye cell draws its off icon only under the pointer, in every row with `always_visible`, and never with
+/// `empty_off`, which wins over `always_visible`.
+#[trial]
+fn an_off_eye_cell_draws_its_off_icon_by_its_options() {
+    let (rest, hovered) = off_eye_drawn(|cell| cell);
+    assert!(rest == 0 && hovered > 0, "a plain off cell shows its off icon only under the pointer: {rest} at rest, {hovered} hovered");
+    let (rest, _) = off_eye_drawn(|cell| cell.always_visible());
+    assert!(rest > 0, "always_visible shows the off icon at rest");
+    let (rest, hovered) = off_eye_drawn(|cell| cell.empty_off());
+    assert_eq!((rest, hovered), (0, 0), "an empty_off cell stays empty, also under the pointer");
+    let (rest, hovered) = off_eye_drawn(|cell| cell.empty_off().always_visible());
+    assert_eq!((rest, hovered), (0, 0), "empty_off wins over always_visible");
+}
+
 /// Every filled rect among `shapes`, nested lists included.
 fn fills(shapes: &[egui::Shape], out: &mut Vec<(egui::Rect, egui::Color32)>) {
     for shape in shapes {
