@@ -640,7 +640,9 @@ impl FooterBar {
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternative => Variant::SECONDARY,
+                            // Production shows Cancel as plain text beside the accented answer.
+                            DialogRole::Cancel => Variant::GHOST,
+                            DialogRole::Other | DialogRole::Alternative => Variant::SECONDARY,
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {

@@ -457,3 +457,20 @@ fn a_space_between_row_in_a_dialog_keeps_its_children_apart_at_both_edges() {
     let dialog = fixture.by_role(craft_ui::contract::Role::DIALOG).first().map(|d| d.rect).expect("the dialog is shown");
     assert!(dialog.max.x - remove.max.x < 40.0, "Remove sits at the row's end edge: {remove:?} in {dialog:?}");
 }
+
+/// Production's dialogs show Cancel as plain text beside the accented answer: a footer's Cancel is a ghost button, not
+/// an outlined one.
+#[trial]
+fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
+    use craft_theme::Variant;
+    let mut fixture = Fixture::new(|ui| {
+        let _ = StandardPrompt::custom("Revert?")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Revert")
+            .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel")
+            .show(ui);
+    });
+    fixture.settle();
+    let seen = fixture.styles_of(std::any::type_name::<craft_ui::buttons::Button<'static>>());
+    assert!(seen.iter().any(|style| style.variant == Variant::GHOST), "Cancel is a ghost button: {:?}", seen.iter().map(|s| s.variant).collect::<Vec<_>>());
+    assert!(!seen.iter().any(|style| style.variant == Variant::SECONDARY), "no outlined button in the footer");
+}
