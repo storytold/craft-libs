@@ -26,6 +26,7 @@ use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
 use crate::sections::{HeaderStrength, Section};
 use crate::text::{NumberField, RangeAlert, SelectableText, TextField};
+use crate::display::Text;
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
@@ -747,13 +748,14 @@ impl<'p> Pass<'p> {
     /// A radio row is its own section: the title shows the row's name once, and the group it names follows.
     fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| {
+        let inline = Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline;
+        let mut body = |ui: &mut Ui| {
             let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
             if let Some(tip) = line.param.tooltip_text() {
                 group = group.tooltip(tip.clone());
             }
             let group = group.show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, cx| {
+                let mut options_row = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
                     for (id, label) in options {
                         let mut radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
                         if let Some(reason) = line.param.disabled_reason(id) {
@@ -769,12 +771,26 @@ impl<'p> Pass<'p> {
                             }
                         }
                     }
-                });
+                };
+                if inline {
+                    Row::new().wrap(true).show(ui, &mut options_row);
+                } else {
+                    Stack::new().show(ui, &mut options_row);
+                }
             });
             if let Some(v) = group.output.value().cloned() {
                 self.work.set(line.key, FieldValue::Text(v));
             }
-        });
+        };
+        // A document dialog sets the caption and its options on one line, as production's do.
+        if inline {
+            Row::new().wrap(true).show(ui, |ui, _| {
+                Text::new(line.name.clone()).show(ui);
+                body(ui);
+            });
+        } else {
+            Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| body(ui));
+        }
     }
 
     /// An angle row: the dial and the field over `range` at `decimals` digits. The field clamps a typed angle into

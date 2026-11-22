@@ -766,7 +766,11 @@ impl<'a> ParamDialog<'a> {
                     });
                 }
                 (Some(state), layout) => {
-                    let zoom = if matches!(layout, ParamLayout::Stacked | ParamLayout::Document) { ZoomRow::Below } else { ZoomRow::Above };
+                    let zoom = match layout {
+                        ParamLayout::Document => ZoomRow::Hidden,
+                        ParamLayout::Stacked => ZoomRow::Below,
+                        _ => ZoomRow::Above,
+                    };
                     Stack::new().show(ui, |ui, _| {
                         show_rows(ui, values);
                         shown_preview = show_preview(ui, &preview_label, state, &mut extras, click_centres, zoom, &mut live);
@@ -1059,15 +1063,17 @@ struct ShownPreview {
     step: Option<PagerStep>,
 }
 
-/// Where the zoom row stands: over the preview pane or under it.
+/// Where the zoom row stands: over the preview pane, under it or nowhere.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ZoomRow {
     Above,
     Below,
+    /// No zoom row: the pane zooms with the wheel alone, as a document dialog's does.
+    Hidden,
 }
 
 /// The pane, the zoom row where `zoom_row` puts it and the pager centred under them. Only a `Ready` picture has a zoom
-/// row and a centre: a pending or failed preview has nothing to zoom.
+/// row above the pane, and a centre: a pending or failed preview has nothing to zoom (the row under it shows always).
 fn show_preview(
     ui: &mut Ui,
     label: &Label,
@@ -1091,7 +1097,8 @@ fn show_preview(
         pane = pane.overlay(overlay.into_paint());
     }
     let pane = pane.show(ui);
-    let below = (picture.is_some() && zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
+    // Under the pane the row is there before the picture is: a dialog sized from its first pass keeps room for it.
+    let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
     let step = extras.pager.as_ref().and_then(|pager| Row::new().align(RowAlign::Center).show(ui, |ui, _| pager.clone().show(ui)).inner.flatten());
     live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown.clone());
     ShownPreview { clicked: pane.clicked, centre: picture.map(|size| pane.shown.centre(size)), step }
