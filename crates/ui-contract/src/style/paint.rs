@@ -229,7 +229,10 @@ pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> Scro
         )),
     };
     let hover = style_color(c.state.hover);
-    let (thickness, thin) = (tokens.size.handle.sm, tokens.stroke.thick);
+    let (thickness, thin) = match kind {
+        ScrollBarKind::Floating => (tokens.size.handle.sm, tokens.stroke.thick),
+        ScrollBarKind::Docked => (tokens.size.icon.md, tokens.size.icon.md),
+    };
     let (track, rest) = match kind {
         ScrollBarKind::Floating => (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), thin),
         ScrollBarKind::Docked => {
