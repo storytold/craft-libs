@@ -633,6 +633,7 @@ impl<'a> GlyphsPanel<'a> {
                         .select(SelectMode::Single)
                         .activate(ActivateOn::Click)
                         .card_columns(popup.cells.len().min(ALTERNATE_COLUMNS))
+                        .natural_height(true)
                         .show_items(ui, &Cells(&popup.cells), &mut |key, _| {
                             let alternate = popup.cells[*key];
                             let info = source.describe(face.0, face.1, alternate);
