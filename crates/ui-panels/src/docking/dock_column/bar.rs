@@ -163,7 +163,7 @@ fn column_bar<P: Clone + Hash + Send + Sync + 'static>(props: &mut BarProps<'_, 
     let toggle = ColumnArrow::Collapse.name(&words, props.expanded);
     let grip = GroupGrip::new(props.unit.clone(), props.active).ghost(props.ghost.clone()).label(props.name.clone());
     let held = grip.show_at(ui, band);
-    if held.drag_started {
+    if held.drag_started.is_some() {
         props.sent.send(BarEvent::DragStarted);
     }
     if held.double_pressed {

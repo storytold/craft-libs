@@ -4,6 +4,7 @@
 
 use super::GRIP;
 use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
     DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
 };
@@ -12,6 +13,7 @@ use crate::runtime::env::Direction;
 use crate::sections::Panel;
 use crate::style::StyleCx;
 use crate::testing::memory::global;
+use crate::testing::relations::{equals_token, grows_with};
 use crate::testing::{Fixture, trial};
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node};
@@ -160,7 +162,7 @@ impl Flyouts {
                     groups.borrow_mut().push((panel, rect));
                     let strip = Rect::from_min_size(rect.min, Vec2::new(rect.width(), STRIP.min(rect.height())));
                     let grip = GroupGrip::new(DragUnit::Group(panel), PanelKey::of(&panel)).show_at(ui, strip);
-                    dragged.set(dragged.get() || grip.drag_started);
+                    dragged.set(dragged.get() || grip.drag_started.is_some());
                     None
                 });
             // A flyout closed this pass still shows its group while it fades out: the open panel's group is the one.
@@ -499,9 +501,10 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
         let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+        let (above, below) = (run.top() - strip.top(), strip.bottom() - run.bottom());
         assert!(
-            run.top() - strip.top() >= tight + 2.0 - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
-            "group {group}: the marks keep space.gap.tight ({tight}) and 2 points more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
+            grows_with(tight, below) && equals_token(above - below, GRIP_ABOVE),
+            "group {group}: the marks keep space.gap.tight ({tight}) off the strip's bottom and {GRIP_ABOVE} points more off its top: {run:?} in {strip:?}"
         );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
@@ -553,7 +556,7 @@ fn a_themes_grip_shape_reaches_the_grips() {
     let shapes = fixture.frame_shapes();
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
-    assert!(marks.iter().all(|m| (m.width() - 2.0).abs() < 0.01 && (m.height() - 2.0).abs() < 0.01), "two-point dots: {marks:?}");
-    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 3.0).abs() < 0.01), "three points apart: {marks:?}");
+    assert!(marks.iter().all(|m| equals_token(m.width(), shape.width) && equals_token(m.height(), shape.width)), "two-point dots: {marks:?}");
+    assert!(marks.windows(2).all(|w| equals_token(w[1].min.x - w[0].max.x, shape.gap)), "three points apart: {marks:?}");
     assert_ne!(ink, egui::Color32::TRANSPARENT);
 }

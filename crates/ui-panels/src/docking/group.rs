@@ -79,7 +79,7 @@ impl GripMarks {
 
 /// The room a grip strip keeps above its marks beyond `space.gap.tight`, in points, in every theme: the marks stand a
 /// little below the strip's middle, clear of the column bar or icon group above (photocraft#16426).
-const GRIP_ABOVE: f32 = 2.0;
+pub(super) const GRIP_ABOVE: f32 = 2.0;
 
 /// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
 /// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
@@ -90,8 +90,8 @@ pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
     tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
 }
 
-/// What a group grip reports: its response, the second press of a double click and whether it started a group
-/// drag this pass.
+/// What a group grip reports: its response, the second press of a double click and where the press of a group drag
+/// it started this pass went down.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct GroupGripOutput {
@@ -99,8 +99,8 @@ pub struct GroupGripOutput {
     pub response: Response,
     /// The second press of a double click went down on the grip this pass.
     pub double_pressed: bool,
-    /// A drag of the whole group started on the grip this pass.
-    pub drag_started: bool,
+    /// A drag of the whole group started on the grip this pass: where its press went down.
+    pub drag_started: Option<Pos2>,
 }
 
 impl Outcome for GroupGripOutput {
@@ -132,13 +132,13 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     #[prop]
     ticks: bool,
     double: bool,
-    started: bool,
+    started: Option<Pos2>,
 }
 
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: None }
     }
 }
 
@@ -164,9 +164,11 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
-        if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
+        if self.movable
+            && let PressPhase::DragStart { start, .. } = cx.press().phase
+        {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
-            self.started = true;
+            self.started = Some(start.origin);
         }
     }
 
