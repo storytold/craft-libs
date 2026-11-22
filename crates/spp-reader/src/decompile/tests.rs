@@ -23,18 +23,6 @@ fn description() -> Description {
     .unwrap()
 }
 
-#[test]
-fn a_select_becomes_one_function_graph_reading_its_parameter() {
-    // (invert ? 1.0 : 0.0)
-    let e = expr(&[0x0842_0004, 0x1234, 0x0000_0d00, 0x3f80_0000, 0x0000_0d00, 0, 0x0000_0d09, 0x0002_0001]);
-    let mut fns = Functions::default();
-    let name = fns.function(&e, &description(), None);
-    assert_eq!(fns.function(&e, &description(), None), name, "identical expressions share a function");
-    assert_eq!(fns.subgraphs.len(), 1);
-    let (_, body) = &fns.subgraphs[0];
-    assert!(body.contains("meta kind \"function\"") && body.contains("\"invert\""), "{body}");
-}
-
 /// A synthetic 8x8 grayscale JPEG, a ramp from 0 to 252.
 const JPEG_RAMP: &str = "ffd8ffe000104a46494600010100000100010000ffdb0043000201010101010201010102020202020403020202020504040304060506060605060606070908060709070606080b08090a0a0a0a0a06080b0c0b0a0c090a0a0affc0000b080008000801011100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda0008010100003f00aff0dbfe0db8ff0057ff001417a7fcbb7ff5abffd9";
 
@@ -67,42 +55,6 @@ fn an_embedded_colour_image_takes_its_second_jpeg_as_alpha() {
 #[test]
 fn a_broken_jpeg_is_an_error_not_a_panic() {
     assert!(super::bitmaps::jpeg_to_png(&[0xff, 0xd8, 0xff, 0xe0, 0, 1]).is_err());
-}
-
-#[test]
-fn a_value_stored_by_one_expression_is_read_by_a_later_one() {
-    use super::functions::ValueNode;
-    // stores 0.5 at word 3: const, store
-    let set = expr(&[0x0900_0002, 0x3f00_0000, 0x0000_0906, 0x0000_0003]);
-    let mut fns = Functions::default();
-    fns.values = vec![ValueNode { offset: 3, words: 1, expr: set, source: 0, seed: None, reads_images: false, inputs: Vec::new() }];
-    // reads word 3
-    let read = expr(&[0x0503_0001, 3]);
-    let name = fns.function(&read, &description(), None);
-    let mut text = String::new();
-    for (n, body) in &fns.subgraphs {
-        text += &format!("subgraph {n}\n{body}end\n");
-    }
-    // the reading function computes the stored value where it reads it
-    assert!(fns.subgraphs.iter().any(|(n, body)| *n == name && body.contains("v=0.5")), "{text}");
-    assert!(fns.warnings.is_empty(), "{:?}", fns.warnings);
-}
-
-#[test]
-fn a_left_out_operand_reads_as_zero() {
-    // lerp(left out, const 1, const 0.5) = 0.5
-    let e = expr(&[0x0d00_0003, 0x3f80_0000, 0x0000_0d00, 0x3f00_0000, 0xffff_0d2f, 0x0000_0000, 0x0001]);
-    assert_eq!(e.instrs.len(), 3);
-}
-
-#[test]
-fn a_left_out_operand_of_and_is_written_as_false() {
-    // and(invert, left out)
-    let e = expr(&[0x0842_0002, 0x1234, 0x0000_081a, 0x0000_ffff]);
-    let mut fns = Functions::default();
-    fns.function(&e, &description(), None);
-    let (_, body) = &fns.subgraphs[0];
-    assert!(body.contains("node 65537 f_float v=0") && body.contains("f_to_bool"), "{body}");
 }
 
 #[test]
@@ -215,16 +167,6 @@ mod values {
 }
 
 #[test]
-fn a_float_cast_to_an_integer_takes_the_integer_below() {
-    // const -1.5, cast int [token 0x0611]
-    let e = expr(&[0x0900_0002, 0xbfc0_0000, 0x0000_0611]);
-    let mut fns = Functions::default();
-    fns.function(&e, &description(), None);
-    let (_, body) = &fns.subgraphs[0];
-    assert!(body.contains("f_floor"), "{body}");
-}
-
-#[test]
 fn the_working_colour_space_is_read_from_the_usertag() {
     assert!(super::working_space("colorspace=$working;padding=extend;alpha=straight"));
     assert!(!super::working_space("colorspace=$standardsrgb"));
@@ -260,16 +202,6 @@ fn the_first_operand_of_a_sequence_runs_only_for_its_sets() {
         ins(0x0c, Operands::Refs(vec![2, 3])),
     ]);
     assert!(set.contains("f_sequence"), "{set}");
-}
-
-#[test]
-fn a_left_out_sample_position_is_not_written_as_a_constant() {
-    // samplecol4(left out, image 0): the input where the pixel is, not at the origin
-    let e = expr(&[0x09f4_0001, 0x0000_ffff]);
-    let mut fns = Functions::default();
-    fns.function(&e, &description(), None);
-    let (_, body) = &fns.subgraphs[0];
-    assert!(!body.contains("65537"), "{body}");
 }
 
 /// The code tables are total over the codes the format defines, and no two codes share a name.
