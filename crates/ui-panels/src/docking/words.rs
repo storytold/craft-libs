@@ -23,7 +23,7 @@ craft_ui::words! {
         /// The tooltip and accessible name of the panel-menu button.
         panel_menu: "dockGroup.panelMenu" = "Panel Menu";
         /// The name of the close button in a titled group's header.
-        close_panel: "dockGroup.closePanel" = "Close panel";
+        close_panel: template "dockGroup.closePanel" = "Close {name}";
 
         /// The name of the workspace switcher's select.
         choose_workspace: "workspaceSwitcher.choose" = "Choose a workspace";

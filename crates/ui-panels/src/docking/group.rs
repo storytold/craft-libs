@@ -516,10 +516,11 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 hook.run(ui, cx);
             }
             if titled {
+                let panel_name = shown.map_or_else(String::new, |panel| panel.title.as_str().to_owned());
                 let can_close = closable && shown.is_some_and(|panel| panel.closable);
                 if can_close {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(close_name.clone()).show(ui).clicked() {
+                        if IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(Label::from(close_name.fill(&[("name", panel_name.as_str())]))).show(ui).clicked() {
                             reported.closed.push(active);
                         }
                     });

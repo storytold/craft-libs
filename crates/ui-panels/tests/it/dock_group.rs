@@ -90,7 +90,7 @@ fn a_titled_group_shows_the_panel_title_and_a_close_button_instead_of_tabs() {
     fixture.settle();
     assert!(fixture.by_label("Accessibility Checker").is_some(), "the title shows whole");
     assert!(fixture.by_label("Pages").is_none(), "no tab for the other panel");
-    let Some(close) = fixture.by_label("Close panel") else { panic!("a close button shows") };
+    let Some(close) = fixture.by_label("Close Accessibility Checker") else { panic!("a close button shows") };
     fixture.click(&close).settle();
     assert!(closed.get(), "it closes the shown panel");
 }
