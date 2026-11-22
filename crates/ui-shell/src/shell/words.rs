@@ -39,6 +39,8 @@ craft_ui::words! {
         show_less: "startScreen.showLess" = "Show less";
         /// The note on a pinned folder the app kept only the newest files of.
         newest_of: template "startScreen.newestOf" = "The newest {shown} of {total}";
+        /// A pinned folder's Unpin button.
+        unpin: "startScreen.unpin" = "Unpin";
         /// The accessible name of a pinned folder's Unpin part.
         unpin_folder: template "startScreen.unpinFolder" = "Unpin {name}";
 

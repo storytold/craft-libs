@@ -22,7 +22,7 @@ use crate::primitives::{CheckerArea, ContentPainterCx, IconSpec, Priority, Thumb
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
-use crate::sections::Section;
+use crate::sections::{HeaderStrength, Section};
 use crate::style::{Corners, SurfaceKind, SurroundLook};
 use crate::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid, TilePartEvent};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Proposal, SelectionChange, keyed};
@@ -296,6 +296,10 @@ pub struct StartScreen<'a> {
     /// The New… button shows (true by default).
     #[prop]
     offers_new: bool,
+    /// The Open… button shows (true by default); an app that opens files from its title bar leaves it out. A double
+    /// click on the page's empty room still asks for Open.
+    #[prop]
+    offers_open: bool,
     /// The host's sections, each at its place, in call order.
     sections: Vec<(StartPlace, HostSection<'a>)>,
 }
@@ -353,6 +357,7 @@ impl<'a> StartScreen<'a> {
             links: &[],
             drop_hint: None,
             offers_new: true,
+            offers_open: true,
             sections: Vec::new(),
         }
     }
@@ -391,6 +396,8 @@ struct Page<'p> {
     now: Option<i64>,
     /// New… shows beside Open.
     offers_new: bool,
+    /// Open… shows.
+    offers_open: bool,
     actions: &'p RefCell<Vec<StartAction>>,
 }
 
@@ -488,12 +495,12 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, offers_new, sections } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, offers_new, offers_open, sections } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, offers_new, actions: &actions };
+        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, offers_new, offers_open, actions: &actions };
         let view = RefCell::new(view);
         let sort = RefCell::new(sort);
 
@@ -504,7 +511,9 @@ impl StartScreen<'_> {
         let rail_stack = || Stack::new().gap(Gap::Tight).pad(Pad::Regular).label(words.start_links.clone());
         let rail_body = |ui: &mut Ui| {
             new_and_open(&page, ui);
-            let _ = Divider::horizontal().show(ui);
+            if offers_new || offers_open {
+                let _ = Divider::horizontal().show(ui);
+            }
             link_items(ui, links);
         };
         let page_stack = || Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width();
@@ -524,7 +533,7 @@ impl StartScreen<'_> {
         // `beside` is whether the rail stands beside the page; without it New and Open lead the page and the links follow
         // the sections.
         let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool| {
-            if !beside {
+            if !beside && (offers_new || offers_open) {
                 let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui));
             }
             host_sections(ui, StartPlace::BeforeRecent);
@@ -581,7 +590,7 @@ fn new_and_open(page: &Page<'_>, ui: &mut Ui) {
     if page.offers_new && clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).show(ui)) {
         page.push(StartAction::New);
     }
-    if clicked(&Button::new(words.open.clone()).id_salt("open").show(ui)) {
+    if page.offers_open && clicked(&Button::new(words.open.clone()).id_salt("open").show(ui)) {
         page.push(StartAction::Open);
     }
 }
@@ -631,6 +640,8 @@ fn recent_section(
         Entry::new(RecentSort::Created, words.sort_created.clone()),
     ];
     let _ = Section::fixed(words.recent.clone())
+        .strength(HeaderStrength::Heading)
+        .quiet_header()
         .header_gap(Gap::Section)
         .command_scope(StartRecentCommands::SCOPE)
         .controls(|ui, _| {
@@ -711,7 +722,7 @@ fn recent_section(
                         };
                         let row = row.trailing_part_revealed(
                             REMOVE,
-                            TrailingFace::Icon(IconSpec::svg(IconId::new("close"))),
+                            TrailingFace::Strong(words.unpin.clone()),
                             words.remove_recent.fill(&[("name", file.name.as_str())]),
                         );
                         match page.thumbnails {
@@ -905,7 +916,7 @@ fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
             }
             heading.trailing_part(
                 UNPIN,
-                TrailingFace::Icon(IconSpec::svg(IconId::new("close"))),
+                TrailingFace::Strong(words.unpin.clone()),
                 words.unpin_folder.fill(&[("name", folder.name.as_str())]),
             )
         }
@@ -926,10 +937,12 @@ fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
 fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
     let words = page.words;
     let _ = Section::fixed(words.pinned.clone())
+        .strength(HeaderStrength::Heading)
+        .quiet_header()
         .header_gap(Gap::Section)
         .command_scope(StartPinnedCommands::SCOPE)
         .controls(|ui, _| {
-            if clicked(&Button::new(words.pin_folder.clone()).id_salt("pin").icon(IconId::new("new_folder")).show(ui)) {
+            if clicked(&Button::new(words.pin_folder.clone()).id_salt("pin").variant(Variant::GHOST).icon(IconId::new("new_folder")).show(ui)) {
                 page.push(StartAction::PinFolder);
             }
         })
@@ -994,7 +1007,7 @@ fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
 
 fn templates_section(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
     let words = page.words;
-    let _ = Section::fixed(words.templates.clone()).header_gap(Gap::Section).show(ui, |ui, _| {
+    let _ = Section::fixed(words.templates.clone()).strength(HeaderStrength::Heading).quiet_header().header_gap(Gap::Section).show(ui, |ui, _| {
         let source = keyed(templates, |template: &Template| template.id.clone()).with_text(|template| Cow::Borrowed(template.name.as_str()));
         let out = page.grid::<String>(words.templates.clone(), false).show_items(ui, &source, &mut |id, _| {
             let Some(template) = templates.iter().find(|template| &template.id == id) else { return Tile::new(Label::Empty) };

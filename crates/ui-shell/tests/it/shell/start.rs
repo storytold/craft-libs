@@ -411,3 +411,25 @@ fn folders_come_before_recent_and_recent_has_a_clear_button() {
     fixture.click(&clear).idle(2);
     assert!(log.borrow().iter().any(|action| matches!(action, StartAction::ClearRecent)), "Clear asks the app to clear the list");
 }
+
+/// An app that opens files from its title bar leaves Open out of the page (`offers_open(false)`); the page's empty
+/// room still asks for Open on a double click, and the section headings are the heading role, not the panel's
+/// emphasised body text.
+#[trial]
+fn open_can_be_left_out_and_the_headings_are_page_headings() {
+    let log: Log = Rc::default();
+    let seen = Rc::clone(&log);
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).offers_new(false).offers_open(false).show(ui);
+        seen.borrow_mut().extend(out.actions);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
+    assert!(fixture.by_label("Open…").is_none(), "no Open button on the page");
+    assert!(fixture.by_label("Poster.psd").is_some(), "the page still lists its recent files");
+    let texts = fixture.texts();
+    let recent = texts.iter().find(|run| run.text == "Recent").expect("the Recent heading");
+    let file = texts.iter().find(|run| run.text == "Poster.psd").expect("a card's name");
+    assert!(recent.rect.height() > file.rect.height(), "the heading is larger than card text: {:?} against {:?}", recent.rect, file.rect);
+}

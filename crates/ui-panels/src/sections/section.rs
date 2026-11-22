@@ -167,6 +167,13 @@ impl<'a> Section<'a> {
         self
     }
 
+    /// The header carries no rule above it: a page heading rather than a boundary between panel sections.
+    #[must_use]
+    pub fn quiet_header(mut self) -> Self {
+        self.update_header(|header| header.rule_above(false));
+        self
+    }
+
     /// The action parts at the end of the header, in reading order.
     #[must_use]
     pub fn actions(mut self, actions: impl IntoIterator<Item = HeaderAction>) -> Self {
