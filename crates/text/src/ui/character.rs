@@ -640,16 +640,19 @@ pub struct CharacterValues {
     pub font_height: Option<FontHeightReference>,
 }
 
+/// A variation axis's tag and its value.
+type AxisValue = ([u8; 4], f32);
+
 impl CharacterValues {
     /// The axis values of the face, none while the selection has no variable axes.
-    fn held_axes(&self) -> &[([u8; 4], f32)] {
+    fn held_axes(&self) -> &[AxisValue] {
         self.axes.as_deref().unwrap_or_default()
     }
 
     /// The axes two selections share with equal values, and the tags of the others: an axis mixes where either
     /// selection mixes it or the values differ.
-    fn mix_axes(&self, other: &Self) -> (Option<Vec<([u8; 4], f32)>>, Vec<[u8; 4]>) {
-        let shared: Vec<([u8; 4], f32)> = self
+    fn mix_axes(&self, other: &Self) -> (Option<Vec<AxisValue>>, Vec<[u8; 4]>) {
+        let shared: Vec<AxisValue> = self
             .held_axes()
             .iter()
             .filter(|(tag, value)| !self.mixed_axes.contains(tag) && !other.mixed_axes.contains(tag) && other.held_axes().contains(&(*tag, *value)))
@@ -1028,8 +1031,7 @@ impl<'a> CharacterControls<'a> {
                         let event = lengths.kerning(
                             ui,
                             words.kerning.clone(),
-                            GlyphLabel::icon(IconId::new("text_cursor")),
-                            words.kerning_hint.clone(),
+                            mark(GlyphLabel::icon(IconId::new("text_cursor")), Some(words.kerning_hint.clone()), FieldLayout::Beside),
                             kerning_shown,
                             &kerning_presets,
                             Some(keys::KERNING),

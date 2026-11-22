@@ -80,14 +80,13 @@ impl Lengths<'_> {
         &self,
         ui: &mut Ui,
         label: Label,
-        glyph: GlyphLabel,
-        hint: Label,
+        side: SideLabel,
         value: Option<NamedOr<KerningName>>,
         presets: &[Entry<NumberPick>],
         key: Option<DocKey>,
     ) -> EditEvents<NamedOr<KerningName>> {
         let units = self.units;
-        let shown = Field::new(label.clone()).side(mark(glyph, Some(hint), FieldLayout::Beside)).show(ui, |ui, _| {
+        let shown = Field::new(label.clone()).side(side).show(ui, |ui, _| {
             let field = NumberField::named(label.clone(), Bind::given(mixed(value))).range(TRACKING_RANGE).presets(presets).scrub_by_label();
             let field = field.codec(NumberCodec::new(units.reader(None), 0));
             match key {
