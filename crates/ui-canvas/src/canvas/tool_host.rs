@@ -1361,12 +1361,12 @@ impl<'a, 't: 'a> Run<'a, 't> {
                 // the edge band gets a hover at its own position in every pass, since the view scrolls under it. The
                 // first resting pass after a press hovers too: the press dropped the tip, and a pointer that came up
                 // where it went down gets it back (WordCraft showed a link's tip again after a Ctrl+click on it).
-                if let Some(pointer) = hover_pointer(frame, *press)
-                    && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred)
-                        || std::mem::take(&mut self.state.rehover)
-                        || self.hover_edge(pointer.pos).is_some())
-                {
-                    self.hover(pointer);
+                // A resting pass that hovers for a stir is that first hover too, so none is left owed to a later pass.
+                if let Some(pointer) = hover_pointer(frame, *press) {
+                    let rehover = std::mem::take(&mut self.state.rehover);
+                    if pointer::with_pass_pointer(self.ctx, |pass| pass.stirred) || rehover || self.hover_edge(pointer.pos).is_some() {
+                        self.hover(pointer);
+                    }
                 }
             }
             PressPhase::Down { start, .. } => {
