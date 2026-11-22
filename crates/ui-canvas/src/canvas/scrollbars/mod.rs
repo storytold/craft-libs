@@ -496,8 +496,9 @@ impl Component for CanvasScrollbars<'_> {
             tip.close(cx);
         }
         let Some(view) = cx.value().copied() else { return };
-        let held = cx.press_slot::<HeldThumb>().clone();
+        let mut held = cx.press_slot::<HeldThumb>().clone();
         let bars = self.bars(&view, cx.rect, cx.style, held.as_ref());
+        let mut ended = false;
         let rtl = cx.flow.is_rtl();
         let min_thumb = cx.style.look.min_thumb;
         for (key, axis, bar) in bars.each() {
@@ -519,7 +520,13 @@ impl Component for CanvasScrollbars<'_> {
                 // The press keeps the extent the thumb was pressed at for its drag.
                 PressPhase::Down { .. } => *cx.press_slot::<HeldThumb>() = Some(HeldThumb::of(axis, &bar.span)),
                 PressPhase::DragStart { .. } => cx.begin(),
-                PressPhase::Release { click: false, .. } => cx.commit(),
+                PressPhase::Release { click, .. } => {
+                    if !click {
+                        cx.commit();
+                    }
+                    ended = true;
+                }
+                PressPhase::Cancel { .. } => ended = true,
                 _ => {}
             }
             let range = match phase {
@@ -547,6 +554,12 @@ impl Component for CanvasScrollbars<'_> {
             } else if next != view {
                 cx.set(next);
             }
+        }
+        if ended {
+            // The pressed extent lasts as long as its press: the press slot is kept until it is cleared, and a stale
+            // extent would hold the bars' range after the drag (a later zoom, pan or Overscroll change).
+            *cx.press_slot::<HeldThumb>() = None;
+            held = None;
         }
         self.held = held;
     }
