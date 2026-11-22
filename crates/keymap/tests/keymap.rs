@@ -365,3 +365,16 @@ fn hold_bindings_clash_only_with_holds() {
         Err(AssignError::NotHoldable(_))
     ));
 }
+
+/// Two command references are equal when their binding keys are: no parameters and an empty object are the same
+/// command, other parameters tell commands apart. Guards against equality and the key disagreeing.
+#[test]
+fn command_refs_are_equal_when_their_keys_are() {
+    let bare = CommandRef::new("tool.move");
+    let empty = CommandRef::with_params("tool.move", json!({}));
+    let given = CommandRef::with_params("tool.move", json!({"copy": true}));
+    assert_eq!(bare.key(), empty.key());
+    assert_eq!(bare, empty, "no parameters and an empty object are one command");
+    assert_ne!(bare.key(), given.key());
+    assert_ne!(bare, given, "parameters tell commands apart");
+}
