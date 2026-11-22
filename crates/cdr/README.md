@@ -57,6 +57,15 @@ reports version 1 for the marker `e` and version 2 for the other two. A RIFF fil
 a version before 3 is refused, and so is the version 4 template form type `CDST`, which reads as
 not a `.cdr` drawing.
 
+## Previews
+
+`preview` returns the picture a `.cdr` file keeps of its drawing without reading the drawing (rows
+R75 and R76). In versions 4 to 13 the picture is the `DISP` chunk, returned as a BMP file. In versions
+14 to 16 it is the package member `metadata/thumbnails/thumbnail.bmp`, and from version 17 on it
+is `previews/thumbnail.png`. The package's drawing stream is not read, so a package that holds
+both members gives the PNG. Files of versions 1 to 3 keep no picture. The bytes are returned still
+encoded, so the caller decodes them within its own image limits.
+
 ## `.cmx` files
 
 `read_cmx` reads `.cmx` exchange files with 32-bit coordinates (rows R53 to R63) into the same
