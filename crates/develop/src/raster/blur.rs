@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(radii_for(f32::NAN, 1400, 900), None);
         assert_eq!(radii_for(0.2, 1400, 900), None);
         assert_eq!(radii_for(5.0, 0, 900), None);
-        let p = super::Plane { width: 4, height: 3, data: (0..12).map(|i| i as f32).collect() };
+        let p = crate::raster::Plane { width: 4, height: 3, data: (0..12).map(|i| i as f32).collect() };
         let t = std::time::Instant::now();
         for sigma in [1e9, f32::INFINITY, f32::NAN] {
             let b = gaussian(&p, sigma);
