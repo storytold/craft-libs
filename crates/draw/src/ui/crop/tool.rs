@@ -405,40 +405,56 @@ impl CropTool {
         }
         let (current, base) = (self.session.frame()?, base?);
         let target = settings.target(document, units);
-        let rect = match target {
-            // Both W and H typed: the frame takes that document size about the frame's centre. The
-            // sides are positive, finite and at most FIELD_MAX (`CropLength::usable`), and a frame's
-            // centre is finite, so the typed rect is finite.
+        let next = match target {
+            // Both W and H typed: the frame takes that document size about the centre of the frame
+            // the edit began with. The view's zoom only changes how large that document size looks.
             Some(target) => {
                 let center = base.rect.center();
-                let typed = craft_behavior::kurbo::Rect::new(
+                let typed_rect = craft_behavior::kurbo::Rect::new(
                     center.x - target.width / 2.0,
                     center.y - target.height / 2.0,
                     center.x + target.width / 2.0,
                     center.y + target.height / 2.0,
                 );
+                // Guarded like `fitted_ratio` guards its rect: only a finite converted rect builds
+                // a frame (a typed FIELD_MAX length converts to at most about 1e18 px, finite).
+                if ![typed_rect.x0, typed_rect.y0, typed_rect.x1, typed_rect.y1].iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                let typed = CropBox::new(typed_rect, base.angle);
                 if settings.delete_pixels {
-                    // Delete Cropped Pixels holds the frame on the canvas, as a drag does: a typed
-                    // frame that hangs past an edge slides in whole, and one the canvas cannot hold
-                    // at all becomes the largest frame of its shape the canvas holds.
+                    // Delete Cropped Pixels keeps the frame's TURNED bounds on the canvas, the rule
+                    // drags hold: a typed frame that hangs past an edge slides back in with the
+                    // least move, and one the canvas cannot hold at all becomes the largest box of
+                    // that shape at the frame's turn, put as near the frame as the canvas allows.
+                    // `eps`: the typed size lands a float hair past an edge far too often for an
+                    // exact compare to be fair.
                     let canvas = document.canvas();
-                    let past_edge = typed.x0 < canvas.x0 || typed.y0 < canvas.y0 || typed.x1 > canvas.x1 || typed.y1 > canvas.y1;
-                    if !past_edge {
+                    let eps = 1e-6;
+                    let bounds = typed.turned_bounds();
+                    if bounds.x0 >= canvas.x0 - eps && bounds.y0 >= canvas.y0 - eps && bounds.x1 <= canvas.x1 + eps && bounds.y1 <= canvas.y1 + eps {
                         typed
-                    } else if target.width <= canvas.width() && target.height <= canvas.height() {
-                        // Never `None` here: an upright box the canvas can hold always slides in.
-                        CropBox::upright(typed).within(canvas, false, false).map_or(typed, |slid| slid.rect)
+                    } else if bounds.width() <= canvas.width() + eps && bounds.height() <= canvas.height() + eps {
+                        // Never `None` here: a box the canvas can hold always slides in.
+                        typed.within(canvas, false, false).unwrap_or(typed)
                     } else {
-                        fitted_ratio(canvas, target.width / target.height)?
+                        // `fitted` keeps the shape and the turn, centred on the canvas; move it to
+                        // the typed frame's centre, then slide it in whole (never `None`: `fitted`'s
+                        // turned bounds already fit the canvas, so the slide only corrects the move).
+                        let fitted = typed.fitted(document.size, base.angle)?;
+                        let to_frame = typed.rect.center() - fitted.rect.center();
+                        fitted.moved(to_frame).within(canvas, false, false).unwrap_or(fitted)
                     }
                 } else {
                     typed
                 }
             }
             // A ratio (or W x H x Resolution with one side empty): the frame fits it, as before.
-            None => fitted_ratio(base.rect, settings.ratio_value(document, units)?)?,
+            None => {
+                let rect = fitted_ratio(base.rect, settings.ratio_value(document, units)?)?;
+                CropBox::new(rect, base.angle)
+            }
         };
-        let next = CropBox::new(rect, base.angle);
         // W x H x Resolution can change the output size even when the frame already fits, so it
         // makes the frame a pending crop.
         let sized = target.is_some();

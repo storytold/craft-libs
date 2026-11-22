@@ -368,19 +368,17 @@ fn typed_inches_set_the_frame_at_the_documents_resolution() {
 }
 
 #[trial]
-fn a_typed_size_bigger_than_the_canvas_fits_the_canvas_when_pixels_are_deleted() {
+fn a_typed_size_bigger_than_the_canvas_fits_the_canvas_nearest_the_frame() {
+    // From an off-centre start, so re-centring on the canvas would show: a frame at the top-left
+    // corner and a typed 3000 x 600 (5 : 1) on a 2000 x 1500 document.
     let mut tool = CropTool::new();
-    let doc = document(1); // 400 x 300
+    let doc = sized(1, 2000.0, 1500.0);
     let px = |value: f64| Some((value, UnitKind::Pixels));
-    tool.crop_to(upright(0.0, 0.0, 400.0, 300.0));
-    let settings = sized_fields(px(800.0), px(400.0));
+    tool.crop_to(upright(0.0, 0.0, 100.0, 100.0));
+    let settings = sized_fields(px(3000.0), px(600.0));
     assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
     let frame = tool.frame().expect("a frame");
-    assert_eq!(
-        frame.rect,
-        Rect::new(0.0, 50.0, 400.0, 250.0),
-        "Delete Cropped Pixels keeps the frame on the canvas: the largest 2 : 1 frame it holds"
-    );
+    assert_eq!(frame.rect, Rect::new(0.0, 0.0, 2000.0, 400.0), "the largest 5 : 1 frame the canvas holds, slid nearest the frame that was");
 }
 
 #[trial]
@@ -405,8 +403,12 @@ fn a_typed_frame_that_hangs_past_the_canvas_is_slid_wholly_in() {
     let settings = sized_fields(px(250.0), px(125.0));
     assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
     let frame = tool.frame().expect("a frame");
-    assert_eq!((frame.rect.width(), frame.rect.height()), (250.0, 125.0), "the typed size is kept; only its place moves in");
-    assert!(frame.rect.x0 >= 0.0 && frame.rect.y0 >= 0.0 && frame.rect.x1 <= 400.0 && frame.rect.y1 <= 300.0, "wholly on the canvas: {frame:?}");
+    assert_eq!(
+        (frame.rect.width(), frame.rect.height()),
+        (250.0, 125.0),
+        "the typed size is kept; only its place moves in"
+    );
+    assert_eq!(frame.rect, Rect::new(0.0, 0.0, 250.0, 125.0), "the least move that brings it wholly in");
 }
 
 #[trial]
@@ -429,8 +431,73 @@ fn a_typed_size_keeps_the_frames_turn() {
     let settings = sized_fields(px(500.0), px(400.0));
     assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
     let frame = tool.frame().expect("a frame");
-    assert_eq!((frame.rect.width(), frame.rect.height()), (500.0, 400.0), "the typed size on a turned frame");
+    // The turned frame's bounds hang past the top-left, so Delete Cropped Pixels slides it in: the
+    // typed size is kept to within the rule's float hair.
+    assert!(
+        (frame.rect.width() - 500.0).abs() < 1e-6 && (frame.rect.height() - 400.0).abs() < 1e-6,
+        "the typed size on a turned frame: {frame:?}"
+    );
     assert_eq!(frame.angle, 30.0, "the turn is kept, as a ratio refit keeps it");
+}
+
+#[trial]
+fn a_typed_size_on_a_turned_frame_is_contained_by_its_turned_bounds() {
+    // The canvas rule of Delete Cropped Pixels is about the TURNED bounds, as a drag's is: base
+    // 450 x 250 turned 30 degrees, typed 1000 x 800, so the turned frame would poke past the top
+    // and left of a 2000 x 1500 document.
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(CropBox::new(Rect::new(100.0, 50.0, 550.0, 300.0), 30.0));
+    let settings = sized_fields(px(1000.0), px(800.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(
+        (frame.rect.width() - 1000.0).abs() < 1e-6 && (frame.rect.height() - 800.0).abs() < 1e-6,
+        "the size is kept; only the place moves in: {frame:?}"
+    );
+    assert_eq!(frame.angle, 30.0, "the typed size keeps the turn");
+    let bounds = frame.turned_bounds();
+    // The same float hair the rule allows: the least move lands the bounds on the edge.
+    assert!(
+        bounds.x0 >= -1e-6 && bounds.y0 >= -1e-6 && bounds.x1 <= 2000.0 + 1e-6 && bounds.y1 <= 1500.0 + 1e-6,
+        "the TURNED bounds stay on the canvas, as a drag's do: {bounds:?} from {frame:?}"
+    );
+}
+
+#[trial]
+fn a_hair_of_an_overshoot_does_not_move_the_typed_frame() {
+    // A px field can hold a float hair past the canvas width - unit conversions move lengths
+    // through pixels, and the result lands at 330.0000000000001 px on a 330 px document. The
+    // typed size is kept to the bit, not snapped to the canvas and not slid.
+    let mut tool = CropTool::new();
+    let doc = CropDocument::new(CropDocKey::new(1), Size::new(330.0, 300.0), 72.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 330.0, 300.0));
+    let settings = sized_fields(px(330.0000000000001), px(300.0));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(frame.rect.width() > 330.0 && frame.rect.width() - 330.0 < 1e-6, "the typed width is kept, overshoot and all: {:?}", frame.rect.width());
+    let center = frame.rect.center();
+    assert!((center.x - 165.0).abs() < 1e-9 && (center.y - 150.0).abs() < 1e-9, "a sub-pixel past the edge does not move the frame: {center:?}");
+}
+
+#[trial]
+fn an_absurd_typed_size_stays_finite_and_on_the_canvas() {
+    let mut tool = CropTool::new();
+    let doc = sized(1, 2000.0, 1500.0);
+    let px = |value: f64| Some((value, UnitKind::Pixels));
+    tool.crop_to(upright(0.0, 0.0, 2000.0, 1500.0));
+    let settings = sized_fields(px(1e9), px(1e9));
+    assert!(matches!(tool.refit(&settings, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let frame = tool.frame().expect("a frame");
+    assert!(frame.is_finite(), "the typed giant stays finite: {frame:?}");
+    assert_eq!(frame.rect, Rect::new(250.0, 0.0, 1750.0, 1500.0), "Delete Cropped Pixels clamps it to the largest square the canvas holds, nearest the frame");
+    let mut kept = settings.clone();
+    kept.delete_pixels = false;
+    assert!(matches!(tool.refit(&kept, &doc, &units(), false), Some(CropEvent::Frame(_))));
+    let huge = tool.frame().expect("a frame");
+    assert!(huge.is_finite() && huge.rect.width() == 1e9 && huge.rect.height() == 1e9, "pixels kept: the typed size stands and stays finite: {huge:?}");
 }
 
 #[trial]
