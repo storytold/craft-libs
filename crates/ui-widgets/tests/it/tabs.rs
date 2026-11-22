@@ -115,6 +115,33 @@ fn document_tabs_reserve_space_for_the_trailing_control() {
     }
 }
 
+#[trial]
+fn nested_document_tabs_reserve_space_for_the_trailing_control() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Row;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Long document number {i}, scanned.pdf")).closable(true)).collect();
+        Row::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            Button::new("Home").show(ui);
+            let _ = DocumentTabs::new("Documents", &tabs)
+                .selected(4)
+                .trailing(|ui| {
+                    Button::new("Open").show(ui);
+                })
+                .show(ui);
+            Button::new("Settings").show(ui);
+        });
+    });
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let open = fixture.by_label("Open").expect("trailing button").rect;
+    for i in 0..5 {
+        let tab = fixture.by_label(&format!("Long document number {i}, scanned.pdf")).expect("each tab is visible").rect;
+        assert!(tab.right() <= open.left() + 0.5, "tab {i} overlaps the trailing button: {tab:?}, {open:?}");
+    }
+}
+
 /// An arrow moves the focus to the next tab without showing it; Enter shows it.
 #[trial]
 fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {

@@ -185,6 +185,13 @@ impl StripLayout {
 }
 
 impl ItemLayout for StripLayout {
+    fn set_view(&mut self, viewport: Vec2, _: ScrollPos) {
+        if self.width != viewport.x {
+            self.width = viewport.x;
+            self.refit();
+        }
+    }
+
     fn content_size(&self) -> ScrollPos {
         ScrollPos { x: f64::from(self.width), y: f64::from(self.height) }
     }
