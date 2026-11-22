@@ -356,7 +356,9 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
         let shared = content_sized(cx);
-        let unit = self.shown_unit(&cx.env.units()).map(|unit| {
+        // A mixed field that reads "Mixed" has no number for a unit to follow: the word takes the room.
+        let worded = self.mixed_word && cx.value().is_none();
+        let unit = self.shown_unit(&cx.env.units()).filter(|_| !worded).map(|unit| {
             let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
             if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
         });
