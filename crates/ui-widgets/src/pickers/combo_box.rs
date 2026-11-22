@@ -98,14 +98,33 @@ pub struct ComboBox<'a> {
     empty: String,
     /// What this pass did to the preview, reported in [`ComboBoxOutput::preview`].
     preview: Preview<String>,
+    /// Whether the combo box sizes to its options alone, as in a toolbar or ribbon.
+    #[style_key]
+    compact: bool,
 }
 
 impl<'a> ComboBox<'a> {
     /// A combo box named `label` over the text `value`, offering `options`; an option's value is the text it puts in
     /// the field.
     pub fn new(label: impl Into<Label>, value: Bind<'a, String>, options: &'a [Entry<String>]) -> Self {
-        ComboBox { common: Common::new(), value, options, placeholder: None, decorate: None, empty: String::new(), preview: Preview::Unchanged }
-            .label(label)
+        ComboBox {
+            common: Common::new(),
+            value,
+            options,
+            placeholder: None,
+            decorate: None,
+            empty: String::new(),
+            preview: Preview::Unchanged,
+            compact: false,
+        }
+        .label(label)
+    }
+
+    /// Sets whether the combo box sizes to its options alone, as in a toolbar or ribbon.
+    #[must_use]
+    pub fn compact(mut self, compact: bool) -> Self {
+        self.compact = compact;
+        self
     }
 
     /// Previews `text`, led by the pointer or by the keys. The pass reports it only when the previewed text changes,
@@ -158,10 +177,13 @@ impl Component for ComboBox<'_> {
     type Style = crate::text::FieldStyle;
     type Output = ComboBoxOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) sized by its options alone, as a ribbon's font size box is.
-    fn style(cx: &crate::style::StyleCx<'_>, _: ComboBoxStyleKey) -> crate::text::FieldStyle {
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) or toolbar (`InBar`), or when `compact` is set,
+    /// sized by its options alone, as a ribbon's font size box is.
+    fn style(cx: &crate::style::StyleCx<'_>, key: ComboBoxStyleKey) -> crate::text::FieldStyle {
         let field = crate::text::FieldStyle::at(cx);
-        if cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon { field.sized_by_content() } else { field }
+        let in_bar = cx.env::<crate::contract::InBar>().0;
+        let ribbon = cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon;
+        if key.compact || ribbon || in_bar { field.sized_by_content() } else { field }
     }
 
     /// The wheel steps the text through the options.

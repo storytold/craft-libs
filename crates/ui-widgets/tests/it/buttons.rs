@@ -484,6 +484,60 @@ fn a_ribbons_combo_box_is_as_wide_as_its_options() {
     assert!(ribbon < standard / 2.0, "the ribbon's combo box fits two digits and its chevron: {ribbon} against {standard}");
 }
 
+#[trial]
+fn a_bars_combo_box_is_as_wide_as_its_options() {
+    use craft_ui::bars::{Bar, BarKind};
+    use craft_ui::style::SurfaceKind;
+
+    #[derive(Clone, Copy)]
+    enum Placement {
+        Standard,
+        InBarEnv,
+        CompactOptIn,
+        FloatingBar,
+    }
+
+    let width = |kind: Placement| {
+        let mut fixture = Fixture::new(move |ui| {
+            let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+            let mut size = "11".to_owned();
+            let mut show = |ui: &mut Ui| {
+                let mut cb = ComboBox::new("Font Size", Bind::bound(&mut size), &options);
+                if matches!(kind, Placement::CompactOptIn) {
+                    cb = cb.compact(true);
+                }
+                let _ = cb.show(ui);
+            };
+            match kind {
+                Placement::Standard | Placement::CompactOptIn => show(ui),
+                Placement::InBarEnv => {
+                    with_env(
+                        ui,
+                        |overrides| {
+                            overrides.values.set(craft_ui::contract::InBar(true));
+                        },
+                        show,
+                    );
+                }
+                Placement::FloatingBar => {
+                    let _ = Bar::new("Floating Bar", BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+                        show(ui);
+                    });
+                }
+            }
+        });
+        fixture.settle();
+        fixture.by_label("Font Size").expect("the combo box").rect.width()
+    };
+    let standard = width(Placement::Standard);
+    let in_bar = width(Placement::InBarEnv);
+    let opt_in = width(Placement::CompactOptIn);
+    let floating_bar = width(Placement::FloatingBar);
+    assert!(in_bar < standard / 2.0, "the bar's combo box fits two digits and its chevron: {in_bar} against {standard}");
+    assert!((in_bar - opt_in).abs() < 0.5, "opt-in compact combo box matches in_bar: {opt_in} against {in_bar}");
+    assert!((in_bar - floating_bar).abs() < 0.5, "floating bar combo box matches in_bar: {floating_bar} against {in_bar}");
+}
+
 /// A page's side menu (`ControlPlace::SideMenu`) shows its buttons as rows of places: the label in the large body role
 /// and padded above and below, so a row is taller and wider than the same ghost button elsewhere. A stacked button
 /// there keeps its own look.
