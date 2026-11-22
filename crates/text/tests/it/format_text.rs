@@ -84,3 +84,20 @@ fn an_unsupported_control_takes_no_input_and_shows_its_reason() {
         assert!(texts.iter().any(|text| text.contains(reason)), "{label}'s tooltip says why it is disabled: {texts:?}");
     }
 }
+
+/// The size field keeps room to show its value in a narrow panel: the colour well, the list buttons and the
+/// alignment menu beside it take what they need and the field the rest, never less than a few digits.
+#[trial]
+fn the_size_field_keeps_room_for_its_value_in_a_narrow_panel() {
+    let character = CharacterValues { family: Some("Helvetica".to_owned()), size: None, ..CharacterValues::default() };
+    let paragraph = ParagraphValues::default();
+    let families = vec!["Helvetica".to_owned()];
+    let mut fixture = Fixture::new(move |ui| {
+        ui.set_max_width(215.0);
+        FormatText::new("Format text", &character, &paragraph, &families).show(ui);
+    });
+    fixture.idle(10);
+    let size = fixture.by_label("Font size").expect("the size field is shown");
+    assert!(size.rect.width() >= 64.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    assert!(fixture.texts().iter().any(|run| run.text == "Mixed"), "a mixed size reads Mixed: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+}
