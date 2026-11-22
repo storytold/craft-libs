@@ -19,15 +19,24 @@ the path to the edited element.
 - `get`, `set`, `get_mut`, `insert`, `remove`, `push` and `pop` take O(log n) and copy one leaf and
   one branch per level. A removal that leaves a node too small also copies the neighbor it merges
   with or takes elements from.
-- `append`, `split_off`, `truncate`, `splice` and `retain` rebuild the branches from the leaves.
-  They keep every leaf they do not cut or change, and copy O(n / 64) handles.
+- `append`, `split_off`, `truncate`, `splice` and `retain` make their changes as single edits when
+  they remove or insert only a few elements. When they change more, they rebuild the branches from
+  the leaves: they keep every leaf they do not cut or change, and copy O(n / 64) handles. A rebuild
+  is chosen only when the single edits could copy as many blocks, so a loop that removes one element
+  at a time through `splice` or `retain` copies about one path per removal, as `remove` does.
+- An empty list does not allocate.
+- If `T::clone` panics during an edit, the list stays memory-safe, but which elements it holds
+  afterwards is unspecified. A panic in the iterator passed to `splice`, or in the closure passed to
+  `retain`, leaves the list as it was.
 - `iter` is double-ended and exact-size; `fold` and `rfold` run a leaf slice at a time. `chunks`
   returns the leaves as slices.
 
 ## Counting retained bytes
 
 `list.bytes_not_in(&other)` returns the bytes of the blocks that `list` holds and `other` does not:
-what keeping both versions costs over keeping `other` alone. It walks the two trees level by level
+what keeping both versions costs over keeping `other` alone. A block's bytes are the sizes it asks
+the allocator for (the `Arc` counts, its fields and each buffer's capacity); the allocator's own
+rounding and bookkeeping are not included. It walks the two trees level by level
 and leaves out every block that both hold, so after one edit it visits about one block per level.
 `bytes_not_in_with(&other, key, payload)` adds the heap bytes of the elements that are new: an
 element is counted when `other` holds no element with the same `key` (for an `Arc`, its address).
@@ -59,17 +68,21 @@ assert!(after.bytes_not_in(&before) < 4_000);
 ## Benchmarks
 
 `cargo run --release -p craft-shared-vec --example bench` times 2,000 edits, each beside a kept
-snapshot, and iteration. Results on a 128-core x86-64 Linux host (Rust 1.100.0), with
-`Arc<u64>` elements for the edits:
+snapshot, and iteration. On both sides the timer covers the edit alone; the snapshot is taken
+before it starts and dropped after it stops. The bytes per edit are computed rather than measured:
+the new vector's capacity times the element size for `Vec`, and `bytes_not_in` for `SharedVec`.
+Results on a 128-core x86-64 Linux host (Rust 1.100.0), with `Arc<u64>` elements for the edits:
 
 | Elements | `Arc<Vec<_>>` copied on write | `SharedVec` |
 |---|---|---|
-| 1,000 | 5.8 µs and 8,000 B per edit | 0.25 µs and 1,000 B per edit |
-| 10,000 | 58 µs and 80,000 B per edit | 0.40 µs and 2,025 B per edit |
-| 100,000 | 579 µs and 800,000 B per edit | 0.55 µs and 2,796 B per edit |
+| 1,000 | 3.0 µs and 8,000 B per edit | 0.24 µs and 1,000 B per edit |
+| 10,000 | 30 µs and 80,000 B per edit | 0.38 µs and 2,025 B per edit |
+| 100,000 | 296 µs and 800,000 B per edit | 0.55 µs and 2,796 B per edit |
 
-Summing 100,000 `u64` values takes 0.14 ns per element with `Vec::iter().fold`, 0.18 ns with
-`SharedVec::iter().fold`, and 0.84 ns with a `for` loop over a `SharedVec` (0.55 ns over a `Vec`).
+Removing one element of the 100,000 with `splice` or `retain` counts 2,808 B.
+
+Summing 100,000 `u64` values takes 0.08 ns per element with `Vec::iter().fold`, 0.18 ns with
+`SharedVec::iter().fold`, and 0.84 ns with a `for` loop over a `SharedVec` (0.39 ns over a `Vec`).
 
 ## License
 

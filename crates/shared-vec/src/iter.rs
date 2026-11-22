@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use crate::node::{self, Node};
 
-/// More levels than any tree that fits in memory has: a node other than the root holds at least
-/// 32 slots, so 8 levels hold at least 2^40 elements.
-const DEPTH: usize = 8;
+/// The levels a walk keeps, the root's included, so it handles trees up to height `DEPTH - 1`.
+/// The root holds at least 2 slots and every other node at least 32, so a tree of height 11 holds
+/// at least 2 * 32^11 = 2^56 elements in 2^51 leaves, far more than fit in memory.
+const DEPTH: usize = 12;
 
 /// The leaves under a node in order, or in reverse order, without allocating.
 struct LeafWalk<'a, T> {
@@ -18,9 +19,9 @@ struct LeafWalk<'a, T> {
 }
 
 impl<'a, T> LeafWalk<'a, T> {
-    fn new(root: &'a Node<T>, reverse: bool) -> Self {
+    fn new(root: Option<&'a Node<T>>, reverse: bool) -> Self {
         let mut levels: [std::slice::Iter<'a, Node<T>>; DEPTH] = std::array::from_fn(|_| <&[Node<T>]>::default().iter());
-        levels[0] = std::slice::from_ref(root).iter();
+        levels[0] = root.map_or(&[][..], std::slice::from_ref).iter();
         LeafWalk { levels, depth: 1, reverse }
     }
 
@@ -49,7 +50,7 @@ impl<T> Clone for LeafWalk<'_, T> {
 
 /// The elements of a list in order, by reference. Made by [`SharedVec::iter`](crate::SharedVec::iter).
 pub struct Iter<'a, T> {
-    root: &'a Node<T>,
+    root: Option<&'a Node<T>>,
     /// The index of the next element from the front.
     front: usize,
     /// One past the index of the next element from the back.
@@ -65,11 +66,11 @@ pub struct Iter<'a, T> {
 }
 
 impl<'a, T> Iter<'a, T> {
-    pub(crate) fn new(root: &'a Node<T>) -> Self {
+    pub(crate) fn new(root: Option<&'a Node<T>>) -> Self {
         Iter {
             root,
             front: 0,
-            back: root.len(),
+            back: root.map_or(0, Node::len),
             front_leaves: LeafWalk::new(root, false),
             back_leaves: LeafWalk::new(root, true),
             front_leaf: <&[T]>::default().iter(),
@@ -114,14 +115,20 @@ impl<'a, T> Iterator for Iter<'a, T> {
 
     /// Folds a leaf slice at a time, which runs as fast as folding a slice.
     fn fold<B, F: FnMut(B, &'a T) -> B>(self, init: B, mut f: F) -> B {
-        self.root.fold_range(self.front, self.back, init, &mut f)
+        match self.root {
+            Some(root) => root.fold_range(self.front, self.back, init, &mut f),
+            None => init,
+        }
     }
 }
 
 impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
     /// Folds a leaf slice at a time from the back.
     fn rfold<B, F: FnMut(B, &'a T) -> B>(self, init: B, mut f: F) -> B {
-        self.root.rfold_range(self.front, self.back, init, &mut f)
+        match self.root {
+            Some(root) => root.rfold_range(self.front, self.back, init, &mut f),
+            None => init,
+        }
     }
 
     fn next_back(&mut self) -> Option<&'a T> {
@@ -147,7 +154,7 @@ pub struct Chunks<'a, T> {
 }
 
 impl<'a, T> Chunks<'a, T> {
-    pub(crate) fn new(root: &'a Node<T>) -> Self {
+    pub(crate) fn new(root: Option<&'a Node<T>>) -> Self {
         Chunks { leaves: LeafWalk::new(root, false) }
     }
 }

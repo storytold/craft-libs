@@ -16,6 +16,12 @@ enum Op {
     Truncate(usize),
     Splice(usize, usize, Vec<u32>),
     Retain(u32),
+    /// Removes the element at an index through `retain`.
+    RetainOne(usize),
+    /// Splits off a few elements from the front (`true`) or the back, and appends the rest again.
+    SplitOffFew(usize, bool),
+    /// Truncates a few elements.
+    TruncateFew(usize),
     AppendClone,
     Snapshot,
     Clear,
@@ -32,6 +38,11 @@ fn op() -> impl Strategy<Value = Op> {
         1 => any::<usize>().prop_map(Op::Truncate),
         2 => (any::<usize>(), 0..200usize, prop::collection::vec(any::<u32>(), 0..200)).prop_map(|(at, len, with)| Op::Splice(at, len, with)),
         1 => (2..40u32).prop_map(Op::Retain),
+        // Range edits of a few elements, which a large enough list makes as single edits.
+        2 => (any::<usize>(), 0..3usize, prop::collection::vec(any::<u32>(), 0..3)).prop_map(|(at, len, with)| Op::Splice(at, len, with)),
+        2 => any::<usize>().prop_map(Op::RetainOne),
+        2 => (0..3usize, any::<bool>()).prop_map(|(count, front)| Op::SplitOffFew(count, front)),
+        1 => (0..3usize).prop_map(Op::TruncateFew),
         1 => Just(Op::AppendClone),
         2 => Just(Op::Snapshot),
         1 => Just(Op::Clear),
@@ -97,6 +108,31 @@ fn run(start: usize, ops: &[Op]) -> Result<(), TestCaseError> {
             Op::Retain(modulus) => {
                 model.retain(|value| value % modulus != 0);
                 list.retain(|value| value % modulus != 0);
+            }
+            Op::RetainOne(at) => {
+                if len > 0 {
+                    let at = at % len;
+                    model.remove(at);
+                    let mut index = 0;
+                    list.retain(|_| {
+                        index += 1;
+                        index != at + 1
+                    });
+                }
+            }
+            Op::SplitOffFew(count, front) => {
+                let at = if front { count.min(len) } else { len.saturating_sub(count) };
+                let mut back = list.split_off(at);
+                node::check(&list.root).map_err(TestCaseError::fail)?;
+                node::check(&back.root).map_err(TestCaseError::fail)?;
+                prop_assert_eq!(list.to_vec(), model[..at].to_vec());
+                prop_assert_eq!(back.to_vec(), model[at..].to_vec());
+                list.append(&mut back);
+                prop_assert!(back.is_empty());
+            }
+            Op::TruncateFew(count) => {
+                model.truncate(len.saturating_sub(count));
+                list.truncate(len.saturating_sub(count));
             }
             Op::AppendClone if len < 20_000 => {
                 let mut copy = list.clone();

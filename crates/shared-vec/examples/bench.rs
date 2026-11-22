@@ -4,8 +4,10 @@
 //!
 //! Each edit sets one element of a list that a snapshot still holds, as an undo history does: the
 //! `Vec` is `Arc<Vec<_>>` changed with `Arc::make_mut`, which copies every element, and the
-//! `SharedVec` copies the blocks on the edited path. The copied bytes are counted the same way for
-//! both: the whole vector for `Vec`, and `bytes_not_in` for `SharedVec`.
+//! `SharedVec` copies the blocks on the edited path. On both sides the timer covers the edit alone:
+//! the snapshot is taken before it starts and dropped after it stops. The bytes per edit are
+//! computed, not measured: the new vector's capacity times the element size for `Vec`, and
+//! `bytes_not_in` for `SharedVec`.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -28,17 +30,18 @@ fn edits(count: usize) {
 
     let mut vec = Arc::new(values.clone());
     let mut vec_bytes = 0usize;
-    let start = Instant::now();
+    let mut vec_time = Duration::ZERO;
     for edit in 0..EDITS {
         let snapshot = Arc::clone(&vec);
+        let start = Instant::now();
         let list = Arc::make_mut(&mut vec);
         if let Some(slot) = list.get_mut(edit * step % count) {
             *slot = Arc::new(edit as u64);
         }
+        vec_time += start.elapsed();
         vec_bytes += list.capacity() * size_of::<Handle>();
         black_box(&snapshot);
     }
-    let vec_time = start.elapsed();
 
     let mut shared: SharedVec<Handle> = values.into();
     let mut shared_bytes = 0usize;
@@ -52,12 +55,21 @@ fn edits(count: usize) {
         black_box(&snapshot);
     }
 
+    // One element removed through the range edits, beside the list before it.
+    let mut spliced = shared.clone();
+    spliced.splice(count / 2..count / 2 + 1, []);
+    let mut retained = shared.clone();
+    let gone = retained.get(count / 2).cloned();
+    retained.retain(|value| gone.as_ref().is_none_or(|gone| !Arc::ptr_eq(value, gone)));
+
     println!(
-        "{count:>7} elements | Vec {:>10.0} ns/edit {:>9} B/edit | SharedVec {:>7.0} ns/edit {:>6} B/edit",
+        "{count:>7} elements | Vec {:>10.0} ns/edit {:>9} B/edit | SharedVec {:>7.0} ns/edit {:>6} B/edit | one-element splice {} B, retain {} B",
         per_edit(vec_time),
         vec_bytes / EDITS,
         per_edit(shared_time),
         shared_bytes / EDITS,
+        spliced.bytes_not_in(&shared),
+        retained.bytes_not_in(&shared),
     );
 }
 

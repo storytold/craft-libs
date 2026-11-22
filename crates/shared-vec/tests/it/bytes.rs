@@ -50,6 +50,44 @@ fn a_list_costs_nothing_beside_its_clone_and_everything_beside_an_unrelated_list
 }
 
 #[test]
+fn a_range_edit_of_one_element_costs_about_as_much_as_one_removal() {
+    let base: SharedVec<u64> = (0..100_000).collect();
+    let mut removed = base.clone();
+    assert!(removed.remove(50_000).is_some());
+    let single = removed.bytes_not_in(&base);
+    type Edit = fn(&mut SharedVec<u64>);
+    let edits: [(&str, Edit); 6] = [
+        ("splice out", |list| assert_eq!(list.splice(50_000..50_001, []).len(), 1)),
+        ("splice in", |list| assert!(list.splice(50_000..50_000, [7]).is_empty())),
+        ("retain", |list| list.retain(|value| *value != 50_000)),
+        ("truncate", |list| list.truncate(99_999)),
+        ("split_off", |list| assert_eq!(list.split_off(99_999).len(), 1)),
+        ("append", |list| list.append(&mut SharedVec::from(vec![7]))),
+    ];
+    for (name, edit) in edits {
+        let mut after = base.clone();
+        edit(&mut after);
+        let cost = after.bytes_not_in(&base);
+        assert!(cost <= 2 * single, "{name}: {cost} bytes against {single} for one removal");
+    }
+}
+
+#[test]
+fn an_empty_list_holds_no_blocks() {
+    let mut emptied: SharedVec<u64> = (0..5_000).collect();
+    emptied.retain(|_| false);
+    let read: SharedVec<u64> = serde_json::from_str("[]").unwrap_or_else(|error| panic!("{error}"));
+    for list in [&SharedVec::new(), &SharedVec::default(), &read, &emptied] {
+        assert!(list.blocks().is_empty());
+        assert_eq!(list.bytes_not_in(&SharedVec::new()), 0);
+        assert!(list.ptr_eq(&SharedVec::new()));
+    }
+    let mut popped: SharedVec<u64> = (0..3).collect();
+    while popped.pop().is_some() {}
+    assert!(popped.blocks().is_empty());
+}
+
+#[test]
 fn one_edit_on_a_large_list_costs_a_small_fraction_of_a_vector_copy() {
     for count in [1_000usize, 10_000, 100_000] {
         let before: SharedVec<u64> = (0..count as u64).collect();

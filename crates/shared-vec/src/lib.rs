@@ -5,24 +5,33 @@
 //! also hold up to 64 children. Blocks sit behind `Arc`, so cloning a list copies one handle, and an
 //! edit to a list that shares its blocks with a clone copies only the blocks on the path to the
 //! edited element: one leaf and one branch per level. A `Vec<T>` that is shared the same way
-//! (`Arc<Vec<T>>` with `Arc::make_mut`) copies every element on each edit.
+//! (`Arc<Vec<T>>` with `Arc::make_mut`) copies every element on each edit. An empty list does not
+//! allocate.
 //!
 //! - **Reads:** [`get`](SharedVec::get), [`first`](SharedVec::first), [`last`](SharedVec::last),
 //!   [`iter`](SharedVec::iter) (double-ended) and [`chunks`](SharedVec::chunks) (the blocks as
 //!   slices).
 //! - **Single edits**, O(log n): [`set`](SharedVec::set), [`get_mut`](SharedVec::get_mut),
 //!   [`insert`](SharedVec::insert), [`remove`](SharedVec::remove), [`push`](SharedVec::push) and
-//!   [`pop`](SharedVec::pop).
-//! - **Range edits**, which rebuild the branches and keep every block they do not cut:
-//!   [`append`](SharedVec::append), [`split_off`](SharedVec::split_off),
+//!   [`pop`](SharedVec::pop). A removal that leaves a block under half full also copies the
+//!   neighbor it merges with or takes elements from.
+//! - **Range edits:** [`append`](SharedVec::append), [`split_off`](SharedVec::split_off),
 //!   [`truncate`](SharedVec::truncate), [`splice`](SharedVec::splice) and
-//!   [`retain`](SharedVec::retain).
+//!   [`retain`](SharedVec::retain). A range edit that removes or inserts only a few elements makes
+//!   them as single edits. One that changes more rebuilds the branches from the leaves: it copies
+//!   O(n / 64) handles and keeps every leaf it does not cut or change. A rebuild is chosen only when
+//!   the single edits could copy as many blocks, so the blocks a range edit copies stay within
+//!   about one path per element it removes or inserts.
 //! - **Accounting:** [`bytes_not_in`](SharedVec::bytes_not_in) counts the bytes of the blocks one
 //!   list holds and another does not, for an undo history that keeps both;
 //!   [`bytes_not_in_with`](SharedVec::bytes_not_in_with) adds the heap bytes of the elements
 //!   that the other list does not hold.
 //! - **Serde** (feature `serde`): a list reads and writes as a plain sequence, the same as a
 //!   `Vec<T>`.
+//!
+//! If `T::clone` panics during an edit, the list stays memory-safe, but which elements it holds
+//! afterwards is unspecified. A panic in the iterator passed to [`splice`](SharedVec::splice), or
+//! in the closure passed to [`retain`](SharedVec::retain), leaves the list as it was.
 //!
 //! ```
 //! use craft_shared_vec::SharedVec;
@@ -56,18 +65,19 @@ use node::{Leaves, Node};
 
 /// An ordered, indexed list of `T` whose clones share their blocks (see the [crate] docs).
 pub struct SharedVec<T> {
-    root: Node<T>,
+    /// `None` for an empty list, so an empty list does not allocate.
+    root: Option<Node<T>>,
 }
 
 impl<T> SharedVec<T> {
-    /// An empty list.
-    pub fn new() -> Self {
-        SharedVec { root: Node::empty() }
+    /// An empty list. It does not allocate.
+    pub const fn new() -> Self {
+        SharedVec { root: None }
     }
 
     /// The number of elements.
     pub fn len(&self) -> usize {
-        self.root.len()
+        self.root.as_ref().map_or(0, Node::len)
     }
 
     /// Whether the list has no elements.
@@ -77,7 +87,7 @@ impl<T> SharedVec<T> {
 
     /// The element at `index`, or `None` past the end.
     pub fn get(&self, index: usize) -> Option<&T> {
-        self.root.get(index)
+        self.root.as_ref()?.get(index)
     }
 
     /// The first element.
@@ -92,23 +102,35 @@ impl<T> SharedVec<T> {
 
     /// The elements in order. The iterator is double-ended and knows its length.
     pub fn iter(&self) -> Iter<'_, T> {
-        Iter::new(&self.root)
+        Iter::new(self.root.as_ref())
     }
 
     /// The blocks as slices, in order. Together they hold every element once.
     pub fn chunks(&self) -> Chunks<'_, T> {
-        Chunks::new(&self.root)
+        Chunks::new(self.root.as_ref())
     }
 
-    /// Whether the two lists are the same tree: a clone that neither list has edited since.
-    /// Lists that compare equal need not be the same tree.
+    /// Whether the two lists are the same tree: a clone that neither list has edited since, or two
+    /// empty lists. Lists that compare equal need not be the same tree.
     pub fn ptr_eq(&self, other: &Self) -> bool {
-        self.root.addr() == other.root.addr()
+        match (&self.root, &other.root) {
+            (None, None) => true,
+            (Some(ours), Some(theirs)) => ours.addr() == theirs.addr(),
+            _ => false,
+        }
     }
 
     /// Removes every element.
     pub fn clear(&mut self) {
-        self.root = Node::empty();
+        self.root = None;
+    }
+
+    /// Whether `count` single edits copy no more blocks than a rebuild of the branches does. A
+    /// single edit copies at most one block per level; a tree of `len` elements has at most about
+    /// `len / (MIN * MIN)` branches, since every node other than the root holds at least `MIN`.
+    fn few(&self, count: usize) -> bool {
+        let levels = self.root.as_ref().map_or(0, Node::height) + 1;
+        count.saturating_mul(levels) <= self.len() / (node::MIN * node::MIN)
     }
 }
 
@@ -116,7 +138,7 @@ impl<T: Clone> SharedVec<T> {
     /// The element at `index`, to change in place, or `None` past the end. The blocks on its path
     /// that the list shares with a clone are copied first.
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        self.root.get_mut(index)
+        self.root.as_mut()?.get_mut(index)
     }
 
     /// Replaces the element at `index` and returns the old one. Past the end, returns `value` as
@@ -134,16 +156,22 @@ impl<T: Clone> SharedVec<T> {
         if index > self.len() {
             return Err(value);
         }
-        if let Some(right) = self.root.insert(index, value) {
-            let left = std::mem::replace(&mut self.root, Node::empty());
-            self.root = Node::Branch(Arc::new(node::Branch::new(vec![left, right])));
+        let Some(root) = self.root.as_mut() else {
+            self.root = Some(Node::Leaf(Arc::new(vec![value])));
+            return Ok(());
+        };
+        let split = root.insert(index, value);
+        if let Some(right) = split
+            && let Some(left) = self.root.take()
+        {
+            self.root = Some(Node::Branch(Arc::new(node::Branch::new(vec![left, right]))));
         }
         Ok(())
     }
 
     /// Removes and returns the element at `index`, or `None` past the end.
     pub fn remove(&mut self, index: usize) -> Option<T> {
-        let removed = self.root.remove(index)?;
+        let removed = self.root.as_mut()?.remove(index)?;
         self.collapse_root();
         Some(removed)
     }
@@ -171,6 +199,20 @@ impl<T: Clone> SharedVec<T> {
             std::mem::swap(self, other);
             return;
         }
+        if self.few(other.len()) {
+            for value in std::mem::take(other) {
+                self.push(value);
+            }
+            return;
+        }
+        if other.few(self.len()) {
+            let front: Vec<T> = std::mem::take(self).into();
+            for value in front.into_iter().rev() {
+                let _ = other.insert(0, value);
+            }
+            std::mem::swap(self, other);
+            return;
+        }
         let mut leaves = self.take_leaves();
         leaves.extend(other.take_leaves());
         self.root = node::build(leaves);
@@ -179,8 +221,24 @@ impl<T: Clone> SharedVec<T> {
     /// Splits the list at `at`: this list keeps `[0, at)` and the rest is returned. An `at` past the
     /// length returns an empty list.
     pub fn split_off(&mut self, at: usize) -> Self {
-        if at >= self.len() {
+        let len = self.len();
+        if at >= len {
             return SharedVec::new();
+        }
+        if self.few(len - at) {
+            let mut back = Vec::with_capacity(len - at);
+            for _ in at..len {
+                back.extend(self.pop());
+            }
+            back.reverse();
+            return back.into();
+        }
+        if self.few(at) {
+            let mut front = Vec::with_capacity(at);
+            for _ in 0..at {
+                front.extend(self.remove(0));
+            }
+            return std::mem::replace(self, front.into());
         }
         let (front, back) = cut(self.take_leaves(), at);
         self.root = node::build(front);
@@ -190,10 +248,18 @@ impl<T: Clone> SharedVec<T> {
     /// Keeps the first `len` elements and drops the rest. A `len` at or past the length leaves the
     /// list unchanged.
     pub fn truncate(&mut self, len: usize) {
-        if len < self.len() {
-            let (front, _) = cut(self.take_leaves(), len);
-            self.root = node::build(front);
+        let old = self.len();
+        if len >= old {
+            return;
         }
+        if self.few(old - len) {
+            for _ in len..old {
+                self.pop();
+            }
+            return;
+        }
+        let (front, _) = cut(self.take_leaves(), len);
+        self.root = node::build(front);
     }
 
     /// Replaces the elements in `range` with `replace_with` and returns the removed elements in
@@ -216,41 +282,64 @@ impl<T: Clone> SharedVec<T> {
             Bound::Unbounded => len,
         }
         .clamp(start, len);
-        // The new elements are read before the list is taken apart, so a panic while reading them
-        // leaves the list as it was.
-        let mut inserted = Vec::new();
-        node::chunk(replace_with, &mut inserted);
+        // The new elements are read before the list changes, so a panic while reading them leaves
+        // the list as it was.
+        let inserted: Vec<T> = replace_with.into_iter().collect();
+        if self.few((end - start).saturating_add(inserted.len())) {
+            let mut removed = Vec::with_capacity(end - start);
+            for _ in start..end {
+                removed.extend(self.remove(start));
+            }
+            for (offset, value) in inserted.into_iter().enumerate() {
+                let _ = self.insert(start + offset, value);
+            }
+            return removed;
+        }
         let (mut leaves, rest) = cut(self.take_leaves(), start);
         let (middle, back) = cut(rest, end - start);
         let removed: Vec<T> = middle.into_iter().flat_map(node::unwrap_vec).collect();
-        leaves.extend(inserted);
+        node::chunk(inserted, &mut leaves);
         leaves.extend(back);
         self.root = node::build(leaves);
         removed
     }
 
     /// Keeps the elements for which `keep` returns `true`, in order. `keep` sees each element once,
-    /// in order. Blocks that keep every element are kept as they are.
+    /// in order, before the list changes. Blocks that keep every element are kept as they are.
     pub fn retain<F: FnMut(&T) -> bool>(&mut self, mut keep: F) {
+        let dropped: Vec<usize> = self.iter().enumerate().filter(|(_, value)| !keep(value)).map(|(index, _)| index).collect();
+        if dropped.is_empty() {
+            return;
+        }
+        if self.few(dropped.len()) {
+            for &index in dropped.iter().rev() {
+                self.remove(index);
+            }
+            return;
+        }
+        let mut dropped = dropped.into_iter().peekable();
         let mut leaves = Vec::new();
-        let mut changed = false;
+        let mut start = 0;
         for leaf in self.leaves() {
-            let flags: Vec<bool> = leaf.iter().map(&mut keep).collect();
-            if flags.iter().all(|&kept| kept) {
+            let end = start + leaf.len();
+            if dropped.peek().is_some_and(|&index| index < end) {
+                let mut kept = Vec::with_capacity(leaf.len());
+                for (offset, value) in leaf.iter().enumerate() {
+                    if dropped.next_if_eq(&(start + offset)).is_none() {
+                        kept.push(value.clone());
+                    }
+                }
+                if !kept.is_empty() {
+                    leaves.push(Arc::new(kept));
+                }
+            } else {
                 leaves.push(leaf);
-                continue;
             }
-            changed = true;
-            let kept: Vec<T> = leaf.iter().zip(&flags).filter(|(_, kept)| **kept).map(|(value, _)| value.clone()).collect();
-            if !kept.is_empty() {
-                leaves.push(Arc::new(kept));
-            }
+            start = end;
         }
-        if changed {
-            // Drop the old tree first, so leaves no other list holds can be merged without a copy.
-            self.root = Node::empty();
-            self.root = node::build(leaves);
-        }
+        // Drop the old tree first, so leaves no other list holds can be merged without a copy.
+        self.root = None;
+        self.root = node::build(leaves);
     }
 
     /// Copies the elements into a `Vec`.
@@ -264,30 +353,36 @@ impl<T: Clone> SharedVec<T> {
 
     fn leaves(&self) -> Vec<Arc<Vec<T>>> {
         let mut leaves = Vec::with_capacity(self.len().div_ceil(node::MIN));
-        self.root.collect_leaves(&mut leaves);
+        if let Some(root) = &self.root {
+            root.collect_leaves(&mut leaves);
+        }
         leaves
     }
 
     /// Empties the list and returns its leaves. A leaf that no clone holds is then held only by the
     /// returned run, so it can be merged or cut without a copy.
     fn take_leaves(&mut self) -> Vec<Arc<Vec<T>>> {
-        let root = std::mem::replace(&mut self.root, Node::empty());
-        let mut leaves = Vec::with_capacity(root.len().div_ceil(node::MIN));
-        root.collect_leaves(&mut leaves);
+        let mut leaves = Vec::with_capacity(self.len().div_ceil(node::MIN));
+        if let Some(root) = self.root.take() {
+            root.collect_leaves(&mut leaves);
+        }
         leaves
     }
 
-    /// Replaces a root branch that has one child with that child.
+    /// Replaces a root branch that has one child with that child, and an empty root with `None`.
     fn collapse_root(&mut self) {
         loop {
             let only = match &self.root {
-                Node::Branch(branch) if branch.children.len() == 1 => branch.children.first().cloned(),
+                Some(Node::Branch(branch)) if branch.children.len() == 1 => branch.children.first().cloned(),
                 _ => None,
             };
             match only {
-                Some(child) => self.root = child,
+                Some(child) => self.root = Some(child),
                 None => break,
             }
+        }
+        if self.is_empty() {
+            self.root = None;
         }
     }
 }

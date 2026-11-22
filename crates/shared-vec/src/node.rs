@@ -51,10 +51,6 @@ impl<T> Branch<T> {
 }
 
 impl<T> Node<T> {
-    pub(crate) fn empty() -> Self {
-        Node::Leaf(Arc::new(Vec::new()))
-    }
-
     /// The number of elements under this node.
     pub(crate) fn len(&self) -> usize {
         match self {
@@ -185,11 +181,17 @@ impl<T: Clone> Node<T> {
     pub(crate) fn insert(&mut self, index: usize, value: T) -> Option<Node<T>> {
         match self {
             Node::Leaf(leaf) => {
+                // Grow towards one past a full leaf, never past it.
+                let target = (leaf.len() * 2).clamp(4, MAX + 1).max(leaf.len() + 1);
+                if Arc::get_mut(leaf).is_none() {
+                    // A shared leaf is copied once, straight into a block with room for the new element.
+                    let mut copy = Vec::with_capacity(target);
+                    copy.extend_from_slice(leaf);
+                    *leaf = Arc::new(copy);
+                }
                 let leaf = Arc::make_mut(leaf);
                 if leaf.len() == leaf.capacity() {
-                    // Grow towards one past a full leaf, never past it.
-                    let target = (leaf.len() * 2).clamp(4, MAX + 1);
-                    leaf.reserve_exact(target.saturating_sub(leaf.len()).max(1));
+                    leaf.reserve_exact(target - leaf.len());
                 }
                 leaf.insert(index.min(leaf.len()), value);
                 if leaf.len() > MAX {
@@ -388,8 +390,8 @@ fn push_split<T>(out: &mut Vec<Arc<Vec<T>>>, mut elements: Vec<T>) {
     }
 }
 
-/// Builds a balanced tree from a run of leaves in order.
-pub(crate) fn build<T: Clone>(leaves: Vec<Arc<Vec<T>>>) -> Node<T> {
+/// Builds a balanced tree from a run of leaves in order, or `None` when they hold no element.
+pub(crate) fn build<T: Clone>(leaves: Vec<Arc<Vec<T>>>) -> Option<Node<T>> {
     let mut level: Vec<Node<T>> = normalize(leaves).into_iter().map(Node::Leaf).collect();
     while level.len() > 1 {
         let count = level.len();
@@ -402,13 +404,14 @@ pub(crate) fn build<T: Clone>(leaves: Vec<Arc<Vec<T>>>) -> Node<T> {
         }
         level = next;
     }
-    level.pop().unwrap_or_else(Node::empty)
+    level.pop()
 }
 
 /// Checks the tree's shape: lengths add up, every node except the root holds [`MIN`]..=[`MAX`]
-/// slots, a root branch holds at least two children, and every leaf is at the same depth.
+/// slots, a root branch holds at least two children, every leaf is at the same depth, and an empty
+/// list has no root.
 #[cfg(test)]
-pub(crate) fn check<T>(root: &Node<T>) -> Result<(), String> {
+pub(crate) fn check<T>(root: &Option<Node<T>>) -> Result<(), String> {
     fn walk<T>(node: &Node<T>, is_root: bool, depth: usize, leaf_depth: &mut Option<usize>) -> Result<usize, String> {
         let slots = node.slots();
         let low = match (is_root, node) {
@@ -445,7 +448,11 @@ pub(crate) fn check<T>(root: &Node<T>) -> Result<(), String> {
             }
         }
     }
-    walk(root, true, 0, &mut None).map(|_| ())
+    match root {
+        Some(root) if root.len() == 0 => Err("an empty root".into()),
+        Some(root) => walk(root, true, 0, &mut None).map(|_| ()),
+        None => Ok(()),
+    }
 }
 
 /// Cuts a run of elements into full leaves.

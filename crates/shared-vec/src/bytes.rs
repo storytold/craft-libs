@@ -38,10 +38,11 @@ fn node_bytes<T>(node: &Node<T>) -> usize {
 }
 
 impl<T> SharedVec<T> {
-    /// Every block of the list, the root first and each block before its children.
+    /// Every block of the list, the root first and each block before its children. An empty list
+    /// has none.
     pub fn blocks(&self) -> Vec<Block> {
         let mut out = Vec::new();
-        let mut stack = vec![&self.root];
+        let mut stack: Vec<&Node<T>> = self.root.iter().collect();
         while let Some(node) = stack.pop() {
             let (is_leaf, slots) = match node {
                 Node::Leaf(leaf) => (true, leaf.len()),
@@ -60,7 +61,9 @@ impl<T> SharedVec<T> {
     /// list compared with a clone of itself counts none. Each block is counted once.
     ///
     /// The count covers the blocks themselves (element storage, child handles and lengths), not
-    /// heap memory the elements own; [`bytes_not_in_with`](Self::bytes_not_in_with) adds that.
+    /// heap memory the elements own; [`bytes_not_in_with`](Self::bytes_not_in_with) adds that. A
+    /// block's bytes are the sizes it asks the allocator for: the `Arc` counts, the block's fields
+    /// and each buffer's capacity. The allocator's own rounding and bookkeeping are not included.
     pub fn bytes_not_in(&self, other: &Self) -> usize {
         let (total, _, _) = self.unshared(other);
         total
@@ -75,7 +78,7 @@ impl<T> SharedVec<T> {
     /// does not share with this list, so the unchanged elements of a copied leaf, and elements that
     /// an edit moved to another leaf, are not counted. Each key is counted once.
     ///
-    /// The count is an upper bound: it never leaves out an element that `other` does not hold. An
+    /// The element count errs high: it never leaves out an element that `other` does not hold. An
     /// element that `other` holds only in leaves both lists share, and that this list also holds in
     /// a new leaf (a handle cloned into a second place, without removing it from the first), is
     /// counted. Finding it would mean reading every leaf of `other`.
@@ -103,10 +106,10 @@ impl<T> SharedVec<T> {
     /// the leaves of `other` that this list does not hold.
     fn unshared<'a>(&'a self, other: &'a Self) -> (usize, Vec<&'a [T]>, Vec<&'a [T]>) {
         let mut total = 0;
-        let mut ours: Vec<&Node<T>> = vec![&self.root];
-        let mut theirs: Vec<&Node<T>> = vec![&other.root];
-        let mut our_height = self.root.height();
-        let mut their_height = other.root.height();
+        let mut ours: Vec<&Node<T>> = self.root.iter().collect();
+        let mut theirs: Vec<&Node<T>> = other.root.iter().collect();
+        let mut our_height = self.root.as_ref().map_or(0, Node::height);
+        let mut their_height = other.root.as_ref().map_or(0, Node::height);
         let mut counted: HashSet<usize> = HashSet::new();
         let mut our_leaves = Vec::new();
         // Above the other tree's root, no block of ours can be one of its blocks.
