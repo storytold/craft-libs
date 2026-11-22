@@ -165,3 +165,38 @@ fn a_tool_rails_grip_strip_replays_while_the_pointer_moves_elsewhere() {
         assert_eq!(grips(&fixture), 0, "pointer step {step}: the rail's grip replays its last run");
     }
 }
+
+/// A tool rail floating in a window of its own is moved by its grip strip, as its title row moves it: a drag on the
+/// grip released over empty room puts the window under the pointer (photocraft#16426). Before, the drag tried to float
+/// the group again, which the model refuses for a floating group, and the window stayed.
+#[trial]
+fn a_floating_tool_rails_grip_moves_its_window() {
+    let seen = Rc::new(Cell::new(None));
+    let at = Rect::from_min_size(egui::pos2(300.0, 100.0), Vec2::new(60.0, RAIL_HEIGHT + 60.0));
+    let window = craft_behavior::dock::Floating::new(100, Column::new(vec![Group::new(vec![RAIL], 0)]).with_steps(1), at);
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![window])));
+    let (mut panels, specs) = (RailPanels { seen: seen.clone() }, Tracked::new(RailSpecs));
+    let layout: Rc<RefCell<Option<Layout<usize>>>> = Rc::default();
+    let kept = Rc::clone(&layout);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = DockArea::new("Rail dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default()).show(ui);
+        *kept.borrow_mut() = Some(workspace.layout().clone());
+    });
+    fixture.room(Vec2::new(800.0, 600.0)).settle();
+    let sizes = DockSizes::of(fixture.ctx());
+    let view = seen.get().expect("the host showed the floating rail");
+    let grip = egui::pos2(view.center().x, view.top() - sizes.grip * 0.5);
+    let before = layout.borrow().as_ref().and_then(|l| l.floating.first().map(|w| w.rect)).expect("the rail floats");
+    fixture.drag_hold_at(grip, Vec2::new(-200.0, 150.0));
+    assert_eq!(
+        drag::active::<GroupDrag<usize>>(fixture.ctx()).map(|drag| drag.unit.clone()),
+        Some(DragUnit::Group(RAIL)),
+        "a drag on the floating rail's grip drags its group"
+    );
+    let to = grip + Vec2::new(-200.0, 150.0);
+    fixture.release_at(to).settle();
+    let after = layout.borrow().as_ref().and_then(|l| l.floating.first().map(|w| w.rect)).expect("the rail still floats");
+    assert!(after.min.x < before.min.x - 100.0 && after.min.y > before.min.y + 100.0, "the window moved with the drag: {before:?} -> {after:?}");
+    assert!(after.contains(to), "the window lies under the release: {after:?} at {to:?}");
+    assert_eq!(layout.borrow().as_ref().map(|l| l.floating.len()), Some(1), "still one floating window");
+}

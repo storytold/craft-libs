@@ -243,10 +243,7 @@ pub fn float_drop<P: Clone + PartialEq>(
     rtl: bool,
 ) -> DockDropped<P> {
     let size = space.size_of(unit, source).min(space.area.size());
-    let under = |size: Vec2| {
-        let min = (at - Vec2::new(size.x * 0.5, space.chrome * 0.5)).min(space.area.max - size).max(space.area.min);
-        Rect::from_min_size(min, size)
-    };
+    let under = |size: Vec2| under_pointer(space, at, size);
     let (rect, edge, mark) = match strip.filter(|_| !matches!(unit, DragUnit::Window(_))) {
         Some(strip) => {
             let shown = under((strip + Vec2::new(0.0, space.chrome)).min(space.area.size()));
@@ -263,6 +260,12 @@ pub fn float_drop<P: Clone + PartialEq>(
         _ => to_target(unit, Target::float_with_edge(rect, edge)),
     };
     DockDropped { action, mark: DropMark::region(mark) }
+}
+
+/// A floating window of `size` under the pointer at `at`: its title row's middle at the pointer, inside the float area.
+fn under_pointer<P>(space: &FloatSpace<P>, at: Pos2, size: Vec2) -> Rect {
+    let min = (at - Vec2::new(size.x * 0.5, space.chrome * 0.5)).min(space.area.max - size).max(space.area.min);
+    Rect::from_min_size(min, size)
 }
 
 /// The action a release of `drag` at `at` makes in the dock `dock`, by the spots of the previous pass; `None` where
@@ -367,8 +370,21 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
 
     /// The unit floated under `at`, when it may float and the model takes it; `source` is its size where the drag
     /// started, `strip` the size of the icons it started on ([`float_drop`]).
+    ///
+    /// A unit that is the whole of a floating window already (a floating tool rail dragged by its grip,
+    /// photocraft#16426) moves that window under `at`: it is floating, so floating it again would be refused.
     fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>, strip: Option<Vec2>) -> Option<DockDropped<P>> {
-        let floated = float_drop(unit, self.space?, at, source, strip, self.rtl);
+        let space = self.space?;
+        if let Some(window) = self.layout.floating.iter().find(|window| window.contains(unit.lead()))
+            && window.panels().all(|panel| moving_panels(self.layout, unit).contains(panel))
+        {
+            let rect = under_pointer(space, at, space.size_of(unit, source).min(space.area.size()));
+            let moved = Action::move_floating(unit.lead().clone(), rect);
+            // A move keeps the arrangement (`takes` asks for a change of it): the model need only take the action.
+            let taken = self.layout.clone().apply_with_permissions(moved.clone(), self.permissions).is_ok();
+            return ((self.permissions)(unit.lead()).movable && taken).then_some(DockDropped { action: moved, mark: DropMark::region(rect) });
+        }
+        let floated = float_drop(unit, space, at, source, strip, self.rtl);
         ((self.permissions)(unit.lead()).floatable && takes(self.layout, &floated.action, self.permissions)).then_some(floated)
     }
 }
