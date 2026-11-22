@@ -516,8 +516,12 @@ pub struct ParaProps {
     /// Tab stops (replaces the inherited list; `TabAlign::Clear` stops remove inherited ones).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tabs: Option<Vec<TabStop>>,
+    /// A fixed paragraph fill. `None` inherits unless `shading_auto` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// Explicit automatic/no fixed fill, replacing an inherited color. A fixed `shading` wins.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shading_auto: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub borders: Option<Borders>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -591,7 +595,14 @@ impl ParaProps {
 
     fn overlay_layout(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, kashida, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars,
-            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, shading, borders);
+            space_before, space_after, space_before_auto, space_after_auto, line_spacing, contextual_spacing, mirror_indents, adjust_right_indent, tabs, borders);
+        if let Some(color) = patch.shading {
+            self.shading = Some(color);
+            self.shading_auto = false;
+        } else if patch.shading_auto {
+            self.shading = None;
+            self.shading_auto = true;
+        }
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
