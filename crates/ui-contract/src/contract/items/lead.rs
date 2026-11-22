@@ -240,6 +240,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             .map(|(_, row)| row)
             .filter(|row| before.pointer != pos || before.row == Some(*row));
         *cx.core.memory.shown::<DragRest>(slot) = DragRest { pointer: pos, row: target };
+        // Another row restarts the wait.
+        if target != before.row {
+            crate::contract::overlay::dwell(&ctx, &mut *cx.core.memory, id, "drag rest", false, crate::contract::tooltip::DELAY);
+        }
         if crate::contract::overlay::dwell(&ctx, &mut *cx.core.memory, id, "drag rest", target.is_some(), crate::contract::tooltip::DELAY)
             && let Some(row) = target
         {
