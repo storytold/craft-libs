@@ -101,9 +101,9 @@ pub struct CxCore<'a> {
     pub(crate) state: StateSet,
     /// True once step 12 wrote `state` in this pass.
     pub(crate) stated: bool,
-    /// True once the run reached step 7. A measuring run, a sizing pass of the parent or host `Ui`, and a host that
-    /// shows nothing (a layer in its parent's sizing pass) stop before it: their core is blank and every part reads
-    /// idle.
+    /// True once the run reached step 7 with something to show. A measuring run, a sizing pass of the parent or host
+    /// `Ui`, and a host that shows nothing (a layer in its parent's sizing pass) stop before it, and an inert run (a
+    /// size the guard refuses) declares no parts: their core is blank and every part reads idle.
     pub(crate) parted: bool,
     /// Read with `Styled::ink`, valid from step 12.
     pub(crate) ink: Ink,

@@ -960,7 +960,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     p.real = true;
     let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
     let e = &mut *p.p;
-    e.core().parted = true;
+    e.core().parted = !inert;
     // 7 parts
     p.trace.mark(Step::Parts);
     let flow = Flow::new(rect, rtl);
