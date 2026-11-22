@@ -336,7 +336,7 @@ impl<'a> FormatText<'a> {
             }
 
             // Size and colour, the list buttons, the alignment menu.
-            Row::new().gap(Gap::Item).show(ui, |ui, _| {
+            Row::new().gap(Gap::Tight).show(ui, |ui, _| {
                 let size = LengthRow {
                     label: cw.size.clone(),
                     side: mark(GlyphLabel::text("tT"), None, FieldLayout::Inside),

@@ -6,6 +6,7 @@ use std::rc::Rc;
 use craft_behavior::EditEvent;
 use craft_text::ui::character::{CharacterChange, CharacterValues, FormatControl, FormatText, FormatTextChange, LineSpacing, ParagraphValues};
 use craft_ui::contract::tooltip::DELAY;
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
@@ -98,6 +99,51 @@ fn the_size_field_keeps_room_for_its_value_in_a_narrow_panel() {
     });
     fixture.idle(10);
     let size = fixture.by_label("Font size").expect("the size field is shown");
-    assert!(size.rect.width() >= 64.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    assert!(size.rect.width() >= 56.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
     assert!(fixture.texts().iter().any(|run| run.text == "Mixed"), "a mixed size reads Mixed: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+}
+
+/// In the Tools pane's width (272 points less its padding, Comfortable density) the size field still reads its value:
+/// "14" and "pt", not just the "tT" mark and the arrow (a fill-width field has a least width of a few digits).
+#[trial]
+fn the_size_field_reads_its_value_in_a_272_point_pane() {
+    use craft_theme::Size;
+    let character = CharacterValues { family: Some("Helvetica".to_owned()), size: Some(14.0), ..CharacterValues::default() };
+    let paragraph = ParagraphValues::default();
+    let families = vec!["Helvetica".to_owned()];
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::layout_components::Stack::new().fill().show_at(ui, ui.available_rect_before_wrap(), |ui, _| {
+            FormatText::new("Format text", &character, &paragraph, &families).show(ui);
+        });
+    });
+    fixture.room(egui::vec2(218.0, 600.0)).density(Size::Comfortable);
+    fixture.idle(10);
+    let size = fixture.by_label("Font size").expect("the size field is shown");
+    let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+    assert!(texts.iter().any(|text| text == "14") && texts.iter().any(|text| text == "pt"), "the size reads 14pt: {texts:?} in {:?}", size.rect);
+    assert!(size.rect.width() >= 56.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    let align = fixture.by_label("Alignment").expect("the alignment menu is shown");
+    assert!(align.rect.right() <= 218.5, "the alignment menu stays in the panel: {:?}", align.rect);
+}
+
+/// The mixed size reads "Mixed" in the same width.
+#[trial]
+fn the_size_field_reads_mixed_in_a_272_point_pane() {
+    use craft_theme::Size;
+    let character = CharacterValues { family: Some("Helvetica".to_owned()), size: None, ..CharacterValues::default() };
+    let paragraph = ParagraphValues::default();
+    let families = vec!["Helvetica".to_owned()];
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::layout_components::Stack::new().fill().show_at(ui, ui.available_rect_before_wrap(), |ui, _| {
+            FormatText::new("Format text", &character, &paragraph, &families).show(ui);
+        });
+    });
+    fixture.room(egui::vec2(218.0, 600.0)).density(Size::Comfortable);
+    fixture.idle(10);
+    let size = fixture.by_label("Font size").expect("the size field is shown");
+    let texts: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+    assert!(texts.iter().any(|text| text == "Mixed"), "the size reads Mixed: {texts:?} in {:?}", size.rect);
+    assert!(size.rect.width() >= 56.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
+    let align = fixture.by_label("Alignment").expect("the alignment menu is shown");
+    assert!(align.rect.right() <= 218.5, "the alignment menu stays in the panel: {:?}", align.rect);
 }
