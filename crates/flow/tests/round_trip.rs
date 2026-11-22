@@ -272,8 +272,8 @@ fn vml_hyperlinks_survive_flow_for_roots_and_nested_members() {
         let mut paragraph = doc.body[0].as_para().unwrap().clone();
         let offsets = paragraph.object_offsets();
         let oversized = "x".repeat(craft_flow::MAX_LINK + 1);
-        paragraph.format(offsets[0], offsets[0] + craft_wordmodel::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
-        paragraph.format(offsets[1], offsets[1] + craft_wordmodel::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
+        paragraph.format(offsets[0], offsets[0] + craft_wordmodel::para::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
+        paragraph.format(offsets[1], offsets[1] + craft_wordmodel::para::OBJ.len_utf8(), &|props| props.link = Some(oversized.clone())).unwrap();
         let craft_wordmodel::para::InlineObject::Group { children, .. } = &mut paragraph.objects[0] else { panic!() };
         children[0].link = Some(oversized);
         doc.body = vec![Block::Para(paragraph).into()];
