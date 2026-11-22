@@ -1293,7 +1293,7 @@ mod fast_tests {
     }
 
     /// CPU highlights/shadows base timings on the #3460 frame size:
-    /// `cargo test --release -p lightcraft-pipeline bench_tone_base_cpu -- --ignored --nocapture`.
+    /// `cargo test --release -p craft-develop bench_tone_base_cpu -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn bench_tone_base_cpu() {
