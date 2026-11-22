@@ -16,11 +16,16 @@ pub fn truthy(v: Option<&str>) -> bool {
 
 /// An integer attribute written as a number (a decimal part is cut off); `default` when missing
 /// or not a number.
+/// The widest number read from a file: HWPX writes 32-bit numbers (offsets also as their unsigned
+/// form, see `signed32`), so this keeps every valid value, and sums and products of a few such
+/// numbers stay inside `i64` whatever a hostile file writes.
+pub const MAX_NUM: i64 = 1 << 32;
+
 pub fn num_or(v: Option<&str>, default: i64) -> i64 {
     match v {
         None | Some("") => default,
         Some(s) => match s.trim().parse::<f64>() {
-            Ok(f) if f.is_finite() => f.trunc().clamp(i64::MIN as f64, i64::MAX as f64) as i64,
+            Ok(f) if f.is_finite() => f.trunc().clamp(-MAX_NUM as f64, MAX_NUM as f64) as i64,
             _ => default,
         },
     }

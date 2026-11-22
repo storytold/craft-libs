@@ -422,8 +422,17 @@ impl Converter<'_> {
     /// The paragraphs of a story other than the body (a header, a note, a memo).
     pub(crate) fn story<'e>(&mut self, paras: impl Iterator<Item = &'e Element>, in_cell: bool) -> Vec<Blk> {
         let saved = std::mem::replace(&mut self.in_story, true);
-        let out = self.blocks(paras, in_cell);
+        let out = self.apart(|c| c.blocks(paras, in_cell));
         self.in_story = saved;
+        out
+    }
+
+    /// Reads a story of its own (a note, a header, a text box): a hyperlink open around where it
+    /// is anchored doesn't reach into it, and comes back after it.
+    pub(crate) fn apart<T>(&mut self, read: impl FnOnce(&mut Self) -> T) -> T {
+        let link = self.link.take();
+        let out = read(self);
+        self.link = link;
         out
     }
 
@@ -458,7 +467,7 @@ impl Converter<'_> {
         {
             let v = ctx.pp.ls_value;
             last.tail = match ctx.pp.ls_type.as_str() {
-                "PERCENT" => floor_div(ctx.font_h * (v - 100).max(0), 100),
+                "PERCENT" => floor_div(ctx.font_h.saturating_mul((v - 100).max(0)), 100),
                 "BETWEEN_LINES" => v.max(0),
                 _ => 0,
             };

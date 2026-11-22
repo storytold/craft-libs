@@ -495,3 +495,35 @@ fn spaces_split_off_their_text() {
     assert_eq!(split_spaces("가나"), ["가나"]);
     assert!(split_spaces("").is_empty());
 }
+
+/// A footnote anchored inside a hyperlink is a story of its own: its text doesn't take the
+/// link, and the text after the note in the body still does.
+#[test]
+fn a_note_inside_a_hyperlink_keeps_its_own_text_unlinked() {
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:ctrl><hp:fieldBegin id="7" type="HYPERLINK"><hp:parameters><hp:stringParam name="Command">https://example.com;1;0;0;</hp:stringParam></hp:parameters></hp:fieldBegin></hp:ctrl><hp:t>앞</hp:t><hp:ctrl><hp:footNote><hp:subList><hp:p><hp:run><hp:t>각주 글</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl><hp:t>뒤</hp:t><hp:ctrl><hp:fieldEnd beginIDRef="7"/></hp:ctrl></hp:run></hp:p></hs:sec>"#
+    );
+    let doc = read_bytes(&hwpx(&sec)).unwrap();
+    let linked = |p: &craft_wordmodel::Paragraph, s: &str| {
+        let at = p.text.find(s).expect("text missing");
+        let mut pos = 0;
+        p.runs
+            .iter()
+            .find(|r| {
+                let hit = pos <= at && at < pos + r.len;
+                pos += r.len;
+                hit
+            })
+            .is_some_and(|r| r.props.link.is_some())
+    };
+    let body = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.contains('뒤')).expect("no body paragraph");
+    assert!(linked(body, "앞") && linked(body, "뒤"), "the body text keeps its link around the note");
+    let note = doc
+        .parts
+        .values()
+        .filter(|p| p.kind == PartKind::Footnote)
+        .flat_map(|p| p.blocks.iter().filter_map(|b| b.as_para().cloned()).collect::<Vec<_>>())
+        .find(|p| p.text.contains("각주"))
+        .expect("no note paragraph");
+    assert!(!linked(&note, "각주"), "the note's text isn't linked");
+}

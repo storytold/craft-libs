@@ -406,14 +406,14 @@ impl Converter<'_> {
 
     fn picture(&mut self, el: &Element) -> Option<InlineObject> {
         let img = el.find("hc:img").or_else(|| el.iter("hc:img").next());
-        let got = img.and_then(|i| self.pkg.binary(i.get("binaryItemIDRef").unwrap_or("")));
-        let Some((name, data)) = got else {
+        // the package outlives the converter: its bytes are copied only into a new media entry
+        let pkg = self.pkg;
+        let Some((name, data)) = img.and_then(|i| pkg.binary(i.get("binaryItemIDRef").unwrap_or(""))) else {
             self.missing("picture (missing image data)");
             return None;
         };
-        let (name, crop) = (name.to_string(), crop(el, data));
-        let data = data.to_vec();
-        let media = self.media(&name, &data);
+        let crop = crop(el, data);
+        let media = self.media(name, data);
         self.pic_n += 1;
         let mut float = Float::default();
         float.set_spin(Spin::new(turn(angle_of(el)), false, false));
@@ -466,7 +466,7 @@ impl Converter<'_> {
         let mut story = None;
         let dt = el.find("hp:drawText");
         if let Some(sub) = dt.and_then(|d| d.find("hp:subList")) {
-            let made = self.blocks(sub.findall("hp:p"), true);
+            let made = self.apart(|c| c.blocks(sub.findall("hp:p"), true));
             let tm = dt.and_then(|d| d.find("hp:textMargin"));
             let ins = |k: &str| tm.map(|t| emu(num(t.get(k)) as f64)).unwrap_or(TEXT_INSET);
             let anchor = match sub.get("vertAlign").unwrap_or("TOP") {
@@ -523,7 +523,7 @@ impl Converter<'_> {
     /// line, or floating without wrapping) holding the table. A floating table of the model
     /// always pushes the text aside.
     pub(crate) fn inline_table(&mut self, el: &Element, props: &CharProps) -> Vec<Item> {
-        let mut made = self.table(el, true);
+        let mut made = self.apart(|c| c.table(el, true));
         if made.is_empty() {
             return vec![];
         }
