@@ -180,7 +180,6 @@ struct PendingAudio {
     parent: ItemId,
     child: ItemId,
     audio: TrackItem,
-    preferred: usize,
     video: Option<ClipId>,
 }
 
@@ -843,7 +842,6 @@ impl<'a> Imp<'a, '_, '_> {
                         parent: ctx.sequence,
                         child: item,
                         audio: ti,
-                        preferred: pref,
                         video: vclip,
                     });
                     continue;
