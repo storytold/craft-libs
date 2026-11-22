@@ -18,7 +18,7 @@
 //! # }
 //! ```
 //!
-//! The index and its lookups, [`verify_font`] and [`IndexPin`] build on every target. The store,
+//! The index and its lookups, [`verify_font`], [`verify_face`] and [`IndexPin`] build on every target. The store,
 //! the HTTP client and Language packs (the store's second item kind, `language-pack`: see
 //! [`FontStore::install_language_pack`]) are native only.
 
@@ -41,7 +41,7 @@ pub use index::{
 };
 pub use pin::{IndexPin, PINNED_INDEX};
 pub use sources::{SourceEntry, SourcesFile};
-pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
+pub use verify::{VerifyError, is_font, sha256_hex, verify_face, verify_font};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{Cancel, Client, FetchError, Timeouts, USER_AGENT};
