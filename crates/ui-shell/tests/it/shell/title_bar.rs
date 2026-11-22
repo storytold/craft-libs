@@ -107,23 +107,33 @@ fn linux_window() -> Frames {
     frames
 }
 
-/// After an OS move the cursor changes for one pass and returns to the arrow: egui-winit sends only a changed cursor,
-/// and the window would keep the compositor's.
+/// After an OS move the cursor changes for one frame, even if its first pass is discarded, and returns to the arrow:
+/// egui-winit sends only a changed cursor, and the window would keep the compositor's.
 #[trial]
 fn a_title_bar_sends_the_arrow_again_after_an_os_move() {
-    let mut frames = linux_window();
-    let bar = Cell::new(Rect::NOTHING);
-    let mut show = |ui: &mut Ui| bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
-    frames.frame(vec![], &mut show);
-    frames.frame(vec![], &mut show);
-    let at = bar.get().center();
-    for events in [vec![moved(at)], vec![press(at)], vec![moved(at + vec2(40.0, 0.0))], vec![]] {
-        frames.frame(events, &mut show);
+    for discarded in [false, true] {
+        let mut frames = linux_window();
+        let bar = Cell::new(Rect::NOTHING);
+        let discard = Cell::new(false);
+        let mut show = |ui: &mut Ui| {
+            if discard.take() {
+                ui.ctx().request_discard("the trial reruns the pass");
+            }
+            bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
+        };
+        frames.frame(vec![], &mut show);
+        frames.frame(vec![], &mut show);
+        let at = bar.get().center();
+        for events in [vec![moved(at)], vec![press(at)], vec![moved(at + vec2(40.0, 0.0))], vec![]] {
+            frames.frame(events, &mut show);
+        }
+        discard.set(discarded);
+        let passes = frames.frame(vec![moved(at)], &mut show);
+        assert!(!discarded || passes > 1, "the frame reruns its discarded pass");
+        assert_ne!(frames.cursor_icon(), CursorIcon::Default, "the first motion after the move changes the cursor");
+        frames.frame(vec![], &mut show);
+        assert_eq!(frames.cursor_icon(), CursorIcon::Default, "the next frame sends the arrow");
     }
-    frames.frame(vec![moved(at)], &mut show);
-    assert_ne!(frames.cursor_icon(), CursorIcon::Default, "the first motion after the move changes the cursor");
-    frames.frame(vec![], &mut show);
-    assert_eq!(frames.cursor_icon(), CursorIcon::Default, "the next pass sends the arrow");
 }
 
 /// A window's own title bar shows the arrow over its free band and its menu titles, as an OS title bar does.

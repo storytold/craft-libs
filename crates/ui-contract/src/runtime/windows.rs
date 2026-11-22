@@ -123,6 +123,8 @@ pub(crate) struct Record {
     awaiting_first_paint: bool,
     /// The last OS move or resize the window was handed.
     handoff: Option<HandOff>,
+    /// The frame whose passes hide the cursor after a hand-off ([`reshow_cursor`]).
+    cursor_hidden_frame: Option<u64>,
     /// The geometry last written to the placement store, so an unchanged window writes nothing.
     placed: Option<Geometry>,
     last_pos: Option<Pos2>,
@@ -461,18 +463,20 @@ fn refuse_close_under_modal(ctx: &Context) -> bool {
 
 /// The compositor owns the pointer during an OS move or resize and sets its own cursor, and egui-winit only sends a
 /// cursor that changed, so afterwards the window keeps the compositor's cursor. On the first pointer motion after the
-/// hand-off's press was ended, hides the cursor for one pass, so the cursor the pointer is over, the default arrow
-/// included, is sent again on the next.
+/// hand-off's press was ended, hides the cursor for every pass of that frame, as egui keeps only the last pass's cursor,
+/// so the cursor the pointer is over, the default arrow included, is sent again on the next frame.
 fn reshow_cursor(ctx: &Context, viewport: ViewportId) {
-    if !ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::PointerMoved(_)))) {
-        return;
-    }
+    let moved = ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::PointerMoved(_))));
     let pass = pass::pass_nr(ctx, viewport);
-    let due = PerViewport::<Record>::with(ctx, viewport, |record| match record.handoff {
-        Some(HandOff { released: Some(released), .. }) if released < pass => record.handoff.take().is_some(),
-        _ => false,
+    let frame = pass::frame_nr(ctx, viewport);
+    let hide = PerViewport::<Record>::with(ctx, viewport, |record| {
+        if moved && matches!(record.handoff, Some(HandOff { released: Some(released), .. }) if released < pass) {
+            record.handoff = None;
+            record.cursor_hidden_frame = Some(frame);
+        }
+        record.cursor_hidden_frame == Some(frame)
     });
-    if due {
+    if hide {
         cursor::request(ctx, Cursor::System(CursorIcon::None), CursorPriority::Drag);
         ctx.request_repaint_of(viewport);
     }
