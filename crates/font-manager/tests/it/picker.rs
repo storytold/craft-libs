@@ -400,3 +400,78 @@ fn a_picker_handed_another_catalog_at_the_same_generation_builds_its_family_data
     fx.frame(vec![]);
     assert_eq!(family_builds(&fx), 1, "the second catalog builds the data once");
 }
+
+/// Every non-transparent vertex colour of textured meshes whose centre falls inside `rect`.
+fn mesh_tints(shapes: &[egui::Shape], rect: egui::Rect, out: &mut Vec<egui::Color32>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => mesh_tints(inner, rect, out),
+            egui::Shape::Mesh(mesh) if rect.contains(mesh.calc_bounds().center()) => {
+                out.extend(mesh.vertices.iter().map(|vertex| vertex.color).filter(|color| color.a() > 0));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The painted tint colours of the missing-font warning icon in `mode`/`contrast`, enabled or disabled, together with
+/// the theme's `status.warn.fg`, `text.normal` and `text.disabled` colours.
+fn missing_warning_colors(
+    mode: craft_theme::Mode,
+    contrast: craft_theme::Contrast,
+    enabled: bool,
+) -> (Vec<egui::Color32>, egui::Color32, egui::Color32, egui::Color32) {
+    use craft_ui::contract::Props as _;
+    use craft_ui::runtime::env::Env;
+    use egui::Color32;
+    use std::cell::Cell;
+
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let seen = Rc::new(Cell::new((None, Color32::TRANSPARENT, Color32::TRANSPARENT, Color32::TRANSPARENT)));
+    let held = Rc::clone(&seen);
+    let mut family = "Gotham".to_owned();
+    let mut fx = Fixture::new(move |ui| {
+        let color = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let env = Env::of(ui);
+        let tokens = &env.tokens.tokens().color;
+        let out = FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .kind(FontPickerKind::Plain)
+            .shown_as("Inter")
+            .enabled(enabled)
+            .show(ui);
+        held.set((Some(out.edit.response.id), color(tokens.status.warn.fg.0), color(tokens.text.normal.0), color(tokens.text.disabled.0)));
+    });
+    fx.theme(mode, contrast);
+    fx.in_room(Room::Window);
+    fx.settle();
+    let (id, warn_fg, text_normal, text_disabled) = seen.get();
+    let picker = id.expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    let mut tints = Vec::new();
+    mesh_tints(&fx.frame_shapes(), mark, &mut tints);
+    tints.dedup();
+    (tints, warn_fg, text_normal, text_disabled)
+}
+
+#[trial]
+fn the_missing_font_warning_icon_paints_in_status_warn_fg_and_dims_when_disabled() {
+    use craft_theme::{Contrast, Mode};
+
+    for (mode, contrast) in [(Mode::Light, Contrast::Standard), (Mode::Dark, Contrast::Standard), (Mode::Dark, Contrast::High)] {
+        let (tints, warn_fg, text_normal, _) = missing_warning_colors(mode, contrast, true);
+        assert_ne!(warn_fg, text_normal, "{mode:?} {contrast:?}: warning ink differs from neutral text ink");
+        assert!(!tints.is_empty(), "{mode:?} {contrast:?}: the missing-font warning icon paints");
+        assert!(
+            tints.iter().all(|tint| *tint == warn_fg),
+            "{mode:?} {contrast:?}: the warning icon paints in status.warn.fg {warn_fg:?}, not {tints:?}"
+        );
+    }
+
+    let (tints, warn_fg, _, text_disabled) = missing_warning_colors(Mode::Dark, Contrast::Standard, false);
+    assert_ne!(text_disabled, warn_fg, "disabled ink differs from warning ink");
+    assert!(!tints.is_empty(), "a disabled picker still paints its warning icon");
+    assert!(
+        tints.iter().all(|tint| *tint == text_disabled),
+        "a disabled picker paints its warning icon in text.disabled {text_disabled:?}, not {tints:?}"
+    );
+}

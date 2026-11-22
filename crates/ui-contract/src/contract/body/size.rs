@@ -5,7 +5,7 @@ use super::placement::overlay_of;
 use super::regions::{RegionSizes, end_full_height, footer_in_body, footer_in_end};
 use super::scroll::scroll_of;
 use crate::contract::run::ShowAt;
-use crate::contract::{ContainerProps, Mount, PadEdges, ShellPane, Sizing};
+use crate::contract::{ContainerProps, Mount, PadEdges, PaneEdge, ShellPane, Sizing};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
@@ -61,6 +61,7 @@ pub(crate) struct EnvFacts {
     offered: Option<f32>,
     measure: Option<f32>,
     grid: Option<Id>,
+    egui_cell: bool,
 }
 
 impl EnvFacts {
@@ -80,6 +81,7 @@ impl EnvFacts {
             offered: env.offered,
             measure: env.measure,
             grid: env.grid,
+            egui_cell: env.egui_cell,
         }
     }
 }
@@ -103,7 +105,8 @@ impl<'b> BodyHooks<'b> {
     /// from its content until the user sizes it; an inline container follows its props.
     pub(super) fn sizing(&self, props: &ContainerProps) -> Sizing {
         match &props.mount {
-            Mount::Pane(pane) if pane.content_height => Sizing::FillWidth,
+            Mount::Pane(pane) if pane.content_extent && matches!(pane.edge, PaneEdge::Start | PaneEdge::End) => Sizing::FillHeight,
+            Mount::Pane(pane) if pane.content_extent => Sizing::FillWidth,
             Mount::Pane(_) | Mount::Window { .. } => Sizing::Fill,
             Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow if self.fixed => Sizing::Fill,
             Mount::Layer(_) | Mount::Viewport { .. } => Sizing::Content,
@@ -327,9 +330,9 @@ impl<'b> BodyHooks<'b> {
                     None => room,
                 }
             }
-            // A pane as tall as its content runs in the rect its caller laid out.
+            // A pane as large as its content runs in the rect its caller laid out.
             _ => match (&props.mount, at) {
-                (Mount::Pane(ShellPane { at: Some(rect), content_height: true, .. }), _) => rect.size(),
+                (Mount::Pane(ShellPane { at: Some(rect), content_extent: true, .. }), _) => rect.size(),
                 (_, ShowAt::Rect(rect)) => rect.size(),
                 (_, ShowAt::Flow) => {
                     let room = crate::layout::flow_room(ui);

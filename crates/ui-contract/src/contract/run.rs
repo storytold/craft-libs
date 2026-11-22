@@ -317,6 +317,10 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         self.scope
     }
 
+    fn focus(&self, _: &C) -> Option<crate::runtime::focus::FocusPolicy> {
+        (C::FOCUS_SCOPE != crate::runtime::focus::FocusPolicy::NONE).then_some(C::FOCUS_SCOPE)
+    }
+
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
         use craft_behavior::Axis;
         let room = crate::layout::leaf_fill_room(ui);

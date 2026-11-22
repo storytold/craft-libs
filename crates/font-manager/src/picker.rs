@@ -14,16 +14,18 @@ use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense,
 use craft_behavior::{HitLevel, HitPriority, NavMove, Preview};
 use craft_font_catalog::Catalog;
 use craft_host::Section;
+use craft_theme::variant::Tone;
 use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
     Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
 };
 use craft_ui::list::{ThumbSize, TrailingPart};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{EnvView, Label};
 use craft_ui::runtime::memory::StageAccess;
-use craft_ui::text::{Adornment, place, reserve};
+use craft_ui::style::{ComponentStyle, Metrics, Stateful, States, StyleColor, StyleCx, SurfaceLook};
+use craft_ui::text::{Adornment, FieldStyle, place, reserve};
 use egui::{Rect, Response, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -589,18 +591,35 @@ impl<'a> FontPicker<'a> {
     }
 }
 
+/// The style of [`FontPicker`]: the field look and the colour of the missing-font warning icon.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct FontPickerStyle {
+    #[style(surface)]
+    surface: SurfaceLook,
+    #[style(metrics)]
+    metrics: Metrics,
+    /// The field look the adornments are placed by; `surface` and `metrics` are its own.
+    field: FieldStyle,
+    /// The ink of the missing-font warning icon (`status.warn.fg`), dimmed to `text.disabled` while disabled.
+    warning: Stateful<StyleColor>,
+}
+
 impl Component for FontPicker<'_> {
     const ROLE: Role = Role::COMBO_BOX;
     const INPUT: Input = Input::Text;
     const KEYS: craft_ui::runtime::focus::KeyUse = craft_ui::runtime::focus::KeyUse::of(Input::Text).with_moves();
-    type Style = craft_ui::text::FieldStyle;
+    type Style = FontPickerStyle;
     type Output = FontPickerOutput;
 
     /// A field; in a ribbon (`ControlPlace::Ribbon`) held at the small field length (`size.length.field.sm`), as a
     /// ribbon's font box is: wide enough for a family name and its menu arrow, the same width whichever it shows.
-    fn style(cx: &craft_ui::style::StyleCx<'_>, _: FontPickerStyleKey) -> craft_ui::text::FieldStyle {
-        let field = craft_ui::text::FieldStyle::at(cx);
-        if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.held_at(cx.tokens.size.length.field.sm) } else { field }
+    fn style(cx: &StyleCx<'_>, _: FontPickerStyleKey) -> FontPickerStyle {
+        let field = FieldStyle::at(cx);
+        let field = if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.held_at(cx.tokens.size.length.field.sm) } else { field };
+        let warn = cx.tone(Tone::Warn);
+        let off = cx.color(cx.tokens.color.text.disabled);
+        FontPickerStyle { surface: cx.field(), metrics: field.metrics(), field, warning: Stateful::new(warn).off(States::new(warn, warn, warn, off)) }
     }
 
     /// The wheel steps the family through the list.
@@ -620,7 +639,7 @@ impl Component for FontPicker<'_> {
         let widest = if ribbon { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
         let name = cx.words::<FontPickerWords>().list.clone();
         let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
-        Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name, note.is_some())), widest.y)
+        Vec2::new(widest.x + reserve(&cx.style.field, &[], &Self::trailing(name, note.is_some())), widest.y)
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
@@ -628,7 +647,7 @@ impl Component for FontPicker<'_> {
         let family = cx.value().cloned().unwrap_or_default();
         let note = self.missing_note(&family, &cx.words::<MissingFontsWords>());
         let trailing = Self::trailing(name, note.is_some());
-        let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.flow.is_rtl());
+        let placed = place(cx.content_rect, &cx.style.field, &[], &trailing, cx.flow.is_rtl());
         if let (Some(note), Some(at)) = (note, placed.trailing.first()) {
             cx.part(WARNING, *at).tooltip(note);
         }
@@ -708,9 +727,10 @@ impl Component for FontPicker<'_> {
         let family = cx.value().cloned().unwrap_or_default();
         let missing = self.missing_note(&family, &cx.words::<MissingFontsWords>()).is_some();
         let trailing = Self::trailing(name.clone(), missing);
-        let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.env.direction().is_rtl());
+        let placed = place(cx.content_rect, &cx.style.field, &[], &trailing, cx.env.direction().is_rtl());
         if let (true, Some(at)) = (missing, placed.trailing.first()) {
-            ui.draw().icon(*at, &IconSpec::svg(IconId::new(WARNING_ICON)));
+            let color = cx.resolve(&cx.style.warning);
+            ui.draw().icon(*at, &IconSpec::svg(IconId::new(WARNING_ICON)).color(color));
         }
         ui.face(CHEVRON, IconButton::new(IconId::new(CHEVRON_ICON)).label(name));
     }
