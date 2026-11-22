@@ -61,8 +61,9 @@ impl SampleFace<'_> {
 /// `DocRun::size`), not a UI size. The label names the sample for a screen reader (the family and the sample text).
 ///
 /// Its measure is the sample laid out in the face at `points` on one row, cut with an ellipsis where the room does
-/// not fit it (`faces::sample_text`, the layout `paint` draws); without a ready face, no width and [`LINE_EM`] of
-/// `points` high.
+/// not fit it (`faces::sample_text`, the layout `paint` draws). Without a ready face it reserves the most that layout
+/// can take, the room's width, at [`LINE_EM`] of `points` high: the band the sample will draw in, so the face
+/// arriving never widens it.
 #[derive(craft_ui::contract::Component)]
 #[component(content_painter)]
 pub(crate) struct FontSample<'a> {
@@ -99,7 +100,7 @@ impl Component for FontSample<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let Some(font) = self.face.ready(cx) else {
-            return Vec2::new(0.0, self.points * LINE_EM);
+            return Vec2::new(cx.room.unwrap_or(0.0), self.points * LINE_EM);
         };
         let runs = [DocRun::new(self.text.as_ref(), font, self.points, DataColor::new(Color32::PLACEHOLDER))];
         cx.layout_doc(&faces::sample_text(&runs, cx.room)).size()
