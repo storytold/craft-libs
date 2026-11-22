@@ -245,20 +245,11 @@ mod tests {
         slot.keep(now, empty(), || note(diagnostic(Some("current load failed"))));
         assert!(crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"));
         slot.keep(before, empty(), || note(None));
-        assert!(
-            crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"),
-            "a stale missing load cannot clear it"
-        );
+        assert!(crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"), "a stale missing load cannot clear it");
         slot.keep(now, empty(), || note(diagnostic(None)));
-        assert!(
-            crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"),
-            "a losing success cannot clear it"
-        );
+        assert!(crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"), "a losing success cannot clear it");
         slot.keep(now, empty(), || note(diagnostic(Some("losing load failed"))));
-        assert!(
-            crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"),
-            "a losing error cannot replace it"
-        );
+        assert!(crate::hunspell::source_load_error(slot.name()).unwrap().contains("current load failed"), "a losing error cannot replace it");
         slot.reload();
         let now = slot.read().reloads;
         let word = Arc::new(AffixDict::from_hunspell("", "1\nacceptedword\n", &[]).unwrap());
