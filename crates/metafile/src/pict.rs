@@ -1440,6 +1440,11 @@ fn qt_image(d: &[u8]) -> Option<([u8; 4], Affine, Rect, &[u8])> {
 /// Read a QuickDraw picture.
 pub fn parse(bytes: &[u8]) -> Result<Picture, Error> {
     crate::dib::set_decode_budget(crate::dib::MAX_DECODE_PIXELS);
+    parse_nested(bytes)
+}
+
+/// [`parse`] for a picture inside the metafile being parsed: it draws on the outer file's decode budget.
+pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     let h = find(bytes).ok_or(Error::NotPict)?;
     let mut q = Pict::new(h.frame);
     let mut r = Be::new(bytes, h.ops);

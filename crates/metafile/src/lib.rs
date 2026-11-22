@@ -265,7 +265,7 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
         // the WMF's own records (its dx rounding shows), so the copy is not used.
         wmf::parse(b)?
     } else if pict::is_pict(bytes) {
-        return pict::parse(bytes);
+        return pict::parse_nested(bytes);
     } else {
         return Err(Error::NotMetafile);
     };
