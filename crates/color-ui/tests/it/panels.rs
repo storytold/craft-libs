@@ -193,7 +193,7 @@ fn spectrum_rect(color: Srgba) -> egui::Rect {
 /// warning (black) or both (a printable-out, non-web teal), so a drag across white and black does not move it.
 #[trial]
 fn a_fill_stroke_panels_warnings_keep_their_room_so_the_spectrum_holds_still() {
-    let (clean, warned) = (spectrum_rect(Srgba::rgb(0.0, 0.0, 0.0)), spectrum_rect(Srgba::rgb(0.07, 0.65, 0.58)));
+    let (clean, warned) = (spectrum_rect(Srgba::rgb(0.0, 0.0, 0.0)), spectrum_rect(Srgba::rgb(0.07, 0.85, 0.58)));
     assert_eq!(clean, warned, "the spectrum with no warning and with both");
 }
 
