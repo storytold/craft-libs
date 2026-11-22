@@ -532,9 +532,11 @@ impl Component for ColorWheel<'_> {
         let shown = cx.value().copied();
         let ring = access.node(RING, Role::SLIDER);
         ring.name = Name::Text(words.hue.as_str().to_owned());
-        if let Some(values) = shown {
-            ring.numeric = Some(Numeric::new(f64::from(finite(values.values[0]).rem_euclid(360.0)), 0.0..=360.0).step(1.0).wraps(true));
-        }
+        let hue = match shown {
+            Some(values) => Numeric::new(f64::from(finite(values.values[0]).rem_euclid(360.0)), 0.0..=360.0),
+            None => Numeric::empty(0.0..=360.0),
+        };
+        ring.numeric = Some(hue.step(1.0).wraps(true));
         if self.inner == WheelInner::Triangle {
             let triangle = access.node(TRIANGLE, Role::GROUP);
             triangle.name = Name::Text(words.triangle.as_str().to_owned());
