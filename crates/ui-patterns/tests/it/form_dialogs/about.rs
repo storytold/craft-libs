@@ -95,6 +95,38 @@ fn the_listed_about_sets_its_blocks_apart() {
     assert!(before_caption > within + 1.0, "the built-with line stands apart from the links: {before_caption} against {within}");
 }
 
+// The centred layout (the default) sets its blocks apart: the gap from the version to the community button, from the
+// button to the link row and from the link row to the built-with line is wider than the one from the blurb to the
+// version. The button and the link row stand centred in the dialog, also when the dialog is wider than its lines.
+#[trial]
+fn the_centred_about_sets_its_blocks_apart_and_centres_the_button_and_links() {
+    let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0")
+        .community(AboutLink::new("Chat", "https://chat.example"))
+        .links([AboutLink::new("Website", "https://example.org"), AboutLink::new("Source", "https://example.org/source")])
+        .built_with("MIT");
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&info, &CREDITS).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let [chat, website, source] = ["Chat", "Website", "Source"].map(|name| fixture.by_label(name).expect("every link shows").rect);
+    let painted = |text: &str| fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect).expect("the text shows");
+    let (blurb, version, caption) = (painted("An image editor."), painted("Version 1.0"), painted("MIT"));
+    let within = version.top() - blurb.bottom();
+    for (gap, what) in [
+        (chat.top() - version.bottom(), "the button stands apart from the version"),
+        (website.top() - chat.bottom(), "the links stand apart from the button"),
+        (caption.top() - source.bottom(), "the built-with line stands apart from the links"),
+    ] {
+        assert!(gap > within + 1.0, "{what}: {gap} against {within}");
+    }
+    // Centred across the body: the button and the link row share one middle, the dialog's.
+    let middle = fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect.center().x;
+    let links = website.union(source);
+    assert!((chat.center().x - links.center().x).abs() < 1.0, "the button and the link row share a middle: {chat:?}, {links:?}");
+    assert!((chat.center().x - middle).abs() < 1.0, "the button is centred: {} against {middle}", chat.center().x);
+    assert!(blurb.left() < chat.left() - 10.0, "the blurb still starts at the start edge");
+}
+
 /// The listed layout is a wide dialog (`LeastWidth::WideDialog`), as WordCraft's About: wider than the centred one
 /// with the same text.
 #[trial]
@@ -254,4 +286,40 @@ fn names_sort_without_at_and_case_and_undated_contributors_sort_last_both_ways()
     fixture.click(&display).idle(30);
     sort_by(&mut fixture, "Name");
     assert_eq!(rows(&fixture, &["@zed", "Ann", "@alice", "@carol"]), ["@alice", "Ann", "@carol", "@zed"], "a display name sorts among the usernames");
+}
+
+/// A crowd of contributors whose grab bag is taller than a small window.
+static CROWD: LazyLock<Credits> = LazyLock::new(|| {
+    let people: Vec<Contributor> = (0..400).map(|at| Contributor::new(format!("contributor-number-{at}")).counts(1, 1)).collect();
+    Credits::new(people, Vec::new(), 400)
+});
+
+/// photocraft#16326: in a small window the Contributors tab, whose grab bag fills the room it is offered, keeps the
+/// About dialog inside the window, and back on About the dialog stands centred again, as it opened.
+#[trial]
+fn about_stays_inside_a_small_window_on_contributors_and_comes_back_to_the_middle() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1200.0, 700.0));
+    let id = host.borrow_mut().open(HostedAbout::new(AboutInfo::new("PhotoCraft", "An image editor.", "1.0"), CROWD.clone()));
+    fixture.settle();
+    let screen = fixture.ctx().content_rect();
+    let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+    let opened = dialog(&fixture);
+    assert!((opened.center().y - screen.center().y).abs() < 1.0, "About opens centred: {opened:?} in {screen:?}");
+
+    let ctx = fixture.ctx().clone();
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("contributors")).expect("`tab` takes Contributors");
+    fixture.settle();
+    let tall = dialog(&fixture);
+    assert!(screen.contains_rect(tall), "Contributors keeps the dialog inside the window: {tall:?} in {screen:?}");
+    let ok = fixture.by_label("OK").expect("the footer's OK").rect;
+    assert!(tall.bottom() - ok.bottom() < 20.0, "OK is the dialog's last row: {ok:?} in {tall:?}");
+    assert!(tall.height() <= 0.9 * screen.height() + 1.0, "the dialog keeps to its share of the window: {tall:?} in {screen:?}");
+
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("about")).expect("`tab` takes About");
+    fixture.settle();
+    let back = dialog(&fixture);
+    assert!((back.center().y - screen.center().y).abs() < 1.0, "back on About the dialog is centred again: {back:?} in {screen:?}");
 }

@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines};
+use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines, is_private_family};
 use craft_i18n::matcher::{Matcher, Rank};
 use craft_i18n::{Collator, Folder};
+use skrifa::GlyphId;
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
 
@@ -146,7 +147,10 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
-    let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some());
+    let inked = inked(&font);
+    let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some_and(&inked));
+    // The fork's kana sample, taken after upstream's inked test: a face that draws kana is listed
+    // by what it draws, and a face with the codepoints but no ink is not.
     if has_kana_sample(&drawn) {
         let arabic = has_arabic_sample(&drawn, sample, arabic).then(|| arabic.to_owned());
         return Some(Samples { latin: KANA_SAMPLE.to_owned(), arabic });
@@ -158,8 +162,25 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
     if drawn(shown) {
         return Some(Samples { latin: shown.to_owned(), arabic: None });
     }
-    let first = map.mappings().filter_map(|(cp, _)| char::from_u32(cp)).filter(|c| !c.is_whitespace() && !c.is_control()).take(6).collect();
+    let first = map
+        .mappings()
+        .filter(|(_, glyph)| inked(*glyph))
+        .filter_map(|(cp, _)| char::from_u32(cp))
+        .filter(|c| !c.is_whitespace() && !c.is_control())
+        .take(6)
+        .collect();
     Some(Samples { latin: first, arabic: None })
+}
+
+/// Whether a glyph of `font` has an outline, which is all the sample painter draws: a TrueType glyph with contours, or
+/// any glyph of a CFF face. A colour bitmap face (sbix, CBDT) maps its characters to glyphs without outlines.
+fn inked<'a>(font: &FontRef<'a>) -> impl Fn(GlyphId) -> bool + 'a {
+    let truetype = font.loca(None).ok().zip(font.glyf().ok());
+    let cff = font.cff().is_ok() || font.cff2().is_ok();
+    move |glyph| match &truetype {
+        Some((loca, glyf)) => loca.get_glyf(glyph, glyf).ok().flatten().is_some(),
+        None => cff,
+    }
 }
 
 /// The upright face nearest weight 400.
@@ -356,6 +377,7 @@ pub(super) fn list(
     let mut ranked: Vec<(Rank, FamilyRow)> = catalog
         .families()
         .iter()
+        .filter(|family| !is_private_family(family))
         .filter_map(|family| {
             let info = infos.families.get(family)?;
             let shown = shown_name(&info.localized, family, listing.language, english);

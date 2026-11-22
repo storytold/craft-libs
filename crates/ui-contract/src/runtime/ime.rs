@@ -236,8 +236,13 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
                     engine.edits.push((EditorInput::delete_surrounding_bytes(before, after), place));
                 }
                 os::Raw::Commit(text) => {
-                    engine.composing = false;
+                    let marked = std::mem::take(&mut engine.composing);
                     engine.preedit.clear();
+                    // An empty commit with nothing marked inserts nothing, so it replaces no selection either, and
+                    // ends no composition whose confirming key needs the guard.
+                    if text.is_empty() && !marked {
+                        continue;
+                    }
                     engine.guard = GUARD_FRAMES;
                     engine.edits.push((EditorInput::ImeCommit, place));
                     engine.edits.push((EditorInput::Text(text.into()), place));

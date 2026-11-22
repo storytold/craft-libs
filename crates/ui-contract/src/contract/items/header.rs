@@ -157,8 +157,9 @@ pub(super) struct Header {
     /// The columns whose header cell the collection hosts a component in (`Collection::hosts_header`): they paint no
     /// label and are no sort target.
     hosted: Vec<ColumnKey>,
-    /// The widest cell of each `Content` column among all rows, or its header label when wider, from the items'
-    /// measure of this pass (`content_id`); zero for the other columns and while unknown.
+    /// The widest cell of each `Content` column among all rows, or its header label or its least width
+    /// (`ColumnSpec::min_width`) when wider, from the items' measure of this pass (`content_id`); zero for the other
+    /// columns and while unknown.
     content: Vec<f32>,
     /// The column a double click on its edge fits to its widest cell in view, with its width as shown.
     pub(super) fit: Option<(ColumnKey, f32)>,
@@ -271,8 +272,10 @@ impl Header {
             .specs
             .iter()
             .map(|spec| {
-                let measured = matches!(spec.width, ColumnWidth::Content).then(|| layout_memory::measured(ctx, content_id(id, &spec.key))).flatten();
-                measured.map_or(0.0, |measured| measured.took.x)
+                if !matches!(spec.width, ColumnWidth::Content) {
+                    return 0.0;
+                }
+                layout_memory::measured(ctx, content_id(id, &spec.key)).map_or(0.0, |measured| measured.took.x).max(spec.min_width)
             })
             .collect();
     }

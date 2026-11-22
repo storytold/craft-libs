@@ -591,6 +591,30 @@ fn keys_that_end_a_composition_do_not_reach_the_editor_while_it_composes() {
     assert!(inputs.is_empty(), "the interrupted composition's late preedit is fenced: {inputs:?}");
 }
 
+/// An empty commit with nothing marked is no edit, so a selection (the Type tool's placeholder) survives it and the
+/// Enter after it is a newline; an empty commit that ends a composition still ends it.
+#[trial]
+fn an_empty_commit_with_nothing_marked_reaches_no_editor() {
+    for (name, mut rig) in [("a field's editor", Rig::new()), ("a canvas's editor", Rig::canvas_editor())] {
+        rig.focus();
+        rig.frame(vec![commit("")]);
+        let inputs = rig.take();
+        assert!(inputs.is_empty(), "{name}: an empty commit with nothing marked reaches the editor: {inputs:?}");
+        rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
+        let inputs = rig.take();
+        assert!(matches!(inputs.as_slice(), [EditorInput::Newline]), "{name}: the Enter after it is a newline: {inputs:?}");
+
+        rig.frame(vec![preedit("k")]);
+        assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "{name}: the editor composes");
+        rig.frame(vec![commit("")]);
+        let inputs = rig.take();
+        assert!(
+            matches!(inputs.as_slice(), [EditorInput::ImeCommit, EditorInput::Text(text)] if text.is_empty()),
+            "{name}: an empty commit ends the composition: {inputs:?}"
+        );
+    }
+}
+
 /// A body that runs inside the component reports through `EditorHandle::report`: its caret reaches the IME output
 /// and its lines reach AccessKit as the component's own `Cx::editor_state` report does.
 #[trial]
