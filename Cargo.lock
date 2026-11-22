@@ -1809,8 +1809,11 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color",
  "craft-color-transform",
  "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
  "craft-render-parity",
  "proptest",
  "rayon",
@@ -2637,6 +2640,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-y4m",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2987,6 +2991,14 @@ version = "0.1.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-png"
+version = "0.1.0"
+dependencies = [
+ "png 0.18.1",
  "thiserror 2.0.21",
 ]
 
