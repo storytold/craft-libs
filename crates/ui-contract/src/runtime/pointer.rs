@@ -107,6 +107,9 @@ pub(crate) struct Memory {
     requested: Option<(u64, PressCancel)>,
     /// Whether any arena of the viewport holds an open press; sensing registers it, as the layer above.
     press_probe: Option<fn(&Context) -> bool>,
+    /// The pass in which a container last held a press on its own surface (`hold_surface_press`); the end sweep
+    /// drops it after a pass with none.
+    surface_held: Option<u64>,
     /// The arena roots whose members the next pass resolves without (`withhold_members`), with the pass that asked.
     withheld: IdMap<u64>,
     /// The touch under way, for the multi-finger tap.
@@ -493,10 +496,27 @@ pub(crate) fn register_press_probe(ctx: &Context, probe: fn(&Context) -> bool) {
     PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| memory.press_probe = Some(probe));
 }
 
-/// Whether a press of the running viewport is open: Escape cancels it before anything else.
+/// Whether a press of the running viewport is open, in an arena or on a container's own surface: Escape cancels it
+/// before anything else.
 pub(crate) fn press_captured(ctx: &Context) -> bool {
-    let probe = PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| memory.press_probe);
-    probe.is_some_and(|probe| probe(ctx))
+    let (probe, surface) = PerViewport::<Memory>::with(ctx, pass::current_viewport(ctx), |memory| (memory.press_probe, memory.surface_held));
+    surface.is_some() || probe.is_some_and(|probe| probe(ctx))
+}
+
+/// Records that a container holds a press on its own surface in the running pass, so the press counts as captured
+/// until the end of the next pass that holds none.
+pub(crate) fn hold_surface_press(ctx: &Context) {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.surface_held = Some(pass_nr));
+    crate::runtime::frame::register_end_sweep(ctx, std::any::TypeId::of::<Memory>(), sweep_surface_press);
+}
+
+/// Drops the surface press of a pass in which no container held one: it ended, or its container was not shown.
+fn sweep_surface_press(ctx: &Context) {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.surface_held = memory.surface_held.filter(|held| *held == pass_nr));
 }
 
 /// Why captured presses end in the running pass: a cancel a service requested, else the window losing focus, else a

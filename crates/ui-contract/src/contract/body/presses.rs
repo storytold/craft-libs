@@ -112,6 +112,9 @@ impl BodyHooks<'_> {
                 _ if surface.is_none() && (!pass.primary_down || pointer::cancel_of_pass(&ctx).is_some()) => *origin = None,
                 _ => {}
             }
+            if origin.is_some() && !core.memory.is_peek() {
+                pointer::hold_surface_press(&ctx);
+            }
         }
         let shown = core.memory.shown::<SurfacePress>(state_id);
         shown.pressed = surface.is_some();
