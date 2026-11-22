@@ -747,7 +747,15 @@ fn place_and_erase_drags_paint_their_preview_while_held() {
         let held_shapes = eraser_rig.fixture().frame_shapes();
         assert_eq!(swath_widths(&held_shapes).len(), 1, "radius {radius}: swath painted at twice the radius while held");
         let cap_circles = held_shapes.iter().filter(|shape| matches!(shape, Shape::Circle(c) if (c.radius - radius).abs() < 0.1)).count();
-        assert!(cap_circles >= 2, "radius {radius}: swath paints round dots along its path: {cap_circles}");
+        assert_eq!(cap_circles, 0, "radius {radius}: the swath is a flat stroke, with no dots at its ends");
+        let grey = held_shapes.iter().any(|shape| match shape {
+            Shape::Path(path) if (path.stroke.width - 2.0 * radius).abs() < 0.1 => match path.stroke.color {
+                ColorMode::Solid(c) => c.r().abs_diff(c.b()) < 8 && c.r().abs_diff(c.g()) < 8,
+                _ => false,
+            },
+            _ => false,
+        });
+        assert!(grey, "radius {radius}: the swath is a flat grey");
         release_drag(&mut eraser_rig, Point::new(220.0, 100.0), Modifiers::NONE);
         let after_shapes = eraser_rig.fixture().frame_shapes();
         assert!(swath_widths(&after_shapes).is_empty(), "radius {radius}: swath clears after release");
@@ -763,4 +771,58 @@ fn place_and_erase_drags_paint_their_preview_while_held() {
     release_drag(&mut strokes_eraser, Point::new(220.0, 100.0), Modifiers::NONE);
     let after_ants = ant_shapes(&strokes_eraser.fixture().frame_shapes());
     assert_eq!(after_ants, baseline_ants, "strokes eraser preview clears after release");
+}
+
+/// A shape being dragged out is previewed in a heavy outline, as the drawing it will become reads on a page.
+#[trial]
+fn a_dragged_shape_preview_is_a_heavy_outline() {
+    let color = [0x10, 0x80, 0xE0];
+    let mut tool = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Rectangle), 0);
+    tool.color = color;
+    let mut shape_rig = rig(tool);
+    hold_drag(&mut shape_rig, Point::new(50.0, 50.0), Point::new(160.0, 120.0), Modifiers::NONE);
+    let shapes = shape_rig.fixture().frame_shapes();
+    let paths = colored_paths(&shapes, Color32::from_rgb(color[0], color[1], color[2]));
+    assert!(paths.iter().any(|p| p.stroke.width >= 3.0), "the preview outline is at least 3 points wide: {paths:?}");
+}
+
+/// The overlay of a selected rectangle: round resize handles. A callout's leader is painted once, in its own colour.
+#[trial]
+fn the_overlay_draws_round_handles_and_no_second_leader() {
+    use craft_review::ui::AnnotationOverlay;
+    use craft_ui::contract::Show as _;
+    let mut callout = annotation(2, AnnotationKind::Callout, Rect::new(150.0, 100.0, 250.0, 140.0));
+    callout.points = vec![Point::new(60.0, 160.0), Point::new(120.0, 120.0)];
+    let annotations = vec![annotation(1, AnnotationKind::Rectangle, Rect::new(20.0, 20.0, 100.0, 60.0)), callout];
+    let selected = vec![AnnotationId(2)];
+    let shown = annotations.clone();
+    let mut overlay = ToolFixture::with_view(
+        "Document",
+        AnnotateTool::new(AnnotationTool::Select, 0),
+        view,
+        move |ui, cx| {
+            AnnotationOverlay::new("Annotations", &shown, &selected).show_at(ui, cx.rect);
+        },
+    );
+    let tip = on_screen(&overlay, Point::new(60.0, 160.0));
+    let shapes = overlay.fixture().frame_shapes();
+    let leaders: Vec<&egui::epaint::PathShape> =
+        shapes.iter().filter_map(|shape| if let Shape::Path(p) = shape { Some(p) } else { None }).filter(|p| p.points.first().is_some_and(|q| (*q - tip).length() < 0.5)).collect();
+    assert!(!leaders.is_empty(), "the leader paints");
+    assert!(leaders.iter().all(|p| p.stroke.color == ColorMode::Solid(Color32::from_rgb(255, 0, 0))), "every leader stroke is the annotation's colour");
+
+    let mut boxed = annotations;
+    boxed.truncate(1);
+    let selected = vec![AnnotationId(1)];
+    let mut overlay = ToolFixture::with_view(
+        "Document",
+        AnnotateTool::new(AnnotationTool::Select, 0),
+        view,
+        move |ui, cx| {
+            AnnotationOverlay::new("Annotations", &boxed, &selected).show_at(ui, cx.rect);
+        },
+    );
+    let shapes = overlay.fixture().frame_shapes();
+    let discs = shapes.iter().filter(|shape| matches!(shape, Shape::Circle(c) if c.radius < 8.0)).count();
+    assert!(discs >= 8, "the eight resize handles are round: {discs}");
 }

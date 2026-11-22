@@ -13,7 +13,7 @@ use egui::{CornerRadius, Pos2, Response};
 use kurbo::{Point, Rect};
 
 use super::tool::{color32, corners};
-use crate::annotate::{Annotation, AnnotationEdit, AnnotationHandle, AnnotationId, AnnotationKind, callout_leader, handles, marker_rect};
+use crate::annotate::{Annotation, AnnotationEdit, AnnotationId, AnnotationKind, callout_leader, handles, marker_rect};
 
 /// The ellipse inscribed in `rect`, as a closed run of page points.
 pub(super) fn ellipse_points(rect: Rect) -> Vec<Point> {
@@ -314,20 +314,13 @@ impl Component for AnnotationOverlay<'_> {
                 outline(PaintShape::Path(a.points.iter().map(|&p| to_screen(p)).collect()));
             } else {
                 outline(ring(screen_rect(a.rect, &to_screen)));
-                let leader = if a.kind == AnnotationKind::Callout { callout_leader(a) } else { Vec::new() };
-                if leader.len() > 1 {
-                    outline(PaintShape::Path(leader.iter().map(|&p| to_screen(p)).collect()));
-                }
             }
             if primary != Some(&a.id) {
                 continue;
             }
-            for (handle, at) in handles(a) {
-                let shape = match handle {
-                    AnnotationHandle::Box(..) => HandleShape::Square,
-                    AnnotationHandle::Point(_) => HandleShape::Circle,
-                };
-                raw.extend(Handle::shapes(&cx.style.handle, shape, to_screen(at), &StateSet::default()));
+            for (_, at) in handles(a) {
+                // Every handle is round.
+                raw.extend(Handle::shapes(&cx.style.handle, HandleShape::Circle, to_screen(at), &StateSet::default()));
             }
         }
     }

@@ -5,7 +5,7 @@ use craft_keymap::Mods;
 use craft_theme::Srgba;
 use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
-use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
+use craft_ui::primitives::{DataWidth, Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2};
@@ -1210,7 +1210,7 @@ impl CanvasTool for AnnotateTool {
             if closed && let Some(&first) = path.first() {
                 path.push(first);
             }
-            draw.stroke(&PaintShape::Path(path), StrokeWidth::Medium, DataColor::new(color));
+            draw.stroke(&PaintShape::Path(path), StrokeWidth::Heavy, DataColor::new(color));
         };
         let drawn = |kind: AnnotationKind| color32(&self.fresh(kind, Rect::ZERO));
         let shift = cx.mods.shift;
@@ -1248,8 +1248,12 @@ impl CanvasTool for AnnotateTool {
             }
             Some(Drag::Stroke(points)) => outline(screen(points), false, drawn(self.ink_kind())),
             Some(Drag::Erase { path, .. }) if self.draw_options.erase == EraseMode::Path => {
-                // The swath the eraser rubs, as wide on screen as its reach at any zoom.
-                cx.swath(&screen(path), 2.0 * self.draw_options.eraser_radius);
+                // The swath the eraser rubs, as wide on screen as its reach at any zoom: a flat grey band.
+                draw.stroke(
+                    &PaintShape::Path(screen(path)),
+                    DataWidth::points(2.0 * self.draw_options.eraser_radius),
+                    DataColor::new(Color32::from_rgba_unmultiplied(0x80, 0x80, 0x80, 0xA0)),
+                );
             }
             Some(Drag::Erase { path, .. }) => cx.marching_ants(&screen(path), false),
             Some(Drag::Edit { .. }) | None => {}
