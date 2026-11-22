@@ -457,14 +457,17 @@ impl Component for MenuItem<'_> {
         let text = mnemonic::marked(cx.resolved.label, &cx.env.folder()).0;
         let run = TextRun::new(text.as_str()).role(self.label_look(cx.style).role);
         let label = if text.is_empty() { Vec2::ZERO } else { cx.layout_at(&run, f32::INFINITY).size() };
-        let line = label.y.max(cx.icon());
+        let metrics = &cx.style.metrics;
+        let padding = metrics.padding;
+        // The label line paint finds (`label_line`): the row is at least its least height, and the sample is as high
+        // as that line.
+        let line = label.y.max(cx.icon()).max(metrics.min_size.y - padding.top - padding.bottom - detail.y);
         let columns = self.columns(cx, &level, line);
         let gap = cx.gap();
         let step = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
         // A sample-only row's sample stands in the label's place: the label takes no width.
         let shown = if self.sample_replaces_label() { 0.0 } else { label.x };
         let rest = shown.max(detail.x) + step(columns.trail, cx.style.shortcut_gap.max(gap));
-        let padding = cx.style.metrics.padding;
         // A row measured before the level's widest mark, icon or sample read narrower columns: the body's group adds
         // the widest columns to what the rows reach past them.
         crate::layout::report_beyond(cx.ui.ctx(), &[MARKS, ICONS, SAMPLES], padding.start + padding.end + rest);
