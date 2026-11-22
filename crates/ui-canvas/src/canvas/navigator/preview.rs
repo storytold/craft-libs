@@ -306,6 +306,12 @@ impl Component for Navigator<'_> {
         Some(self.view.reborrow())
     }
 
+    /// The canvas settles the view a drag of the view box proposes to whole device pixels, so the view the app writes
+    /// back is the drag's own value, not the app changing the view under it, and the drag goes on (photocraft#16403).
+    fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
+        crate::canvas::scrollbars::settled_as_proposed(proposed, host)
+    }
+
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         cx.part(WELL, rect).sense(Sense::CLICK | Sense::DRAG).pointer_only(POINTER_ONLY);
         let Some(view) = cx.value().copied() else { return };
