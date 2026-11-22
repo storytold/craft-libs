@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn letter_limits_use_original_source_offsets_for_decomposed_text() {
-        let patterns = Patterns::from_huhyphn("UTF-8\né'b5c/bz=,3,1\n").unwrap();
+        let patterns = Patterns::from_huhyphn("UTF-8\né'b5c/bz=,3,1\na2a\n").unwrap();
         let lim = Limits { min_word: 2, after_first: 2, before_last: 3, capitalized: true };
         let lang = ProofLang::from_tag(Some("hu"));
         for (word, at) in [("é'bcaa", 3), ("e\u{301}’bcaa", 4)] {
