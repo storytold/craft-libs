@@ -92,7 +92,10 @@ impl BodyLayout {
         BodyLayout::Row { wrap: false, align: RowAlign::Start }
     }
 
-    /// Children row-major over `columns`: a `'static` slice, or columns built in the pass.
+    /// Children row-major over `columns`: a `'static` slice, or columns built in the pass. The cells are the body's
+    /// craft children: an egui container shown in the body is no cell, and egui places it below the cells placed so
+    /// far. The rows after it are placed over it: show it as the last child, or put it in a craft body (`Row`), which
+    /// takes a cell.
     pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self {
         BodyLayout::Grid { columns: columns.into(), fit: GridFit::Stack, cells: CellAlign::Center }
     }
@@ -521,13 +524,13 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
             });
             let width = ui.max_rect().width();
             for level in 0..levels.max(1) {
-                let installed = Env::install_for(ui, no_room.clone());
                 // Every level shows the same bodies under the same ids: each measures as a probe, so no level reuses a
                 // record another level left, and none serves the sweep at the levels given, which records its own.
                 let (_, took) = layout_memory::probing(&ctx, || {
-                    crate::runtime::egui::sizing::run_sized(ui, width, child::column_layout(rtl), |ui| show(ui, level))
+                    crate::runtime::egui::sizing::run_sized(ui, width, child::column_layout(rtl), |ui| {
+                        Env::run_in(ui, no_room.clone(), |ui| show(ui, level))
+                    })
                 });
-                Env::restore(&ctx, installed);
                 if level == 0 {
                     widest = took;
                 }
@@ -889,7 +892,7 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
         return inner;
     }
     if !shares_along(env, axis) {
-        return child::block(ui, None, layout, body).0;
+        return child::block(ui, None, layout, |ui| Env::run_in(ui, env.clone(), body)).0;
     }
     let key = sub(id, "share");
     child::block(ui, None, layout, |ui| {
@@ -943,7 +946,7 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
     let ctx = ui.ctx().clone();
     let in_child = |ui: &mut Ui, body: &mut dyn FnMut(&mut Ui) -> R| {
         let mut child = laid_out_child(ui, layout);
-        let inner = body(&mut child);
+        let inner = Env::run_in(&mut child, env.clone(), body);
         (inner, child.min_rect())
     };
     if !shares_along(env, axis) {
@@ -1158,10 +1161,12 @@ impl Spread {
 fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(&mut Ui) -> R) -> (R, Option<f32>) {
     let ctx = ui.ctx().clone();
     let layout = child::row_layout(rtl, false);
-    let sweep = |ui: &mut Ui, last: Option<Vec2>, leasts: Vec<f32>, probe: bool, body: &mut dyn FnMut(&mut Ui) -> R| {
+    let env = Env::of(ui);
+    let sweep = |ui: &mut Ui, env: &Env, last: Option<Vec2>, leasts: Vec<f32>, probe: bool, body: &mut dyn FnMut(&mut Ui) -> R| {
         let flow = Flow::new(ui.available_rect_before_wrap(), rtl);
         pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Spread(Spread::new(flow, gap, last, leasts, probe))));
-        let inner = body(ui);
+        // The children run in the sweep's own `Ui`: the row's env is installed for it, so they are its direct children.
+        let inner = Env::run_in(ui, env.clone(), body);
         let spread = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
             Some(Cursor::Spread(spread)) => Some(spread),
             _ => None,
@@ -1174,13 +1179,13 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
         let count = this_pass(&ctx, false, leasts_id).map_or(0, |count| count.x as usize);
         let leasts = (0..count).map(|i| this_pass(&ctx, false, sub(id, ("least", i))).map_or(0.0, |least| least.x)).collect();
         let last = this_pass(&ctx, false, id);
-        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, last, leasts, false, body)).0;
+        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, &env, last, leasts, false, body)).0;
         return (inner, natural(&spread));
     }
     let room = ui.available_rect_before_wrap().size();
     let ((inner, spread), rect, short) = crate::contract::keeping_ids(&ctx, || {
         let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
-        let (inner, spread) = sweep(&mut first, None, Vec::new(), false, body);
+        let (inner, spread) = sweep(&mut first, &env, None, Vec::new(), false, body);
         // Half a point: less than a pixel shows at any scale the box runs.
         let short = spread.as_ref().is_some_and(|spread| spread.count >= 2 && room.x.is_finite() && spread.natural > room.x + 0.5);
         (((inner, spread), first.min_rect(), short), short)
@@ -1188,21 +1193,19 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
     let (inner, spread, leasts) = if short {
         #[cfg(feature = "testing")]
         measure::count_least(&ctx, id);
-        let probe = Env::of(ui).derive_local(|scoped| {
+        let probe = env.derive_local(|scoped| {
             scoped.unbounded.0 = true;
             scoped.least = true;
         });
         let leasts = crate::contract::keeping_ids(&ctx, || {
             let leasts = layout_memory::probing(&ctx, || {
                 let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
-                let installed = Env::install_for(&least, probe.clone());
-                let (_, spread) = sweep(&mut least, None, Vec::new(), true, body);
-                Env::restore(&ctx, installed);
+                let (_, spread) = sweep(&mut least, &probe, None, Vec::new(), true, body);
                 spread.map_or_else(Vec::new, |spread| spread.widths)
             });
             (leasts, true)
         });
-        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, None, leasts.clone(), false, body)).0;
+        let (inner, spread) = child::block(ui, None, layout, |ui| sweep(ui, &env, None, leasts.clone(), false, body)).0;
         (inner, spread, leasts)
     } else {
         ui.advance_cursor_after_rect(rect);
