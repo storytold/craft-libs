@@ -37,9 +37,13 @@ fn css_font_name(name: &str) -> String {
     o
 }
 
-fn align_css(a: Option<Align>) -> Option<&'static str> {
+/// The CSS for a logical alignment of a paragraph that reads right to left when `rtl`. CSS `left`
+/// and `right` are physical, so the end edge of an RTL paragraph is `left`; the start edge is
+/// what a browser does anyway.
+fn align_css(a: Option<Align>, rtl: bool) -> Option<&'static str> {
     match a? {
         Align::Center => Some("text-align:center"),
+        Align::Right if rtl => Some("text-align:left"),
         Align::Right => Some("text-align:right"),
         Align::Justify | Align::Distribute => Some("text-align:justify"),
         Align::Left => None,
@@ -266,7 +270,7 @@ fn spacing_css(s: &Spacing) -> Vec<String> {
 fn para_attrs(p: &Para, spaced: bool) -> String {
     let mut attrs = if p.rtl { " dir=\"rtl\"".to_string() } else { String::new() };
     let mut css: Vec<String> = Vec::new();
-    if let Some(a) = align_css(p.align) {
+    if let Some(a) = align_css(p.align, p.rtl) {
         css.push(a.to_string());
     }
     if spaced {
@@ -406,7 +410,7 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 }
                 _ => None,
             };
-            if let Some(a) = single.and_then(|p| align_css(p.align)) {
+            if let Some(a) = single.and_then(|p| align_css(p.align, p.rtl)) {
                 css.push(a.to_string());
             }
             out.push_str(&format!("<{tag}{attrs} style=\"{}\">", css.join(";")));

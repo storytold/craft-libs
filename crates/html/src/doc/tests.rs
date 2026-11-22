@@ -2284,3 +2284,82 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
 }
+
+fn dir_align(src: &str) -> Vec<(bool, Option<Align>)> {
+    paras(&parse(src)).iter().map(|p| (p.rtl, p.align)).collect()
+}
+
+#[test]
+fn physical_left_right_become_logical_with_the_paragraph_direction() {
+    // CSS `left`/`right` are physical, the model's `Left`/`Right` are start/end.
+    let ltr = |a| (false, Some(a));
+    let rtl = |a| (true, Some(a));
+    assert_eq!(dir_align(r#"<p style="text-align:right">a</p>"#), [ltr(Align::Right)]);
+    assert_eq!(dir_align(r#"<p style="text-align:left">a</p>"#), [ltr(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:right">a</p>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:left">a</p>"#), [rtl(Align::Right)]);
+    // Logical values and direction-free ones stay as they are.
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:start">a</p>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:end">a</p>"#), [rtl(Align::Right)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" style="text-align:center">a</p>"#), [rtl(Align::Center)]);
+    // The direction may come after the alignment, from CSS or an ancestor, and the `align` attribute is physical.
+    assert_eq!(dir_align(r#"<p style="text-align:right;direction:rtl">a</p>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<div dir="rtl" style="text-align:right"><p>a</p></div>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<div style="text-align:right"><p dir="rtl">a</p></div>"#), [rtl(Align::Left)]);
+    assert_eq!(dir_align(r#"<p dir="rtl" align="right">a</p>"#), [rtl(Align::Left)]);
+}
+
+#[test]
+fn rtl_cell_inherits_physical_alignment() {
+    let f = parse(r#"<table><tr><td dir="rtl" style="text-align:right">a</td></tr></table>"#);
+    let p = &cell_paras(&f)[0][0][0];
+    assert_eq!((p.rtl, p.align), (true, Some(Align::Left)));
+}
+
+#[test]
+fn rtl_alignment_round_trips_through_html() {
+    let again = |src: &str| {
+        let out = export_fragment(&craft_flow::to_doc(&parse(src)));
+        (dir_align(&out), out)
+    };
+    for (src, want, css) in [
+        (r#"<p dir="rtl" style="text-align:right">a</p>"#, (true, None), None),
+        (r#"<p dir="rtl" style="text-align:left">a</p>"#, (true, Some(Align::Right)), Some("text-align:left")),
+        (r#"<p style="text-align:right">a</p>"#, (false, Some(Align::Right)), Some("text-align:right")),
+        (r#"<p style="text-align:left">a</p>"#, (false, None), None),
+    ] {
+        let (got, out) = again(src);
+        assert_eq!(got, [want], "{src} -> {out}");
+        // The start edge is what a browser does without a rule; `(rtl, end)` is the physical left edge.
+        match css {
+            Some(css) => assert!(out.contains(css), "{src} -> {out}"),
+            None => assert!(!out.contains("text-align"), "{src} -> {out}"),
+        }
+    }
+}
+
+#[test]
+fn dir_auto_follows_the_first_strong_character() {
+    let rtl = |src: &str| paras(&parse(src)).iter().map(|p| p.rtl).collect::<Vec<_>>();
+    assert_eq!(rtl(r#"<div dir="rtl"><p dir="auto">abc</p></div>"#), [false]);
+    assert_eq!(rtl(r#"<p dir="auto">123 مرها abc</p>"#), [true]);
+    assert_eq!(rtl(r#"<div dir="auto"><p>مرها</p><p>abc</p></div>"#), [true, false]);
+    assert_eq!(rtl(r#"<div dir="auto"><p dir="rtl">abc</p></div>"#), [true]);
+    // The alignment is resolved with the direction found.
+    assert_eq!(dir_align(r#"<p dir="auto" style="text-align:right">مرها</p>"#), [(true, Some(Align::Left))]);
+}
+
+#[test]
+fn direction_initial_is_ltr() {
+    assert_eq!(dir_align(r#"<div dir="rtl"><p style="direction:initial">a</p></div>"#), [(false, None)]);
+}
+
+#[test]
+fn direction_passes_through_inline_ancestors() {
+    let rtl = |src: &str| paras(&parse(src)).iter().map(|p| p.rtl).collect::<Vec<_>>();
+    assert_eq!(rtl(r#"<span dir="rtl"><div>a</div></span>"#), [true]);
+    assert_eq!(rtl(r#"<custom-el dir="rtl"><div>a</div></custom-el>"#), [true]);
+    assert_eq!(rtl(r#"<span dir="rtl"><div dir="ltr">a</div></span>"#), [false]);
+    // An inline's own direction does not make its paragraph's.
+    assert_eq!(rtl(r#"<p>a <span dir="rtl">b</span></p>"#), [false]);
+}

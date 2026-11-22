@@ -184,6 +184,8 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     if let Some(c) = p.extra.as_ref().and_then(|x| x.contextual_spacing) {
         out.contextual_spacing = Some(c);
     }
+    // `extra.bidi` (a direction a reader kept on the paragraph) wins over `p.rtl` when set, in
+    // both directions: `Some(false)` makes an `rtl` paragraph left to right.
     if let Some(bidi) = p.extra.as_ref().and_then(|x| x.bidi) {
         out.bidi = Some(bidi);
     }
