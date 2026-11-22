@@ -2319,7 +2319,7 @@ impl std::ops::Index<ContourIdx> for Contours {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::{BezPath, Shape};
+    use kurbo::{BezPath, Rect, Shape};
     use proptest::prelude::*;
 
     use crate::{
@@ -2756,6 +2756,92 @@ mod tests {
             + &rect_path(40.0, 50.0, 60.0, 70.0, true);
         let contours = consistent_contours(&svg, 1e-6);
         assert_eq!(contours.len(), 5);
+    }
+
+    // The contour of `contours` whose bounding box is `bbox`.
+    fn contour_with_box(contours: &Contours, bbox: Rect) -> ContourIdx {
+        let found: Vec<usize> = contours
+            .contours()
+            .enumerate()
+            .filter(|(_, c)| c.path.bounding_box() == bbox)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(found.len(), 1, "contours with box {bbox:?}");
+        ContourIdx(found[0])
+    }
+
+    // The bounding box of the path `svg`.
+    fn svg_box(svg: &str) -> Rect {
+        BezPath::from_svg(svg).unwrap().bounding_box()
+    }
+
+    #[test]
+    fn touching_child_attaches_to_the_sibling_that_contains_it() {
+        // Two outer squares touching at (100, 100), with a hole that touches the
+        // edge of one of them. Each case puts the hole in a different square, and
+        // the hole attaches to that square.
+        let a = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let b = Rect::new(100.0, 100.0, 200.0, 200.0);
+        let squares =
+            rect_path(a.x0, a.y0, a.x1, a.y1, false) + &rect_path(b.x0, b.y0, b.x1, b.y1, false);
+        for (hole, container) in [
+            ("M150,100 L140,120 L150,140 L160,120 Z", b),
+            ("M50,100 L60,80 L50,60 L40,80 Z", a),
+        ] {
+            let svg = squares.clone() + hole;
+            let contours = consistent_contours(&svg, 1e-6);
+            assert_eq!(contours.len(), 3, "{svg}");
+            let hole = &contours[contour_with_box(&contours, svg_box(hole))];
+            assert!(!hole.outer, "{svg}");
+            let container = contour_with_box(&contours, container);
+            assert_eq!(hole.parent, Some(container), "{svg}");
+            for square in [a, b] {
+                let square = &contours[contour_with_box(&contours, square)];
+                assert_eq!(square.parent, None, "{svg}");
+            }
+        }
+
+        // Two holes of a square touching at (150, 150), with an island that touches
+        // the edge of one of them.
+        let outer = Rect::new(0.0, 0.0, 300.0, 300.0);
+        let h1 = Rect::new(50.0, 50.0, 150.0, 150.0);
+        let h2 = Rect::new(150.0, 150.0, 250.0, 250.0);
+        let holes = rect_path(outer.x0, outer.y0, outer.x1, outer.y1, false)
+            + &rect_path(h1.x0, h1.y0, h1.x1, h1.y1, true)
+            + &rect_path(h2.x0, h2.y0, h2.x1, h2.y1, true);
+        for (island, container) in [
+            ("M200,150 L210,170 L200,190 L190,170 Z", h2),
+            ("M100,150 L90,130 L100,110 L110,130 Z", h1),
+        ] {
+            let svg = holes.clone() + island;
+            let contours = consistent_contours(&svg, 1e-6);
+            assert_eq!(contours.len(), 4, "{svg}");
+            let island = &contours[contour_with_box(&contours, svg_box(island))];
+            assert!(island.outer, "{svg}");
+            let container = contour_with_box(&contours, container);
+            assert_eq!(island.parent, Some(container), "{svg}");
+            let square = contour_with_box(&contours, outer);
+            for hole in [h1, h2] {
+                let hole = &contours[contour_with_box(&contours, hole)];
+                assert_eq!(hole.parent, Some(square), "{svg}");
+            }
+        }
+
+        // A square with a hole that touches its top edge at (150, 0), and a second
+        // hole that touches the first at (200, 50). One walk splits into the square
+        // and both holes, and each hole attaches to the square.
+        let first = "M150,0 L100,50 L150,100 L200,50 Z";
+        let second = "M200,50 L200,150 L250,150 L250,50 Z";
+        let svg = rect_path(outer.x0, outer.y0, outer.x1, outer.y1, false) + first + " " + second;
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(contours.len(), 3, "{svg}");
+        let square = contour_with_box(&contours, outer);
+        assert_eq!(contours[square].parent, None);
+        for hole in [first, second] {
+            let hole = &contours[contour_with_box(&contours, svg_box(hole))];
+            assert!(!hole.outer, "{svg}");
+            assert_eq!(hole.parent, Some(square), "{svg}");
+        }
     }
 
     // Checks that all output segments intersect one another only at endpoints.
