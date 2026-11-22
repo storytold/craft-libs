@@ -6,13 +6,15 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+type Paint = dyn Fn(&ContentPainterCx<'_>, Rect) + Send + Sync;
+
 /// The one host painter a value carries: two faces with one key are the same value.
 #[derive(Clone, crate::contract::MemoProps, craft_ui_macros::PlainData)]
 pub struct FacePaint {
     key: u64,
     #[memo_props(covered_by = "key", reason = "the key names what the painter paints")]
     #[plain_data(assume = "a face is replaced, never written: its painter is shared")]
-    paint: Arc<dyn Fn(&ContentPainterCx<'_>, Rect) + Send + Sync>,
+    paint: Arc<Paint>,
 }
 
 impl FacePaint {

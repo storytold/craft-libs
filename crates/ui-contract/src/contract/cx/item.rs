@@ -92,6 +92,13 @@ impl<'r, K> ItemCx<'_, 'r, K> {
         self.detail = Some(Box::new(body));
     }
 
+    /// The detail body the item gave, for a row that takes it: one of auto height (`auto`).
+    pub(crate) fn take_detail(&mut self, auto: bool) -> Option<ItemTip<'r>> {
+        let detail = self.detail.take();
+        debug_assert!(detail.is_none() || auto, "an item's detail needs an auto-height row; a grid and a fixed-height row ignore it");
+        detail.filter(|_| auto)
+    }
+
     /// The opener for the item's part `part`: after the collection is shown, `CollectionResponse::opener` gives the
     /// part's response (its click this pass and its rect), and a layer-5 menu opens from it with `opened_by`.
     pub fn part_opener(&mut self, part: impl Into<craft_behavior::PartRef>) -> ItemOpener {

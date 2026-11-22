@@ -477,12 +477,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let item = (self.item)(&key, &mut icx);
                 let mut item = comp.dress(item, &state);
                 let tip = icx.tip.take();
-                let detail = icx.detail.take();
-                debug_assert!(
-                    detail.is_none() || layout.is_auto(at),
-                    "an item's detail needs an auto-height row; a grid and a fixed-height row ignore it"
-                );
-                let detail = detail.filter(|_| layout.is_auto(at));
+                let detail = icx.take_detail(layout.is_auto(at));
                 let openers = std::mem::take(&mut icx.openers);
                 drop(icx);
                 item = Props::id(item, item_id);
@@ -555,10 +550,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         }
                     }
                     if let Some(column) = &fit {
-                        let (_, cells) = crate::runtime::measure::cell_widths(&ctx, || item.measure_in(measure_ui, Proposal::Ideal));
-                        if let Some((_, width)) = cells.iter().find(|(held, _)| held == column) {
-                            fit_widest = fit_widest.max(*width);
-                        }
+                        fit_widest = fit_widest.max(cell_width(&ctx, &mut item, measure_ui, column).unwrap_or_default());
                     }
                 }
                 let leaf = leaf_height.map_or(row, |height| Rect::from_min_size(row.min, Vec2::new(row.width(), height)));
@@ -566,8 +558,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let row_node = if C::MEMBERS { super::members::lead_node(id, &key) } else { item_id };
                 shown_rows.push(ShownRow::new(key.clone(), row_node, leaf, shown_cells.clone()).with_hover(state.hovered));
                 let Some((mut row_ui, installed)) = row_ui else {
-                    debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
-                    debug_assert!(detail.is_none(), "a member of a collection's run takes no detail body");
+                    debug_assert!(tip.is_none() && detail.is_none(), "a member of a collection's run takes no rich tooltip and no detail body");
                     let shown = shown_rows.len() - 1;
                     members.push(Member { at, key, item, row, clip, flags, position, renaming: state.renaming, openers, shown });
                     continue;
@@ -862,6 +853,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
         }
     }
+}
+
+/// The width `item` gives its cell in `column` at its ideal width in `ui`; `None` when it has no cell there.
+fn cell_width(ctx: &Context, item: &mut impl crate::contract::Show, ui: &Ui, column: &craft_behavior::ColumnKey) -> Option<f32> {
+    let (_, cells) = crate::runtime::measure::cell_widths(ctx, || item.measure_in(ui, Proposal::Ideal));
+    cells.into_iter().find(|(held, _)| held == column).map(|(_, width)| width)
 }
 
 /// Apply the collection's wheel displacement, the page and end moves a descendant left untaken and any reveal left by

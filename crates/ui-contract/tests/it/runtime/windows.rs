@@ -859,11 +859,11 @@ fn a_palette_hides_while_the_root_shows_a_modal_or_popup_and_returns_when_it_clo
         frame(false, false);
     }
     assert_eq!((0..2).find_map(|_| visibility(&frame(false, false))), None, "no layer: the palette stays as it is");
-    let hidden = (0..3).filter_map(|_| visibility(&frame(true, false))).last();
+    let hidden = (0..3).filter_map(|_| visibility(&frame(true, false))).reduce(|_, latest| latest);
     assert_eq!(hidden, Some(false), "the palette hides under the modal");
     let out = frame(true, true);
     assert_eq!(builder_titled(&out, "second").1.visible, Some(false), "a palette opened meanwhile opens hidden");
-    let back = (0..3).filter_map(|_| visibility(&frame(false, false))).last();
+    let back = (0..3).filter_map(|_| visibility(&frame(false, false))).reduce(|_, latest| latest);
     assert_eq!(back, Some(true), "the palette returns once the modal closed");
 }
 

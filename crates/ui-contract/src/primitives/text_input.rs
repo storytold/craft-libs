@@ -49,6 +49,9 @@ pub enum TabKey {
     Reports,
 }
 
+/// Whether a pasted text is whole ([`TextOptions::whole_paste`]).
+type WholePaste = dyn Fn(&str) -> bool;
+
 /// How a text part behaves beyond its codec.
 #[derive(Clone)]
 pub struct TextOptions {
@@ -114,7 +117,7 @@ pub struct TextOptions {
     /// Set from the codec by `PartsCx::text`, never by hosts: a pasted text that this says is whole replaces all the
     /// text instead of the selection. It gets the paste as copied; the codec trims it.
     // PLAN: no `Send + Sync`: `Codec` and `PartsCx::text`'s codec are not `Send`.
-    pub whole_paste: Option<Arc<dyn Fn(&str) -> bool>>,
+    pub whole_paste: Option<Arc<WholePaste>>,
 }
 
 impl Default for TextOptions {

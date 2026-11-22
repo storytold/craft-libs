@@ -430,7 +430,7 @@ pub(crate) struct ShrinkReports(IdMap<Vec<Reported>>);
 pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
 
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's whole and least widths, or `None`
-/// for a body.
+/// for a body, and how it leaves a row too narrow for it: whether its content is made to be cut, and its rank.
 pub(crate) fn report_shrink(
     ctx: &egui::Context,
     row: Id,
@@ -438,8 +438,7 @@ pub(crate) fn report_shrink(
     took: f32,
     ideal: f32,
     whole_least: Option<(f32, f32)>,
-    cut_first: bool,
-    rank: Option<u8>,
+    (cut_first, rank): (bool, Option<u8>),
 ) {
     let (whole, least) = whole_least.map_or((ideal, ideal), |(whole, least)| (whole.min(ideal), least.min(ideal)));
     let widths = ShrinkUnit { ideal, least: least.min(whole) };
@@ -708,8 +707,7 @@ fn shrink_in_turns(units: &[ShrinkUnit], whole: &[f32], first: &[bool], fixed: f
 fn shrink_or_drop(
     units: &[ShrinkUnit],
     whole: &[f32],
-    first: &[bool],
-    ranks: &[Option<u8>],
+    (first, ranks): (&[bool], &[Option<u8>]),
     (fixed, gap): (f32, f32),
     room: f32,
     order: ShrinkOrder,
@@ -824,7 +822,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
         let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(leaf, *level)).sum();
         let widths = if room.is_finite() {
-            shrink_or_drop(&units, &whole, &first, &ranks, (fixed + held, gap), room, order, drops)
+            shrink_or_drop(&units, &whole, (&first, &ranks), (fixed + held, gap), room, order, drops)
         } else {
             units.iter().map(|unit| ShrinkCap { width: unit.ideal, dropped: false, narrowed: false }).collect()
         };

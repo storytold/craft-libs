@@ -91,8 +91,7 @@ fn tapped(fingers: usize, hold: f64, end: TouchPhase, drift: f32) -> Vec<(u8, Po
     }
     frames.frame(all(end, fingers), &mut show);
     frames.idle(2, &mut show);
-    let taps = taps.borrow().clone();
-    taps
+    taps.borrow().clone()
 }
 
 #[trial]
@@ -121,8 +120,7 @@ fn tapped_beside_a_modal(opens: bool) -> Vec<(u8, Pos2)> {
     frames.idle(1, &mut show);
     frames.frame(all(TouchPhase::End, 2), &mut show);
     frames.idle(2, &mut show);
-    let taps = taps.borrow().clone();
-    taps
+    taps.borrow().clone()
 }
 
 #[trial]
