@@ -168,6 +168,9 @@ struct Entry {
     down: bool,
     /// The key the system grabs for it ([`KeyMap::slot`]). No two entries share one.
     slot: u64,
+    /// The entry is leaving the set, and an entry that stays may now hold its hotkey id
+    /// ([`GlobalHotkeys::regrab`]): no event goes to it.
+    retired: bool,
 }
 
 /// System-wide hotkeys, one set per process.
@@ -261,7 +264,7 @@ impl GlobalHotkeys {
             return Err(GlobalError::Taken(chord));
         }
         self.manager.register(hotkey).map_err(|e| os_error(e, chord))?;
-        self.entries.push(Entry { hotkey, chord, command: command.into(), down: false, slot });
+        self.entries.push(Entry { hotkey, chord, command: command.into(), down: false, slot, retired: false });
         Ok(())
     }
 
@@ -459,6 +462,9 @@ impl GlobalHotkeys {
         if !hits.is_empty() {
             // Events that came under the entries' hotkeys so far go to them before the ids change.
             self.flush();
+            // An entry below may take the hotkey id of one leaving, whose grab is gone. Its later
+            // events, until the leaving one is removed, go to it.
+            retire(&mut self.entries, leaving);
         }
         for i in hits.into_iter().rev() {
             let entry = &self.entries[i];
@@ -878,6 +884,14 @@ fn hit(entries: &[Entry], released: &[HotKey], leaving: &[u64], now: &KeyMap) ->
     (0..entries.len()).filter(|&i| slots.contains(&entries[i].slot) && !leaving.contains(&entries[i].slot)).collect()
 }
 
+/// Marks the entries whose slot is in `leaving` as retired, so [`translate`] gives no event to
+/// them.
+fn retire(entries: &mut [Entry], leaving: &[u64]) {
+    for entry in entries.iter_mut().filter(|e| leaving.contains(&e.slot)) {
+        entry.retired = true;
+    }
+}
+
 /// For each binding in `wanted` that has no kept entry in `slots`, a new entry, or
 /// [`GlobalError::Duplicate`] when a kept entry or an earlier binding grabs the same key or
 /// registers the same hotkey id. Also returns the slot of each.
@@ -895,7 +909,7 @@ fn new_entries(slots: &[Option<Entry>], wanted: &[Wanted]) -> (Vec<Result<Entry,
         } else {
             taken.push(*slot);
             hotkey_ids.push(hotkey.id());
-            Ok(Entry { hotkey: *hotkey, chord: *chord, command: command.clone(), down: false, slot: *slot })
+            Ok(Entry { hotkey: *hotkey, chord: *chord, command: command.clone(), down: false, slot: *slot, retired: false })
         };
         new.push(result);
         new_ids.push(*slot);
@@ -1021,7 +1035,8 @@ fn oldest_pair(pending: &[GlobalEvent]) -> Option<(usize, usize)> {
 
 /// Matches one event from the system to the entry it belongs to, and drops repeated presses and
 /// releases without a press. A release whose id is in `stale` belongs to an entry that left the
-/// set while held: it is dropped, so it cannot end a hold of a newer entry with the same id.
+/// set while held: it is dropped, so it cannot end a hold of a newer entry with the same id. A
+/// retired entry gets no event ([`retire`]).
 fn translate(entries: &mut [Entry], stale: &mut Vec<u32>, event: GlobalHotKeyEvent) -> Option<GlobalEvent> {
     if event.state == HotKeyState::Released
         && let Some(i) = stale.iter().position(|&id| id == event.id)
@@ -1029,7 +1044,7 @@ fn translate(entries: &mut [Entry], stale: &mut Vec<u32>, event: GlobalHotKeyEve
         stale.remove(i);
         return None;
     }
-    let entry = entries.iter_mut().find(|e| e.hotkey.id() == event.id)?;
+    let entry = entries.iter_mut().find(|e| !e.retired && e.hotkey.id() == event.id)?;
     let state = match event.state {
         HotKeyState::Pressed if !entry.down => KeyState::Pressed,
         HotKeyState::Released if entry.down => KeyState::Released,
@@ -1367,7 +1382,7 @@ mod tests {
 
     fn entry(text: &str, command: &str) -> Entry {
         let hotkey = hk(text, Platform::Windows);
-        Entry { hotkey, chord: chord(text), command: command.into(), down: false, slot: u64::from(hotkey.id()) }
+        Entry { hotkey, chord: chord(text), command: command.into(), down: false, slot: u64::from(hotkey.id()), retired: false }
     }
 
     fn event(entry: &Entry, state: HotKeyState) -> GlobalHotKeyEvent {
@@ -1534,6 +1549,27 @@ mod tests {
         let mut stale = vec![entries[0].hotkey.id()];
         drain(&mut entries, &mut stale, Queue { events: VecDeque::new(), overflowed: true }, &mut Vec::new());
         assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn an_entry_grabbed_again_under_the_hotkey_id_of_one_leaving_gets_its_events() {
+        // Ctrl+Q leaves the set; Ctrl+A stays and is grabbed again through Ctrl+Q's hotkey after a
+        // layout change, while the Ctrl+Q entry is still in the set until its removal.
+        let quit = entry("Ctrl+Q", "app.quit");
+        let mut select = entry("Ctrl+A", "select.all");
+        select.hotkey = quit.hotkey;
+        let leaving = [quit.slot];
+        let mut entries = vec![quit, select];
+        retire(&mut entries, &leaving);
+        assert!(entries[0].retired);
+        assert!(!entries[1].retired);
+        let press = event(&entries[1], HotKeyState::Pressed);
+        let release = event(&entries[1], HotKeyState::Released);
+        let mut out = Vec::new();
+        drain(&mut entries, &mut Vec::new(), Queue { events: VecDeque::from([press, release]), overflowed: false }, &mut out);
+        let states: Vec<_> = out.iter().map(|e| (e.command.key(), e.state)).collect();
+        assert_eq!(states, [("select.all".to_string(), KeyState::Pressed), ("select.all".to_string(), KeyState::Released)]);
+        assert!(!entries[0].down);
     }
 
     #[test]
