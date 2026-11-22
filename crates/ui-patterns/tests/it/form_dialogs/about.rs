@@ -287,3 +287,39 @@ fn names_sort_without_at_and_case_and_undated_contributors_sort_last_both_ways()
     sort_by(&mut fixture, "Name");
     assert_eq!(rows(&fixture, &["@zed", "Ann", "@alice", "@carol"]), ["@alice", "Ann", "@carol", "@zed"], "a display name sorts among the usernames");
 }
+
+/// A crowd of contributors whose grab bag is taller than a small window.
+static CROWD: LazyLock<Credits> = LazyLock::new(|| {
+    let people: Vec<Contributor> = (0..400).map(|at| Contributor::new(format!("contributor-number-{at}")).counts(1, 1)).collect();
+    Credits::new(people, Vec::new(), 400)
+});
+
+/// photocraft#16326: in a small window the Contributors tab, whose grab bag fills the room it is offered, keeps the
+/// About dialog inside the window, and back on About the dialog stands centred again, as it opened.
+#[trial]
+fn about_stays_inside_a_small_window_on_contributors_and_comes_back_to_the_middle() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1200.0, 700.0));
+    let id = host.borrow_mut().open(HostedAbout::new(AboutInfo::new("PhotoCraft", "An image editor.", "1.0"), CROWD.clone()));
+    fixture.settle();
+    let screen = fixture.ctx().content_rect();
+    let dialog = |fixture: &Fixture| fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect;
+    let opened = dialog(&fixture);
+    assert!((opened.center().y - screen.center().y).abs() < 1.0, "About opens centred: {opened:?} in {screen:?}");
+
+    let ctx = fixture.ctx().clone();
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("contributors")).expect("`tab` takes Contributors");
+    fixture.settle();
+    let tall = dialog(&fixture);
+    assert!(screen.contains_rect(tall), "Contributors keeps the dialog inside the window: {tall:?} in {screen:?}");
+    let ok = fixture.by_label("OK").expect("the footer's OK").rect;
+    assert!(tall.bottom() - ok.bottom() < 20.0, "OK is the dialog's last row: {ok:?} in {tall:?}");
+    assert!(tall.height() <= 0.9 * screen.height() + 1.0, "the dialog keeps to its share of the window: {tall:?} in {screen:?}");
+
+    host.borrow_mut().set_json_field(&ctx, id, "tab", json!("about")).expect("`tab` takes About");
+    fixture.settle();
+    let back = dialog(&fixture);
+    assert!((back.center().y - screen.center().y).abs() < 1.0, "back on About the dialog is centred again: {back:?} in {screen:?}");
+}
