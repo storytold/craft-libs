@@ -76,7 +76,7 @@ data folder runs neither set.
 
 ## Language packs
 
-**API (fixed by `plan/pack-contract.md`, plus the additions marked ＋):**
+**API (disk packs plus runtime memory-pack support; additions marked ＋):**
 
 ```rust
 // craft_proof::packs
