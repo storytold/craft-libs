@@ -189,6 +189,7 @@ pub fn comments_more_menu<H: Value>(
     let active = state.sort;
     let (mut sort, mut collapse, mut ran) = (None, None, None);
     Menu::new(words.more.clone()).opened_by(opener, Trigger::Click).show(ui, |ui, _| {
+        MenuItem::heading(words.sort_heading.clone()).show(ui);
         sort = sort_rows(ui, &words, active);
         if active == CommentSort::Page {
             collapse = pages_rows(ui, &words);

@@ -8,7 +8,7 @@ use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _, clicked};
 use craft_ui::controls::disclosure::DisclosureGlyph;
 use craft_ui::display::Badge;
-use craft_ui::primitives::{HAlign, IconSpec, PaintShape, SubmitKey, TextRun, Wrap};
+use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, SubmitKey, TextRun, Wrap};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::style::{ComponentStyle, DataColor, Ink, StyleColor, StyleCx, TypeRole};
@@ -33,8 +33,8 @@ pub(crate) struct CommentRowStyle {
     bar: StyleColor,
     avatar: StyleColor,
     avatar_ink: StyleColor,
-    /// The disc behind a card's kind icon.
-    sunken: StyleColor,
+    /// The line that joins a card's avatars.
+    thread_line: StyleColor,
     /// The kind icon's side.
     kind_icon: f32,
     /// The side of a plain icon: the glyph of the icon buttons beside it.
@@ -52,6 +52,8 @@ struct Heading {
     title: String,
     count: String,
     open: bool,
+    /// The heading names a group that does not fold (not a page): the title alone, with no disclosure or count shown.
+    plain: bool,
 }
 
 /// How a text or icon is inked.
@@ -110,6 +112,8 @@ trait Sink {
     fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>);
     /// The avatar of `name`.
     fn avatar(&mut self, rect: Rect, name: &str);
+    /// The line that joins the avatars above and below it, from `from` down to `to`.
+    fn connector(&mut self, from: Pos2, to: Pos2);
     /// A square icon button; it reports its press.
     fn button(&mut self, slot: Slot, rect: Rect, id: &'static str, name: &Label, on: bool);
     /// A multi-line field at `at`'s top left and width; returns its height.
@@ -195,9 +199,9 @@ impl<'r> CommentRow<'r> {
     }
 
     /// A heading row.
-    pub(crate) fn heading(title: String, count: String, open: bool) -> Self {
+    pub(crate) fn heading(title: String, count: String, open: bool, plain: bool) -> Self {
         let name = title.clone();
-        Self::bare(None, Some(Heading { title, count, open }), name)
+        Self::bare(None, Some(Heading { title, count, open, plain }), name)
     }
 
     /// The card of `thread`, named `name`.
@@ -278,6 +282,11 @@ impl CommentRow<'_> {
         let (h, gap, pad) = (st.height, st.gap, st.pad);
         let room = (width - 2.0 * pad).max(h);
         if let Some(heading) = &self.heading {
+            if heading.plain {
+                let title = Spec::new(TypeRole::BodyStrong, Tone::Muted, Wrap::Elide);
+                sink.text(strip(Pos2::new(pad, pad), room), title, &heading.title);
+                return h + 2.0 * pad;
+            }
             sink.disclosure(square(Pos2::new(pad, pad), h), heading.open);
             let count_spec = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Wrap).end();
             let count = sink.size(count_spec, &heading.count).x;
@@ -324,11 +333,18 @@ impl CommentRow<'_> {
             }
         }
         let mut y = y + head + gap;
-        y = self.message(0, thread, st, Line { at: Pos2::new(pad, y), room }, &words, sink) + gap;
-        y = self.statuses(thread, st, Line { at: Pos2::new(pad, y), room }, &words, sink);
+        // The comment's text and badges sit under the author's name, not under the kind disc.
+        let under = Line { at: Pos2::new(name_at, y), room: (width - pad - name_at).max(h) };
+        y = self.message(0, thread, st, under, &words, sink) + gap;
+        y = self.statuses(thread, st, Line { at: Pos2::new(name_at, y), room: under.room }, &words, sink);
+        // The thread line runs from the kind disc down through the replies' avatars.
+        let line_x = pad + h / 2.0;
+        let mut joined = pad + h;
         for index in 1..thread.messages.len() {
             let Some(message) = thread.messages.get(index) else { break };
             let top = y;
+            sink.connector(Pos2::new(line_x, joined), Pos2::new(line_x, top));
+            joined = top + h;
             sink.avatar(square(Pos2::new(pad, y), h), &message.author);
             let x = pad + h + gap;
             let name_room = width - pad - h - gap - x;
@@ -355,7 +371,7 @@ impl CommentRow<'_> {
             y = bottom + gap;
         }
         if self.lead && self.editable {
-            let field = sink.field(Slot::ReplyField, strip(Pos2::new(pad, y), room), &words.reply, self.reply, REPLY_LINES);
+            let field = sink.field(Slot::ReplyField, strip(Pos2::new(name_at, y), under.room), &words.reply, self.reply, REPLY_LINES);
             y += field + gap;
             let button = sink.push_size(Slot::ReplyPost, &words.post);
             let post = Rect::from_min_size(Pos2::new(width - pad - button.x, y), button);
@@ -442,6 +458,8 @@ impl Sink for Measure<'_, '_, '_> {
     fn kind(&mut self, _: Rect, _: &'static str, _: Option<[u8; 3]>) {}
 
     fn avatar(&mut self, _: Rect, _: &str) {}
+
+    fn connector(&mut self, _: Pos2, _: Pos2) {}
 
     fn button(&mut self, slot: Slot, rect: Rect, _: &'static str, _: &Label, _: bool) {
         if let Slot::More(index) = slot {
@@ -558,7 +576,7 @@ impl Sink for Paint<'_, '_> {
     fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>) {
         let rect = self.place(rect);
         let draw = self.ui.draw();
-        draw.fill(&PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0), self.st.sunken);
+        draw.fill(&PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0), self.st.avatar);
         let spec = IconSpec::svg(IconId::new(id));
         let spec = match color {
             Some([r, g, b]) => spec.data_color(DataColor::new(Color32::from_rgb(r, g, b))),
@@ -570,6 +588,11 @@ impl Sink for Paint<'_, '_> {
     fn avatar(&mut self, rect: Rect, name: &str) {
         let rect = self.place(rect);
         paint_face(&self.ui.draw(), rect, name, self.st.avatar, self.st.avatar_ink);
+    }
+
+    fn connector(&mut self, from: Pos2, to: Pos2) {
+        let rect = self.place(Rect::from_two_pos(from, to));
+        self.ui.draw().stroke(&PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]), StrokeWidth::Thin, self.st.thread_line);
     }
 
     fn button(&mut self, slot: Slot, rect: Rect, id: &'static str, name: &Label, on: bool) {
@@ -680,11 +703,11 @@ impl Component for CommentRow<'_> {
             metrics: Metrics::new(),
             normal: cx.ink(Ink::OnPanel),
             muted: cx.color(color.text.muted),
-            highlight: cx.color(color.state.selected),
+            highlight: cx.color(color.surface.raised),
             bar: cx.color(color.accent.solid),
-            avatar: cx.color(color.accent.strong),
-            avatar_ink: cx.color(color.text.on_strong),
-            sunken: cx.color(color.surface.sunken),
+            avatar: cx.color(color.line.border),
+            avatar_ink: cx.color(color.text.normal),
+            thread_line: cx.color(color.line.divider),
             kind_icon: cx.tokens.size.icon.sm,
             glyph: cx.glyph(),
             bar_width: cx.tokens.stroke.thick,

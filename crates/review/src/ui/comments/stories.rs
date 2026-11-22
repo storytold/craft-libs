@@ -126,7 +126,7 @@ fn list(ui: &mut Ui, threads: &[CommentThread]) -> StoryOutput {
                 .state(item.row.selected, true, NOW)
                 .lead(item.row.selected)
                 .drafts(None, ""),
-            RowEntry::Group { title, count, open, .. } => CommentRow::heading(title.clone(), count.clone(), *open),
+            RowEntry::Group { title, count, open, page } => CommentRow::heading(title.clone(), count.clone(), *open, page.is_none()),
         })
         .into()
 }

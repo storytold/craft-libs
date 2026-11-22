@@ -19,13 +19,13 @@ mod stories;
 
 use std::collections::BTreeMap;
 
-use craft_behavior::{Selection, Value};
+use craft_behavior::{IconId, Selection, Value};
 use craft_i18n::{DateStyle, DateTime, TimeZone};
 use craft_ui::contract::{Bind, CollectionEvent, Entry, NoValue, Outcome, Pattern, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::notices::{Notice, NoticeLayout};
-use craft_ui::primitives::SubmitKey;
+use craft_ui::notices::{Notice, NoticeIcon, NoticeLayout};
+use craft_ui::primitives::{IconSpec, SubmitKey};
 use craft_ui::runtime::env::{AgeStyle, Env, EnvView, Label};
 use craft_ui::style::TypeRole;
 use craft_ui::text::TextField;
@@ -44,7 +44,7 @@ use row::{CommentRow, MORE};
 pub(crate) const AGE_SHOWN_AS_DATE: u64 = 7 * 24 * 60 * 60;
 
 /// The rows of a reply box.
-const REPLY_LINES: usize = 2;
+const REPLY_LINES: usize = 1;
 
 /// The rows of an inline editor.
 const EDIT_LINES: usize = 3;
@@ -100,6 +100,8 @@ craft_ui::words! {
         cancelled: "comments.cancelled" = "Cancelled";
         completed: "comments.completed" = "Completed";
         empty: "comments.empty" = "No comments yet.";
+        empty_hint: "comments.emptyHint" = "Pick an annotation tool, or type above.";
+        sort_heading: "comments.sortHeading" = "Sort by";
     }
 }
 
@@ -599,7 +601,13 @@ impl<H: Value> CommentsPanel<'_, H> {
                 }
             }
             if threads.is_empty() {
-                return Notice::new(craft_theme::variant::Tone::Neutral, words.empty.clone()).layout(NoticeLayout::Centred).show(ui).response;
+                // A comment icon over what is missing and what to do about it.
+                return Notice::new(craft_theme::variant::Tone::Neutral, words.empty_hint.clone())
+                    .title(words.empty.clone())
+                    .icon(NoticeIcon::Custom(IconSpec::svg(IconId::new("note"))))
+                    .layout(NoticeLayout::Centred)
+                    .show(ui)
+                    .response;
             }
             let query = state.search.trim().to_owned();
             let kind_of = |kind: AnnotationKind| kind_name(&words, &kinds, Some(kind));
@@ -665,7 +673,7 @@ impl<H: Value> CommentsPanel<'_, H> {
             let out = CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped, select_mode)
                 .revealing(revealing.map(CardKey::Thread))
                 .show_items(ui, &source, &mut |_, item| match &source.entries[item.at].1 {
-                    RowEntry::Group { title, count, open, .. } => CommentRow::heading(title.clone(), count.clone(), *open),
+                    RowEntry::Group { title, count, open, page } => CommentRow::heading(title.clone(), count.clone(), *open, !by_page || page.is_none()),
                     RowEntry::Card { thread, .. } => {
                         let name = thread
                             .messages

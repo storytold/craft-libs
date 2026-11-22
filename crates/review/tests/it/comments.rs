@@ -495,3 +495,105 @@ fn an_editor_opened_on_an_out_of_view_card_makes_room_when_scrolled_back() {
     assert!(first.height() > second.height(), "card 1 is rebuilt with its editor: {first:?} then {second:?}");
     assert!(second.top() >= first.bottom(), "the card below starts under the card with the editor: {first:?} then {second:?}");
 }
+
+/// A panel over `threads` with `state`, settled in a panel-sized room.
+fn panel_of(threads: Vec<CommentThread>, mut state: CommentsPanelState) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.in_room(Room::Panel).settle();
+    fixture
+}
+
+/// The rect of the first painted text run equal to `text`.
+fn text_rect(fixture: &Fixture, text: &str) -> Option<Rect> {
+    fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect)
+}
+
+/// An empty panel says what to do next, under its "No comments yet." line.
+#[trial]
+fn an_empty_panel_says_what_to_do_next() {
+    let fixture = panel_of(Vec::new(), CommentsPanelState::default());
+    assert!(text_rect(&fixture, "No comments yet.").is_some(), "the empty line shows");
+    assert!(fixture.texts().iter().any(|run| run.text.contains("type above")), "a hint says to pick a tool or type above");
+}
+
+/// The More menu names its sort rows with a "Sort by" heading.
+#[trial]
+fn the_more_menu_heads_its_sort_rows() {
+    let threads = vec![thread(1, 1, "Note 1.")];
+    let mut state = CommentsPanelState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Panel options").show(ui);
+        let _ = comments_more_menu::<u32>(ui, &opener, &threads, &mut state, &[]);
+    });
+    fixture.settle();
+    let options = fixture.by_label("Panel options").expect("the host's button");
+    fixture.click(&options).settle();
+    assert!(fixture.texts().iter().any(|run| run.text == "Sort by"), "the sort rows have a Sort by heading");
+}
+
+/// A selected card is a raised surface with an accent rule at its edge: its fill is not the strong selection fill a
+/// selected row of a list has (in the dark theme, a mid grey), and no card-sized fill is blue.
+#[trial]
+fn a_selected_card_is_a_raised_surface_not_a_selection_fill() {
+    let mut state = CommentsPanelState::default();
+    state.selected = Selection::single(ThreadId(1));
+    let mut fixture = panel_of(vec![thread(1, 1, "Note 1.")], state);
+    fixture.theme(craft_theme::Mode::Dark, craft_theme::Contrast::Standard).settle();
+    let card = card(&fixture, "Note 1.").expect("the card");
+    let shapes = fixture.frame_shapes();
+    let fills: Vec<egui::Color32> = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.rect.width() > 60.0 && rect.rect.height() > 20.0 && card.contains_rect(rect.rect.shrink(0.5)) => {
+                Some(rect.fill)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(fills.iter().all(|fill| fill.r() < 0x60 && i32::from(fill.b()) - i32::from(fill.r()) < 40), "the card fill is a quiet surface: {fills:?}");
+}
+
+/// The avatars of a card's messages are muted discs, not accent-coloured ones.
+#[trial]
+fn card_avatars_are_muted() {
+    let mut item = thread(1, 1, "Note 1.");
+    item.messages.push(message("Bo", "A reply."));
+    let mut state = CommentsPanelState::default();
+    state.selected = Selection::single(ThreadId(1));
+    let mut fixture = panel_of(vec![item], state);
+    let shapes = fixture.frame_shapes();
+    let discs: Vec<egui::Color32> = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Circle(circle) if (8.0..20.0).contains(&circle.radius) => Some(circle.fill),
+            _ => None,
+        })
+        .collect();
+    assert!(!discs.is_empty(), "the reply's avatar disc paints");
+    assert!(discs.iter().all(|fill| i32::from(fill.b()) - i32::from(fill.r()) < 40), "no disc is blue: {discs:?}");
+}
+
+/// A card's text starts under its author's name, and a selected card's reply field is indented with it.
+#[trial]
+fn card_text_and_the_reply_field_sit_under_the_name() {
+    let mut state = CommentsPanelState::default();
+    state.selected = Selection::single(ThreadId(1));
+    let fixture = panel_of(vec![thread(1, 1, "Note 1.")], state);
+    let name = text_rect(&fixture, "Ana").expect("the author");
+    let body = text_rect(&fixture, "Note 1.").expect("the text");
+    assert!((name.left() - body.left()).abs() < 0.5, "the text starts under the name: {name:?} {body:?}");
+    let field = fixture.by_label("Add a reply").expect("the reply field");
+    assert!(field.rect.left() >= name.left() - 0.5, "the reply field is indented to the name: {:?} {name:?}", field.rect);
+}
+
+/// A heading of a sort other than Page is the group's name alone: no count and no disclosure.
+#[trial]
+fn a_group_heading_of_the_author_sort_is_plain() {
+    let mut state = CommentsPanelState::default();
+    state.sort = CommentSort::Author;
+    let fixture = panel_of(vec![thread(1, 1, "Note 1.")], state);
+    assert!(text_rect(&fixture, "Ana").is_some(), "the group heading names the author");
+    assert!(text_rect(&fixture, "1").is_none(), "the heading paints no count");
+}
