@@ -2,12 +2,15 @@
 //! body through its `ToolPass`.
 
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, EditorInput, Proposal, TextPos};
+use craft_behavior::{CanvasView, EditCommand, EditorInput, Proposal, TextPos};
+use craft_ui::buttons::Button;
 use craft_ui::canvas::{Canvas, tool_pass};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::{EditorPurpose, EditorState};
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::focus;
+use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, resolve};
+use craft_ui::runtime::focus::{self, EditSet};
+use craft_ui::runtime::frame;
 use craft_ui::testing::focus::egui_focused;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::TextField;
@@ -143,4 +146,70 @@ fn focus_has_answers_for_a_canvas_whose_editor_part_holds_focus() {
     fixture.click_at(field_rect.center());
     assert!(focus::has(fixture.ctx(), field_id), "a click on the field moves focus there");
     assert!(!focus::has(fixture.ctx(), canvas_id), "and the canvas has it no more");
+}
+
+/// Guards `Canvas::inactive_edits` with an editor part: inactive Cut stays owned by the editor and resolves disabled
+/// (even when the app's Cut is enabled), inactive Undo and Redo fall through to app command states and fire the app
+/// command while keeping canvas focus, and a separate text field resolves Cut from its own selection independently.
+#[trial]
+fn inactive_edits_disable_cut_and_let_undo_and_redo_fall_through_to_app_state() {
+    let inactive = Rc::new(Cell::new(EditSet::NONE.with(EditCommand::Cut).with(EditCommand::Undo).with(EditCommand::Redo)));
+    let text = Rc::new(RefCell::new("hello".to_owned()));
+    let ids: Rc<Cell<Option<(Id, Id, Id)>>> = Rc::default();
+    let (held_inactive, held_text, shown_ids) = (Rc::clone(&inactive), Rc::clone(&text), Rc::clone(&ids));
+    let mut fixture = Fixture::new(move |ui| {
+        let cut = Button::command(EditCommands::Cut).show(ui).id;
+        let undo = Button::command(EditCommands::Undo).show(ui).id;
+        let _ = TextField::new("Notes", Bind::bound(&mut *held_text.borrow_mut())).show(ui);
+        let room = ui.available_rect_before_wrap();
+        let view = CanvasView::new(room, Point::new(PAGE.width / 2.0, PAGE.height / 2.0), 1.0);
+        let output = canvas(view).inactive_edits(held_inactive.get()).show_at(ui, room, |_, _| {});
+        shown_ids.set(Some((output.output.response.id, cut, undo)));
+    });
+    fixture.command_state(EditCommands::Cut, CommandState::new().enabled(true));
+    fixture.command_state(EditCommands::Undo, CommandState::new().enabled(false));
+    fixture.command_state(EditCommands::Redo, CommandState::new().enabled(false));
+    fixture.room(ROOM);
+    fixture.settle();
+
+    let (canvas_id, cut_id, undo_id) = ids.get().expect("the canvas and buttons showed");
+    let canvas_rect = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").rect;
+    fixture.click_at(canvas_rect.center());
+    fixture.settle();
+    assert!(focus::has(fixture.ctx(), canvas_id), "the canvas has focus");
+
+    assert!(!resolve(fixture.ctx(), EditCommands::Cut).enabled, "inactive Cut resolves disabled despite app Cut state");
+    assert!(fixture.tree().is_disabled(cut_id), "the Cut button reflects the inactive editor command");
+    assert!(!resolve(fixture.ctx(), EditCommands::Undo).enabled, "inactive Undo falls through to disabled app state");
+    assert!(!resolve(fixture.ctx(), EditCommands::Redo).enabled, "inactive Redo falls through to disabled app state");
+    assert!(fixture.tree().is_disabled(undo_id), "the Undo button is disabled while app Undo is disabled");
+
+    fixture.command_state(EditCommands::Undo, CommandState::new().enabled(true));
+    fixture.command_state(EditCommands::Redo, CommandState::new().enabled(true));
+    fixture.settle();
+    assert!(resolve(fixture.ctx(), EditCommands::Undo).enabled, "inactive Undo follows enabled app state");
+    assert!(resolve(fixture.ctx(), EditCommands::Redo).enabled, "inactive Redo follows enabled app state");
+    assert!(!fixture.tree().is_disabled(undo_id), "the Undo button enables with app Undo");
+
+    frame::take_output(fixture.ctx());
+    let undo_node = fixture.by_label("Undo").expect("the Undo button shows");
+    fixture.click(&undo_node);
+    fixture.settle();
+    let undo_ref = CommandRef::from(EditCommands::Undo).id;
+    let fired: Vec<String> = frame::take_output(fixture.ctx()).fired.into_iter().map(|entry| entry.command.id).collect();
+    assert!(fired.contains(&undo_ref), "clicking Undo while inactive on the editor fires the app command: {fired:?}");
+    assert!(focus::has(fixture.ctx(), canvas_id), "the Undo button press keeps focus on the canvas");
+
+    inactive.set(EditSet::NONE.with(EditCommand::Undo).with(EditCommand::Redo));
+    fixture.settle();
+    assert!(resolve(fixture.ctx(), EditCommands::Cut).enabled, "removing Cut from inactive_edits enables Cut");
+    assert!(!fixture.tree().is_disabled(cut_id), "the Cut button enables once Cut is active on the editor");
+
+    let field_rect = fixture.by_role(Role::TEXT_INPUT).into_iter().next().expect("the field").rect;
+    fixture.click_at(field_rect.center());
+    fixture.settle();
+    assert!(!resolve(fixture.ctx(), EditCommands::Cut).enabled, "a focused TextField with no selection disables Cut independently");
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.settle();
+    assert!(resolve(fixture.ctx(), EditCommands::Cut).enabled, "selecting text in the TextField enables Cut independently");
 }

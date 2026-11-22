@@ -143,13 +143,24 @@ pub(super) fn pane_grip_id(id: Id) -> Id {
 
 impl Host for PaneHost {
     fn run(&mut self, id: Id, parent: &mut Ui, env: &Env, pass: &mut HostPass<'_>) {
-        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as tall as its
-        // content flows from the rect's top and takes its height in the parent's flow.
+        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as large as its
+        // content flows from the rect's outer edge and takes its extent in the parent's flow.
         if let Some(rect) = self.0.at {
-            if self.0.content_height {
+            if self.0.content_extent {
+                let rtl = env.direction.is_rtl();
                 let builder = egui::UiBuilder::new().max_rect(rect);
+                let builder = match self.0.edge {
+                    PaneEdge::Bottom => builder.layout(egui::Layout::bottom_up(egui::Align::Min)),
+                    PaneEdge::Start | PaneEdge::End if (self.0.edge == PaneEdge::Start) == rtl => {
+                        builder.layout(egui::Layout::right_to_left(egui::Align::Min))
+                    }
+                    PaneEdge::Start | PaneEdge::End => builder.layout(egui::Layout::left_to_right(egui::Align::Min)),
+                    _ => builder,
+                };
                 let mut ui = crate::runtime::egui::alloc::child(parent, builder);
-                pass(&mut ui, Some(ShowAt::Flow), None);
+                // A layout room of its own, as a docked pane's.
+                let room = env.new_room();
+                Env::run_in(&mut ui, room.clone(), |ui| pass(ui, Some(ShowAt::Flow), Some(&room)));
                 crate::runtime::egui::alloc::advance_past(parent, ui.min_rect());
             } else {
                 pass(parent, Some(ShowAt::Rect(rect)), None);

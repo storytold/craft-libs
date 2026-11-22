@@ -18,10 +18,10 @@ use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::sub;
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
-use craft_theme::{ControlSize, Tokens};
+use craft_theme::{ControlSize, Rgba, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::fmt::Debug;
@@ -33,6 +33,49 @@ use std::hash::Hash;
 pub struct GroupGripStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The marks a grip with [`ticks`](GroupGrip::ticks) shows.
+    marks: GripMarks,
+}
+
+/// How many ticks a grip's row of marks has, at every display scale.
+const GRIP_TICKS: u16 = 10;
+/// How tall a grip's tick is, in points.
+const GRIP_TICK_LENGTH: f32 = 4.0;
+/// The share of the panel's lightness a grip's ticks keep: the references' marks are a little darker than the panel
+/// they sit on in every interface colour (`#454545` on `#535353`, `#272727` on `#323232`, `#9e9e9e` on `#b8b8b8`).
+const GRIP_INK_SHARE: f32 = 0.83;
+
+/// The row of marks a dock grip shows, as the references draw it: ten upright ticks, a thin stroke wide, four points
+/// tall and a thin stroke apart, centred on the grip, a little darker than the panel. They keep their ink under the
+/// pointer, as the references' do. A toolbar's grip under its column bar and the grip above each icon group of a
+/// collapsed column paint the same marks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GripMarks {
+    ink: StyleColor,
+    /// The width of a tick and the gap between two of them.
+    side: f32,
+    /// The height of a tick.
+    length: f32,
+}
+
+impl GripMarks {
+    /// The marks in the tokens of `cx`.
+    pub(super) fn style(cx: &StyleCx<'_>) -> Self {
+        GripMarks { ink: cx.color(grip_ink(cx.tokens.color.surface.panel)), side: cx.tokens.stroke.thin, length: GRIP_TICK_LENGTH }
+    }
+
+    /// Paints the row centred on `centre`.
+    pub(super) fn paint(&self, ui: &PaintUi<'_>, centre: Pos2) {
+        let look = RuleLook { color: self.ink.egui(), width: RuleWidth::Points(self.side) };
+        ui.draw().grip_ticks(&look, centre, GRIP_TICKS, self.side, self.length);
+    }
+}
+
+/// The ink of a grip's ticks on a `panel` surface: the panel's channels at [`GRIP_INK_SHARE`].
+fn grip_ink(panel: Rgba) -> Rgba {
+    let [r, g, b, a] = panel.0;
+    let darker = |channel: u8| (f32::from(channel) * GRIP_INK_SHARE).round().clamp(0.0, 255.0) as u8;
+    Rgba([darker(r), darker(g), darker(b), a])
 }
 
 /// What a group grip reports: its response, the second press of a double click and whether it started a group
@@ -73,6 +116,9 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     /// A drag on the grip drags the unit.
     #[prop]
     movable: bool,
+    /// The grip shows the dock's row of grip marks in its middle; else it is an unmarked band.
+    #[prop]
+    ticks: bool,
     double: bool,
     started: bool,
 }
@@ -80,7 +126,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: false }
     }
 }
 
@@ -92,8 +138,8 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     type Style = GroupGripStyle;
     type Output = GroupGripOutput;
 
-    fn style(_: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
-        GroupGripStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: GroupGripStyleKey<P>) -> GroupGripStyle {
+        GroupGripStyle { metrics: Metrics::new(), marks: GripMarks::style(cx) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -109,6 +155,12 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
         if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
             self.started = true;
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.ticks {
+            cx.style.marks.paint(ui, cx.rect.center());
         }
     }
 
@@ -508,6 +560,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         let (line, gap) = (env.tokens.size.panel_header, env.tokens.space.gap.item);
         ui.set_min_height(line);
         let surface_pressed = cx.surface_pressed();
+        // A raw egui layout: the host's items and the tab row sit side by side, and the header column's flow facts are
+        // not theirs. The tab row takes the rest of the line, so the strip's empty room is its own, and nothing but the
+        // memoized tab row runs in it, so a settled header replays.
         let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
         let mut sent = Vec::new();
         let strip = ui

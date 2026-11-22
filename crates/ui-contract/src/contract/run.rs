@@ -317,6 +317,10 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         self.scope
     }
 
+    fn focus(&self, _: &C) -> Option<crate::runtime::focus::FocusPolicy> {
+        (C::FOCUS_SCOPE != crate::runtime::focus::FocusPolicy::NONE).then_some(C::FOCUS_SCOPE)
+    }
+
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
         use craft_behavior::Axis;
         let room = crate::layout::leaf_fill_room(ui);
@@ -378,6 +382,7 @@ fn blank_core<'a>(
         member_of: None,
         lent: Default::default(),
         activation: None,
+        pointer_group: None,
         injected: None,
         keep_open: false,
         part_clicked: false,
@@ -409,6 +414,7 @@ fn blank_core<'a>(
         texts: None,
         selections: Vec::new(),
         faded: false,
+        node: false,
         fade: None,
         focus_shapes: Vec::new(),
         surface_slot: None,
@@ -619,6 +625,7 @@ pub(super) fn paint_ui<'a>(ui: &'a mut Ui, env: &'a Env, core: &'a CxCore<'_>, s
         size: core.resolved.size,
         selections: &core.selections,
         fade: core.fade,
+        node: core.node,
         kids: None,
     }
 }
@@ -820,14 +827,21 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
         let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y), line });
         // The column's first sweep learns which of its held children measured narrower than it settles on.
         if let Some(ColumnSweep::Count(column)) = env.column {
-            crate::layout::report_held(&ctx, column, flowed.width());
+            crate::layout::report_held(&ctx, column, id, crate::layout::HeldKind::Fill, flowed.width());
         }
         let across = Vec2::new(size.x.max(flowed.width()).max(column), flowed.height());
         if rtl { Rect::from_min_size(Pos2::new(flowed.max.x - across.x, flowed.min.y), across) } else { Rect::from_min_size(flowed.min, across) }
     } else {
         let fill = p.p.fills_width() && !p.p.fills_width_only();
         let size = if inert { Vec2::ZERO } else { size };
-        steps::place(ui, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() })
+        let placed = steps::place(ui, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() });
+        // A picture its measure held (`MeasureCx::picture_size`) reports its placed width, padding included.
+        if let Some(ColumnSweep::Count(column)) = env.column
+            && crate::layout::held_kind(&ctx, column, id) == Some(crate::layout::HeldKind::Picture)
+        {
+            crate::layout::report_held(&ctx, column, id, crate::layout::HeldKind::Picture, placed.width());
+        }
+        placed
     };
     (rect, held)
 }
@@ -891,7 +905,6 @@ struct HostStep {
     text_keys: Option<focus::KeyUse>,
     own: Sense,
     member: Option<crate::runtime::env::ArenaId>,
-    node: bool,
     /// The bar line whose rules wait for this member.
     line: Option<Id>,
     /// A bar's view cut the member: it shows nothing until the clip is restored.
@@ -1015,6 +1028,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     }
     let session = member.filter(|_| e.keys().session);
     let core = e.core();
+    core.node = node;
     // A hovered part's declared cursor, else the role's over the root's own shape.
     let own_hovered = enabled && response.hovered() && !results.values().any(|result| result.hovered);
     core.part_cursors =
@@ -1094,7 +1108,6 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         text_keys,
         own,
         member,
-        node,
         line,
         cut,
         shown_clip,
@@ -1287,7 +1300,6 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         e,
         facts,
         &steps::ReportIn {
-            node: h.node,
             decls: &h.parts.decls,
             sense: h.own,
             live: e.live(),
@@ -1570,9 +1582,14 @@ fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
     let room = match at {
         ShowAt::Rect(rect) => Some(rect.width()),
         // A measuring run in a content column asks for what the content needs: nothing there fills the room. Once the
-        // column settled its width, a child that fills its width measures at that width.
+        // column settled its width, a child that fills its width, or a picture its first sweep held, measures at
+        // that width.
         ShowAt::Flow => match env.column {
-            Some(ColumnSweep::Column(width)) if env.content_column && t.fills_width() => Some(width),
+            Some(ColumnSweep::Column(column, width))
+                if env.content_column && (t.fills_width() || crate::layout::held_kind(ctx, column, id) == Some(crate::layout::HeldKind::Picture)) =>
+            {
+                Some(width)
+            }
             _ => Some(crate::layout::flow_room(ui).x)
                 .filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(ctx))),
         },
@@ -1766,6 +1783,7 @@ fn run_passes(
     let env = begun.env();
     let id = resolved.id;
     let mut core = blank_core(env.view(), resolved, stage, begun.ctx.clone(), env.ink, steps::inert_response(ui, id), begun.step1.command.clone());
+    core.pointer_group = Some(ui.scope_id());
     core.faded = begun.facts.faded && !resolved.enabled;
     // 6 to 16, in the host's `Ui`, once per call of the host.
     let mut host = t.host(HostCx { ui: &*ui, env, id, label: &begun.step1.label, size: sizes.size });
@@ -1925,4 +1943,6 @@ pub(crate) struct FaceSource<'a> {
     pub enabled: bool,
     /// The host is faded (`DisabledLook::Faded`): its faces paint their enabled look inside its fade.
     pub faded: bool,
+    /// The host's step 16 fills the part's sub-node from the face's record: a reported face of a host with a node.
+    pub reported: bool,
 }

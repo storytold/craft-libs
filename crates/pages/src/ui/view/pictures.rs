@@ -5,6 +5,7 @@ use super::{PageSource, PlacedPage};
 use crate::layout::PageSpacing;
 use crate::ui::access::{AccessDescriber, describe};
 use craft_behavior::{Input, Metrics, PixelSize, Sense};
+use craft_theme::ComponentSet;
 use craft_ui::canvas::DetailPlan;
 use craft_ui::canvas::PixelRect;
 use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, NoValue, Outcome, PaintUi, Role};
@@ -15,8 +16,12 @@ use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
 use egui::{Rect, Response, Vec2, pos2};
 
+/// Productivity inter-page gap as a multiple of `space.gap.section`: 18 pt in Compact (Word's gap) and 24 pt in
+/// Comfortable.
+const PRODUCTIVITY_GAP_RATIO: f32 = 1.5;
+
 /// The style of the page view's spacing: the gap between pages, the margin, the side column, Hide White Space's pad
-/// and its seam, all from the tokens.
+/// and its seam, from the tokens and the scope's [`ComponentSet`].
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct PageMetricsStyle {
@@ -74,14 +79,26 @@ impl Component for PageMetrics {
 
     fn style(cx: &StyleCx<'_>, _: PageMetricsStyleKey) -> PageMetricsStyle {
         let tokens = cx.tokens;
-        let pad = tokens.space.pad;
-        PageMetricsStyle {
-            metrics: Metrics::new(),
-            gap: tokens.space.gap.section,
-            margin: pad.roomy,
-            side: tokens.size.rail.width,
-            white_space_pad: tokens.space.gap.inline,
-            seam: tokens.stroke.thin,
+        match cx.set() {
+            ComponentSet::Creative => PageMetricsStyle {
+                metrics: Metrics::new(),
+                gap: tokens.space.gap.section,
+                margin: tokens.space.pad.roomy,
+                side: tokens.size.rail.width,
+                white_space_pad: tokens.space.gap.inline,
+                seam: tokens.stroke.thin,
+            },
+            ComponentSet::Productivity => {
+                let gap = tokens.space.gap.section * PRODUCTIVITY_GAP_RATIO;
+                PageMetricsStyle {
+                    metrics: Metrics::new(),
+                    gap,
+                    margin: gap,
+                    side: gap,
+                    white_space_pad: tokens.space.gap.stack,
+                    seam: tokens.stroke.thin,
+                }
+            }
         }
     }
 
