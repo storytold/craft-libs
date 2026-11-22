@@ -263,7 +263,7 @@ mod tests {
         use craft_raw::opcodes::Area;
         use craft_raw::{DngCompression, DngWriteOptions};
 
-        let mosaic = Normalized { width: 4, height: 4, cpp: 1, data: vec![1.0; 16], cfa: Some(bayer("RGGB")) };
+        let mosaic = Normalized { width: 4, height: 4, cpp: 1, data: vec![1.0; 16], cfa: Cfa::bayer("RGGB") };
         let mut stored = raw_from(&mosaic, 0.0, 1.0);
         stored.white = vec![65535.0]; // deliberately different from the table maximum
         stored.linearization_table = Some(vec![0, 20, 100, 200]);
