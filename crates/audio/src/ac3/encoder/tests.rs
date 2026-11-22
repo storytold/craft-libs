@@ -127,9 +127,10 @@ fn rates_modes_and_crc_boundaries() -> Result<(), Box<dyn std::error::Error>> {
                 CodingMode::StereoTwoSurround,
                 CodingMode::ThreeFrontTwoSurround,
             ] {
-                for lfe in [false, true].into_iter().filter(|&lfe| {
-                    rate == 48000 || matches!((mode, lfe), (CodingMode::Mono, false) | (CodingMode::ThreeFrontTwoSurround, true))
-                }) {
+                for lfe in [false, true]
+                    .into_iter()
+                    .filter(|&lfe| rate == 48000 || matches!((mode, lfe), (CodingMode::Mono, false) | (CodingMode::ThreeFrontTwoSurround, true)))
+                {
                     let cfg = Config { sample_rate: rate, ..config(codec, mode, lfe) };
                     let mut encoder = Encoder::new(cfg)?;
                     let planes = vec![vec![0.0; 1537]; cfg.channels()];
