@@ -1,6 +1,7 @@
 //! The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu. [`fit`] and
 //! [`fit_whole`] assign tab widths (tabs shrink before they overflow, or keep their width); [`fit_items`] shortens
-//! items that have a short form, in the order their host ranks, and drops command items and titles from the end. All of them read no egui types.
+//! items that have a short form, in the order their host ranks, and drops command items and titles from the end.
+//! All of them read no egui types.
 
 /// Tabs visible on a strip and tabs that need an overflow menu, all in original order.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -242,21 +243,23 @@ impl FitItem {
         FitItem { extent, section, keep, short: None, short_order: 0, short_late: false }
     }
 
-    /// The item with a shorter form `extent` long, which it takes before any free item leaves.
+    /// The item with a shorter form `extent` long, which it takes before any free item leaves unless it is late.
+    /// An item marked [`FitItem::short_late`] takes that form only after no free item is left to leave.
     pub const fn short(mut self, extent: f32) -> Self {
         self.short = Some(extent);
         self
     }
 
-    /// The item with its short form ranked `order`: short forms of a lower rank are taken first, and items of
-    /// one rank take theirs last item first. Every item ranks 0 by default.
+    /// The item with its short form ranked `order`: lower ranks shorten first, and the last item of a rank first.
+    /// Every item ranks 0 by default.
     pub const fn short_order(mut self, order: u16) -> Self {
         self.short_order = order;
         self
     }
 
-    /// The item takes its short form only after every free item that can leave has left, so the other items go to
-    /// the overflow menu before this one shortens. A free item with a late short form leaves in its turn instead.
+    /// The item takes its short form only after every free item that can leave has left.
+    /// The other items go to the overflow menu before this one shortens. A free item with a late short form leaves
+    /// in its turn instead.
     pub const fn short_late(mut self) -> Self {
         self.short_late = true;
         self
