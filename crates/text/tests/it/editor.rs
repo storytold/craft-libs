@@ -210,6 +210,25 @@ fn a_secondary_click_on_the_text_reports_a_context_click_and_starts_no_drag() {
     assert_eq!(editor.commits.get() + editor.cancels.get(), 0, "the session stays open");
 }
 
+/// The I-beam is the editor's only over its text and while its own press is held: elsewhere the pointer is the
+/// canvas's or the rest of the UI's.
+#[trial]
+fn the_i_beam_shows_over_the_text_and_during_its_drag_but_not_elsewhere() {
+    let mut editor = session("abc def", None);
+    editor.focus();
+    let i_beam = Some(craft_behavior::Cursor::System(craft_behavior::CursorIcon::Text));
+    let cursor = |editor: &Session| craft_ui::runtime::cursor::current(editor.fixture.ctx());
+    let (on_text, away) = (pos2(40.0, 10.0), pos2(300.0, 300.0));
+    editor.fixture.frame(vec![pointer::moved(on_text)]).settle();
+    assert_eq!(cursor(&editor), i_beam, "over the text");
+    editor.fixture.frame(vec![pointer::moved(away)]).settle();
+    assert_ne!(cursor(&editor), i_beam, "away from the text, with the session open");
+    editor.fixture.frame(vec![pointer::moved(on_text)]).frame(vec![pointer::press(on_text)]).frame(vec![pointer::moved(away)]);
+    assert_eq!(cursor(&editor), i_beam, "a drag that leaves the text keeps it");
+    editor.fixture.frame(vec![pointer::release(away)]).settle();
+    assert_ne!(cursor(&editor), i_beam, "after the release");
+}
+
 fn preedit(text: &str) -> Event {
     Event::Ime(ImeEvent::Preedit { text: text.to_owned(), active_range_chars: None })
 }

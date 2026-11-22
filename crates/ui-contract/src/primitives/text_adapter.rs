@@ -522,13 +522,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
             _ => {}
         }
     }
+    let env = crate::runtime::env::Env::of(input.ui);
     let multiline = input.options.multiline();
     let scroll = if multiline { scroll_before(ctx, widget) } else { 0.0 };
     let filter = egui_focus::event_filter(input.keys.keep, false);
     // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
     // the body text's.
     let baseline = (!input.options.multiline()).then(|| {
-        let env = crate::runtime::env::Env::of(input.ui);
         let text_env = super::text::TextEnv { tokens: &env.tokens, direction: env.direction, ink: input.ink, fonts: crate::fonts::stack_facts(ctx) };
         super::text::line_baseline(ctx, &text_env, input.options.role, input.rect.center().y)
     });
@@ -561,7 +561,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
     let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
-    let shown = text_edit::show(input.ui, edit);
+    let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
     if let Some((caret, anchor)) = kept
         && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
@@ -648,6 +648,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     let multiline = run.wrap == crate::primitives::Wrap::Wrap;
     let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
     let mut shown = layout.full().to_owned();
+    let env = crate::runtime::env::Env::of(ui);
     // A line longer than its room is cut at the room's edge, as a field's is.
     let mut cut = (layout.size().x > rect.width()).then(|| {
         let mut cut = crate::runtime::egui::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
@@ -656,6 +657,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     });
     text_edit::show(
         cut.as_mut().unwrap_or(&mut *ui),
+        &env,
         text_edit::Edit {
             id: widget,
             rect: layout.galley.rect.translate(at.to_vec2()),

@@ -309,6 +309,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.held = self.held(props, &env);
         self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(..)));
         self.in_column = label::in_column(ui);
+        self.egui_cell = env.egui_cell;
         self.given.1 |= self.given_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
@@ -1307,6 +1308,7 @@ impl BodyHooks<'_> {
                     plan.regions.body.width()
                 },
                 content_row: false,
+                egui_cell: self.egui_cell,
                 text: resolved.label_value,
                 side,
                 help: props.help.as_ref(),
@@ -1858,6 +1860,7 @@ impl BodyHooks<'_> {
             self.room.x = width;
         }
         self.in_column = label::in_column(at.ui);
+        self.egui_cell = at.env.egui_cell;
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);

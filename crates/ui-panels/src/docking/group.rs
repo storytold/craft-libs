@@ -560,6 +560,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         let (line, gap) = (env.tokens.size.panel_header, env.tokens.space.gap.item);
         ui.set_min_height(line);
         let surface_pressed = cx.surface_pressed();
+        // A raw egui layout: the host's items and the tab row sit side by side, and the header column's flow facts are
+        // not theirs. The tab row takes the rest of the line, so the strip's empty room is its own, and nothing but the
+        // memoized tab row runs in it, so a settled header replays.
         let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
         let mut sent = Vec::new();
         let strip = ui

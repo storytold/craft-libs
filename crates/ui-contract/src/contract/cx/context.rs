@@ -425,12 +425,13 @@ impl Under {
 }
 
 /// An env derived for children `PaintUi` builds: the composite's resolved `enabled` and `size`, and only the inside
-/// label `under` gives.
+/// label `under` gives. The composite places its children itself, so they are in no egui grid's cell.
 pub(crate) fn child_env(env: &Env, under: &Under) -> Env {
     env.derive_local(|scoped| {
         scoped.enabled &= under.enabled;
         scoped.size = under.size;
         scoped.inside_label = under.inside.clone().map(|inside| inside as crate::runtime::env::Held);
         scoped.cell_fills = false;
+        scoped.egui_cell = false;
     })
 }

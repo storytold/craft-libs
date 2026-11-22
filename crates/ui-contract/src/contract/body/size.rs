@@ -61,6 +61,7 @@ pub(crate) struct EnvFacts {
     offered: Option<f32>,
     measure: Option<f32>,
     grid: Option<Id>,
+    egui_cell: bool,
 }
 
 impl EnvFacts {
@@ -80,6 +81,7 @@ impl EnvFacts {
             offered: env.offered,
             measure: env.measure,
             grid: env.grid,
+            egui_cell: env.egui_cell,
         }
     }
 }
