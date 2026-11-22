@@ -18,6 +18,10 @@
 
 use super::{Normalized, RawData, RawDevelopExt, RawImage, Rect, Result, Rgb32f, cfa_valid};
 
+// Cap the precomputed colour bytes, not image size or the supported block size.
+const PHASE_COLOUR_BYTES: usize = 4 * 1024 * 1024;
+type PhaseLayout = (Vec<u8>, [f32; 3]);
+
 /// Does at least one `k × k` block fit the active area, with single-plane CFA data and R, G
 /// and B present in every block phase? Bayer also requires an even `k`.
 pub fn can_bin(raw: &RawImage, k: usize) -> bool {
@@ -56,6 +60,10 @@ pub fn develop_binned_masked(raw: &RawImage, k: usize, clip: f32) -> Result<Opti
 /// The binned image and its clip mask; `keep_max`: a channel with a clipped sample takes the
 /// block's maximum sample of the colour instead of the mean.
 fn bin(raw: &RawImage, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rgb32f, Vec<u8>)>> {
+    bin_with_phase_budget(raw, k, clip, keep_max, PHASE_COLOUR_BYTES)
+}
+
+fn bin_with_phase_budget(raw: &RawImage, k: usize, clip: f32, keep_max: bool, phase_budget: usize) -> Result<Option<(Rgb32f, Vec<u8>)>> {
     raw.validate()?;
     if !can_bin(raw, k) || !raw.opcodes.list3.is_empty() {
         return Ok(None);
@@ -76,15 +84,8 @@ fn bin(raw: &RawImage, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rg
     let scale = if range > 0.0 { 1.0 / range } else { 1.0 };
     let uniform_black = raw.black.delta_h.is_empty() && raw.black.delta_v.is_empty() && raw.black.values.iter().all(|&v| v == raw.black.values[0]);
     let black0 = raw.black.at(0, 0, 0, 1);
-    // colour of every sample of a block, per pattern phase of the block's corner
     let (pw, ph) = (cfa.width, cfa.height);
-    let layouts: Vec<(Vec<u8>, [f32; 3])> = (0..ph)
-        .flat_map(|j| (0..pw).map(move |i| (i, j)))
-        .map(|(i, j)| {
-            let (l, n) = block_layout(&cfa, i, j, k);
-            (l, n.map(|n| 1.0 / n.max(1) as f32))
-        })
-        .collect();
+    let layouts = phase_layouts(&cfa, k, phase_budget);
     let wlen = bw * k;
     let mut out = Rgb32f::new(bw, bh);
     let mut mask = vec![0u8; bw * bh];
@@ -112,16 +113,22 @@ fn bin(raw: &RawImage, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rg
         }
         let py = (c.y + by * k) % ph;
         for (bx, (px, m)) in row.iter_mut().zip(mrow.iter_mut()).enumerate() {
-            let (layout, inv) = &layouts[py * pw + (c.x + bx * k) % pw];
-            let (mut sum, mut max) = ([0f32; 3], [f32::MIN; 3]);
-            for dy in 0..k {
-                let src = &rows[dy * wlen + bx * k..][..k];
-                for (&v, &col) in src.iter().zip(&layout[dy * k..(dy + 1) * k]) {
-                    let col = col as usize;
-                    sum[col] += v;
-                    max[col] = max[col].max(v);
+            let phase_x = (c.x + bx * k) % pw;
+            let (sum, max, inv) = if let Some(layouts) = &layouts {
+                let (layout, inv) = &layouts[py * pw + phase_x];
+                let (mut sum, mut max) = ([0f32; 3], [f32::MIN; 3]);
+                for dy in 0..k {
+                    let src = &rows[dy * wlen + bx * k..][..k];
+                    for (&v, &col) in src.iter().zip(&layout[dy * k..(dy + 1) * k]) {
+                        let col = col as usize;
+                        sum[col] += v;
+                        max[col] = max[col].max(v);
+                    }
                 }
-            }
+                (sum, max, *inv)
+            } else {
+                periodic_block(&rows[bx * k..], wlen, k, &cfa, (phase_x, py))
+            };
             for ch in 0..3 {
                 let clipped = max[ch] >= clip;
                 px[ch] = if clipped && keep_max { max[ch] } else { sum[ch] * inv[ch] };
@@ -141,6 +148,44 @@ fn bin(raw: &RawImage, k: usize, clip: f32, keep_max: bool) -> Result<Option<(Rg
         }
     }
     Ok(Some((out, mask)))
+}
+
+fn phase_layouts(cfa: &super::Cfa, k: usize, budget: usize) -> Option<Vec<PhaseLayout>> {
+    let (pw, ph) = (cfa.width, cfa.height);
+    // There are at most 16 × 16 phase descriptors; the variable payload is one byte per sample.
+    let bytes = k.checked_mul(k)?.checked_mul(pw)?.checked_mul(ph)?;
+    if bytes > budget {
+        return None;
+    }
+    Some(
+        (0..ph)
+            .flat_map(|j| (0..pw).map(move |i| (i, j)))
+            .map(|(i, j)| {
+                let (layout, count) = block_layout(cfa, i, j, k);
+                (layout, count.map(|n| 1.0 / n.max(1) as f32))
+            })
+            .collect(),
+    )
+}
+
+/// Accumulate in the same row-major order as the precomputed layout, using one CFA row at a time.
+fn periodic_block(rows: &[f32], stride: usize, k: usize, cfa: &super::Cfa, phase: (usize, usize)) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let (phase_x, phase_y) = phase;
+    let (pw, ph) = (cfa.width, cfa.height);
+    let (mut sum, mut max, mut count) = ([0f32; 3], [f32::MIN; 3], [0u32; 3]);
+    for dy in 0..k {
+        let src = &rows[dy * stride..][..k];
+        // The CFA was shifted to the active area's origin; both stored origin offsets are zero.
+        let start = ((phase_y + dy) % ph) * pw;
+        let colours = cfa.pattern[start..start + pw].iter().cycle().skip(phase_x);
+        for (&v, &col) in src.iter().zip(colours) {
+            let col = col.min(2) as usize;
+            sum[col] += v;
+            max[col] = max[col].max(v);
+            count[col] += 1;
+        }
+    }
+    (sum, max, count.map(|n| 1.0 / n.max(1) as f32))
 }
 
 /// Colours of the `k × k` samples of a block whose corner sits at pattern position `(i, j)`
@@ -235,6 +280,36 @@ mod tests {
         assert!(!raw.can_bin(8));
         assert!(raw.develop_binned(8, 0.99).unwrap().is_none());
         assert!(raw.develop_binned_masked(8, 0.99).unwrap().is_none());
+    }
+
+    #[test]
+    fn binned_phase_budget_preserves_xtrans_pixels_and_clip_masks() {
+        let img = Rgb32f::from_fn(23, 21, |x, y| {
+            if (x, y) == (7, 4) {
+                [1.0; 3]
+            } else {
+                [x as f32 / 64.0, y as f32 / 64.0, (x + y) as f32 / 64.0]
+            }
+        });
+        let mut raw = raw_from(&mosaic_from_rgb(&img, &Cfa::xtrans()), 0.0, 4096.0);
+        raw.active_area = Rect::new(1, 1, 21, 19);
+        raw.crop = Rect::new(1, 2, 17, 15);
+        let k = 5;
+        let cfa = raw.cfa.as_ref().unwrap().shifted(raw.active_area.x, raw.active_area.y);
+        assert!(phase_layouts(&cfa, k, PHASE_COLOUR_BYTES).is_some());
+        assert!(phase_layouts(&cfa, k, 0).is_none());
+        let compare = |keep_max| {
+            let (fast, fast_mask) = bin_with_phase_budget(&raw, k, 0.875, keep_max, PHASE_COLOUR_BYTES).unwrap().unwrap();
+            let (bounded, bounded_mask) = bin_with_phase_budget(&raw, k, 0.875, keep_max, 0).unwrap().unwrap();
+            assert_eq!((fast.width, fast.height), (3, 3));
+            assert_eq!((fast.width, fast.height), (bounded.width, bounded.height));
+            let bits = |img: &Rgb32f| img.data.iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>();
+            assert_eq!(bits(&fast), bits(&bounded));
+            assert_eq!(fast_mask, bounded_mask);
+            assert_eq!(fast_mask.iter().filter(|&&m| m != 0).count(), 1);
+            fast.get(1, 0)
+        };
+        assert_ne!(compare(false), compare(true));
     }
 
     /// Issue #548: specular points that clip one green sample in some 8 × 8 blocks of a grey surface.
