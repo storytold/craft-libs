@@ -47,7 +47,8 @@ const END_GROUP: i16 = 14;
 const CURVE: i16 = 67;
 
 // Point type bytes (R16): bits 7 and 6 give the operation, bit 3 closes the subpath. Bit 2, which
-// the reader does not read, is set on every node, as the test files of `synth_cmx` set it.
+// the reader does not read, is set on every node and left clear on control points, as the test
+// files of `synth_cmx` set it.
 const MOVE: u8 = 0x04;
 const LINE: u8 = 0x44;
 const CURVE_END: u8 = 0x84;
@@ -83,7 +84,8 @@ pub struct Written {
     /// A shape filled with the nonzero rule may fill differently with the even-odd rule every
     /// curve is written with: one of its cubics loops, one of its subpaths crosses or touches
     /// itself or loops over itself, or two turn the same way and their boxes overlap, measured
-    /// with each cubic flattened to 16 lines. Past 50,000,000 comparisons of edges and boxes in one
+    /// with each cubic flattened to 16 lines, and with two lines that are not neighbors taken to
+    /// cross when they are closer than the cubics may stray from them. Past 50,000,000 comparisons of edges and boxes in one
     /// file, a shape is taken to fill differently.
     pub nonzero_fills: bool,
     /// A spot color has no name, so it opens as a process color, its look at its tint: the reader
@@ -93,7 +95,7 @@ pub struct Written {
     /// in that use), so it is written, and opens, as black at its tint.
     pub unknown_looks: bool,
     /// A spot color name was used with different looks, and a use was written with the look of
-    /// the use at the strongest tint, so that it opens more than 2/255 off what its own look would
+    /// the use at the strongest tint among the uses whose look is known, so that it opens more than 2/255 off what its own look would
     /// open as, or off its own look where its own look would not.
     pub merged_looks: bool,
     /// The drawing held what the file does not hold: hidden layers, groups or shapes, guide and
@@ -539,7 +541,8 @@ fn spot_looks(drawing: &Drawing) -> HashMap<String, [f32; 3]> {
 
 impl Writer {
     /// The 1-based color entry of `c`. A named spot color takes its ink's look: the look of the
-    /// use of its name at the strongest tint, hidden uses included.
+    /// use of its name at the strongest tint among the uses whose look is known, hidden uses
+    /// included.
     fn color(&mut self, c: &Color) -> Result<u16, Error> {
         let key = match c {
             Color::Spot { name, tint, .. } if self.looks.contains_key(name) => {
@@ -672,16 +675,17 @@ impl Writer {
                     self.left_out = true;
                     self.begin_group(out)?;
                     // The container's fill is drawn behind the objects it clips and its outline
-                    // over them; an outline behind the fill is drawn behind them too. A container
-                    // with neither draws nothing and is not written.
+                    // over them; an outline behind a fill is drawn behind them too, and an
+                    // outline with no fill to be behind is drawn over them. A container with
+                    // neither draws nothing and is not written.
                     let mut over = None;
-                    match &container.outline {
-                        Some(o) if !o.behind_fill && container.fill.is_some() => {
+                    match (&container.fill, &container.outline) {
+                        (None, None) => {}
+                        (None, Some(_)) => over = Some((**container).clone()),
+                        (Some(_), Some(o)) if !o.behind_fill => {
                             self.shape(&Shape { outline: None, ..(**container).clone() }, out)?;
                             over = Some(Shape { fill: None, ..(**container).clone() });
                         }
-                        Some(o) if !o.behind_fill => over = Some((**container).clone()),
-                        None if container.fill.is_none() => {}
                         _ => self.shape(container, out)?,
                     }
                     stack.push((objects.iter().rev(), true, over));
@@ -1119,37 +1123,65 @@ fn charge(budget: &mut u64, cost: u64) -> bool {
 }
 
 /// The closed polygon of a subpath with each cubic flattened to [`CURVE_STEPS`] lines, without
-/// repeated points.
-fn flatten(s: &SubPath) -> Vec<Pt> {
-    let mut pts = vec![s.start];
+/// repeated points, and for each edge (from a point to the next, and from the last point to the
+/// first) how far the subpath may stray from that edge: 0 along a line, and along a piece of a
+/// cubic `h² / 8` times the cubic's largest second derivative, `h` being the piece's share of the
+/// cubic's parameter.
+fn flatten(s: &SubPath) -> (Vec<Pt>, Vec<f64>) {
+    // Each point with how far the subpath may stray from the edge that ends at it.
+    let mut pts = vec![(s.start, 0.0)];
     let mut last = s.start;
     for seg in &s.segments {
         match *seg {
             Segment::Line(p) => {
-                pts.push(p);
+                pts.push((p, 0.0));
                 last = p;
             }
             Segment::Cubic(c1, c2, p) => {
+                // The second derivative, 6 ((1 − t) (p0 − 2 c1 + c2) + t (c1 − 2 c2 + p3)), is at its
+                // largest at an end.
+                let second = |a: Pt, b: Pt, c: Pt| (a.x - 2.0 * b.x + c.x).hypot(a.y - 2.0 * b.y + c.y);
+                let steps = f64::from(CURVE_STEPS);
+                let stray = 6.0 * second(last, c1, c2).max(second(c1, c2, p)) / (8.0 * steps * steps);
                 for i in 1..=CURVE_STEPS {
-                    let t = f64::from(i) / f64::from(CURVE_STEPS);
+                    let t = f64::from(i) / steps;
                     let u = 1.0 - t;
                     let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-                    pts.push(Pt { x: a * last.x + b * c1.x + c * c2.x + d * p.x, y: a * last.y + b * c1.y + c * c2.y + d * p.y });
+                    let q = Pt { x: a * last.x + b * c1.x + c * c2.x + d * p.x, y: a * last.y + b * c1.y + c * c2.y + d * p.y };
+                    pts.push((q, stray));
                 }
                 last = p;
             }
         }
     }
-    pts.dedup();
-    if pts.len() > 1 && pts.first() == pts.last() {
-        pts.pop();
+    // A repeated point is dropped; the subpath strays no further than that from the point, which
+    // is on the edge that ends at it.
+    let mut kept: Vec<(Pt, f64)> = Vec::with_capacity(pts.len());
+    for (q, stray) in pts {
+        match kept.last_mut() {
+            Some((prev, e)) if *prev == q => *e = e.max(stray),
+            _ => kept.push((q, stray)),
+        }
     }
-    pts
+    // A last point back on the first is dropped, and its edge becomes the edge back to the first.
+    if kept.len() > 1 && kept.first().map(|f| f.0) == kept.last().map(|l| l.0) {
+        let back = kept.pop().map_or(0.0, |(_, e)| e);
+        if let Some(first) = kept.first_mut() {
+            first.1 = first.1.max(back);
+        }
+    }
+    let (points, ends): (Vec<Pt>, Vec<f64>) = kept.into_iter().unzip();
+    // Edge k runs from point k to point k + 1.
+    let n = ends.len();
+    let strays = (0..n).map(|k| ends[(k + 1) % n]).collect();
+    (points, strays)
 }
 
 /// Whether `p` may fill differently even-odd than nonzero: one of its cubics loops, a subpath
-/// crosses itself or turns around other than once, measured with the cubics flattened, or two of
-/// its subpaths turn the same way and their boxes, control points included, overlap. Subpaths
+/// crosses itself or turns around other than once, measured with the cubics flattened (two edges
+/// that are not neighbors count as crossing when they are closer than the cubics may stray from
+/// their lines), or two of its subpaths turn the same way and their boxes, control points
+/// included, overlap. Subpaths
 /// that turn opposite ways, such as a letter's counter inside the letter, and subpaths apart from
 /// each other, fill the same either way. `budget` counts down the comparisons, and is charged for
 /// a subpath's edges before the subpath is flattened.
@@ -1178,8 +1210,8 @@ fn may_fill_differently(p: &Path, budget: &mut u64) -> bool {
                 }
             }
         }
-        let pts = flatten(s);
-        if loops(&pts) || crosses(&pts) {
+        let (pts, strays) = flatten(s);
+        if loops(&pts) || crosses(&pts, &strays) {
             return true;
         }
         polygons.push(pts);
@@ -1295,8 +1327,10 @@ fn loops(pts: &[Pt]) -> bool {
 }
 
 /// Whether two edges of the closed polygon through `pts` that are not neighbors cross, touch or run
-/// along each other: the subpath comes back to a place it has been.
-fn crosses(pts: &[Pt]) -> bool {
+/// along each other: the subpath comes back to a place it has been. `strays` holds, for each edge
+/// from a point to the next, how far the subpath may stray from it; two edges closer than their
+/// subpath may stray from them count as crossing.
+fn crosses(pts: &[Pt], strays: &[f64]) -> bool {
     let n = pts.len();
     if n < 4 {
         return false;
@@ -1317,11 +1351,29 @@ fn crosses(pts: &[Pt]) -> bool {
                 // On one line: they meet when their spans along it meet.
                 let along = |q: Pt| (q.x - a.x) * (b.x - a.x) + (q.y - a.y) * (b.y - a.y);
                 let (tc, td, tb) = (along(c), along(d), along(b));
-                return tc.min(td).max(0.0) <= tc.max(td).min(tb);
+                if tc.min(td).max(0.0) <= tc.max(td).min(tb) {
+                    return true;
+                }
+            } else if sc * sd <= 0 && side(c, d, a) * side(c, d, b) <= 0 {
+                return true;
             }
-            sc * sd <= 0 && side(c, d, a) * side(c, d, b) <= 0
+            // A cubic's piece may cross an edge that its line passes close to.
+            let stray = strays.get(i).copied().unwrap_or(0.0) + strays.get(j).copied().unwrap_or(0.0);
+            stray > 0.0 && gap(a, b, c, d) <= stray * (1.0 + 1e-9)
         })
     })
+}
+
+/// The distance between the segment from `a` to `b` and the segment from `c` to `d`, which do not
+/// cross: the shortest distance from an end of one to the other.
+fn gap(a: Pt, b: Pt, c: Pt, d: Pt) -> f64 {
+    let to = |p: Pt, a: Pt, b: Pt| {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = dx * dx + dy * dy;
+        let t = if len > 0.0 { (((p.x - a.x) * dx + (p.y - a.y) * dy) / len).clamp(0.0, 1.0) } else { 0.0 };
+        (p.x - a.x - t * dx).hypot(p.y - a.y - t * dy)
+    };
+    to(a, c, d).min(to(b, c, d)).min(to(c, a, b)).min(to(d, a, b))
 }
 
 /// A rectangle from the origin to (`w`, `h`) with its corners rounded by `radii`, counterclockwise

@@ -294,6 +294,8 @@ fn table_entries(bytes: &[u8], id: &[u8; 4]) -> Vec<Vec<u8>> {
         let mut first = None;
         while bytes[p] != 0xff {
             let len = usize::from(u16::from_le_bytes([bytes[p + 1], bytes[p + 2]]));
+            // A length shorter than its header, or past the file, would stop the walk.
+            assert!(len >= 3 && p + len <= bytes.len(), "field at {p} has length {len}");
             if bytes[p] == 1 {
                 first = Some(bytes[p + 3..p + len].to_vec());
             }
@@ -312,21 +314,28 @@ fn every_outline_names_a_screen_and_a_dash_pattern_the_file_holds() {
     let d = drawing(vec![Page { size: None, layers: vec![layer("L", vec![Object::Shape(Box::new(solid)), Object::Shape(Box::new(dashed))])] }]);
     let bytes = write_cmx(&d).unwrap().bytes;
     let (screens, dashes) = (table_entries(&bytes, b"rscr"), table_entries(&bytes, b"rdot"));
-    let outlines = table_entries(&bytes, b"rotl");
+    let (line_types, outlines) = (table_entries(&bytes, b"rott"), table_entries(&bytes, b"rotl"));
     assert_eq!(outlines.len(), 2);
-    let counts: Vec<u16> = outlines
+    let mut patterns: Vec<(bool, Vec<u16>)> = outlines
         .iter()
         .map(|o| {
             let entry = |i: usize| usize::from(u16::from_le_bytes([o[2 * i], o[2 * i + 1]]));
             assert!((1..=screens.len()).contains(&entry(1)), "the screen entry exists");
+            let line = entry(0);
+            assert!((1..=line_types.len()).contains(&line), "the line type entry exists");
             let dash = entry(5);
             assert!((1..=dashes.len()).contains(&dash), "the dash entry exists");
-            u16::from_le_bytes([dashes[dash - 1][0], dashes[dash - 1][1]])
+            let pattern = &dashes[dash - 1];
+            let count = usize::from(u16::from_le_bytes([pattern[0], pattern[1]]));
+            assert_eq!(pattern.len(), 2 + 2 * count);
+            let lengths = pattern[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            // The outline's own line type says whether it is dashed.
+            (line_types[line - 1][0] & 4 != 0, lengths)
         })
         .collect();
-    // A solid outline names an empty pattern; the dashed one names its two lengths.
-    assert_eq!(counts.len(), 2);
-    assert!(counts.contains(&0) && counts.contains(&2), "{counts:?}");
+    patterns.sort();
+    // The solid outline names an empty pattern; the dashed one names its two lengths.
+    assert_eq!(patterns, vec![(false, vec![]), (true, vec![3, 1])]);
 }
 
 #[test]
@@ -548,8 +557,8 @@ fn layer_names_the_reader_cuts_or_drops_are_reported() {
 
 #[test]
 fn an_unfilled_clipping_containers_outline_keeps_its_place() {
-    // Front to back, whether the outline comes first: over the clipped shape, unless it is drawn
-    // behind the fill.
+    // Front to back, whether the outline comes first: over the clipped shape, as an outline with
+    // no fill to be behind is drawn over it too.
     for behind_fill in [false, true] {
         let o = Outline { behind_fill, ..outline(Color::Gray(1.0)) };
         let container = Shape::new(square(0.0, 0.0, 10.0), Matrix::IDENTITY, None, Some(o));
@@ -557,7 +566,26 @@ fn an_unfilled_clipping_containers_outline_keeps_its_place() {
         let clip = Object::Clip { container: Box::new(container), objects: vec![Object::Shape(Box::new(child))] };
         let back = round_trip(&drawing(vec![Page { size: None, layers: vec![layer("L", vec![clip])] }]));
         let Object::Group { objects, .. } = &back.pages[0].layers[0].objects[0] else { panic!("not a group") };
-        assert_eq!(shape(&objects[0]).outline.is_some(), !behind_fill, "behind_fill {behind_fill}");
+        let outlined: Vec<bool> = objects.iter().map(|o| shape(o).outline.is_some()).collect();
+        assert_eq!(outlined, vec![true, false], "behind_fill {behind_fill}");
+    }
+}
+
+#[test]
+fn a_filled_clipping_containers_outline_goes_over_unless_behind_the_fill() {
+    // Front to back, as (fill, outline) of each curve: the outline alone over the clipped shape
+    // and the fill alone behind it, or the whole container behind it when the outline is behind
+    // the fill.
+    for behind_fill in [false, true] {
+        let o = Outline { behind_fill, ..outline(Color::Gray(1.0)) };
+        let container = Shape::new(square(0.0, 0.0, 10.0), Matrix::IDENTITY, Some(Color::Gray(0.1)), Some(o));
+        let child = Shape::new(square(2.0, 2.0, 5.0), Matrix::IDENTITY, Some(Color::Gray(0.8)), None);
+        let clip = Object::Clip { container: Box::new(container), objects: vec![Object::Shape(Box::new(child))] };
+        let back = round_trip(&drawing(vec![Page { size: None, layers: vec![layer("L", vec![clip])] }]));
+        let Object::Group { objects, .. } = &back.pages[0].layers[0].objects[0] else { panic!("not a group") };
+        let parts: Vec<(bool, bool)> = objects.iter().map(|o| (shape(o).fill.is_some(), shape(o).outline.is_some())).collect();
+        let want = if behind_fill { vec![(true, false), (true, true)] } else { vec![(false, true), (true, false), (true, false)] };
+        assert_eq!(parts, want, "behind_fill {behind_fill}");
     }
 }
 
@@ -849,7 +877,7 @@ fn a_blank_layer_name_opens_with_no_name() {
     let plain = Object::Shape(Box::new(Shape::new(square(0.0, 0.0, 1.0), Matrix::IDENTITY, Some(Color::Gray(0.5)), None)));
     let bytes = write_cmx(&drawing(vec![Page { size: None, layers: vec![layer("\u{2003}", vec![plain])] }])).unwrap().bytes;
     let back = read_cmx(&bytes, Limits::default()).unwrap();
-    assert!(!back.pages[0].layers[0].name.contains('?'), "{:?}", back.pages[0].layers[0].name);
+    assert!(back.pages[0].layers[0].name.is_empty(), "{:?}", back.pages[0].layers[0].name);
 }
 
 #[test]
@@ -867,7 +895,7 @@ fn a_long_blank_layer_name_opens_with_no_name() {
     let plain = Object::Shape(Box::new(Shape::new(square(0.0, 0.0, 1.0), Matrix::IDENTITY, Some(Color::Gray(0.5)), None)));
     let bytes = write_cmx(&drawing(vec![Page { size: None, layers: vec![layer(&" ".repeat(257), vec![plain])] }])).unwrap().bytes;
     let back = read_cmx(&bytes, Limits::default()).unwrap();
-    assert!(back.pages[0].layers[0].name.trim().is_empty(), "{:?}", back.pages[0].layers[0].name);
+    assert!(back.pages[0].layers[0].name.is_empty(), "{:?}", back.pages[0].layers[0].name);
 }
 
 #[test]
@@ -1077,11 +1105,28 @@ fn a_cubic_looping_from_its_start_is_reported() {
 }
 
 #[test]
+fn a_cubic_crossing_an_edge_between_its_flattened_points_is_reported() {
+    let p = |x, y| Pt { x, y };
+    // The arch (16 t, 9 t (1 − t)) is flattened at whole x; at x = 7.5 its line is at y = 2.2324
+    // and the arch at y = 2.2412. A notch down to `tip` stays clear of the line, and crosses the
+    // arch when the tip is below it.
+    let filled = |tip: f64| {
+        let mut segments = vec![Segment::Cubic(p(16.0 / 3.0, 3.0), p(32.0 / 3.0, 3.0), p(16.0, 0.0))];
+        segments.extend([p(16.0, 6.0), p(7.5, tip), p(0.0, 6.0)].map(Segment::Line));
+        let geometry = Geometry::Path(Path { subpaths: vec![SubPath { start: p(0.0, 0.0), segments, closed: true }] });
+        let s = Shape { nonzero: true, ..Shape::new(geometry, Matrix::IDENTITY, Some(Color::Gray(0.5)), None) };
+        write_cmx(&one_shape(s)).unwrap().nonzero_fills
+    };
+    assert!(filled(2.237));
+    assert!(!filled(2.3));
+}
+
+#[test]
 fn a_blank_layer_name_before_a_nul_opens_with_no_name() {
     let plain = Object::Shape(Box::new(Shape::new(square(0.0, 0.0, 1.0), Matrix::IDENTITY, Some(Color::Gray(0.5)), None)));
     let bytes = write_cmx(&drawing(vec![Page { size: None, layers: vec![layer("\u{2003}\0", vec![plain])] }])).unwrap().bytes;
     let back = read_cmx(&bytes, Limits::default()).unwrap();
-    assert!(!back.pages[0].layers[0].name.contains('?'), "{:?}", back.pages[0].layers[0].name);
+    assert!(back.pages[0].layers[0].name.is_empty(), "{:?}", back.pages[0].layers[0].name);
 }
 
 #[test]

@@ -86,7 +86,8 @@ written as curves, and a clipping container as a group of its fill, the objects 
 corners, not stretched ones. Hidden layers, groups and shapes, guide and grid layers, guidelines
 and master layers are left out; opacity, blend modes, fill rules and locked states are not
 written, desktop layers are written as drawing layers, and a spot color with no name opens as a
-process color; every use of a named spot color takes the look of its use at the strongest tint.
+process color; every use of a named spot color takes the look of its use at the strongest tint
+among the uses whose look is known.
 
 `write_cmx` returns an error, and writes nothing, for a coordinate, page side or outline width
 past the 32-bit range, a negative or NaN outline width, a page side that rounds to 0, more than
