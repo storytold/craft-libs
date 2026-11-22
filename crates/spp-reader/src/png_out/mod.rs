@@ -7,17 +7,17 @@
 mod checksum;
 mod deflate;
 
-use checksum::Crc32;
+use crc32fast::Hasher;
 use deflate::Level;
 
 fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
     out.extend_from_slice(data);
-    let mut crc = Crc32::new();
+    let mut crc = Hasher::new();
     crc.update(kind);
     crc.update(data);
-    out.extend_from_slice(&crc.finish().to_be_bytes());
+    out.extend_from_slice(&crc.finalize().to_be_bytes());
 }
 
 /// PNG colour types the decompiler writes.

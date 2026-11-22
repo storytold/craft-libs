@@ -9,6 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+adler2 = "2"
+crc32fast = "1"
 lz4_flex = { workspace = true }
 # Unpacks graph packages (7z, LZMA) to read their compiled graphs. Apache-2.0.
 sevenz-rust2 = { version = "0.24", default-features = false }
