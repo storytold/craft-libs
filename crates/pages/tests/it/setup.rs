@@ -118,3 +118,32 @@ fn page_setup_rows_stand_two_to_a_line() {
     assert!((rect("Mirror margins").min.x - first.min.x).abs() < 1.0, "Mirror margins stands at its section's start");
     assert!(first.max.y <= 900.0, "the last row is in view without scrolling: {first:?}");
 }
+
+// The Margins grid's last row (Gutter) has a wider caption than the rows above it and no second pair: the grid is still
+// as wide as its columns, so the Bottom and Right fields are not clipped short.
+#[trial]
+fn the_margins_second_column_is_drawn_whole_in_centimetres() {
+    let state = Rc::new(RefCell::new(PageSetup::default()));
+    let seen = Rc::clone(&state);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut setup = seen.borrow_mut();
+        PageSetupDialog::new(Bind::bound(&mut *setup))
+            .unit(craft_ui::runtime::env::UnitKind::Centimetres)
+            .layout()
+            .direction()
+            .opened(Bind::given(true))
+            .show(ui);
+    });
+    fixture.room(Vec2::new(1440.0, 900.0)).settle();
+    let fields: Vec<egui::Rect> =
+        ["Height", "Bottom", "Right"].iter().map(|label| fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown")).rect).collect();
+    let shapes = fixture.frame_clipped_shapes();
+    for field in fields {
+        let clipped = shapes
+            .iter()
+            .filter(|(_, shape)| field.contains_rect(shape.visual_bounding_rect()))
+            // A clip of the field's own (its text box) lies inside it; one from around it must reach its right edge.
+            .find(|(clip, _)| clip.min.x < field.min.x && clip.max.x < field.max.x - 0.5);
+        assert!(clipped.is_none(), "the field at {field:?} is drawn whole, not clipped to {:?}", clipped.map(|(clip, _)| *clip));
+    }
+}

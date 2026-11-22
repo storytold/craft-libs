@@ -1606,6 +1606,12 @@ fn run_grid<R>(
         found(&ctx, true, sub(id, "stacked"), room, Vec2::new(f32::from(u8::from(stacked)), 0.0));
     };
     if !short {
+        // A column a later row widened placed the rows before it narrower: the grid is as wide as its columns.
+        let wide = measured.columns.iter().sum::<f32>() + gap.x * measured.columns.len().saturating_sub(1) as f32;
+        let rect = match rtl {
+            true => Rect::from_min_max(egui::pos2(rect.min.x.min(rect.max.x - wide), rect.min.y), rect.max),
+            false => Rect::from_min_max(rect.min, egui::pos2(rect.max.x.max(rect.min.x + wide), rect.max.y)),
+        };
         ui.advance_cursor_after_rect(rect);
         record(&measured, &[], false, ui.available_rect_before_wrap().size());
         return inner;
