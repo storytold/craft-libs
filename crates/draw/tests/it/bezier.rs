@@ -6,7 +6,7 @@ use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
     PathEdit, PathSelection, PathTool, SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
+use craft_ui::canvas::{Canvas, Guide, Momentary, NavigationOptions, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::cancel_press_of;
@@ -199,6 +199,8 @@ struct State {
     tool_clicks: usize,
     /// The anchor tool the canvas runs under the overlay, if any.
     canvas_tool: Option<PathTool>,
+    /// The app-owned momentary navigation set, enabled by tests that exercise Space-to-Hand routing.
+    momentary: Option<Momentary>,
     /// Passes in which that tool ran a gesture.
     tool_gestures: usize,
 }
@@ -264,6 +266,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         lone_selects: 0,
         tool_clicks: 0,
         canvas_tool: None,
+        momentary: None,
         tool_gestures: 0,
     }));
     let shown = Rc::clone(&state);
@@ -298,18 +301,25 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
                 .segment_mark(st.segment_mark)
                 .show_at(ui, body.rect);
             if let (Some(tool), Some(pass)) = (st.canvas_tool, tool_pass(&body.env)) {
-                reply = Some(ToolHost::new().run(ui, &pass, &mut AnchorTool::new(tool)));
+                let mut host = ToolHost::new();
+                if let Some(momentary) = st.momentary.as_mut() {
+                    host = host.momentary(momentary);
+                }
+                reply = Some(host.run(ui, &pass, &mut AnchorTool::new(tool)));
             }
             output
         });
         if canvas.output.click_at().is_some() {
             st.tool_clicks += 1;
         }
-        if let Some(reply) = reply {
+        let tool_view = if let Some(reply) = reply {
             st.tool_gestures += usize::from(reply.gesture.is_some());
-        }
+            reply.view
+        } else {
+            None
+        };
         if st.pans {
-            st.view = canvas.output.view.or(st.view);
+            st.view = tool_view.or(canvas.output.view).or(st.view);
         }
         let Some(output) = canvas.inner else { return };
         st.id = output.edit.response.id;
@@ -1305,7 +1315,11 @@ fn space_moves_the_pulled_anchor_then_release_resumes_its_handles() {
     };
     let close = |a: Vec2, b: Vec2| (a - b).hypot() < 1e-6;
     let mut h = harness_with(vec![path_a(), path_b()], true);
-    h.update(|st| st.tool = BezierTool::AddAnchor);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+    });
     let at = h.screen(p(110.0, 60.0));
     let pulled_at = at + vec2(0.0, 60.0);
     h.press_at(at);
@@ -1383,7 +1397,11 @@ fn space_still_pans_when_add_anchor_has_no_drag() {
         modifiers: egui::Modifiers::NONE,
     };
     let mut h = harness_with(vec![path_a(), path_b()], true);
-    h.update(|st| st.tool = BezierTool::AddAnchor);
+    h.update(|st| {
+        st.tool = BezierTool::AddAnchor;
+        st.canvas_tool = Some(PathTool::AddAnchor);
+        st.momentary = Some(Momentary::new(NavigationOptions::default()));
+    });
     let (before, paths, selection) = {
         let st = h.state.borrow();
         (st.view.expect("the canvas showed"), st.paths.clone(), st.selection.clone())
