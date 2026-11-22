@@ -169,13 +169,16 @@ impl Component for LabelLeaf {
                 Stateful::new(muted).off(States::new(muted, muted, muted, off))
             },
             // A caption reads as secondary; a check box's or a radio's text after it is the control's own.
-            name: if key.link {
-                cx.link_look(true)
-            } else {
+            name: {
                 let text = &cx.tokens.color.text;
                 let (role, ink) = if key.after { (TypeRole::Body, text.normal) } else { (TypeRole::Label, text.muted) };
-                let (ink, off) = (cx.color(ink), cx.color(text.disabled));
-                TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                if key.link {
+                    // A link label keeps its role, so it takes the room of the caption it is, in the link's ink.
+                    TextLook { role, ..cx.link_look(true) }
+                } else {
+                    let (ink, off) = (cx.color(ink), cx.color(text.disabled));
+                    TextLook::new(role, Stateful::new(ink).off(States::new(ink, ink, ink, off)))
+                }
             },
             glyph: {
                 let off = Some(cx.color(cx.tokens.color.text.disabled));
