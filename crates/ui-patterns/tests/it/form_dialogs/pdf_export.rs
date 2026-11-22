@@ -81,6 +81,19 @@ fn the_hosted_dialog_takes_the_automation_fields() {
     }
 }
 
+/// OK files the settings for the app, which takes them once while the dialog waits for its answer.
+#[trial]
+fn ok_files_the_settings_once_for_the_app() {
+    let ctx = Context::default();
+    let mut host = DialogHost::new();
+    let id = host.open(dialog());
+    host.confirm_by_id(&ctx, id);
+    let pdf = host.get_mut_by_id::<HostedPdfExport>(id).expect("the dialog stays open for the app's answer");
+    let filed = pdf.take_ok().expect("OK filed an answer");
+    assert_eq!(filed.result.options, mine().settings, "with the dialog's settings");
+    assert!(pdf.take_ok().is_none(), "handed out once");
+}
+
 #[trial]
 fn reset_restores_the_chosen_preset_and_keeps_the_artboards() {
     let host = Rc::new(RefCell::new(DialogHost::new()));

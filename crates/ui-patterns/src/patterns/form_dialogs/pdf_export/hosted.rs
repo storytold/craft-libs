@@ -6,7 +6,9 @@ use super::{
     PresetDraft, apply_standard, check_range, summary_text, warning_lines,
 };
 use crate::contract::Bind;
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
+use crate::dialog::{
+    DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id, serde_fields, set_serde_field,
+};
 use crate::patterns::presets::PresetError;
 use crate::runtime::env::{Label, UnitKind};
 use crate::runtime::overlay::CloseReason;
@@ -248,6 +250,11 @@ impl HostedPdfExport {
         summary_text(words, &self.settings, &self.base(), &warnings)
     }
 
+    /// The answer OK filed for the app to write, once; `None` when none is filed or it was taken already.
+    pub fn take_ok(&mut self) -> Option<PdfExportAnswer> {
+        self.held.take()
+    }
+
     /// The app's answer to the held OK: `Ok` closes the dialog with the held answer; `Err` shows its label and keeps
     /// the dialog open.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
@@ -314,6 +321,23 @@ impl HostedPdfExport {
 /// The section `id` names.
 fn section_of(id: &str) -> Option<PdfSection> {
     PdfSection::ALL.iter().zip(SECTION_IDS).find(|(_, name)| *name == id).map(|(section, _)| *section)
+}
+
+impl HoldsOk for HostedPdfExport {
+    type Answer = PdfExportAnswer;
+
+    /// OK is always held: the dialog as it is.
+    fn held_ok(self) -> Self {
+        self
+    }
+
+    fn take_ok(&mut self) -> Option<PdfExportAnswer> {
+        HostedPdfExport::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedPdfExport::answer_ok(self, answer);
+    }
 }
 
 impl StackDialog for HostedPdfExport {
