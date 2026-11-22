@@ -250,3 +250,24 @@ fn a_menu_opener_accepts_accessibility_activation() {
         assert!(craft_ui::runtime::focus::keyboard_in_menu(fixture.ctx()), "a later key drives the menu");
     }
 }
+
+/// A context menu opened near the top edge of the window, taller than the room above its pointer, stays inside the
+/// window (it hangs below the pointer, not clipped above it).
+#[trial]
+fn a_context_menu_near_the_top_stays_inside_the_window() {
+    let mut fixture = Fixture::new(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(400.0, 300.0), egui::Sense::click());
+        let target = ui.interact(rect, ui.id().with("area"), egui::Sense::click());
+        Menu::context("Page menu", &target).show(ui, |ui, _| {
+            for name in ["Copy", "Paste", "Select All", "Rotate", "Delete", "Insert", "Extract", "Print", "Properties", "More"] {
+                MenuItem::new(name).show(ui);
+            }
+        });
+    });
+    fixture.room(egui::vec2(400.0, 300.0));
+    fixture.settle();
+    right_click(&mut fixture, pos2(150.0, 2.0));
+    let menu = menu_rect(&fixture).expect("the menu opened");
+    let window = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+    assert!(menu.min.y >= window.min.y - 0.5 && menu.max.y <= window.max.y + 0.5, "the menu lies inside the window: {menu:?}");
+}
