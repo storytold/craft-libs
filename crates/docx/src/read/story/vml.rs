@@ -756,7 +756,22 @@ fn vml_spin(style: &str) -> craft_wordmodel::geom::Spin {
 fn vml_link(pict: &El, shape: &El) -> Option<String> {
     let inherited = || {
         let id = shape.attr("type")?.trim().trim_start_matches('#');
-        pict.els().find(|e| e.name == "v:shapetype" && e.attr("id") == Some(id))?.attr("href")
+        let template = pict
+            .els()
+            .find(|e| e.name == "v:shapetype" && e.attr("id") == Some(id))
+            .or_else(|| pict.els().filter(|e| e.name == "v:group").find_map(|group| vml_group_link_template(group, id, 0)))?;
+        template.attr("href")
     };
     shape.attr("href").or_else(inherited).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// A hyperlink template in this picture's VML groups, not in arbitrary descendants or
+/// an unselected compatibility branch. As in the group reader, its outer group is depth 0.
+fn vml_group_link_template<'a>(group: &'a El, id: &str, depth: usize) -> Option<&'a El> {
+    group.els().find(|e| e.name == "v:shapetype" && e.attr("id") == Some(id)).or_else(|| {
+        if depth >= MAX_VML_GROUP_DEPTH {
+            return None;
+        }
+        group.els().filter(|e| e.name == "v:group").find_map(|nested| vml_group_link_template(nested, id, depth + 1))
+    })
 }

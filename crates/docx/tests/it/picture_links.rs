@@ -426,6 +426,42 @@ fn vml_hyperlink_templates_and_outer_runs_keep_their_scope() {
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].link.as_deref(), Some("https://example.com/Child"), "the run overrides the group, not its child");
     }
+
+    // A shape type may be declared inside the group rather than beside it. These
+    // original inputs use unique IDs and keep image-source URLs out of click lookup.
+    let local_cases = [(r##"type="#GroupLocal""##, Some("https://example.com/GroupTemplate")), (r##"type="#NotSelected""##, None)];
+    let mut local_shapes = String::new();
+    for (attributes, _) in local_cases {
+        local_shapes.push_str(&format!(
+            r#"<v:shape style="width:6pt;height:5pt" {attributes}><v:imagedata r:id="rIdPic" o:href="https://example.com/ImageSource" r:href="rIdWeb"/></v:shape>"#,
+        ));
+    }
+    let local_body = format!(
+        r##"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:other="urn:original-test:unselected"><mc:AlternateContent><mc:Choice Requires="other"><v:shapetype id="NotSelected" href="https://example.com/Unselected"/></mc:Choice><mc:Fallback/></mc:AlternateContent><v:group style="width:36pt;height:10pt" coordsize="36,10"><v:shapetype id="GroupLocal" href="  https://example.com/GroupTemplate  "/>{local_shapes}<v:group style="left:12pt;top:5pt;width:6pt;height:5pt" coordsize="6,5" href="https://example.com/NestedTemplateGroup"><v:shapetype id="DeepLocal" href="https://example.com/DeepTemplate"/><v:shape type="#DeepLocal" style="width:6pt;height:5pt"><v:imagedata r:id="rIdPic"/></v:shape></v:group></v:group></w:pict></w:r></w:p>"##,
+    );
+    let local_doc = craft_docx::read(&package(&local_body)).unwrap();
+    let local_saved = craft_docx::write(&local_doc).unwrap();
+    let local_reopened = craft_docx::read(&local_saved).unwrap();
+    let original_png = png();
+    for current in [&local_doc, &local_reopened] {
+        assert_eq!(current.body.len(), 1);
+        let paragraph = current.body[0].as_para().unwrap();
+        assert_eq!(paragraph.objects.len(), 1);
+        assert_eq!(paragraph.props_of_char(0).link, None, "a template must not become its containing group's link");
+        let InlineObject::Group { children, .. } = &paragraph.objects[0] else { panic!() };
+        assert_eq!(children.len(), local_cases.len() + 1);
+        for (child, (_, expected)) in children.iter().zip(local_cases) {
+            let InlineObject::Image { media, w, h, .. } = &child.obj else { panic!() };
+            assert_eq!(current.media.get(media).unwrap().as_slice(), original_png.as_slice());
+            assert!((*w - 6.0).abs() < 0.001 && (*h - 5.0).abs() < 0.001);
+            assert_eq!(child.link.as_deref(), expected, "group-local template href");
+        }
+        let nested = &children[local_cases.len()];
+        assert_eq!(nested.link.as_deref(), Some("https://example.com/NestedTemplateGroup"));
+        let InlineObject::Group { children: nested_children, .. } = &nested.obj else { panic!() };
+        assert_eq!(nested_children.len(), 1);
+        assert_eq!(nested_children[0].link.as_deref(), Some("https://example.com/DeepTemplate"), "nested group-local template href");
+    }
 }
 
 fn replacing_picture_part(bytes: &[u8], name: &str, replacement: &str) -> Vec<u8> {
