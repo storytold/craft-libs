@@ -85,6 +85,8 @@ pub struct Gallery<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     caption: CaptionPlace,
     /// Each shown tile's rect.
     laid: Vec<Rect>,
+    /// The column of stepper buttons, if shown.
+    column: Rect,
     picked: Option<K>,
     menu: Option<ContextMenuRequest<K>>,
 }
@@ -118,6 +120,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
             thumb_size: ThumbSize::Medium,
             caption: CaptionPlace::None,
             laid: Vec::new(),
+            column: Rect::NOTHING,
             picked: None,
             menu: None,
         }
@@ -131,7 +134,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
         self
     }
 
-    /// One rounded frame on the raised surface around the tiles and the buttons, as the old Word-style ribbon drew
+    /// One rounded frame on the sunken well surface around the tiles and the buttons, as the old Word-style ribbon drew
     /// its Styles gallery.
     pub fn framed(mut self) -> Self {
         self.framed = true;
@@ -509,6 +512,9 @@ pub struct GalleryStyle {
     frame: (StyleColor, StyleColor, f32),
     /// The room inside a frame.
     inset: f32,
+    /// The stepper buttons column's track fill and divider.
+    track: StyleColor,
+    divider: StyleColor,
 }
 
 /// The sizes the gallery's faces measure.
@@ -527,8 +533,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         let colors = &cx.tokens.color;
         GalleryStyle {
             metrics: Metrics::new().gap(cx.tokens.space.gap.inline),
-            frame: (cx.color(colors.surface.raised), cx.color(colors.line.control_edge), cx.tokens.shape.radius.control),
+            frame: (cx.color(colors.surface.sunken), cx.color(colors.line.control_edge), cx.tokens.shape.radius.control),
             inset: cx.tokens.space.gap.inline,
+            track: cx.color(colors.surface.panel),
+            divider: cx.color(colors.line.divider),
         }
     }
 
@@ -566,6 +574,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         let buttons = self.buttons(level);
         let rect = rect.shrink2(Vec2::new(self.inset(cx.style), 0.0));
         let (column, rest) = Flow::new(rect, cx.flow.is_rtl()).take_end(if buttons { sizes.button.x } else { 0.0 });
+        self.column = if buttons { column } else { Rect::NOTHING };
         self.laid.clear();
         for at in 0..shown {
             let cell = rest.span(at as f32 * (sizes.tile.x + sizes.gap), sizes.tile.x);
@@ -701,6 +710,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         }
         if !self.buttons(level) {
             return;
+        }
+        if self.framed && self.column.is_positive() {
+            let draw = ui.draw();
+            let radius = cx.style.frame.2.round().clamp(0.0, 255.0) as u8;
+            let track_shape = PaintShape::Rect(self.column, CornerRadius::same(radius));
+            draw.fill(&track_shape, cx.style.track);
+            draw.stroke(&track_shape, craft_ui::primitives::StrokeWidth::Thin, cx.style.divider);
+            let height = self.column.height() / 3.0;
+            let y1 = self.column.min.y + height;
+            let y2 = self.column.min.y + 2.0 * height;
+            draw.rule(craft_ui::style::RuleKind::Divider, egui::pos2(self.column.left(), y1), egui::pos2(self.column.right(), y1));
+            draw.rule(craft_ui::style::RuleKind::Divider, egui::pos2(self.column.left(), y2), egui::pos2(self.column.right(), y2));
         }
         ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0));
         ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last));
