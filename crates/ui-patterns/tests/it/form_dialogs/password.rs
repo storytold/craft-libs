@@ -134,3 +134,27 @@ fn the_lock_icon_stands_by_the_title_not_the_message() {
     assert!(title.is_positive() && message.is_positive(), "both texts are painted: {title:?} {message:?}");
     assert!(title.left() > message.left() + 8.0, "the title starts after the lock: {title:?} vs the message {message:?}");
 }
+
+/// The lock before the title is in the accent colour, as production's is.
+#[trial]
+fn the_title_lock_is_drawn_in_the_accent_colour() {
+    let mut fixture = Fixture::new(|ui| {
+        let _ = PasswordDialog::new(PasswordPurpose::open("poster.pdf")).show(ui);
+    });
+    fixture.idle(30);
+    let title = fixture.texts().iter().find(|run| run.text.starts_with("Password required")).map(|run| run.rect).expect("the title");
+    let colours: Vec<egui::Color32> = fixture
+        .frame_shapes()
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) if mesh.calc_bounds().max.x <= title.left() + 1.0 && (mesh.calc_bounds().center().y - title.center().y).abs() < 8.0 => {
+                mesh.vertices.first().map(|v| v.color)
+            }
+            _ => None,
+        })
+        .collect();
+    let accent = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).color.accent.text;
+    assert!(!colours.is_empty(), "the lock is drawn before the title");
+    let accent = egui::Color32::from_rgb(accent.0[0], accent.0[1], accent.0[2]);
+    assert!(colours.contains(&accent), "the lock is {colours:?}, not the accent {accent:?}");
+}

@@ -144,7 +144,7 @@ pub struct FooterHost<'s, 'a> {
 pub fn header(ui: &mut Ui, cx: &mut BodyCx<'_>, actions: &[HeaderAction], note: Option<&Label>, icon: Option<&craft_behavior::IconId>) {
     let mut row = TitleRow::new(cx.label()).strength(HeaderStrength::Heading).level(TITLE_LEVEL);
     if let Some(icon) = icon {
-        row = row.icon(IconSpec::svg(icon.clone()).ink(Ink::Accent));
+        row = row.icon(IconSpec::svg(icon.clone())).icon_ink(Ink::Accent);
     }
     if let Some(note) = note {
         row = row.note(note.clone());

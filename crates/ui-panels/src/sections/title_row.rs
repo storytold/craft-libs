@@ -186,6 +186,10 @@ pub struct TitleRow<'a> {
     /// An icon before the title, painted in the style's icon colour unless the spec names another.
     #[prop]
     icon: Option<IconSpec<'a>>,
+    /// The ink of that icon: the accent for a dialog's lock or warning mark.
+    #[style_key]
+    #[prop]
+    icon_ink: Ink,
     /// Whether the row takes the whole width offered, so its actions sit at the end edge; off, it is as wide as its
     /// parts.
     #[prop]
@@ -231,6 +235,7 @@ impl<'a> TitleRow<'a> {
             note: None,
             subtitle: None,
             icon: None,
+            icon_ink: Ink::OnPanel,
             fill: true,
             lead_name: None,
             handle: false,
@@ -341,7 +346,7 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
         };
         let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
-        let (ink, disabled) = (cx.ink(Ink::OnPanel), cx.color(text.disabled));
+        let (ink, disabled) = (cx.ink(key.icon_ink), cx.color(text.disabled));
         TitleRowStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, height)).gap(cx.control().gap),
             text: TextLook::new(role, Stateful::new(shade).off(States::new(shade, shade, shade, disabled))),
