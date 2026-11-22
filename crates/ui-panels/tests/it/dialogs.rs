@@ -430,3 +430,30 @@ fn the_unsaved_question_can_ask_as_a_document_app_does() {
     assert!(at("Don't Save") < at("Cancel") && at("Cancel") < at("Save"), "Don't Save, Cancel, Save");
     assert!(fixture.texts().iter().any(|run| run.text.contains("before closing?")), "the app's title is shown");
 }
+
+/// A row that fills the dialog's width and spreads its children (a count at the start, a Remove button at the end)
+/// puts them apart, the last at the row's end edge, not on top of each other.
+#[trial]
+fn a_space_between_row_in_a_dialog_keeps_its_children_apart_at_both_edges() {
+    use craft_ui::buttons::Button;
+    use craft_ui::display::Text;
+    use craft_ui::layout::RowAlign;
+    use craft_ui::layout_components::Row;
+    let mut fixture = Fixture::new(|ui| {
+        let mut open = true;
+        Dialog::new("Hidden").opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+                Text::new("3 hidden items").show(ui);
+                Button::new("Remove").show(ui);
+            });
+            Text::new("A longer paragraph of text that makes the dialog about as wide as production's does.").show(ui);
+        });
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let remove = fixture.by_label("Remove").expect("the button is shown").rect;
+    let count = fixture.texts().iter().find(|run| run.text.contains("3 hidden")).map(|run| run.rect).expect("the count is painted");
+    assert!(count.max.x < remove.min.x, "the children do not overlap: {count:?} {remove:?}");
+    let dialog = fixture.by_role(craft_ui::contract::Role::DIALOG).first().map(|d| d.rect).expect("the dialog is shown");
+    assert!(dialog.max.x - remove.max.x < 40.0, "Remove sits at the row's end edge: {remove:?} in {dialog:?}");
+}
