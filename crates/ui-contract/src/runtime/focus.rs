@@ -784,9 +784,8 @@ pub(crate) enum FocusOrigin {
     /// A scope shown for the first time moved focus to its initial stop (a dialog's first field): a request too, so
     /// it counts as an arrival by key, and a text part selects its whole text so typing replaces it.
     Open,
-    /// The focused stop went away and handed focus to its neighbour: neither the keyboard nor a request chose it, so
-    /// it is no arrival by key (a deleted guide selects no other guide) and no scroll owner reveals it (a closed canvas
-    /// text editor does not pan the canvas to the stop before it).
+    /// The focused child of a collection row went away and handed focus back to its row: neither the keyboard nor a
+    /// request chose it, so it is no arrival by key and no scroll owner reveals it.
     Removal,
 }
 

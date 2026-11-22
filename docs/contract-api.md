@@ -716,7 +716,7 @@ The fit rules: which tabs, bar items or titles stay in a strip and which go to a
 
 ## `craft_behavior::focus`
 
-Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, focus after removal, the Escape order and the
+Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, the Escape order and the focus-on-press kinds. The runtime's
 
 - `craft_behavior::focus::CancelRule`: `pub enum CancelRule { Close, ClearThenClose, Ignore }`. What Escape does in a scope that has no more specific taker.
 - `craft_behavior::focus::EscapeFacts`: `pub struct EscapeFacts { pub press_captured: bool, pub component_undoable: bool, pub in_row_child: bool, pub scope_clearable: bool }`. The facts the Escape order reads.
@@ -731,7 +731,6 @@ Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, focus after removal, the E
 - `craft_behavior::focus::PressFocus`: `pub enum PressFocus { Take, Keep, Release, Unclaimed }`. How a primary press moves key focus (8.3).
   - `pub const fn commits_draft(self) -> bool`. Whether a focused text part with a draft commits it in the press pass.
 - `craft_behavior::focus::ScopeKind`: `pub enum ScopeKind { Window, Pane, Dialog, Popup, Menu, Group }`. What a focus scope is.
-- `craft_behavior::focus::after_removal`: `pub fn after_removal<'a, T: PartialEq>(last_order: &'a [T], focused: &T, registered: impl Fn(&T) -> bool) -> Option<&'a T>`. The stop that takes focus when `focused` is no longer registered: the one after it in last pass's order
 - `craft_behavior::focus::classify_press`: `pub fn classify_press(winner: Option<Sense>) -> PressFocus`. The kind of a press from the sense of the shape that wins it, `None` when no shape senses it. A shape that
 - `craft_behavior::focus::escape_step`: `pub fn escape_step(facts: EscapeFacts, rule: CancelRule) -> EscapeStep`. The order of Escape for the top egui layer that is not exiting: a captured press, the focused component,
 - `craft_behavior::focus::key_owner`: `pub fn key_owner(blocked: bool, present: &[OwnerClass]) -> KeyOwner`. Key ownership, in the order blocked, `Menu`, `Recorder`, `Dialog`, `Text`, `Popup` and `PassivePopup`,

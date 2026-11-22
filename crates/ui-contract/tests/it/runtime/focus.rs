@@ -12,12 +12,11 @@ use std::cell::{Cell, RefCell};
 const ORIGIN: Pos2 = Pos2::new(10.0, 10.0);
 const VIEW: Vec2 = Vec2::new(200.0, 100.0);
 
-/// The focused stop goes away and hands the focus to the next stop in its scope, far below a scrolling body's view:
-/// the stop takes the focus and the body stays where it is. A neighbour that inherits the focus was not shown by
-/// anyone, so nothing reveals it (#15555: the rulers' corner panned the canvas when a closed text editor handed it the
-/// focus).
+/// The focused stop goes away while the next stop in its scope lies far below a scrolling body's view: the focus goes
+/// nowhere and the body stays where it is (#15555: the rulers' corner panned the canvas when a closed text editor
+/// handed it the focus).
 #[trial]
-fn a_stop_that_inherits_the_focus_from_a_removed_one_is_not_revealed() {
+fn a_removed_stop_hands_its_focus_to_no_neighbour_and_the_body_stays() {
     let (first, next) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
     let shown = Cell::new(true);
     let top = Cell::new(0.0f32);
@@ -42,7 +41,7 @@ fn a_stop_that_inherits_the_focus_from_a_removed_one_is_not_revealed() {
     let start = top.get();
     shown.set(false);
     frames.idle(6, &mut show);
-    let next_id = next.borrow().id.expect("the next stop ran");
-    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), Some(next_id), "the next stop inherits the focus");
+    assert!(next.borrow().id.is_some(), "the next stop ran");
+    assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), None, "no neighbour inherits the focus");
     assert!((top.get() - start).abs() < 0.5, "the body keeps its offset: content top {} from {start}", top.get());
 }

@@ -263,7 +263,7 @@ Grouped by gallery level, then shape, then name.
 | `craft_behavior::eviction` | When a component's remembered state is due for eviction |
 | `craft_behavior::fit` | The fit rules: which tabs, bar items or titles stay in a strip and which go to an overflow menu |
 | `craft_behavior::flow` | `Insets`, `Flow` and `Axis`: start and end geometry resolved once for the layout direction |
-| `craft_behavior::focus` | Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, focus after removal, the Escape order and the focus-on-press kinds |
+| `craft_behavior::focus` | Pure focus rules (spec 9.3, 9.4, 8.3): key ownership, the Escape order and the focus-on-press kinds |
 | `craft_behavior::grid` | The `Grid` cursor: columns resolved from last pass's measurements, and the cell each child takes |
 | `craft_behavior::hit` | Hit shapes, their priority and the arena's resolve rule (8.3) |
 | `craft_behavior::input` | What a component takes from the user, which decides its default key use |
