@@ -4,11 +4,12 @@
 use craft_behavior::geometry::{CropBox, SnapKind, SnapOptions, SnapTarget};
 use craft_behavior::kurbo;
 use craft_behavior::{Axis, CancelReason, CanvasView};
-use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
+use craft_pages::layout::{Fit, LayoutOptions, PageDisplay, PagedLayout};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{
     PagePreview, PageRegion, PageSnap, PageSource, PageView, PageViewState, PageViewWords, PlacedPage, ReadingNav, ReadingState, ReadingView,
 };
+use craft_theme::ComponentSet;
 use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Role, Show as _};
 
@@ -954,4 +955,118 @@ fn go_to_a_point_inside_a_page_puts_it_at_the_top() {
     let (first, offset, _, at) = gone_to(5, 0.5, false);
     assert_eq!(first, Some(5), "the first page in view is the one gone to");
     assert!((offset - at).abs() < 0.01, "the view's top {offset} is the point gone to, {at}");
+}
+
+/// Lays out three pages under `set` with `start`, returning the layout and the scope's `space.gap.section` token.
+fn layout_in_set(set: ComponentSet, options: LayoutOptions, start: PageViewState, bodies: Option<&'static [(f64, f64)]>) -> (PagedLayout, f32) {
+    let state = Rc::new(RefCell::new(start));
+    let seen: Rc<RefCell<(PagedLayout, f32)>> = Rc::default();
+    let (kept, recorded) = (Rc::clone(&state), Rc::clone(&seen));
+    let pages = DemoPages::new(3);
+    let mut fixture = Fixture::new(move |ui| {
+        let section_gap = Env::of(ui).tokens.space.gap.section;
+        let mut now = kept.borrow().clone();
+        let mut view = PageView::new("Pages", &pages, &mut now, PAPER).options(options);
+        if let Some(bodies) = bodies {
+            view = view.bodies(bodies);
+        }
+        let out = view.show(ui, |_, _| ());
+        *recorded.borrow_mut() = (out.layout, section_gap);
+        *kept.borrow_mut() = now;
+    });
+    fixture.set(set);
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    seen.borrow().clone()
+}
+
+/// The productivity component set gives pages a wider inter-page gap, no tool-rail side gutter under Fit Width (without
+/// overflowing the viewport), and wider Hide White Space padding than the creative set, while leaving `space.gap.section`
+/// untouched for other components.
+#[trial]
+fn the_component_set_picks_the_page_spacing_without_changing_section_gap() {
+    let fixed = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+        s.display = PageDisplay::Columns;
+    });
+    let (creative, creative_section) = layout_in_set(ComponentSet::Creative, LayoutOptions::WORD, fixed.clone(), None);
+    let (productivity, productivity_section) = layout_in_set(ComponentSet::Productivity, LayoutOptions::WORD, fixed, None);
+    let creative_gap = creative.rects[1].y0 - creative.rects[0].y1;
+    let productivity_gap = productivity.rects[1].y0 - productivity.rects[0].y1;
+    assert_eq!(productivity_section, creative_section, "space.gap.section is unchanged by the component set");
+    assert!(productivity_gap > creative_gap, "productivity inter-page gap ({productivity_gap}) is wider than creative ({creative_gap})");
+    assert!(
+        productivity.rects[0].y0 > creative.rects[0].y0,
+        "productivity top margin ({}) is wider than creative ({})",
+        productivity.rects[0].y0,
+        creative.rects[0].y0
+    );
+
+    let fit_width = state_with(|s| {
+        s.fit = Fit::Width;
+        s.display = PageDisplay::Columns;
+    });
+    let (creative_fit, _) = layout_in_set(ComponentSet::Creative, LayoutOptions::WORD, fit_width.clone(), None);
+    let (productivity_fit, _) = layout_in_set(ComponentSet::Productivity, LayoutOptions::WORD, fit_width, None);
+    assert!(
+        productivity_fit.rects[0].width() > creative_fit.rects[0].width(),
+        "productivity Fit Width fills more of the viewport ({}) than creative with its rail gutter ({})",
+        productivity_fit.rects[0].width(),
+        creative_fit.rects[0].width()
+    );
+    assert!(
+        productivity_fit.size.width <= 900.0 + 0.5,
+        "productivity Fit Width stays within the viewport width without horizontal overflow: {}",
+        productivity_fit.size.width
+    );
+
+    const BODIES: [(f64, f64); 3] = [(72.0, 720.0); 3];
+    let hidden = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+        s.display = PageDisplay::Single;
+        s.hide_white_space = true;
+    });
+    let (creative_hidden, _) = layout_in_set(ComponentSet::Creative, LayoutOptions::ACROBAT, hidden.clone(), Some(&BODIES));
+    let (productivity_hidden, _) = layout_in_set(ComponentSet::Productivity, LayoutOptions::ACROBAT, hidden, Some(&BODIES));
+    assert!(
+        productivity_hidden.bands[1].0 < creative_hidden.bands[1].0 && productivity_hidden.bands[1].1 > creative_hidden.bands[1].1,
+        "productivity Hide White Space keeps more pad around the text body: {:?} vs {:?}",
+        productivity_hidden.bands[1],
+        creative_hidden.bands[1]
+    );
+}
+
+/// Switching the component set updates the page view's inter-page spacing on the frame of the change and settles.
+#[trial]
+fn a_component_set_change_updates_the_page_view_spacing() {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+        s.display = PageDisplay::Columns;
+    })));
+    let gap = Rc::new(Cell::new(0.0_f64));
+    let (kept, seen) = (Rc::clone(&state), Rc::clone(&gap));
+    let pages = DemoPages::new(3);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::WORD).show(ui, |_, _| ());
+        seen.set(out.layout.rects[1].y0 - out.layout.rects[0].y1);
+        *kept.borrow_mut() = now;
+    });
+    fixture.set(ComponentSet::Creative);
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let creative_gap = gap.get();
+
+    fixture.set(ComponentSet::Productivity);
+    fixture.frame(Vec::new());
+    let productivity_gap = gap.get();
+    assert!(
+        productivity_gap > creative_gap,
+        "switching to productivity widens the page gap on the frame of the change: {productivity_gap} vs {creative_gap}"
+    );
+    fixture.idle(1);
+    assert_eq!(gap.get(), productivity_gap, "an idle frame after the switch keeps the new gap");
 }
