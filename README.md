@@ -374,7 +374,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
   copies of a valid input, and fails the test with the case that panicked or did not finish. Its
   `skip` module prints a `SKIPPED:` line when a test lacks a program, a corpus or the craft-fonts
-  faces, or fails the test when the variable the caller names is exactly `1`. Not published.
+  faces, or fails the test when the variable the caller names is `1`. Any other value of that
+  variable except empty or `0` fails the test as a configuration error. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

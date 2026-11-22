@@ -221,11 +221,17 @@ Changes from `craft-media-testkit`'s `hammer`:
 The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
 (a program, a corpus file, the craft-fonts faces) skips or fails under one rule:
 
-- When the variable the caller names is exactly `1`, the absence fails the test. No skip line is
-  printed.
-- Otherwise, including when the variable is unset, empty, `0`, `true`, ` 1` or `1` followed by a
-  line feed, the helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test
-  returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`.
+The variable is read only when something is missing.
+
+| Value | Result |
+|---|---|
+| Not set, empty or `0` | The helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`. |
+| `1` | The test fails. No skip line is printed. |
+| Any other value, such as `true`, `yes`, ` 1` or `1` followed by a line feed | The test fails with the reason and the variable's name and value. No skip line is printed. |
+| Not Unicode | The test fails with the reason and the variable's name. No skip line is printed. |
+
+`skip::required(var)` returns the same decision without failing the test: `Ok(false)`, `Ok(true)`,
+or a `RequiredError` that names the variable.
 
 The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
 `CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
@@ -345,3 +351,8 @@ cases change, and keep the test names.
 | GridCraft | `craft_fonts_cover`, which reads GridCraft's embedded face table | Not started |
 | craft-libs `craft-media-testkit` | `skip` and `skip_with`, which accept `1`, `true`, `yes` and `on` | Not started |
 | craft-libs `pdf` tests | `or_skip!` in `crates/pdf/tests/cos/oracle.rs`, which reads any value of `CRAFT_PDF_ORACLES_REQUIRED` | Not started |
+
+After an adoption, an app that reads any value as required skips on an empty value or `0`, and
+fails as a configuration error on every other value except `1`. An app that accepts `true`, `yes`
+and `on` fails on those values as a configuration error.
+Each adoption says which values change and keeps the variable name.
