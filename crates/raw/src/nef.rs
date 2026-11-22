@@ -270,7 +270,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Mode::Header => h.min(MASK_ROWS),
     };
     let mut data = if info.compression == t::compression::NIKON {
-        compressed(bytes, &info, mn.as_ref(), rows, limits)?
+        // a High Efficiency strip decodes to RGGB: a tag that names another pattern is not the measured layout
+        let rggb =
+            !matches!((raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)), (Some([2, 2]), Some(p)) if p != [0, 1, 1, 2]);
+        compressed(bytes, &info, mn.as_ref(), rows, rggb, limits)?
     } else {
         uncompressed(bytes, &info, tiff.order, mn.as_ref(), rows, limits)?
     };
@@ -544,7 +547,7 @@ fn unpack_packed(src: &[u8], w: usize, h: usize, bits: u32, layout: PackedLayout
 
 /// Nikon Huffman-compressed strip (see [`crate::nefc`]); the decode table is maker note `0x0096`. Without a table the
 /// strip may be packed uncompressed data (see [`PackedLayout`]).
-fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize, limits: &Limits) -> Result<RawData> {
+fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>, rows: usize, rggb: bool, limits: &Limits) -> Result<RawData> {
     let starts_with = |magic: &[u8]| {
         let start = info.chunks(bytes.len() as u64).first().and_then(|c| usize::try_from(c.offset).ok());
         start.and_then(|o| bytes.get(o..o.checked_add(magic.len())?)) == Some(magic)
@@ -553,7 +556,11 @@ fn compressed(bytes: &[u8], info: &ImageInfo, mn: Option<&makernote::MakerNote>,
     // a 0x0096 table
     let mode = nef_compression(mn);
     if starts_with(&JPEG_XS_START) || matches!(mode, Some(13 | 14)) {
-        let black = mn.and_then(|m| m.ifd.f64s(BLACK_LEVEL)).filter(|v| !v.is_empty()).map_or(0.0, |v| v.iter().sum::<f64>() / v.len() as f64);
+        // the black level the image reports (the same rule as in `decode`), or the samples and it would disagree
+        let black = match mn.and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
+            Some(v @ [_, _, _, _]) if rggb && v.iter().all(|x| *x < 16384.0) => v.iter().sum::<f64>() / 4.0,
+            _ => return Err(RawError::Unsupported(HIGH_EFFICIENCY.into())),
+        };
         let src = strip_bytes(bytes, info)?;
         return Ok(RawData::U16(crate::nef_he::decode(src, info.width as usize, info.height as usize, rows, black, limits)?));
     }

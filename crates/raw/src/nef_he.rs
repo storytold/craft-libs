@@ -411,6 +411,10 @@ pub(crate) fn decode(src: &[u8], width: usize, height: usize, rows: usize, black
             return Err(unsupported("band coding modes differ from the measured ones"));
         }
         let pr = Precinct { q: i32::from(head[3]), r: i32::from(head[4]), first_in_slice };
+        let end = p + 12 + len;
+        if end > src.len() {
+            return Err(corrupt("truncated precinct"));
+        }
         let mut o = p + 12;
         for (k, line) in lines.iter_mut().enumerate() {
             let (mut sub, next) = Subpackets::read(src, o, sig_lens.get(k).copied().unwrap_or(0))?;
@@ -418,14 +422,18 @@ pub(crate) fn decode(src: &[u8], width: usize, height: usize, rows: usize, black
             coder.packet(k, &mut sub, &pr, out)?;
             o = next;
         }
-        if o > p + 12 + len {
+        if o > end {
             return Err(corrupt("packets overrun their precinct"));
         }
         first_in_slice = false;
-        p += 12 + len;
+        p = end;
         index += 1;
     }
+    if needed == precincts && src.get(p..p + 2) != Some(&[0xff, 0x11][..]) {
+        return Err(corrupt("no end of codestream after the last precinct"));
+    }
     let planes = components(&coder.packets, &lines, cw, needed);
+    drop(lines);
     Ok(mosaic(&planes, cw, rows.min(height), black))
 }
 
