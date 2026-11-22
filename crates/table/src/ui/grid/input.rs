@@ -393,7 +393,7 @@ impl CellGrid<'_> {
                             edits.push(GridEdit::BeginEdit { typed });
                         }
                     }
-                    (Mode::Ready, _) | (_, EditorInput::Newline | EditorInput::Tab | EditorInput::Cancel) => {}
+                    (Mode::Ready, _) | (_, EditorInput::Newline { .. } | EditorInput::Tab | EditorInput::Cancel) => {}
                     (_, EditorInput::Move(..)) if state.pointing() => {}
                     (_, input) => {
                         state.point = None;

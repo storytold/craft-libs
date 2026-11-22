@@ -544,7 +544,7 @@ impl Component for TextEditor<'_> {
                 }
                 EditorInput::ImeCommit => ending = edits.session.preedit.take(),
                 EditorInput::Text(text) => edits.done.changed |= edits.insert_typed(&text),
-                EditorInput::Newline if edits.session.preedit.is_none() => edits.done.changed |= edits.insert_text("\n", EditKind::Typed),
+                EditorInput::Newline { .. } if edits.session.preedit.is_none() => edits.done.changed |= edits.insert_text("\n", EditKind::Typed),
                 EditorInput::Tab => edits.done.changed |= edits.insert_text("\t", EditKind::Typed),
                 EditorInput::Move(step, mods) => edits.motion(step, mods),
                 EditorInput::Delete { forward, by, .. } => edits.done.changed |= edits.delete(forward, by),

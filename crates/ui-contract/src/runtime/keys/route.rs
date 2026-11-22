@@ -1,7 +1,7 @@
 //! The begin hook's routing: key presses, shortcuts and AccessKit requests to the intents of their owners.
 
 use super::input::chrome_toggle_of;
-use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Taken, current, with};
+use super::{Batch, EscapePress, Item, MenuKey, Node, Nudge, Press, Routed, Shortcuts, Source, Taken, current, with};
 use crate::runtime::commands::{self, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
@@ -75,7 +75,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 let route = press_route(ctx, os, rec, press, driven.or(field_list));
                 apply_press(ctx, rec, press, route, &mut routed, &mut activated)
             };
-            stamp(&mut routed, press.place);
+            stamp(&mut routed, Source { place: press.place, shift: press.mods.shift });
         }
         // The focused stop reads its typing from egui's input when it is a text field (its egui text widget) or an app's
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
@@ -100,7 +100,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             for (to, intent) in route {
                 push(&mut routed, Some(to), intent, false);
             }
-            stamp(&mut routed, typed.place);
+            stamp(&mut routed, Source { place: typed.place, shift: false });
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
@@ -213,14 +213,14 @@ fn remap_mods(mods: &[(usize, Mods)], kept: &[bool]) -> Vec<(usize, Mods)> {
 }
 
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
-    routed.entry(target).or_default().items.push(Item { intent, horizontal, place: None });
+    routed.entry(target).or_default().items.push(Item { intent, horizontal, source: None });
 }
 
-/// Gives the intents routed so far without a place the place `place` of the press or text they came from: routing
-/// stamps each event's intents right after it pushed them, so only that event's are without one.
-fn stamp(routed: &mut HashMap<Option<Id>, Routed>, place: usize) {
+/// Gives the intents routed so far without a source the press or text `source` they came from: routing stamps each
+/// event's intents right after it pushed them, so only that event's are without one.
+fn stamp(routed: &mut HashMap<Option<Id>, Routed>, source: Source) {
     for item in routed.values_mut().flat_map(|routed| routed.items.iter_mut()) {
-        item.place.get_or_insert(place);
+        item.source.get_or_insert(source);
     }
 }
 

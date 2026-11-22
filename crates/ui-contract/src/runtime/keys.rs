@@ -219,9 +219,17 @@ struct Item {
     intent: Intent,
     /// A physical left or right arrow: under right-to-left text it reads as the opposite logical move.
     horizontal: bool,
-    /// The place among the frame's events of the press or text it came from ([`Batch::place`]); `None` for an intent
-    /// of no one event.
-    place: Option<usize>,
+    /// The press or text it came from; `None` for an intent of no one event.
+    source: Option<Source>,
+}
+
+/// The press or text an intent came from.
+#[derive(Clone, Copy, Debug)]
+struct Source {
+    /// Its place among the frame's events ([`Batch::place`]).
+    place: usize,
+    /// Shift was held at the press; never for a text.
+    shift: bool,
 }
 
 #[derive(Clone, Default)]

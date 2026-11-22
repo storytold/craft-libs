@@ -335,6 +335,24 @@ impl Rig {
     }
 }
 
+/// Shift+Enter reaches an editor as a newline with Shift held, told from a plain Enter in the same frame, in the order
+/// they were pressed: an editor gives Shift+Enter its own meaning (a line break within the paragraph). Guards against
+/// the press's Shift being lost between the press and the editor input.
+#[trial]
+fn shift_enter_reaches_an_editor_as_a_newline_with_shift_in_order() {
+    let mut rig = Rig::new();
+    rig.focus();
+    rig.frame(vec![key_press(Key::Enter, Modifiers::SHIFT), key_press(Key::Enter, Modifiers::NONE), key_press(Key::Enter, Modifiers::SHIFT)]);
+    let inputs = rig.take();
+    assert!(
+        matches!(
+            inputs.as_slice(),
+            [EditorInput::Newline { shift: true, .. }, EditorInput::Newline { shift: false, .. }, EditorInput::Newline { shift: true, .. }]
+        ),
+        "each Enter keeps its own Shift, in order: {inputs:?}"
+    );
+}
+
 /// Text, Backspace, Tab and Enter reach an editor as one input stream in the order they were typed; a read-only
 /// editor still receives moves but none of the inputs that change text.
 #[trial]
@@ -347,7 +365,7 @@ fn editor_input_reaches_an_editor_part_and_read_only_filtering_drops_edits() {
     rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
     let inputs = rig.take();
     assert!(
-        matches!(inputs.as_slice(), [EditorInput::Text(text), EditorInput::Delete { forward: false, .. }, EditorInput::Tab, EditorInput::Newline] if &**text == "x"),
+        matches!(inputs.as_slice(), [EditorInput::Text(text), EditorInput::Delete { forward: false, .. }, EditorInput::Tab, EditorInput::Newline { shift: false, .. }] if &**text == "x"),
         "the inputs arrive in the pass they are typed, in order: {inputs:?}"
     );
 
@@ -647,7 +665,7 @@ fn keys_that_end_a_composition_do_not_reach_the_editor_while_it_composes() {
     assert!(inputs.is_empty(), "the Enter that confirmed the commit, a frame late, is no newline: {inputs:?}");
     rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
     let inputs = rig.take();
-    assert!(matches!(inputs.as_slice(), [EditorInput::Newline]), "after the guard frame Enter is a newline: {inputs:?}");
+    assert!(matches!(inputs.as_slice(), [EditorInput::Newline { .. }]), "after the guard frame Enter is a newline: {inputs:?}");
 
     rig.frame(vec![preedit("x")]);
     assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "a new composition starts");
