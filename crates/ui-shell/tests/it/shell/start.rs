@@ -454,3 +454,27 @@ fn a_start_screen_takes_the_shape_and_width_of_its_card_pictures() {
     assert!(page.y > page.x, "a 3:4 card is taller than wide: {page:?}");
     assert!(page.x < default.x * 0.7, "a card at zoom 1 does not grow to fill the row: {page:?}");
 }
+
+/// In a room wide enough, the links stand in the rail beside the page, above the recent cards rather than after them.
+/// The page's least width was measured with `fill_width`, which reports the whole room, so the rail never fit.
+#[trial]
+fn the_links_stand_in_the_rail_beside_the_page() {
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let links = vec![StartLink::url("Docs", None, "https://example.test/docs")];
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).links(&links).show(ui);
+    });
+    fixture.room(egui::Vec2::new(1000.0, 700.0));
+    fixture.settle();
+    let docs = fixture.by_label("Docs").expect("the link shows").center();
+    let card = fixture.by_label("Poster.psd").expect("the card shows").center();
+    assert!(docs.x < card.x && docs.y < card.y, "the link is in the rail beside the page: link {docs:?}, card {card:?}");
+
+    // Too narrow for a card beside the rail: the links follow the sections.
+    fixture.room(egui::Vec2::new(360.0, 700.0));
+    fixture.settle();
+    let docs = fixture.by_label("Docs").expect("the link shows").center();
+    let card = fixture.by_label("Poster.psd").expect("the card shows").center();
+    assert!(docs.y > card.y, "the link follows the sections: link {docs:?}, card {card:?}");
+}

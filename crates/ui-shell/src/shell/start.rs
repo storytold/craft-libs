@@ -49,6 +49,9 @@ pub(super) const HOME_RECENT_PICTURE_ASPECT: f32 = 3.0 / 2.0;
 
 /// The number of recent files shown until `max_recent` says otherwise.
 const RECENT_SHOWN: usize = 12;
+/// The least room the page keeps beside the rail: about a recent card and the page's padding. A narrower page lists
+/// the links after the sections.
+const PAGE_LEAST: f32 = 320.0;
 
 const HOME_BREAKPOINT: f32 = 640.0;
 const HOME_RAIL_WIDTH: f32 = 170.0;
@@ -545,9 +548,23 @@ impl StartScreen<'_> {
         // The rail stands beside the sections when the room holds the rail, the gap and the sections' least width; a
         // narrower page keeps New and Open in its row and lists the links after the sections.
         let rail = !links.is_empty() && {
-            let rail_width = rail_stack().measure_in(ui, Proposal::Ideal, |ui, _| rail_body(ui)).x;
-            let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true, None)).x;
-            ui.available_width() >= rail_width + env.tokens.space.gap.section + sections_least
+            // Measured without the divider, which takes the room it is given (the whole room under `Ideal`) and spans
+            // the rail's width once shown.
+            let rail_width = rail_stack()
+                .measure_in(ui, Proposal::Ideal, |ui, _| {
+                    new_and_open(&page, ui, Sizing::Content);
+                    link_items(ui, links, false);
+                })
+                .x;
+            // The page is measured in the room the rail leaves it: content that fills the room (the section rule, the
+            // page's `fill_width`) takes that room, and only content that needs more turns the rail down. Measured at
+            // `Min`, filling content reports the whole room and the rail never stands beside the page.
+            let room = ui.available_width() - rail_width - env.tokens.space.gap.section;
+            room >= PAGE_LEAST && {
+                let measured =
+                    page_stack().measure_in(ui, Proposal::Size(Vec2::new(room, ui.available_height())), |ui, cx| page_body(ui, cx, true, None));
+                measured.x <= room + 0.5
+            }
         };
 
         // The page senses its own surface for the empty-room double click (`BodyCx::surface_double_pressed`). A pass reads
