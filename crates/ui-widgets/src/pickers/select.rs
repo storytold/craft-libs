@@ -308,7 +308,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         access.numeric(numeric.step(1.0));
     }
 
-    /// The listbox: one option row per entry, a spacer for a separator, the picked entry's row selected. Each row the
+    /// The listbox: one option row per entry, a separator row for a separator, the picked entry's row selected. Each row the
     /// keys move the lead to is proposed, and with a preview each row the pointer moves it to; a pick comes back from
     /// the list as Enter or a click on a row and commits.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {

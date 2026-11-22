@@ -70,27 +70,29 @@ pub enum PresetItemCommands {
 const LARGE_FROM: f64 = 1.5;
 const SMALL_UNTIL: f64 = 0.75;
 
-/// The key of a row of the browser's collections: a preset or group of the app's rows, or the action row at an index of
-/// `PresetBrowser::actions`. The browser maps it back to the app's key at every edge it reports through.
+/// The key of a row of the browser's collections: a preset or group of the app's rows, the action row at an index of
+/// `PresetBrowser::actions`, or the line between the presets and the actions. The browser maps it back to the app's key
+/// at every edge it reports through.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum BrowserKey<K> {
     Preset(K),
     Action(usize),
+    Separator,
 }
 
 impl<K> BrowserKey<K> {
     fn preset(&self) -> Option<&K> {
         match self {
             BrowserKey::Preset(key) => Some(key),
-            BrowserKey::Action(_) => None,
+            BrowserKey::Action(_) | BrowserKey::Separator => None,
         }
     }
 
-    /// The app's key of a preset or group row, `None` for an action row.
+    /// The app's key of a preset or group row, `None` for an action row or the separator.
     fn into_preset(self) -> Option<K> {
         match self {
             BrowserKey::Preset(key) => Some(key),
-            BrowserKey::Action(_) => None,
+            BrowserKey::Action(_) | BrowserKey::Separator => None,
         }
     }
 }
@@ -178,8 +180,8 @@ struct RowMap<'a, K> {
 }
 
 impl<K: Clone + Eq> RowMap<'_, K> {
-    /// The host's place of a place in the browser's collection; `None` where no drop lands: on a group or an action
-    /// row, or past the presets.
+    /// The host's place of a place in the browser's collection; `None` where no drop lands: on a group, an action row
+    /// or the separator, or past the presets.
     fn host(&self, at: &DropAt<BrowserKey<K>>) -> Option<DropAt<K>> {
         match at {
             DropAt::Onto(BrowserKey::Preset(key)) => {
@@ -187,7 +189,7 @@ impl<K: Clone + Eq> RowMap<'_, K> {
             }
             DropAt::Gap { key, insert, .. } if *insert <= self.displayed.len() => {
                 let over = match key {
-                    Some(BrowserKey::Action(_)) => return None,
+                    Some(BrowserKey::Action(_) | BrowserKey::Separator) => return None,
                     Some(BrowserKey::Preset(key)) => Some(key.clone()),
                     None => None,
                 };
@@ -450,19 +452,32 @@ struct Shown<'a, K> {
 }
 
 impl<K> Shown<'_, K> {
-    /// The preset row at position `at`, `None` for an action row.
+    /// The preset row at position `at`, `None` for the separator or an action row.
     fn row(&self, at: usize) -> Option<&PresetRow<K>> {
         self.at.get(at).map(|&row| &self.rows[row])
+    }
+
+    /// Whether a line sets the action rows off from the presets: both are shown.
+    fn separated(&self) -> bool {
+        self.actions > 0 && !self.at.is_empty()
     }
 }
 
 impl<K: Clone> DisplayOrder<BrowserKey<K>> for Shown<'_, K> {
     fn len(&self) -> usize {
-        self.at.len() + self.actions
+        self.at.len() + usize::from(self.separated()) + self.actions
     }
 
     fn key(&self, at: usize) -> BrowserKey<K> {
-        self.row(at).map_or_else(|| BrowserKey::Action(at - self.at.len()), |row| BrowserKey::Preset(row.key.clone()))
+        match self.row(at) {
+            Some(row) => BrowserKey::Preset(row.key.clone()),
+            None if self.separated() && at == self.at.len() => BrowserKey::Separator,
+            None => BrowserKey::Action(at - self.at.len() - usize::from(self.separated())),
+        }
+    }
+
+    fn is_section(&self, at: usize) -> bool {
+        self.separated() && at == self.at.len()
     }
 
     fn depth(&self, at: usize) -> usize {
@@ -976,7 +991,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
     let accepts = |drag: &ListDrag<BrowserKey<K>>, over: Option<&BrowserKey<K>>, insert: usize| {
         let (Some(rules), Some(drag)) = (reorder, app_drag(drag)) else { return false };
         match over {
-            Some(BrowserKey::Action(_)) => false,
+            Some(BrowserKey::Action(_) | BrowserKey::Separator) => false,
             over => rules.allows(source, rows, &drag, over.and_then(BrowserKey::preset), insert),
         }
     };
@@ -1107,20 +1122,17 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
             list = list.max_rows(rows);
         }
         let aspect = cell_shape.aspect();
-        // The last preset row draws the divider above the action rows.
-        let ruled = |at: usize| !actions.is_empty() && at + 1 == shown.len();
-        let out = list.show_items(ui, &source_rows, &mut |_, icx| {
+        let out = list.show_items(ui, &source_rows, &mut |key, icx| {
             let Some(&at) = source_rows.at.get(icx.at) else {
-                return ListRow::new(actions[icx.at - shown.len()].clone());
+                return match key {
+                    BrowserKey::Action(action) => ListRow::new(actions[*action].clone()),
+                    _ => ListRow::separator(),
+                };
             };
             let row = &rows[at];
             if row.is_group() {
-                let mut line = ListRow::new(row.label.clone())
-                    .heading()
-                    .depth(row.depth)
-                    .group(icx.row.open)
-                    .icon(IconSpec::svg(folder(icx.row.open)))
-                    .rule(ruled(icx.at));
+                let mut line =
+                    ListRow::new(row.label.clone()).heading().depth(row.depth).group(icx.row.open).icon(IconSpec::svg(folder(icx.row.open)));
                 if let Some(detail) = counted(at) {
                     line = line.detail(detail);
                 }
@@ -1130,7 +1142,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
                 let key = row.key.clone();
                 icx.tip(move |ui| tip(ui, &key));
             }
-            let mut line = ListRow::new(row.label.clone()).depth(row.depth).rule(ruled(icx.at));
+            let mut line = ListRow::new(row.label.clone()).depth(row.depth);
             if let Some(caption) = &row.caption {
                 line = line.detail(caption.clone());
             }
@@ -1238,6 +1250,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
                         action(&mut events, at);
                     }
                 }
+                Seen::Select(BrowserKey::Separator) | Seen::Activate(BrowserKey::Separator) => {}
                 Seen::Open(change) => {
                     if !ruled_heads && let BrowserKey::Preset(key) = change.key {
                         events.push(PresetEvent::Open(OpenChange { key, open: change.open, all: change.all }));

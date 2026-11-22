@@ -348,3 +348,32 @@ fn hovering_a_row_moves_the_lead_and_leaves_the_selected_option_held() {
     fixture.settle();
     assert_eq!(value(&mut fixture), 3, "the lead followed the pointer, so Enter chooses the row under it");
 }
+
+/// One to Four with a separator between Two and Three.
+fn separated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::separator(), Entry::new(3u8, "Three"), Entry::new(4u8, "Four")];
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
+}
+
+/// A separator draws a rule between the rows around it, lower than a row, and the keys pass over it (FW-319: it drew
+/// blank room).
+#[trial]
+fn a_separator_in_the_list_draws_a_rule_and_the_keys_pass_over_it() {
+    let mut fixture = Fixture::story(&Story::new("select_separated", separated));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.settle();
+    let two = fixture.by_label("Two").expect("the Two row").rect;
+    let three = fixture.by_label("Three").expect("the Three row").rect;
+    let gap = three.top() - two.bottom();
+    assert!(gap > 0.0 && gap < two.height(), "the separator is lower than a row: {gap} between rows {} high", two.height());
+    let rule = fixture.shape_bounds().iter().any(|shape| {
+        shape.top() >= two.bottom() - 0.5 && shape.bottom() <= three.top() + 0.5 && shape.width() > two.width() / 2.0 && shape.height() < gap
+    });
+    assert!(rule, "a rule across the list between Two and Three");
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.key(Key::ArrowDown, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(value(&mut fixture), 3, "Down from Two lands on Three");
+}

@@ -34,8 +34,8 @@ use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, Stateful, Style
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::scroll::ScrollSpan;
-use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase, Sense};
-use egui::{CornerRadius, Rect, Response, Vec2, pos2, vec2};
+use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase, PressStart, Sense};
+use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 use std::ops::{Deref, Range};
 
 const HORIZONTAL: PartKey = PartKey::new("horizontal");
@@ -68,6 +68,7 @@ pub struct ScrollbarsStyle {
     metrics: Metrics,
     look: ScrollBarLook,
     document: Option<DocumentLook>,
+    margin: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,17 +161,31 @@ impl Bar {
 #[derive(Clone, Debug, Default, PartialEq)]
 struct HeldThumb {
     horizontal: bool,
+    /// The press this extent belongs to: where and when it went down.
+    origin: Pos2,
+    time: f64,
     content: Range<f64>,
     visible: Range<f64>,
 }
 
 impl HeldThumb {
-    fn of(axis: Axis, span: &ScrollSpan) -> Self {
-        HeldThumb { horizontal: axis == Axis::X, content: span.content.clone(), visible: span.visible.clone() }
+    fn of(axis: Axis, press: PressStart, span: &ScrollSpan) -> Self {
+        HeldThumb {
+            horizontal: axis == Axis::X,
+            origin: press.origin,
+            time: press.time,
+            content: span.content.clone(),
+            visible: span.visible.clone(),
+        }
     }
 
     fn on(&self, axis: Axis) -> bool {
         self.horizontal == (axis == Axis::X)
+    }
+
+    /// The extent of `press` on `axis`'s thumb.
+    fn of_press(&self, axis: Axis, press: &PressStart) -> bool {
+        self.on(axis) && self.origin == press.origin && self.time == press.time
     }
 }
 
@@ -257,9 +272,12 @@ impl Bars {
         held: Option<&HeldThumb>,
     ) -> Bars {
         let document_chrome = style.document.is_some();
+        let margin = style.margin;
         let mut width = style.look.thickness;
         if document_chrome {
             width = width.min(rect.width().max(0.0)).min(rect.height().max(0.0));
+        } else {
+            width = width.min((rect.width() - 2.0 * margin).max(0.0)).min((rect.height() - 2.0 * margin).max(0.0));
         }
         let x = Span::of(
             doc.width(),
@@ -270,9 +288,15 @@ impl Bars {
         )
         .filter(|_| horizontal);
         let y = Span::of(doc.height(), view.center.y - doc.y0, f64::from(view.rect.height()), view.zoom, KEPT_IN_VIEW);
-        let right = if y.is_some() { rect.right() - width } else { rect.right() };
-        let bottom = if x.is_some() { rect.bottom() - width } else { rect.bottom() };
-        let corner = (document_chrome && x.is_some() && y.is_some()).then(|| Rect::from_min_max(pos2(right, bottom), rect.max));
+        let v_left = rect.right() - margin - width;
+        let v_right = rect.right() - margin;
+        let v_top = rect.top() + margin;
+        let v_bottom = if x.is_some() { rect.bottom() - 2.0 * margin - width } else { rect.bottom() - margin };
+        let h_left = rect.left() + margin;
+        let h_right = if y.is_some() { rect.right() - 2.0 * margin - width } else { rect.right() - margin };
+        let h_top = rect.bottom() - margin - width;
+        let h_bottom = rect.bottom() - margin;
+        let corner = (document_chrome && x.is_some() && y.is_some()).then(|| Rect::from_min_max(pos2(v_left, h_top), rect.max));
         let bar = |span: Option<Span>, axis, rect| {
             span.map(|span| {
                 let mut scroll = span.scroll(overscroll);
@@ -283,8 +307,8 @@ impl Bars {
             })
         };
         Bars {
-            horizontal: bar(x, Axis::X, Rect::from_min_max(pos2(rect.left(), bottom), pos2(right, rect.bottom()))),
-            vertical: bar(y, Axis::Y, Rect::from_min_max(pos2(right, rect.top()), pos2(rect.right(), bottom))),
+            horizontal: bar(x, Axis::X, Rect::from_min_max(pos2(h_left, h_top), pos2(h_right, h_bottom))),
+            vertical: bar(y, Axis::Y, Rect::from_min_max(pos2(v_left, v_top), pos2(v_right, v_bottom))),
             corner,
         }
     }
@@ -437,17 +461,18 @@ impl Component for CanvasScrollbars<'_> {
 
     fn style(cx: &StyleCx<'_>, key: CanvasScrollbarsStyleKey) -> ScrollbarsStyle {
         let mut look = cx.scroll_bar_of(ScrollBarKind::Docked);
+        look.thickness = cx.tokens.size.icon.md;
+        let margin = if key.document_chrome { 0.0 } else { cx.tokens.space.gap.tight };
         let document = key.document_chrome.then(|| {
             let color = &cx.tokens.color;
-            look.thickness = cx.tokens.size.icon.md;
             look.track = Stateful::new(cx.color(color.surface.sunken));
             DocumentLook { corner: cx.color(color.surface.panel), arrow: cx.quiet_ink() }
         });
-        ScrollbarsStyle { metrics: Metrics::new(), look, document }
+        ScrollbarsStyle { metrics: Metrics::new(), look, document, margin }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        Vec2::splat(cx.style.look.thickness)
+        Vec2::splat(cx.style.look.thickness + cx.style.margin)
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, CanvasView>> {
@@ -496,8 +521,9 @@ impl Component for CanvasScrollbars<'_> {
             tip.close(cx);
         }
         let Some(view) = cx.value().copied() else { return };
-        let held = cx.press_slot::<HeldThumb>().clone();
+        let mut held = cx.press_slot::<HeldThumb>().clone();
         let bars = self.bars(&view, cx.rect, cx.style, held.as_ref());
+        let mut ended = false;
         let rtl = cx.flow.is_rtl();
         let min_thumb = cx.style.look.min_thumb;
         for (key, axis, bar) in bars.each() {
@@ -515,11 +541,27 @@ impl Component for CanvasScrollbars<'_> {
                 }
             }
             let phase = cx.part(thumb_of(key)).press.phase;
+            // The press keeps the extent the thumb was pressed at for its drag. It is taken in the first pass that sees
+            // the press, which need not be its `Down` (a pass that runs again, a press that starts a drag in its first
+            // pass), and only from the view: an extent kept from another press never stands for this one.
+            if let Some(start) = phase.start().filter(|_| !matches!(phase, PressPhase::Release { .. } | PressPhase::Cancel { .. }))
+                && !held.as_ref().is_some_and(|held| held.of_press(axis, &start))
+            {
+                let fresh = Bars::of(&view, self.document, self.overscroll, !self.vertical_only, cx.rect, cx.style, None);
+                let span = if axis == Axis::X { fresh.horizontal } else { fresh.vertical }.map_or_else(|| bar.span.clone(), |bar| bar.span);
+                let taken = HeldThumb::of(axis, start, &span);
+                *cx.press_slot::<HeldThumb>() = Some(taken.clone());
+                held = Some(taken);
+            }
             match phase {
-                // The press keeps the extent the thumb was pressed at for its drag.
-                PressPhase::Down { .. } => *cx.press_slot::<HeldThumb>() = Some(HeldThumb::of(axis, &bar.span)),
                 PressPhase::DragStart { .. } => cx.begin(),
-                PressPhase::Release { click: false, .. } => cx.commit(),
+                PressPhase::Release { click, .. } => {
+                    if !click {
+                        cx.commit();
+                    }
+                    ended = true;
+                }
+                PressPhase::Cancel { .. } => ended = true,
                 _ => {}
             }
             let range = match phase {
@@ -547,6 +589,12 @@ impl Component for CanvasScrollbars<'_> {
             } else if next != view {
                 cx.set(next);
             }
+        }
+        if ended {
+            // The pressed extent lasts as long as its press: the press slot is kept until it is cleared, and a stale
+            // extent would hold the bars' range after the drag (a later zoom, pan or Overscroll change).
+            *cx.press_slot::<HeldThumb>() = None;
+            held = None;
         }
         self.held = held;
     }

@@ -37,7 +37,7 @@ impl ListRow<'_> {
                 }
                 TrailingItem::Hosted(hosted) => {
                     if let Some(item) = hosted.item.take() {
-                        let height = hosted.size.map_or(cx.style.sizes.row, |size| size.ideal.y.min(cx.style.sizes.row));
+                        let height = hosted.size.map_or(slot.height(), |size| size.ideal.y.min(slot.height()));
                         item.show(ui, field_key(at), Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
                     }
                 }

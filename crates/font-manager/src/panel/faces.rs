@@ -4,6 +4,7 @@
 use craft_i18n::{Direction, base_direction};
 use craft_ui::fonts::{FaceBytes, FontRef};
 use craft_ui::primitives::{ContentPainterCx, DocRun, DocText, FacesCx};
+use craft_theme::Srgba;
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect};
 
@@ -58,6 +59,15 @@ pub(crate) fn sample_text<'a>(runs: &'a [DocRun<'a>], room: Option<f32>) -> DocT
 
 /// `text` on one line in `font` at `points`, at the reading start of `rect` and centred between its top and bottom,
 /// clipped to `rect`. The sample keeps its own direction whatever the interface's.
+/// The ink of a sample over `rect`: black on a white paper it fills, in every theme, when `on_white`; else `ink`.
+pub(crate) fn sample_ink(painter: &ContentPainterCx<'_>, rect: Rect, on_white: bool, ink: Color32) -> DataColor {
+    if !on_white {
+        return DataColor::new(ink);
+    }
+    painter.painter.rect_filled(rect, 0.0, Color32::from(Srgba::WHITE));
+    DataColor::new(Color32::from(Srgba::BLACK))
+}
+
 pub(crate) fn paint_sample(painter: &ContentPainterCx<'_>, rect: Rect, font: &FontRef, text: &str, points: f32, color: DataColor) {
     let runs = [DocRun::new(text, font.clone(), points, color)];
     let layout = painter.layout(&sample_text(&runs, Some(rect.width())));

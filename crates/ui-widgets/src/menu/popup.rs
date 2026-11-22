@@ -5,9 +5,9 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use super::words::MenuWords;
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, Popup};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue,
-    Outcome, Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, TooltipSpec,
-    Trigger,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InBar, InMenu, LeastWidth, Mount,
+    NoValue, Outcome, Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing,
+    TooltipSpec, Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label, with_env};
@@ -522,8 +522,8 @@ impl CompanionLayer {
             .body_scroll(false)
             .focus(FocusPolicy::NONE)
             .dismiss(Dismiss::new().outside(Outside::Keep))
-            .place(Place::anchored(Anchor::Parent, Side::Above, Align::Center));
-        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::None).sizing(Sizing::Content);
+            .place(Place::anchored(Anchor::Parent, Side::Above, Align::Start));
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::Control).sizing(Sizing::Content);
         CompanionLayer { common: Common::new(), props, open: Bind::given(true) }.label(label).id_salt("menu-companion")
     }
 }
@@ -541,6 +541,10 @@ impl Component for CompanionLayer {
 
     fn sense(&self) -> Sense {
         Sense::empty()
+    }
+
+    fn content_env(&self, _: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
+        values.set(InBar(true));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CompanionOutput {

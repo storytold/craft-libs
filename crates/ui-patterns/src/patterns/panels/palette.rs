@@ -53,13 +53,14 @@ struct Session {
     stamp: u64,
 }
 
-/// The key of a row of the list: the suggested heading, a command by its position in the app's entries, or the
-/// fallback row.
+/// The key of a row of the list: the suggested heading, a command by its position in the app's entries, the line that
+/// sets the fallback row off from the commands, or the fallback row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Line {
     #[default]
     Heading,
     Entry(usize),
+    Separator,
     Fallback,
 }
 
@@ -405,7 +406,7 @@ fn show_rows(ui: &mut Ui, input: &RowsInput<'_>, state: &mut Session, env: &crat
             match key {
                 Line::Entry(at) => chosen.picked = input.entries.get(at).map(|entry| entry.command().clone()),
                 Line::Fallback => chosen.fallback = Some(found.clone()),
-                Line::Heading => {}
+                Line::Heading | Line::Separator => {}
             }
         }
     }
@@ -552,6 +553,9 @@ fn layout(input: &RowsInput<'_>, query: &str, suggested: Option<&[CommandRef]>, 
     let (keys, total) = listing(input, query, active);
     let mut keys: Vec<Line> = keys.into_iter().map(Line::Entry).collect();
     if input.fallback.is_some() {
+        if !keys.is_empty() {
+            keys.push(Line::Separator);
+        }
         keys.push(Line::Fallback);
     }
     Listing { keys, total }
@@ -580,14 +584,14 @@ struct RowData {
     hint: Option<Arc<str>>,
     /// The row heads the rows after it.
     heading: bool,
-    /// A rule under the row sets it off from the fallback row that follows.
-    rule: bool,
+    /// The row is the line between the commands and the fallback row.
+    separator: bool,
 }
 
 impl RowData {
-    /// A row of `label` alone: the heading or the fallback row.
-    fn plain(label: &str, heading: bool) -> RowData {
-        RowData { label: label.to_owned(), path: None, chord: None, enabled: true, icon: None, hint: None, heading, rule: false }
+    /// A row of `label` alone: the heading, the separator or the fallback row.
+    fn plain(label: &str, heading: bool, separator: bool) -> RowData {
+        RowData { label: label.to_owned(), path: None, chord: None, enabled: true, icon: None, hint: None, heading, separator }
     }
 
     /// One line: the icon, the label, then the home or menu path, which drops out when the label would get too
@@ -596,7 +600,10 @@ impl RowData {
         if self.heading {
             return ListRow::new(self.label.clone()).heading();
         }
-        let row = ListRow::new(self.label.clone()).option().command_row().enabled(self.enabled).rule(self.rule);
+        if self.separator {
+            return ListRow::separator();
+        }
+        let row = ListRow::new(self.label.clone()).option().command_row().enabled(self.enabled);
         let row = match &self.icon {
             Some(icon) => row.icon(icon.clone()),
             None => row,
@@ -632,10 +639,10 @@ fn row_data(
     let (os, layout) = (env.shell().os, env.keyboard_layout());
     let separator = env.words::<CommonWords>().path_separator.as_str().to_owned();
     keys.iter()
-        .enumerate()
-        .map(|(index, key)| match key {
-            Line::Heading => RowData::plain(heading, true),
-            Line::Fallback => RowData::plain(fallback, false),
+        .map(|key| match key {
+            Line::Heading => RowData::plain(heading, true, false),
+            Line::Separator => RowData::plain("", false, true),
+            Line::Fallback => RowData::plain(fallback, false, false),
             Line::Entry(at) => {
                 let entry = &entries[*at];
                 let resolved = commands::resolve_beneath(ctx, entry.command().clone());
@@ -651,7 +658,7 @@ fn row_data(
                     icon: entry.icon().cloned().or_else(|| command_icon(&resolved)),
                     hint: resolved.hint.clone(),
                     heading: false,
-                    rule: keys.get(index + 1) == Some(&Line::Fallback),
+                    separator: false,
                 }
             }
         })
@@ -674,7 +681,7 @@ impl DisplayOrder<Line> for Listed<'_> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        self.rows[at].heading
+        self.rows[at].heading || self.rows[at].separator
     }
 
     fn enabled(&self, at: usize) -> bool {
@@ -682,7 +689,7 @@ impl DisplayOrder<Line> for Listed<'_> {
     }
 
     fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
-        (!self.rows[at].heading).then(|| std::borrow::Cow::Borrowed(self.rows[at].label.as_str()))
+        (!self.is_section(at)).then(|| std::borrow::Cow::Borrowed(self.rows[at].label.as_str()))
     }
 }
 

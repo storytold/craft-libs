@@ -160,6 +160,8 @@ impl<K> Outcome for BrushSectionListOutput<K> {
 enum Slot<K> {
     /// The "Brushes" link row.
     Link,
+    /// The line between the link row and the sections (a separator row, so keys and clicks skip it).
+    Rule,
     /// Empty room (a spacer row, so keys and clicks skip it) as tall as its gap, counted from 0.
     Gap(u8),
     /// The section with this key.
@@ -175,7 +177,7 @@ struct Rows<'a, K> {
 }
 
 impl<'a, K: Clone + Eq> Rows<'a, K> {
-    /// The link row and a gap of `gap`, then the sections with a gap of `gap` after the first row and one of
+    /// The link row and a line under it, then the sections with a gap of `gap` after the first row and one of
     /// `switch_gap` before the first switch row.
     fn new(sections: &'a [BrushSection<K>], link_row: bool, gap: f32, switch_gap: f32) -> Self {
         let mut slots = Vec::new();
@@ -186,7 +188,7 @@ impl<'a, K: Clone + Eq> Rows<'a, K> {
         };
         if link_row {
             slots.push(Slot::Link);
-            room(&mut slots, gap);
+            slots.push(Slot::Rule);
         }
         let first_switch = sections.iter().position(|section| section.kind == BrushSectionKind::Switch);
         for (at, section) in sections.iter().enumerate() {
@@ -216,7 +218,7 @@ impl<K: Clone + Eq> DisplayOrder<Slot<K>> for Rows<'_, K> {
     }
 
     fn is_section(&self, at: usize) -> bool {
-        matches!(self.slots[at], Slot::Gap(_))
+        matches!(self.slots[at], Slot::Gap(_) | Slot::Rule)
     }
 
     fn text(&self, at: usize) -> Option<Cow<'_, str>> {
@@ -314,7 +316,8 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                 .sizing(Sizing::Content);
             let out = table.show_items(ui, &rows, &mut |key, icx| match key {
                 Slot::Gap(_) => ListRow::spacer(),
-                Slot::Link => ListRow::new(words.brushes.clone()).cells(icx.cells()).icon(IconSpec::svg(IconId::new("brush"))).rule(true),
+                Slot::Rule => ListRow::separator(),
+                Slot::Link => ListRow::new(words.brushes.clone()).cells(icx.cells()).icon(IconSpec::svg(IconId::new("brush"))),
                 Slot::Section(key) => {
                     let Some(section) = rows.section(key) else { return ListRow::spacer() };
                     let mut row =
@@ -396,7 +399,7 @@ impl<'a, K: Value + Eq + Hash> BrushSectionList<'a, K> {
                 }
                 CollectionEvent::Activate(slot) if !toggled.contains(&slot) => match slot {
                     Slot::Link => events.push(BrushSectionEvent::OpenLink),
-                    Slot::Gap(_) => {}
+                    Slot::Gap(_) | Slot::Rule => {}
                     Slot::Section(key) => {
                         let Some(section) = rows.section(&key) else { continue };
                         match section.kind {
