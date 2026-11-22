@@ -16,7 +16,7 @@ use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::testing::access::{NodeKey, name};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
-use egui::{Key, Modifiers, Vec2};
+use egui::{Key, Modifiers, Rect, Vec2};
 
 /// The room the dialog is shown in: tall enough for the longest effect page.
 const ROOM: Vec2 = Vec2::new(900.0, 1400.0);
@@ -159,6 +159,83 @@ fn page_rig(kind: EffectKind, params: Option<StyleParams>) -> (Fixture, Rc<RefCe
     let effects = vec![EffectInstance { id: EffectId(1), kind, on: true, params }];
     let draft = LayerStyleDraft::new(LayerStyle { effects, ..LayerStyle::default() });
     rig_of(host(draft, vec![spec]))
+}
+
+fn painted_labels(fixture: &Fixture, label: &str) -> Vec<Rect> {
+    let mut labels: Vec<_> = fixture
+        .texts()
+        .iter()
+        .filter(|run| run.text == label)
+        .map(|run| {
+            assert!(run.rect.is_positive() && !run.elided && run.clip.contains_rect(run.rect), "{label} is fully visible: {run:?}");
+            run.rect
+        })
+        .collect();
+    labels.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    labels
+}
+
+fn label_beside(box_rect: Rect, label: Rect) {
+    assert!(label.left() >= box_rect.right() - 0.5 && label.top() < box_rect.bottom() && label.bottom() > box_rect.top());
+}
+
+#[trial]
+fn blending_channels_paint_each_name_side_by_side_and_edit_the_bound_channel() {
+    for names in [&["R", "G", "B"][..], &["C", "M", "Y", "K"], &["L", "a", "b"]] {
+        let mut model = host(LayerStyleDraft::default(), vec![]);
+        model.channels = names.iter().map(|name| (*name).to_owned()).collect();
+        let (mut fixture, host) = rig_of(model);
+        let labels = painted_labels(&fixture, "Channels:");
+        let [heading] = labels.as_slice() else { panic!("expected one Channels label, got {labels:?}") };
+        let mut trailing = heading.right();
+        for name in names {
+            let boxes = named(&fixture, Role::CHECK_BOX, name);
+            let [checkbox] = boxes.as_slice() else { panic!("expected one checkbox for {name}") };
+            assert!(checkbox.rect.left() >= trailing - 0.5, "{name} follows the previous label");
+            assert!(checkbox.rect.top() < heading.bottom() && checkbox.rect.bottom() > heading.top(), "{name} is on the Channels row");
+            let labels = painted_labels(&fixture, name);
+            let [label] = labels.as_slice() else { panic!("expected one painted label for {name}, got {labels:?}") };
+            label_beside(checkbox.rect, *label);
+            trailing = label.right();
+        }
+
+        let second = one(&fixture, Role::CHECK_BOX, names[1]);
+        focus(&mut fixture, &second);
+        fixture.key(Key::Space, Modifiers::NONE);
+        fixture.idle(2);
+        let mut expected = vec![true; names.len()];
+        expected[1] = false;
+        assert_eq!(host.borrow().draft.style.blending.channels, expected);
+    }
+}
+
+#[trial]
+fn contour_pages_paint_each_anti_aliased_label_and_edit_its_own_setting() {
+    for (kind, keys) in [
+        (EffectKind::BevelEmboss, &["glossAntiAlias", "contourAntiAlias"][..]),
+        (EffectKind::InnerShadow, &["antiAlias"][..]),
+        (EffectKind::InnerGlow, &["antiAlias"][..]),
+        (EffectKind::Satin, &["antiAlias"][..]),
+        (EffectKind::OuterGlow, &["antiAlias"][..]),
+        (EffectKind::DropShadow, &["antiAlias"][..]),
+    ] {
+        let (mut fixture, host) = page_rig(kind, None);
+        let boxes = named(&fixture, Role::CHECK_BOX, "Anti-aliased");
+        let labels = painted_labels(&fixture, "Anti-aliased");
+        assert_eq!(boxes.len(), keys.len(), "{kind:?}: named checkboxes");
+        assert_eq!(labels.len(), keys.len(), "{kind:?}: painted labels");
+        for (checkbox, label) in boxes.iter().zip(labels) {
+            label_beside(checkbox.rect, label);
+        }
+        let defaults = EffectSpec::photoshop(kind).defaults;
+        for (index, key) in keys.iter().enumerate() {
+            let checkbox = &named(&fixture, Role::CHECK_BOX, "Anti-aliased")[index];
+            fixture.click(checkbox);
+            fixture.idle(2);
+            let on = host.borrow().draft.style.effect(EffectId(1)).and_then(|effect| effect.params.bool(key));
+            assert_eq!(on, defaults.bool(key).map(|value| !value), "{kind:?}: {key}");
+        }
+    }
 }
 
 /// A page shows the spec's defaults for keys the instance lacks without writing them; editing one field writes only

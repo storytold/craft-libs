@@ -7,7 +7,7 @@ pub(crate) mod stories;
 
 use craft_behavior::{EditEvents, Mixed};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, EditResponse, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, EditResponse, FieldLayout, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ThumbAspect;
 use craft_ui::patterns::presets::{PickerField, PresetEvent, PresetFns, PresetFooterEvent, PresetPicker, PresetRow, PresetSource, PresetState};
@@ -289,7 +289,8 @@ impl<'a> ContourField<'a> {
                     && let Some(Mixed::Same(Some(on))) = bind.reborrow().read(root)
                 {
                     let mut value = on;
-                    let check = Checkbox::new(Bind::bound(&mut value)).label(words.anti_aliased.clone()).show(ui);
+                    let after = SideLabel::new().layout(FieldLayout::After);
+                    let check = root.labelled(ui, "antiAlias", words.anti_aliased.clone(), after, Checkbox::new(Bind::bound(&mut value)));
                     anti_events = check.events.map(Some);
                     for event in &anti_events {
                         bind.reborrow().write(root, event);

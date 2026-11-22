@@ -4,9 +4,9 @@ use std::cell::RefCell;
 
 use craft_behavior::EditEvents;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
-use craft_ui::layout_components::Stack;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::runtime::env::{Env, Label};
@@ -136,10 +136,13 @@ pub(super) fn blending_page(ui: &mut Ui, input: &BlendingInput<'_>) -> BlendingO
                 let mut channels = b.channels.clone();
                 channels.resize(of, true);
                 Field::new(words.channels.clone()).show(ui, |ui, _| {
-                    for (index, name) in input.channel_names.iter().enumerate() {
-                        let edit = Checkbox::new(Bind::given(channels[index])).label(name.clone()).show(ui);
-                        push(style_edit(&edit, style, |v: &bool| StyleOp::Blending(BlendingOp::Channel { index, of, on: *v })));
-                    }
+                    Row::new().show(ui, |ui, cx| {
+                        for (index, name) in input.channel_names.iter().enumerate() {
+                            let after = SideLabel::new().layout(FieldLayout::After);
+                            let edit = cx.labelled(ui, index, Label::from(name.clone()), after, Checkbox::new(Bind::given(channels[index])));
+                            push(style_edit(&edit, style, |v: &bool| StyleOp::Blending(BlendingOp::Channel { index, of, on: *v })));
+                        }
+                    });
                 });
                 let knockouts = [
                     Entry::new(Knockout::None, words.knockout_none.clone()),
