@@ -3,7 +3,7 @@
 use super::{Destination, Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, FieldLayout, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
+use craft_ui::contract::{Bind, Entry, FieldLayout, Held, LabelScheme, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -29,6 +29,7 @@ craft_ui::words! {
         long_edge: "printPanel.longEdge" = "Long edge";
         short_edge: "printPanel.shortEdge" = "Short edge";
         grayscale: "printPanel.grayscale" = "Grayscale";
+        print_in_grayscale: "printPanel.printInGrayscale" = "Print in grayscale";
         print_settings: "printPanel.printSettings" = "Print Settings…";
         orientation: "printPanel.orientation" = "Orientation";
         portrait: "printPanel.portrait" = "Portrait";
@@ -124,6 +125,11 @@ pub struct PrintPanel<'a> {
     /// The layout sets two-sided printing: the Two-sided row is left out.
     #[prop]
     duplex_by_layout: bool,
+    /// A document dialog's compact rows, as production's: each caption stands at the row start with its control right
+    /// after it, Refresh is left out (the printers are found as the dialog opens) and Grayscale reads "Print in
+    /// grayscale".
+    #[prop]
+    inline: bool,
     /// The driver's paper in points, as the caller last took it.
     #[prop(quantity = "paper size the printer driver reports, in points")]
     page: Option<egui::Vec2>,
@@ -143,6 +149,7 @@ impl<'a> PrintPanel<'a> {
             driver: DriverControls::None,
             destinations: Destinations::Printers,
             duplex_by_layout: false,
+            inline: false,
             page: None,
             page_error: None,
         }
@@ -150,7 +157,7 @@ impl<'a> PrintPanel<'a> {
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, page, page_error } = self;
+        let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, inline, page, page_error } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let mut queues: Vec<Entry<Destination>> = printers
@@ -177,7 +184,9 @@ impl<'a> PrintPanel<'a> {
         let mut printer_chosen = None;
         let mut settings_clicked = false;
         let mut turned = None;
-        let mut shown = FieldGroup::new(words.title.clone()).enabled(!busy).show(ui, |ui, cx| {
+        let group = FieldGroup::new(words.title.clone()).enabled(!busy);
+        let group = if inline { group.labels(LabelScheme::Inline) } else { group };
+        let mut shown = group.show(ui, |ui, cx| {
             let before = held.read(cx)?;
             let mut now = before.clone();
             Field::new(words.printer.clone()).id_salt("printer").show(ui, |ui, _| {
@@ -192,8 +201,10 @@ impl<'a> PrintPanel<'a> {
                         }
                         now.destination.clone_from(destination);
                     }
-                    let button = Button::new(words.refresh.clone()).enabled(!discovering).id_salt("refresh").show(ui);
-                    refresh |= clicked(&button);
+                    if !inline {
+                        let button = Button::new(words.refresh.clone()).enabled(!discovering).id_salt("refresh").show(ui);
+                        refresh |= clicked(&button);
+                    }
                     if driver == DriverControls::Properties {
                         let queue = matches!(&now.destination, Destination::Printer(name) if !name.is_empty());
                         let button = Button::new(words.properties.clone()).enabled(queue).id_salt("properties").show(ui);
@@ -220,7 +231,7 @@ impl<'a> PrintPanel<'a> {
                         now.collate = on;
                     }
                     let grayscale =
-                        cx.labelled(ui, "grayscale", words.grayscale.clone(), after, Checkbox::new(Bind::given(now.grayscale)).enabled(free));
+                        cx.labelled(ui, "grayscale", if inline { words.print_in_grayscale.clone() } else { words.grayscale.clone() }, after, Checkbox::new(Bind::given(now.grayscale)).enabled(free));
                     if let Some(on) = grayscale.value().copied() {
                         now.grayscale = on;
                     }

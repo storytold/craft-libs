@@ -142,6 +142,7 @@ pub struct ParamRows<'a> {
     preview_colors: &'a [(String, Srgba)],
     sliders: SliderFieldLayout,
     labels: Option<LabelScheme>,
+    heading: Option<Label>,
 }
 
 impl<'a> ParamRows<'a> {
@@ -158,7 +159,15 @@ impl<'a> ParamRows<'a> {
             preview_colors: &[],
             sliders: SliderFieldLayout::Inline,
             labels: None,
+            heading: None,
         }
+    }
+
+    /// The heading the rows stand under, when the host shows one. In a `LabelScheme::Inline` form a radio row of the
+    /// same name leaves its caption out, as production's Pages to Print options follow their heading.
+    pub fn heading(mut self, heading: impl Into<Label>) -> Self {
+        self.heading = Some(heading.into());
+        self
     }
 
     /// How the range rows arrange their slider and number field: `Inline` (the default) puts them on one line beside
@@ -211,7 +220,7 @@ impl<'a> ParamRows<'a> {
 
     /// Shows the rows across the width offered.
     pub fn show(self, ui: &mut Ui) -> ParamRowsOutput {
-        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, patterns, preview_colors, sliders, labels } = self;
+        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, patterns, preview_colors, sliders, labels, heading } = self;
         let env = Env::of(ui);
         let words = env.words::<ParamWords>();
         let units = env.units();
@@ -220,6 +229,7 @@ impl<'a> ParamRows<'a> {
         pass.previews = preview_colors;
         pass.sliders = sliders;
         pass.shaded = labels == Some(LabelScheme::Inline);
+        pass.heading = heading.map(|heading| plain(&heading).as_str().to_owned());
         let mut changed = false;
         let mut values = None;
         let mut edited = Vec::new();
@@ -315,6 +325,8 @@ struct Pass<'p> {
     sliders: SliderFieldLayout,
     /// The option groups are shaded: a card under each section's rows (`ParamRows::labels`).
     shaded: bool,
+    /// The heading the rows stand under (`ParamRows::heading`).
+    heading: Option<String>,
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -370,6 +382,7 @@ impl<'p> Pass<'p> {
             previews: &[],
             sliders: SliderFieldLayout::Inline,
             shaded: false,
+            heading: None,
         }
     }
 
@@ -435,6 +448,7 @@ impl<'p> Pass<'p> {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
+                let outer = self.heading.replace(plain(&head.label).as_str().to_owned());
                 if self.shaded {
                     // A document dialog's option group: a caption over its rows on a card.
                     Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
@@ -451,6 +465,7 @@ impl<'p> Pass<'p> {
                         }
                     });
                 }
+                self.heading = outer;
             }
             rest = after;
         }
@@ -785,7 +800,9 @@ impl<'p> Pass<'p> {
         // A document dialog sets the caption and its options on one line, as production's do.
         if inline {
             Row::new().wrap(true).show(ui, |ui, _| {
-                Text::new(line.name.clone()).show(ui);
+                if self.heading.as_deref() != Some(plain(&line.name).as_str()) {
+                    Text::new(line.name.clone()).show(ui);
+                }
                 body(ui);
             });
         } else {

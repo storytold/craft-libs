@@ -10,7 +10,7 @@ use craft_print::ui::{
 };
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog as _, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, PanePager, Param};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, PanePager, Param, ParamKind};
 use craft_ui::primitives::TextureCache;
 use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::testing::{Fixture, trial};
@@ -477,4 +477,43 @@ fn the_preview_tints_the_pages_of_a_grayscale_job() {
     assert_eq!(page_tint(Settings::default()), Color32::WHITE, "a colour job shows the pictures as they are");
     let tint = page_tint(Settings { grayscale: true, ..Settings::default() });
     assert!(tint.r() == tint.g() && tint.g() == tint.b() && tint.r() < 250 && tint.r() > 150, "a grayscale job tints the pictures grey: {tint:?}");
+}
+
+/// A document print dialog over a Pages to Print section holding a radio of the same name.
+fn document_dialog() -> Fixture {
+    let mut settings = Settings::default();
+    let mut fields = DialogFields::default();
+    let printers = vec![Printer::new("Office")];
+    let options = |names: [&'static str; 2]| names.into_iter().map(|name| (name.to_owned(), Label::from(name))).collect::<Vec<_>>();
+    let sections = vec![PrintSection::new(
+        "Pages to Print",
+        vec![Param::new("which", "Pages to Print", ParamKind::radio(options(["All pages", "Current page"]), Some("All pages".into())))],
+    )];
+    let mut fixture = Fixture::new(move |ui| {
+        let page = SheetPage::new([pos2(72.0, 72.0), pos2(300.0, 72.0), pos2(300.0, 400.0), pos2(72.0, 400.0)], "1");
+        let sheet = PrintSheet::pages(LETTER, vec![page], "Letter".into());
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet)
+            .layout(PrintLayout::Document)
+            .sections(&sections)
+            .ready(true)
+            .show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 900.0));
+    fixture.settle();
+    fixture
+}
+
+/// A document print dialog is compact, as production's: the printer rows head it with no "Printer Setup" heading and no
+/// Refresh button, a section's radio group does not repeat the section's heading, and its options stand on one line.
+#[trial]
+fn a_document_print_dialog_has_compact_inline_rows() {
+    let fixture = document_dialog();
+    let texts = fixture.texts();
+    let count = |text: &str| texts.iter().filter(|run| run.text == text).count();
+    assert_eq!(count("Printer Setup"), 0, "the printer rows carry no heading");
+    assert_eq!(fixture.by_label("Refresh").is_none(), true, "the printers are found as the dialog opens: no Refresh");
+    assert_eq!(count("Pages to Print"), 1, "the heading is shown once, not again as the radio's caption");
+    let all = texts.iter().find(|run| run.text == "All pages").expect("the first option is painted");
+    let current = texts.iter().find(|run| run.text == "Current page").expect("the second option is painted");
+    assert!((all.rect.center().y - current.rect.center().y).abs() < 2.0, "the options stand on one line: {:?} {:?}", all.rect, current.rect);
 }

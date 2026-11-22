@@ -7,6 +7,7 @@ use craft_behavior::{CursorIcon, EditEvent, EditEvents, Metrics, Mixed, PartKey,
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
+    LabelScheme,
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Role, Scroll, Show as _, ShowContainer as _, WordSetCx as _, clicked,
 };
@@ -23,7 +24,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::requests::HostAnswer;
-use craft_ui::sections::{DialogRole, FooterButton, Section};
+use craft_ui::sections::{DialogRole, FooterButton, HeaderStrength, Section};
 use craft_ui::style::{ComponentStyle, Corners, RuleKind, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use egui::load::SizedTexture;
 use egui::{Color32, Mesh, Pos2, Rect, Response, Shape, TextureId, Ui, Vec2, pos2, vec2};
@@ -244,18 +245,28 @@ pub struct PrintSection {
     folded: Option<bool>,
     /// The title-row buttons: the id a press files, the label and whether the button is enabled.
     buttons: Vec<(String, Label, bool)>,
+    /// The rows stand without the section's heading in a document dialog (`PrintLayout::Document`).
+    untitled: bool,
 }
 
 impl PrintSection {
     /// The section titled `title` with its `params` rows.
     pub fn new(title: impl Into<Label>, params: Vec<Param>) -> Self {
-        Self { title: title.into(), params, folded: None, buttons: Vec::new() }
+        Self { title: title.into(), params, folded: None, buttons: Vec::new(), untitled: false }
     }
 
     /// Collapses the section when `open` is false, through `Section::initially_open`.
     #[must_use]
     pub fn folded(mut self, open: bool) -> Self {
         self.folded = Some(open);
+        self
+    }
+
+    /// In a document dialog (`PrintLayout::Document`) the section's rows follow the ones above with no heading of their
+    /// own, as production's Paper rows follow Two-sided.
+    #[must_use]
+    pub fn untitled(mut self) -> Self {
+        self.untitled = true;
         self
     }
 
@@ -267,9 +278,19 @@ impl PrintSection {
     }
 
     /// Shows the section with its rows over `values`. Its rows' requests and a title button's press go into `requests`.
-    fn show(&self, ui: &mut Ui, at: usize, values: &mut DialogFields, requests: &mut HostRequests) {
+    fn show(&self, ui: &mut Ui, at: usize, inline: bool, values: &mut DialogFields, requests: &mut HostRequests) {
         // Declared before `section`, whose controls closure borrows it.
         let mut pressed = None;
+        // A document dialog's rows: the captions at the row start, the heading a small caption over them.
+        let rows = |ui: &mut Ui, values: &mut DialogFields, requests: &mut HostRequests| {
+            let rows = ParamRows::new(self.title.clone(), &self.params, Bind::bound(&mut *values)).heading(self.title.clone());
+            let mut rows = if inline { rows.labels(LabelScheme::Inline) } else { rows }.show(ui);
+            requests.absorb(&mut rows);
+        };
+        if inline && self.untitled && self.buttons.is_empty() {
+            rows(ui, values, requests);
+            return;
+        }
         let mut section = match self.folded {
             Some(open) => Section::new(self.title.clone()).initially_open(open),
             None => Section::fixed(self.title.clone()),
@@ -286,10 +307,10 @@ impl PrintSection {
                 }
             });
         }
-        section.id_salt(("section", at)).show(ui, |ui, _| {
-            let mut rows = ParamRows::new(self.title.clone(), &self.params, Bind::bound(&mut *values)).show(ui);
-            requests.absorb(&mut rows);
-        });
+        if inline {
+            section = section.strength(HeaderStrength::Caption);
+        }
+        section.id_salt(("section", at)).show(ui, |ui, _| rows(ui, values, requests));
         if let Some(id) = pressed {
             requests.request_action(id);
         }
@@ -851,22 +872,29 @@ impl<'a> PrintDialog<'a> {
             }
             // Printer Setup and the app's sections.
             let mut setup = |ui: &mut Ui, values: &mut DialogFields, requests: &mut HostRequests| {
-                Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| {
+                let mut printer = |ui: &mut Ui| {
                     let panel = PrintPanel::new(settings.reborrowed(), printers)
                         .discovering(discovering)
                         .busy(busy)
                         .driver(driver)
                         .destinations(destinations)
                         .duplex_by_layout(duplex_by_layout)
+                        .inline(document)
                         .show(ui);
                     refresh |= panel.refresh;
                     settings_clicked |= panel.settings_clicked;
                     if panel.printer_chosen.is_some() {
                         printer_chosen = panel.printer_chosen;
                     }
-                });
+                };
+                // A document dialog's printer rows head the dialog with no heading of their own, as production's.
+                if document {
+                    printer(ui);
+                } else {
+                    Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| printer(ui));
+                }
                 for (at, section) in sections.iter().enumerate() {
-                    section.show(ui, at, values, requests);
+                    section.show(ui, at, document, values, requests);
                 }
             };
             // The sheet preview, the pager under it in the `Document` layout, the readout and the notes.
