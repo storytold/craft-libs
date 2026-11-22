@@ -142,7 +142,12 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
-    /// The panel whose floating window takes over the held press this pass, and where the window holds the pointer.
+    /// The floating window holding the panel takes over the held primary press in this pass, with the pointer at the
+    /// grab point inside the window ([`FloatingGroup::continue_move`]): the window follows the pointer and docks where it
+    /// would dock on release. A request of the pass: a host that floats a panel from a rail's `torn_off` keeps it for
+    /// the one pass after, when the window shows. Without a held press, or when no window holds the panel, it does
+    /// nothing.
+    #[prop(quantity = "panel and grab point")]
     continue_move: Option<(P, Vec2)>,
 }
 
@@ -183,16 +188,6 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         config: DockConfig,
     ) -> Self {
         DockArea { locked: true, ..Self::new(label, Bind::given(Arc::clone(workspace)), specs, panels, config) }
-    }
-
-    /// The floating window holding `panel` takes over the held primary press in this pass, with the pointer at `grab`
-    /// inside the window ([`FloatingGroup::continue_move`]): the window follows the pointer and docks where it would
-    /// dock on release. A request of the pass: a host that floats a panel from a rail's `torn_off` keeps it for the one
-    /// pass after, when the window shows. Without a held press, or when no window holds `panel`, it does nothing.
-    #[must_use]
-    pub fn continue_move(mut self, panel: P, grab: Vec2) -> Self {
-        self.continue_move = Some((panel, grab));
-        self
     }
 }
 

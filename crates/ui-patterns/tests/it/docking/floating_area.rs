@@ -87,7 +87,7 @@ fn bed_with(layout: Layout<usize>, config: DockConfig) -> Bed {
         let mut panels = Panels;
         let mut area = DockArea::new("Floating dock", Bind::bound(&mut workspace), &specs, &mut panels, config.clone());
         if let Some((panel, grab)) = asked.take() {
-            area = area.continue_move(panel, grab);
+            area = area.continue_move((panel, grab));
         }
         let out = area.show(ui);
         *held.borrow_mut() = workspace;
