@@ -19,5 +19,15 @@ rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# The headless test and example light their scene with an environment made by craft-pbr.
+craft-pbr = { workspace = true }
 # The differential tests run a verbatim copy of the app's previous code, which uses rayon.
 rayon = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# The headless test lists the wasm32 example's imports and runs it.
+craft-wasm = { workspace = true }
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "portable-dispatch"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

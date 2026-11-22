@@ -118,6 +118,31 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   `wasm32-unknown-unknown`. Every output and error is the same either way, except the `needed`
   count of `TooMuchWork` when shadow maps pass the work limit, since each thread stops counting
   at its own point.
+- **wasm32.** `tests/headless.rs` renders a scene lit by an environment from `craft-pbr`, with
+  shadow maps, an alpha-masked card and a blended card, natively and as a wasm32 module under
+  Node.js. The shadow texels, the depth and the encoded image at 8 bits per channel hash to the
+  same constants on x86_64 Linux and in the module; other targets run only its coverage and
+  behavior checks. Natively, Rust's `acos`, `atan2`, `exp2`, `log2`, `powf`, `sin` and `cos` call
+  the platform's math library, and on wasm32 they call Rust's own, so the encoded `f32` colors
+  can differ by a few units in the last place. With
+  `wasm-bindgen-test-runner` of the `wasm-bindgen` version in `Cargo.lock` on the path:
+
+  ```sh
+  CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+    cargo test -p craft-raster3d --no-default-features --target wasm32-unknown-unknown --test headless
+  ```
+
+  The `headless_scene` example renders the same scene as a program. Built for wasm32 with the
+  serial build, it is a module with no imports that exports `main` and its memory. An ignored
+  test in `tests/headless.rs` checks its import list with `craft-wasm`, runs it in `wasmi`, and
+  requires both hashes to match and the memory to stay at or under 128 pages (8 MiB; the release
+  build grows to 118):
+
+  ```sh
+  cargo build -p craft-raster3d --no-default-features --release --target wasm32-unknown-unknown --example headless_scene
+  CRAFT_RASTER3D_HEADLESS_WASM=target/wasm32-unknown-unknown/release/examples/headless_scene.wasm \
+    cargo test -p craft-raster3d --test headless -- --ignored
+  ```
 
 ## Origin
 

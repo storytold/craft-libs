@@ -3156,8 +3156,12 @@ dependencies = [
 name = "craft-raster3d"
 version = "0.1.0"
 dependencies = [
+ "craft-pbr",
+ "craft-wasm",
  "rayon",
  "thiserror 2.0.21",
+ "wasm-bindgen-test",
+ "wasmi",
 ]
 
 [[package]]
