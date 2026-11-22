@@ -60,25 +60,7 @@ impl Traits {
 pub struct FamilyInfos {
     pub(super) families: HashMap<String, Info>,
     traits: Mutex<HashMap<String, Option<Traits>>>,
-    samples: Mutex<HashMap<(String, String, String), Samples>>,
-}
-
-/// The texts a row's thumbnails paint.
-#[derive(Clone, Default)]
-pub(super) struct Samples {
-    /// The Latin sample, the name or the face's first glyphs.
-    pub(super) latin: String,
-    /// The Arabic second sample, when the face draws it and the Latin sample.
-    pub(super) arabic: Option<String>,
-}
-
-/// The Arabic letters a face must map besides the Arabic sample: alef, lam, meem and ain.
-const ARABIC_CORE: &str = "\u{627}\u{644}\u{645}\u{639}";
-
-/// Whether a face gets the Arabic second sample: `drawn` (the face's character map) draws the Latin sample, the core
-/// Arabic letters and the Arabic sample.
-fn has_arabic_sample(drawn: &dyn Fn(&str) -> bool, latin: &str, arabic: &str) -> bool {
-    drawn(latin) && drawn(ARABIC_CORE) && drawn(arabic)
+    samples: Mutex<HashMap<(String, String), String>>,
 }
 
 impl FamilyInfos {
@@ -121,32 +103,30 @@ impl FamilyInfos {
         lock(&self.traits).get(family).and_then(|t| t.as_ref()).and_then(|t| t.class)
     }
 
-    /// What the row's samples say: `sample` when the family's face draws it, else its name, else the
-    /// first glyphs the face has (a symbol or non-Latin face); and `arabic` as a second sample when the face
-    /// draws that too. Both come from one read of the face's character map.
-    pub(super) fn sample_text(&self, catalog: &Catalog, family: &str, sample: &str, arabic: &str, shown: &str) -> Samples {
-        let key = (family.to_owned(), sample.to_owned(), arabic.to_owned());
+    /// What the row's sample says: `sample` when the family's face draws it, else its name, else the first glyphs the
+    /// face has (a symbol face, or a face without the sample's script).
+    pub(super) fn sample_text(&self, catalog: &Catalog, family: &str, sample: &str, shown: &str) -> String {
+        let key = (family.to_owned(), sample.to_owned());
         if let Some(text) = lock(&self.samples).get(&key) {
             return text.clone();
         }
-        let text = self.families.get(family).and_then(|info| draws(catalog, &info.regular, sample, arabic, shown)).unwrap_or_default();
+        let text = self.families.get(family).and_then(|info| draws(catalog, &info.regular, sample, shown)).unwrap_or_default();
         lock(&self.samples).insert(key, text.clone());
         text
     }
 }
 
-fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: &str) -> Option<Samples> {
+fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, shown: &str) -> Option<String> {
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
     let inked = inked(&font);
     let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some_and(&inked));
     if drawn(sample) {
-        let arabic = has_arabic_sample(&drawn, sample, arabic).then(|| arabic.to_owned());
-        return Some(Samples { latin: sample.to_owned(), arabic });
+        return Some(sample.to_owned());
     }
     if drawn(shown) {
-        return Some(Samples { latin: shown.to_owned(), arabic: None });
+        return Some(shown.to_owned());
     }
     let first = map
         .mappings()
@@ -155,7 +135,7 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
         .filter(|c| !c.is_whitespace() && !c.is_control())
         .take(6)
         .collect();
-    Some(Samples { latin: first, arabic: None })
+    Some(first)
 }
 
 /// Whether a glyph of `font` has an outline, which is all the sample painter draws: a TrueType glyph with contours, or
@@ -385,30 +365,4 @@ pub(super) fn list(
         rows.splice(0..0, recent);
     }
     (rows, comparable)
-}
-
-#[cfg(test)]
-pub(crate) mod tests {
-    use craft_ui::testing::trial;
-
-    use super::{ARABIC_CORE, has_arabic_sample};
-
-    const LATIN: &str = "AaBbCc";
-    /// "أبجد هوز".
-    const ARABIC: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
-
-    fn maps(chars: &str) -> impl Fn(&str) -> bool + '_ {
-        move |text| text.chars().filter(|c| !c.is_whitespace()).all(|c| chars.contains(c))
-    }
-
-    #[trial]
-    fn an_arabic_sample_needs_the_latin_sample_and_every_arabic_test_letter() {
-        let all = format!("{LATIN}{ARABIC_CORE}{ARABIC}");
-        assert!(has_arabic_sample(&maps(&all), LATIN, ARABIC));
-        assert!(!has_arabic_sample(&maps(LATIN), LATIN, ARABIC), "a Latin-only face");
-        for missing in LATIN.chars().chain(ARABIC_CORE.chars()).chain(ARABIC.chars().filter(|c| !c.is_whitespace())) {
-            let partial: String = all.chars().filter(|c| *c != missing).collect();
-            assert!(!has_arabic_sample(&maps(&partial), LATIN, ARABIC), "without U+{:04X}", missing as u32);
-        }
-    }
 }

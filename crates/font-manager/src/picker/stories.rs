@@ -60,7 +60,7 @@ fn styled_catalog() -> Arc<Catalog> {
     Arc::clone(CATALOG.get_or_init(|| with_inter(&[])))
 }
 
-/// The styled catalog with Noto Sans Arabic, which draws both samples, when the build has the craft fonts set.
+/// The styled catalog with Noto Sans Arabic, when the build has the craft fonts set.
 fn arabic_catalog() -> Arc<Catalog> {
     static CATALOG: OnceLock<Arc<Catalog>> = OnceLock::new();
     Arc::clone(CATALOG.get_or_init(|| with_inter(&STORY_FONTS.iter().map(|face| face.bytes).collect::<Vec<_>>())))
@@ -182,13 +182,17 @@ fn font_picker_banner_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
 }
 
-/// Large samples: a face with Arabic letters (Noto Sans Arabic, when the build has the craft fonts set) gets the second
-/// sample after the Latin one.
+/// An Arabic sample text, at Large: every row's sample shows it in the family's face, Noto Sans Arabic (when the build
+/// has the craft fonts set) draws it, and a face without Arabic letters shows its name.
 #[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
-fn font_picker_arabic_sample(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn font_picker_arabic_sample_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = FontPickerSettings { preview: crate::picker::FontPreviewSize::Large, ..FontPickerSettings::default() };
-    show_with(ui, data, demo("Inter", settings, FontFilters::default()), &arabic_catalog(), &Extras::default())
+    let extras = Extras { banner: Some(ARABIC_SAMPLE_TEXT), ..Extras::default() };
+    show_with(ui, data, demo("Inter", settings, FontFilters::default()), &arabic_catalog(), &extras)
 }
+
+/// "أبجد هوز", the first words of the abjad order.
+const ARABIC_SAMPLE_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
 
 /// Settings whose recents are the families `recent`.
 fn recents(recent: &[&str]) -> FontPickerSettings {
