@@ -120,6 +120,35 @@ fn document_bars_show_arrows_and_an_inset_thumb_for_a_fitting_image() {
     );
 }
 
+/// #2980: docked canvas scrollbars (without document chrome) provide comfortable thickness
+/// (`size.icon.md` / 16 pt) and a breathing margin along the viewport edge.
+#[trial]
+fn docked_canvas_scrollbars_provide_comfortable_thickness_and_edge_margin() {
+    let large = Size::new(4000.0, 3000.0);
+    let view = Rc::new(Cell::new(CanvasView::new(DOCUMENT_WINDOW, Point::new(2000.0, 1500.0), 1.0)));
+    let observed = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut next = observed.get();
+        let doc = DocRect::from_origin_size(Point::ZERO, large);
+        let _ = CanvasScrollbars::new("Scroll bars", Bind::bound(&mut next), doc).show_at(ui, DOCUMENT_WINDOW);
+        observed.set(next);
+    });
+    fixture.room(vec2(760.0, 560.0)).settle();
+
+    let horizontal = fixture.by_label("Horizontal scroll bar").expect("the horizontal bar").rect;
+    let vertical = fixture.by_label("Vertical scroll bar").expect("the vertical bar").rect;
+
+    // Comfortable desktop thickness (16 pt in standard compact density, matching size.icon.md):
+    assert!(vertical.width() >= 14.0, "vertical bar width should be comfortable (>= 14 pt): {vertical:?}");
+    assert!(horizontal.height() >= 14.0, "horizontal bar height should be comfortable (>= 14 pt): {horizontal:?}");
+
+    // Breathing room along viewport edge (not merging directly into window border):
+    assert!(vertical.right() < DOCUMENT_WINDOW.right(), "vertical bar has margin from right edge: {vertical:?} vs {DOCUMENT_WINDOW:?}");
+    assert!(vertical.right() >= DOCUMENT_WINDOW.right() - 4.0, "vertical bar margin is subtle: {vertical:?}");
+    assert!(horizontal.bottom() < DOCUMENT_WINDOW.bottom(), "horizontal bar has margin from bottom edge: {horizontal:?} vs {DOCUMENT_WINDOW:?}");
+    assert!(horizontal.bottom() >= DOCUMENT_WINDOW.bottom() - 4.0, "horizontal bar margin is subtle: {horizontal:?}");
+}
+
 /// #15529: a press is one small step, a held press repeats, and the rest of the track still pages.
 #[trial]
 fn a_document_scroll_arrow_steps_and_repeats_while_its_track_pages() {
