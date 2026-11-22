@@ -564,11 +564,11 @@ fn mosaic(planes: &[Vec<i32>], cw: usize, rows: usize, black: f64) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The measured headers (Z f HE) for a `width` × `height` sensor, then `body`.
-    fn codestream(width: u16, height: u16, body: &[u8]) -> Vec<u8> {
+    pub(crate) fn codestream(width: u16, height: u16, body: &[u8]) -> Vec<u8> {
         let mut s = vec![0xff, 0x10, 0xff, 0x50, 0x00, 0x22];
         s.extend(b"CONTACT_INTOPIX_");
         s.extend([0xef, 0xc0]);

@@ -1494,6 +1494,34 @@ mod tests {
         }
     }
 
+    /// A High Efficiency strip reaches its decoder only in the measured layout: 14-bit and RGGB, with the four
+    /// black levels the image reports. Anything else would give samples that disagree with the image's levels or
+    /// colours, so it keeps the preview.
+    #[test]
+    fn high_efficiency_decoder_takes_only_the_measured_layout() {
+        let strip = crate::nef_he::tests::codestream(256, 32, &[]);
+        let run = |bits: u16, black: Option<u16>, rggb: bool| {
+            let note = black.map(|b| {
+                let mut n = IfdBuilder::new();
+                n.set(BLACK_LEVEL, Value::Short(vec![b; 4]));
+                n
+            });
+            let bytes = nef_with_note(34713, bits, vec![strip.clone()], 256, 32, 32, note);
+            let tiff = Tiff::parse(&bytes).unwrap();
+            let info = raw_ifd(&tiff).unwrap().image().unwrap();
+            let mn = tiff
+                .exif()
+                .and_then(|e| e.get(t::MAKER_NOTE))
+                .and_then(|e| makernote::parse_makernote(&bytes, e.offset, e.count() as u64, tiff.order, "NIKON CORPORATION"));
+            compressed(&bytes, &info, mn.as_ref(), 32, rggb, &Limits::default()).map(|_| ())
+        };
+        // the measured layout gets as far as the codestream body, which is empty here
+        assert!(matches!(run(14, Some(1008), true), Err(RawError::Corrupt(_))));
+        for refused in [run(12, Some(1008), true), run(14, Some(1008), false), run(14, Some(16384), true), run(14, None, true)] {
+            assert!(matches!(&refused, Err(RawError::Unsupported(m)) if m == HIGH_EFFICIENCY), "{refused:?}");
+        }
+    }
+
     #[test]
     fn packed_layout_refuses_overflowing_dimensions() {
         for bits in [12, 14] {
