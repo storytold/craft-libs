@@ -1669,11 +1669,7 @@ mod tests {
         let unchecked = |lang: ProofLang| check_text(text, &[(0..text.len(), lang)]).iter().all(|i| i.kind == IssueKind::Grammar);
         // System dictionaries are valid sources too; the Dutch pack must leave French unchanged.
         let french = ProofLang::from_tag(Some("fr-FR"));
-        let french_state = || (
-            has_dictionary(Some("fr-FR")),
-            pack_dictionary_file(french),
-            check_text(text, &[(0..text.len(), french)]),
-        );
+        let french_state = || (has_dictionary(Some("fr-FR")), pack_dictionary_file(french), check_text(text, &[(0..text.len(), french)]));
         let french_before = french_state();
         let before = (is_correct_in("fietz", nl), hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), pack_dictionary_file(nl));
         let pack = write_pack(
