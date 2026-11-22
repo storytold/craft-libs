@@ -266,6 +266,7 @@ pub struct ListRow<'a> {
     /// keeps the disclosure column and paints no disclosure.
     pub(super) disclosure_by_host: bool,
     /// How the row's tree lines up its leaves: the collection gives it (`List::tree_leaves`).
+    #[prop(vis = "pub(crate)")]
     pub(super) leaves: TreeLeaves,
     /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
     #[style_key]
@@ -394,13 +395,6 @@ impl<'a> ListRow<'a> {
     #[must_use]
     pub fn disclosure_by_host(mut self) -> Self {
         self.disclosure_by_host = true;
-        self
-    }
-
-    /// How the collection's tree lines up its leaves (`List::tree_leaves`).
-    #[must_use]
-    pub(crate) fn leaves(mut self, leaves: TreeLeaves) -> Self {
-        self.leaves = leaves;
         self
     }
 
@@ -586,8 +580,8 @@ impl<'a> ListRow<'a> {
         self.trailing_part_revealed(TrailingPart::MENU, TrailingFace::Icon(IconSpec::svg(craft_behavior::IconId::new("more"))), Label::Empty)
     }
 
-    /// A component at the trailing end, as wide as it measures, that always shows: a field that edits a value of the
-    /// row, or a button. The row shows `field` in its slot and hands its output to `output` in the pass it is shown.
+    /// A component at the trailing end, as wide as it measures and at its own height up to the row's, that always
+    /// shows: a field that edits a value of the row, or a button. The row shows `field` in its slot and hands its output to `output` in the pass it is shown.
     /// The field's stop joins the row's roving group like the row's focusable parts (Forward from the row enters it,
     /// Tab leaves the collection); it takes the keys it declares.
     #[must_use]
@@ -595,7 +589,8 @@ impl<'a> ListRow<'a> {
         self.hosted(Hosting::new(field, output), false)
     }
 
-    /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one, that drops out when the
+    /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one (its own width, its own
+    /// height up to the row's), that drops out when the
     /// label would get narrower than its least width with it (a binding's badge). A row sized to its content makes
     /// room for it.
     #[must_use]
