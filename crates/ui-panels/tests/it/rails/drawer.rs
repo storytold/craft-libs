@@ -161,6 +161,7 @@ fn the_drawer_opens_on_the_side_it_is_given() {
 /// revealed tool far down the list scrolls into the drawer's room, and only a marked tool wears the mark.
 #[trial]
 fn a_revealed_tool_scrolls_into_view_and_wears_the_mark() {
+    use craft_ui::contract::Role;
     use craft_ui::display::TargetMark;
     use craft_ui::rails::{DrawerGroup, ToolbarDrawer};
     use egui::{Pos2, Rect};
@@ -181,13 +182,14 @@ fn a_revealed_tool_scrolls_into_view_and_wears_the_mark() {
             ToolbarDrawer::new(rail, &groups, &toolbar, None).reveal(reveal).mark(marked.then_some(&target)).show(ui);
         });
         fixture.room(ROOM).idle(60);
+        // The drawer is a popover over the window, which is larger than the room: its list scrolls inside it.
+        let drawer = fixture.by_role(Role::DIALOG).first().expect("the drawer is open").rect;
         let row = fixture.by_label("Cut").expect("the revealed tool's row is shown").rect;
-        (row, !fixture.styles_of(std::any::type_name::<TargetMark>()).is_empty())
+        (drawer, row, !fixture.styles_of(std::any::type_name::<TargetMark>()).is_empty())
     };
-    let room = Rect::from_min_size(Pos2::ZERO, ROOM);
-    let (row, marked) = shown(true);
-    assert!(room.contains_rect(row), "the revealed row {row:?} lies inside the room {room:?}");
+    let (drawer, row, marked) = shown(true);
+    assert!(drawer.contains_rect(row), "the revealed row {row:?} lies inside the drawer {drawer:?}");
     assert!(marked, "the marked tool wears the mark");
-    let (_, unmarked) = shown(false);
+    let (_, _, unmarked) = shown(false);
     assert!(!unmarked, "without a mark no ring is drawn");
 }
