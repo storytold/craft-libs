@@ -152,7 +152,7 @@ fn segmented_disc_patches_and_brightness_radius() {
     let markers = [Srgba::rgb(0.8, 0.0, 0.0), Srgba::BLACK];
     let distance = |radius: DiscRadius| {
         let mut fixture = Fixture::new(move |ui| {
-            let _ = ColorDisc::new("Harmony", &markers, Bind::given(DiscMove::new(0, 0.0, 0.0))).radius(radius).show(ui);
+            let _ = ColorDisc::new("Harmony", &markers, Bind::kept()).radius(radius).show(ui);
         });
         fixture.room(vec2(320.0, 240.0));
         fixture.settle();
@@ -253,7 +253,7 @@ fn a_disc_click_reports_its_point_and_a_secondary_click_what_it_hit() {
     let (clicked, context) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
     let (k, c) = (clicked.clone(), context.clone());
     let mut fixture = Fixture::new(move |ui| {
-        let out = ColorDisc::new("Harmony", &markers, Bind::given(DiscMove::new(0, 0.0, 0.0))).show(ui);
+        let out = ColorDisc::new("Harmony", &markers, Bind::kept()).show(ui);
         if out.clicked.is_some() {
             k.set(out.clicked);
         }
