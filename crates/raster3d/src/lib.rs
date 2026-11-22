@@ -134,7 +134,10 @@ pub enum RenderError {
     /// Rasterizing or rendering shadow maps would take more coverage or depth tests than
     /// [`Limits::max_work`]. The count stops at the first triangle past the limit (for shadow
     /// maps, counted on several threads, within one triangle per thread), so `needed` is at least
-    /// `limit + 1` and may be below the scene's total.
+    /// `limit + 1` and may be below the scene's total. The search under discarded opaque pixels
+    /// is charged as one step, the opaque pass's whole count added at once, so when that charge
+    /// passes the limit `needed` is twice the opaque pass's tests and can be well above
+    /// `limit + 1`.
     #[error("the render needs at least {needed} tests, over the limit of {limit}")]
     TooMuchWork { needed: u64, limit: u64 },
     /// A resolve factor is zero or does not divide both sides of the target.

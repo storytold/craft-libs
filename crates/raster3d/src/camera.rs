@@ -40,8 +40,9 @@ pub enum CameraError {
     /// The scene has no drawn vertex to frame.
     #[error("the scene has no drawn vertex")]
     Empty,
-    /// The camera's eye, target or distances are not finite, the eye and the target coincide, or
-    /// its transforms or near plane do not fit `f32`.
+    /// The camera's eye, target or distances are not finite, the eye and the target coincide, its
+    /// transforms or near plane do not fit `f32`, an image axis collapses in `f32`, or a fitted
+    /// camera does not hold its points.
     #[error("the camera is outside the range the transforms can hold")]
     OutOfRange,
 }
@@ -149,11 +150,18 @@ impl Camera {
     /// orthographic projection, the tighter image axis keeping 5% clear on each side. Bounds of
     /// zero size are framed as a box of radius 1 around their center.
     ///
+    /// The points are checked against the basis of the returned camera, whose eye is rounded to
+    /// `f64`: an orthographic camera that the rounding leaves short of a point is widened around
+    /// the same target, keeping the 5% margin.
+    ///
     /// # Errors
     /// [`RenderError::BadCamera`] when `bounds` are not finite or a minimum is above its maximum,
     /// `aspect` is not positive and finite, `direction` is zero or not finite, `up` is zero, not
-    /// finite or parallel to `direction`, or the camera's eye or extent is outside `f64`'s range
-    /// or would coincide with its target.
+    /// finite or parallel to `direction`, the camera's eye or extent is outside `f64`'s range or
+    /// would coincide with its target, a perspective camera leaves a point outside its view or
+    /// short of its near plane in `f64`, or, where the point and the camera's clip rows fit `f32`,
+    /// the `f32` transform [`Camera::apply`] writes for an image of this aspect ratio would clip a
+    /// point.
     pub fn fit(bounds: &Bounds, direction: [f64; 3], up: [f64; 3], perspective: bool, aspect: f64) -> Result<Camera, RenderError> {
         bounds.check()?;
         let corners = (0..8).map(|k| [0, 1, 2].map(|i| if k >> i & 1 == 0 { bounds.min[i] } else { bounds.max[i] }));
@@ -211,7 +219,7 @@ impl Camera {
             let tx = ty * aspect;
             // A point at lateral (x, y) from the target and depth f past it is in view when
             // |x| <= (d + f)·tx and |y| <= (d + f)·ty.
-            let d = points.map(view).fold(floor, |d, [x, y, f]| {
+            let d = points.clone().map(view).fold(floor, |d, [x, y, f]| {
                 let need = ((x - mx).abs() / tx).max((y - my).abs() / ty);
                 d.max(need - f).max(floor - f)
             });
@@ -223,12 +231,99 @@ impl Camera {
             }
             (Projection::Orthographic { height }, 2.0 * radius)
         };
-        let camera = Camera { eye: sub(target, scale(dir, distance)), target, up, projection };
+        let mut camera = Camera { eye: sub(target, scale(dir, distance)), target, up, projection };
         if !camera.eye.iter().chain(&camera.target).all(|c| c.is_finite()) {
             return Err(CameraError::OutOfRange);
         }
-        camera.basis()?;
+        // Rounding the eye to f64 can turn the view, so the points are checked against the
+        // returned camera's own basis.
+        let basis = camera.basis()?;
+        let [right, upward, forward] = basis;
+        match camera.projection {
+            Projection::Orthographic { height } => {
+                let mut need = 0.0_f64;
+                for p in points.clone() {
+                    let r = sub(p, camera.target);
+                    need = need.max(dot(r, upward).abs()).max(dot(r, right).abs() / aspect);
+                }
+                if !need.is_finite() {
+                    return Err(CameraError::OutOfRange);
+                }
+                // A fit that lost points to rounding is widened around the same target.
+                if 2.0 * need > height {
+                    let wider = 2.0 * need * FIT_MARGIN;
+                    if !wider.is_finite() {
+                        return Err(CameraError::OutOfRange);
+                    }
+                    camera.projection = Projection::Orthographic { height: wider };
+                }
+            }
+            Projection::Perspective { fov_y } => {
+                let ty = (fov_y.to_radians() / 2.0).tan();
+                let tx = ty * aspect;
+                let near = camera.near();
+                for p in points.clone() {
+                    let r = sub(p, camera.eye);
+                    let (x, y, z) = (dot(r, right), dot(r, upward), dot(r, forward));
+                    if !(z > near && x.abs() <= z * tx && y.abs() <= z * ty) {
+                        return Err(CameraError::OutOfRange);
+                    }
+                }
+            }
+        }
+        // The f32 clip rows `apply` writes for this aspect ratio, where they fit f32: the
+        // rasterizer clips a point outside them, or short of the perspective near plane.
+        let ortho = matches!(camera.projection, Projection::Orthographic { .. });
+        let [rx, ry] = camera.lateral(basis, aspect)?.map(|r| r.map(|c| c as f32));
+        let rw = view_row(forward, camera.eye).map(|c| c as f32);
+        let near = camera.near() as f32;
+        let fits = rx.iter().chain(&ry).all(|c| c.is_finite()) && (ortho || (rw.iter().all(|c| c.is_finite()) && near.is_normal()));
+        if fits {
+            let row = |m: [f32; 4], q: [f32; 3]| m[0] * q[0] + m[1] * q[1] + m[2] * q[2] + m[3];
+            for q in points.map(|p| p.map(|c| c as f32)).filter(|q| q.iter().all(|c| c.is_finite())) {
+                let (x, y) = (row(rx, q), row(ry, q));
+                let w = if ortho { 1.0 } else { row(rw, q) };
+                if !(w.is_finite() && (ortho || w > near) && x.abs() <= w && y.abs() <= w) {
+                    return Err(CameraError::OutOfRange);
+                }
+            }
+        }
         Ok(camera)
+    }
+
+    /// The clip rows of the image's x and y axes for an image of aspect ratio `aspect`, from the
+    /// camera's `basis`.
+    ///
+    /// # Errors
+    /// [`CameraError::Projection`] for a field of view outside 0 to 180 degrees or too small for
+    /// a finite focal length, or an orthographic height that is not positive and finite.
+    fn lateral(&self, basis: [[f64; 3]; 3], aspect: f64) -> Result<[[f64; 4]; 2], CameraError> {
+        let (kx, ky) = match self.projection {
+            Projection::Perspective { fov_y } => {
+                if !(fov_y > 0.0 && fov_y < 180.0) {
+                    return Err(CameraError::Projection);
+                }
+                let focal = 1.0 / (fov_y.to_radians() / 2.0).tan();
+                if !focal.is_finite() {
+                    return Err(CameraError::Projection);
+                }
+                (focal / aspect, focal)
+            }
+            Projection::Orthographic { height } => {
+                if !(height.is_finite() && height > 0.0) {
+                    return Err(CameraError::Projection);
+                }
+                let half = height / 2.0;
+                (1.0 / (half * aspect), 1.0 / half)
+            }
+        };
+        let [vr, vu] = [basis[0], basis[1]].map(|a| view_row(a, self.eye));
+        Ok([vr.map(|c| c * kx), vu.map(|c| c * ky)])
+    }
+
+    /// The perspective near plane: [`NEAR_FRACTION`] of the eye-to-target distance.
+    fn near(&self) -> f64 {
+        (length(span(self.eye, self.target)) * NEAR_FRACTION).max(f64::MIN_POSITIVE)
     }
 
     /// Right, up and forward unit vectors.
@@ -251,53 +346,48 @@ impl Camera {
     /// A perspective camera clips at a near plane 1/10,000 of the way from the eye to the target
     /// and has no far plane. An orthographic camera's depth range holds every vertex of the
     /// scene's drawn triangles (see [`Bounds::of_scene`]), with room on each side for rounding,
-    /// so the camera must be applied again after the vertices change.
+    /// so the camera must be applied again after the drawn set changes: a moved vertex, a changed
+    /// index or a material made visible.
+    ///
+    /// The scene's index order is left as it is. The rasterizer blends the transparent range in
+    /// that order, so a caller that sorts transparent triangles by depth sorts them again for the
+    /// new view.
     ///
     /// # Errors
     /// [`RenderError::BadSize`] for a raster side of zero, and [`RenderError::BadCamera`] for an
     /// eye or target that is not finite or coincides, an up direction that is zero, not finite or
     /// parallel to the view, a field of view outside 0 to 180 degrees or too small for a finite
-    /// focal length, an orthographic height that is not positive and finite, or transforms or a
-    /// near plane that do not fit `f32`. On an error the scene is left as it was.
+    /// focal length, an orthographic height that is not positive and finite, transforms or a
+    /// near plane that do not fit `f32`, or an image axis whose clip row rounds to zero in `f32`.
+    /// On an error the scene is left as it was.
     pub fn apply(&self, s: &mut Scene) -> Result<(), RenderError> {
         if s.width == 0 || s.height == 0 {
             return Err(RenderError::BadSize(s.width, s.height));
         }
         let aspect = f64::from(s.width) / f64::from(s.height);
         let basis = self.basis()?;
-        let view: [[f64; 4]; 3] = basis.map(|a| [a[0], a[1], a[2], -dot(a, self.eye)]);
+        let view: [[f64; 4]; 3] = basis.map(|a| view_row(a, self.eye));
         let [vr, vu, vf] = view;
-        let scaled = |row: [f64; 4], k: f64| row.map(|c| c * k);
+        let [cx, cy] = self.lateral(basis, aspect)?;
         let (clip, ortho) = match self.projection {
-            Projection::Perspective { fov_y } => {
-                if !(fov_y > 0.0 && fov_y < 180.0) {
-                    return Err(CameraError::Projection.into());
-                }
-                let focal = 1.0 / (fov_y.to_radians() / 2.0).tan();
-                if !focal.is_finite() {
-                    return Err(CameraError::Projection.into());
-                }
-                let near = (length(span(self.eye, self.target)) * NEAR_FRACTION).max(f64::MIN_POSITIVE);
+            Projection::Perspective { .. } => {
+                let near = self.near();
                 // Reversed depth: normalized device z = near / camera z, 1 at the near plane.
                 if !((near as f32).is_normal() && near.is_finite()) {
                     return Err(CameraError::OutOfRange.into());
                 }
-                ([scaled(vr, focal / aspect), scaled(vu, focal), [0.0, 0.0, 0.0, near], vf], false)
+                ([cx, cy, [0.0, 0.0, 0.0, near], vf], false)
             }
-            Projection::Orthographic { height } => {
-                if !(height.is_finite() && height > 0.0) {
-                    return Err(CameraError::Projection.into());
-                }
-                let half = height / 2.0;
+            Projection::Orthographic { .. } => {
                 let (near, far) = ortho_depth(s, vf)?;
                 // Reversed depth: normalized device z runs from 1 at `near` to 0 at `far`.
                 let k = 1.0 / (far - near);
                 if !(k as f32).is_normal() {
                     return Err(CameraError::OutOfRange.into());
                 }
-                let mut z = scaled(vf, -k);
+                let mut z = vf.map(|c| c * -k);
                 z[3] += far * k;
-                ([scaled(vr, 1.0 / (half * aspect)), scaled(vu, 1.0 / half), z, [0.0, 0.0, 0.0, 1.0]], true)
+                ([cx, cy, z, [0.0, 0.0, 0.0, 1.0]], true)
             }
         };
         let narrow = |m: [[f64; 4]; 4]| m.map(|r| r.map(|c| c as f32));
@@ -306,6 +396,10 @@ impl Camera {
         let eye = self.eye.map(|c| c as f32);
         let fwd = basis[2].map(|c| c as f32);
         if !clip.iter().chain(&view).flatten().chain(&eye).chain(&fwd).all(|c| c.is_finite()) {
+            return Err(CameraError::OutOfRange.into());
+        }
+        // A lateral row that rounds to zero in f32 collapses that image axis.
+        if clip[..2].iter().any(|r| r[..3].iter().all(|&c| c == 0.0)) {
             return Err(CameraError::OutOfRange.into());
         }
         // In f32, as the rasterizer computes clip w: the target must stay past the near plane, or
@@ -339,6 +433,12 @@ fn ortho_depth(s: &Scene, vf: [f64; 4]) -> Result<(f64, f64), CameraError> {
     let (near, far) = (lo - pad, hi + pad);
     let ok = near.is_finite() && far.is_finite() && (far - near).is_finite() && far > near;
     if ok { Ok((near, far)) } else { Err(CameraError::OutOfRange) }
+}
+
+/// The view-transform row of unit axis `a` for a camera at `eye`: the distance along `a` from
+/// the eye.
+fn view_row(a: [f64; 3], eye: [f64; 3]) -> [f64; 4] {
+    [a[0], a[1], a[2], -dot(a, eye)]
 }
 
 /// Right, up and `forward` (a unit vector) for a camera whose up direction is `up`.

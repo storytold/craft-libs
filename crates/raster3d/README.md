@@ -21,14 +21,23 @@ app.
   `Scene::eye`, `Scene::cam_fwd` and `Scene::ortho` for the scene's raster aspect ratio. A
   perspective camera's near plane is 1/10,000 of the eye-to-target distance and it has no far
   plane; an orthographic camera's depth range holds the scene's drawn vertices, so it is applied
-  again after they change. Bounds that are not finite or whose minimum is above the maximum, an
+  again after the drawn set changes (a moved vertex, a changed index or a material made visible).
+  `apply` leaves the index order as it is, and the rasterizer blends the transparent range in that
+  order, so a caller that sorts transparent triangles by depth sorts them again for a new view.
+  A fit checks its points against the basis of the camera it returns, whose eye is rounded to
+  `f64`: an orthographic camera that the rounding leaves short of a point is widened around the
+  same target, and a perspective camera that leaves a point outside its view or short of its near
+  plane is an error. A fit whose `f32` transform, as `apply` writes it for an image of the given
+  aspect ratio, would clip a point is an error too; the check covers points and clip rows that fit
+  `f32`. Bounds that are not finite or whose minimum is above the maximum, an
   aspect ratio that is not positive and finite, a view direction that is zero or not finite, an
   up direction that is zero, not finite or parallel to the view
   (<https://registry.khronos.org/OpenGL-Refpages/gl2.1/xhtml/gluLookAt.xml>), a field of view
   outside 0 to 180 degrees, an orthographic height that is not positive and finite, a scene with
   no drawn vertex, and an eye, extent, transform or near plane outside `f64` or `f32` (or an eye
-  that rounds onto its target in `f64`, or that leaves the target short of the near plane in the
-  `f32` transforms) are a `RenderError::BadCamera`. `apply` leaves the scene as it was
+  that rounds onto its target in `f64`, an eye that leaves the target short of the near plane in
+  the `f32` transforms, or an image axis whose clip row rounds to zero in `f32`) are a
+  `RenderError::BadCamera`. `apply` leaves the scene as it was
   on an error.
 - **Rendering.** `try_render(&scene, &limits)` returns a `Target` at the scene's raster size:
   premultiplied linear RGBA and the camera-space depth of the nearest opaque surface, infinity where
@@ -222,9 +231,10 @@ files:
 The camera fit comes from PdfCraft's `crates/prc-render/src/render.rs` (`Camera::fit`,
 `Camera::fit_meshes`, `Bounds`) and `src/vec3.rs`, at `4f23ee1c1`, and the render ceilings from
 its `MAX_RENDER_PIXELS` and `MAX_RENDER_WORK` and its 2^24 triangle and vertex ceilings. For
-finite, ordered bounds and points whose diagonal fits `f64`, every fitted camera's eye, target, up
-direction and projection match PdfCraft's bit for bit; `tests/it/camera.rs` runs a copy of
-PdfCraft's code on the same inputs. Changes from those files:
+finite, ordered bounds and points whose diagonal fits `f64`, and whose fitted camera holds them in
+its own basis and inside its `f32` transform, every fitted camera's
+eye, target, up direction and projection match PdfCraft's bit for bit; `tests/it/camera.rs` runs a
+copy of PdfCraft's code on the same inputs. Changes from those files:
 
 - `Camera::fit_scene` frames the vertices of a `Scene`'s drawn triangles in place of PdfCraft's
   meshes, and `Camera::apply` writes the camera into the scene's `f32` transforms. PdfCraft
@@ -235,6 +245,13 @@ PdfCraft's code on the same inputs. Changes from those files:
 - Bounds that are not finite or whose minimum is above the maximum are errors, and so is an up
   direction that is not finite. An up direction whose cross product with the view overflows is
   normalized first; PdfCraft refused it.
+- A fit checks its points against the basis of the camera it returns. PdfCraft checked only that
+  the camera has a basis, so far from the origin, where rounding the eye turns the view, its camera
+  could miss points it was fitted to: for a box from `[1e16, -1, 0]` to `[1e16, 1, 0]` seen
+  orthographically along `[1, 1, 0]` with +z up in a square image, its view leaves two corners
+  out. Here such an orthographic camera is widened around the same target and such a perspective
+  camera is an error; either is an error when its `f32` transform would clip a point.
+- `Camera::apply` refuses an image axis whose clip row rounds to zero in `f32`.
 - Each error is a `CameraError` variant inside `RenderError::BadCamera` in place of PdfCraft's
   message string.
 

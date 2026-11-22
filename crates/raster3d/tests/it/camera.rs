@@ -139,32 +139,59 @@ fn a_scene_fit_frames_drawn_vertices_and_ignores_empty_box_corners() {
     assert_eq!(height(Camera::fit_scene(&s, dir, up, false, 2.0).unwrap()), tight);
 }
 
+const VIEWS: [([f64; 3], [f64; 3]); 4] =
+    [([0.0, 0.0, -1.0], UP), ([1.0, 1.0, 1.0], UP), ([0.0, 0.3, -1.0], [1.0, 1.0, 0.0]), ([2.0, -5.0, 0.5], [0.0, 0.0, 3.0])];
+
+fn theirs(c: pc::Camera) -> Camera {
+    let projection = match c.projection {
+        pc::Projection::Perspective { fov_y } => Projection::Perspective { fov_y },
+        pc::Projection::Orthographic { height } => Projection::Orthographic { height },
+    };
+    Camera { eye: c.eye, target: c.target, up: c.up, projection }
+}
+
+/// Every field of a camera as bits, so `+0.0` and `-0.0` differ.
+fn bits(c: &Camera) -> [u64; 11] {
+    let (kind, p) = match c.projection {
+        Projection::Perspective { fov_y } => (0, fov_y),
+        Projection::Orthographic { height } => (1, height),
+    };
+    let mut out = [kind, p.to_bits(), 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for (o, v) in out[2..].iter_mut().zip(c.eye.iter().chain(&c.target).chain(&c.up)) {
+        *o = v.to_bits();
+    }
+    out
+}
+
+/// Whether every point is inside the orthographic camera's view, measured in its own basis.
+fn ortho_holds(c: &Camera, aspect: f64, points: &[[f64; 3]]) -> bool {
+    let Projection::Orthographic { height } = c.projection else { panic!("orthographic expected") };
+    let [r, u, _] = c.basis().unwrap();
+    points.iter().all(|p| {
+        let d = [0, 1, 2].map(|i| p[i] - c.target[i]);
+        let along = |a: [f64; 3]| a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        along(u).abs() <= height / 2.0 && along(r).abs() <= height / 2.0 * aspect
+    })
+}
+
 #[test]
 fn camera_fits_match_the_previous_code() {
+    // Each case fits on both sides, and every field matches bit for bit.
     let boxes = [
         Bounds { min: [-3.0, -1.0, 2.0], max: [5.0, 4.0, 3.5] },
         Bounds { min: [0.0; 3], max: [0.0; 3] },
-        Bounds { min: [1e16, 1e16, 1e16], max: [1e16 + 4.0, 1e16 + 4.0, 1e16] },
         Bounds { min: [-1e150, 2.0, -7.0], max: [1e150, 3.0, 9.0] },
     ];
-    let views = [([0.0, 0.0, -1.0], UP), ([1.0, 1.0, 1.0], UP), ([0.0, 0.3, -1.0], [1.0, 1.0, 0.0]), ([2.0, -5.0, 0.5], [0.0, 0.0, 3.0])];
-    let theirs = |c: pc::Camera| {
-        let projection = match c.projection {
-            pc::Projection::Perspective { fov_y } => Projection::Perspective { fov_y },
-            pc::Projection::Orthographic { height } => Projection::Orthographic { height },
-        };
-        Camera { eye: c.eye, target: c.target, up: c.up, projection }
-    };
-    let mut compared = 0;
     for b in boxes {
         let pb = pc::Bounds { min: b.min, max: b.max };
         let points: Vec<[f64; 3]> = corners(&b).take(5).collect();
-        for (dir, up) in views {
+        for (dir, up) in VIEWS {
             for perspective in [true, false] {
                 for aspect in [0.5, 1.0, 2.0] {
-                    let (ours, prev) = (Camera::fit(&b, dir, up, perspective, aspect), pc::Camera::fit(&pb, dir, up, perspective, aspect));
-                    assert_eq!(ours.as_ref().ok(), prev.ok().map(theirs).as_ref(), "{b:?} {dir:?} {perspective} {aspect}: {ours:?}");
-                    compared += usize::from(ours.is_ok());
+                    let case = format!("{b:?} {dir:?} {perspective} {aspect}");
+                    let ours = Camera::fit(&b, dir, up, perspective, aspect).unwrap_or_else(|e| panic!("{case}: {e:?}"));
+                    let prev = pc::Camera::fit(&pb, dir, up, perspective, aspect).unwrap_or_else(|e| panic!("{case}: {e:?}"));
+                    assert_eq!(bits(&ours), bits(&theirs(prev)), "{case}: {ours:?}");
                     // The scene's vertices are f32; these points are exact in f32 only for the
                     // first two boxes.
                     if b.min.iter().chain(&b.max).all(|&c| f64::from(c as f32) == c) {
@@ -172,16 +199,76 @@ fn camera_fits_match_the_previous_code() {
                         let mut s = box_scene(&b, 8, 8);
                         s.indices = vec![0, 1, 2, 3, 4, 2];
                         s.opaque_count = 6;
-                        assert_eq!(Camera::fit_scene(&s, dir, up, perspective, aspect).unwrap(), theirs(prev));
-                        compared += 1;
+                        let ours = Camera::fit_scene(&s, dir, up, perspective, aspect).unwrap_or_else(|e| panic!("{case}: {e:?}"));
+                        assert_eq!(bits(&ours), bits(&theirs(prev)), "{case} (scene): {ours:?}");
                     }
                 }
             }
         }
     }
-    // At least the three boxes nearest the origin fit on both sides, and the two exact in f32
-    // fit as scenes.
-    assert!(compared >= 3 * 4 * 2 * 3 + 2 * 4 * 2 * 3, "{compared}");
+}
+
+#[test]
+fn an_orthographic_fit_whose_eye_rounds_is_widened_to_hold_its_points() {
+    // Far from the origin, rounding the eye to f64 turns the view: the previous code's camera
+    // misses two corners in its own basis, and ours is widened around the same target.
+    let b = Bounds { min: [1e16, -1.0, 0.0], max: [1e16, 1.0, 0.0] };
+    let (dir, up) = ([1.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+    let points: Vec<[f64; 3]> = corners(&b).collect();
+    let prev = theirs(pc::Camera::fit(&pc::Bounds { min: b.min, max: b.max }, dir, up, false, 1.0).unwrap());
+    assert!(!ortho_holds(&prev, 1.0, &points), "{prev:?}");
+    let ours = Camera::fit(&b, dir, up, false, 1.0).unwrap();
+    assert!(ortho_holds(&ours, 1.0, &points), "{ours:?}");
+    assert_eq!((ours.eye, ours.target, ours.up), (prev.eye, prev.target, prev.up));
+    // A box near 1e16 in every view: ours holds its points, and is the previous camera where
+    // that holds them too, or it is an error because its f32 transform would clip a point.
+    let b = Bounds { min: [1e16, 1e16, 1e16], max: [1e16 + 4.0, 1e16 + 4.0, 1e16] };
+    let points: Vec<[f64; 3]> = corners(&b).collect();
+    for (dir, up) in VIEWS {
+        for aspect in [0.5, 1.0, 2.0] {
+            let prev = theirs(pc::Camera::fit(&pc::Bounds { min: b.min, max: b.max }, dir, up, false, aspect).unwrap());
+            match Camera::fit(&b, dir, up, false, aspect) {
+                Ok(ours) => {
+                    assert!(ortho_holds(&ours, aspect, &points), "{dir:?} {aspect}: {ours:?}");
+                    if ortho_holds(&prev, aspect, &points) {
+                        assert_eq!(bits(&ours), bits(&prev), "{dir:?} {aspect}");
+                    }
+                }
+                Err(e) => assert_eq!(e, RenderError::BadCamera(CameraError::OutOfRange), "{dir:?} {aspect}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_fit_that_the_f32_transform_would_clip_is_an_error() {
+    let z = [0.0, 0.0, 1.0];
+    let cases = [
+        // Seen along +z, the face at z = 1e8 is 2 units past the eye in f64, but in f32 the eye
+        // rounds onto that face and the rasterizer would clip it.
+        (Bounds { min: [-0.5, -0.5, 1e8], max: [0.5, 0.5, 1e8 + 16.0] }, z, UP, true),
+        // The f32 x row's offset rounds by about one image width.
+        (Bounds { min: [10_000_006.0, -1.0, 0.0], max: [10_000_008.0, 1.0, 0.0] }, z, UP, false),
+    ];
+    for (b, dir, up, perspective) in cases {
+        let case = format!("{b:?} {dir:?} {perspective}");
+        assert!(pc::Camera::fit(&pc::Bounds { min: b.min, max: b.max }, dir, up, perspective, 1.0).is_ok(), "{case}");
+        assert_eq!(bad(Camera::fit(&b, dir, up, perspective, 1.0)), CameraError::OutOfRange, "{case}");
+        let s = box_scene(&b, 8, 8);
+        assert_eq!(bad(Camera::fit_scene(&s, dir, up, perspective, 1.0)), CameraError::OutOfRange, "{case}");
+    }
+    // The same boxes near the origin fit, and every corner is inside the f32 transform.
+    let near_origin =
+        [(Bounds { min: [-0.5, -0.5, 0.0], max: [0.5, 0.5, 16.0] }, true), (Bounds { min: [6.0, -1.0, 0.0], max: [8.0, 1.0, 0.0] }, false)];
+    for (b, perspective) in near_origin {
+        let mut s = box_scene(&b, 8, 8);
+        Camera::fit(&b, z, UP, perspective, 1.0).unwrap().apply(&mut s).unwrap();
+        for p in corners(&b) {
+            let q = p.map(|c| c as f32);
+            let c: [f32; 4] = std::array::from_fn(|r| s.clip[r][0] * q[0] + s.clip[r][1] * q[1] + s.clip[r][2] * q[2] + s.clip[r][3]);
+            assert!(c[3] > 0.0 && c[0].abs() <= c[3] && c[1].abs() <= c[3] && (0.0..=c[3]).contains(&c[2]), "{p:?}: {c:?}");
+        }
+    }
 }
 
 #[test]
@@ -229,10 +316,12 @@ fn an_eye_that_rounds_onto_its_target_is_an_error() {
     for perspective in [true, false] {
         assert_eq!(bad(Camera::fit(&b, [1.0, 0.0, 0.0], UP, perspective, 1.0)), CameraError::OutOfRange);
     }
-    // A point at 1e8 fits in f64, but its eye 0.001 away rounds onto the target in f32, so
-    // applying the perspective camera would clip the point.
+    // A point at 1e8 fits in f64, but its eye 0.001 away rounds onto the target in f32, so the
+    // perspective camera would clip the point: the fit is an error, and so is applying a camera
+    // placed there by hand.
     let b = Bounds { min: [1e8, 0.0, 0.0], max: [1e8, 0.0, 0.0] };
-    let camera = Camera::fit(&b, [1.0, 0.0, 0.0], UP, true, 1.0).unwrap();
+    assert_eq!(bad(Camera::fit(&b, [1.0, 0.0, 0.0], UP, true, 1.0)), CameraError::OutOfRange);
+    let camera = Camera { eye: [1e8 - 0.001, 0.0, 0.0], target: b.min, up: UP, projection: Projection::Perspective { fov_y: 30.0 } };
     let mut s = box_scene(&b, 8, 8);
     assert_eq!(bad(camera.apply(&mut s)), CameraError::OutOfRange);
 }
@@ -277,12 +366,22 @@ fn applying_a_camera_checks_its_projection_and_range_and_leaves_the_scene_on_err
         (Camera { eye: [0.0, 0.0, -1e-40], target: [0.0; 3], ..base }, CameraError::OutOfRange),
         // An orthographic depth range past f32.
         (Camera { eye: [0.0, 0.0, -1e300], target: [0.0; 3], projection: Projection::Orthographic { height: 2.0 }, ..base }, CameraError::OutOfRange),
+        // A visible height so large that both lateral clip rows round to zero in f32.
+        (Camera { projection: Projection::Orthographic { height: 1e100 }, ..base }, CameraError::OutOfRange),
     ];
     for (camera, want) in cases {
         let mut s = scene.clone();
         assert_eq!(bad(camera.apply(&mut s)), want, "{camera:?}");
         assert_eq!((s.clip, s.view, s.eye, s.cam_fwd, s.ortho), (scene.clip, scene.view, scene.eye, scene.cam_fwd, scene.ortho));
     }
+    // On a raster 2^30 times wider than tall, only the horizontal row rounds to zero.
+    let wide = Scene { width: 1 << 30, height: 1, ..scene.clone() };
+    let mut s = wide.clone();
+    let camera = Camera { projection: Projection::Orthographic { height: 1e37 }, ..base };
+    assert_eq!(bad(camera.apply(&mut s)), CameraError::OutOfRange);
+    assert_eq!(s.clip, wide.clip);
+    // With a height that keeps both rows, the same raster applies.
+    Camera { projection: Projection::Orthographic { height: 1e30 }, ..base }.apply(&mut s).unwrap();
     let mut s = Scene { width: 0, ..scene.clone() };
     assert_eq!(base.apply(&mut s), Err(RenderError::BadSize(0, 16)));
 }
