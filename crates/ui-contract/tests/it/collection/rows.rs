@@ -497,7 +497,7 @@ fn a_lead_that_leaves_the_source_takes_the_hosts_current_item_unreported() {
     frames.idle(3, &mut show);
     pointer::click(&mut frames, ORIGIN + Vec2::new(5.0, ROW_H * 2.5), &mut show);
     let lead = |events: &RefCell<Vec<CollectionEvent<usize, Dismissed>>>| {
-        events.borrow().iter().filter_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None }).last()
+        events.borrow().iter().rev().find_map(|event| if let CollectionEvent::LeadMoved { key, .. } = event { Some(*key) } else { None })
     };
     assert_eq!(lead(&events), Some(12), "the press made the current row the lead");
     events.borrow_mut().clear();
