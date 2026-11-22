@@ -942,7 +942,7 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if rx < 0.0 || ry < 0.0 {
                 return Err(svg_error(path_name, "<rect> corner radii cannot be negative"));
             }
-            rounded_rect(x, y, w, h, rx.min(w / 2.0), ry.min(h / 2.0))
+            return Ok((w != 0.0 && h != 0.0).then(|| rounded_rect(x, y, w, h, rx.min(w / 2.0), ry.min(h / 2.0))));
         }
         "circle" => {
             let cx = number("cx", 0.0)?;
@@ -951,7 +951,7 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if r < 0.0 {
                 return Err(svg_error(path_name, "<circle> radius cannot be negative"));
             }
-            ellipse_path(cx, cy, r, r)
+            return Ok((r != 0.0).then(|| ellipse_path(cx, cy, r, r)));
         }
         "ellipse" => {
             let cx = number("cx", 0.0)?;
@@ -961,7 +961,7 @@ fn geometry_for(node: roxmltree::Node<'_, '_>, path_name: &str) -> Result<Option
             if rx < 0.0 || ry < 0.0 {
                 return Err(svg_error(path_name, "<ellipse> radii cannot be negative"));
             }
-            ellipse_path(cx, cy, rx, ry)
+            return Ok((rx != 0.0 && ry != 0.0).then(|| ellipse_path(cx, cy, rx, ry)));
         }
         "line" => {
             let mut p = BezPath::new();
