@@ -31,6 +31,7 @@ mod objects;
 mod outline;
 mod page_setup;
 mod para_borders;
+mod paragraph_shading;
 mod parts;
 mod placeholders;
 mod polygons;

@@ -524,6 +524,8 @@ pub(crate) fn papx(p: &ParaProps, ctx: &dyn ParaCtx) -> Grpprl {
     }
     if let Some(c) = p.shading {
         g.var(P_SHD, &shd(Some(c)));
+    } else if p.shading_auto {
+        g.var(P_SHD, &shd(None));
     }
     if let Some(b) = &p.borders {
         para_borders(&mut g, b);

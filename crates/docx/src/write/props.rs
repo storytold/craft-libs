@@ -335,6 +335,8 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     }
     if let Some(s) = p.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
+    } else if p.shading_auto {
+        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", "auto")]);
     }
     write_tabs(w, p);
     write_text_flow(w, p);

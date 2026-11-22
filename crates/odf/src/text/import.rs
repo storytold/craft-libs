@@ -286,6 +286,7 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             keep_next: look.keep_next.then_some(true),
             borders: look.borders,
             shading: look.shading,
+            shading_auto: look.shading_auto,
             // LibreOffice measures tabs from the indent (`TabsRelativeToIndent`); Word from the
             // margin.
             tabs: look.tabs.clone().map(|mut tabs| {
@@ -356,6 +357,8 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
     (p.indent_left, p.indent_right, p.indent_first) = (sp.left, sp.right, sp.first);
     p.align = look.align;
     p.keep_next = look.keep_next.then_some(true);
+    p.shading = look.shading;
+    p.shading_auto = look.shading_auto;
     if look.contextual.is_some() {
         p.contextual_spacing = look.contextual;
     }
@@ -782,6 +785,8 @@ struct Parsed {
     size: Option<f32>,
     /// The document's default text colour.
     color: Option<craft_wordmodel::props::Rgb>,
+    /// Default/Standard paragraph background, retaining an explicit transparent value.
+    shading: Option<Option<craft_wordmodel::props::Rgb>>,
     /// The custom paragraph styles the paragraphs use, parents included, parents first.
     named: Vec<super::styles::NamedStyle>,
     /// Their ODF names, alongside.
@@ -1009,6 +1014,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         font: styles.doc_font(),
         size: styles.doc_size(),
         color: styles.doc_color(),
+        shading: styles.doc_shading(),
         spacing: styles.doc_spacing(),
         looks: styles.kind_looks(),
         named,
@@ -1055,6 +1061,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         font,
         size,
         color,
+        shading,
         spacing,
         looks,
         named,
@@ -1136,6 +1143,10 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     (d.indent_left, d.indent_right, d.indent_first) = (spacing.left, spacing.right, spacing.first);
     // Unstated: on, XSL's initial value of 2 lines (§20.312 and §20.244 refer to it), and Word's.
     d.widow_control = Some(widows.unwrap_or(true));
+    if let Some(bg) = shading {
+        d.shading = bg;
+        d.shading_auto = bg.is_none();
+    }
     for (kind, look) in &looks {
         apply_look(&mut doc, *kind, look);
     }

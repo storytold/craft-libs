@@ -34,6 +34,7 @@ mod math_normal_text;
 mod missing_pictures;
 mod nested_block_controls;
 mod note_comments;
+mod paragraph_shading;
 mod partial_table_margins;
 mod passthrough;
 mod picture_links;
