@@ -169,6 +169,18 @@ fn an_unticked_check_box_whose_default_is_ticked_says_so() {
 }
 
 #[test]
+fn a_first_entry_choice_is_written_when_the_default_is_another_entry() {
+    // An absent w:result would select the default entry.
+    let first = Ff { bits: 2, default: 1, name: "S", entries: &["One", "Two"], ..Ff::default() };
+    let form = form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&first)));
+    assert!(form.contains(r#"<w:ddList><w:result w:val="0"/><w:default w:val="1"/>"#), "{form}");
+    // With the first entry as the default Word writes neither.
+    let plain = Ff { bits: 2, name: "S", entries: &["One", "Two"], ..Ff::default() };
+    let form = form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&plain)));
+    assert!(form.contains("<w:ddList><w:listEntry"), "{form}");
+}
+
+#[test]
 fn a_text_field_keeps_its_kind() {
     for (n, name) in [(1u16, "number"), (2, "date"), (3, "currentDate"), (4, "currentTime"), (5, "calculated")] {
         let f = Ff { bits: n << 11, name: "T", ..Ff::default() };

@@ -229,10 +229,11 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
         2 => {
             let entries = cur.entries()?;
             out.push_str("<w:ddList>");
-            // Only a choice that names an entry is kept. Word leaves w:result out when the first
-            // entry is chosen (an absent result is the first entry), so 0 is not written.
+            // Only a choice that names an entry is kept (25 means none). An absent w:result selects
+            // the w:default entry, so Word leaves it out when the first entry is chosen and the
+            // default is the first; with another default a choice of 0 is written explicitly.
             let valid = |n: usize| n != 0 && n < entries.len();
-            if valid(usize::from(res)) {
+            if valid(usize::from(res)) || (res == 0 && valid(usize::from(default)) && !entries.is_empty()) {
                 out.push_str(&format!("<w:result w:val=\"{res}\"/>"));
             }
             if valid(usize::from(default)) {
