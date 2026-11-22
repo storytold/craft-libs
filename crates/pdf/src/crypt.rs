@@ -14,6 +14,7 @@
 //! `/Encrypt` dictionary and the first element of the trailer `/ID`.
 
 mod aes_cbc;
+pub mod public_key;
 mod rc4;
 
 use md5::{Digest as _, Md5};
@@ -65,8 +66,10 @@ pub enum Method {
 /// The values of an `/Encrypt` dictionary that the handler needs.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct EncryptDict {
-    /// `/Filter` (must be `Standard`).
+    /// `/Filter`: `Standard` for passwords or `Adobe.PubSec` for public keys.
     pub filter: Vec<u8>,
+    /// Parameters of the public-key handler, absent for password security.
+    pub public_key: Option<public_key::PublicKeyParameters>,
     pub v: i64,
     pub r: i64,
     /// File key length in bits: `/Length` (40 when absent, always 40 for `/V 1`), for `/V 4` the
@@ -86,11 +89,15 @@ pub struct EncryptDict {
     pub ef_f: Vec<u8>,
 }
 
-/// Which password authenticated the document.
+/// Which credential authenticated the document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Auth {
     Owner,
     User,
+    /// Permissions recovered from this recipient's encrypted CMS payload.
+    Recipient {
+        permissions: i32,
+    },
 }
 
 /// Permission flags from `/P`, read the way the handler's revision reads them (ISO 32000-1:2008,
@@ -162,13 +169,19 @@ pub enum StreamKind<'a> {
 }
 
 /// An authenticated security handler for one document.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SecurityHandler {
     dict: EncryptDict,
     key: Zeroizing<Vec<u8>>,
     auth: Auth,
     recovered_user: Option<Zeroizing<Vec<u8>>>,
     methods: Methods,
+}
+
+impl std::fmt::Debug for SecurityHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityHandler").field("filter", &self.dict.filter).field("auth", &self.auth).finish_non_exhaustive()
+    }
 }
 
 /// The crypt filter methods of a handler, resolved once: a document controls both the number of
@@ -348,6 +361,9 @@ impl SecurityHandler {
     /// (Algorithm 13). Where the two differ, a permission counts only when both grant it, so an
     /// edited `/P` grants nothing extra. Without a readable `/Perms`, `/P` applies as before.
     pub fn permissions(&self) -> Permissions {
+        if let Auth::Recipient { permissions } = self.auth {
+            return Permissions { bits: permissions, owner: permissions & 2 != 0, revision: 3 };
+        }
         let bits = self.perms_p().map_or(self.dict.p, |p| self.dict.p & p);
         Permissions { bits, owner: self.auth == Auth::Owner, revision: self.dict.r }
     }
@@ -381,7 +397,7 @@ impl SecurityHandler {
         &self.dict
     }
 
-    /// The file encryption key (for tests and diagnostics).
+    /// The shared secret for authenticated decryption adapters. Never serialize or log it.
     pub fn file_key(&self) -> &[u8] {
         &self.key
     }
