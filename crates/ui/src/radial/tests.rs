@@ -1071,6 +1071,49 @@ fn a_repeat_of_an_arrow_from_before_the_ring_opened_does_not_stop_the_flick() {
 }
 
 #[test]
+fn an_arrow_pressed_before_the_opening_key_in_its_pass_does_not_stop_the_flick() {
+    let m = menu();
+    let press = |key, pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    let mut h = opened_by(Key::Space);
+    h.input_mut().events.push(Event::PointerMoved(MIDDLE));
+    h.step();
+    // Right goes down, then Space opens the ring, the pointer flicks down and Space goes up, all
+    // in one pass.
+    let below = MIDDLE + vec2(0.0, RADIUS * 3.0);
+    for e in [press(Key::ArrowRight, true), press(Key::Space, true), Event::PointerMoved(below), press(Key::Space, false)] {
+        h.input_mut().events.push(e);
+    }
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("lock".into())]);
+    assert!(!m.is_open(&h.ctx));
+}
+
+#[test]
+fn only_a_key_the_ring_acts_on_before_the_release_stops_the_flick() {
+    let space = |pressed| Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    let press = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    let flick_with = |before: Event, after: Event| {
+        let mut h = opened_by(Key::Space);
+        h.input_mut().events.push(Event::PointerMoved(MIDDLE));
+        h.input_mut().events.push(space(true));
+        h.step();
+        h.step();
+        move_to(&mut h, MIDDLE + vec2(0.0, RADIUS * 3.0));
+        for e in [before, space(false), after] {
+            h.input_mut().events.push(e);
+        }
+        h.step();
+        h.state().events.clone()
+    };
+    // The ring does not take Ctrl+Right, so the release picks before the Esc after it.
+    let events = flick_with(press(Key::ArrowRight, Modifiers::CTRL), press(Key::Escape, Modifiers::NONE));
+    assert_eq!(events, vec![RadialEvent::Picked("lock".into())]);
+    // Esc with Alt closes the ring before the release.
+    let events = flick_with(press(Key::Escape, Modifiers::ALT), press(Key::Enter, Modifiers::NONE));
+    assert_eq!(events, vec![RadialEvent::Closed]);
+}
+
+#[test]
 fn each_tab_in_one_pass_moves_the_highlight() {
     let m = menu();
     for (modifiers, to) in [(Modifiers::NONE, 2), (Modifiers::SHIFT, 7)] {
@@ -1236,6 +1279,52 @@ fn a_press_on_a_disabled_item_that_is_enabled_before_the_release_picks_nothing()
     h.input_mut().events.push(Event::PointerButton { pos: slot(4, 8), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.step();
     assert_eq!(h.state().events, vec![RadialEvent::Picked("lock".into())]);
+}
+
+#[test]
+fn a_press_on_a_disabled_item_released_over_its_neighbor_picks_nothing() {
+    // Just inside Group's sector, and one point lower, just inside Ungroup's: closer together
+    // than egui's click distance.
+    let in_group = MIDDLE + vec2(66.0, 27.0);
+    let in_ungroup = MIDDLE + vec2(66.0, 28.0);
+    assert_eq!(hit(MIDDLE, in_group, 8, CENTER / 2.0, menu().outer_radius()), RingHit::Slot(2));
+    assert_eq!(hit(MIDDLE, in_ungroup, 8, CENTER / 2.0, menu().outer_radius()), RingHit::Slot(3));
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let disabled_group = || {
+        let mut list = items(8);
+        list[2] = RadialItem::new("group", "Group").disabled("Select two objects");
+        let mut h = harness(list);
+        open(&mut h, MIDDLE, false);
+        move_to(&mut h, in_group);
+        h
+    };
+
+    // The press and the release in one pass.
+    let mut h = disabled_group();
+    h.input_mut().events.push(button(in_group, true));
+    h.input_mut().events.push(Event::PointerMoved(in_ungroup));
+    h.input_mut().events.push(button(in_ungroup, false));
+    h.step();
+    assert!(h.state().events.is_empty(), "{:?}", h.state().events);
+    assert!(menu().is_open(&h.ctx));
+
+    // The release a pass after the press.
+    let mut h = disabled_group();
+    h.input_mut().events.push(button(in_group, true));
+    h.step();
+    h.input_mut().events.push(Event::PointerMoved(in_ungroup));
+    h.input_mut().events.push(button(in_ungroup, false));
+    h.step();
+    assert!(h.state().events.is_empty(), "{:?}", h.state().events);
+
+    // A click that goes down and up in Ungroup still picks it.
+    let mut h = disabled_group();
+    move_to(&mut h, in_ungroup);
+    h.input_mut().events.push(button(in_ungroup, true));
+    h.step();
+    h.input_mut().events.push(button(in_ungroup, false));
+    h.step();
+    assert_eq!(h.state().events, vec![RadialEvent::Picked("ungroup".into())]);
 }
 
 #[test]
@@ -1522,6 +1611,62 @@ fn an_open_ring_keeps_other_keys_from_the_panels_under_it() {
     h.step();
     assert_eq!(h.state().later_keys, 0);
     assert!(menu().is_open(&h.ctx));
+}
+
+#[test]
+fn keys_before_the_opening_press_in_its_pass_still_reach_the_panels() {
+    let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        |ui, app: &mut App| {
+            let fresh = |i: &egui::InputState| i.events.iter().any(|e| matches!(e, Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
+            if !menu().is_open(ui.ctx()) && ui.input(fresh) {
+                ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space));
+                menu().open_held_key(ui.ctx(), MIDDLE, Key::Space);
+            }
+            if let Some(event) = menu().show(ui.ctx(), &app.items, &RadialLabels::default()) {
+                app.events.push(event);
+            }
+            let other = |e: &&Event| matches!(e, Event::Key { key: Key::Z | Key::Delete, pressed: true, .. });
+            app.later_keys += ui.input(|i| i.events.iter().filter(other).count() + i.raw.events.iter().filter(other).count());
+        },
+        app(items(8)),
+    );
+    let key = |key, pressed, modifiers| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+    for e in [key(Key::Z, true, Modifiers::COMMAND), key(Key::Space, true, Modifiers::NONE), key(Key::Delete, true, Modifiers::NONE)] {
+        h.input_mut().events.push(e);
+    }
+    h.step();
+    assert!(menu().is_open(&h.ctx));
+    assert_eq!(h.state().later_keys, 2, "the Ctrl+Z before Space, in both lists, and not the Delete after it");
+
+    // Space pressed twice in the pass that opens the ring: a key between the two presses came
+    // after the ring opened.
+    menu().close(&h.ctx);
+    h.input_mut().events.push(key(Key::Z, false, Modifiers::COMMAND));
+    h.input_mut().events.push(key(Key::Delete, false, Modifiers::NONE));
+    h.input_mut().events.push(key(Key::Space, false, Modifiers::NONE));
+    h.step();
+    h.state_mut().later_keys = 0;
+    for e in [
+        key(Key::Space, true, Modifiers::NONE),
+        key(Key::Space, false, Modifiers::NONE),
+        key(Key::Delete, true, Modifiers::NONE),
+        key(Key::Space, true, Modifiers::NONE),
+    ] {
+        h.input_mut().events.push(e);
+    }
+    h.step();
+    assert!(menu().is_open(&h.ctx));
+    assert_eq!(h.state().later_keys, 0, "the Delete between the two presses of Space");
+}
+
+#[test]
+fn a_key_equal_to_one_before_the_opening_press_and_one_after_counts_as_after() {
+    let press = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+    let raw = [press(Key::Z), press(Key::Space), press(Key::Z)];
+    // The app consumed one Z and the Space: the Z left over is read as the one after the Space.
+    assert_eq!(processed_before(&raw, &[press(Key::Z)], 1), 0);
+    assert_eq!(processed_before(&raw, &[press(Key::Z), press(Key::Z)], 1), 1);
+    assert_eq!(processed_before(&raw, &raw, 2), 2);
 }
 
 #[test]

@@ -10,7 +10,8 @@
 //! memory under its id, so the app calls [`RadialMenu::show`] every frame and stores nothing.
 //!
 //! While the ring is open it takes every key press, typed or composed text and clipboard event,
-//! so a shortcut or a tool key does not reach the app's panels under it. Key releases still reach
+//! so a shortcut or a tool key does not reach the app's panels under it. Input that came before
+//! the opening press in the pass that opened the ring is left for the app. Key releases still reach
 //! the app, so it can report the opening key's release with [`RadialMenu::release`]. egui's
 //! `key_down` still reports held keys; an app that acts on a held key reads
 //! [`RadialMenu::is_open`] before calling [`RadialMenu::show`] and skips that for the rest of the
@@ -151,8 +152,9 @@ fn mirrored(direction: Vec2, rtl: bool) -> Vec2 {
 
 /// Removes this pass's key presses, typed and composed text, clipboard events and assistive
 /// technology requests for widgets other than `ring`'s, so the panels drawn after an open ring do
-/// not see them. Key releases stay for the app.
-fn swallow_keys(ctx: &Context, ring: &[egui::accesskit::NodeId]) {
+/// not see them. Key releases stay for the app, and so do the first `keep.0` raw events and the
+/// first `keep.1` processed events: those that came before the press that opened the ring.
+fn swallow_keys(ctx: &Context, ring: &[egui::accesskit::NodeId], keep: (usize, usize)) {
     ctx.input_mut(|input| {
         let modal = |e: &Event| match e {
             Event::AccessKitActionRequest(request) => !ring.contains(&request.target_node),
@@ -168,8 +170,16 @@ fn swallow_keys(ctx: &Context, ring: &[egui::accesskit::NodeId]) {
                     | Event::Ime(_)
             ),
         };
-        input.events.retain(|e| !modal(e));
-        input.raw.events.retain(|e| !modal(e));
+        let mut n = 0;
+        input.events.retain(|e| {
+            n += 1;
+            n <= keep.1 || !modal(e)
+        });
+        let mut n = 0;
+        input.raw.events.retain(|e| {
+            n += 1;
+            n <= keep.0 || !modal(e)
+        });
     });
 }
 
@@ -184,16 +194,16 @@ fn release_pos(ctx: &Context, fallback: Option<Pos2>) -> Option<Pos2> {
 }
 
 /// Where this pass's click with the primary button ended, as [`release_pos`] finds it, and
-/// whether the primary button went down for it in this pass.
-fn primary_click(ctx: &Context) -> Option<(Pos2, bool)> {
+/// where the primary button went down for it when that was in this pass.
+fn primary_click(ctx: &Context) -> Option<(Pos2, Option<Pos2>)> {
     let max = ctx.options(|o| o.input_options.max_click_dist);
     ctx.input(|i| {
         // Where the last press in this pass went down while no button has gone up since, and
         // whether the pointer moved too far from it.
         let mut origin: Option<Pos2> = None;
         let mut far = false;
-        // The primary button went down in this pass and has not gone up since.
-        let mut primary_here = false;
+        // Where the primary button went down in this pass, while it has not gone up since.
+        let mut primary_press = None;
         let mut click = None;
         for e in &i.raw.events {
             match e {
@@ -205,14 +215,16 @@ fn primary_click(ctx: &Context) -> Option<(Pos2, bool)> {
                 Event::PointerButton { pos, button, pressed: true, .. } => {
                     origin = Some(*pos);
                     far = false;
-                    primary_here |= *button == egui::PointerButton::Primary;
+                    if *button == egui::PointerButton::Primary {
+                        primary_press = Some(*pos);
+                    }
                 }
                 Event::PointerButton { pos, button, pressed: false, .. } => {
                     if *button == egui::PointerButton::Primary {
                         if !far {
-                            click = Some((*pos, primary_here));
+                            click = Some((*pos, primary_press));
                         }
-                        primary_here = false;
+                        primary_press = None;
                     }
                     origin = None;
                 }
@@ -221,6 +233,39 @@ fn primary_click(ctx: &Context) -> Option<(Pos2, bool)> {
         }
         click
     })
+}
+
+/// Where the primary button last went down in this pass, or else where egui's current press began.
+fn primary_press_pos(ctx: &Context) -> Option<Pos2> {
+    ctx.input(|i| {
+        i.raw
+            .events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+            .or(i.pointer.press_origin())
+    })
+}
+
+/// How many of `events`, which are `raw` with some events removed, come from `raw[..end]`. Each
+/// event is matched to the latest raw event it can be, so an event equal to one before `end` and
+/// one after it counts as after.
+fn processed_before(raw: &[Event], events: &[Event], end: usize) -> usize {
+    let mut until = raw.len();
+    let mut after = 0;
+    for e in events.iter().rev() {
+        match raw[..until].iter().rposition(|r| r == e) {
+            Some(at) if at >= end => {
+                until = at;
+                after += 1;
+            }
+            _ => break,
+        }
+    }
+    events.len() - after
 }
 
 /// The four arrows in the order the ring reads them: up, down, left, right.
@@ -363,6 +408,9 @@ struct View {
     /// The primary button went down over other commands, or over the same commands drawn
     /// elsewhere: mirrored, moved or resized. A pointer click then picks nothing.
     press_moved: bool,
+    /// The primary button went down over an item that was disabled then. A pointer click then
+    /// picks nothing, even when it goes up over a neighbor.
+    press_on_disabled: bool,
 }
 
 /// What the ring drew in one pass: each slot's command, whether it was enabled, and where the
@@ -382,6 +430,13 @@ impl Layout {
     /// The same commands in the same places, whichever are enabled.
     fn same_places(&self, other: &Self) -> bool {
         Self { enabled: other.enabled, ..*self } == *other
+    }
+
+    /// Where `pointer` lay relative to the ring as this layout drew it.
+    fn hit(&self, pointer: Pos2) -> RingHit {
+        let count = self.commands.iter().filter(|c| c.is_some()).count();
+        let outer = self.radius + self.button / 2.0 + MARGIN;
+        hit(self.center, self.center + mirrored(pointer - self.center, self.rtl), count, CENTER / 2.0, outer)
     }
 }
 
@@ -415,6 +470,8 @@ struct State {
     last_focus: Option<Id>,
     /// What was drawn when the primary pointer button went down, while it is down.
     press_layout: Option<Layout>,
+    /// Where the primary pointer button went down, while it is down.
+    press_at: Option<Pos2>,
     /// The arrows the ring took that are still down, in [`ARROWS`] order. An arrow that went down
     /// with Alt, Ctrl or Command, or before the ring opened, is not among them. Only the arrows
     /// among them repeat.
@@ -621,6 +678,7 @@ impl RadialMenu {
             drawn: None,
             last_focus: None,
             press_layout: None,
+            press_at: None,
             arrows: [false; 4],
             tab: false,
             last_pointer: pass_start,
@@ -739,7 +797,28 @@ impl RadialMenu {
         stops.push(self.close_id());
         // The widgets an assistive technology may still act on while the ring is open.
         let ring_nodes: Vec<egui::accesskit::NodeId> = stops.iter().map(Id::accesskit_id).collect();
-        let swallow_keys = |ctx: &Context| swallow_keys(ctx, &ring_nodes);
+        let opening_pass = ctx.cumulative_pass_nr() == state.opened_pass;
+        // In the opening pass, the first and the last press of the key or button that opened the
+        // ring, among the raw events. Input before the first came before the ring existed: the
+        // ring does not read it and leaves it for the app. The hold starts at the last. Input
+        // between two such presses goes to the ring, since the ring cannot tell which press the
+        // app opened it on.
+        let open_presses = ctx.input(|i| {
+            let is_open_press = |e: &Event| match (state.opener, state.button) {
+                (Some(key), _) => matches!(e, Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key),
+                (None, Some(button)) => matches!(e, Event::PointerButton { button: b, pressed: true, .. } if *b == button),
+                (None, None) => false,
+            };
+            Some((i.raw.events.iter().position(is_open_press)?, i.raw.events.iter().rposition(is_open_press)?))
+        });
+        let open_presses = open_presses.filter(|_| opening_pass);
+        let open_press = open_presses.map(|(first, _)| first);
+        // The processed events before the first opening press, and the first processed event
+        // after it.
+        let (before_open, first_event) = open_press
+            .map_or((0, 0), |at| ctx.input(|i| (processed_before(&i.raw.events, &i.events, at), processed_before(&i.raw.events, &i.events, at + 1))));
+        let keep = (open_press.unwrap_or(0), before_open);
+        let swallow_keys = |ctx: &Context| swallow_keys(ctx, &ring_nodes, keep);
         // Each slot's command, to tell when the app put another command in a slot.
         let mut commands = [None; MAX_ITEMS];
         for (slot, item) in commands.iter_mut().zip(items) {
@@ -757,7 +836,6 @@ impl RadialMenu {
             self.finish(ctx, state);
             return Some(RadialEvent::Closed);
         }
-        let opening_pass = ctx.cumulative_pass_nr() == state.opened_pass;
         // The opening key's hold, and where it ends among this pass's events: at a release of that
         // key, but in the opening pass only one after the press that opened the ring.
         let hold_key = state.opener.filter(|_| state.held);
@@ -768,15 +846,7 @@ impl RadialMenu {
         if let Some(opener) = hold_key {
             let is_release = |e: &Event| matches!(e, Event::Key { key, pressed: false, .. } if *key == opener);
             let release = ctx.input(|i| {
-                let from = if opening_pass {
-                    i.raw
-                        .events
-                        .iter()
-                        .rposition(|e| matches!(e, Event::Key { key, pressed: true, repeat: false, .. } if *key == opener))
-                        .map_or(0, |at| at + 1)
-                } else {
-                    0
-                };
+                let from = open_presses.map_or(0, |(_, last)| last + 1);
                 let at = i.raw.events.iter().skip(from).position(is_release)? + from;
                 // `Some(None)`: the pointer left the window before the release.
                 let moved = i.raw.events[..at].iter().rev().find_map(|e| match e {
@@ -825,11 +895,17 @@ impl RadialMenu {
         // button went up and down again. Keys and assistive clicks do not depend on the press.
         let pressed_now = match primary_click(ctx) {
             Some((_, here)) => here,
-            None => state.press_layout.is_none() && ctx.input(|i| i.pointer.primary_pressed()),
+            None if state.press_layout.is_none() && ctx.input(|i| i.pointer.primary_pressed()) => primary_press_pos(ctx),
+            None => None,
         };
-        let at_press = if pressed_now { Some(state.drawn.unwrap_or(layout)) } else { state.press_layout };
+        let (at_press, press_at) = match pressed_now {
+            Some(at) => (Some(state.drawn.unwrap_or(layout)), Some(at)),
+            None => (state.press_layout, state.press_at),
+        };
         let press_moved = at_press.is_some_and(|at_press| !at_press.same_places(&layout));
         let press_disabled = at_press.map_or([false; MAX_ITEMS], |at_press| at_press.enabled.map(|on| !on));
+        // The press itself landed on an item that was disabled, as that pass drew the ring.
+        let press_on_disabled = at_press.zip(press_at).is_some_and(|(drawn, at)| matches!(drawn.hit(at), RingHit::Slot(i) if !drawn.enabled[i]));
 
         let pointer = ctx.pointer_latest_pos();
         let moved_since_open = |p: Pos2| state.pointer_at_open.is_none_or(|open| open.distance(p) > self.inner_radius());
@@ -849,33 +925,23 @@ impl RadialMenu {
         };
         let aimed = |p: Pos2, held: bool| aimed_slot(p, held).filter(|i| enabled[*i]);
 
-        // The opening key went up this pass, and no Esc, Tab or arrow came before it: the flick it
-        // ends picks now, before any key that came after the release. A repeat of Tab or an arrow
-        // counts only when the ring took its press in an earlier pass; a fresh press before the
-        // release counts by itself.
-        let repeats = |key: Key| match ARROWS.iter().position(|k| *k == key) {
-            Some(n) => state.arrows[n],
-            None => key != Key::Tab || state.tab,
+        // The pick that the opening key's release this pass makes when no key acted before it in
+        // an earlier pass or in this one. The key loop below reads the release in order, so only
+        // an Esc, Tab or arrow that the loop acts on before the release keeps the flick from
+        // picking, and keys after the release do not.
+        let keys_used_before = state.keys_used;
+        let flick = || {
+            let at = pointer_at_release.filter(|_| !keys_used_before)?;
+            let i = at.filter(|p| moved_since_open(*p)).and_then(|p| aimed(p, true)).filter(|i| !changed[*i])?;
+            Some(RadialEvent::Picked(items[i].id.clone()))
         };
-        let keys_before_release = hold_ends.is_some_and(|end| {
-            ctx.input(|i| {
-                i.events[..end].iter().any(|e| {
-                    matches!(e, Event::Key { key, pressed: true, repeat, modifiers, .. }
-                        if matches!(key, Key::Escape | Key::Tab | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight)
-                            && !modifiers.alt
-                            && !(*repeat && (hold_key == Some(*key) || !repeats(*key))))
-                })
-            })
-        });
-        if let Some(at) = pointer_at_release
-            && !state.keys_used
-            && !keys_before_release
-            && let Some(i) = at.filter(|p| moved_since_open(*p)).and_then(|p| aimed(p, true)).filter(|i| !changed[*i])
+        // A release found among the raw events but not among the processed ones comes first.
+        if hold_ends.is_none()
+            && let Some(picked) = flick()
         {
             swallow_keys(ctx);
-            let picked = items[i].id.clone();
             self.finish(ctx, state);
-            return Some(RadialEvent::Picked(picked));
+            return Some(picked);
         }
 
         // Keys are read before the ring's widgets exist, and egui's own focus step is canceled,
@@ -925,6 +991,18 @@ impl RadialMenu {
             let mut held_now = state.arrows;
             let mut tab_held = state.tab;
             for (n_event, e) in input.events.iter().enumerate() {
+                // The opening key went up here, and no key before it moved the highlight: the
+                // flick it ends picks now, before the keys after it.
+                if hold_ends == Some(n_event)
+                    && move_to.is_none()
+                    && let Some(picked) = flick()
+                {
+                    event = Some(picked);
+                    break;
+                }
+                if n_event < first_event {
+                    continue;
+                }
                 // Repeats of the opening key during its hold, up to its release, are not input to
                 // the ring. Repeats after the release come from a new press.
                 let opener_repeat = |key: Key, repeat: bool| repeat && hold.is_some_and(|(k, end)| k == key && n_event < end);
@@ -1052,11 +1130,11 @@ impl RadialMenu {
             // for an app that reads the pointer itself.
             ui.expand_to_include_rect(screen);
             ui.scope_builder(UiBuilder::new().max_rect(screen).accessibility_role(Role::Menu).accessibility_label(labels.menu.clone()), |ui| {
-                ended = self.draw(ui, center, items, labels, View { rtl, changed, press_disabled, press_moved }, caption_for)
+                ended = self.draw(ui, center, items, labels, View { rtl, changed, press_disabled, press_moved, press_on_disabled }, caption_for)
             });
             if ended.is_none() && backdrop.clicked() {
                 ended = match release_pos(ctx, backdrop.interact_pointer_pos()).map(ring_hit) {
-                    Some(RingHit::Slot(i)) if enabled[i] && !changed[i] && !press_moved && !press_disabled[i] => {
+                    Some(RingHit::Slot(i)) if enabled[i] && !changed[i] && !press_moved && !press_on_disabled && !press_disabled[i] => {
                         Some(RadialEvent::Picked(items[i].id.clone()))
                     }
                     Some(RingHit::Slot(_)) => None,
@@ -1073,10 +1151,10 @@ impl RadialMenu {
             state.last_pointer = pointer;
             // A press lands on what was drawn in the last pass.
             let drawn = state.drawn.unwrap_or(layout);
-            state.press_layout = match ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down())) {
-                (true, _) => Some(drawn),
-                (false, true) => state.press_layout,
-                (false, false) => None,
+            (state.press_layout, state.press_at) = match ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down())) {
+                (true, _) => (Some(drawn), primary_press_pos(ctx)),
+                (false, true) => (state.press_layout, state.press_at),
+                (false, false) => (None, None),
             };
             state.drawn = Some(layout);
             state.last_focus = ctx.memory(|m| m.focused()).filter(|id| self.owns(*id)).or(state.last_focus);
@@ -1227,7 +1305,7 @@ impl RadialMenu {
             None => own.map_or(RingHit::Center, RingHit::Slot),
         };
         // Only a pointer click depends on its press.
-        let press_stale = |i: usize| pointer.is_some() && (view.press_moved || view.press_disabled[i]);
+        let press_stale = |i: usize| pointer.is_some() && (view.press_moved || view.press_on_disabled || view.press_disabled[i]);
         match at {
             RingHit::Slot(i) if items[i].enabled && !view.changed[i] && !press_stale(i) => Some(RadialEvent::Picked(items[i].id.clone())),
             RingHit::Slot(_) => None,
