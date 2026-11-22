@@ -112,7 +112,8 @@ fn text_y_counts_up_with_y_up() {
         let g = Graph::parse(&format!("size 32\nnode 1 text text=\"HI\" size=0.3 y=0.25{extra}\noutput o 1\n")).unwrap();
         let out = g.evaluate(Some(32)).unwrap();
         let lit: Vec<usize> = out["o"].px.iter().enumerate().filter(|(_, p)| p[0] > 0.5).map(|(i, _)| i / 32).collect();
-        lit.iter().sum::<usize>() as f32 / lit.len().max(1) as f32
+        assert!(!lit.is_empty(), "no text pixels{extra}");
+        lit.iter().sum::<usize>() as f32 / lit.len() as f32
     };
     let (down, up) = (row(""), row(" y_up=1"));
     assert!(down > 20.0 && up < 12.0, "rows {down} {up}");

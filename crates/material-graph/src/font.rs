@@ -3,7 +3,7 @@
 //!
 //! The reader handles the common case: a single TrueType face with a Unicode `cmap` (format 4 or 12) and `glyf`
 //! outlines, including composite glyphs. Not supported: OpenType/CFF outlines (`.otf`), font collections, hinting,
-//! kerning and complex-script shaping.
+//! kerning, complex-script shaping and composite components placed by matching points (only x/y offsets).
 
 use crate::vector::{P, Poly, Seg, Xf, flatten};
 
