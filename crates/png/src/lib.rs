@@ -167,7 +167,7 @@ mod tests {
             let mut decoded = vec![0u8; reader.output_buffer_size().ok_or("output size")?];
             let info = reader.next_frame(&mut decoded)?;
             assert_eq!((info.width, info.height, info.color_type, info.bit_depth), (width, height, color, png::BitDepth::Sixteen));
-            let decoded_u16: Vec<u16> = decoded.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+            let decoded_u16: Vec<u16> = decoded.as_chunks::<2>().0.iter().copied().map(u16::from_be_bytes).collect();
             assert_eq!(decoded_u16, expected);
         }
         Ok(())
