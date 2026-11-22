@@ -1,6 +1,6 @@
 //! The W × H × Resolution cells both crop bars share, and the rules on [`CropSizeFields`].
 
-use super::options::{CropLength, FIELD_MAX, LENGTH_MIN, ResolutionUnit, trim_number};
+use super::options::{CropLength, CropRatio, CropSettings, FIELD_MAX, LENGTH_MIN, ResolutionUnit, trim_number};
 use super::{CropBarWords, CropDocument, CropSizeFields};
 use craft_behavior::{IconId, NumberCodec};
 use craft_ui::buttons::IconButton;
@@ -235,5 +235,32 @@ impl CropSizeFields {
             (px.is_finite() && px > 0.0).then_some(px)
         };
         CropSizeTarget { width: pixels(self.width), height: pixels(self.height), resolution }
+    }
+
+    /// The W and H lengths in document pixels at the document's own resolution, for the frame's
+    /// size. Unlike [`target`](Self::target), the Resolution field never enters: it names the
+    /// commit's resample, not the frame's measure, so retyping it or switching its px/in - px/cm
+    /// unit leaves the frame's pixel size alone (#3003 review).
+    fn frame_sides(&self, document: &CropDocument, units: &Units) -> (Option<f64>, Option<f64>) {
+        let pixels = |length: Option<CropLength>| {
+            let length = CropLength::usable(length)?;
+            let px = length.unit.to_pixels(length.value, 0.0, document.resolution, units.points_per_inch())?;
+            (px.is_finite() && px > 0.0).then_some(px)
+        };
+        (pixels(self.width), pixels(self.height))
+    }
+}
+
+impl CropSettings {
+    /// The size the W and H fields name for the crop frame, in [`CropRatio::Size`] mode with both
+    /// sides holding lengths; `None` otherwise. Each length converts at the document's own
+    /// resolution - [`CropSettings::target`]'s Resolution is the commit's resample, never the
+    /// frame's measure (#3003 review): a resolution edit never moves the frame.
+    pub(super) fn frame_size(&self, document: &CropDocument, units: &Units) -> Option<(f64, f64)> {
+        if self.ratio != CropRatio::Size {
+            return None;
+        }
+        let (width, height) = self.size.frame_sides(document, units);
+        Some((width?, height?))
     }
 }

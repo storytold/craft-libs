@@ -392,10 +392,12 @@ impl CropTool {
     /// The bar changed the ratio or W x H x Resolution ([`CropBarOutput::ratio`](super::CropBarOutput::ratio)):
     /// a ratio refits the frame to [`CropSettings::ratio_value`] about its centre, and W x H x Resolution
     /// sets the frame to the size the fields name, centred on it (photocraft#16367: the typed size is
-    /// the crop, and the view's zoom only changes how large that document size looks). From the frame
-    /// the field edit began with while `editing`, as one box step. Returns the frame's `Set` for the
-    /// host's mirror, or `None` when nothing changed. In image mode the next pass turns the view with
-    /// the frame.
+    /// the crop, and the view's zoom only changes how large that document size looks). The frame
+    /// converts at the document's resolution ([`CropSettings::frame_size`]); the Resolution field
+    /// names only the commit's resample, so editing it never moves the frame. From the frame the
+    /// field edit began with while `editing`, as one box step. Returns the frame's `Set` for the
+    /// host's mirror, or `None` when nothing changed. In image mode the next pass turns the view
+    /// with the frame.
     pub fn refit(&mut self, settings: &CropSettings, document: &CropDocument, units: &Units, editing: bool) -> Option<CropEvent> {
         self.session.show_frame();
         let base = self.session.ratio_base(editing);
@@ -404,17 +406,17 @@ impl CropTool {
             return None;
         }
         let (current, base) = (self.session.frame()?, base?);
-        let target = settings.target(document, units);
-        let next = match target {
-            // Both W and H typed: the frame takes that document size about the centre of the frame
-            // the edit began with. The view's zoom only changes how large that document size looks.
-            Some(target) => {
+        let next = match settings.frame_size(document, units) {
+            // Both W and H typed: the frame takes that document size (converted at the
+            // document's resolution) about the centre of the frame the edit began with. The view's
+            // zoom only changes how large that document size looks.
+            Some((width, height)) => {
                 let center = base.rect.center();
                 let typed_rect = craft_behavior::kurbo::Rect::new(
-                    center.x - target.width / 2.0,
-                    center.y - target.height / 2.0,
-                    center.x + target.width / 2.0,
-                    center.y + target.height / 2.0,
+                    center.x - width / 2.0,
+                    center.y - height / 2.0,
+                    center.x + width / 2.0,
+                    center.y + height / 2.0,
                 );
                 // Guarded like `fitted_ratio` guards its rect: only a finite converted rect builds
                 // a frame (a typed FIELD_MAX length converts to at most about 1e18 px, finite).
@@ -456,8 +458,9 @@ impl CropTool {
             }
         };
         // W x H x Resolution can change the output size even when the frame already fits, so it
-        // makes the frame a pending crop.
-        let sized = target.is_some();
+        // makes the frame a pending crop. (The commit's target, with its Resolution; the frame
+        // above converts at the document's resolution.)
+        let sized = settings.target(document, units).is_some();
         // The untouched selection frame leaves its state with the first refit, even when it already fits.
         let selection = self.session.from_selection();
         if next == current && !selection && (editing || !sized) {
