@@ -269,7 +269,7 @@ mod tests {
             let slot: DictSlot<AffixDict> = DictSlot::new(names, "Test");
             let dictionary = load_embedded(&slot, &packs).unwrap();
             assert!(dictionary.check("word") && !dictionary.check("wrong"));
-            assert!(crate::hunspell::load_error(slot.name()).is_none(), "successful fallback clears the failed regional diagnostic");
+            assert!(crate::hunspell::source_load_error(slot.name()).is_none(), "successful fallback clears the failed regional diagnostic");
             let _ = slot.keep(0, Arc::new(dictionary), || {});
             assert!(slot.has_dictionary(), "the loaded slot must not report a missing dictionary");
             assert!(load_embedded(&slot, &[]).is_none());
@@ -326,10 +326,11 @@ mod tests {
             crate::packs::EmbeddedPack { locale: "pl", aff: b"", dic: b"1\nfallbackword\n", patterns: "", nonstandard: "" },
         ];
         assert!(load_embedded(&slot, &packs[..1]).is_none());
-        assert!(crate::hunspell::load_error(slot.name()).unwrap().1.contains("no words"));
+        assert!(crate::hunspell::source_load_error(slot.name()).unwrap().contains("no words"));
+        assert!(crate::hunspell::load_error(slot.name()).is_none(), "embedded diagnostics never invent a file path");
         let dictionary = load_embedded(&slot, &packs).unwrap();
         assert!(dictionary.check("fallbackword") && !dictionary.check("wrongword"));
-        assert!(crate::hunspell::load_error(slot.name()).is_none());
+        assert!(crate::hunspell::source_load_error(slot.name()).is_none());
         let _ = slot.keep(0, Arc::new(dictionary), || {});
         assert!(slot.has_dictionary());
     }
