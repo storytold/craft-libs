@@ -85,6 +85,21 @@ fn prefiltering_over_the_byte_or_work_budget_is_refused() {
 }
 
 #[test]
+fn prefiltering_counts_the_source_pyramid_lists() {
+    // A 16 × 8 source is halved once to 8 × 4 for the pyramid, and its second level is 8 × 4.
+    let env = env_from(16, 8, |_, _| [1.0; 3]);
+    let options = opts(|o| (o.levels, o.samples) = (2, 1));
+    let (image, reference) = (size_of::<EnvImage>() as u64, size_of::<&EnvImage>() as u64);
+    let pixels = (128 + 32 + 32) * 12;
+    let sample = size_of::<([f32; 3], f32, &EnvImage)>() as u64;
+    let level_lists = 2 * (size_of::<(u32, u32)>() as u64 + image);
+    // The halved source level, and references to it and to the source.
+    let total = pixels + sample + level_lists + image + 2 * reference;
+    assert_eq!(try_prefilter(&env, &options, &limits(|l| l.max_bytes = total - 1)), Err(PbrError::TooLarge(16, 8)));
+    assert!(try_prefilter(&env, &options, &limits(|l| l.max_bytes = total)).is_ok());
+}
+
+#[test]
 fn sh9_over_the_byte_budget_for_its_column_table_is_refused() {
     // A 2048 × 1 source is 24 KiB; its column table holds six `f64` per column, 96 KiB.
     let env = env_from(2048, 1, |_, _| [1.0; 3]);

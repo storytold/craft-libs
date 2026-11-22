@@ -6,7 +6,7 @@ use std::collections::BinaryHeap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::raster::f32_crossing;
-use crate::scene::{EnvInfo, Scene, ShadowMap, TexInfo, unit, validate};
+use crate::scene::{EnvInfo, Light, Scene, ShadowMap, TexInfo, unit, validate};
 use crate::shade::sample;
 use crate::{Limits, RenderError, filled, for_each_item, map_collect, try_with_capacity};
 
@@ -115,13 +115,17 @@ fn light_poly(s: &Scene, m: &ShadowMap, ids: [usize; 3]) -> Vec<LightCorner> {
 /// The light-space polygon on `m`'s texels.
 fn map_corners(m: &ShadowMap, poly: &[LightCorner]) -> Vec<MapCorner> {
     let c = m.size as f32 * 0.5;
+    // A finite coordinate whose product with the focal length overflows f32 is projected in f64.
+    let at = |x: f32, z: f32, fast: f32| {
+        if fast.is_finite() || !x.is_finite() { f64::from(fast) } else { f64::from(x) * f64::from(m.focal) / f64::from(z) + f64::from(c) }
+    };
     poly.iter()
         .map(|(p, uv)| {
             if m.ortho {
-                ([(p[0] * m.focal + c) as f64, (p[1] * m.focal + c) as f64], 1.0, p[2], *uv)
+                ([at(p[0], 1.0, p[0] * m.focal + c), at(p[1], 1.0, p[1] * m.focal + c)], 1.0, p[2], *uv)
             } else {
                 let iz = 1.0 / p[2];
-                ([(p[0] * m.focal * iz + c) as f64, (p[1] * m.focal * iz + c) as f64], iz, p[2], *uv)
+                ([at(p[0], p[2], p[0] * m.focal * iz + c), at(p[1], p[2], p[1] * m.focal * iz + c)], iz, p[2], *uv)
             }
         })
         .collect()
@@ -300,7 +304,8 @@ pub fn shadow_point_face_size(size: u32, draft: bool) -> u32 {
 }
 
 /// Per-light map sizes (`None` = this light gets no shadow map). `kinds`: 0 = no shadows (costs
-/// nothing), 1 = single map (spot or parallel), 2 = point cube (budgeted as its six faces).
+/// nothing), 1 = single map (spot or parallel), 2 = cube (a point light, or a spot light wider
+/// than one map; budgeted as its six faces).
 /// Lights start at their full size; while the scene exceeds [`MAX_SHADOW_TEXELS`] the largest
 /// map above its floor (512, or 128 for a cube face) is halved, the earliest light first on
 /// ties, and once every light is at its floor the last lights lose their shadows. Deterministic,
@@ -406,6 +411,20 @@ fn bounding_sphere(s: &Scene) -> ([f64; 3], f64) {
     (centre, radius)
 }
 
+/// The widest half angle, in radians, that one spot light map covers (about 83°).
+const MAX_SPOT_HALF_ANGLE: f64 = 1.45;
+
+/// The half angle a spot light's map covers: the outer cone's half angle plus 0.05 radians.
+fn spot_half_angle(l: &Light) -> f64 {
+    l.cos_outer.clamp(-1.0, 1.0).acos() as f64 + 0.05
+}
+
+/// Whether light `l` has a cube of six maps instead of one map: a point light, or a spot light
+/// whose cone with its margin is wider than one map covers.
+pub(crate) fn cube_maps(l: &Light) -> bool {
+    l.kind == 2 || (l.kind == 1 && spot_half_angle(l) > MAX_SPOT_HALF_ANGLE)
+}
+
 /// The maps of light `li` at `size`, appended to `maps`.
 fn light_maps(s: &Scene, li: usize, size: u32, sphere: ([f64; 3], f64), maps: &mut Vec<ShadowMap>) {
     let (centre, radius) = sphere;
@@ -421,8 +440,8 @@ fn light_maps(s: &Scene, li: usize, size: u32, sphere: ([f64; 3], f64), maps: &m
             let focal = (size as f64 * 0.5 / radius) as f32;
             maps.push(ShadowMap { view: basis(eye, dir, hint), focal, ortho: true, size, offset: 0, bias: 1.5, radius: soft });
         }
-        1 => {
-            let half = (l.cos_outer.clamp(-1.0, 1.0).acos() as f64 + 0.05).min(1.45);
+        1 if !cube_maps(&l) => {
+            let half = spot_half_angle(&l);
             let focal = (size as f64 * 0.5 / half.tan()) as f32;
             maps.push(ShadowMap { view: basis(pos, dir, hint), focal, ortho: false, size, offset: 0, bias: 1.5, radius: soft });
         }
@@ -487,7 +506,7 @@ fn shadow_maps_checked(s: &mut Scene, draft: bool, limits: &Limits) -> Result<()
         .map(|l| {
             if l.shadow < 0 {
                 0
-            } else if l.kind > 1 {
+            } else if cube_maps(l) {
                 2
             } else {
                 1

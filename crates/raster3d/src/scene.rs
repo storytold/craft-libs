@@ -1,6 +1,7 @@
 //! The scene: everything the rasterizer needs, flattened into world-space triangles and plain
 //! arrays, and the checks a scene passes before it is rendered.
 
+use crate::shadow::cube_maps;
 use crate::{Limits, RenderError};
 
 /// One vertex in world space.
@@ -124,7 +125,8 @@ pub struct Light {
     pub falloff: u32,
     pub radius: f32,
     pub falloff_distance: f32,
-    /// First shadow map (point lights use six), −1 = none. [`crate::try_shadow_maps`] reads any
+    /// First shadow map (point lights, and spot lights whose outer cone's half angle is over 1.40
+    /// radians, use six), −1 = none. [`crate::try_shadow_maps`] reads any
     /// value of 0 or more as a request for maps.
     pub shadow: i32,
     /// Fraction of the light a full shadow removes, 0 to 1.
@@ -352,10 +354,11 @@ fn validate_lights(s: &Scene, limits: &Limits) -> Result<(), RenderError> {
 }
 
 /// Every light and the environment light either has no shadow (a negative mark) or refers to
-/// maps in [`Scene::shadows`]: six from its mark for a point light, one otherwise.
+/// maps in [`Scene::shadows`]: six from its mark for a point light or a spot light whose cone
+/// one map does not cover, one otherwise.
 pub(crate) fn validate_shadow_refs(s: &Scene) -> Result<(), RenderError> {
     let exists = |first: i32, count: usize| first < 0 || (first as usize).checked_add(count).is_some_and(|end| end <= s.shadows.len());
-    if let Some(i) = s.lights.iter().position(|l| !exists(l.shadow, if l.kind == 2 { 6 } else { 1 })) {
+    if let Some(i) = s.lights.iter().position(|l| !exists(l.shadow, if cube_maps(l) { 6 } else { 1 })) {
         return Err(RenderError::MissingShadowMap(Some(i)));
     }
     if s.env.is_some_and(|e| !exists(e.shadow, 1)) {

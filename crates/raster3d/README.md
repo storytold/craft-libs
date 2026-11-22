@@ -61,8 +61,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   over a jittered grid of 5 × 5 to 10 × 10 taps, each a bilinear comparison against the receiver's
   plane. A spot or point light's maps hold casters at a light-space depth of 0.001 or more, and a
   receiver at that depth or nearer is not shadowed. A spot light's map covers its outer cone's half
-  angle plus 0.05 radians, up to 1.45 radians (about 83°), as EffectCraft's does; a receiver
-  outside the map is not shadowed. A masked caster drops texels whose material alpha is below the
+  angle plus 0.05 radians. A spot light whose half angle with that margin is over 1.45 radians
+  (about 83°) gets six maps, as a point light does. A masked caster drops texels whose material alpha is below the
   material's cutoff, as shading does. A blended caster drops texels whose alpha times the opacity
   is below 0.5. A masked or blended caster without a base texture is tested the same way with its
   material's alpha. An opaque-mode or masked caster with an opacity below 0.5 casts no shadow.
@@ -78,7 +78,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   an error it leaves the scene as it was.
 - **Resolve and encoding.** `try_resolve(&target, k)` averages each `k × k` block of premultiplied
   pixels with equal weights, and takes the mean depth of the block's covered pixels, infinity where
-  none is covered; a pixel whose `f32` sums overflow is averaged in `f64`. `try_encode(&mut image)` divides each color by alpha, applies the sRGB transfer
+  none is covered; a pixel whose `f32` sums overflow, and every pixel when a block holds more than
+  2^24 subsamples, is averaged in `f64`. `try_encode(&mut image)` divides each color by alpha, applies the sRGB transfer
   function of CSS Color 4 (<https://www.w3.org/TR/css-color-4/#color-conversion-code>), a linear
   segment up to 0.0031308 and a 1/2.4 power above it, multiplies by alpha again and leaves alpha
   linear. Pixels with alpha of 1e-6 or less are left as they are. `try_render_cpu` renders and
@@ -100,12 +101,13 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` returns
   `BadPixel` when a rendered color or depth overflows `f32` (finite inputs near the top of its
   range). `try_shadow_maps` also returns an error when a map's view or a caster's
-  corners in a map would not fit `f32` (vertices far from the origin).
+  light-space corners would not fit `f32` (vertices far from the origin).
   `try_env_shadow_map` returns an error for inputs out of range and for a map that would hold a
   value that is not finite. `try_resolve` returns an error for a factor that is zero or does
   not divide both sides and for buffers of the wrong length. `try_encode` returns an error for a
   pixel that is not finite, an alpha below 0 or above 1 (beyond 1e-4 of rounding), or a color whose
-  division by alpha or encoding overflows, and changes no pixel then. The renderer holds 40 bytes per raster
+  division by alpha or encoding overflows, and changes no pixel then; the error names the first
+  such pixel. The renderer holds 40 bytes per raster
   pixel and up to seven clipped triangles of about 140 bytes per scene triangle. Targets, images,
   shadow maps and the working buffers that grow with the raster or the vertex or triangle count
   are reserved fallibly: when a reservation fails, the `try_` function returns `OutOfMemory`. A
@@ -150,7 +152,11 @@ The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resol
 `render_cpu`), `adv/raster.rs`, `adv/shade.rs` and the scene types of `adv/scene.rs`, at
 `2f16feb12f`. For valid scenes whose triangles stay inside the guard band and off the far plane,
 whose depth-range crossings lie more than 1/4096 of an edge from its inside corner, whose texture
-coordinates on repeated and mirrored axes stay below 2^24, whose shadows-only materials receive
+coordinates times the texture's width or height stay below 2^23 in magnitude, whose normals'
+squared lengths, squared distances from fragments to point and spot lights, and casters'
+light-space coordinates times a map's focal length fit `f32`, whose
+shadow-casting spot lights' outer cones are at most 1.40 radians wide, whose resolve blocks hold
+at most 2^24 subsamples, whose shadows-only materials receive
 shadows, whose fragments under discarded opaque pixels stay inside the depth range, whose blended
 casters have a base texture, whose opaque-mode and masked casters have an opacity of 0.5 or more,
 and whose casters do not reach within
@@ -188,17 +194,28 @@ Changes from those files:
   whose interpolated depth rounded past 1.
 - A shadows-only material that does not receive shadows draws nothing. EffectCraft drew the
   shadows on it.
-- A repeated or mirrored texture axis reduces a coordinate of 2^24 or more by its period before
-  scaling it to texels. EffectCraft saturated the texel index, which picked a texel off the wrap
-  period.
+- A texture coordinate whose value times the texture's width or height reaches 2^23 is scaled to
+  texels in `f64`, after a repeated or mirrored axis reduces it by its period. EffectCraft scaled
+  it in `f32`, which dropped the half-texel shift there, and from 2^24 saturated the texel index,
+  which picked a texel off the wrap period.
+- A normal whose squared length overflows `f32`, and the direction to a point or spot light whose
+  squared distance overflows `f32`, are normalized in `f64`. EffectCraft divided them by an
+  infinite length, so the surface took no direct light.
+- A caster corner or a receiver whose light-space coordinate times the map's focal length overflows
+  `f32` is projected in `f64`. EffectCraft's map coordinates for it were infinite.
+- A spot light whose outer cone's half angle plus 0.05 radians is over 1.45 radians gets six maps,
+  as a point light does. EffectCraft gave it one map 1.45 radians wide, so receivers in the rest
+  of the cone were not shadowed.
+- A resolve block of more than 2^24 subsamples is averaged in `f64`. EffectCraft's `f32` count of
+  covered subsamples stopped at 2^24, which raised the mean depth.
 - A clipped corner whose `1/w` overflows `f32` (a clip transform scaled near `f32`'s smallest
   values) is projected in `f64` instead of dropping its triangle, and a drawn pixel whose camera
   depth overflows is an error.
 - A texture lookup computes its texel offset in `i128`, so `sample` on a texture whose sides
   are near `u32::MAX` reads a missing texel as transparent black.
 - A texture or shadow-map lookup at a coordinate past `i64` saturates instead of overflowing, and
-  a texture coordinate that overflows `f32` when scaled to texels is taken as the largest finite
-  one, so the sample stays finite. A channel whose bilinear interpolation between large finite
+  a texture coordinate that is not finite is taken as the largest finite one, so the sample stays
+  finite. A channel whose bilinear interpolation between large finite
   texels overflows `f32` is interpolated in `f64`.
 - A receiver more than its filter reach plus one texel outside a shadow map is unshadowed before
   the filter runs. EffectCraft's tap jitter scaled the map coordinate by 8, which overflowed past
