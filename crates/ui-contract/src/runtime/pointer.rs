@@ -50,6 +50,10 @@ pub struct PointerFrame {
     /// The modifiers of the pass's last button release, with the latched ones added; the held `mods` in a pass with no
     /// release and in a rerun pass. The one source of a pick's and a drop's modifiers.
     pub pick_mods: Mods,
+    /// Where the pass's last button release went up; the latest `pos` in a pass with no release and in a rerun pass. The
+    /// one source of a drop's position: a pointer that moves on or leaves the window after the release in the same
+    /// frame does not move the drop.
+    pub pick_pos: Option<Pos2>,
     /// The tap a per-viewport recognizer reports when the last finger lifts, in the frame's first pass only.
     pub multi_tap: Option<craft_behavior::MultiTap>,
     /// The pass's time in seconds.
@@ -295,7 +299,8 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         press,
         release: read.release,
         mods,
-        pick_mods: read.release_mods.map_or(mods, |released| with_latched(released, latched)),
+        pick_mods: read.released_at.map_or(mods, |(_, released)| with_latched(released, latched)),
+        pick_pos: read.released_at.map_or(read.pos, |(at, _)| Some(at)),
         multi_tap: tap,
         time: read.time,
         kind: read.kind,
@@ -448,6 +453,7 @@ pub(crate) fn frame_raw(ctx: &Context) -> PointerFrame {
         release: None,
         mods: Mods::NONE,
         pick_mods: Mods::NONE,
+        pick_pos: None,
         multi_tap: None,
         time: 0.0,
         kind: PointerKind::Mouse,

@@ -269,8 +269,8 @@ pub(crate) struct PointerRead {
     pub buttons: Buttons,
     /// The button that went up last in the pass, any button.
     pub release: Option<PointerButton>,
-    /// The modifiers of the pass's last button release.
-    pub release_mods: Option<Mods>,
+    /// Where the pass's last button release went up, and its modifiers.
+    pub released_at: Option<(Pos2, Mods)>,
     /// The last press of a button other than the primary one: the button and where it went down.
     pub other_press: Option<(PointerButton, Pos2)>,
     /// Whether the primary button went down in this pass.
@@ -342,7 +342,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut touched = false;
         let mut touch_sample = None;
         let mut release = None;
-        let mut release_mods = None;
+        let mut released_at = None;
         let mut touches = Vec::new();
         let mut other_press = None;
         let mut rotation = 0.0;
@@ -368,7 +368,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                         }
                     } else {
                         release = Some(button);
-                        release_mods = Some(Mods::from_egui(modifiers, os));
+                        released_at = Some((*pos, Mods::from_egui(modifiers, os)));
                     }
                 }
                 Event::PointerMoved(pos) => {
@@ -388,7 +388,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                     }
                 }
                 Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers } => {
-                    release_mods = Some(Mods::from_egui(modifiers, os));
+                    released_at = Some((*pos, Mods::from_egui(modifiers, os)));
                     if barrel_press {
                         barrel_press = false;
                         release = Some(PointerButton::Secondary);
@@ -457,7 +457,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             primary_down: input.pointer.primary_down() && !barrel_press,
             buttons,
             release,
-            release_mods,
+            released_at,
             touches,
             other_press,
             primary_pressed: input.pointer.primary_pressed() && !barrel_pressed,

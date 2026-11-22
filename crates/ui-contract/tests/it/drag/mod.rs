@@ -162,6 +162,31 @@ fn a_named_drag_shows_its_name_inside_a_region_mark_and_nothing_without_a_mark()
     frames.frame(vec![release(SLOT.center())], &mut show);
 }
 
+/// A drop lands where the button went up: the pointer moving on out of the target after the release, in the same
+/// frame, does not take the drop away from it.
+#[trial]
+fn a_drop_lands_where_the_button_went_up_though_the_pointer_moves_on_in_its_frame() {
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        Chip { common: Common::new(), seen: &seen, preview: DragPreview::None }.id_salt("chip").show_at(ui, CHIP);
+        Slot { common: Common::new(), seen: &seen, mark: DropMark::region(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+    };
+    let mut frames = Frames::new();
+    let (from, to) = (CHIP.center(), SLOT.center());
+    frames.frame(vec![moved(from)], &mut show);
+    frames.frame(vec![press(from)], &mut show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(from + (to - from) * (step as f32 / 4.0))], &mut show);
+    }
+    frames.idle(1, &mut show);
+    let away = Pos2::new(120.0, 200.0);
+    assert!(!SLOT.contains(away));
+    frames.frame(vec![release(to), moved(away)], &mut show);
+    frames.idle(2, &mut show);
+    let dropped: Vec<u32> = seen.borrow().dropped.iter().map(|(payload, _)| *payload).collect();
+    assert_eq!(dropped, [7], "the slot under the release takes the drop");
+}
+
 /// The bounds of the text shapes among `shapes`.
 fn texts(shapes: &[Shape]) -> Vec<Rect> {
     shapes.iter().filter(|shape| matches!(shape, Shape::Text(_))).map(Shape::visual_bounding_rect).collect()

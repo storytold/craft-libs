@@ -495,11 +495,12 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
 }
 
 /// The pointer of the running session in screen space, whatever its payload: the pointer `dragging_of` pairs with a
-/// payload. `None` without a session or a pointer.
+/// payload, where the button went up in the pass of its release (`PointerFrame::pick_pos`). `None` without a session or
+/// a pointer.
 pub(crate) fn session_pointer(ctx: &Context) -> Option<Pos2> {
     let os = board(ctx, |board| board.session.as_ref().map(|session| session.os))?;
     let host = WindowHost::of(ctx);
-    if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { pointer::frame_raw(ctx).pos }
+    if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { pointer::frame_raw(ctx).pick_pos }
 }
 
 /// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
