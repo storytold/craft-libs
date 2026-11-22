@@ -53,6 +53,18 @@ impl ControlClient {
         self.broken
     }
 
+    /// Whether a call can be sent now: false when the connection is broken, the server closed it,
+    /// or it holds bytes no call asked for (a server that says why it closes), as no reply to the
+    /// next call could be read from it. Every call checks this before it sends and, when false,
+    /// closes the connection and fails with nothing sent; a caller reconnects instead.
+    pub fn is_usable(&self) -> bool {
+        if self.broken || !self.reader.buffer().is_empty() || self.stream.set_nonblocking(true).is_err() {
+            return false;
+        }
+        let probe = self.stream.peek(&mut [0]);
+        self.stream.set_nonblocking(false).is_ok() && probe.is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
+    }
+
     /// Connect (read timeout [`CALL_TIMEOUT`]), send
     /// `{"id": 1, "method": "auth", "params": {"token": token}}` and read one reply line; `Err` with
     /// the reply's `error` text as `Refused` when it isn't `ok`, or the I/O error's message as `Transport`.
@@ -90,17 +102,22 @@ impl ControlClient {
     }
 
     fn exchange(&mut self, id: u64, method: &str, params: Value, cancelled: Option<&dyn Fn() -> bool>) -> Result<Value, String> {
-        if self.broken {
+        if !self.is_usable() {
+            self.close();
             return Err("connection closed".into());
         }
         let result = self.round_trip(id, method, params, cancelled);
         if matches!(result, Err(Failure::Io(_))) {
-            self.broken = true;
-            let _ = self.stream.shutdown(std::net::Shutdown::Both);
+            self.close();
         }
         result.map_err(|f| match f {
             Failure::Io(e) | Failure::Reply(e) => e,
         })
+    }
+
+    fn close(&mut self) {
+        self.broken = true;
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
 
     fn round_trip(&mut self, id: u64, method: &str, params: Value, cancelled: Option<&dyn Fn() -> bool>) -> Result<Value, Failure> {
