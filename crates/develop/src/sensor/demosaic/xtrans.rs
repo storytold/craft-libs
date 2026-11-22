@@ -13,15 +13,17 @@ use crate::raster::par_rows;
 
 const EPS: f32 = 1e-3;
 
+type OffsetList = Vec<(isize, isize)>;
+
 /// Same-colour neighbour offsets for every pattern phase, in scan order (so sums run in the same
 /// order as a plain 2-D loop and interior pixels match border pixels bit for bit).
 struct Offsets {
     pw: usize,
     ph: usize,
     /// Per phase: green offsets at radius 1, then those at radius 2 (ring order as the loop below).
-    green: Vec<(Vec<(isize, isize)>, Vec<(isize, isize)>)>,
+    green: Vec<(OffsetList, OffsetList)>,
     /// Per phase and colour (0 = red, 1 = blue): 5×5 offsets of that colour.
-    rb: Vec<[Vec<(isize, isize)>; 2]>,
+    rb: Vec<[OffsetList; 2]>,
 }
 
 impl Offsets {
