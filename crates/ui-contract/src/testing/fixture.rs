@@ -655,9 +655,10 @@ impl Fixture {
         self.click_at(target.center())
     }
 
-    /// Hover, press and release at `pos`, in separate frames, then one idle frame.
+    /// Hover, press and release at `pos`, in separate frames, then one idle frame. The press and release carry the
+    /// modifiers [`Fixture::hold`] keeps.
     pub fn click_at(&mut self, pos: Pos2) -> &mut Self {
-        self.play(injected::click_frames(pos, egui::PointerButton::Primary, 1, Modifiers::NONE));
+        self.play(injected::click_frames(pos, egui::PointerButton::Primary, 1, self.frames.held()));
         self.frame(Vec::new())
     }
 

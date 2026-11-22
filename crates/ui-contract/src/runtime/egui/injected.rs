@@ -62,28 +62,14 @@ pub(crate) fn text_event(text: &str) -> Event {
     Event::Text(text.to_owned())
 }
 
-/// The announcement of `modifiers`, none when no modifier is held.
-#[cfg(feature = "testing")]
-fn announced(modifiers: Modifiers) -> Option<Event> {
-    (modifiers != Modifiers::NONE).then(|| modifiers_changed(modifiers))
-}
-
-/// The frame that clears `modifiers`, none when none was held.
-#[cfg(feature = "testing")]
-fn cleared(modifiers: Modifiers) -> Option<Frame> {
-    announced(modifiers).map(|_| vec![modifiers_changed(Modifiers::NONE)])
-}
-
-/// A move to `pos` (with `modifiers` announced first), then `count` times a press and a release of `button`, one
-/// frame each; `modifiers` are cleared in a last frame when they were set.
+/// A move to `pos`, then `count` times a press and a release of `button` carrying the held `modifiers`, one frame each.
 #[cfg(feature = "testing")]
 pub(crate) fn click_frames(pos: Pos2, pressed_button: egui::PointerButton, count: u32, modifiers: Modifiers) -> Vec<Frame> {
-    let mut frames = vec![announced(modifiers).into_iter().chain([pointer_moved(pos)]).collect()];
+    let mut frames = vec![vec![pointer_moved(pos)]];
     for _ in 0..count {
         frames.push(vec![button(pos, pressed_button, true, modifiers)]);
         frames.push(vec![button(pos, pressed_button, false, modifiers)]);
     }
-    frames.extend(cleared(modifiers));
     frames
 }
 
