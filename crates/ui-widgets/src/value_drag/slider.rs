@@ -267,6 +267,10 @@ impl Component for Slider<'_> {
         if follow_track_on_down {
             let press = cx.part(TRACK).press;
             if let Some(start) = press.phase.start().filter(|start| start.button == craft_behavior::PointerButton::Primary) {
+                if matches!(press.phase, PressPhase::Down { .. }) && cx.in_wheel_run() {
+                    // The pending wheel End must close the old run before follow_press starts the press gesture.
+                    cx.commit();
+                }
                 let absolute = craft_behavior::ValueDrag::absolute(travel.track.clone(), travel.units.clone());
                 if matches!(press.phase, PressPhase::Down { .. })
                     && let Some(position) = absolute.at(start.origin, rtl)

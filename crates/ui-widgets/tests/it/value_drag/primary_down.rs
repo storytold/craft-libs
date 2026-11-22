@@ -477,3 +477,80 @@ fn opt_in_slider_double_track_click_preserves_coarse_step_reset() {
 fn opt_in_slider_field_double_track_click_preserves_coarse_step_reset() {
     coarse_step_double_track_reset(true);
 }
+
+#[trial]
+fn a_live_wheel_commits_before_opted_track_down_and_the_fresh_press_keeps_dragging() {
+    for fields in [false, true] {
+        let mut rig = Rig::new(fields, Some(true));
+        let geometry = rig.geometry(0);
+        rig.clear();
+        rig.fixture.frame(vec![pointer::moved(geometry.thumb.center()), pointer::wheel_lines(1.0)]);
+        let (wheel_id, wheel_value) = {
+            let state = rig.state.borrow();
+            assert!(state.events[1].is_empty());
+            assert!(state.values[0] > START && state.values[0] < 0.75, "a real wheel preview must be live: {:?}", state.events[0]);
+            match state.events[0].as_slice() {
+                [EditEvent::Begin { id: begin, before: Mixed::Same(before), .. }, EditEvent::Update { id, value, .. }]
+                    if begin == id && *before == START && *value == state.values[0] =>
+                {
+                    (*id, *value)
+                }
+                events => panic!("the genuine wheel must remain open before the press: {events:?}"),
+            }
+        };
+        let at = geometry.at(0.75);
+        rig.down(&geometry, at);
+        let press_id = {
+            let state = rig.state.borrow();
+            eprintln!("WHEEL_TO_PRIMARY_DOWN fields={fields} wheel_id={wheel_id:?} wheel_value={wheel_value:?} down={:?}", state.events[0]);
+            assert_eq!(state.values[0], 0.75, "the opted press still previews immediately");
+            assert!(state.events[1].is_empty());
+            match state.events[0].as_slice() {
+                [
+                    EditEvent::Commit { id: ended, before: Mixed::Same(old), after, .. },
+                    EditEvent::Begin { id: begin, before: Mixed::Same(start), .. },
+                    EditEvent::Update { id, value, .. },
+                ] if *ended == wheel_id
+                    && *old == START
+                    && *after == wheel_value
+                    && begin != ended
+                    && *start == wheel_value
+                    && begin == id
+                    && *value == 0.75 =>
+                {
+                    *id
+                }
+                events => panic!("end the old wheel at its own preview before starting a fresh press: {events:?}"),
+            }
+        };
+        for (fraction, expected) in [(0.5, 0.5), (0.6, 0.6)] {
+            rig.clear();
+            rig.fixture.frame(vec![pointer::moved(geometry.at(fraction))]);
+            let state = rig.state.borrow();
+            assert_eq!(state.values[0], expected, "DragStart and Drag must keep moving the fresh press");
+            assert!(
+                matches!(state.events[0].as_slice(), [EditEvent::Update { id, value, .. }]
+                if *id == press_id && *value == expected),
+                "one update in the fresh press, not an early commit or second Begin: {:?}",
+                state.events[0]
+            );
+            assert!(state.events[1].is_empty());
+        }
+        rig.clear();
+        rig.fixture.frame(vec![pointer::release(geometry.at(0.6))]);
+        {
+            let state = rig.state.borrow();
+            assert!(
+                matches!(state.events[0].as_slice(), [EditEvent::Commit { id, before: Mixed::Same(before), after, .. }]
+                if *id == press_id && *before == wheel_value && *after == 0.6),
+                "only Release commits the fresh press: {:?}",
+                state.events[0]
+            );
+            assert!(state.events[1].is_empty());
+        }
+        rig.clear();
+        rig.fixture.frame(Vec::new());
+        assert!(rig.state.borrow().events.iter().all(Vec::is_empty), "no delayed wheel-end replay");
+        assert_eq!(rig.state.borrow().values[0], 0.6);
+    }
+}
