@@ -12,7 +12,7 @@ use craft_keymap::{Binding, CommandDef, CommandRef, ImportPlan, ImportReport};
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Animate as _, Bind, BodyCx, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
+use craft_ui::contract::{Animate as _, Bind, BodyCx, Entry, FieldLayout, Lazy, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::Notice;
@@ -132,9 +132,13 @@ fn section(ui: &mut Ui, say: &Say, title: &str, lines: &[Line]) {
         return;
     }
     heading(ui, say, title, lines.len());
+    let estimate = UiEnv::of(ui).tokens.size.row.text;
     for (at, line) in lines.iter().enumerate() {
-        let shade = if line.to { Shade::Normal } else { Shade::Muted };
-        Text::new(line.text(say)).shade(shade).id_salt((title, at)).show(ui);
+        // A line out of view does not run: a review can list thousands.
+        Lazy::new((title, at), estimate).show(ui, |ui| {
+            let shade = if line.to { Shade::Normal } else { Shade::Muted };
+            Text::new(line.text(say)).shade(shade).id_salt((title, at)).show(ui);
+        });
     }
 }
 
@@ -401,41 +405,44 @@ fn plan_view(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState, 
         heading(ui, say, title, lines.len());
         for (at, line) in lines.iter().enumerate() {
             let marks = entry_of(&line.item, line.line);
-            Row::new().id_salt((tag, at)).show(ui, |ui, _| {
-                if let Some((entry, on)) = marks {
-                    let label = format!("{}: {}", w.include_entry.as_str(), line.item);
-                    let check = Checkbox::new(Bind::given(on)).label(label).show(ui);
-                    if let Some(on) = check.value().copied() {
-                        *act = Some(Act::Include(entry, on));
+            // A line out of view does not run: a review can list thousands.
+            Lazy::new((tag, at), ui_env.tokens.size.control.md).show(ui, |ui| {
+                Row::new().id_salt((tag, at)).show(ui, |ui, _| {
+                    if let Some((entry, on)) = marks {
+                        let label = format!("{}: {}", w.include_entry.as_str(), line.item);
+                        let check = Checkbox::new(Bind::given(on)).label(label).show(ui);
+                        if let Some(on) = check.value().copied() {
+                            *act = Some(Act::Include(entry, on));
+                        }
                     }
-                }
-                let shade = if line.to { Shade::Normal } else { Shade::Muted };
-                Text::new(line.text(say)).shade(shade).id_salt("text").show(ui);
-                let Some((entry, _)) = marks.filter(|_| pick) else { return };
-                let candidates: &[CommandRef] =
-                    suggestions.iter().find(|s| s.item == line.item && s.line == line.line).map(|s| s.candidates.as_slice()).unwrap_or_default();
-                let own: Vec<Entry<usize>>;
-                let entries: &[Entry<usize>] = if candidates.is_empty() {
-                    shared_entries()
-                } else {
-                    let first = catalog.len() + 1;
-                    own = candidates
-                        .iter()
-                        .enumerate()
-                        .map(|(ci, c)| Entry::new(first + ci, say.label_of(env.keymap, c)))
-                        .chain(shared_entries().iter().cloned())
-                        .collect();
-                    &own
-                };
-                let mut chosen = usize::MAX;
-                Select::new(w.command_for_item.fill(&[("item", line.item.as_str())]), Bind::bound(&mut chosen), entries)
-                    .placeholder(w.choose_a_command_more.clone())
-                    .searchable()
-                    .id_salt("target")
-                    .show(ui);
-                if let Some(target) = target_of(catalog, candidates, chosen) {
-                    *act = Some(Act::Target(entry, target));
-                }
+                    let shade = if line.to { Shade::Normal } else { Shade::Muted };
+                    Text::new(line.text(say)).shade(shade).id_salt("text").show(ui);
+                    let Some((entry, _)) = marks.filter(|_| pick) else { return };
+                    let candidates: &[CommandRef] =
+                        suggestions.iter().find(|s| s.item == line.item && s.line == line.line).map(|s| s.candidates.as_slice()).unwrap_or_default();
+                    let own: Vec<Entry<usize>>;
+                    let entries: &[Entry<usize>] = if candidates.is_empty() {
+                        shared_entries()
+                    } else {
+                        let first = catalog.len() + 1;
+                        own = candidates
+                            .iter()
+                            .enumerate()
+                            .map(|(ci, c)| Entry::new(first + ci, say.label_of(env.keymap, c)))
+                            .chain(shared_entries().iter().cloned())
+                            .collect();
+                        &own
+                    };
+                    let mut chosen = usize::MAX;
+                    Select::new(w.command_for_item.fill(&[("item", line.item.as_str())]), Bind::bound(&mut chosen), entries)
+                        .placeholder(w.choose_a_command_more.clone())
+                        .searchable()
+                        .id_salt("target")
+                        .show(ui);
+                    if let Some(target) = target_of(catalog, candidates, chosen) {
+                        *act = Some(Act::Target(entry, target));
+                    }
+                });
             });
         }
     };

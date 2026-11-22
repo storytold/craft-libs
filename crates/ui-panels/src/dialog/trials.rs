@@ -399,7 +399,7 @@ fn a_dialog_moves_by_its_title_band_stays_on_screen_and_reopens_where_left() {
 
     let title = band(&fixture);
     fixture.drag(&title, egui::vec2(5000.0, 5000.0)).settle();
-    let screen = fixture.shown();
+    let screen = fixture.ctx().content_rect();
     assert!(screen.contains_rect(dialog(&fixture)), "a drag past the edge stops at it: {:?} in {screen:?}", dialog(&fixture));
 
     for _ in 0..8 {
@@ -429,7 +429,7 @@ fn a_tall_body_scrolls_under_a_footer_that_stays_in_view() {
     fixture.settle();
     let first = |fixture: &Fixture| fixture.by_label("Line 0").map(|target| target.rect);
     let at_top = first(&fixture).expect("the first line is shown");
-    let screen = fixture.shown();
+    let screen = fixture.ctx().content_rect();
     let ok = fixture.by_label("OK").expect("the footer is shown").rect;
     assert!(screen.contains_rect(ok), "the footer stays inside the short window: {ok:?} in {screen:?}");
     assert!(fixture.by_label("Line 59").is_none_or(|last| !screen.contains_rect(last.rect)), "the body does not all fit: it scrolls");
@@ -468,6 +468,8 @@ fn an_armed_answer_waits_until_its_prompt_was_seen() {
         }
         shown.set(now);
     });
+    // The wait counts while the window has the focus, which the fixture's window has once it reports it.
+    fixture.frame(vec![egui::Event::WindowFocused(true)]);
     fixture.settle();
     let press = |fixture: &mut Fixture| {
         let delete = fixture.by_label("Delete").expect("the armed button is shown");
