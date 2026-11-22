@@ -219,9 +219,9 @@ pub struct CollectionProps {
     pub marquee: bool,
     /// Delete and Backspace at the lead report `CollectionEvent::Delete`.
     pub deletable: bool,
-    /// Maps a row drag to the payload that other drop targets take (8.4). A map starts row drags by itself, with or
-    /// without a reorder rule.
-    pub drag_payload: Option<DragPayload>,
+    /// Map a row drag to the payloads that other drop targets take (8.4), one per type. A map starts row drags by
+    /// itself, with or without a reorder rule.
+    pub drag_payloads: Vec<DragPayload>,
     /// The count word the drag badge shows for the dragged items, one item included ("1 page", "3 pages"); `None`
     /// shows the number of items for several and the item's text for one.
     pub drag_count: Option<Counted>,
@@ -329,7 +329,7 @@ impl CollectionProps {
             item_keys: ItemKeys::Own,
             marquee: false,
             deletable: false,
-            drag_payload: None,
+            drag_payloads: Vec::new(),
             drag_count: None,
             natural_height: false,
             min_rows: 0,
@@ -370,7 +370,14 @@ impl CollectionProps {
     /// unless a reorder rule is set. The drag stays one session with one ghost.
     #[must_use]
     pub fn drag_payload<K: 'static, P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
-        self.drag_payload = Some(DragPayload::new(map));
+        self.carry(DragPayload::new(map))
+    }
+
+    /// A row drag carries `payload` of it too, beside the payloads given before: a host adds its own payload type to a
+    /// drag the component already maps.
+    #[must_use]
+    pub fn carry(mut self, payload: DragPayload) -> Self {
+        self.drag_payloads.push(payload);
         self
     }
 

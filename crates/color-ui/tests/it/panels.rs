@@ -399,6 +399,61 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
 }
 
 /// `count` entries of a colour table, each named by its index.
+/// A swatch dragged out of the panel carries the host's payload to the host's drop target (the app's paint, which a
+/// gradient's stops take), and the panel's own drag still moves a swatch onto another group.
+#[trial]
+fn a_dragged_swatch_carries_the_hosts_payload_beside_the_panels_own_move() {
+    use craft_ui::contract::{ListDrag, ShowContainer as _};
+    use craft_ui::display::Text;
+    use craft_ui::sections::DropAction;
+    use egui::{Pos2, Rect, UiBuilder};
+    #[derive(Clone, Debug, PartialEq)]
+    struct Paint(String);
+    const PANEL: Rect = Rect { min: Pos2::new(0.0, 0.0), max: Pos2::new(320.0, 300.0) };
+    const TARGET: Rect = Rect { min: Pos2::new(0.0, 320.0), max: Pos2::new(320.0, 400.0) };
+    let entry = |name: &str| craft_color_ui::palette::SwatchEntry::new(name.to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0]));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red"), entry("Rose")] },
+        SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue")] },
+    ];
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let dropped = Rc::new(RefCell::new(Vec::new()));
+    let (seen, taken) = (Rc::clone(&edits), Rc::clone(&dropped));
+    let mut state = SwatchesState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        ui.scope_builder(UiBuilder::new().max_rect(PANEL), |ui| {
+            let out = SwatchesPanel::new(&groups, Bind::bound(&mut state), RED)
+                .drag_payload(|drag: &ListDrag<SwatchKey>| match &drag.grabbed {
+                    SwatchKey::Swatch(name) => Some(Paint(name.clone())),
+                    _ => None,
+                })
+                .show(ui);
+            seen.borrow_mut().extend(out.edits);
+        });
+        ui.scope_builder(UiBuilder::new().max_rect(TARGET), |ui| {
+            let out = DropAction::<Paint>::new(|_| true).show(ui, |ui, _| {
+                Text::new("Gradient").show(ui);
+            });
+            taken.borrow_mut().extend(out.output.dropped);
+        });
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    let red = fixture.by_label("Red, #ff0000").expect("the Red swatch").center();
+    let other = fixture.by_label("Other").expect("the Other group's header").center();
+    fixture.drag_at(red, other - red);
+    fixture.settle();
+    let reported = edits.borrow().clone();
+    assert!(matches!(&reported[..], [SwatchEdit::MoveTo { swatch, group, .. }] if swatch == "Red" && group == "Other"), "{reported:?}");
+    assert!(dropped.borrow().is_empty(), "the move within the panel reaches no host target");
+
+    let rose = fixture.by_label("Rose, #ff0000").expect("the Rose swatch").center();
+    let target = fixture.by_label("Gradient").expect("the host's drop target").center();
+    fixture.drag_at(rose, target - rose);
+    fixture.settle();
+    assert_eq!(*dropped.borrow(), [Paint("Rose".to_owned())], "the host's target takes the swatch's paint");
+    assert_eq!(edits.borrow().len(), 1, "a drop outside the panel edits nothing: {:?}", edits.borrow());
+}
+
 fn table_entries(count: usize) -> Vec<(Label, Srgba)> {
     (0..count).map(|i| (Label::from(format!("Index {i}")), Srgba::rgb(i as f32 / count as f32, 0.5, 0.25))).collect()
 }

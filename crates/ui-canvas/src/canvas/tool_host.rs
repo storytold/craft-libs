@@ -1044,7 +1044,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
 
     /// Starts the drag session of `request` under the canvas's id. A running session stays (`drag::start`).
     fn open_session(&self, request: DragRequest) {
-        drag::start(self.ctx, self.canvas, &self.env.view(), request.payload, request.also, request.preview);
+        drag::start(self.ctx, self.canvas, &self.env.view(), request.payload, request.also.into_iter().collect(), request.preview);
     }
 
     /// A tool asked for a drag session: one per gesture. Before the gesture is stored (a request made in `press`) the

@@ -60,7 +60,7 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
         register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
         host.rect = fixture::host_field(ui, field(), &mut host.text);
         if std::mem::take(&mut host.start_drag) {
-            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), None, DragPreview::None);
+            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), Vec::new(), DragPreview::None);
         }
         if with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
             host.cancels += 1;

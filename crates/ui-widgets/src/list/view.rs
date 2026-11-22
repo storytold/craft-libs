@@ -7,7 +7,7 @@ use super::predicate::{DropTest, RowTest, RowText};
 use super::{ListRow, RowEvent, TreeLeaves};
 use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnLayout, Common, Component, ContainerProps, Cx,
-    DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Show as _, Sizing,
+    DragPayload, DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Show as _, Sizing,
 };
 use crate::runtime::env::{Env, Label};
 use crate::style::{ComponentStyle, StyleCx};
@@ -161,6 +161,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// A row drag carries `payload` of it too, beside the payloads given before (`CollectionProps::carry`).
+    #[must_use]
+    pub fn carry(mut self, payload: DragPayload) -> Self {
+        self.items = self.items.carry(payload);
         self
     }
 

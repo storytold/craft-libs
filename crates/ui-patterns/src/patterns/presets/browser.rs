@@ -21,9 +21,9 @@ use super::words::PresetWords;
 use crate::bars::{Bar, BarKind};
 use crate::choice::Segmented;
 use crate::contract::{
-    Bind, BodyCx, CollectionEvent, DropAt, DropKind, DropMark, DropPayload, DropPlace, DropTarget, DropZone, Entry, ListDrag, MemoProps, MemoView,
-    OpenChange, Outbox, Pattern, Props, Rename, ReorderMove, ReorderRule, RowHeight, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    TooltipSpec, request_rename,
+    Bind, BodyCx, CollectionEvent, DragPayload, DropAt, DropKind, DropMark, DropPayload, DropPlace, DropTarget, DropZone, Entry, ListDrag, MemoProps,
+    MemoView, OpenChange, Outbox, Pattern, Props, Rename, ReorderMove, ReorderRule, RowHeight, SelectMode, Show as _, ShowCollection as _,
+    ShowContainer as _, TooltipSpec, request_rename,
 };
 use crate::display::Divider;
 use crate::layout_components::Stack;
@@ -353,6 +353,8 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 's
     #[prop(boxed = "Fn(&mut Ui, &K) + 'a")]
     tip: Option<TipFn<'a, K>>,
     drops: Vec<PresetDrop<'a, K>>,
+    /// The host's payloads a preset drag carries beside its `ListDrag<K>`.
+    payloads: Vec<DragPayload>,
     /// The search field is its scope's default stop (`Initial::Default`): a picker's popover opens with the focus in
     /// it, so typing filters the presets.
     search_first: bool,
@@ -406,6 +408,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
             actions: Vec::new(),
             tip: None,
             drops: Vec::new(),
+            payloads: Vec::new(),
             search_first: false,
             footer: None,
             max_rows: None,
@@ -418,6 +421,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
     /// Takes host payloads dropped onto a preset or between presets; each drop comes back as `PresetEvent::Dropped`.
     pub fn takes_drop(mut self, drop: PresetDrop<'a, K>) -> Self {
         self.drops.push(drop);
+        self
+    }
+
+    /// A preset drag carries `map` of it too, for the host's drop targets of type `P` (an app's paint payload), beside
+    /// the `ListDrag<K>` the browser's own targets take. Presets the map gives a payload for drag without `drags`.
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
+        self.payloads.push(DragPayload::new(move |drag: &ListDrag<BrowserKey<K>>| map(&app_drag(drag)?)));
         self
     }
 
@@ -723,6 +733,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
             actions,
             tip: tip_painter,
             drops,
+            payloads,
             search_first,
             footer,
             max_rows,
@@ -817,10 +828,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                 row_menu,
                 drags,
                 group_heads,
-                host: (tip_painter.is_some() || row_items.is_some() || !drops.is_empty()).then(|| HostFns {
+                host: (tip_painter.is_some() || row_items.is_some() || !drops.is_empty() || !payloads.is_empty()).then(|| HostFns {
                     tip: tip_painter.as_ref(),
                     row_items: row_items.as_ref(),
                     drops: &drops,
+                    payloads: &payloads,
                 }),
                 empty: empty_text.clone(),
                 sent: Outbox::new(&mut sent),
@@ -888,6 +900,7 @@ struct HostFns<'p, 'a, K> {
     tip: Option<&'p TipFn<'a, K>>,
     row_items: Option<&'p RowItems<'a, K>>,
     drops: &'p [PresetDrop<'a, K>],
+    payloads: &'p [DragPayload],
 }
 
 /// Every input of the browser's presets view: the source, the state the toolbar left (the open groups, the search,
@@ -963,7 +976,8 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         (*list_id, *view, *zoom, *cell_shape, *tile_size, *columns, *max_rows, *reorder, *drop_zone, *row_menu, *select, *drags, *group_heads);
     let label = label.clone();
     let actions = props.actions;
-    let (tip_painter, row_items, drops) = props.host.as_ref().map_or((None, None, &[][..]), |host| (host.tip, host.row_items, host.drops));
+    let (tip_painter, row_items, drops, payloads) =
+        props.host.as_ref().map_or((None, None, &[][..], &[][..]), |host| (host.tip, host.row_items, host.drops, host.payloads));
     let reveal = props.reveal.clone();
     let mut held = props.selection.clone();
     let mut menu_target = props.menu_target.clone();
@@ -981,7 +995,7 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         held.lead.clone().map(BrowserKey::Preset),
         held.anchor.clone().map(BrowserKey::Preset),
     );
-    let payload_drag = reorder.is_some() || drop_zone.is_some() || !drops.is_empty() || drags;
+    let payload_drag = reorder.is_some() || drop_zone.is_some() || !drops.is_empty() || !payloads.is_empty() || drags;
     let stamp = query_stamp(&query);
 
     let can_drag = |key: &BrowserKey<K>| {
@@ -1055,6 +1069,9 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         if payload_drag {
             grid = grid.drag_payload(app_drag::<K>);
         }
+        for payload in payloads {
+            grid = grid.carry(payload.clone());
+        }
         for drop in drops {
             grid = grid.takes_drop(drop.kind(Rc::clone(&map)));
         }
@@ -1111,6 +1128,9 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
         }
         if payload_drag {
             list = list.drag_payload(app_drag::<K>);
+        }
+        for payload in payloads {
+            list = list.carry(payload.clone());
         }
         for drop in drops {
             list = list.takes_drop(drop.kind(Rc::clone(&map)));

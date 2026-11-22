@@ -217,8 +217,9 @@ struct Session {
     viewport: ViewportId,
     button: PointerButton,
     payload: Arc<dyn Any + Send + Sync>,
-    /// A second payload of the same drag, which targets of its type take: a collection's row drag maps to it.
-    also: Option<Arc<dyn Any + Send + Sync>>,
+    /// More payloads of the same drag, one per type, which targets of their types take: a collection's row drag maps
+    /// to them.
+    also: Vec<Arc<dyn Any + Send + Sync>>,
     preview: DragPreview,
     /// The env of the region the drag started in, which its preview paints with; `None` for files from the OS.
     env: Option<Env>,
@@ -297,7 +298,7 @@ pub fn start(
     source: Id,
     env: &EnvView<'_>,
     payload: Arc<dyn Any + Send + Sync>,
-    also: Option<Arc<dyn Any + Send + Sync>>,
+    also: Vec<Arc<dyn Any + Send + Sync>>,
     preview: DragPreview,
 ) {
     let viewport = WindowHost::of(ctx).viewport_of(source).unwrap_or_else(|| pass::current_viewport(ctx));
@@ -336,7 +337,7 @@ fn operation(ctx: &Context, mods: Mods) -> DropOperation {
     drop_operation(windows::os_of(ctx), mods)
 }
 
-/// Changes the running session's payload of type `P` (or its second payload of that type) with `change`, in the frame
+/// Changes the running session's payload of type `P` (or its further payload of that type) with `change`, in the frame
 /// the session started only: a host completes what a drag its component started carries with what only the host knows
 /// (a dock measures the panel a tab drag floats). Returns whether a payload changed; from the next frame on, the
 /// payload is fixed and nothing changes.
@@ -344,7 +345,7 @@ pub fn amend<P: Clone + Send + Sync + 'static>(ctx: &Context, change: impl FnOnc
     let frame = pass::root_frame_nr(ctx);
     board(ctx, |board| {
         let Some(session) = board.session.as_mut().filter(|session| session.began == frame) else { return false };
-        let slot = if session.payload.is::<P>() { Some(&mut session.payload) } else { session.also.as_mut().filter(|also| also.is::<P>()) };
+        let slot = if session.payload.is::<P>() { Some(&mut session.payload) } else { session.also.iter_mut().find(|also| also.is::<P>()) };
         let Some(slot) = slot else { return false };
         let Some(mut payload) = slot.downcast_ref::<P>().cloned() else { return false };
         change(&mut payload);
@@ -359,15 +360,15 @@ pub fn active<P: Send + Sync + 'static>(ctx: &Context) -> Option<Arc<P>> {
     active_of(ctx, TypeId::of::<P>())?.downcast::<P>().ok()
 }
 
-/// The active drag payload whose type is `payload`: the session's own payload, else its `also`. For a target that
-/// picks the payload types it takes at run time.
+/// The active drag payload whose type is `payload`: the session's own payload, else the one of its `also`. For a
+/// target that picks the payload types it takes at run time.
 pub(crate) fn active_of(ctx: &Context, payload: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Drag);
     let (own, also) = board(ctx, |board| board.session.as_ref().map(|session| (session.payload.clone(), session.also.clone())))?;
     if Any::type_id(&*own) == payload {
         return Some(own);
     }
-    also.filter(|also| Any::type_id(&**also) == payload)
+    also.into_iter().find(|also| Any::type_id(&**also) == payload)
 }
 
 /// How many sessions have started on this context.
@@ -379,10 +380,10 @@ pub fn started(ctx: &Context) -> u64 {
 
 /// What a drag reader sees of the session, as the tracked input `Drag` compares it: the sessions started, and the
 /// payloads of the running one.
-pub(crate) fn state(ctx: &Context) -> (u64, Option<(usize, Option<usize>)>) {
+pub(crate) fn state(ctx: &Context) -> (u64, Option<(usize, Vec<usize>)>) {
     board(ctx, |board| {
         let payloads = board.session.as_ref().map(|session| {
-            (Arc::as_ptr(&session.payload) as *const () as usize, session.also.as_ref().map(|also| Arc::as_ptr(also) as *const () as usize))
+            (Arc::as_ptr(&session.payload) as *const () as usize, session.also.iter().map(|also| Arc::as_ptr(also) as *const () as usize).collect())
         });
         (board.started, payloads)
     })
@@ -435,7 +436,7 @@ fn os_files(ctx: &Context) {
                 viewport,
                 button: PointerButton::Primary,
                 payload: Arc::new(OsFiles { files: seen.hovered }),
-                also: None,
+                also: Vec::new(),
                 preview: DragPreview::None,
                 env: None,
                 mark: None,
@@ -533,7 +534,7 @@ pub fn moves(ctx: &Context, viewport: ViewportId) -> bool {
 /// of its own. For trials.
 #[cfg(feature = "testing")]
 pub(crate) fn begin_window_drag(ctx: &Context, source: Id) {
-    start(ctx, source, &Env::of_root(ctx).view(), Arc::new(()), None, DragPreview::None);
+    start(ctx, source, &Env::of_root(ctx).view(), Arc::new(()), Vec::new(), DragPreview::None);
 }
 
 /// Sets the mark of the target that would take a drop, as one in another window would. For trials.

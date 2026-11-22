@@ -14,8 +14,9 @@ use super::tile::AroundPicture;
 use super::{CaptionPlace, CardText, Tile, TilePartEvent, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
-    ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, RowHeight, RowState, SelectMode, Show as _, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, section_part,
+    ContainerProps, Cx, DragPayload, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props as _, Role, RowHeight, RowState, SelectMode, Show as _, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn,
+    section_part,
 };
 use crate::controls::disclosure::Disclosure;
 use crate::list::{DropTest, ListRow, ListRowStyle, RowTest, ThumbSize};
@@ -389,6 +390,13 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     #[must_use]
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
+        self
+    }
+
+    /// A tile drag carries `payload` of it too, beside the payloads given before (`CollectionProps::carry`).
+    #[must_use]
+    pub fn carry(mut self, payload: DragPayload) -> Self {
+        self.items = self.items.carry(payload);
         self
     }
 

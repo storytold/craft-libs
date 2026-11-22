@@ -46,8 +46,14 @@ pub trait Pointer {
     fn cancel_press(&mut self, reason: PressCancel);
     /// Starts the drag session with `payload`; the context holds one session at a time, and a running one stays.
     fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview);
-    /// Starts the drag session with `payload`, which also carries `also`: targets of either type see the one drag.
-    fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview);
+    /// Starts the drag session with `payload`, which also carries the payloads `also`, one per type: targets of any of
+    /// these types see the one drag.
+    fn start_drag_also<P: Clone + Send + Sync + 'static>(
+        &mut self,
+        payload: P,
+        also: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        preview: DragPreview,
+    );
     /// The active drag payload of type `P` and the pointer position in this component's egui layer space (8.3), from any
     /// viewport.
     fn dragging<P: Send + Sync + 'static>(&self) -> Option<(Arc<P>, Pos2)>;
@@ -142,11 +148,16 @@ impl Pointer for CxCore<'_> {
     }
 
     fn start_drag<P: Clone + Send + Sync + 'static>(&mut self, payload: P, preview: DragPreview) {
-        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), None, preview);
+        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), Vec::new(), preview);
     }
 
-    fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview) {
-        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), Some(also), preview);
+    fn start_drag_also<P: Clone + Send + Sync + 'static>(
+        &mut self,
+        payload: P,
+        also: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        preview: DragPreview,
+    ) {
+        drag::start(&self.ctx, self.id, &self.env, Arc::new(payload), also, preview);
     }
 
     fn dragging<P: Send + Sync + 'static>(&self) -> Option<(Arc<P>, Pos2)> {
@@ -240,7 +251,12 @@ impl<C: Component> Pointer for Cx<'_, C> {
         self.core.start_drag(payload, preview);
     }
 
-    fn start_drag_also<P: Clone + Send + Sync + 'static>(&mut self, payload: P, also: Arc<dyn std::any::Any + Send + Sync>, preview: DragPreview) {
+    fn start_drag_also<P: Clone + Send + Sync + 'static>(
+        &mut self,
+        payload: P,
+        also: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+        preview: DragPreview,
+    ) {
         self.core.start_drag_also(payload, also, preview);
     }
 

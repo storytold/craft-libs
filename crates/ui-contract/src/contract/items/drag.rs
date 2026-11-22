@@ -580,10 +580,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             None => self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned()))),
         };
         let drag = ListDrag::new(id, keys, key.clone());
-        match props.drag_payload.as_ref().and_then(|map| map.of(&drag)) {
-            Some(also) => cx.start_drag_also(drag, also, preview),
-            None if props.reorder.is_some() => cx.start_drag(drag, preview),
-            None => return,
+        let also: Vec<_> = props.drag_payloads.iter().filter_map(|map| map.of(&drag)).collect();
+        if !also.is_empty() {
+            cx.start_drag_also(drag, also, preview);
+        } else if props.reorder.is_some() {
+            cx.start_drag(drag, preview);
+        } else {
+            return;
         }
         self.drags.grabbed = Some(key);
     }
@@ -744,7 +747,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 {
                     if free {
                         self.free_move(cx, origin, layer(pos));
-                    } else if (props.reorder.is_some() || props.drag_payload.is_some()) && self.drags.grabbed.is_none() {
+                    } else if (props.reorder.is_some() || !props.drag_payloads.is_empty()) && self.drags.grabbed.is_none() {
                         self.begin_row_drag(cx, props, at);
                     }
                 }

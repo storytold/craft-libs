@@ -347,7 +347,7 @@ impl Component for ListRow<'_> {
                 && start.button == PointerButton::Primary
             {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
-                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
@@ -369,7 +369,7 @@ impl Component for ListRow<'_> {
                     && matches!(result.press.phase, PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary)
                 {
                     let preview = DragPreview::frame(result.rect.size(), None);
-                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), Vec::new(), preview);
                     self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
                 }
                 continue;

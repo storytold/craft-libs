@@ -2,13 +2,16 @@
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use craft_cms::convert::CmykConverter;
 use craft_i18n::Format;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
-use craft_ui::contract::{Bind, DropAt, DropPlace, DropZone, Entry, Held, MemoProps, NoValue, Outcome, Pattern, SelectMode, ShowContainer as _};
+use craft_ui::contract::{
+    Bind, DropAt, DropPlace, DropZone, Entry, Held, ListDrag, MemoProps, NoValue, Outcome, Pattern, SelectMode, ShowContainer as _,
+};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{
     PresetBrowser, PresetDrop, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetRowMenu, PresetWords, ThumbFn,
@@ -51,6 +54,7 @@ type ToolsFn<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 type RowIconsFn<'a> = Box<dyn Fn(&SwatchKey) -> Vec<(IconSpec<'static>, String)> + 'a>;
 type RowItemsFn<'a> = Box<dyn Fn(&SwatchKey) -> Vec<Entry<String>> + 'a>;
 type DropMaker<'a> = Box<dyn Fn() -> PresetDrop<'a, SwatchKey> + 'a>;
+type PayloadAdder<'a> = Box<dyn for<'b> Fn(PresetBrowser<'b, SwatchKey>) -> PresetBrowser<'b, SwatchKey> + 'a>;
 
 /// The Swatches panel on the library's groups, built on `PresetBrowser`: groups as folders, swatches as flat touching
 /// squares with no gap or corner radius (Photoshop), the size the browser's zoom chooses.
@@ -61,6 +65,8 @@ type DropMaker<'a> = Box<dyn Fn() -> PresetDrop<'a, SwatchKey> + 'a>;
 ///   the canvas.
 /// - The footer's + is New Swatch: the foreground colour into the selected swatch's group, named "Color Swatch N", then
 ///   renamed in place. Its Delete removes every selected swatch and group.
+/// - A dragged swatch carries the host's payloads ([`drag_payload`](SwatchesPanel::drag_payload)) to the host's drop
+///   targets (a gradient's stops, the canvas), beside the move within the panel.
 /// - Every change of the library comes back as a [`SwatchEdit`] with resolved names and positions; the host runs it.
 /// - Tooltips name the swatch and its value; AccessKit as the preset browser's grid, each swatch named.
 /// - The files of Import, Replace and Export go out as `PresetFileRequest`s from the panel menu; the host answers
@@ -87,6 +93,7 @@ pub struct SwatchesPanel<'a> {
     row_icons: Option<RowIconsFn<'a>>,
     select: SelectMode,
     takes_drop: Option<DropMaker<'a>>,
+    payloads: Vec<PayloadAdder<'a>>,
     row_items: Option<RowItemsFn<'a>>,
 }
 
@@ -116,6 +123,7 @@ impl<'a> SwatchesPanel<'a> {
             row_icons: None,
             select: SelectMode::Single,
             takes_drop: None,
+            payloads: Vec::new(),
             row_items: None,
         }
     }
@@ -190,6 +198,17 @@ impl<'a> SwatchesPanel<'a> {
         self
     }
 
+    /// A swatch drag carries `map` of the dragged swatches too, for the host's drop targets of type `P` (the app's
+    /// paint payload), as `PresetBrowser::drag_payload` does.
+    pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<SwatchKey>) -> Option<P> + Send + Sync + 'static) -> Self {
+        let map = Arc::new(map);
+        self.payloads.push(Box::new(move |browser| {
+            let map = Arc::clone(&map);
+            browser.drag_payload(move |drag: &ListDrag<SwatchKey>| map(drag))
+        }));
+        self
+    }
+
     /// The host's rows of the row menu for a swatch; the standard rows give way to them.
     pub fn row_items(mut self, items: impl Fn(&SwatchKey) -> Vec<Entry<String>> + 'a) -> Self {
         self.row_items = Some(Box::new(items));
@@ -212,6 +231,7 @@ impl<'a> SwatchesPanel<'a> {
             row_icons,
             select,
             takes_drop,
+            payloads,
             row_items,
         } = self;
         let cmyk = cmyk.unwrap_or_else(|| CmykConverter::coated());
@@ -263,6 +283,9 @@ impl<'a> SwatchesPanel<'a> {
                 }
                 if let Some(make) = &takes_drop {
                     browser = browser.takes_drop(make());
+                }
+                for add in &payloads {
+                    browser = add(browser);
                 }
                 browser.show(ui)
             };
