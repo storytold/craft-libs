@@ -609,6 +609,12 @@ impl<T, const B: usize> TreeVec<T, B> {
     }
 
     /// Returns an iterator over a sub-range of this container.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bound is past `usize::MAX`, if the start is after the end, or if the end is
+    /// past the length of this container.
+    // Craft patch (range bounds): the panics are documented.
     pub fn range(&self, range: impl std::ops::RangeBounds<usize>) -> Iter<'_, T, B> {
         let (start, end) = self.normalize_bounds(range);
         let inner = match &*self.root {
@@ -630,6 +636,12 @@ impl<T, const B: usize> TreeVec<T, B> {
     }
 
     /// Returns an iterator over mutable references to a sub-range of this container.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bound is past `usize::MAX`, if the start is after the end, or if the end is
+    /// past the length of this container.
+    // Craft patch (range bounds): the panics are documented.
     pub fn range_mut(&mut self, range: impl std::ops::RangeBounds<usize>) -> IterMut<'_, T, B> {
         let (start, end) = self.normalize_bounds(range);
         let len = self.len();
