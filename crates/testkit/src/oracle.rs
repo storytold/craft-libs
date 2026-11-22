@@ -27,7 +27,7 @@
 //! the byte limit. On Unix the child runs in its own process group, and the whole group is killed,
 //! so a process it started that holds the output pipes ends too. On Windows the child's process
 //! tree is ended with `taskkill /T /F`, then the child is killed; when the child has already exited,
-//! the processes it started are not reached. A successful lookup is cached for the process under
+//! the processes it started are not guaranteed to end. A successful lookup is cached for the process under
 //! every input it read (the program, the version argument, the explicit variable and its value,
 //! `PATH`, `PATHEXT`, the current directory, the install folders and the limits). A failed lookup is
 //! not cached.
@@ -637,8 +637,8 @@ const TREE_KILL_LIMIT: Duration = Duration::from_secs(5);
 /// The tool is run by that absolute path, with only `SystemRoot` in its environment, so neither
 /// `PATH` nor the current directory chooses the program. It does nothing when `SystemRoot` is unset
 /// or not absolute, or when the tool does not start. A run longer than [`TREE_KILL_LIMIT`] is killed
-/// and reaped. When the child has already exited, `taskkill` does not find it, and the processes it
-/// started are not ended.
+/// and reaped. When the child has already exited, `taskkill` is not guaranteed to end the processes
+/// it started.
 #[cfg(windows)]
 fn end_tree(child: &Child) {
     let Some(root) = std::env::var_os("SystemRoot").filter(|r| Path::new(r).is_absolute()) else {
