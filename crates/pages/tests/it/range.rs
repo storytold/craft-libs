@@ -98,21 +98,23 @@ fn editing_to_preserves_from() {
     assert_eq!(range.pages(12, 2, &[]), vec![7], "a committed end below From still selects the starting page");
 }
 
-/// In a document dialog the page range options read as production's: the heading over one line holding the radio
-/// buttons, the page fields and the subset, rather than a label beside a column of radio buttons.
+/// In a document dialog the page range options read as production's: the heading over a column of radio buttons, the
+/// page fields ending in "of N", and no Subset where the dialog keeps it in a row of its own.
 #[trial]
-fn the_page_range_options_of_a_document_dialog_share_one_line_under_their_heading() {
+fn the_page_range_options_of_a_document_dialog_stack_under_their_heading_and_count_the_pages() {
     use craft_ui::patterns::form_dialogs::{ParamDialog, ParamLayout};
     let mut fixture = Fixture::new(|ui| {
         let mut fields = DialogFields::new();
-        ParamDialog::new("range", "Add Watermark", vec![PageRangeOptions::param("pages", "Page range", 12, 2, PageRangeChoices::Acrobat)]).layout(ParamLayout::Document).values(Bind::bound(&mut fields)).show(ui);
+        ParamDialog::new("range", "Rotate", vec![PageRangeOptions::param("pages", "Pages", 12, 2, PageRangeChoices::SelectedFromTo)])
+            .layout(ParamLayout::Document)
+            .values(Bind::bound(&mut fields))
+            .show(ui);
     });
     fixture.room(egui::vec2(1100.0, 700.0));
     fixture.settle();
     let at = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name:?} is shown")).rect;
-    let (all, from, subset) = (at("All pages"), at("Pages from"), at("Subset"));
-    assert!((all.center().y - subset.center().y).abs() < 6.0, "All pages and Subset share a line: {all:?} {subset:?}");
-    assert!((all.center().y - from.center().y).abs() < 6.0, "Pages from is on that line too: {all:?} {from:?}");
-    let heading = fixture.texts().iter().find(|run| run.text.starts_with("Page range")).map(|run| run.rect).expect("the heading is painted");
-    assert!(heading.max.y <= all.min.y + 2.0, "the heading is over the line: {heading:?} {all:?}");
+    let (all, selected, from) = (at("All pages"), at("Selected pages"), at("Pages from"));
+    assert!(selected.min.y > all.max.y - 2.0 && from.min.y > selected.max.y - 2.0, "the radios stack: {all:?} {selected:?} {from:?}");
+    assert!(fixture.texts().iter().any(|run| run.text == "of 12"), "the range ends in the page count");
+    assert!(fixture.by_label("Subset").is_none(), "this arrangement has no Subset");
 }

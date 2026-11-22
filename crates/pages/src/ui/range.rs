@@ -47,7 +47,10 @@ craft_ui::words! {
         selection: "pageRangeOptions.selection" = "Selected pages";
         pages_from: "pageRangeOptions.pagesFrom" = "Pages from";
         to: "pageRangeOptions.to" = "to";
+        /// After the last page field of a document dialog; `{count}` is the number of pages.
+        of_count: template "pageRangeOptions.ofCount" = "of {count}";
         subset: "pageRangeOptions.subset" = "Subset";
+        even_and_odd: "pageRangeOptions.evenAndOdd" = "Even and Odd Pages";
         all_in_range: "pageRangeOptions.allInRange" = "All pages in range";
         even_only: "pageRangeOptions.evenOnly" = "Even pages only";
         odd_only: "pageRangeOptions.oddOnly" = "Odd pages only";
@@ -249,6 +252,9 @@ pub enum PageRangeChoices {
     FromTo,
     /// All pages, Current page and From and To, with no Subset.
     CurrentFromTo,
+    /// All pages, Selected pages and From and To, with no Subset (its own row, [`PageRangeOptions::subset_select`],
+    /// stands elsewhere in the dialog).
+    SelectedFromTo,
 }
 
 impl PageRangeChoices {
@@ -259,7 +265,7 @@ impl PageRangeChoices {
 
     /// Whether the rows offer Selected pages.
     fn selection(self) -> bool {
-        self == PageRangeChoices::Selection
+        matches!(self, PageRangeChoices::Selection | PageRangeChoices::SelectedFromTo)
     }
 
     /// Whether the rows end with the Subset list.
@@ -311,6 +317,23 @@ impl PageRangeOptions {
             FieldValue::Json(value) => serde_json::from_value(value.clone()).ok(),
             _ => None,
         }
+    }
+
+    /// The Subset list alone, for a dialog row of its own (production's Rotate puts it first under "Rotate:"): it edits
+    /// the subset of the range kept under `key` (see [`param`](Self::param)).
+    pub fn subset_select(ui: &mut Ui, fields: &mut DialogFields, key: &str) -> Response {
+        let words = Env::of(ui).words::<PageRangeOptionsWords>();
+        let range = Self::value(fields, key).unwrap_or_default();
+        let entries = [
+            Entry::new(Subset::All, words.even_and_odd.clone()),
+            Entry::new(Subset::Even, words.even_only.clone()),
+            Entry::new(Subset::Odd, words.odd_only.clone()),
+        ];
+        let picked = Select::new(words.subset.clone(), Bind::given(range.subset), &entries).show(ui);
+        if let Some(chosen) = picked.value().copied() {
+            fields.set(key.to_owned(), Self::field_value(&PageRange { subset: chosen, ..range }));
+        }
+        picked.response
     }
 
     /// The row's stored form of `range`, for the row's `opens_with`.
@@ -375,6 +398,10 @@ impl PageRangeOptions {
                     Row::new().show(ui, |ui, _| {
                         Text::new(words.to.clone()).show(ui);
                         to = whole(&field(&words.to, shown_to).show(ui).edit, shown_to);
+                        if inline {
+                            let count = env.format().integer(last as u64);
+                            Text::new(words.of_count.fill(&[("count", count.as_str())])).show(ui);
+                        }
                     });
                     if inline && choices.subset() {
                         Row::new().show(ui, |ui, _| {
@@ -384,12 +411,8 @@ impl PageRangeOptions {
                     }
                 });
             };
-            if inline {
-                // One line: the radio buttons side by side as far as the room goes.
-                Row::new().wrap(true).show(ui, |ui, _| body(ui));
-            } else {
-                Stack::new().show(ui, |ui, _| body(ui));
-            }
+            // The radio buttons stack, in a document dialog as elsewhere: production's Pages group is a column.
+            Stack::new().show(ui, |ui, _| body(ui));
         });
         if let Some(scope) = group.output.value().copied() {
             next.scope = scope;
