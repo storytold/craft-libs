@@ -39,6 +39,9 @@ pub enum NoticeLayout {
     Centred,
 }
 
+/// How many large icons wide the picture of a centred notice (an empty state) is.
+const EMPTY_ICON_IN_LARGE: f32 = 1.5;
+
 /// The icon of a notice.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -584,7 +587,12 @@ impl Component for Notice<'_> {
             detail,
             line,
             more,
-            icon: IconLook::new(control.icon, stateful(tone)),
+            icon: if key.layout == NoticeLayout::Centred {
+                // An empty state's picture: large and quiet above its message.
+                IconLook::new(cx.tokens.size.icon.lg * EMPTY_ICON_IN_LARGE, stateful(muted))
+            } else {
+                IconLook::new(control.icon, stateful(tone))
+            },
             card_width: cx.tokens.size.notice.width,
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }

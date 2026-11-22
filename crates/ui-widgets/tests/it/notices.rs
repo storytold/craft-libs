@@ -216,3 +216,19 @@ fn a_toast_is_light_on_a_dark_theme_and_dark_on_a_light_one() {
         assert_eq!(luminance(card.1) > 128.0, light_card, "{mode:?}: the toast's card is {:?}", card.1);
     }
 }
+
+/// A centred notice (an empty state) draws its icon large, above the message: the message starts at least a large
+/// icon's height below the top of the notice.
+#[trial]
+fn a_centred_notice_draws_a_large_icon_above_its_message() {
+    let mut fixture = Fixture::new(|ui| {
+        let _ = Notice::new(Tone::Neutral, "This document has no bookmarks.")
+            .layout(NoticeLayout::Centred)
+            .icon(craft_ui::notices::NoticeIcon::Custom(craft_ui::primitives::IconSpec::svg(craft_behavior::IconId::new("bookmark"))))
+            .show(ui);
+    });
+    fixture.room(Vec2::new(500.0, 300.0));
+    fixture.settle();
+    let text = fixture.texts().iter().find(|run| run.text.contains("no bookmarks")).map(|run| run.rect).expect("the message is painted");
+    assert!(text.min.y >= 30.0, "the icon above the message is large: the message starts at {}", text.min.y);
+}
