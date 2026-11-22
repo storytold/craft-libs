@@ -100,7 +100,7 @@ fn a_typed_zoom_lands_exactly_after_its_ease() {
             assert!(!space.easing(), "the ease has ended; animated: {animated}");
             assert_eq!(percent(&space.view), typed, "the shown view; animated: {animated}");
             let field = fixture.by_label("Zoom").expect("the Navigator's zoom field");
-            assert_eq!(fixture.tree().value_of(field.node), Some(text.as_str()), "the field's text; animated: {animated}");
+            assert_eq!(fixture.tree().run_texts_of(field.node).concat(), text, "the field's text; animated: {animated}");
         }
     }
 }

@@ -299,7 +299,13 @@ impl AccessTree {
 
     /// The text of each `TextRun` node below `id`, in order.
     pub fn run_texts(&self, id: Id) -> Vec<String> {
-        let Some(node) = self.node(id) else { return Vec::new() };
+        self.run_texts_of(NodeKey::of(id))
+    }
+
+    /// The text of each `TextRun` node below the node `key`, in order: a text node's editable text, which its value
+    /// may read with more (a number field's unit).
+    pub fn run_texts_of(&self, key: NodeKey) -> Vec<String> {
+        let Some(node) = self.lookup(NodeId(key.0)) else { return Vec::new() };
         node.children()
             .iter()
             .filter_map(|child| self.lookup(*child))

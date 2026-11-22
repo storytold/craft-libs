@@ -97,9 +97,9 @@ pub(crate) fn fold_editor(ctx: &Context, widget: Id, owner: Id) {
 
 /// Adds the text facts to the node of `owner` and fills its run nodes. The owner's node is the one node of the text:
 /// the widget's own node folds into it, so a component whose root edits its value through the text (a text field, a
-/// spin button, an editable combo box) is one node that takes focus and the text actions. Call it after the node's
-/// common facts.
-pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
+/// spin button, an editable combo box) is one node that takes focus and the text actions. The value reads `unit`, the
+/// unit the component draws after the text, after a shown text. Call it after the node's common facts.
+pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Option<&str>) {
     adapter::fold_widget(ctx, facts.widget, owner);
     let mut entries = Vec::new();
     if !facts.masked {
@@ -122,8 +122,11 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
         let (focus_node, focus_at) = end_of(&entries, owner, focus)?;
         Some((anchor_node, anchor_at, focus_node, focus_at))
     });
-    let value = (!facts.masked).then_some(facts.text.as_str());
-    adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, disabled: facts.disabled, selection });
+    let value = (!facts.masked).then(|| match unit {
+        Some(unit) if !facts.text.is_empty() => format!("{} {unit}", facts.text),
+        _ => facts.text.clone(),
+    });
+    adapter::write_text(ctx, owner, &TextNode { value: value.as_deref(), editable: facts.editable, disabled: facts.disabled, selection });
     Service::<Tables>::run(ctx, |tables| tables.0.insert(owner, entries));
 }
 

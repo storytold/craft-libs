@@ -289,6 +289,7 @@ pub struct Access {
     pub(crate) description: Option<String>,
     pub(crate) placeholder: Option<String>,
     pub(crate) value: Option<String>,
+    pub(crate) unit: Option<String>,
     pub(crate) color: Option<Srgba>,
     pub(crate) numeric: Option<Numeric>,
     pub(crate) expanded: Option<bool>,
@@ -339,6 +340,13 @@ impl Access {
     /// The text value of a text component.
     pub fn value(&mut self, text: impl Into<String>) -> &mut Self {
         self.value = Some(text.into());
+        self
+    }
+
+    /// The unit a text component draws after its text: the node's value reads it after the text ("160 pt"), while
+    /// the text runs stay the editable text.
+    pub fn unit(&mut self, unit: impl Into<String>) -> &mut Self {
+        self.unit = Some(unit.into());
         self
     }
 

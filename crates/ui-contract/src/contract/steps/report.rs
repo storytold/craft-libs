@@ -229,7 +229,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
     };
     if let Some(facts) = core.text_access.take().or_else(editor_record) {
-        crate::runtime::access::text::report_text(ctx, id, &facts);
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.unit.as_deref());
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }

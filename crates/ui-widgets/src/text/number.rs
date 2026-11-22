@@ -327,6 +327,12 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
     }
 
+    /// The unit drawn this pass. A mixed value shows the dash alone: a unit beside it would claim a measure the
+    /// selection does not have.
+    fn painted_unit(&self, cx: &Cx<'_, Self>) -> Option<Label> {
+        self.shown_unit(&cx.env.units()).filter(|_| cx.value().is_some_and(|value| !non_finite(Some(value))))
+    }
+
     /// `stored` in the shown unit.
     fn to_shown(&self, stored: f64) -> f64 {
         stored * self.scale
@@ -733,8 +739,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
     }
 
-    /// The numeric value, and a button node per chevron named by its word (the painted face). The text part adds the
-    /// text value, the selection and the text actions to the same node.
+    /// The numeric value, the painted unit, and a button node per chevron named by its word (the painted face). The
+    /// text part adds the text value, read with the unit, the selection and the text actions to the same node.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let rule = self.rule();
         // A value that is not finite shows the dash, as a mixed one does, and has no number to read.
@@ -743,6 +749,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             None => Numeric::empty(rule.bounds()),
         };
         access.numeric(numeric.step(rule.step));
+        if let Some(unit) = self.painted_unit(cx) {
+            access.unit(cx.env.resolve(&unit).as_str());
+        }
         for (key, shown) in [(PRESETS, self.presets.is_some()), (SLIDER, self.popup_slider.is_some())] {
             if shown {
                 access.node(key, Role::BUTTON);
@@ -754,9 +763,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let rtl = cx.flow.is_rtl();
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
-        // A mixed value shows the dash alone: a unit beside it would claim a measure the selection does not have.
-        if self.shown_unit(&cx.env.units()).is_some()
-            && cx.value().is_some_and(|value| !non_finite(Some(value)))
+        if self.painted_unit(cx).is_some()
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
             unit.paint(ui, *at, cx.resolve(&cx.style.unit.color), self.options.role);
