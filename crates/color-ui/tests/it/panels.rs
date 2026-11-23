@@ -11,7 +11,7 @@ use craft_color_ui::ui::{
     SwatchLibrary, SwatchPalette, SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState, SwatchesWords, swatch_rows,
 };
 use craft_host::target::Os;
-use craft_theme::Srgba;
+use craft_theme::{ColorModel as _, HsbModel, Srgba};
 use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
@@ -174,6 +174,24 @@ fn the_slider_modes_show_a_channel_on_one_line() {
     rig.fixture.frame(vec![moved(egui::pos2(short.x / 2.0, short.y / 2.0))]);
     rig.fixture.frame(vec![craft_ui::testing::pointer::wheel(-200.0)]).settle();
     assert!(k(&rig).bottom() <= short.y + 0.5 && k(&rig).top() >= 0.0, "CMYK in {short:?}: the K row scrolls into view ({:?})", k(&rig));
+}
+
+/// A step of one channel leaves the others as they were: the fields round what they show, the edit does not.
+#[trial]
+fn a_channel_step_keeps_the_other_channels_unrounded() {
+    let start = Srgba::rgb(0.2, 0.5, 0.7);
+    let mut rig = PanelRig::new(ColorPanelMode::HsbSliders);
+    rig.set_colors([start, BLUE]);
+    let hue = rig.fixture.by_role(Role::SLIDER).into_iter().next().expect("the hue slider");
+    rig.fixture.access(AccessActionKind::Focus, &hue).settle();
+    rig.fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
+    let edits = rig.edits.borrow();
+    let edited = edits.iter().rev().find_map(|(_, edit)| edit.value()).expect("the step's edit").color;
+    let [before, after] = [start, edited].map(|color| HsbModel.from_srgb(color).values);
+    assert_ne!(before[0], after[0], "the hue moved");
+    for channel in [1, 2] {
+        assert!((before[channel] - after[channel]).abs() < 0.01, "channel {channel} kept ({before:?}, {after:?})");
+    }
 }
 
 /// The rect of the FillStroke spectrum in Web Color for a foreground of `color`.

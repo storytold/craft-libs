@@ -1031,7 +1031,7 @@ impl Body<'_> {
         });
     }
 
-    /// The model's values for the edited colour, whole numbers as Photoshop's fields.
+    /// The model's values for the edited colour, unrounded: an edit of one channel leaves the others as they are.
     fn values(&self, model: &dyn ColorModel) -> ModelValues {
         let color = self.color();
         // The host's own values of the colour (typed CMYK, a working space's numbers) stand when they give the colour.
@@ -1040,12 +1040,7 @@ impl Body<'_> {
             .iter()
             .chain(given.as_ref())
             .find(|v| v.model == model.id() && model.to_srgb(&v.values).same_rgb8(color));
-        let mut values = kept.copied().unwrap_or_else(|| self.read(model, color));
-        for (slot, ch) in values.values.iter_mut().zip(model.channels()) {
-            let scale = 10f32.powi(i32::from(ch.decimals));
-            *slot = if slot.is_finite() { (*slot * scale).round() / scale } else { 0.0 };
-        }
-        values
+        finite_values(kept.copied().unwrap_or_else(|| self.read(model, color)))
     }
 
     /// `color` in `model`. HSB takes the hue of a grey, and the hue and saturation of black, from the last HSB values
@@ -1136,11 +1131,10 @@ impl Body<'_> {
                 track_values.values[2] = 100.0;
             }
             let track = model.track(i, &track_values);
-            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(f64::from(current.values[i]) * scale), rule)
-                .short(ch.label)
-                .unit(unit)
-                .track(track)
-                .show(ui);
+            // The field shows the channel's places, as Photoshop's; the edits start from the unrounded values.
+            let places = 10f64.powi(i32::from(rule.decimals));
+            let shown = (f64::from(current.values[i]) * scale * places).round() / places;
+            let row = ChannelRow::new(channel_name(model, i, &[model]), Bind::given(shown), rule).short(ch.label).unit(unit).track(track).show(ui);
             for event in row.into_iter().flat_map(|row| row.events) {
                 self.channel_event(model, current, i, event.map(|x| x / scale));
             }
