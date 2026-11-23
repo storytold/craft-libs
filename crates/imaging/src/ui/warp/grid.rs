@@ -19,7 +19,7 @@ use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::style::{ComponentStyle, HandleLook, StyleColor, StyleCx};
-use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 
 use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 
@@ -74,8 +74,8 @@ impl<'a> WarpRule<'a> {
 }
 
 /// The look of the warp grid: lines in `overlay.line`, arms in `overlay.handle_stroke`, the split
-/// preview in `overlay.stroke` over `overlay.halo`, anchors as handle squares and handle ends as
-/// small handle circles.
+/// preview in `overlay.stroke` over `overlay.halo`, anchors as small dots and handle ends as
+/// handle circles.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct WarpGridStyle {
@@ -517,10 +517,12 @@ impl Component for WarpGrid<'_> {
         let look = |index: usize, fill: &craft_ui::style::Stateful<craft_ui::style::StyleColor>| {
             if cx.part_if_declared(POINT.at(index as u64)).is_some() { cx.resolve_part(POINT.at(index as u64), fill) } else { cx.resolve(fill) }
         };
+        // Anchors are small dots, about half a handle end's size, as the reference application draws its warp grid
+        // (measured at 100 and 200 %: a corner mark of 3-4 px, a border handle's of about 7).
         for anchor in mesh.anchors() {
-            let square = PaintShape::Rect(Rect::from_center_size(screen(anchor), Vec2::splat(style.anchor.side)), CornerRadius::ZERO);
-            draw.fill(&square, look(anchor, &style.anchor.fill));
-            draw.stroke(&square, StrokeWidth::Thin, style.anchor.stroke);
+            let dot = PaintShape::Circle(screen(anchor), style.end.side * 0.3);
+            draw.fill(&dot, look(anchor, &style.anchor.fill));
+            draw.stroke(&dot, StrokeWidth::Thin, style.anchor.stroke);
         }
         for index in ends {
             let circle = PaintShape::Circle(screen(index), style.end.side / 2.0);
