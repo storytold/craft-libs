@@ -65,6 +65,8 @@ fn checked(fixture: &Fixture, label: &str) -> bool {
     assert_eq!(fixture.tree().role_of(target.node), Some(if label.ends_with("grid") { Role::BUTTON } else { Role::CHECK_BOX }));
     match fixture.tree().toggled_of(target.node) {
         Some(Mixed::Same(value)) => value,
+        // The standard BUTTON exposes CHECKED only while on; checkboxes expose both states.
+        None if matches!(label, "4x4 grid" | "10x10 grid") => false,
         other => panic!("{label} reports its checked state: {other:?}"),
     }
 }
