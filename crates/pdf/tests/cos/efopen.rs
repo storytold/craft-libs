@@ -316,8 +316,8 @@ fn page_content(doc: &Document) -> (u32, craft_pdf::cos::Stream) {
 }
 
 /// A file specification can be anywhere, so every object of the file is looked in. Ones that are
-/// their own `/EF`, or each other's, or sit deep in arrays naming objects the file doesn't have,
-/// open and save, and change how nothing else is read.
+/// their own `/EF`, or each other's, or sit deep in arrays naming objects the file doesn't have
+/// or generations its objects don't have, open and save, and change how nothing else is read.
 #[test]
 fn hostile_embedded_file_dictionaries_change_nothing_else() {
     let mut doc = Document::open(Arc::new(fixture_typed(Algorithm::Aes256, false))).unwrap();
@@ -335,6 +335,8 @@ fn hostile_embedded_file_dictionaries_change_nothing_else() {
     let mut ef = Dict::new();
     ef.set(b"F".to_vec(), Object::Ref(ObjRef { num: 999_999, generation: 0 }));
     ef.set(b"UF".to_vec(), Object::Ref(ObjRef { num: u32::MAX, generation: 0 }));
+    // The page's content under a generation it doesn't have: a reference to null (§7.3.10).
+    ef.set(b"DOS".to_vec(), Object::Ref(ObjRef { num: CONTENT.num, generation: 1 }));
     let mut spec = Dict::new();
     spec.set(b"EF".to_vec(), Object::Dict(ef));
     let mut nested = Object::Dict(spec);

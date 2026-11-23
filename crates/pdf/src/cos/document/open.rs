@@ -340,19 +340,22 @@ impl Document {
     /// optional, Table 44). A file specification can be anywhere (a name tree, an annotation, an
     /// `/AF` array, an action), so every object of the file is read, once and without the editing
     /// caches, and what is nested in it is walked without recursion: cycles and nesting cost no
-    /// more than the objects' size. A number that isn't an object of the file is left out, so the
-    /// set is no larger than the file's object count; so is the number the writer gives the
-    /// object streams it builds.
+    /// more than the objects' size. A reference that doesn't resolve to an object of the file (a
+    /// number it doesn't have, or a generation the object doesn't take, which is null, ISO 32000-2
+    /// §7.3.10) is left out, so the set is no larger than the file's object count; so is the
+    /// number the writer gives the object streams it builds.
     fn embedded_file_streams(&self) -> HashSet<u32> {
-        let mut numbers = self.entries.object_numbers(&self.data);
-        numbers.sort_unstable();
-        let is_object = |num: u32| num != u32::MAX && numbers.binary_search(&num).is_ok();
+        let numbers = self.entries.object_numbers(&self.data);
+        let is_object = |r: ObjRef| r.num != u32::MAX && self.reference_matches(r);
         let mut reader = self.object_reader();
         let mut found = HashSet::new();
+        // The `/EF` dictionaries given by reference already scanned: file specifications can share
+        // one, and each is scanned once however many name it.
+        let mut scanned = HashSet::new();
         let mut add = |ef: &Dict| {
             for (_, v) in ef.iter() {
                 if let Object::Ref(r) = v
-                    && is_object(r.num)
+                    && is_object(*r)
                 {
                     found.insert(r.num);
                 }
@@ -381,6 +384,9 @@ impl Document {
                 pending.extend(d.iter().map(|(_, v)| v));
             }
             for r in by_ref {
+                if !scanned.insert(r) {
+                    continue;
+                }
                 if let Object::Dict(ef) = &*reader.get(r) {
                     add(ef);
                 }
