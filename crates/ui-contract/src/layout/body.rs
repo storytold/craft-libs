@@ -213,6 +213,91 @@ impl LineTook {
     }
 }
 
+/// The children of each wrapping `Row` body in the sweep or run under way, by body id.
+#[derive(Default)]
+pub(crate) struct WrapRows(IdMap<WrapTook>);
+
+/// What the children of a wrapping row took so far, and the lines the real run sets them on.
+#[derive(Default)]
+struct WrapTook {
+    /// Each child placed so far: its line, counted from the row's first, and its height.
+    children: Vec<(usize, f32)>,
+    /// The top of the last child's slot.
+    top: Option<f32>,
+    /// In a real run, each child's line and that line's height in this pass's measuring run, while every child so far
+    /// went on the line it went on there: `None` in a measuring run, without one, and once a child did not.
+    planned: Option<Vec<(usize, f32)>>,
+}
+
+/// Starts the children of the wrapping `Row` body `id` afresh; a real run reads the lines this pass's measuring run
+/// found for them.
+fn open_wraps(ctx: &egui::Context, sizing: bool, id: Id) {
+    let count = this_pass(ctx, sizing, sub(id, "wraps")).map_or(0, |count| count.x as usize);
+    let planned =
+        (count > 0).then(|| (0..count).map(|i| this_pass(ctx, sizing, sub(id, ("wrap", i))).map(|at| (at.x as usize, at.y))).collect()).flatten();
+    pass_state::with::<WrapRows, _>(ctx, |rows| rows.0.insert(id, WrapTook { planned, ..WrapTook::default() }));
+}
+
+/// Ends the children of the wrapping `Row` body `id`, `room` wide; a measuring run records each child's line and the
+/// height of its tallest child.
+fn close_wraps(ctx: &egui::Context, sizing: bool, id: Id, room: Vec2) {
+    let took = pass_state::with::<WrapRows, _>(ctx, |rows| rows.0.remove(&id)).unwrap_or_default();
+    if !sizing {
+        return;
+    }
+    let mut heights: Vec<f32> = Vec::new();
+    for &(line, height) in &took.children {
+        heights.resize(heights.len().max(line + 1), 0.0);
+        if let Some(tallest) = heights.get_mut(line) {
+            *tallest = tallest.max(height);
+        }
+    }
+    found(ctx, true, sub(id, "wraps"), room, Vec2::new(took.children.len() as f32, 0.0));
+    for (i, &(line, _)) in took.children.iter().enumerate() {
+        found(ctx, true, sub(id, ("wrap", i)), room, Vec2::new(line as f32, heights.get(line).copied().unwrap_or_default()));
+    }
+}
+
+/// Whether egui puts the next child `width` wide in `ui`, a wrapping row's block, on a new line (`Layout::next_frame`):
+/// the line holds something already and the child does not fit the rest of it.
+fn wraps(ui: &Ui, width: f32) -> bool {
+    let (cursor, max) = (ui.cursor(), ui.max_rect());
+    let begun = if ui.layout().main_dir() == egui::Direction::RightToLeft { cursor.right() < max.right() } else { max.left() < cursor.left() };
+    begun && ui.available_rect_before_wrap().width() < width
+}
+
+/// Counts the next child of `size` placed in `ui`, the block of the wrapping `Row` body that places the children under
+/// `env`, on its line: the line egui sets it on, or a line another allocation started. Returns the height of that line
+/// in this pass's measuring run while each child so far went on the line it went on there; `None` outside a wrapping
+/// row, in a measuring run, and once the lines differ.
+fn wrap_line(ui: &Ui, env: &Env, size: Vec2) -> Option<f32> {
+    let body = env.flow_body.filter(|_| ui.layout().main_wrap)?;
+    let (starts, top) = (wraps(ui, size.x), ui.cursor().top());
+    pass_state::with::<WrapRows, _>(ui.ctx(), |rows| {
+        let took = rows.0.get_mut(&body)?;
+        let line = match (took.children.last(), took.top) {
+            (Some(&(last, _)), Some(was)) if starts || top > was + ONE_LINE_SLACK => last + 1,
+            (Some(&(last, _)), _) => last,
+            (None, _) => 0,
+        };
+        let i = took.children.len();
+        took.children.push((line, size.y));
+        let planned = took.planned.as_ref().and_then(|planned| planned.get(i)).filter(|(at, _)| *at == line).map(|(_, height)| *height);
+        if planned.is_none() {
+            took.planned = None;
+        }
+        planned
+    })
+}
+
+/// Notes the top of the `slot` a child took in `ui`, the block of the wrapping `Row` body that places the children
+/// under `env`.
+fn wrap_took(ui: &Ui, env: &Env, slot: Rect) {
+    if let Some(body) = env.flow_body.filter(|_| ui.layout().main_wrap) {
+        pass_state::with::<WrapRows, _>(ui.ctx(), |rows| rows.0.get_mut(&body).map(|took| took.top = Some(slot.top())));
+    }
+}
+
 /// Opens the first-line targets `targets` of a container's measuring sweep (`Scoped::first_line`).
 pub(crate) fn open_first_lines(ctx: &egui::Context, targets: &[Id]) {
     pass_state::with::<FirstLines, _>(ctx, |lines| {
@@ -1276,7 +1361,8 @@ fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
 /// The rect a child of measured `size` takes in flow in `ui`: the next cell of the `Grid` or spread `Row` body that
 /// encloses it directly, else the next allocation of `ui`'s layout. A direct child of an unwrapped `Row` that is one
 /// line sits with its centre on the row's line; a child of more than one line (a column, a field with a help line)
-/// sits at the row's top. In a `Grid` cell a child that `fill`s takes the
+/// sits at the row's top. A direct child of a wrapping `Row` takes the height of its line, at the line's middle when it
+/// is one line, else at its top. In a `Grid` cell a child that `fill`s takes the
 /// cell's whole height from the cell's top, so the cards of one row share their top and bottom edges; any other child
 /// sits at the vertical centre of its cell.
 #[doc(hidden)]
@@ -1298,16 +1384,21 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     });
     let centre = bracket.and_then(|(_, centre)| centre).or_else(|| line.and_then(|line| line.centre));
     let above = centre.zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
-    let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
+    // A child of a wrapping row takes the height of its line; a one-line child sits at its middle.
+    let wrapped = if line.is_none() { wrap_line(ui, &env, size) } else { None };
+    let height = line.and_then(|line| line.height).or(wrapped);
+    let slot = Vec2::new(size.x, height.map_or(above + size.y, |height| height.max(above + size.y)));
     let (rect, in_cell) = take_in(ui, &env, slot);
+    wrap_took(ui, &env, rect);
     let placed = if child.fill && in_cell {
         rect
     } else {
+        let spare = (rect.height() - size.y).max(0.0);
         let (above, below) = match line {
             Some(_) => (above, (rect.height() - above - size.y).max(0.0)),
             None => {
-                let spare = (rect.height() - size.y).max(0.0);
-                if env.grid_top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
+                let top = if wrapped.is_some() { one_line(child.first, size.y).is_none() } else { env.grid_top };
+                if top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
             }
         };
         Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
@@ -1933,9 +2024,10 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
             })
         }
     };
-    // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
-    // first line.
+    // A wrapped row has a line per wrap, whose height this pass's measuring run finds (`wrap_line`), and its first
+    // child gives its first line.
     let line = (!wrap).then(|| on_line(id, row_line(&ctx, sizing, id, shared), shared));
+    let lines = wrap && !env.least;
     // Where its least is asked, a wrapping row is as narrow as its widest child at its least: every child on a
     // line of its own.
     let block_layout = if wrap && env.least { child::column_layout(rtl) } else { child::row_layout(rtl, wrap) };
@@ -1955,7 +2047,13 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
                 }
             }),
         );
+        if lines {
+            open_wraps(&ctx, sizing, id);
+        }
         let inner = if wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };
+        if lines {
+            close_wraps(&ctx, sizing, id, room.size());
+        }
         Env::restore(&ctx, installed);
         if !wrap {
             record_line(ui, sizing, id, shared);
