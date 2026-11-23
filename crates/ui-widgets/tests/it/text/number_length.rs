@@ -77,3 +77,16 @@ fn a_bare_number_reads_in_the_lengths_bare_unit() {
     let picas_plain = in_lengths(picas, START, type_and_commit("1"));
     assert!((picas_spelled - picas_plain).abs() < SAME, "a spelled pica is still a pica");
 }
+
+/// Any length field reads picas and points written together (`2p6`) as their sum, and a percentage after `*` as a
+/// share of the quantity before it.
+#[trial]
+fn picas_with_points_and_a_percentage_factor_read_as_print_apps_write_them() {
+    let mm = LengthUnits::new(UnitKind::Points, UnitKind::Millimetres, START);
+    let together = in_lengths(mm, START, type_and_commit("2p6"));
+    let summed = in_lengths(mm, START, type_and_commit("2 pica + 6 pt"));
+    assert!((together - summed).abs() < SAME && together != START, "2p6 is two picas and six points: {together} against {summed}");
+    let share = in_lengths(mm, START, type_and_commit("3cm*50%"));
+    let half = in_lengths(mm, START, type_and_commit("1.5cm"));
+    assert!((share - half).abs() < SAME && share != START, "3cm*50% is half of 3 cm: {share} against {half}");
+}

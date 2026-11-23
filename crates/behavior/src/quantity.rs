@@ -30,12 +30,15 @@ struct Unit {
     factor: f64,
     /// What the caller named this unit by, handed back by [`Reader::read_tagged`].
     tag: Option<u32>,
+    /// The factor of a number written right after the spelling ([`Reader::split_unit`]).
+    rest: Option<f64>,
 }
 
 /// Reads numbers, expressions and unit quantities written in one locale.
 ///
 /// Grammar: `expr = term (('+' | '-') term)*`, `term = factor (('*' | '/' | 'x' | 'X' | '×') factor)*`,
-/// `factor = ('-' | '+')? (number unit? | '(' expr ')')`. Text that starts with `+`, `*` or `/` is relative: it
+/// `factor = ('-' | '+')? (number unit? | '(' expr ')')`. A factor after `*`, `/`, `x` or `×` may be a percentage
+/// (`3cm*50%` is 1.5 cm), whatever `%` means elsewhere. Text that starts with `+`, `*` or `/` is relative: it
 /// applies to the start value (`+5` adds 5, `*2` doubles). A leading `-` is a negative number. A unit is the longest
 /// registered spelling at the start of the letters after a number, so `2inx3` is `2in` times 3 and `2px` stays a
 /// quantity when `px` is registered. A group separator counts only before exactly three digits.
@@ -87,14 +90,22 @@ impl Reader {
     /// Spaces between the number and the spelling are skipped, so "12 %" reads like "12%".
     #[must_use]
     pub fn unit(mut self, spelling: &str, factor: f64) -> Self {
-        self.units.push(Unit { spelling: spelling.to_lowercase(), factor, tag: None });
+        self.units.push(Unit { spelling: spelling.to_lowercase(), factor, tag: None, rest: None });
         self
     }
 
     /// Like [`Reader::unit`], with a `tag` that [`Reader::read_tagged`] returns when the text names this spelling.
     #[must_use]
     pub fn unit_tagged(mut self, spelling: &str, factor: f64, tag: u32) -> Self {
-        self.units.push(Unit { spelling: spelling.to_lowercase(), factor, tag: Some(tag) });
+        self.units.push(Unit { spelling: spelling.to_lowercase(), factor, tag: Some(tag), rest: None });
+        self
+    }
+
+    /// Like [`Reader::unit_tagged`], where a number written right after the spelling adds that many of `rest`: picas
+    /// and points read as `2p6`, two picas and six points.
+    #[must_use]
+    pub fn split_unit(mut self, spelling: &str, factor: f64, rest: f64, tag: u32) -> Self {
+        self.units.push(Unit { spelling: spelling.to_lowercase(), factor, tag: Some(tag), rest: Some(rest) });
         self
     }
 
@@ -170,7 +181,8 @@ impl Parse<'_> {
         Ok(left)
     }
 
-    /// A factor; `scaled` says a number with no unit counts as the reader's bare factor.
+    /// A factor; `scaled` says it starts a term, where a number with no unit counts as the reader's bare factor.
+    /// Otherwise it is a multiplier, which may be a percentage.
     fn factor(&mut self, scaled: bool) -> Result<f64, NotAValue> {
         match self.peek() {
             Some('-') => {
@@ -196,6 +208,10 @@ impl Parse<'_> {
     fn quantity(&mut self, scaled: bool) -> Result<f64, NotAValue> {
         let number = self.number()?;
         self.tag = None;
+        if !scaled && self.peek() == Some('%') {
+            self.at += 1;
+            return Ok(number / 100.0);
+        }
         let reader = self.reader;
         let run: Vec<char> = self.chars[self.at..].iter().copied().take_while(|c| is_unit_char(*c)).collect();
         let unit = (1..=run.len()).rev().find_map(|len| {
@@ -206,7 +222,11 @@ impl Parse<'_> {
             Some((len, unit)) => {
                 self.at += len;
                 self.tag = unit.tag;
-                Ok(number * unit.factor)
+                let rest = match unit.rest {
+                    Some(rest) if self.peek().is_some_and(|c| digit(c).is_some() || c == reader.decimal) => rest * self.number()?,
+                    _ => 0.0,
+                };
+                Ok(number * unit.factor + rest)
             }
             None if scaled => Ok(number * reader.bare),
             None => Ok(number),
@@ -284,6 +304,17 @@ mod tests {
         near(&picas, "1pt+12", 13.0 / 12.0);
         near(&picas, "1pc+12", 2.0);
         near(&picas, "12*2", 2.0);
+
+        let split = Reader::new().bare(1.0 / 12.0).split_unit("p", 1.0, 1.0 / 12.0, 0);
+        near(&split, "2p6", 2.5);
+        near(&split, "-2p6", -2.5);
+        near(&split, "2p", 2.0);
+
+        let percent = Reader::new().unit("cm", 1.0).unit("%", 7.0);
+        near(&percent, "3cm*50%", 1.5);
+        near(&percent, "3cm/50%", 6.0);
+        near(&percent, "2%", 14.0);
+        assert_eq!(percent.read("*50%", Some(4.0)), Ok(2.0), "a relative share");
 
         let german = Reader::new().decimal(',').group('.');
         near(&german, "1.234,5", 1234.5);

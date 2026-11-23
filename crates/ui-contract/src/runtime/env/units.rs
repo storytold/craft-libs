@@ -620,12 +620,19 @@ impl Units {
             reader = reader.group(group);
         }
         let english = Units::new(self.format.clone(), english_words(), Arc::new(Words::english()), self.point_size);
+        let points = factor(UnitKind::Points);
         for (tag, other) in UnitKind::ALL.into_iter().enumerate() {
             let Some(factor) = factor(other) else { continue };
             for spelling in [self.symbol(other), english.symbol(other)] {
                 if is_unit_spelling(&spelling) {
                     reader = reader.unit_tagged(&spelling, factor, tag as u32);
                 }
+            }
+            if other == UnitKind::Picas
+                && let Some(points) = points
+            {
+                // Picas and points as print apps read them: `2p6` is two picas and six points.
+                reader = reader.split_unit("p", factor, points, tag as u32);
             }
         }
         reader
