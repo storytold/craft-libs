@@ -101,18 +101,17 @@ fn block_comment_tail(mut text: &str) -> Option<&str> {
     }
 }
 
-/// Peel list markers using the block parser's whitespace and interruption rules.
-/// The returned column is relative to `line`; non-list text and indented code stay intact.
-fn list_content(mut line: &str, starts_block: bool) -> (&str, usize) {
-    let mut column = 0usize;
-    for depth in 0..=MAX_NEST {
+/// Peel valid list markers and retain each containing item's document column.
+/// A bounded stack restores the parent context when a nested item ends.
+fn list_source<'a>(mut line: &'a str, mut column: usize, mut starts_block: bool, items: &mut Vec<(usize, bool)>) -> (&'a str, usize) {
+    while items.len() < MAX_NEST {
         let ind = indent(line);
         let text = line.trim_start_matches([' ', '\t']);
         if ind >= 4 || thematic_break(text) {
             break;
         }
         let Some(marker) = list_marker(text) else { break };
-        if depth == 0 && !starts_block && !list_interrupts(marker, text) {
+        if !starts_block && !list_interrupts(marker, text) {
             break;
         }
         let after = text.get(marker.len..).unwrap_or("");
@@ -124,24 +123,20 @@ fn list_content(mut line: &str, starts_block: bool) -> (&str, usize) {
             marker_space(ind, marker.len, after)
         };
         column = column.saturating_add(ind).saturating_add(marker.len).saturating_add(spaces);
+        items.push((column, false));
         line = after.get(skip..).unwrap_or("");
+        starts_block = true;
     }
     (line, column)
 }
 
-/// The content column of a comment opened directly or after list markers.
-fn list_comment_indent(line: &str, starts_block: bool) -> Option<usize> {
-    let (content, column) = list_content(line, starts_block);
-    (indent(content) < 4 && content.trim_start_matches([' ', '\t']).starts_with("<!--")).then_some(column)
-}
-
 /// Reprocess visible tails through list/comment containers, as the block pass does.
 /// Keep borrowed suffixes so each delimiter is scanned once and the source stays intact.
-fn reference_comment_tail(mut text: &str, mut column: usize) -> (Option<&str>, usize) {
+fn reference_comment_tail<'a>(mut text: &'a str, mut column: usize, items: &mut Vec<(usize, bool)>) -> (Option<&'a str>, usize) {
     loop {
         let Some(tail) = block_comment_tail(text) else { return (None, column) };
-        let (content, nested_column) = list_content(tail, true);
-        column = column.saturating_add(nested_column);
+        let (content, nested_column) = list_source(tail, column, true, items);
+        column = nested_column;
         if indent(content) >= 4 || !content.trim_start_matches([' ', '\t']).starts_with("<!--") {
             return (Some(content), column);
         }
@@ -162,10 +157,11 @@ fn list_interrupts(marker: Marker, text: &str) -> bool {
 }
 
 /// Remove only a visible reference definition; retain the comment's closing delimiters.
-fn take_comment_tail_reference(line: &mut String, refs: &mut Refs) -> bool {
-    let (Some(tail), _) = reference_comment_tail(line, 0) else { return false };
+fn take_comment_tail_reference(line: &mut String, tail_len: Option<usize>, refs: &mut Refs) -> bool {
+    let Some(tail_len) = tail_len else { return false };
+    let keep = line.len().saturating_sub(tail_len);
+    let Some(tail) = line.get(keep..) else { return false };
     let Some((label, dest)) = link_definition(tail) else { return false };
-    let keep = line.len().saturating_sub(tail.len());
     refs.entry(label).or_insert(dest.into());
     line.truncate(keep);
     true
@@ -188,111 +184,85 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
     let mut open: Option<(char, usize)> = None;
     let mut fence_indent = 0usize;
     let mut fence_after_blank = false;
-    let mut list_item: Option<(usize, bool)> = None;
+    let mut list_items: Vec<(usize, bool)> = Vec::new();
     let mut in_comment = false;
     let mut comment_indent = 0usize;
     let mut comment_after_blank = false;
-    // The start of the document begins a block.
     let mut starts_block = true;
     lines.retain_mut(|line| {
-        if let Some((column, after_blank)) = list_item {
-            if list_item_ends(line, column, after_blank) {
-                list_item = None;
-                starts_block = true;
-            } else {
-                list_item = Some((column, is_blank(line)));
-            }
+        while list_items.last().is_some_and(|(column, blank)| list_item_ends(line, *column, *blank)) {
+            list_items.pop();
+            starts_block = true;
+        }
+        for (_, blank) in &mut list_items {
+            *blank = is_blank(line);
         }
         if open.is_some() && list_item_ends(line, fence_indent, fence_after_blank) {
             open = None;
             starts_block = true;
         }
-        if open.is_some() {
+        if let Some((c, n)) = open {
             fence_after_blank = is_blank(line);
-        }
-        if in_comment && comment_indent > 0 {
-            // A dedented block after a blank, or an interrupting block, ends the list item.
-            // Its following definitions are outside the unclosed comment.
-            if list_item_ends(line, comment_indent, comment_after_blank) {
-                in_comment = false;
+            let source = strip_indent(line, fence_indent);
+            let t = source.trim_start_matches([' ', '\t']);
+            if indent(source) < 4 && fence(t).is_some_and(|(fc, fl)| fc == c && fl >= n) && t.trim_start_matches(c).trim().is_empty() {
+                open = None;
                 starts_block = true;
             }
-            comment_after_blank = is_blank(line);
-        }
-        if in_comment {
-            let (tail, column) = reference_comment_tail(line, comment_indent);
-            comment_indent = column;
-            if list_item.is_none() && column > 0 {
-                list_item = Some((column, false));
-            }
-            in_comment = tail.is_none();
-            // parse_blocks reprocesses visible tails as source, including opening fences.
-            open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
-            fence_indent = comment_indent;
-            fence_after_blank = false;
-            starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
-            starts_block |= take_comment_tail_reference(line, &mut refs);
             return true;
         }
-        // A continuation is parsed in its containing item's coordinate system.
-        let enclosing_column = list_item.filter(|(column, _)| indent(line) >= *column).map_or(0, |(column, _)| column);
-        let source = strip_indent(line, enclosing_column);
-        let t = source.trim_start_matches([' ', '\t']);
-        // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
-        let fence_line = if open.is_some() { strip_indent(line, fence_indent) } else { source };
-        let fence_text = fence_line.trim_start_matches([' ', '\t']);
-        let marker = (indent(fence_line) < 4).then(|| fence(fence_text)).flatten();
-        match open {
-            Some((c, n)) => {
-                // A closing fence holds nothing but its own run of fence characters.
-                if marker.is_some_and(|(fc, fl)| fc == c && fl >= n) && fence_text.trim_start_matches(c).trim().is_empty() {
-                    open = None;
-                    starts_block = true;
-                }
-                return true;
-            }
-            None => {
-                if let Some(f) = marker {
-                    open = Some(f);
-                    fence_indent = enclosing_column;
-                    fence_after_blank = false;
-                    return true;
-                }
-            }
+        if in_comment && list_item_ends(line, comment_indent, comment_after_blank) {
+            in_comment = false;
+            starts_block = true;
         }
-        // Remember a valid surrounding item so its next marker starts a new block even when
-        // an ordered number other than one could not interrupt a plain paragraph.
-        if list_item.is_none()
-            && !thematic_break(t)
-            && indent(line) < 4
-            && let Some(m) = list_marker(t)
-            && (starts_block || list_interrupts(m, t))
-        {
-            let after = t.get(m.len..).unwrap_or("");
-            let spaces = if is_blank(after) || indent(after) > 4 { 1 } else { marker_space(indent(line), m.len, after).0 };
-            list_item = Some((indent(line).saturating_add(m.len).saturating_add(spaces), false));
-        }
-        if let Some(column) = list_comment_indent(source, starts_block) {
-            comment_indent = enclosing_column.saturating_add(column);
-            comment_after_blank = false;
-            let (tail, column) = reference_comment_tail(source, comment_indent);
+        if in_comment {
+            comment_after_blank = is_blank(line);
+            let (tail, column) = reference_comment_tail(line, comment_indent, &mut list_items);
             comment_indent = column;
-            if list_item.is_none() && column > 0 {
-                list_item = Some((column, false));
-            }
             in_comment = tail.is_none();
-            // parse_blocks reprocesses visible tails as source, including opening fences.
             open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
-            fence_indent = comment_indent;
+            fence_indent = column;
             fence_after_blank = false;
             starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
-            starts_block |= take_comment_tail_reference(line, &mut refs);
+            let tail_len = tail.map(str::len);
+            starts_block |= take_comment_tail_reference(line, tail_len, &mut refs);
+            return true;
+        }
+        let enclosing_column = list_items.last().filter(|(column, _)| indent(line) >= *column).map_or(0, |(column, _)| *column);
+        let source = strip_indent(line, enclosing_column);
+        let item_count = list_items.len();
+        let (source, column) = list_source(source, enclosing_column, starts_block, &mut list_items);
+        starts_block |= list_items.len() > item_count;
+        let t = source.trim_start_matches([' ', '\t']);
+        if indent(source) < 4
+            && let Some(f) = fence(t)
+        {
+            open = Some(f);
+            fence_indent = column;
+            fence_after_blank = false;
+            return true;
+        }
+        if indent(source) < 4 && t.starts_with("<!--") {
+            comment_after_blank = false;
+            let (tail, column) = reference_comment_tail(source, column, &mut list_items);
+            comment_indent = column;
+            in_comment = tail.is_none();
+            open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
+            fence_indent = column;
+            fence_after_blank = false;
+            starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
+            let tail_len = tail.map(str::len);
+            starts_block |= take_comment_tail_reference(line, tail_len, &mut refs);
             return true;
         }
         if starts_block && let Some((label, dest)) = link_definition(source) {
-            // The first definition of a label wins, as CommonMark says, and definitions may
-            // follow one another.
             refs.entry(label).or_insert(dest.into());
+            if list_items.len() > item_count {
+                // The marker still owns continuation lines after its definition disappears.
+                let keep = line.len().saturating_sub(source.len());
+                line.truncate(keep);
+                return true;
+            }
             return false;
         }
         starts_block = is_blank(source) || atx_heading(t).is_some() || thematic_break(t);

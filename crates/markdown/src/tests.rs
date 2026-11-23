@@ -1074,3 +1074,77 @@ fn continuation_comment_tail_columns_include_the_enclosing_list_item() {
         assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.text().contains("[x]: /wrong"))), "{md}");
     }
 }
+
+#[test]
+fn fences_on_list_item_first_lines_protect_reference_definitions() {
+    for (marker, pad) in [("-   ", "    "), ("1. ", "   "), ("- - ", "    ")] {
+        let md = format!("{marker}```\n\n{pad}[x]: /wrong\n{pad}```\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.text().contains("[x]: /wrong"))), "code remains visible: {md}");
+    }
+}
+
+#[test]
+fn nested_sibling_boundaries_allow_ordered_comment_items() {
+    let md = "- outer\n  - child\n  2. <!--\n\n     [x]: /wrong\n     -->\n\n[x]: /right\n\n[x]";
+    let flow = parse(md);
+    let links: Vec<_> = flow
+        .blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+        .collect();
+    assert_eq!(links, ["/right"]);
+    for md in ["- outer\n  paragraph\n  2. <!--\n\n     [x]: /right\n\n[x]", "- outer\n  - child\n    2. <!--\n\n       [x]: /right\n\n[x]"] {
+        let flow = parse(md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "an ordered marker cannot interrupt this paragraph: {md}");
+    }
+}
+
+#[test]
+fn unfinished_nested_fences_end_at_their_own_item_boundary() {
+    let md = "- outer\n  - inner\n    ```\n    code\n\n    [x]: /wrong\n\n  [x]: /right\n\n[x]";
+    let flow = parse(md);
+    let links: Vec<_> = flow
+        .blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+        .collect();
+    assert_eq!(links, ["/right"]);
+    assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.text().contains("[x]: /wrong"))), "the inner definition remains code");
+}
+
+#[test]
+fn first_line_list_definitions_preserve_their_continuation_container() {
+    for (marker, pad) in [("- ", "  "), ("2. ", "   ")] {
+        let md = format!("{marker}[x]: /right\n{pad}body\n\n[x]");
+        let flow = parse(&md);
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.list.is_some() && p.text() == "body")), "{md}");
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+}
