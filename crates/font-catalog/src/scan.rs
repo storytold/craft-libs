@@ -98,6 +98,9 @@ pub struct FaceInfo {
     pub code_pages: [u32; 2],
     /// The file the face is in; `None` for a face added as bytes.
     pub path: Option<PathBuf>,
+    /// The size in bytes of the file when it was scanned; `None` for a face added as bytes. A caller that draws with the
+    /// face checks it before loading, so no file system read happens while it paints.
+    pub file_bytes: Option<u64>,
     /// The face's number in its file: its index in a collection (0 in a single font), or for a
     /// Mac suitcase font the number of its `sfnt` resource.
     pub index: u32,
@@ -329,6 +332,7 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, outlines: Outlines, index: 
         fs_type,
         code_pages,
         path: path.map(Path::to_path_buf),
+        file_bytes: None,
         index,
         source,
         blob: None,
@@ -430,9 +434,11 @@ pub(crate) fn file_faces(path: &Path, max_read: u64, source: Source) -> Vec<Face
             return vec![];
         }
         let mut faces = Vec::new();
+        let file_bytes = Some(crate::suitcase::fork_len(path));
         for (resource, font) in (0u32..).zip(crate::suitcase::read_fonts(path)) {
             for mut face in data_faces(&font, 1, Some(path), source) {
                 face.info.index = resource;
+                face.info.file_bytes = file_bytes;
                 faces.push(face);
             }
         }
@@ -493,6 +499,10 @@ fn reader_faces(mut file: impl std::io::Read + std::io::Seek, max_faces: u32, ma
             Some(font_faces(&skrifa::FontRef::new(&font).ok()?, outlines, index, Some(path), source))
         })
         .flatten()
+        .map(|mut face| {
+            face.info.file_bytes = Some(file_len);
+            face
+        })
         .collect()
 }
 

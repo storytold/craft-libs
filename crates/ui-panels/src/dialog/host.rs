@@ -50,6 +50,11 @@ pub trait StackDialog: Any + Send {
     /// ([`dialog_id`](super::dialog_id) of the dialog's key).
     fn id(&self) -> DialogId;
 
+    /// Whether the dialog is modeless now: current state, so a dialog may change it while open.
+    fn modeless(&self) -> bool {
+        false
+    }
+
     /// Shows one pass; `Some` when the dialog finished this pass.
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<Self::Result>>;
 
@@ -64,6 +69,13 @@ pub trait StackDialog: Any + Send {
     /// (`ParamDialog::instance`). The host replaces an open dialog
     /// only by one of the same type and instance; `None` (the default) is one dialog per type.
     fn instance(&self) -> Option<DialogId> {
+        None
+    }
+
+    /// A child the dialog asks the host to open over it, taken once after [`show`](StackDialog::show): the host opens
+    /// it with [`DialogHost::open_child`] under this dialog (a Replace prompt from a file chooser). `None` (the default)
+    /// asks for nothing.
+    fn take_child(&mut self) -> Option<ChildDialog> {
         None
     }
 
@@ -181,9 +193,26 @@ pub enum StartupStage {
     Update,
 }
 
+/// A dialog one open dialog asks the host to open as its child ([`StackDialog::take_child`]).
+pub struct ChildDialog(Box<dyn AnyStackDialog>);
+
+impl ChildDialog {
+    /// Wraps `dialog` for [`StackDialog::take_child`].
+    pub fn new<D: StackDialog>(dialog: D) -> Self {
+        Self(Box::new(dialog))
+    }
+}
+
+impl std::fmt::Debug for ChildDialog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildDialog").finish_non_exhaustive()
+    }
+}
+
 /// Type-erased [`StackDialog`] the host stores.
 trait AnyStackDialog: Send {
     fn id(&self) -> DialogId;
+    fn modeless(&self) -> bool;
     fn result_type(&self) -> TypeId;
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
@@ -193,6 +222,8 @@ trait AnyStackDialog: Send {
     fn json_fields(&self) -> Option<Value>;
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
+    /// [`StackDialog::take_child`], unwrapped.
+    fn take_child_erased(&mut self) -> Option<Box<dyn AnyStackDialog>>;
     /// `DialogResult::<D::Result>::Cancel`, boxed, for a dialog closed from outside.
     fn cancelled(&self) -> Box<dyn Any + Send>;
     /// [`StackDialog::cancelled`].
@@ -203,6 +234,10 @@ trait AnyStackDialog: Send {
 }
 
 impl<D: StackDialog> AnyStackDialog for D {
+    fn modeless(&self) -> bool {
+        StackDialog::modeless(self)
+    }
+
     fn id(&self) -> DialogId {
         StackDialog::id(self)
     }
@@ -241,6 +276,10 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>> {
         self.show(ui, stack).map(|result| Box::new(result) as Box<dyn Any + Send>)
+    }
+
+    fn take_child_erased(&mut self) -> Option<Box<dyn AnyStackDialog>> {
+        self.take_child().map(|ChildDialog(child)| child)
     }
 
     fn release(&mut self, ctx: &Context) {
@@ -314,6 +353,9 @@ pub struct DialogHost {
     opens: u64,
     /// The number of each dialog's last open, by id; read only while the dialog is open.
     serials: Vec<(DialogId, u64)>,
+    /// Dialogs [`close_by_id`](DialogHost::close_by_id) asked to close, closed by the next `run`
+    /// (which has the `Context` a close needs).
+    closing: Vec<DialogId>,
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -346,6 +388,12 @@ impl fmt::Debug for DialogHost {
 }
 
 impl DialogHost {
+    /// Whether its open stack holds a dialog that is not modeless; current state, so a dialog opened this pass counts.
+    /// A queued startup dialog is not shown yet, so it does not count.
+    pub fn shows_modal(&self) -> bool {
+        self.open.iter().any(|dialog| !dialog.modeless())
+    }
+
     /// An empty host with no open or queued dialogs.
     pub fn new() -> Self {
         Self::default()
@@ -402,6 +450,9 @@ impl DialogHost {
     pub fn run(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.release_replaced(&ctx);
+        for id in std::mem::take(&mut self.closing) {
+            self.cancel_by_id(&ctx, id);
+        }
         self.open_next_queued();
         let ids: Vec<DialogId> = self.stack.ids().collect();
         for (place, id) in ids.into_iter().enumerate() {
@@ -412,7 +463,17 @@ impl DialogHost {
             let Some(at) = self.position_by_id(id) else { continue };
             let stack = &self.stack;
             let dialog = &mut self.open[at];
-            let Some(result) = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack)) else { continue };
+            let shown = crate::runtime::overlay::stack_place(&ctx, place, id, || dialog.show_erased(ui, stack));
+            // The child is taken after every show, so a request is never left for a later pass; a dialog that just
+            // finished would close its child with it, so its request is dropped.
+            let child = dialog.take_child_erased();
+            let Some(result) = shown else {
+                if let Some(child) = child {
+                    // The child is not on this run's `ids`, so it shows from the next pass, as any open during the run.
+                    self.open_with_parent(child, Some(id));
+                }
+                continue;
+            };
             self.remove_tree(id);
             let dialog = self.open.remove(at);
             crate::runtime::overlay::end_stack_dialog(&ctx, id);
@@ -534,6 +595,16 @@ impl DialogHost {
         match self.position_by_id(id) {
             Some(at) => self.cancel_at(ctx, at),
             None => false,
+        }
+    }
+
+    /// Asks for the open dialog `id` names to close as a cancel, for a caller with no `Context`
+    /// (a service that drops the request the dialog answers). The close lands at the next
+    /// [`run`](DialogHost::run); asking again before then, or for a dialog that is not open, does
+    /// nothing more.
+    pub fn close_by_id(&mut self, id: DialogId) {
+        if self.position_by_id(id).is_some() && !self.closing.contains(&id) {
+            self.closing.push(id);
         }
     }
 

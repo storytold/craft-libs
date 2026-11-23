@@ -14,8 +14,8 @@ use craft_keymap::{Chord, mnemonic};
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// One answer of a prompt before its button exists: the label, what the button means, whether it has a letter and
 /// whether it is available.
@@ -103,10 +103,15 @@ impl Outcome for PromptOutput {
 }
 
 /// The index Escape and the close action answer with: the answer of `chosen` when there is one, else Cancel, else
-/// the first Other answer, else the default answer.
+/// the first Alternate answer, else the first Other answer, else the default answer.
 fn escape_answer(answers: &[FooterButton], chosen: Option<DialogRole>) -> Option<usize> {
     let find = |wanted: DialogRole| answers.iter().position(|answer| answer.role() == wanted);
-    chosen.and_then(find).or_else(|| find(DialogRole::Cancel)).or_else(|| find(DialogRole::Other)).or_else(|| default_answer(answers))
+    chosen
+        .and_then(find)
+        .or_else(|| find(DialogRole::Cancel))
+        .or_else(|| find(DialogRole::Alternate))
+        .or_else(|| find(DialogRole::Other))
+        .or_else(|| default_answer(answers))
 }
 
 /// The first Accept answer, else the first Destructive one, whether it is enabled or not.
@@ -186,7 +191,7 @@ pub struct Prompt<'a> {
     /// The role whose answer Escape and the close action give, instead of the default choice.
     #[prop]
     escape: Option<DialogRole>,
-    /// Whether the dialog reports the alert-dialog role, described by the message.
+    /// Whether the dialog reports the alert-dialog role, described by the message and any tone.
     alert: bool,
 }
 
@@ -204,7 +209,8 @@ impl<'a> Prompt<'a> {
         }
     }
 
-    /// The prompt is an alert: its node has the alert-dialog role and the message as its description.
+    /// The prompt is an alert: its node has the alert-dialog role and the message (including any tone) as its
+    /// description.
     #[must_use]
     pub(super) fn alert(mut self) -> Self {
         self.alert = true;
@@ -262,7 +268,27 @@ impl<'a> Prompt<'a> {
         let initial = if enter_at.is_none() && has_default(&answers) { Initial::Keep } else { Initial::Default };
         let mut dialog = Dialog::prompt(title).buttons(answers).initial_focus(initial).close_on_enter(enter_at.is_some());
         if alert {
-            dialog = dialog.alert().description(Env::of(ui).view().resolve(&message).as_str());
+            let env = Env::of(ui);
+            let view = env.view();
+            let message_str = view.resolve(&message);
+            let description = match &extras.tone {
+                Some((_, tone_label)) => {
+                    let tone_str = view.resolve(tone_label);
+                    let tone = tone_str.as_str().trim();
+                    let msg = message_str.as_str().trim();
+                    if tone.is_empty() {
+                        msg.to_owned()
+                    } else if msg.is_empty() {
+                        tone.to_owned()
+                    } else if msg.ends_with(['.', '!', '?']) {
+                        format!("{msg} {tone}")
+                    } else {
+                        format!("{msg}. {tone}")
+                    }
+                }
+                None => message_str.as_str().to_owned(),
+            };
+            dialog = dialog.alert().description(description);
         }
         if let Some(open) = open {
             dialog = dialog.opened(open);

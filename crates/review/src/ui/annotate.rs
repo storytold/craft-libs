@@ -1,10 +1,10 @@
 //! The annotation tool on the canvas, the overlay that draws annotations, and the toolbar.
 
-mod overlay;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod overlay;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod tool;
-mod toolbar;
+pub(crate) mod toolbar;
 mod words;
 
 pub use overlay::{AnnotationOverlay, AnnotationOverlayStyle};

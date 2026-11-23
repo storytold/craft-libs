@@ -18,25 +18,45 @@ pub enum Anchor {
     /// A corner or edge of a rect in the opener's layer space, inset by the panel padding and kept inside the safe
     /// rect: the body a toast stack sits in.
     Corner(Rect, Align2),
+    /// The placed panel rect of the parent layer the overlay opened from.
+    Parent,
 }
 
 /// Where a floating layer sits.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FloatPlace {
-    /// A position for the layer's left-top, in the layer's parent space; `None` centres it in the viewport.
+    /// Where the layer's `corner` sits, in the layer's parent space; `None` centres it in the viewport.
     pub pos: Option<Pos2>,
+    /// The corner of the layer that sits at `pos`.
+    pub corner: Align2,
+}
+
+impl Default for FloatPlace {
+    fn default() -> Self {
+        FloatPlace::centred()
+    }
 }
 
 impl FloatPlace {
     /// Centred in the viewport.
     pub const fn centred() -> Self {
-        FloatPlace { pos: None }
+        FloatPlace { pos: None, corner: Align2::LEFT_TOP }
     }
 
-    /// At `pos`.
+    /// With its left-top at `pos`.
     pub const fn at(pos: Pos2) -> Self {
-        FloatPlace { pos: Some(pos) }
+        FloatPlace { pos: Some(pos), corner: Align2::LEFT_TOP }
+    }
+
+    /// With its `corner` at `pos`.
+    pub const fn corner_at(pos: Pos2, corner: Align2) -> Self {
+        FloatPlace { pos: Some(pos), corner }
+    }
+
+    /// The top left of a layer `size` large whose `corner` sits at `pos`; `None` for a centred layer.
+    pub(crate) fn top_left(&self, size: Vec2) -> Option<Pos2> {
+        self.pos.map(|pos| pos - self.corner.pos_in_rect(&Rect::from_min_size(Pos2::ZERO, size)).to_vec2())
     }
 }
 

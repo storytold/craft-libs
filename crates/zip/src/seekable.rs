@@ -1,7 +1,8 @@
 //! Checks and streaming reader for seekable ZIP archives.
 
 use std::borrow::Cow;
-use std::io::{self, Read, Seek};
+use std::collections::HashMap;
+use std::io::{self, Read, Seek, SeekFrom};
 
 use crate::{Budget, Error, MetadataReader, check_entry_count_seekable};
 
@@ -52,6 +53,54 @@ pub struct SeekableLimits {
 pub struct SeekableArchive<R: Read + Seek> {
     zip: zip::ZipArchive<MetadataReader<R>>,
     budget: Budget,
+    duplicate_names: Vec<String>,
+}
+
+const CENTRAL_HEADER: [u8; 4] = *b"PK\x01\x02";
+const CENTRAL_HEADER_LEN: usize = 46;
+
+/// Scan central directory records from `cd_start` (bounded by `max_metadata_bytes`) and return
+/// each distinct name that appears more than once, lossily decoded as UTF-8.
+fn collect_duplicate_names<R: Read + Seek>(reader: &mut R, cd_start: u64, max_metadata_bytes: u64) -> Result<Vec<String>, Error> {
+    reader.seek(SeekFrom::Start(cd_start)).map_err(|e| Error::NotZip(e.to_string()))?;
+    let mut remaining = max_metadata_bytes;
+    let mut seen: HashMap<Vec<u8>, bool> = HashMap::new();
+    let mut duplicates = Vec::new();
+    loop {
+        let mut sig = [0u8; 4];
+        match reader.read_exact(&mut sig) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(Error::NotZip(e.to_string())),
+        }
+        if sig != CENTRAL_HEADER {
+            break;
+        }
+        let mut rest = [0u8; CENTRAL_HEADER_LEN - 4];
+        reader.read_exact(&mut rest).map_err(|e| Error::NotZip(e.to_string()))?;
+        let name_len = usize::from(u16::from_le_bytes([rest[24], rest[25]]));
+        let extra_len = usize::from(u16::from_le_bytes([rest[26], rest[27]]));
+        let comment_len = usize::from(u16::from_le_bytes([rest[28], rest[29]]));
+        let record_bytes = (CENTRAL_HEADER_LEN + name_len + extra_len + comment_len) as u64;
+        remaining = remaining.checked_sub(record_bytes).ok_or_else(|| Error::NotZip("ZIP metadata exceeds the indexing limit".into()))?;
+        let mut name_buf = vec![0u8; name_len];
+        reader.read_exact(&mut name_buf).map_err(|e| Error::NotZip(e.to_string()))?;
+        let skip = i64::try_from(extra_len + comment_len).map_err(|_| Error::NotZip("central directory record too large".into()))?;
+        if skip > 0 {
+            reader.seek(SeekFrom::Current(skip)).map_err(|e| Error::NotZip(e.to_string()))?;
+        }
+        match seen.get_mut(&name_buf) {
+            None => {
+                seen.insert(name_buf, false);
+            }
+            Some(recorded) if !*recorded => {
+                *recorded = true;
+                duplicates.push(String::from_utf8_lossy(&name_buf).into_owned());
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(duplicates)
 }
 
 impl<R: Read + Seek> SeekableArchive<R> {
@@ -67,7 +116,21 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if found > limits.max_entries {
             return Err(Error::TooManyEntries { declared: found, limit: limits.max_entries });
         }
-        Ok(Self { zip, budget: Budget::new("archive", limits.max_total_bytes) })
+        let (zip, duplicate_names) = if zip.has_duplicate_names() {
+            let cd_start = zip.central_directory_start();
+            let archive_offset = zip.offset();
+            let mut inner = zip.into_inner().into_inner();
+            let duplicates = collect_duplicate_names(&mut inner, cd_start, limits.max_metadata_bytes)?;
+            let (meta_reader, indexing) = MetadataReader::new(inner, limits.max_metadata_bytes).map_err(|e| Error::NotZip(e.to_string()))?;
+            let zip =
+                zip::ZipArchive::with_config(zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(archive_offset) }, meta_reader)
+                    .map_err(|e| Error::NotZip(e.to_string()))?;
+            indexing.finish();
+            (zip, duplicates)
+        } else {
+            (zip, Vec::new())
+        };
+        Ok(Self { zip, budget: Budget::new("archive", limits.max_total_bytes), duplicate_names })
     }
 
     /// The number of distinct entry names.
@@ -77,6 +140,28 @@ impl<R: Read + Seek> SeekableArchive<R> {
 
     pub fn is_empty(&self) -> bool {
         self.zip.is_empty()
+    }
+
+    /// Whether the central directory contains repeated raw names. The strict index keeps one
+    /// entry per raw name, so `len` alone cannot distinguish these from unique records.
+    pub fn has_duplicate_names(&self) -> bool {
+        self.zip.has_duplicate_names()
+    }
+
+    /// Whether any name matching `predicate` appears more than once in the central directory.
+    pub fn has_duplicate_names_matching(&self, mut predicate: impl FnMut(&str) -> bool) -> bool {
+        self.duplicate_names.iter().any(|name| predicate(name))
+    }
+
+    /// Distinct names that appear more than once in the central directory.
+    pub fn duplicate_names(&self) -> impl Iterator<Item = &str> {
+        self.duplicate_names.iter().map(String::as_str)
+    }
+
+    /// Locate a surviving entry by the absolute offset of its central directory record,
+    /// without decoding its name or reading the local entry header.
+    pub fn index_for_central_record(&self, offset: u64) -> Option<usize> {
+        (0..self.zip.len()).find(|&i| self.zip.by_index_data(i).is_ok_and(|e| e.central_header_start() == offset))
     }
 
     /// The name at `index`, copied on demand.
@@ -363,5 +448,31 @@ mod tests {
         assert!(reader.read_to_end(&mut sink).is_err());
         drop(reader);
         assert_eq!(bad_archive.budget().used(), 0);
+    }
+
+    #[test]
+    fn seekable_archive_reports_duplicate_names_for_matching() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("notes.txt", options).unwrap();
+        writer.write_all(b"first").unwrap();
+        writer.start_file("notes.tx2", options).unwrap();
+        writer.write_all(b"second").unwrap();
+        writer.start_file("Cat.lrcat", options).unwrap();
+        writer.write_all(b"catalog").unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        for window in 0..=bytes.len() - 9 {
+            if &bytes[window..window + 9] == b"notes.tx2" {
+                bytes[window..window + 9].copy_from_slice(b"notes.txt");
+            }
+        }
+
+        let limits = SeekableLimits { max_entries: 10, max_metadata_bytes: 16_384, max_total_bytes: 4096 };
+        let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
+        assert!(archive.has_duplicate_names());
+        assert_eq!(archive.duplicate_names().collect::<Vec<_>>(), vec!["notes.txt"]);
+        assert!(!archive.has_duplicate_names_matching(|n| n.ends_with(".lrcat")));
+        assert!(archive.has_duplicate_names_matching(|n| n == "notes.txt"));
+        assert_eq!(archive.read("Cat.lrcat", 100).unwrap().as_deref(), Some(b"catalog".as_slice()));
     }
 }

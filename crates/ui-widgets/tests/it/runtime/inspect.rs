@@ -3,9 +3,10 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::InspectOverlay;
 use craft_ui::layout_components::Stack;
+use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::inspect::{self, Recorded};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Rect};
@@ -84,5 +85,54 @@ fn a_region_records_its_own_elements_and_numbers_every_stop() {
     let painted: HashSet<String> = fixture.texts().iter().map(|text| text.text.clone()).collect();
     for number in 1..=stops.len() {
         assert!(painted.contains(&number.to_string()), "badge {number} is painted");
+    }
+}
+
+/// The commands the command trial's buttons are bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "inspectTrial")]
+#[non_exhaustive]
+enum Bound {
+    #[command(label = "Apply", modal = "always")]
+    Apply,
+    #[command(label = "Revert", modal = "always")]
+    Revert,
+}
+
+#[trial]
+fn an_element_records_the_command_it_is_bound_to_with_accesskit_off() {
+    let key = Id::NULL.with("trial.inspect.command");
+    let seen: Rc<RefCell<Option<Arc<Recorded>>>> = Rc::new(RefCell::new(None));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (_, recorded) = inspect::record(ui, key, |ui| {
+            Stack::new().show(ui, |ui, _| {
+                Button::command(Bound::Apply).show(ui);
+                Button::command(Bound::Revert).show(ui);
+                Button::new("Plain").show(ui);
+            })
+        });
+        if recorded.is_some() {
+            *out.borrow_mut() = recorded;
+        }
+    });
+    // AccessKit off: no node is built, and the record still carries each control's command.
+    fixture.ctx().disable_accesskit();
+    fixture.frame(Vec::new());
+    let seen = seen.borrow();
+    let recorded = seen.as_deref().expect("the region ran");
+    let buttons: Vec<&inspect::Element> =
+        recorded.elements.iter().filter(|element| element.part.is_none() && element.component == "Button").collect();
+    assert_eq!(buttons.len(), 3, "the three buttons are recorded: {buttons:?}");
+    let commands: Vec<Option<CommandRef>> = buttons.iter().map(|element| element.command.clone()).collect();
+    assert_eq!(
+        commands,
+        vec![Some(CommandRef::from(Bound::Apply)), Some(CommandRef::from(Bound::Revert)), None],
+        "each bound button records its own command, the plain one none"
+    );
+    // The rect a badge is placed at is the bound control's own.
+    for (index, element) in recorded.elements.iter().enumerate().filter(|(_, element)| element.command.is_some()) {
+        let rect = recorded.stop_rect(index).expect("the element is recorded");
+        assert!(rect.is_positive() && element.rect.expand(0.5).contains_rect(rect), "{:?} lies on its control {:?}", rect, element.rect);
     }
 }

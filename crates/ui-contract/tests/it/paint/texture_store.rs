@@ -7,7 +7,7 @@ use craft_ui::primitives::{
     LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureBudget, TextureLoader, TextureState, TextureStore, TextureStoreOptions,
 };
 use craft_ui::testing::{Frames, trial};
-use egui::{Color32, ColorImage, Context};
+use egui::{Color32, ColorImage, Context, Rect, TextureId, pos2};
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,6 +62,62 @@ fn over_budget_the_oldest_unseen_entry_goes_first_and_a_fresh_entry_stays() {
     next_frame(&mut frames);
     crowded.put(&ctx, 3, Revision::new(1), square(2, shade(40)));
     assert_eq!(crowded.statistics(&ctx).entries, 4, "entries of the previous frame stay too");
+}
+
+/// A side four of which fill a page: two to a row, two rows.
+const TILE: usize = 1000;
+
+/// The distinct textures of `textures`, in first-seen order.
+fn distinct(textures: impl IntoIterator<Item = TextureId>) -> Vec<TextureId> {
+    let mut ids = Vec::new();
+    for id in textures {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Pictures share pages; when every page is full and was drawn from in this frame no page starts over (the picture
+/// takes a texture of its own); a later frame starts over only the page not drawn from, in place.
+#[trial]
+fn a_packed_store_shares_pages_and_a_full_store_never_restarts_a_page_drawn_this_pass() {
+    let mut frames = Frames::new();
+    let ctx = frames.ctx.clone();
+    let unit = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    let plain = store_with(&ctx, "plain", TextureBudget::new(usize::MAX, usize::MAX));
+    assert_eq!(plain.put(&ctx, 0, Revision::new(1), square(SMALL, shade(40))).uv(), unit, "an unpacked texture is drawn whole");
+
+    let budget = TextureBudget::new(usize::MAX, usize::MAX);
+    let packed = TextureStore::<u32>::in_context(&ctx, "packed", TextureStoreOptions::thumbnails().packed(TILE as u32).budget(budget));
+    let first: Vec<_> = (0..16).map(|key| packed.put(&ctx, key, Revision::new(1), square(TILE, shade(40 + key as u8)))).collect();
+    let pages = distinct(first.iter().map(|texture| texture.id));
+    assert!(pages.len() < first.len(), "pictures share pages: {} pages for {} pictures", pages.len(), first.len());
+    let (a, b) = (first[0], first[1]);
+    assert_eq!(a.id, b.id, "the first two pictures share a page");
+    assert_ne!(a.uv(), b.uv());
+    assert!(unit.contains_rect(a.uv()) && unit.contains_rect(b.uv()), "both lie in the page");
+    assert!(!a.uv().intersects(b.uv()), "the two pictures do not overlap");
+    assert_eq!(a.size_vec2(), egui::vec2(TILE as f32, TILE as f32), "a packed texture's size is the picture's own");
+
+    // Every page is full and drawn from in this frame: the next picture takes a texture of its own.
+    let own = packed.put(&ctx, 16, Revision::new(1), square(TILE, shade(200)));
+    assert!(!pages.contains(&own.id), "no page started over while its pictures are on screen");
+    assert_eq!(own.uv(), unit);
+    assert!((0..16).all(|key| ready(&packed.state(&ctx, &key, Revision::new(1)))), "every picture drawn this pass stays");
+
+    // A later frame draws from every page but the first one's: only that page starts over, in place.
+    frames.idle(QUIET_FRAMES, |_| {});
+    let page_of = |key: u32| first[key as usize].id;
+    let kept: Vec<u32> = (0..16).filter(|key| page_of(*key) != a.id).collect();
+    for key in &kept {
+        assert!(ready(&packed.state(&ctx, key, Revision::new(1))));
+    }
+    let restarted = packed.put(&ctx, 17, Revision::new(1), square(TILE, shade(220)));
+    assert_eq!(restarted.id, a.id, "the page drawn from longest ago starts over and keeps its texture");
+    assert!((0..16).filter(|key| page_of(*key) == a.id).all(|key| packed.state(&ctx, &key, Revision::new(1)) == TextureState::Missing));
+    assert!(kept.iter().all(|key| ready(&packed.state(&ctx, key, Revision::new(1)))), "pages drawn from this pass stay");
+    assert_eq!(distinct(kept.iter().map(|key| page_of(*key)).chain([restarted.id])).len(), pages.len(), "no page was added");
 }
 
 fn loader_with(ctx: &Context, lanes: usize, uploads: usize) -> (TextureLoader<u32>, Arc<ManualJobs>) {

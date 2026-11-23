@@ -51,4 +51,4 @@ pub(crate) use update::Repeat;
 
 #[cfg(test)]
 #[path = "tests/pdf_bounds.rs"]
-mod tests;
+pub(crate) mod tests;

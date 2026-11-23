@@ -69,9 +69,6 @@
         "short": 120.0,
         "track": 144.0
       },
-      "notice": {
-        "width": 360.0
-      },
       "pane": {
         "least": 50.0
       },
@@ -95,18 +92,6 @@
       },
       "row": {
         "text": 21.0
-      },
-      "ruler": {
-        "tick": {
-          "mid": 9.0,
-          "minor": 4.5
-        }
-      },
-      "scroll_fade": 20.0,
-      "story": {
-        "height": 450.0,
-        "width_max": 900.0,
-        "width_min": 300.0
       },
       "thumb": {
         "card": 160.0,

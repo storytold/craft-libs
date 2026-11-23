@@ -92,7 +92,8 @@ impl LevelState {
 /// The rows of one menu level: each registers its label, and the level gives every row its mnemonic from the
 /// registrations of this pass. It also holds the level's one open submenu row and its active row. Rows
 /// outside any menu get an inert level.
-#[derive(Clone)]
+#[derive(Clone, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a handle to the level's state, which its rows write during the pass")]
 pub(crate) struct MenuLevel {
     state: Option<Arc<Mutex<LevelState>>>,
 }
@@ -277,6 +278,11 @@ impl MenuLevel {
 
     pub(super) fn submenu_open(&self, id: Id) -> bool {
         self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row == id))
+    }
+
+    /// Whether a sibling's submenu is open in this level.
+    pub(super) fn sibling_submenu_open(&self, id: Id) -> bool {
+        self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row != id))
     }
 
     /// The submenu of row `id` was shown at `rect`, or closed itself.

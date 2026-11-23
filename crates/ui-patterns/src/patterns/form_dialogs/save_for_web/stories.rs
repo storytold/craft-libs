@@ -1,7 +1,6 @@
 //! Stories of `SaveForWebDialog`.
 
 use super::{Animation, SaveForWebDialog, SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant};
-use crate::contract::Bind;
 use crate::primitives::TextureCache;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;
@@ -48,16 +47,17 @@ fn save_for_web(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut pictures = WebPictures::new().original(original);
     pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES));
     let flags = extras(data, false, true);
-    let (options, open) = data.value("web", (SaveForWebOptions::default(), true));
-    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+    let ((options, open), web_at) = data.value_at("web", (SaveForWebOptions::default(), true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, web_at.bind(options)).opened(web_at.bind(open)), flags).show(ui).into()
 }
 
 #[story(SaveForWebDialog<'static>, covers = [], drive = Drive::Never)]
 fn save_for_web_pending_animation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let original = picture(ui, "form-dialogs-web-original", Color32::from_rgb(0x8a, 0x6f, 0x4d));
     let flags = extras(data, true, false);
-    let (options, open) = data.value("web-animation", (SaveForWebOptions::default(), true));
-    let dialog = SaveForWebDialog::new("loop.psd", size(), WebPictures::new().original(original), Bind::bound(options)).opened(Bind::bound(open));
+    let ((options, open), options_open_at) = data.value_at("web-animation", (SaveForWebOptions::default(), true));
+    let dialog = SaveForWebDialog::new("loop.psd", size(), WebPictures::new().original(original), options_open_at.bind(options))
+        .opened(options_open_at.bind(open));
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -79,8 +79,10 @@ fn save_for_web_color_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         ..SaveForWebOptions::default()
     };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-table", (start, true));
-    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+    let ((options, open), options_open_at) = data.value_at("web-table", (start, true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)), flags)
+        .show(ui)
+        .into()
 }
 
 /// The slices of the slices story: three side by side.
@@ -104,8 +106,10 @@ fn save_for_web_slices(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES));
     let start = SaveForWebOptions { slices: WebSlices::Selected(vec![2]), ..SaveForWebOptions::default() };
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-slices", (start, true));
-    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).slices(story_slices());
+    let ((options, open), options_open_at) = data.value_at("web-slices", (start, true));
+    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options))
+        .opened(options_open_at.bind(open))
+        .slices(story_slices());
     with_extras(dialog, flags).show(ui).into()
 }
 
@@ -115,6 +119,8 @@ fn save_for_web_failed_encode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
     let mut pictures = WebPictures::new().original(original);
     pictures.set(WebVariant::failed(0, 1, "The encoder ran out of memory"));
     let flags = extras(data, false, false);
-    let (options, open) = data.value("web-failed", (SaveForWebOptions::default(), true));
-    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+    let ((options, open), options_open_at) = data.value_at("web-failed", (SaveForWebOptions::default(), true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, options_open_at.bind(options)).opened(options_open_at.bind(open)), flags)
+        .show(ui)
+        .into()
 }

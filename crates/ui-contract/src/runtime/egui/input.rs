@@ -273,7 +273,8 @@ pub(crate) struct PointerRead {
     pub focus_lost: bool,
     /// Whether the real pointer moved or entered in this pass.
     pub stirred: bool,
-    /// The zoom factor of the pass: pinch and Ctrl or Cmd with the wheel.
+    /// The zoom factor of the pass's own events: `Event::Zoom` and wheel deltas under egui's zoom modifier. The
+    /// fingers' factor is `multi_touch`'s alone.
     pub zoom: f32,
     /// The pass's summed `Event::Rotate` radians.
     pub rotation: f32,
@@ -312,6 +313,9 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
     let injected_pen = super::injected::pen(ctx);
     let pen = crate::runtime::pen::source(ctx).filter(|_| injected_pen.is_none());
     let pointed = ctx.input(|input| input.raw.events.iter().any(|event| matches!(event, Event::PointerMoved(_) | Event::PointerButton { .. })));
+    let (zoom_modifier, line, zoom_speed) = ctx
+        .options(|options| (options.input_options.zoom_modifier, options.input_options.line_scroll_speed, options.input_options.scroll_zoom_speed));
+    let page = ctx.content_rect().height();
     let tablet = match injected_pen {
         Some(sample) => Some(PenPass::injected(sample)),
         None => pen.as_ref().map(|source| if pointed { PenPass::read(source) } else { PenPass::live(source) }),
@@ -326,6 +330,9 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut release = None;
         let mut other_press = None;
         let mut rotation = 0.0;
+        // The pass's own zoom: its pinch steps and its zoom-modifier wheel deltas, each applied once. egui's eased
+        // `zoom_delta` would hand one notch to several passes and frames; easing is the zooming component's motion.
+        let mut zoom = 1.0_f32;
         let mut barrel_press = tablet.as_ref().is_some_and(|tablet| tablet.barrel_press);
         let mut barrel_pressed = false;
         for event in &input.raw.events {
@@ -382,9 +389,23 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                     }
                 }
                 Event::Rotate(radians) if radians.is_finite() => rotation += *radians,
+                // A hostile factor (NaN, infinite, not positive) zooms nowhere: it is left out.
+                Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => zoom *= *factor,
+                Event::MouseWheel { unit, delta, modifiers, .. } if modifiers.matches_any(zoom_modifier) => {
+                    let points = match unit {
+                        MouseWheelUnit::Point => 1.0,
+                        MouseWheelUnit::Line => line,
+                        MouseWheelUnit::Page => page,
+                    };
+                    let factor = (zoom_speed * points * (delta.x + delta.y)).exp();
+                    if factor.is_finite() && factor > 0.0 {
+                        zoom *= factor;
+                    }
+                }
                 _ => {}
             }
         }
+        let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
         let pen_active = tablet.as_ref().is_some_and(PenPass::active);
         let (kind, sample) = match &tablet {
             _ if touched => (PointerKind::Touch, touch_sample),
@@ -424,7 +445,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             sample,
             focus_lost,
             stirred,
-            zoom: input.zoom_delta(),
+            zoom,
             rotation,
             multi_touch,
         };
@@ -657,17 +678,65 @@ pub(crate) struct RawState {
     /// The input time of the last Ctrl+wheel folded into a pinch step.
     last_pinch: Option<f64>,
     control_click: ControlClick,
+    /// The Alt+numpad entry in progress.
+    alt_code: super::alt_code::AltCodeEntry,
+    /// An Alt release in this hook's input ended an Alt code: the key stage takes it (`take_alt_code_ended`) in the
+    /// same hook call, so it never carries to another pass.
+    alt_code_ended: bool,
 }
 
 /// The input hook's raw-input step for every viewport, after the injected step joined the input and before the key
-/// stage and the one-press rule: folds a legacy pinch, caps the text events, then turns a macOS Control-click into a
-/// secondary click. Injected input passes it as real input does.
+/// stage and the one-press rule: folds a legacy pinch, scales the wheel by the user's speed, folds Alt+numpad codes
+/// into text, caps the text events, then turns a macOS Control-click into a secondary click. Injected input passes it
+/// as real input does.
+///
+/// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
+/// once and each digit folded once, with nothing to replay or remember between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
     fold_legacy_pinch(ctx, input);
+    // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
+    // PLAN: assumed `pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages)` in `runtime/frame.rs` (platform-w3).
+    let (wheel, pages) = crate::runtime::frame::root_input(ctx);
+    scale_wheel(&mut input.events, wheel);
+    let os = crate::runtime::windows::os_of(ctx);
+    let macos = os == Os::Mac;
+    // A chord a component claims or a capture holds goes to its owner before Alt-code entry.
+    let claimed = crate::runtime::keys::claims_press(ctx, input);
+    let events = &mut input.events;
+    PerViewport::<RawState>::with(ctx, input.viewport_id, |state| {
+        // On macOS Option+digit types its own characters (¡ ™ £…): there is no Alt code there.
+        state.alt_code_ended = !macos && super::alt_code::fold(&mut state.alt_code, events, pages, os, &claimed);
+    });
     cap_text(&mut input.events);
-    let macos = crate::runtime::windows::os_of(ctx) == Os::Mac;
     let events = &mut input.events;
     PerViewport::<RawState>::with(ctx, input.viewport_id, |state| state.control_click.normalize(events, macos));
+}
+
+/// Takes whether an Alt release in this hook's input of `viewport` ended an Alt code (`prepare`), so the key stage
+/// does not read the release as a lone Alt.
+pub(crate) fn take_alt_code_ended(ctx: &Context, viewport: ViewportId) -> bool {
+    PerViewport::<RawState>::with(ctx, viewport, |state| std::mem::take(&mut state.alt_code_ended))
+}
+
+/// Multiplies each wheel delta by the user's `speed`: `line` for notches, `point` for touchpad deltas. A wheel with
+/// Ctrl or Cmd held zooms by notches (`fold_legacy_pinch` already made a pinch `Event::Zoom`), so its distance stays
+/// the device's.
+fn scale_wheel(events: &mut [Event], speed: crate::runtime::env::WheelSpeed) {
+    for event in events {
+        let Event::MouseWheel { unit, delta, modifiers, .. } = event else { continue };
+        if modifiers.ctrl || modifiers.command || modifiers.mac_cmd {
+            continue;
+        }
+        let factor = match unit {
+            MouseWheelUnit::Line => speed.line,
+            MouseWheelUnit::Point => speed.point,
+            MouseWheelUnit::Page => continue,
+        };
+        // A hostile speed (NaN, infinite, negative) would send the view nowhere: such a delta stays as it came.
+        if factor.is_finite() && factor > 0.0 {
+            *delta *= factor;
+        }
+    }
 }
 
 /// The widget egui holds a drag on.
@@ -690,15 +759,22 @@ pub(crate) fn step_key_pressed(ctx: &Context) -> bool {
     ctx.input(|input| [Key::ArrowUp, Key::ArrowDown, Key::PageUp, Key::PageDown].into_iter().any(|key| input.key_pressed(key)))
 }
 
-/// Removes this pass's Tab and Shift+Tab presses from the input events; returns whether there was one. A Tab with
-/// Ctrl, Cmd or Alt is the window's, not the field's, and stays.
-pub(crate) fn take_tab(ctx: &Context) -> bool {
+/// Removes this pass's Tab and Shift+Tab presses from the input events; returns the direction of one if there was
+/// one: `Some(true)` for Tab, `Some(false)` for Shift+Tab. A Tab with Ctrl, Cmd or Alt is the window's, not the
+/// field's, and stays.
+pub(crate) fn take_tab(ctx: &Context) -> Option<bool> {
     ctx.input_mut(|input| {
-        let before = input.events.len();
-        input.events.retain(|event| {
-            !matches!(event, Event::Key { key: Key::Tab, pressed: true, modifiers, .. }
-                if !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt)
+        // The first press taken gives the direction: one pass rarely holds two, and the field moves once.
+        let mut forward = None;
+        input.events.retain(|event| match event {
+            Event::Key { key: Key::Tab, pressed: true, modifiers, .. }
+                if !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt =>
+            {
+                forward.get_or_insert(!modifiers.shift);
+                false
+            }
+            _ => true,
         });
-        input.events.len() != before
+        forward
     })
 }

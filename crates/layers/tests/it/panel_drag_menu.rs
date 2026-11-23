@@ -9,7 +9,7 @@ use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayerDrop, LayerSelect, LayersDrag, LayersEvent, LayersPanel, MaskMove};
 use craft_layers::ui::tree::{LayerPart, LayerRowKey, LayerTree as _};
 use craft_theme::LabelColor;
-use craft_ui::contract::Entry;
+use craft_ui::contract::{Entry, Tracked};
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Modifiers, Pos2, Vec2};
 use std::cell::RefCell;
@@ -27,7 +27,7 @@ const PANEL: Vec2 = Vec2::new(420.0, 560.0);
 fn rig() -> (Fixture, Seen, Asked) {
     let (seen, asked): (Seen, Asked) = (Rc::default(), Rc::default());
     let (sink, menus) = (Rc::clone(&seen), Rc::clone(&asked));
-    let tree = FakeLayers::sample();
+    let tree = Tracked::new(FakeLayers::sample());
     let mut fixture = Fixture::new(move |ui| {
         let out = LayersPanel::new(&tree)
             .row_menu(|target| {

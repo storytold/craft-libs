@@ -221,6 +221,8 @@ craft-gpu-wgpu = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
+craft-audio-dsp = { workspace = true, optional = true }
+craft-sbs = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -266,6 +268,28 @@ screen-testing = [
     "craft-theme-store?/screen-testing",
     "craft-timeline?/screen-testing",
     "craft-update?/screen-testing",
+]
+suite = [
+    "screen-testing",
+    "craft-ui/suite",
+    "craft-automation?/suite",
+    "craft-browse?/suite",
+    "craft-color-ui?/suite",
+    "craft-dialogs?/suite",
+    "craft-draw?/suite",
+    "craft-font-manager?/suite",
+    "craft-imaging?/suite",
+    "craft-layers?/suite",
+    "craft-menu?/suite",
+    "craft-pages?/suite",
+    "craft-print?/suite",
+    "craft-review?/suite",
+    "craft-table?/suite",
+    "craft-text?/suite",
+    "craft-theme-editor?/suite",
+    "craft-theme-store?/suite",
+    "craft-timeline?/suite",
+    "craft-update?/suite",
 ]
 aaf = ["dep:craft-aaf"]
 
@@ -325,6 +349,8 @@ audio-vmd-decode = ["audio", "craft-audio/vmd-decode"]
 audio-vorbis-decode = ["audio", "craft-audio/vorbis-decode"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
 
+audio-dsp = ["dep:craft-audio-dsp"]
+
 automation = ["dep:craft-automation", "keymap"]
 automation-agents = ["automation", "craft-automation/agents"]
 
@@ -382,7 +408,7 @@ develop-model = ["dep:craft-develop-model"]
 
 dex = ["dep:craft-dex"]
 
-dialogs = ["dep:craft-dialogs"] # native only: rfd's folder picker and file paths
+dialogs = ["dep:craft-dialogs", "browse"] # native only: rfd's folder picker and file paths
 
 doc = ["dep:craft-doc"]
 doc-pcraft-pixels = ["doc", "craft-doc/pcraft-pixels"]
@@ -482,6 +508,7 @@ gif = ["dep:craft-gif"]
 gif-frames = ["gif", "craft-gif/frames"]
 
 gpu = ["dep:craft-gpu"]
+gpu-startup = ["gpu", "craft-gpu/startup"]
 
 gpu-null = ["dep:craft-gpu-null"]
 
@@ -632,7 +659,7 @@ openpgp = ["dep:craft-openpgp"]
 
 ora = ["dep:craft-ora"]
 
-pages = ["dep:craft-pages"]
+pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
 
@@ -670,8 +697,10 @@ pkcs7 = ["dep:craft-pkcs7"]
 
 platform = ["dep:craft-platform"]
 platform-appearance = ["platform", "craft-platform/appearance"]
+platform-apple-events = ["platform", "craft-platform/apple-events"]
 platform-browser = ["platform", "craft-platform/browser"]
 platform-clipboard = ["platform", "craft-platform/clipboard"]
+platform-clipboard-system = ["platform", "craft-platform/clipboard-system"]
 platform-pointer = ["platform", "craft-platform/pointer"]
 platform-screen = ["platform", "craft-platform/screen"]
 platform-testing = ["platform", "craft-platform/testing"]
@@ -738,11 +767,13 @@ raw-raf = ["raw", "craft-raw/raf"]
 raw-rw2 = ["raw", "craft-raw/rw2"]
 raw-srw = ["raw", "craft-raw/srw"]
 
-review = ["dep:craft-review", "keymap"]
+review = ["dep:craft-review", "keymap", "pages"]
 
 rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
+
+sbs = ["dep:craft-sbs"]
 
 score = ["dep:craft-score"]
 
@@ -879,6 +910,7 @@ timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
 tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]

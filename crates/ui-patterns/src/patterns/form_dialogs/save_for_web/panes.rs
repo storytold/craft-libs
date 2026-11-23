@@ -40,6 +40,8 @@ pub(super) struct Panes<'p> {
     pub(super) slices: &'p [WebSlice],
     /// The numbers of the selected slices.
     pub(super) chosen: &'p [u32],
+    /// The formats the host can write.
+    pub(super) formats: &'p [WebFormat],
 }
 
 /// A click on a slice: its number and whether Shift was held (add to or remove from the selection).
@@ -154,7 +156,7 @@ fn one_pane(ui: &mut Ui, panes: &Panes<'_>, live: &Live, pane: WebPane, at: usiz
         if let Some(point) = shown.clicked
             && let Some(number) = slice_at(panes.slices, point)
         {
-            reported.slice = Some(SliceClick { number, add: crate::runtime::pointer::frame(ui.ctx()).mods.shift });
+            reported.slice = Some(SliceClick { number, add: crate::runtime::pointer::mods(ui.ctx()).shift });
         }
         if reported.moved.is_none() {
             reported.moved = shown.view;
@@ -228,7 +230,7 @@ fn captions(panes: &Panes<'_>, pane: WebPane) -> (String, String) {
             let Some(variant) = panes.pictures.variants.get(index).and_then(Option::as_ref) else {
                 return (words.pane_pending.as_str().to_owned(), String::new());
             };
-            let format = pane_format(panes.options, index);
+            let format = pane_format(panes.options, panes.formats, index);
             let mut first = words
                 .encoded_caption
                 .fill(&[("format", format.extension().to_uppercase().as_str()), ("size", panes.units.file_size(variant.bytes).as_str())]);
@@ -245,9 +247,9 @@ fn captions(panes: &Panes<'_>, pane: WebPane) -> (String, String) {
 }
 
 /// The format the encoded pane `index` is encoded in.
-fn pane_format(options: &SaveForWebOptions, index: usize) -> WebFormat {
+fn pane_format(options: &SaveForWebOptions, formats: &[WebFormat], index: usize) -> WebFormat {
     match index {
         0 => options.format,
-        _ => four_up_variants(options)[(index - 1).min(1)].format,
+        _ => four_up_variants(options, formats)[(index - 1).min(1)].format,
     }
 }

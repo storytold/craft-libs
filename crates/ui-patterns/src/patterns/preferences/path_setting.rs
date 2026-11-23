@@ -1,7 +1,7 @@
 //! `PathSetting`: a path setting of Preferences, typed or picked through the host's file service, kept in the draft.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::SettingsDraft;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, ShowContainer as _};

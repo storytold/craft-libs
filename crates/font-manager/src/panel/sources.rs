@@ -2,8 +2,8 @@
 //! added (never curated, and flagged when their file changed since it was added), adding one,
 //! and downloading them all again.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

@@ -1,10 +1,10 @@
 //! `Slider`, `RangeSlider`, `AngleDial`, `PointPicker` and `ThumbRow`, built on `ValueDrag`.
 
-mod angle_dial;
-mod point_picker;
-mod range_slider;
-mod slider;
-mod thumb_row;
+pub(crate) mod angle_dial;
+pub(crate) mod point_picker;
+pub(crate) mod range_slider;
+pub(crate) mod slider;
+pub(crate) mod thumb_row;
 pub(crate) mod track;
 mod words;
 

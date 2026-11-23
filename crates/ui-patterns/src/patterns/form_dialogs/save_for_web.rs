@@ -9,9 +9,11 @@ use super::size_model::LinkedSize;
 use super::sizing::{Resample, SizingWords};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
 
-use crate::contract::{Bind, Held, NoValue, Outcome, Props as _, ShowContainer as _};
+use crate::contract::{Bind, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 
+use crate::display::Text;
 use crate::layout_components::{Row, Stack};
+use crate::style::TypeRole;
 
 use crate::runtime::env::{Env, Label};
 
@@ -22,7 +24,7 @@ use crate::runtime::overlay::CloseReason;
 use craft_behavior::{PixelSize, Selection};
 use craft_keymap::{Chord, Key, Mods};
 
-use craft_theme::Rgba;
+use craft_theme::{Rgba, variant::Tone};
 
 use egui::load::SizedTexture;
 use egui::{Response, Ui};
@@ -34,8 +36,8 @@ use std::path::{Path, PathBuf};
 mod options;
 mod panes;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use panes::WebPane;
 
@@ -125,6 +127,7 @@ craft_ui::words! {
         image_size: "saveForWeb.imageSize" = "Image Size";
         width: "saveForWeb.width" = "Width";
         height: "saveForWeb.height" = "Height";
+        constrain: "saveForWeb.constrainProportions" = "Constrain proportions";
         size_unit: "saveForWeb.sizeUnit" = "Unit";
         percent: "saveForWeb.percent" = "Percent";
         fit: "saveForWeb.fit" = "Fit";
@@ -334,8 +337,9 @@ pub struct SaveForWebDialog<'a> {
     /// The Preset list.
     #[prop]
     presets: Vec<WebPreset>,
-    /// The formats the Format list offers, in its order; [`WebFormat::STANDARD`] unless set. Settings in a format
-    /// not offered (one remembered from a build that could write it) open as the default format.
+    /// The formats the Format list offers, in its order; [`WebFormat::STANDARD`] unless set or when empty. The host is
+    /// only asked for these: settings in another format (one remembered from a build that could write it) open as
+    /// JPEG, or as the first format offered where JPEG is not, and presets in another format are not listed.
     #[prop]
     formats: Vec<WebFormat>,
     /// The document is an animation: the play row shows and the frame advances while playing.
@@ -354,6 +358,9 @@ pub struct SaveForWebDialog<'a> {
     /// The document's slices, for the Slices choice.
     #[prop]
     slices: &'a [WebSlice],
+    /// A notice from the host about slices omitted from the preview and export.
+    #[prop]
+    slice_warning: Option<Label>,
     /// Binds the view tab to `view`: the dialog shows the bound view and writes the tab the user picks, so the host
     /// and the dialog share one value.
     #[prop]
@@ -380,6 +387,7 @@ impl<'a> SaveForWebDialog<'a> {
             saving: false,
             answers: Vec::new(),
             slices: &[],
+            slice_warning: None,
             view: None,
             frame: None,
         }
@@ -387,8 +395,24 @@ impl<'a> SaveForWebDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> SaveForWebOutput {
-        let SaveForWebDialog { name, size, pictures, options, open, presets, formats, animation, remember, saving, answers, slices, view, frame } =
-            self;
+        let SaveForWebDialog {
+            name,
+            size,
+            pictures,
+            options,
+            open,
+            presets,
+            formats,
+            animation,
+            remember,
+            saving,
+            answers,
+            slices,
+            slice_warning,
+            view,
+            frame,
+        } = self;
+        let formats = WebFormat::offered(&formats);
         let mut view_held = view.map(Held::new);
         let mut frame_held = frame.map(Held::new);
         let env = Env::of(ui);
@@ -419,15 +443,11 @@ impl<'a> SaveForWebDialog<'a> {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<Last>>(key).clone());
                 live = Live::open(size, saved.as_ref());
                 if let Some(last) = &saved {
-                    // The slices and palette edits belong to one document, so a remembered set leaves them at their defaults.
-                    *options = SaveForWebOptions { percent: 100.0, ..last.options.without_document_fields() };
+                    *options = last.options.without_document_fields();
                     restored = true;
                 }
             }
-            if !formats.contains(&options.format) {
-                options.format = SaveForWebOptions::default().format;
-                options.palette_edits.clear();
-            }
+            options.keep_to(formats);
             // A measuring run reads the view but never writes it, as `FormDialog` does for its own bind.
             let measuring = crate::runtime::measure::active(ui.ctx());
             if let Some(held) = view_held.as_mut()
@@ -461,6 +481,7 @@ impl<'a> SaveForWebDialog<'a> {
                 }
             }
             let before = (options.clone(), live.link.pixels(), live.view, live.frame);
+            options.apply_size(&mut live.link);
             // A frame the host set is a change from the one the last pass showed: the panes are encoded again.
             if let Some(bound) = frame_held.as_mut().and_then(|held| held.read(&mut **cx)) {
                 live.frame = bound;
@@ -485,8 +506,12 @@ impl<'a> SaveForWebDialog<'a> {
                         options: &*options,
                         slices,
                         chosen: options.slices.selected(),
+                        formats,
                     };
-                    panes::show(ui, &reads, &mut live, &mut slice_click)
+                    panes::show(ui, &reads, &mut live, &mut slice_click);
+                    if let Some(warning) = &slice_warning {
+                        Text::new(warning.clone()).role(TypeRole::Caption).tone(Tone::Warn).show(ui);
+                    }
                 });
                 Stack::new().id_salt("settings").show(ui, |ui, _| {
                     let kit = options::Kit {
@@ -496,7 +521,7 @@ impl<'a> SaveForWebDialog<'a> {
                         presets: &presets,
                         palette,
                         has_slices: !slices.is_empty(),
-                        formats: &formats,
+                        formats,
                     };
                     options::show(ui, &kit, options, &mut live.link, &mut live.table, &mut live.editing, &mut ask)
                 });
@@ -505,9 +530,6 @@ impl<'a> SaveForWebDialog<'a> {
                 options.slices.select(number, add);
             }
 
-            if live.link.pixels() != before.1 {
-                options.percent = percent_of(live.link.pixels(), live.link.original());
-            }
             if (options.clone(), live.link.pixels(), live.view, live.frame) != before {
                 live.revision += 1;
             }
@@ -530,7 +552,7 @@ impl<'a> SaveForWebDialog<'a> {
             if let Some(request) = ask {
                 cx.requests().request_color(request);
             }
-            wanted = Self::wanted(&live, options);
+            wanted = Self::wanted(&live, options, formats);
             live.reported = live.revision;
             *cx.memory::<Live>() = live.clone();
             after = live;
@@ -627,8 +649,9 @@ pub(crate) fn advance_frame(frame: u32, frames: u32, fps: f32, last: f64, now: f
 }
 
 /// 4-Up's two extra panes: JPEG, lossy WebP and AVIF at half and a quarter of the quality; GIF and PNG-8 at half and a
-/// quarter of the colours; any other format as PNG-8 at 128 colours and GIF at 64 colours.
-pub(crate) fn four_up_variants(settings: &SaveForWebOptions) -> [SaveForWebOptions; 2] {
+/// quarter of the colours; any other format as PNG-8 at 128 colours and GIF at 64 colours. A pane in a format not among
+/// `formats` shows the settings as they are.
+pub(crate) fn four_up_variants(settings: &SaveForWebOptions, formats: &[WebFormat]) -> [SaveForWebOptions; 2] {
     [2u16, 4].map(|divisor| {
         let mut variant = settings.clone();
         match settings.format {
@@ -643,7 +666,7 @@ pub(crate) fn four_up_variants(settings: &SaveForWebOptions) -> [SaveForWebOptio
                 variant.colors = 256 / divisor;
             }
         }
-        variant
+        if formats.contains(&variant.format) { variant } else { settings.clone() }
     })
 }
 
@@ -654,7 +677,7 @@ pub(crate) fn download_seconds(bytes: u64, kbps: f64) -> u64 {
 
 impl SaveForWebDialog<'_> {
     /// The panes to encode when the revision changed since the last report.
-    fn wanted(live: &Live, options: &SaveForWebOptions) -> Vec<WantedVariant> {
+    fn wanted(live: &Live, options: &SaveForWebOptions, formats: &[WebFormat]) -> Vec<WantedVariant> {
         if live.revision == live.reported {
             return Vec::new();
         }
@@ -664,7 +687,7 @@ impl SaveForWebDialog<'_> {
             wanted.push(WantedVariant { index: 0, request: PreviewRequest::new(revision, options.clone()) });
         }
         if live.view == WebView::FourUp {
-            let [half, quarter] = four_up_variants(options);
+            let [half, quarter] = four_up_variants(options, formats);
             wanted.push(WantedVariant { index: 1, request: PreviewRequest::new(revision, half) });
             wanted.push(WantedVariant { index: 2, request: PreviewRequest::new(revision, quarter) });
         }

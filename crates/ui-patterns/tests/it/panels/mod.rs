@@ -1,9 +1,9 @@
 //! The rules of the panels family: an inspector keys its controls by the target and shows the empty notice for no
 //! target.
 
-mod history;
-mod palette;
-mod tour;
+pub(crate) mod history;
+pub(crate) mod palette;
+pub(crate) mod tour;
 
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Props as _, Show as _};

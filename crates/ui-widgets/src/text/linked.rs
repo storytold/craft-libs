@@ -1,8 +1,8 @@
 //! `LinkedFields`: number fields joined by a link toggle that keeps their values in proportion (width and height) or
 //! equal (four sides).
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::NumberField;
 use crate::buttons::ToggleButton;

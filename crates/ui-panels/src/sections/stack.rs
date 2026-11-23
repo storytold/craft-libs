@@ -15,8 +15,8 @@ use craft_behavior::{Axis, EditEvent, Metrics, Mixed, Sense};
 use egui::{Pos2, Rect, Response, Ui};
 use std::sync::{Arc, Mutex, PoisonError};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What a section of a stack is told about its place: `Section::in_stack` reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -54,9 +54,6 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
             }
             b'}' => {
                 r.close();
-                if r.info_depth.is_some_and(|d| r.depth() < d) {
-                    r.info_depth = None;
-                }
                 first_in_group = false;
                 starred = false;
                 i += 1;
@@ -123,9 +120,6 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
                         r.skip_chars -= 1;
                         first_in_group = false;
                         continue;
-                    }
-                    if word == "info" {
-                        r.info_depth = Some(r.depth());
                     }
                     r.word(word, param, starred, first_in_group);
                     first_in_group = false;

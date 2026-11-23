@@ -916,4 +916,4 @@ pub(crate) fn msi_path(msi: &Path) -> Result<PathBuf, String> {
 pub mod windows;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

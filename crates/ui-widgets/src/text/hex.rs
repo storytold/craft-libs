@@ -1,8 +1,8 @@
 //! `HexField`: a text field over a colour's hex digits, the `#` side label its row shows before it, and `HexCodec`,
 //! the codec behind it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::TextField;
 use crate::contract::{Bind, GlyphLabel, LabelKind, SideLabel};

@@ -15,13 +15,24 @@ use crate::contract::{
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook};
+use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+/// The role of a tab in its strip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TabRole {
+    /// An ordinary tab.
+    #[default]
+    Standard,
+    /// A tab that appears with a selection: it takes the accent text colour, enters with motion and leaves through `Presence`.
+    Contextual,
+}
 
 /// What a tab's own parts report, besides what the collection reads from the pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,6 +78,12 @@ const MARK: &str = "*";
 
 const CLOSE_REASON: &str = "The Close command closes the focused tab";
 
+/// The padding on each side of a ribbon tab's label: the strip insets its sliding underline by it, so the underline
+/// runs under the label.
+pub(super) fn ribbon_pad(tokens: &UiTokens) -> f32 {
+    tokens.space.gap.item + tokens.space.gap.tight
+}
+
 /// The sizes a tab takes from its kind and the tokens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Sizes {
@@ -81,6 +98,8 @@ struct Sizes {
     /// The height of the selected tab's indicator bar.
     indicator: f32,
     text_only: bool,
+    /// Whether the label stands in the middle of the tab's height: a ribbon tab, whose strip is a bar.
+    middle: bool,
 }
 
 /// The look of a tab.
@@ -92,9 +111,12 @@ pub struct TabStyle {
     surface: SurfaceLook,
     #[style(metrics)]
     metrics: Metrics,
-    /// The label: the text colour on the selected tab, muted on the others, also under the pointer.
+    /// The label: the text colour on the selected tab, muted on the others, also under the pointer. A ribbon tab's
+    /// label is in the accent text colour when shown or contextual, and measures at the shown tab's semibold type.
     #[style(text)]
     label: TextLook,
+    /// The label's type on a tab that is not shown: the ribbon's regular weight, the label's own type elsewhere.
+    idle_role: TypeRole,
     /// The detail, which stays readable while the label is cut.
     #[style(text)]
     detail: TextLook,
@@ -120,7 +142,10 @@ struct Placed {
     detail: Option<Rect>,
     /// The modified mark, right after the last text.
     mark: Option<Rect>,
-    progress: Option<Rect>,
+    /// The band the label, detail and mark share.
+    band: Rect,
+    /// Whether the band cuts the label or the detail.
+    cut: bool,
 }
 
 /// One tab of a strip.
@@ -132,6 +157,10 @@ pub struct Tab<'a> {
     #[style_key]
     #[prop]
     kind: TabKind,
+    /// Whether the tab is a standard one or a contextual one; a contextual ribbon tab takes the accent text colour.
+    #[style_key]
+    #[prop]
+    role: TabRole,
     /// Large Tabs: the strip's taller form with the body type.
     #[style_key]
     #[prop(flag)]
@@ -157,7 +186,6 @@ pub struct Tab<'a> {
     /// The tab's place in its set when it is shown alone; inside a strip the item step gives it.
     #[prop]
     position: Option<SetPosition>,
-    placed: Option<Placed>,
     event: Option<TabPartEvent>,
 }
 
@@ -167,6 +195,7 @@ impl<'a> Tab<'a> {
         Tab {
             common: Common::new(),
             kind: TabKind::Document,
+            role: TabRole::default(),
             large: false,
             detail: None,
             icon: None,
@@ -175,7 +204,6 @@ impl<'a> Tab<'a> {
             progress: None,
             close_label: None,
             position: None,
-            placed: None,
             event: None,
         }
         .label(label)
@@ -204,6 +232,49 @@ impl<'a> Tab<'a> {
         TextRun::new(MARK).role(style.label.role)
     }
 
+    /// Where the parts lie in `content`, with `natural` the unbounded width of a run. `parts` registers its parts
+    /// here and `paint` paints here, so a tab worn as a face, which runs no `parts`, paints the same.
+    fn place(&self, style: &TabStyle, content: Rect, rtl: bool, label: &str, natural: impl Fn(&TextRun<'_>) -> f32) -> Placed {
+        let sizes = style.sizes;
+        let mut flow = Flow::new(content, rtl);
+        let mut close = None;
+        if self.shows_close() {
+            let at_start = style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
+            let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
+            close = Some(slot);
+            flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
+        }
+        flow = flow.take_end(sizes.tail).1;
+        let mut icon = None;
+        if self.icon.is_some() {
+            let (slot, rest) = flow.take_start(sizes.icon);
+            icon = Some(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon)));
+            flow = rest.take_start(sizes.gap).1;
+        }
+        let band = flow.rect();
+        let label_natural = natural(&self.label_run(style, label));
+        let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(style.detail.role)));
+        let mark_width = if self.modified { natural(&self.mark_run(style)) } else { 0.0 };
+        let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
+        let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
+        let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
+        let line = |rect: Rect, height: f32| {
+            let top = if sizes.text_only && !sizes.middle { content.top() } else { content.center().y - height / 2.0 };
+            Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
+        };
+        let (label, rest) = flow.take_start(label_width);
+        let (detail, after) = if detail_width > 0.0 {
+            let (detail, after) = rest.take_start(detail_gap).1.take_start(detail_width);
+            (Some(line(detail, sizes.detail_line)), after)
+        } else {
+            (None, rest)
+        };
+        let mark = self.modified.then(|| line(after.take_start(mark_width).0, sizes.label_line));
+        let label = line(label, sizes.label_line);
+        let cut = label_width < label_natural || detail_width < detail_natural;
+        Placed { close, icon, label, detail, mark, band, cut }
+    }
+
     fn name(&self, label: &str, words: &TabWords) -> String {
         let name = match self.detail_text() {
             Some(detail) => format!("{label}, {detail}"),
@@ -223,11 +294,24 @@ impl Component for Tab<'_> {
         let tokens = cx.tokens;
         let (colors, space, size, stroke) = (&tokens.color, &tokens.space, &tokens.size, &tokens.stroke);
         let text_only = key.kind.text_only();
+        let ribbon = key.kind == TabKind::Ribbon;
         let c = |rgba: Rgba| cx.color(rgba);
         let clear = Rgba::TRANSPARENT;
-        let role = if text_only || key.large { TypeRole::Body } else { TypeRole::Label };
+        // A ribbon tab measures at the shown tab's semibold type, so showing a tab does not move its neighbours.
+        let role = if ribbon {
+            TypeRole::BodyStrong
+        } else if text_only || key.large {
+            TypeRole::Body
+        } else {
+            TypeRole::Label
+        };
+        let idle_role = if ribbon { TypeRole::Body } else { role };
         let line = |role: TypeRole| tokens.typography.get(role).line_height;
-        let height = if text_only {
+        // A ribbon tab is a bar's tab, its label in the middle of the old ribbon's 28-point strip (compact sizes) and
+        // padded by an item and a tight gap on each side (10 points in the compact sizes, as the old ribbon padded them).
+        let height = if ribbon {
+            size.bar.tab + space.gap.tight
+        } else if text_only {
             line(role) + space.gap.tight + stroke.thick
         } else if key.large {
             size.bar.title
@@ -236,35 +320,53 @@ impl Component for Tab<'_> {
         } else {
             size.bar.tab
         };
-        let pad_x = if text_only { 0.0 } else { 2.0 * space.pad.control };
+        let pad_x = if ribbon {
+            ribbon_pad(tokens)
+        } else if text_only {
+            0.0
+        } else {
+            2.0 * space.pad.control
+        };
         let panel = colors.surface.panel;
-        let fill = if text_only {
+        let hover = c(colors.state.hover);
+        let fill = if ribbon {
+            Stateful::new(c(clear)).off(States::new(c(clear), hover, c(clear), c(clear))).on(States::new(c(clear), c(clear), c(clear), c(clear)))
+        } else if text_only {
             Stateful::new(c(clear))
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
-        let surface = SurfaceLook::new(fill);
+        let surface = if ribbon { SurfaceLook::new(fill).radius(UiTokens::corner(tokens.shape.radius.sm)) } else { SurfaceLook::new(fill) };
         let disabled = c(colors.text.disabled);
         let ink = |off: Rgba, on: Rgba| {
             Stateful::new(c(off)).off(States::new(c(off), c(off), c(off), disabled)).on(States::new(c(on), c(on), c(on), disabled))
+        };
+        let label_ink = match (ribbon, key.role) {
+            (true, TabRole::Contextual) => ink(colors.accent.text, colors.accent.text),
+            // A ribbon look may rest its tabs in the normal text colour (`RibbonLook::tabs`).
+            (true, _) if cx.env::<crate::buttons::RibbonLook>().tab_ink => ink(colors.text.normal, colors.accent.text),
+            (true, _) => ink(colors.text.muted, colors.accent.text),
+            _ => ink(colors.text.muted, colors.text.normal),
         };
         let sizes = Sizes {
             gap: space.gap.inline,
             icon: size.icon.sm,
             close_box: size.icon.md,
-            tail: if text_only { space.gap.section } else { 0.0 },
+            tail: if text_only && !ribbon { space.gap.section } else { 0.0 },
             label_line: line(role),
             detail_line: line(TypeRole::Caption),
             underline_gap: space.gap.tight,
             indicator: stroke.thick,
             text_only,
+            middle: ribbon,
         };
         TabStyle {
             surface,
             metrics: Metrics::new().padding(Insets::new(pad_x, pad_x, 0.0, 0.0)).min_size(Vec2::new(0.0, height)).gap(sizes.gap),
-            label: TextLook::new(role, ink(colors.text.muted, colors.text.normal)),
+            label: TextLook::new(role, label_ink.clone()),
+            idle_role,
             detail: TextLook::new(TypeRole::Caption, ink(colors.text.faint, colors.text.faint)),
-            icon: IconLook::new(sizes.icon, ink(colors.text.muted, colors.text.normal)),
+            icon: IconLook::new(sizes.icon, label_ink),
             underline: c(colors.text.normal),
             indicator: (!text_only && cx.contrast() == Contrast::High).then(|| c(colors.accent.solid)),
             divider: key.kind.trailing_divider(),
@@ -306,60 +408,22 @@ impl Component for Tab<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let sizes = cx.style.sizes;
-        let rtl = cx.flow.is_rtl();
-        let content = cx.content_rect;
-        let mut flow = Flow::new(content, rtl);
-        let mut close = None;
-        if self.shows_close() {
-            let at_start = cx.style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
-            let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
-            close = Some(slot);
-            flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
-        }
-        flow = flow.take_end(sizes.tail).1;
-        let mut icon = None;
-        if self.icon.is_some() {
-            let (slot, rest) = flow.take_start(sizes.icon);
-            icon = Some(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon)));
-            flow = rest.take_start(sizes.gap).1;
-        }
-        let band = flow.rect();
-        let natural = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
-        let label_natural = natural(&self.label_run(cx.style, cx.resolved.label));
-        let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(cx.style.detail.role)));
-        let mark_width = if self.modified { natural(&self.mark_run(cx.style)) } else { 0.0 };
-        let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
-        let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
-        let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
-        let line = |rect: Rect, height: f32| {
-            let top = if sizes.text_only { content.top() } else { content.center().y - height / 2.0 };
-            Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
-        };
-        let (label, rest) = flow.take_start(label_width);
-        let (detail, after) = if detail_width > 0.0 {
-            let (detail, after) = rest.take_start(detail_gap).1.take_start(detail_width);
-            (Some(line(detail, sizes.detail_line)), after)
-        } else {
-            (None, rest)
-        };
-        let mark = self.modified.then(|| line(after.take_start(mark_width).0, sizes.label_line));
-        let label = line(label, sizes.label_line);
-        let cut = label_width < label_natural || detail_width < detail_natural;
-        if cut {
+        let placed = self.place(cx.style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| cx.layout_at(run, f32::INFINITY).size().x);
+        if placed.cut {
             let full = match self.detail_text() {
                 Some(detail) => format!("{}, {detail}", cx.resolved.label),
                 None => cx.resolved.label.to_owned(),
             };
-            let _ = cx.part(TEXT, band).tooltip(full);
+            let _ = cx.part(TEXT, placed.band).tooltip(full);
         }
-        if let Some(slot) = close {
+        if let Some(slot) = placed.close {
             let name = self.close_label.clone();
             let part = cx.part(CLOSE, slot).sense(Sense::CLICK).pointer_only(CLOSE_REASON);
             if let Some(name) = name {
                 let _ = part.tooltip(name);
             }
         }
+        let sizes = cx.style.sizes;
         let progress = self.progress.map(|_| {
             let bar = cx.face(Progress::new(0.0)).y.min(rect.height());
             Rect::from_min_max(
@@ -370,7 +434,6 @@ impl Component for Tab<'_> {
         if let Some(bar) = progress {
             let _ = cx.part(PROGRESS, bar);
         }
-        self.placed = Some(Placed { close, icon, label, detail, mark, progress });
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -400,11 +463,11 @@ impl Component for Tab<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let Some(placed) = self.placed.take() else { return };
         let (style, rect) = (cx.style, cx.rect);
         let sizes = style.sizes;
         let selected = cx.resolved.selected == Some(true) || cx.state().flags.contains(Flags::SELECTED);
         let draw = ui.draw();
+        let placed = self.place(style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| draw.layout(run, f32::INFINITY).size().x);
         if style.divider {
             draw.edge_rule(RuleKind::Divider, rect, RectSide::end(cx.flow.is_rtl()));
         }
@@ -412,12 +475,14 @@ impl Component for Tab<'_> {
             let bar = Rect::from_min_size(rect.min, Vec2::new(rect.width(), sizes.indicator.min(rect.height())));
             draw.fill(&PaintShape::Rect(bar, egui::CornerRadius::ZERO), color);
         }
-        if sizes.text_only && selected {
+        // A strip that slides its underline paints the one underline itself.
+        if sizes.text_only && selected && !self.kind.slides_underline() {
             let y = placed.label.bottom() + sizes.underline_gap;
             let line = PaintShape::Path(vec![Pos2::new(placed.label.left(), y), Pos2::new(placed.label.right(), y)]);
             draw.stroke(&line, StrokeWidth::Thick, style.underline);
         }
-        let label = self.label_run(style, cx.resolved.label).color(cx.resolve(&style.label.color));
+        let role = if selected { style.label.role } else { style.idle_role };
+        let label = TextRun::new(cx.resolved.label).role(role).color(cx.resolve(&style.label.color));
         draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
@@ -439,7 +504,7 @@ impl Component for Tab<'_> {
             };
             ui.face(CLOSE, IconButton::new(IconId::new("close")).label(name));
         }
-        if let (Some(_), Some(fraction)) = (placed.progress, self.progress) {
+        if let Some(fraction) = self.progress {
             ui.face(PROGRESS, Progress::new(fraction).label(cx.resolved.label.to_owned()));
         }
     }

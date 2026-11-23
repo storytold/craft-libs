@@ -2,7 +2,7 @@
 
 use super::{MARK, PathRange, PathTextMarkers, PathTrack};
 use craft_behavior::kurbo::{BezPath, Circle, ParamCurve, ParamCurveArclen, ParamCurveNearest, PathSeg, Point, Shape as _, Vec2 as PathVec};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::testing::canvas_story::{self, OUTLINE, StoryPicture, StoryShape, paint_shapes};
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::{Color32, Ui, vec2};
@@ -126,7 +126,7 @@ fn on_canvas(
     configure: impl for<'a> Fn(PathTextMarkers<'a>) -> PathTextMarkers<'a>,
 ) -> StoryOutput {
     const STEPS: usize = 120;
-    let range = data.value("range", initial);
+    let (range, range_at) = data.value_at("range", initial);
     let boxes = glyph_boxes(track, *range);
     let length = track.length();
     let mut path = BezPath::new();
@@ -137,7 +137,7 @@ fn on_canvas(
     let shapes = [StoryShape::line(&path, OUTLINE, colour)];
     let picture = StoryPicture::new(2 * CENTER.x as u32, 2 * CENTER.y as u32, move |p| paint_shapes(&shapes, Color32::TRANSPARENT, p));
     canvas_story::on_picture(ui, &picture, |ui, at, _| {
-        StoryOutput::from(configure(PathTextMarkers::new("Text on path", Bind::bound(&mut *range), track).body(&boxes)).show_at(ui, at).range)
+        StoryOutput::from(configure(PathTextMarkers::new("Text on path", range_at.bind(&mut *range), track).body(&boxes)).show_at(ui, at).range)
     })
 }
 

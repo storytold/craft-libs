@@ -15,8 +15,8 @@ use egui::Ui;
 
 #[story(BrightnessContrastEditor<'static>, covers = [Default], drive = Drive::Never)]
 fn brightness_contrast(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("value", BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false });
-    BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).show(ui).into()
+    let (value, value_at) = data.value_at("value", BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false });
+    BrightnessContrastEditor::new("Brightness/Contrast", value_at.bind(value)).show(ui).into()
 }
 
 /// The editor in its Image › Adjustments dialog, opened from a button.
@@ -35,16 +35,16 @@ fn brightness_contrast_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 #[story(ThresholdEditor<'static>, covers = [Default], drive = Drive::Never)]
 fn threshold(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let histogram = HistogramData::tone(&story_bins(0.0), ChannelColor::Neutral);
-    let level = data.value("level", 90.0);
-    ThresholdEditor::new("Threshold", Bind::bound(level)).histogram(&histogram).show(ui).into()
+    let (level, level_at) = data.value_at("level", 90.0);
+    ThresholdEditor::new("Threshold", level_at.bind(level)).histogram(&histogram).show(ui).into()
 }
 
 fn color_balance(ui: &mut Ui, data: &mut StoryData, start: ColorBalanceTone) -> StoryOutput {
     let shifts =
         ColorBalance { shadows: [-20.0, 0.0, 30.0], midtones: [10.0, -15.0, 0.0], highlights: [25.0, 10.0, -20.0], ..ColorBalance::default() };
     // The host keeps the value and the tone shown.
-    let (value, tone) = data.value("value", (shifts, start));
-    let shown = ColorBalanceEditor::new("Color Balance", Bind::bound(value)).tone(*tone).show(ui);
+    let ((value, tone), value_at) = data.value_at("value", (shifts, start));
+    let shown = ColorBalanceEditor::new("Color Balance", value_at.bind(value)).tone(*tone).show(ui);
     *tone = shown.tone;
     shown.into()
 }
@@ -67,13 +67,14 @@ fn color_balance_highlights(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A filter preset: the Filter row is on.
 #[story(PhotoFilterEditor<'static>, covers = [Default], drive = Drive::Never, group = "Sources", title = "A filter preset")]
 fn photo_filter_preset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("preset", PhotoFilter { color: PhotoFilterPreset::Cooling80.color(), density: 25.0, preserve_luminosity: true });
-    PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).show(ui).into()
+    let (value, value_at) =
+        data.value_at("preset", PhotoFilter { color: PhotoFilterPreset::Cooling80.color(), density: 25.0, preserve_luminosity: true });
+    PhotoFilterEditor::new("Photo Filter", value_at.bind(value)).show(ui).into()
 }
 
 /// A colour of no preset: the Color row is on, and the select offers Custom.
 #[story(PhotoFilterEditor<'static>, covers = [], drive = Drive::Never, group = "Sources", title = "A custom color")]
 fn photo_filter_color(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("color", PhotoFilter { color: Srgba::rgb(0.4, 0.2, 0.6), density: 60.0, preserve_luminosity: false });
-    PhotoFilterEditor::new("Photo Filter", Bind::bound(value)).show(ui).into()
+    let (value, value_at) = data.value_at("color", PhotoFilter { color: Srgba::rgb(0.4, 0.2, 0.6), density: 60.0, preserve_luminosity: false });
+    PhotoFilterEditor::new("Photo Filter", value_at.bind(value)).show(ui).into()
 }

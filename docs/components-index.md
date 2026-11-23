@@ -14,6 +14,7 @@ Grouped by gallery level, then shape, then name.
 | `CanvasScrollbars` | Leaf | `craft_ui_canvas::canvas::scrollbars` | The scroll bars of a canvas |
 | `CropOverlay` | Leaf | `craft_ui_canvas::canvas::crop` | The crop frame of a document, edited by dragging it as Photoshop's Classic crop does (or moving and turning the image behind it in image mode) and by the keyboard |
 | `Divider` | Leaf | `craft_ui_widgets::display::divider` | A separator line in the divider colour, snapped to the pixel grid |
+| `FaceRuns` | Leaf | `craft_ui_contract::testing::face_runs` | Three runs in a document face, as an input method's composition is drawn in the text's own font: at its own size, with kana the face lacks drawn by the interface fonts, and a run asked at 4,000 points drawn at the atlas's cap |
 | `FalloffPreview` | Leaf | `craft_ui_canvas::canvas_controls::brush::falloff` | A tip's falloff centred at a document point, with the circle of the brush's size round it: the preview a brush resize and a hover show |
 | `FooterSlot` | Leaf | `craft_ui_contract::contract::footer_slot` | The cell where a container whose footer stands in its body (`FooterPlace::Body`) draws that footer: a dialog's buttons in the cell its body's arrangement keeps for them, as the Color Picker keeps one above its second field group |
 | `Guides` | Leaf | `craft_ui_canvas::canvas_controls::guides` | The ruler guides of a canvas: drawn, taken by the pointer and moved with the keyboard |
@@ -146,6 +147,7 @@ Grouped by gallery level, then shape, then name.
 | `FullWindowSide` | Body | `craft_ui_canvas::canvas::full_window_parts::side` | A side column of a full-window dialog: Liquify's and Select and Mask's Properties, Content-Aware Fill's Preview and settings panels, Filter Gallery's settings |
 | `IconicColumn` | Body | `craft_ui_panels::docking::iconic` | A column collapsed to icons: the column bar over icon groups, one cell per panel |
 | `ModalDragStrip` | Body | `craft_ui_panels::dialog::modal` | The chrome a modal dialog puts over a drag area of the window it covers, so that the window still moves by it |
+| `PageBand` | Body | `craft_ui_shell::shell::title_bar::page_band` | The band over a shown page that moves the window, with the window's ends: the traffic lights' room or the caption buttons |
 | `PaneFrame` | Body | `craft_ui_patterns::patterns::dock::panes` | A docked pane: a shell pane on one edge of the area, with a title row and a scrolling body |
 | `Panel` | Body | `craft_ui_panels::sections::panel` | A panel of a workspace: scrolling body, optional footer, optional title row |
 | `Popover` | Body | `craft_ui_widgets::popover::anchored` | A non-modal popup that hangs from the control that opened it and holds the app's body (a colour picker, a stroke editor, a settings form) |
@@ -160,7 +162,7 @@ Grouped by gallery level, then shape, then name.
 | `BarHome` | Pattern | `craft_ui_widgets::bars::lead` | The Home button at the start of an options bar: a toggle with the home icon at the standard control size, as tall as a bar's tool icons, then a rule |
 | `BarTool` | Pattern | `craft_ui_widgets::bars::lead` | The active tool's icon at the start of an options bar, after Home: the icon, the dropdown arrow that tells it has a menu, then a rule |
 | `CanvasSize` | Pattern | `craft_ui_patterns::patterns::form_dialogs::sizing::canvas` | Canvas Size: the current size, the new width and height with a unit each (no chain: the sides are independent), the Relative box, the 3 by 3 anchor and the colour that fills a larger canvas |
-| `CommandPalette` | Pattern | `craft_ui_patterns::patterns::panels::palette` | A search over the app's commands in a centred modal box: a search field over the matching commands |
+| `CommandPalette` | Pattern | `craft_ui_patterns::patterns::panels::palette` | A search over the app's commands: a search field over the matching commands, in a centred modal box or in place |
 | `ConstraintFields` | Pattern | `craft_ui_widgets::bars::constraint_fields` | The Style, Width, swap and Height cells of an options `Bar` that read and write a marquee's [`Constraint`] (Photoshop's Rectangular Marquee bar, the Slice tool's) |
 | `DeleteWorkspaceDialog` | Pattern | `craft_ui_patterns::patterns::dock::workspace_dialogs` | Window › Workspace › Delete Workspace…: one of the saved workspaces |
 | `DockArea` | Pattern | `craft_ui_patterns::patterns::dock::area` | The docking pattern over a workspace |
@@ -200,6 +202,7 @@ Grouped by gallery level, then shape, then name.
 | `PathRow` | Pattern | `craft_ui_patterns::patterns::form_dialogs::path_row` | A text field with the path, taking the row's room, and a Browse button after it, for a row whose enclosing `Field` shows the label |
 | `PathSetting` | Pattern | `craft_ui_patterns::patterns::preferences::path_setting` | A path setting for a custom row or page of Preferences ([`CustomSettings`](super::CustomSettings)): the label, then a text field with the path and a Browse… button, over the draft value at `key` |
 | `PdfExportDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::pdf_export` | File > Save as PDF: a preset row, Standard and Compatibility, and a list of sections (General, Compression, Marks and Bleeds, Output, Advanced, Security and Summary) beside the shown section |
+| `PreferencesPage` | Pattern | `craft_ui_patterns::patterns::preferences::page` | A preferences page that applies each value at once, with search and Reset Section |
 | `PreferencesWindow` | Pattern | `craft_ui_patterns::patterns::preferences::window` | The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them |
 | `PresetBrowser` | Pattern | `craft_ui_patterns::patterns::presets::browser` | A library of named presets shown as thumbnails |
 | `PresetFooter` | Pattern | `craft_ui_patterns::patterns::presets::footer` | The footer of a preset panel: the host's own controls, the thumbnail size slider and the count, then the action buttons Delete, New and New Group and the host's own actions |
@@ -237,7 +240,8 @@ Grouped by gallery level, then shape, then name.
 | `AppShell` | Pattern | `craft_ui_shell::shell::app_shell` | The window skeleton |
 | `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the document tab strip flush against the document, then the document area, over the canvas surround |
 | `OpeningCard` | Pattern | `craft_ui_shell::shell::opening` | A centred card: "Opening {name}…" elided on one line with the full text on hover, the muted message, a progress bar (indeterminate without a fraction), the percentage at the start and Cancel at the end of the last row |
-| `ScreenModeButton` | Pattern | `craft_ui_shell::shell::screen_mode_button` | A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away or a right click lists the three modes without cycling |
+| `RecentList` | Pattern | `craft_ui_shell::shell::recent_list` | The recent files as rows, with the commands of a recent file and its context menu |
+| `ScreenModeButton` | Pattern | `craft_ui_shell::shell::screen_mode_button` | A flyout button over the screen modes of the shell's set, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away or a right click lists the modes without cycling |
 | `StartScreen` | Pattern | `craft_ui_shell::shell::start` | The start screen, shown in a shell's body when no document is open |
 | `ViewportWindow` | Pattern | `craft_ui_shell::shell::viewport_window` | A window of the app with a body the app fills |
 

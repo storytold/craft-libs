@@ -1746,6 +1746,7 @@ dependencies = [
  "craft-assuan",
  "craft-atomic",
  "craft-audio",
+ "craft-audio-dsp",
  "craft-automation",
  "craft-behavior",
  "craft-ber",
@@ -1891,6 +1892,7 @@ dependencies = [
  "craft-raw",
  "craft-review",
  "craft-rtf",
+ "craft-sbs",
  "craft-score",
  "craft-scraft-format",
  "craft-settings",
@@ -2050,6 +2052,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-audio-dsp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-automation"
 version = "0.1.0"
 dependencies = [
@@ -2071,6 +2077,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
+ "web-time",
 ]
 
 [[package]]
@@ -2082,6 +2089,8 @@ dependencies = [
  "craft-host",
  "craft-keymap",
  "craft-theme",
+ "craft-tracked",
+ "craft-ui-macros",
  "emath",
  "kurbo",
  "serde",
@@ -2223,6 +2232,7 @@ dependencies = [
  "craft-ai-agents",
  "craft-atomic",
  "craft-flags",
+ "dirs",
  "getrandom 0.3.4",
  "log",
  "proptest",
@@ -2357,6 +2367,7 @@ dependencies = [
  "block2 0.6.2",
  "craft-atomic",
  "craft-behavior",
+ "craft-browse",
  "craft-host",
  "craft-i18n",
  "craft-platform",
@@ -2369,6 +2380,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+ "serde_json",
  "zbus",
 ]
 
@@ -2476,6 +2488,7 @@ dependencies = [
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-xml",
  "kurbo",
  "log",
@@ -2698,6 +2711,7 @@ dependencies = [
  "craft-font-catalog",
  "craft-font-manager",
  "craft-font-store",
+ "craft-fonts-build",
  "craft-host",
  "craft-i18n",
  "craft-theme",
@@ -2814,8 +2828,12 @@ dependencies = [
 name = "craft-gpu"
 version = "0.1.0"
 dependencies = [
+ "egui-wgpu",
+ "log",
+ "pollster 1.0.1",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -3005,6 +3023,8 @@ dependencies = [
  "craft-keymap",
  "craft-theme",
  "craft-ui",
+ "craft-ui-test-kit",
+ "craft-window",
  "egui",
  "egui_kittest",
  "kurbo",
@@ -3099,6 +3119,8 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-settings",
+ "craft-tracked",
+ "craft-ui-macros",
  "craft-xml",
  "egui",
  "serde",
@@ -3187,6 +3209,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
 ]
@@ -3420,6 +3443,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-i18n",
+ "craft-keymap",
  "craft-text",
  "craft-theme",
  "craft-ui",
@@ -3596,11 +3620,13 @@ dependencies = [
  "craft-docpath",
  "craft-host",
  "craft-theme",
+ "fmv-macos-events",
  "futures-lite",
  "js-sys",
  "log",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "rfd",
  "serde",
  "serde_json",
  "sysinfo",
@@ -3609,6 +3635,7 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "web-time",
+ "windows",
  "wl-clipboard-rs",
  "x11rb",
  "xcap",
@@ -3636,6 +3663,7 @@ name = "craft-ppt-binary"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-codepage",
  "craft-drawingml",
  "craft-pptx",
  "image",
@@ -3695,14 +3723,19 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-ui",
  "craft-winprint-gdi",
  "egui",
+ "js-sys",
  "log",
  "miniz_oxide 0.9.1",
  "roxmltree 0.21.2",
+ "serde",
  "serde_json",
  "tempfile",
+ "wasm-bindgen",
+ "web-sys",
  "winprint",
  "winsafe",
 ]
@@ -3819,6 +3852,7 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-keymap",
+ "craft-pages",
  "craft-theme",
  "craft-ui",
  "egui",
@@ -3840,6 +3874,18 @@ dependencies = [
  "encoding_rs",
  "image",
  "proptest",
+]
+
+[[package]]
+name = "craft-sbs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "craft-mime",
+ "craft-xml",
+ "flate2",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3871,11 +3917,15 @@ dependencies = [
  "craft-host",
  "craft-settings",
  "dirs",
+ "log",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "toml_edit",
+ "wasm-bindgen-test",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -4127,6 +4177,8 @@ name = "craft-theme"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "craft-tracked",
+ "craft-ui-macros",
  "ecolor",
  "log",
  "proptest",
@@ -4201,6 +4253,7 @@ name = "craft-tracked"
 version = "0.1.0"
 dependencies = [
  "craft-ui-macros",
+ "serde",
 ]
 
 [[package]]
@@ -4258,6 +4311,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "craft-behavior",
+ "craft-codepage",
  "craft-font-catalog",
  "craft-fonts-build",
  "craft-host",
@@ -4284,6 +4338,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "proc-macro2",
+ "scoped-tls",
  "serde",
  "serde_json",
  "siphasher",
@@ -4291,6 +4346,7 @@ dependencies = [
  "smallvec",
  "syn 2.0.119",
  "toml",
+ "typeid",
  "web-time",
 ]
 
@@ -4329,6 +4385,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
+ "toml",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -4401,6 +4458,7 @@ dependencies = [
  "craft-window",
  "eframe",
  "egui",
+ "raw-window-handle",
  "serde",
  "web-time",
 ]
@@ -5394,7 +5452,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "bytemuck",
  "emath",
@@ -5450,7 +5508,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5485,7 +5543,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "accesskit",
  "ahash",
@@ -5504,7 +5562,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5523,7 +5581,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -5543,7 +5601,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "bytemuck",
  "egui",
@@ -5556,7 +5614,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "eframe",
  "egui",
@@ -5633,7 +5691,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "bytemuck",
 ]
@@ -5706,7 +5764,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -5732,7 +5790,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[package]]
 name = "equator"
@@ -6047,6 +6105,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fmv-macos-events"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90642cf66dde7f205dc8b42dfe57b47d0f3a29f571b832742883ef512e23fe55"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -12888,6 +12957,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
 
 [[package]]
+name = "typeid"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13402,8 +13477,6 @@ dependencies = [
 [[package]]
 name = "vello_common"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3361bff7f7d82c0c496b92048db83846691f0e844cc28dee92b1c824291b55ee"
 dependencies = [
  "bytemuck",
  "fearless_simd",
@@ -13452,8 +13525,6 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo 0.1.1",
@@ -15050,19 +15121,19 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[patch.unused]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=7e1c30d142bc7879d043e74b5ceb3ecfe7f51329#7e1c30d142bc7879d043e74b5ceb3ecfe7f51329"
+source = "git+https://github.com/storytold/egui.git?rev=f5025284445ea19c35f746d96fc0b75468b3f560#f5025284445ea19c35f746d96fc0b75468b3f560"

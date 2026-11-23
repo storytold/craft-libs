@@ -11,11 +11,11 @@
 //! }
 //! ```
 
-mod list;
+pub(crate) mod list;
 mod menus;
-mod row;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod row;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::BTreeMap;
 
@@ -34,9 +34,12 @@ use super::annotate::{AnnotateWords, PALETTE};
 use crate::annotate::AnnotationKind;
 use crate::comments::{CommentFilter, CommentSort, CommentThread, ReviewStatus, ThreadId, matches, sort_threads};
 
-use list::{CardEvent, CardKey, CommentList, RowEntry, Rows};
+use list::{CardKey, CommentList, RowEntry, Rows};
 use menus::{card_menu, filter_menu, pages_menu, sort_menu};
-use row::{CommentRow, MORE};
+use row::MORE;
+
+pub(super) use list::CardEvent;
+pub(super) use row::{CardActions, CommentRow};
 
 /// Ages under this many seconds (one week) read relative; older ones read as a date.
 pub(crate) const AGE_SHOWN_AS_DATE: u64 = 7 * 24 * 60 * 60;
@@ -68,6 +71,9 @@ craft_ui::words! {
         edit: "comments.edit" = "Edit";
         set_status: "comments.setStatus" = "Set status";
         delete: "comments.delete" = "Delete";
+        reply_button: "comments.replyButton" = "Reply";
+        resolve: "comments.resolve" = "Resolve";
+        reopen: "comments.reopen" = "Reopen";
         copy_text: "comments.copyText" = "Copy text";
         mark: "comments.mark" = "Mark with checkmark";
         unmark: "comments.unmark" = "Remove checkmark";
@@ -256,7 +262,9 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 ///   cards. A card shows the kind's icon, author, age (relative under a week, then the date), the
 ///   text, a status icon, the checkmark, a lock icon and the replies, each with its own "..." menu.
 /// - The selected card has the accent bar, the reply box and "..." (Edit, Set status, Delete).
-///   Locked threads and `read_only` hide the editing items.
+///   Locked threads and `read_only` hide the editing items. An inline editor takes the keyboard in
+///   the pass it opens. Selecting another card drops the reply draft and the edit of another
+///   thread; a card selected again keeps its own edit draft.
 /// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the selected
 ///   card's reply box, Cmd+Enter (Ctrl+Enter off macOS) in the reply box or an inline editor posts,
 ///   Escape in a control of a card returns to the card.
@@ -350,13 +358,17 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, value: T) {
     }
 }
 
-/// Makes `thread` the selected one; false when it already was.
+/// Makes `thread` the selected one; false when it already was. The reply draft and an edit of another thread go; an
+/// edit of `thread` itself stays, so a draft the app could not write back (a document that refused it) is there again
+/// when its card is selected again.
 fn select_thread(state: &mut CommentsPanelState, thread: ThreadId) -> bool {
     let changed = state.selected != Some(thread);
     if changed {
         state.selected = Some(thread);
         state.reply.clear();
-        state.editing = None;
+        if state.editing.as_ref().is_some_and(|(editing, ..)| *editing != thread) {
+            state.editing = None;
+        }
     }
     changed
 }
@@ -576,9 +588,12 @@ impl CommentsPanel<'_> {
 }
 
 /// Applies what a card reported.
-fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
+pub(super) fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
     match event {
         CardEvent::Mark { thread, marked } => edits.push(CommentEdit::Mark { thread, marked }),
+        CardEvent::Resolve { thread, resolved } => edits.push(CommentEdit::Resolve { thread, resolved }),
+        // Index 0 deletes the whole thread.
+        CardEvent::Delete { thread } => edits.push(CommentEdit::Delete { thread, index: 0 }),
         CardEvent::EditText(text) => {
             if let Some((_, _, draft)) = state.editing.as_mut() {
                 *draft = text;

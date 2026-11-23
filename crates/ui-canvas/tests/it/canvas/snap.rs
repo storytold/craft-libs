@@ -1,7 +1,7 @@
 //! `Snap` (cw.C16): the canvas's one snapping, over its targets, at the tolerance of the view it shows, gated by View >
-//! Snap and the Control key of the OS.
+//! Snap and the suspend key of its options (Control of the OS by default, or Alt).
 
-use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
+use craft_behavior::geometry::{SnapKind, SnapOptions, SnapSuspend, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{Axis, CancelReason, CanvasView};
 use craft_keymap::{Mods, Platform};
@@ -72,7 +72,7 @@ fn snapped_with(fixture: &mut ToolFixture<Recorder>, mods: Modifiers) -> Point {
 // The body's snap and the tool's both snap within 8 screen points, 4 document units at zoom 2: a coordinate 3 units off
 // a guide moves onto it and one 5 units off stays. A point snaps on both axes and a box by its edge, each with the
 // lines to draw. View > Snap off returns the input. Control suspends snapping on macOS and Ctrl elsewhere, unless the
-// gesture reads that key itself.
+// gesture reads that key itself. With Alt as the options' suspend key, Alt suspends instead and Control does not.
 #[trial]
 fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     let options = SnapOptions::default();
@@ -95,7 +95,7 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CTRL), 103.0);
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CMD), 100.0);
     assert_eq!(
-        snap.point(NEAR, Mods::CTRL, GestureSnap::default().reads_control(true)).0,
+        snap.point(NEAR, Mods::CTRL, GestureSnap::default().reads_suspend_key(true)).0,
         Point::new(100.0, 200.0),
         "a gesture that reads Control keeps snapping"
     );
@@ -109,6 +109,38 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::NONE), 100.0);
     assert_eq!(snapped_with(&mut fixture, Modifiers::CTRL), NEAR, "Ctrl held suspends the tool's snap");
 
+    alt_suspends(options);
+    snap_off(options);
+}
+
+/// With Alt as the suspend key, Alt suspends and Control no longer does, on either OS.
+fn alt_suspends(options: SnapOptions) {
+    let mut alt = options;
+    alt.suspend = SnapSuspend::Alt;
+    for os in [Platform::Mac, Platform::Windows] {
+        let (mut fixture, seen) = rig(Snap::new(targets(), alt));
+        fixture.fixture().os(os).frame(Vec::new());
+        let snap = seen.borrow().clone().expect("the canvas publishes its snap to its body");
+        assert_eq!(snap.options().suspend, SnapSuspend::Alt);
+        assert_eq!(snap.apply(Axis::Y, 103.0, Mods::ALT), 103.0, "Alt suspends on {os:?}");
+        assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CTRL), 100.0, "Control keeps snapping on {os:?}");
+        assert_eq!(snap.point(NEAR, Mods::ALT, GestureSnap::default()), (NEAR, Vec::new()), "on {os:?}");
+        assert_eq!(snap.point(NEAR, Mods::CTRL, GestureSnap::default()).0, Point::new(100.0, 200.0), "on {os:?}");
+        assert_eq!(
+            snap.point(NEAR, Mods::ALT, GestureSnap::default().reads_suspend_key(true)).0,
+            Point::new(100.0, 200.0),
+            "a gesture that reads Alt keeps snapping on {os:?}"
+        );
+        assert_eq!(snap.rect(DocRect::new(60.0, 10.0, 97.0, 40.0), Mods::ALT), (Vec2::ZERO, Vec::new()), "on {os:?}");
+        assert_eq!(snap.rect(DocRect::new(60.0, 10.0, 97.0, 40.0), Mods::CTRL).0, Vec2::new(3.0, 0.0), "on {os:?}");
+        assert!(!snap.rect(DocRect::new(60.0, 10.0, 97.0, 40.0), Mods::CTRL).1.is_empty(), "Control snaps and reports its line on {os:?}");
+        assert_eq!(snapped_with(&mut fixture, Modifiers::ALT), NEAR, "Alt held suspends the tool's snap on {os:?}");
+        assert_eq!(snapped_with(&mut fixture, Modifiers::CTRL), Point::new(100.0, 200.0), "Control held snaps the tool on {os:?}");
+    }
+}
+
+/// With View > Snap off nothing snaps.
+fn snap_off(options: SnapOptions) {
     let mut off = options;
     off.on = false;
     let (mut fixture, seen) = rig(Snap::new(targets(), off));

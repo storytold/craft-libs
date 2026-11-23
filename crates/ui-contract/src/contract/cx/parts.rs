@@ -187,6 +187,14 @@ impl PartBuilder<'_> {
         self
     }
 
+    /// The part's hit area is its shape as declared, never grown to the pointer's target size (`size.hit.target`): a
+    /// frame's resize grip, whose band is sized as its reach and whose neighbours (a title row, the content) own every
+    /// point beside it.
+    pub fn exact_hit(self) -> Self {
+        self.decl.exact = true;
+        self
+    }
+
     /// The part's look is the plain state layer: the paint step fills its rect with `StyleCx::state_layer` in the
     /// part's state, under the component's paint, with control corners.
     pub fn state_layer(self) -> Self {

@@ -13,11 +13,11 @@
 
 mod arrange;
 mod caption;
-mod pill;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod pill;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod style;
-mod tile;
+pub(crate) mod tile;
 
 pub use arrange::{ArrangeSpace, ComparePair, survey_cell, survey_columns};
 pub use caption::CompareCaption;

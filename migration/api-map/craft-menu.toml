@@ -108,6 +108,11 @@ new = ""
 note = "Use `Props::id_salt` on the bar's parent scope."
 
 [[call]]
+old = "MenuBarUi::english(hook)"
+new = ""
+note = "The English name is a field of the model (`Item::english`, `Node::english`, `Menu::english`), set where the app translates a label."
+
+[[call]]
 old = "MenuBar::palette_entries(&keymap, target, &options, english, os)"
-new = "MenuBar::help_entries(target, &options, english)"
-note = "Returns `craft_ui::menu::HelpEntry`; chords and enabled state come from the commands, so the keymap and operating system arguments go."
+new = "MenuBar::help_entries(target, &options)"
+note = "Returns `craft_ui::menu::HelpEntry`; chords and enabled state come from the commands, so the keymap and operating system arguments go, and so does the English hook: set `Item::english` on the model."

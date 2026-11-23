@@ -5,20 +5,18 @@ use std::sync::Arc;
 
 use craft_host::target::Os;
 use craft_host::{AppInfo, Host};
-use craft_menu::{CommandRef, Labeled, MenuBarUi, Row, from_items};
+use craft_menu::{CommandRef, LayoutOptions, MenuBarUi, Row, Target, from_items};
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
 
 #[trial]
 fn a_cjk_title_shows_its_english_letter_and_alt_with_the_letter_opens_it() {
-    let bar = from_items(&["文件"], &[Row::new(&["文件"], CommandRef::new("file.new"), "新建")]);
-    let english = |labeled: Labeled<'_>| match labeled {
-        Labeled::Title("文件") => Some("File".to_owned()),
-        Labeled::Command(command) if *command == CommandRef::new("file.new") => Some("New".to_owned()),
-        _ => None,
-    };
+    let mut bar = from_items(&["文件"], &[Row::new(&["文件"], CommandRef::new("file.new"), "新建").english("New")]);
+    bar.menus[0].english = Some("File".to_owned());
+    let bar = Tracked::new(bar);
     let mut fixture = Fixture::new(move |ui| {
-        MenuBarUi::new(&bar).english(&english).show(ui);
+        MenuBarUi::new(&bar).show(ui);
     });
     // A Mac bar has no letters.
     fixture.os(Os::Linux);
@@ -29,8 +27,16 @@ fn a_cjk_title_shows_its_english_letter_and_alt_with_the_letter_opens_it() {
     assert!(fixture.by_label("新建(N)").is_some(), "Alt+F opens the title's menu, whose row shows its own English letter");
 }
 
+#[trial]
+fn help_search_lists_an_item_by_its_english_name_in_a_translated_model() {
+    let bar = from_items(&["文件"], &[Row::new(&["文件"], CommandRef::new("file.new"), "新建").english("New")]);
+    let entries = bar.help_entries(Target::Linux, &LayoutOptions::new("Sample"));
+    let entry = entries.iter().find(|entry| *entry.command() == CommandRef::new("file.new")).expect("the command is listed");
+    assert_eq!(entry.english().map(|label| label.as_str()), Some("New"));
+}
+
 /// A host whose interface language is Turkish, with an empty catalog.
-fn turkish() -> Arc<Host> {
+pub(crate) fn turkish() -> Arc<Host> {
     let (i18n, _) = craft_i18n::I18n::from_owned([("tr".to_owned(), String::new(), String::new())], &["tr"]);
     let tr = i18n.from_code("tr").unwrap_or_else(|| panic!("tr is offered"));
     Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).lang(tr).build())
@@ -39,8 +45,10 @@ fn turkish() -> Arc<Host> {
 /// The rows shown after Alt with `key` on a Linux bar titled `ix` and `ı` under a Turkish host: `One` is `ix`'s, `Two`
 /// is `ı`'s.
 fn opened_by(key: Key) -> (bool, bool) {
-    let bar =
-        from_items(&["ix", "ı"], &[Row::new(&["ix"], CommandRef::new("menu.one"), "One"), Row::new(&["ı"], CommandRef::new("menu.two"), "Two")]);
+    let bar = Tracked::new(from_items(
+        &["ix", "ı"],
+        &[Row::new(&["ix"], CommandRef::new("menu.one"), "One"), Row::new(&["ı"], CommandRef::new("menu.two"), "Two")],
+    ));
     let mut fixture = Fixture::new(move |ui| {
         MenuBarUi::new(&bar).show(ui);
     });

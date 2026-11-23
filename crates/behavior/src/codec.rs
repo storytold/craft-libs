@@ -303,13 +303,18 @@ impl Codec for NumberCodec {
 
     fn format(&self, v: &Option<f64>) -> String {
         let Some(number) = v else { return String::new() };
-        let fixed = format!("{number:.*}", self.decimals);
+        let written = format!("{number:.*}", self.decimals);
+        // A value that rounds to zero at these decimals carries no sign.
+        let fixed = match written.strip_prefix('-') {
+            Some(digits) if digits.bytes().all(|byte| matches!(byte, b'0' | b'.')) => digits,
+            _ => &written,
+        };
         let trimmed = if self.fixed {
-            &fixed
+            fixed
         } else if fixed.contains('.') {
             fixed.trim_end_matches('0').trim_end_matches('.')
         } else {
-            &fixed
+            fixed
         };
         trimmed.replace('.', &self.reader.decimal_separator().to_string())
     }
@@ -343,5 +348,19 @@ impl Codec for NumberCodec {
 
     fn sample(&self, _current: &Option<f64>) -> Cow<'_, str> {
         Cow::Borrowed(NUMBER_SAMPLE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_value_that_rounds_to_zero_is_written_without_a_sign() {
+        let one = NumberCodec::new(Reader::new(), 1);
+        assert_eq!(one.format(&Some(-0.0)), "0");
+        assert_eq!(one.format(&Some(-0.04)), "0");
+        assert_eq!(one.format(&Some(-0.06)), "-0.1");
+        assert_eq!(NumberCodec::new(Reader::new(), 1).fixed().format(&Some(-0.04)), "0.0");
     }
 }

@@ -31,6 +31,9 @@ impl ThemeDef {
                 c.at(id.as_str(), |c| {
                     c.mode_pins(&app.pins, self.variants);
                     c.at("high_contrast", |c| c.mode_pins(&app.high_contrast, self.variants));
+                    if let Some(shape) = &app.shape {
+                        c.at("shape", |c| c.shape(shape));
+                    }
                 });
             }
         });

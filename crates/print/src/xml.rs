@@ -125,7 +125,7 @@ fn attribute_name(tag: &[u8]) -> &[u8] {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 
