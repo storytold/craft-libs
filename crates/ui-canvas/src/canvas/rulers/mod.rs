@@ -439,6 +439,7 @@ impl Component for Rulers<'_> {
         let started = press.phase.start().filter(|start| start.button == PointerButton::Primary);
         if started.is_some() && !self.origin_locked {
             // Every step of the drag proposes where it lands, its start and its release too: a drag of one move lands.
+            // A release lands only while the drag's edit is open: a cancelled drag stays cancelled.
             let land =
                 |pos: Pos2, start: Point| if corner.contains(pos) { start } else { Self::landing(&space, self.snap.as_ref(), pos, press.mods, zero) };
             match press.phase {
@@ -451,7 +452,7 @@ impl Component for Rulers<'_> {
                     let start = cx.press_slot::<Point>().unwrap_or(zero);
                     cx.propose(land(pos, start));
                 }
-                PressPhase::Release { pos, click: false, .. } => {
+                PressPhase::Release { pos, click: false, .. } if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) => {
                     let start = cx.press_slot::<Point>().unwrap_or(zero);
                     cx.propose(land(pos, start));
                     cx.commit();

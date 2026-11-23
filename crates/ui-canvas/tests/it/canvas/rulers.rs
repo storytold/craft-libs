@@ -190,3 +190,29 @@ fn a_corner_drag_of_one_move_lands_the_zero_point() {
     fixture.settle();
     assert_ne!(*zero.borrow(), Point::ZERO, "the zero point lands where the one-move drag released");
 }
+
+/// A host that moves the zero point under a corner drag cancels the drag's edit while the press goes on; the release
+/// that follows lands nothing, so the host's zero point stays.
+#[trial]
+fn a_corner_drag_the_host_cancelled_lands_nothing_at_its_release() {
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let view = |room: Rect| CanvasView::new(room, Point::new(f64::from(room.center().x), f64::from(room.center().y)), 1.0);
+    let snap = Snap::new(std::sync::Arc::new(SnapTargets::new()), SnapOptions::default());
+    let mut fixture = ToolFixture::with_rulers("Document", Overpaint, view, snap, zero.clone(), |_, _| {});
+    fixture.fixture().room(Vec2::new(500.0, 400.0)).settle();
+    let canvas = fixture.canvas().rect;
+    let (from, to) = (canvas.min + Vec2::splat(4.0), canvas.center());
+    let fixture = fixture.fixture();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(to)]);
+    fixture.settle();
+    let dragged = *zero.borrow();
+    assert_ne!(dragged, Point::ZERO, "the drag moves the zero point");
+    let host = Point::new(-dragged.x, -dragged.y);
+    *zero.borrow_mut() = host;
+    fixture.frame(vec![craft_ui::testing::pointer::moved(to + Vec2::splat(10.0))]);
+    fixture.frame(vec![craft_ui::testing::pointer::release(to + Vec2::splat(10.0))]);
+    fixture.settle();
+    assert_eq!(*zero.borrow(), host, "the release after the host's change leaves the zero point where the host put it");
+}
