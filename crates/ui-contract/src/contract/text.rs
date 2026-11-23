@@ -409,6 +409,8 @@ struct PreparedText {
     caret_visible: bool,
     commit_now: bool,
     was_focused: bool,
+    /// The part's edit menu is open and holds its editing focus.
+    menu_open: bool,
 }
 
 /// Run the text adapter and adjust focus before the component's typed resolver handles its value.
@@ -520,7 +522,7 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
             state.select_on_click = false;
         }
     }
-    PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused }
+    PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, menu_open: held }
 }
 
 /// Places the caret of the text part's widget `widget` as focus arrives on the part: where the codec puts it, or over
@@ -574,7 +576,7 @@ pub(crate) fn run<C: Component>(
     }
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
-    let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused } = text;
+    let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, menu_open } = text;
     if part.options.complete.is_some() {
         drive_completions(cx, &mut state);
     }
@@ -627,7 +629,9 @@ pub(crate) fn run<C: Component>(
     outcome.clicked = out.clicked;
     // The focus service moved focus off the widget with Tab before this pass's widgets ran.
     let left_by_tab = if was_focused && !out.focused { crate::runtime::focus::tabbed_off(&ctx, widget) } else { None };
-    let text_lost_focus = was_focused && !out.focused;
+    // The edit menu holds the part's editing focus while it is open (`was_focused` stays true through it): key focus
+    // that is with the menu is not lost until the menu is gone and focus is not back.
+    let text_lost_focus = was_focused && !out.focused && !menu_open;
     cx.core.texts =
         Some((part.key, Box::new(RecordedText { outcome, submit_mods: resolved.submit_mods, left_by_tab, tab: out.tab, caret, text_lost_focus })));
     apply_events(cx, resolved.events);

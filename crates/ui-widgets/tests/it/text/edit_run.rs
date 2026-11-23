@@ -238,3 +238,19 @@ fn a_field_removed_with_its_edit_menu_open_starts_afresh() {
     rig.escape();
     assert_eq!(rig.text(), "Porto", "Escape gives back the text the new run began with");
 }
+
+/// The edit menu holds the field's editing focus while it is open: that is no focus loss, so the field reports none in
+/// the passes the menu is open.
+#[trial]
+fn an_open_edit_menu_is_no_focus_loss() {
+    let mut rig = rig("Lisbon", false);
+    rig.retype("Rome");
+    rig.fixture.advance(1.0);
+    let at = rig.at();
+    rig.fixture.frame(vec![pointer::secondary(at, true)]);
+    rig.fixture.frame(vec![pointer::secondary(at, false)]);
+    rig.fixture.settle();
+    assert!(rig.fixture.by_label("Cut").is_some(), "the edit menu is open");
+    rig.fixture.idle(4);
+    assert_eq!(rig.lost_focus(), 0, "the passes with the menu open report no focus loss");
+}
