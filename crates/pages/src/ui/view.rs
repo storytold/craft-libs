@@ -117,6 +117,34 @@ pub struct PageViewState {
     pub turn: Option<bool>,
 }
 
+/// Where the creative set's page view ([`ComponentSet::Creative`](craft_theme::ComponentSet::Creative)) takes its
+/// spacing from. An app sets it once at its root (`RootEnv::values`); the productivity set's spacing is its own either
+/// way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::runtime::env::EnvValue, craft_ui::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum PageInsets {
+    /// The section gap between pages, the roomy pad above and below, the rail's width at the sides.
+    #[default]
+    Standard,
+    /// The theme's page insets (`space.inset.page_gap`, `page_margin` and `page_side`): PdfCraft's page view.
+    Theme,
+}
+
+/// Where Go To ([`GoTo::Top`]) puts a page's top in the view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GoToPlace {
+    /// The view's top where what shows of the row above ends (the document's start for the first row), so the space
+    /// the layout keeps above the page shows and nothing of the page before it; a fraction of the page goes to the
+    /// view's top.
+    #[default]
+    AfterRowAbove,
+    /// PdfCraft's, as production places it: the page gap above the page's top, or above the fraction of it, never
+    /// above the document's start.
+    GapAbove,
+}
+
 /// Where the next pass takes the view.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -448,6 +476,8 @@ pub struct PageView<'a> {
     tool_regions: Vec<PageRegion>,
     rulers: bool,
     reach: f32,
+    go_to_place: GoToPlace,
+    fill_screen: bool,
 }
 
 /// How far from the view, in view heights above and below it (and one view width either side), the page view keeps a
@@ -476,7 +506,26 @@ impl<'a> PageView<'a> {
             tool_regions: Vec::new(),
             rulers: false,
             reach: PICTURE_REACH,
+            go_to_place: GoToPlace::AfterRowAbove,
+            fill_screen: false,
         }
+    }
+
+    /// Where Go To puts a page's top in the view: after the row above by default, the page gap above it with
+    /// [`GoToPlace::GapAbove`] (PdfCraft's).
+    #[must_use]
+    pub fn go_to_place(mut self, place: GoToPlace) -> Self {
+        self.go_to_place = place;
+        self
+    }
+
+    /// Full screen's edge-to-edge view: no margin above the first page or below the last, no side gutter, no page
+    /// border or shadow, and in Two-up that is not continuous the shown spread fitted by its own pages (two pages'
+    /// widths side by side, a page alone keeping a spread's room) and centred. Off by default.
+    #[must_use]
+    pub fn fill_screen(mut self, on: bool) -> Self {
+        self.fill_screen = on;
+        self
     }
 
     /// The colour round the pages: the theme's by default; production's full screen view is black.
@@ -645,8 +694,18 @@ impl<'a> PageView<'a> {
             tool_regions,
             rulers,
             reach,
+            go_to_place,
+            fill_screen,
         } = self;
-        let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
+        let mut spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
+        // Filling the screen, the pages keep no margin above or below and no gutter beside them, and draw no border.
+        let border = if fill_screen {
+            spacing.margin = 0.0;
+            spacing.side = 0.0;
+            PageBorder::None
+        } else {
+            border
+        };
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
         // With rulers the canvas shows inside the strips, so its view lies inside them. Its body is clipped to its view
@@ -666,7 +725,7 @@ impl<'a> PageView<'a> {
         // The canvas is given the view of the state as the pass will read it.
         let mut start = state.clone();
         start.normalise();
-        let build = Geometry { sizes: &sizes, viewport, options, spacing, bodies, cache: RefCell::new(None) };
+        let build = Geometry { sizes: &sizes, viewport, options, spacing, bodies, go_to_place, fill_screen, cache: RefCell::new(None) };
         let geo = build.of(&start);
         let frame = Frame::of(&geo);
         let given = frame.view(rect, start.offset, geo.scale / SCREEN_POINTS_PER_POINT);
@@ -1255,7 +1314,7 @@ impl Pending {
         let went = go_to.is_some();
         if let Some(go_to) = go_to {
             geo = place_go_to(build, &mut state, go_to, (vw, vh));
-            want = go_to_offset(go_to, &geo, state.continuous, want, (vw, vh), &build.spacing);
+            want = go_to_offset(go_to, &geo, state.continuous, want, (vw, vh), &build.spacing, build.go_to_place);
         }
         // Turned by Left or Right at an edge, a row wider than the view starts at the edge the reader comes from, so
         // the next key scrolls across it rather than turning again.
@@ -1339,7 +1398,15 @@ fn place_go_to(build: &Geometry, state: &mut PageViewState, go_to: GoTo, (vw, vh
 /// gives as NaN. A page's own top puts the view's top where what shows of the row above ends (the document's start
 /// for the first row), so the space the layout keeps above the page shows and nothing of the page before it; a point
 /// inside the page goes to the view's top. Out of a continuous view, a page's own top is the top of its row.
-fn go_to_offset(go_to: GoTo, geo: &Placed, continuous: bool, want: (f64, f64), (vw, vh): (f64, f64), spacing: &PageSpacing) -> (f64, f64) {
+fn go_to_offset(
+    go_to: GoTo,
+    geo: &Placed,
+    continuous: bool,
+    want: (f64, f64),
+    (vw, vh): (f64, f64),
+    spacing: &PageSpacing,
+    place: GoToPlace,
+) -> (f64, f64) {
     let page = go_to.page().min(geo.layout.rects.len().saturating_sub(1));
     let Some(&r) = geo.layout.rects.get(page) else { return (want.0, geo.doc.y0) };
     let scale = geo.scale;
@@ -1349,7 +1416,16 @@ fn go_to_offset(go_to: GoTo, geo: &Placed, continuous: bool, want: (f64, f64), (
         GoTo::Top { fraction, .. } => {
             let (top, bottom) = geo.layout.bands[page];
             let start = r.y0 + top;
-            let y = if fraction > 0.0 {
+            // Production's place: the page gap above the page's top, or above the fraction of it, never above the
+            // document's start; out of a continuous view a page's own top is the top of its row.
+            let gap_above = match place {
+                GoToPlace::GapAbove if continuous || fraction > 0.0 => Some((start + fraction * (bottom - top) - spacing.gap).max(geo.doc.y0)),
+                GoToPlace::GapAbove => Some(geo.doc.y0),
+                _ => None,
+            };
+            let y = if let Some(y) = gap_above {
+                y
+            } else if fraction > 0.0 {
                 start + fraction * (bottom - top)
             } else if continuous {
                 geo.layout.rects.iter().zip(&geo.layout.bands).map(|(r, band)| r.y0 + band.1).filter(|&end| end <= start).fold(geo.doc.y0, f64::max)
@@ -1380,6 +1456,48 @@ fn go_to_offset(go_to: GoTo, geo: &Placed, continuous: bool, want: (f64, f64), (
             or_want(c.x - vw / 2.0, c.y - vh / 2.0)
         }
     }
+}
+
+/// The scale that fits the spread `spread` (its one or two pages' sizes) into `viewport` by `fit`, as full screen fits
+/// the spread it shows: two pages side by side by their own widths, a page alone keeping a spread's room (a cover keeps
+/// its blank slot); `None` for no fit or no pages.
+fn spread_fit_scale(spread: &[Size], viewport: Size, fit: Fit, options: &LayoutOptions, spacing: &PageSpacing) -> Option<f64> {
+    let dims = |s: &Size| {
+        (if s.width.is_finite() && s.width > 0.0 { s.width } else { 1.0 }, if s.height.is_finite() && s.height > 0.0 { s.height } else { 1.0 })
+    };
+    let width = match spread {
+        [a, b] => dims(a).0 + dims(b).0,
+        _ => spread.iter().map(|s| dims(s).0).fold(0.0, f64::max) * 2.0,
+    };
+    let height = spread.iter().map(|s| dims(s).1).fold(0.0, f64::max);
+    if fit == Fit::None || spread.is_empty() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let extent = |v: f64| if v.is_finite() { v.max(0.0) } else { 0.0 };
+    let gap = if options.page_gaps { spacing.gap } else { 0.0 };
+    let by_width = (extent(viewport.width) - 2.0 * spacing.side - gap).max(1.0) / (width + 2.0 * options.markup.max(0.0));
+    let by_height = (extent(viewport.height) - 2.0 * spacing.margin).max(1.0) / height;
+    let scale = match fit {
+        Fit::Width => by_width,
+        Fit::Height => by_height,
+        _ => by_width.min(by_height),
+    };
+    scale.is_finite().then(|| scale.clamp(ZOOM_RANGE.start() * SCREEN_POINTS_PER_POINT, ZOOM_RANGE.end() * SCREEN_POINTS_PER_POINT))
+}
+
+/// Centres the pages of `row` across a view `width` wide and makes the layout that wide when the row fits it: the
+/// content is as wide as the spread full screen shows, not as the document's widest spread, which would centre a
+/// narrower spread past the screen's edge.
+fn centre_row(layout: &mut PagedLayout, row: Range<usize>, width: f64) {
+    let Some(shown) = layout.rects.get(row.clone()).and_then(|rects| rects.iter().copied().reduce(|a, b| a.union(b))) else { return };
+    if !width.is_finite() || shown.width() > width {
+        return;
+    }
+    let dx = (width - shown.width()) / 2.0 - shown.x0;
+    for rect in layout.rects.get_mut(row).into_iter().flatten() {
+        *rect = *rect + craft_behavior::kurbo::Vec2::new(dx, 0.0);
+    }
+    layout.size.width = width;
 }
 
 /// A scroll smaller than this many screen points is the arithmetic of the view's round trip, not a scroll.
@@ -1579,6 +1697,10 @@ struct Geometry<'a> {
     options: LayoutOptions,
     spacing: PageSpacing,
     bodies: Option<&'a [(f64, f64)]>,
+    /// Where Go To puts a page's top (`PageView::go_to_place`).
+    go_to_place: GoToPlace,
+    /// `PageView::fill_screen`: a spread that is not continuous fits by its own pages and stands centred.
+    fill_screen: bool,
     /// The last layout and its inputs.
     cache: RefCell<Option<(LayoutKey, Arc<Placed>)>>,
 }
@@ -1618,10 +1740,20 @@ impl Geometry<'_> {
 
     fn build(&self, state: &PageViewState) -> Placed {
         let options = self.layout_options(state);
-        let scale = fit_scale(self.sizes, self.viewport, state.fit, &options, &self.spacing, Some(state.current))
+        let spread = self.fill_screen && options.display == PageDisplay::TwoUp && !options.continuous;
+        let row = shown_row(self.sizes.len(), state.current, &options);
+        let fitted = if spread {
+            spread_fit_scale(self.sizes.get(row.clone()).unwrap_or(&[]), self.viewport, state.fit, &options, &self.spacing)
+        } else {
+            fit_scale(self.sizes, self.viewport, state.fit, &options, &self.spacing, Some(state.current))
+        };
+        let scale = fitted
             .unwrap_or(state.zoom * SCREEN_POINTS_PER_POINT)
             .clamp(ZOOM_RANGE.start() * SCREEN_POINTS_PER_POINT, ZOOM_RANGE.end() * SCREEN_POINTS_PER_POINT);
         let mut layout = place_pages(self.sizes, scale, self.viewport, &options, &self.spacing);
+        if spread {
+            centre_row(&mut layout, row, self.viewport.width);
+        }
         if let Some(bodies) = self.bodies.filter(|_| state.hide_white_space) {
             layout.hide_white_space(bodies, scale, self.viewport.height, &self.spacing);
         }

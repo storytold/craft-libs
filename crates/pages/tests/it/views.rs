@@ -1880,15 +1880,17 @@ fn the_wheel_over_the_pages_scrolls_and_reports_it_while_a_field_beside_them_has
     assert!(scrolled.get(), "the view reports the reader's scroll");
 }
 
-/// A page fitted to the width stands the theme's page side margin from each edge of the view, and the first page stands
-/// the theme's page margin below its top: the spacing is the theme's (production's 70 and 28 points at the comfortable
-/// density), not a size derived from the tool rail.
+/// With `PageInsets::Theme` (PdfCraft's page view) a page fitted to the width stands the theme's page side margin from
+/// each edge of the view, and the first page stands the theme's page margin below its top: the spacing is the theme's
+/// (production's 70 and 28 points at the comfortable density), not a size derived from the tool rail.
 #[trial]
 fn a_page_fitted_to_the_width_keeps_the_theme_side_margin() {
     use craft_theme::{Contrast, Mode};
     let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
     let (side, margin) = (f64::from(tokens.space.inset.page_side), f64::from(tokens.space.inset.page_margin));
-    let view = rig(3, state_with(|s| s.fit = Fit::Width));
+    let mut view = rig_over(DemoPages::new(3), state_with(|s| s.fit = Fit::Width), NavigationOptions::default(), false);
+    view.fixture.root_value(craft_pages::ui::PageInsets::Theme);
+    view.fixture.settle();
     let out = view.out.borrow();
     let page = out.rects[0];
     let left = page.x0 - out.offset.0;
@@ -2549,4 +2551,134 @@ fn page_view_forwards_inactive_edits_to_its_editor_canvas() {
     inactive.set(EditSet::NONE.with(EditCommand::Undo).with(EditCommand::Redo));
     fixture.settle();
     assert!(resolve(fixture.ctx(), EditCommands::Cut).enabled, "active Cut resolves enabled on focused PageView");
+}
+
+/// The layout of three demo pages in a 900 × 600 room of the creative set, at 100 % in one column, with the app's
+/// `PageInsets` when `insets` names one, and the tokens' roomy pad and theme page margin.
+fn creative_layout(insets: Option<craft_pages::ui::PageInsets>) -> (PagedLayout, f64, f64) {
+    let seen: Rc<RefCell<(PagedLayout, f64, f64)>> = Rc::default();
+    let recorded = Rc::clone(&seen);
+    let pages = DemoPages::new(3);
+    let mut state = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+    });
+    let mut fixture = Fixture::new(move |ui| {
+        let tokens = Env::of(ui).tokens.clone();
+        let out = PageView::new("Pages", &pages, &mut state, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
+        *recorded.borrow_mut() = (out.layout, f64::from(tokens.space.pad.roomy), f64::from(tokens.space.inset.page_margin));
+    });
+    fixture.set(ComponentSet::Creative);
+    if let Some(insets) = insets {
+        fixture.root_value(insets);
+    }
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    seen.borrow().clone()
+}
+
+/// Upstream's creative spacing by default: the first page sits the roomy pad down; with `PageInsets::Theme`
+/// (PdfCraft's page view) it sits the theme's page margin down.
+#[trial]
+fn the_creative_page_spacing_is_upstreams_by_default_and_the_themes_insets_when_asked() {
+    let (standard, roomy, _) = creative_layout(None);
+    assert!((standard.rects[0].y0 - roomy).abs() < 0.5, "the first page sits the roomy pad ({roomy}) down: {}", standard.rects[0].y0);
+    let (themed, _, page_margin) = creative_layout(Some(craft_pages::ui::PageInsets::Theme));
+    assert!(
+        (themed.rects[0].y0 - page_margin).abs() < 0.5,
+        "the first page sits the theme's page margin ({page_margin}) down: {}",
+        themed.rects[0].y0
+    );
+}
+
+/// The view's offset after a Go To a quarter into page 2 of five, continuous at 100 %, with Go To placed as `place`
+/// says; and the page's top and the layout's page gap.
+fn go_to_quarter(place: craft_pages::ui::GoToPlace) -> (f64, f64, f64) {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+    })));
+    let seen: Rc<RefCell<Option<PagedLayout>>> = Rc::default();
+    let (kept, recorded) = (Rc::clone(&state), Rc::clone(&seen));
+    let pages = DemoPages::new(5);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).go_to_place(place).show(ui, |_, _| ());
+        *recorded.borrow_mut() = Some(out.layout);
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    state.borrow_mut().go_to_fraction(2, 0.25);
+    fixture.settle();
+    let layout = seen.borrow().clone().expect("a pass ran");
+    let top = layout.rects[2].y0 + 0.25 * layout.rects[2].height();
+    let gap = layout.rects[2].y0 - layout.rects[1].y1;
+    let offset = state.borrow().offset.1;
+    (offset, top, gap)
+}
+
+/// By default Go To puts the quarter of the page at the view's top; with `GoToPlace::GapAbove` (production's place)
+/// the page gap stands above it.
+#[trial]
+fn go_to_puts_the_point_at_the_top_by_default_and_a_gap_above_it_when_asked() {
+    let (offset, top, _) = go_to_quarter(craft_pages::ui::GoToPlace::AfterRowAbove);
+    assert!((offset - top).abs() < 0.5, "the quarter is at the view's top: offset {offset}, point {top}");
+    let (offset, top, gap) = go_to_quarter(craft_pages::ui::GoToPlace::GapAbove);
+    assert!(gap > 0.0, "the layout keeps a page gap");
+    assert!((offset - (top - gap)).abs() < 0.5, "the page gap ({gap}) stands above the quarter: offset {offset}, point {top}");
+}
+
+/// The page rects of `count` demo pages shown one row at a time at Fit Page in `display`, with `fill_screen`, and the
+/// view's rect.
+fn filled(display: PageDisplay, count: usize, fill: bool) -> (Vec<kurbo::Rect>, (f64, f64), egui::Rect) {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::Page;
+        s.continuous = false;
+        s.display = display;
+    })));
+    let seen = Rc::new(RefCell::new((Vec::<kurbo::Rect>::new(), egui::Rect::NOTHING)));
+    let (kept, recorded) = (Rc::clone(&state), Rc::clone(&seen));
+    let pages = DemoPages::new(count);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).fill_screen(fill).show(ui, |_, _| ());
+        *recorded.borrow_mut() = (out.layout.rects.clone(), out.canvas.response.rect);
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let (rects, view) = seen.borrow().clone();
+    let offset = state.borrow().offset;
+    (rects, offset, view)
+}
+
+/// By default a page shown alone at Fit Page keeps the view's margin above and below it; with `fill_screen` (full
+/// screen's edge-to-edge view) it spans the view's height, its top at the view's top, centred across.
+#[trial]
+fn full_screen_fills_the_screen_edge_to_edge() {
+    let (rects, offset, view) = filled(PageDisplay::Single, 3, false);
+    let height = f64::from(view.height());
+    assert!(rects[0].height() < height - 1.0, "a margin stays above and below the page: {} in {height}", rects[0].height());
+    let (rects, offset_filled, view) = filled(PageDisplay::Single, 3, true);
+    assert!((rects[0].height() - height).abs() < 1.0, "the page spans the view's height: {} in {height}", rects[0].height());
+    assert!((rects[0].y0 - offset_filled.1).abs() < 1.0, "the page's top is the view's top: {} at offset {}", rects[0].y0, offset_filled.1);
+    let centre = offset_filled.0 + f64::from(view.width()) / 2.0;
+    assert!((rects[0].center().x - centre).abs() < 1.0, "the page is centred across: {} against {centre}", rects[0].center().x);
+    let _ = offset;
+}
+
+/// Filling the screen in Two-up one spread at a time, the spread fits by its two pages, side by side and centred.
+#[trial]
+fn full_screen_two_page_view_fits_the_spread_it_shows() {
+    let (rects, offset, view) = filled(PageDisplay::TwoUp, 4, true);
+    let spread = rects[0].union(rects[1]);
+    let (width, height) = (f64::from(view.width()), f64::from(view.height()));
+    assert!(spread.width() <= width + 1.0 && spread.height() <= height + 1.0, "the spread fits the view: {spread:?} in {width} × {height}");
+    assert!(
+        (spread.width() - width).abs() < 1.0 || (spread.height() - height).abs() < 1.0,
+        "the spread meets the view on one axis: {spread:?} in {width} × {height}"
+    );
+    let centre = offset.0 + width / 2.0;
+    assert!((spread.center().x - centre).abs() < 1.0, "the spread is centred across: {} against {centre}", spread.center().x);
 }
