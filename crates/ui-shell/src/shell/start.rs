@@ -300,6 +300,9 @@ pub struct StartScreen<'a> {
     /// click on the page's empty room still asks for Open.
     #[prop]
     offers_open: bool,
+    /// The heading of the pinned folders section, in place of the built-in word.
+    #[prop(into)]
+    pinned_title: Option<Label>,
     /// The host's sections, each at its place, in call order.
     sections: Vec<(StartPlace, HostSection<'a>)>,
 }
@@ -358,6 +361,7 @@ impl<'a> StartScreen<'a> {
             drop_hint: None,
             offers_new: true,
             offers_open: true,
+            pinned_title: None,
             sections: Vec::new(),
         }
     }
@@ -398,6 +402,7 @@ struct Page<'p> {
     offers_new: bool,
     /// Open… shows.
     offers_open: bool,
+    pinned_title: Option<&'p Label>,
     actions: &'p RefCell<Vec<StartAction>>,
 }
 
@@ -495,12 +500,12 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, offers_new, offers_open, sections } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, offers_new, offers_open, pinned_title, sections } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, offers_new, offers_open, actions: &actions };
+        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, offers_new, offers_open, pinned_title: pinned_title.as_ref(), actions: &actions };
         let view = RefCell::new(view);
         let sort = RefCell::new(sort);
 
@@ -936,7 +941,7 @@ fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
 
 fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
     let words = page.words;
-    let _ = Section::fixed(words.pinned.clone())
+    let _ = Section::fixed(page.pinned_title.cloned().unwrap_or_else(|| words.pinned.clone()))
         .strength(HeaderStrength::Heading)
         .quiet_header()
         .header_gap(Gap::Section)

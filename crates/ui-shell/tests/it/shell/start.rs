@@ -433,3 +433,17 @@ fn open_can_be_left_out_and_the_headings_are_page_headings() {
     let file = texts.iter().find(|run| run.text == "Poster.psd").expect("a card's name");
     assert!(recent.rect.height() > file.rect.height(), "the heading is larger than card text: {:?} against {:?}", recent.rect, file.rect);
 }
+
+/// An app may name the pinned folders section itself (`pinned_title`), in place of the built-in "Pinned Folders".
+#[trial]
+fn the_pinned_section_takes_the_apps_title() {
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let folders = vec![PinnedFolder::new("/tmp/Work", "Work")];
+    let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).pinned(&folders).pinned_title("Folders").show(ui);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
+    assert!(fixture.texts().iter().any(|run| run.text == "Folders"), "the app's title heads the section");
+    assert!(!fixture.texts().iter().any(|run| run.text == "Pinned Folders"), "the built-in word is replaced");
+}
