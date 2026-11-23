@@ -178,6 +178,7 @@ impl<'a> FindBar<'a> {
             }
             Row::new().show(ui, |ui, _| {
                 let edit = TextField::search(words.find_text.clone(), Bind::given(query.clone()))
+                    .clear_button(false)
                     .placeholder(words.find_text.clone())
                     .select_all(to_query)
                     .show(ui);
@@ -216,7 +217,7 @@ impl<'a> FindBar<'a> {
                     *open = !*open;
                 }
                 let active = options.match_case || options.whole_word;
-                let button = IconButton::new(IconId::new("settings")).label(words.options.clone()).popup(PopupKind::Menu).selected(active).show(ui);
+                let button = IconButton::new(IconId::new("sliders-horizontal")).label(words.options.clone()).popup(PopupKind::Menu).selected(active).show(ui);
                 let entries = [
                     Entry::new(BarOption::WholeWords, words.whole_words_only.clone()).checked(options.whole_word),
                     Entry::new(BarOption::MatchCase, words.case_sensitive.clone()).checked(options.match_case),

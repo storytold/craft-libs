@@ -62,6 +62,8 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     pub(super) empty: Option<C::Value>,
     /// The search form: a clear part while there is text, and Escape clears the text.
     search: bool,
+    /// Whether the search form shows its clear button (on); Escape still clears the text without it.
+    clear_button: bool,
     /// The adornments before the text, in reading order.
     leading: Vec<Adornment>,
     /// The field reserves and paints a chevron at the end, for the host's popup.
@@ -103,11 +105,20 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             limit: Limit::Default,
             empty: None,
             search: false,
+            clear_button: true,
             leading: Vec::new(),
             arrow: false,
             drives: None,
         }
         .label(label)
+    }
+
+    /// Whether a search field shows its clear button while there is text. Off, the field is a plain integrated one
+    /// (a find bar's): Escape still clears it.
+    #[must_use]
+    pub fn clear_button(mut self, on: bool) -> Self {
+        self.clear_button = on;
+        self
     }
 
     /// Shown while the text is empty.
@@ -254,7 +265,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
 impl<C: Codec + Clone + 'static> TextField<'_, C> {
     /// The clear part shows while the field has text.
     fn clear_shown(&self, value: Option<&C::Value>) -> bool {
-        self.search && value.is_some_and(|value| !self.codec.format(value).is_empty())
+        self.search && self.clear_button && value.is_some_and(|value| !self.codec.format(value).is_empty())
     }
 
     /// The adornments after the text, in reading order: the clear button when `clear` names it, then the arrow.
@@ -310,7 +321,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         if cx.proposal == Proposal::Min {
             size.x = 0.0;
         }
-        let clear = self.search.then(|| Self::clear_name(&cx.words::<words::TextWords>()));
+        let clear = (self.search && self.clear_button).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
         size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear));
         // Short text keeps a field at `size.length.short`, so a column of fields ends at one edge; a content-sized field

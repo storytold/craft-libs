@@ -118,3 +118,17 @@ fn asking_for_the_bar_again_selects_its_query_unless_a_composition_runs() {
     bar.fixture.type_text("dog").settle();
     assert_eq!(bar.query(), "dog", "after the commit the next request selects the query again");
 }
+
+// Production's find field is a plain integrated one: no clear button beside the text, and Escape still clears it.
+#[trial]
+fn the_find_field_has_no_clear_button_and_escape_clears_it() {
+    let mut bar = Bar::new();
+    bar.ask();
+    bar.fixture.type_text("cat");
+    bar.fixture.frame(Vec::new()).settle();
+    assert_eq!(bar.query(), "cat");
+    assert!(bar.fixture.by_label("Clear").is_none(), "no clear button beside the text");
+    bar.fixture.key(Key::Escape, Modifiers::NONE);
+    bar.fixture.frame(Vec::new()).settle();
+    assert_eq!(bar.query(), "", "Escape clears the query");
+}
