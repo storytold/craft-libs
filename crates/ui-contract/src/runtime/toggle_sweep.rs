@@ -94,6 +94,14 @@ struct Probe {
     others: Vec<Member>,
 }
 
+impl Probe {
+    /// Whether the drag crossed another enabled toggle of the group or went up over the owner at `layer` and `visible`.
+    fn engages(&self, ctx: &Context, layer: areas::Layer, visible: Rect) -> bool {
+        let ends_here = self.end.is_some_and(|end| crosses_visible(ctx, layer, visible, &[(end, end)]));
+        ends_here || self.others.iter().any(|other| crosses_visible(ctx, other.layer, other.visible, &self.path))
+    }
+}
+
 /// What a pass's records say about the toggle asking.
 enum Ready {
     Owner { on: bool, replay: bool, probe: Option<Probe> },
@@ -164,6 +172,11 @@ impl Record {
         }
     }
 
+    /// The other enabled toggles of `group` that asked in the last pass with any: the ones a drag from `owner` can reach.
+    fn others(&self, owner: Id, group: Id) -> Vec<Member> {
+        self.earlier.iter().filter(|other| other.group == group && other.enabled && other.id != owner).cloned().collect()
+    }
+
     fn finish(&mut self) {
         self.completed = self.sweep.take().map(|sweep| CompletedSweep { sweep, path: std::mem::take(&mut self.path) });
     }
@@ -199,12 +212,31 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
         let finished = record.completed.as_ref().filter(|finished| eligible(&finished.sweep))?;
         let sweep = &finished.sweep;
         if sweep.owner == id {
-            return sweep.engaged.then_some((sweep.on, None));
+            // A sweep that finished with the next press never ran its owner's probe, so it runs now, over the finished path.
+            let probe = (!sweep.engaged).then(|| Probe {
+                path: Arc::clone(&finished.path),
+                end: sweep.travel.released.then_some(sweep.travel.last).flatten(),
+                others: record.others(id, group),
+            });
+            return Some(Ready::Owner { on: sweep.on, replay: false, probe });
         }
-        (!sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&finished.path))))
+        (!sweep.visited.contains(&id)).then(|| Ready::Sibling { on: sweep.on, path: Arc::clone(&finished.path) })
     })
-    .and_then(|(on, path)| {
-        if let Some(path) = path {
+    .and_then(|ready| match ready {
+        Ready::Owner { on, probe, .. } => {
+            if let Some(probe) = probe {
+                if !probe.engages(ctx, layer, visible) {
+                    return None;
+                }
+                PerViewport::<Record>::with(ctx, viewport, |record| {
+                    if let Some(finished) = record.completed.as_mut().filter(|finished| finished.sweep.owner == id) {
+                        finished.sweep.engaged = true;
+                    }
+                });
+            }
+            Some(on)
+        }
+        Ready::Sibling { on, path } => {
             if !crosses_visible(ctx, layer, visible, &path) {
                 return None;
             }
@@ -213,8 +245,8 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
                     finished.sweep.visited.insert(id);
                 }
             });
+            Some(on)
         }
-        Some(on)
     });
     let ready = PerViewport::<Record>::with(ctx, viewport, |record| {
         match press {
@@ -229,7 +261,7 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
             let probe = (!sweep.engaged).then(|| Probe {
                 path: Arc::clone(&record.path),
                 end: sweep.travel.released.then_some(sweep.travel.last).flatten(),
-                others: record.earlier.iter().filter(|other| other.group == group && other.enabled && other.id != id).cloned().collect(),
+                others: record.others(id, group),
             });
             return Some(Ready::Owner { on: sweep.on, replay: record.replay_first_path, probe });
         }
@@ -239,9 +271,7 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
     match ready {
         Ready::Owner { on, replay, probe } => {
             if let Some(probe) = probe {
-                let reaches = |other: &Member| crosses_visible(ctx, other.layer, other.visible, &probe.path);
-                let ends_here = probe.end.is_some_and(|end| crosses_visible(ctx, layer, visible, &[(end, end)]));
-                if !(ends_here || probe.others.iter().any(reaches)) {
+                if !probe.engages(ctx, layer, visible) {
                     return completed;
                 }
                 PerViewport::<Record>::with(ctx, viewport, |record| {

@@ -113,6 +113,30 @@ fn a_completed_checkbox_sweep_replays_before_the_next_press() {
 }
 
 #[trial]
+fn a_completed_checkbox_sweep_that_crossed_a_box_below_its_owner_still_sets_the_owner() {
+    let values = Rc::new(RefCell::new([false; 3]));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut values = shown.borrow_mut();
+        for (value, label) in values.iter_mut().zip(["Sweep start", "Crossed checkbox", "Next checkbox"]) {
+            Checkbox::new(Bind::bound(value)).label(label).show(ui);
+        }
+    });
+    fixture.settle();
+    let start = fixture.by_label("Sweep start").expect("start").center();
+    let crossed = fixture.by_label("Crossed checkbox").expect("crossed").center();
+    let next = fixture.by_label("Next checkbox").expect("next").center();
+
+    fixture.frame(vec![pointer::moved(start)]);
+    fixture.frame(vec![pointer::press(start), pointer::moved(crossed), pointer::release(crossed)]);
+    fixture.frame(vec![pointer::moved(next), pointer::press(next)]);
+    assert_eq!(*values.borrow(), [true, true, false], "a sweep that finishes as the next press starts still sets the box it began on");
+    fixture.frame(vec![pointer::release(next)]);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [true, true, true], "the next click still toggles its own checkbox");
+}
+
+#[trial]
 fn a_completed_checkbox_sweep_allows_an_immediate_click_on_its_owner() {
     for batched_click in [false, true] {
         let values = Rc::new(RefCell::new([false; 2]));
