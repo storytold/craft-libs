@@ -33,7 +33,7 @@ pub use input::held;
 #[doc(hidden)]
 pub use input::keyed;
 pub use input::textless_paste;
-pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, take_menu_keys, take_nav};
+pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, stirred, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
@@ -286,6 +286,8 @@ pub(crate) struct Stage {
     down: Vec<Key>,
     /// The input hook read a key press, typed text or a clipboard event in this pass, withheld ones included.
     keyed: bool,
+    /// A key went down or up (no repeat) in this pass, withheld ones included: the pointer's stir.
+    stirred: bool,
     /// The input hook read a paste with no text (the clipboard held none) in this pass.
     textless_paste: bool,
     /// How many inputs of the viewport held an event sent to the focus (`count_sent`).

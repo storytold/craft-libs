@@ -334,6 +334,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         Some(sample) => Some(PenPass::injected(sample)),
         None => pen.as_ref().map(|source| if pointed { PenPass::read(source) } else { PenPass::live(source) }),
     };
+    let keys_stirred = crate::runtime::keys::stirred(ctx);
     let (read, barrel_press) = ctx.input(|input| {
         let mut events = Vec::new();
         let mut moves = Vec::new();
@@ -407,7 +408,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                         touch_sample = force.map(PointerSample::new);
                     }
                 }
-                Event::ModifiersChanged(_) | Event::Key { repeat: false, .. } => stirred = true,
+                Event::ModifiersChanged(_) => stirred = true,
                 Event::Rotate(radians) if radians.is_finite() => rotation += *radians,
                 // A hostile factor (NaN, infinite, not positive) zooms nowhere: it is left out.
                 Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => zoom *= *factor,
@@ -466,7 +467,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             kind,
             sample,
             focus_lost,
-            stirred,
+            stirred: stirred || keys_stirred,
             zoom,
             rotation,
             multi_touch,

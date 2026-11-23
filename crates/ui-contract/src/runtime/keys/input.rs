@@ -512,6 +512,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         }
         with(ctx, viewport, |stage| {
             stage.keyed = false;
+            stage.stirred = false;
             stage.textless_paste = false;
         });
         return (removed || trimmed, Vec::new());
@@ -562,6 +563,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;
+        stage.stirred = false;
         stage.textless_paste = false;
         let mut place = 0;
         events.retain(|arrived| {
@@ -576,6 +578,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             // Read from the event the pass applies, so a held-back one is not read twice.
             batch.focus_lost |= matches!(arrived.event, egui::Event::WindowFocused(false));
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
+            stage.stirred |= matches!(arrived.event, egui::Event::Key { repeat: false, .. });
             stage.textless_paste |= matches!(read, KeyEvent::Clip { command: EditCommand::Paste, text: None, .. });
             visible = match &read {
                 KeyEvent::PointerPress => Some(false),
@@ -698,6 +701,12 @@ pub(crate) fn sent(ctx: &Context) -> u64 {
 pub fn keyed(ctx: &Context) -> bool {
     crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.keyed)
+}
+
+/// Whether a key went down or up in the running viewport's pass, repeats aside: a press the key stage took from egui
+/// (a claimed chord, the canvas's Space) and its release count, so a held pointer reads the change.
+pub(crate) fn stirred(ctx: &Context) -> bool {
+    current(ctx, |stage| stage.stirred)
 }
 
 /// Whether the running viewport's input hook read a paste with no text in this pass: the paste chord came while the

@@ -7,7 +7,7 @@
 //! session control in the canvas body (a crop frame) takes the arrows, Enter and Escape before the tool, with the
 //! canvas focused or nothing focused; with none shown, the arrows reach the tool with nothing focused. A tool that
 //! claims the nudges declares Increment and Decrement on its node, and an AccessKit step moves what it holds as the
-//! arrow toward or away from the reading end does.
+//! arrow toward or away from the reading end does. A key the tool claims, pressed under a held pointer, drags again.
 
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect};
@@ -382,4 +382,57 @@ fn a_tool_that_claims_the_nudges_takes_increment_and_decrement_on_its_node() {
     assert_eq!(canvas.tool().x, 1.0, "Increment moves the marker toward the reading end");
     canvas.fixture().access(AccessActionKind::Decrement, &target).access(AccessActionKind::Decrement, &target).settle();
     assert_eq!(canvas.tool().x, -1.0, "Decrement moves it back");
+}
+
+/// A ring sized by a drag: it claims the keyboard while its press is down, and each drag call records whether
+/// Backtick was held (a flare's rings place anew while it is).
+#[derive(Default)]
+struct Ring {
+    busy: bool,
+    backtick: Vec<bool>,
+}
+
+impl CanvasTool for Ring {
+    fn claims(&self) -> ToolClaims {
+        if self.busy { ToolClaims::NONE.keyboard() } else { ToolClaims::NONE }
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.busy = true;
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.backtick.push(cx.held(ChordKey::Backtick));
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.busy = false;
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        matches!(key, ToolKey::Kept(_))
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the ring's form")
+    }
+}
+
+/// A key the tool claims, pressed or let go under a still pointer, changes what the drag reads: the held pointer gets
+/// a drag in that pass, as for a modifier change.
+#[trial]
+fn a_claimed_key_under_a_held_pointer_drags_again() {
+    let mut canvas = ToolFixture::new("Document", Ring::default());
+    canvas.fixture().settle();
+    let at = canvas.canvas().center() + egui::vec2(40.0, 0.0);
+    canvas.press_at(canvas.canvas().center()).move_to(at);
+    canvas.fixture().frame(vec![key_press(Key::Backtick, Modifiers::NONE)]).frame(Vec::new());
+    canvas.fixture().frame(vec![key_release(Key::Backtick, Modifiers::NONE)]).frame(Vec::new());
+    let seen = canvas.tool().backtick.clone();
+    assert!(seen.ends_with(&[false, true, false]), "the press and the release each drag once: {seen:?}");
 }
