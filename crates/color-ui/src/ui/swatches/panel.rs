@@ -32,9 +32,10 @@ use crate::palette::{SwatchGroup, SwatchNote, SwatchReport};
 pub struct SwatchesPanelOutput {
     /// The panel's response.
     pub response: Response,
-    /// A swatch was clicked: its colour (through the document's converter) for the foreground, or for the background
-    /// when Alt (Ctrl or Cmd too, as PhotoCraft) was held.
-    pub used: Option<(SwatchAt, Srgba, bool)>,
+    /// A swatch was clicked: where it is, its colour (through the document's converter) when it holds one, and whether
+    /// it is for the background (Alt held; Ctrl or Cmd too, as PhotoCraft) rather than the foreground. A gradient,
+    /// pattern or None swatch reports no colour: the host applies the paint it keeps for the entry.
+    pub used: Option<(SwatchAt, Option<Srgba>, bool)>,
     /// The edits the user made this pass, in pass order, for the host to run; the panel never writes the library.
     pub edits: Vec<SwatchEdit>,
     /// The browser events the panel does not turn into `used` or `edits`, in the order they happened: `Activate`,
@@ -101,7 +102,7 @@ pub struct SwatchesPanel<'a> {
 struct Settled {
     before_state: SwatchesState,
     st: SwatchesState,
-    used: Option<(SwatchAt, Srgba, bool)>,
+    used: Option<(SwatchAt, Option<Srgba>, bool)>,
     edits: Vec<SwatchEdit>,
     events: Vec<PresetEvent<SwatchKey>>,
 }
@@ -296,9 +297,8 @@ impl<'a> SwatchesPanel<'a> {
                 if let PresetEvent::Select { key: SwatchKey::Swatch(name), mods, .. } = &event
                     && let Some(at) = find_swatch(groups, name)
                     && let Some(entry) = groups.get(at.group).and_then(|g| g.entries.get(at.index))
-                    && let Some(color) = entry.color()
                 {
-                    used = Some((at, color.to_srgb(cmyk), mods.alt || mods.cmd || mods.ctrl));
+                    used = Some((at, entry.color().map(|color| color.to_srgb(cmyk)), mods.alt || mods.cmd || mods.ctrl));
                 }
                 let forwarded = matches!(
                     event,

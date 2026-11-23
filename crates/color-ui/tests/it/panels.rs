@@ -416,6 +416,37 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
 }
 
+/// Tb-8 (5): a click uses any swatch, as production applied every one: a colour swatch reports its colour, and a
+/// gradient, pattern or None swatch reports where it is with no colour, for the host to apply its paint. The panel
+/// reported only colour swatches.
+#[trial]
+fn a_click_uses_every_kind_of_swatch() {
+    use craft_color_ui::palette::{SwatchEntry, SwatchPaint};
+    let groups = vec![SwatchGroup {
+        name: "Basics".to_owned(),
+        entries: vec![
+            SwatchEntry::new("Red".to_owned(), SwatchColor::Rgb([1.0, 0.0, 0.0])),
+            SwatchEntry::with_paint("Fade", SwatchPaint::Gradient),
+            SwatchEntry::with_paint("Dots", SwatchPaint::Pattern),
+            SwatchEntry::with_paint("None", SwatchPaint::None),
+        ],
+    }];
+    let used = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&used);
+    let mut state = SwatchesState::default();
+    let shown = groups.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = SwatchesPanel::new(&shown, Bind::bound(&mut state), RED).show(ui);
+        seen.borrow_mut().extend(out.used.map(|(at, color, _)| (at.index, color.is_some())));
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    for name in ["Red, #ff0000", "Fade", "Dots", "None"] {
+        let swatch = fixture.by_label(name).expect("the swatch");
+        fixture.click(&swatch).settle();
+    }
+    assert_eq!(*used.borrow(), [(0, true), (1, false), (2, false), (3, false)], "each click uses its swatch, a colour only where it holds one");
+}
+
 /// `count` entries of a colour table, each named by its index.
 /// A swatch dragged out of the panel carries the host's payload to the host's drop target (the app's paint, which a
 /// gradient's stops take), and the panel's own drag still moves a swatch onto another group.
