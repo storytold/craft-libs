@@ -76,6 +76,33 @@ fn shadow_drag_uses_whole_degrees_and_pixels_and_moves_the_global_angle() {
     assert!(!draft.drag_shadow(&defaults, true, [10.0, 10.0]));
 }
 
+// From 120° and 3 px, a drag of (+20, +20) gives 133° / 31 px, and a second drag of (−20, 0) 92° / 23 px, as
+// measured in the reference application (photocraft#14894): the angle's fraction is cut off (133.6°, 92.9°), the
+// distance rounds. Drop Shadow and Inner Shadow drag alike, and the shared angle follows. An angle below 0° was not
+// measured and still rounds.
+#[trial]
+fn shadow_drag_cuts_the_angle_fraction_off() {
+    for kind in [EffectKind::DropShadow, EffectKind::InnerShadow] {
+        let mut draft = LayerStyleDraft::new(style_with(&[(1, kind)]));
+        let defaults = EffectSpec::photoshop(kind).defaults;
+        draft.set_param(EffectId(1), "angle", StyleValue::Number(120.0));
+        draft.set_param(EffectId(1), "distance", StyleValue::Number(3.0));
+        let shown = |draft: &LayerStyleDraft| {
+            let params = &draft.style.effects[0].params;
+            (params.number("angle"), params.number("distance"))
+        };
+        for (total, want) in [([20.0, 20.0], (133.0, 31.0)), ([-20.0, 0.0], (92.0, 23.0))] {
+            // Each drag is its own press, from what the one before left.
+            draft.shadow_drag = None;
+            let _ = draft.drag_shadow(&defaults, true, [0.0, 0.0]);
+            assert!(draft.drag_shadow(&defaults, false, total), "{kind:?} {total:?}");
+            assert_eq!(shown(&draft), (Some(want.0), Some(want.1)), "{kind:?} {total:?}");
+            assert_eq!(draft.style.global_light, want.0, "{kind:?} {total:?}");
+        }
+    }
+    assert_eq!(ShadowDrag::begin(120.0, 0.0).moved([21.5, -22.6]).map(|(angle, _)| angle), Some(-134.0));
+}
+
 // An instance without angle and distance starts the drag from the spec's defaults, not from 120°
 // and 0.
 
