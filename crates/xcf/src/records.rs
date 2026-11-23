@@ -7,6 +7,7 @@
 use crate::{Cursor, Error, MAX_METADATA_BYTES, MAX_PAYLOAD, MAX_STRING, Result};
 
 pub mod paths;
+pub mod text;
 
 /// Limits for one property or parasite list.
 #[derive(Debug, Clone, Copy)]
