@@ -1342,6 +1342,34 @@ fn test_coderabbit_410b6b3_findings() {
     );
     assert_eq!(decode_text(vni_over_invalid_tcvn, &DecodeOptions::default()).as_deref(), Ok("xÍ I× I× à 1234567890"));
 
+    // 1b. Why (detect.rs raw-byte Latin-1 guard ordering): On non-UTF-8 byte slices,
+    // `is_already_unicode_vietnamese(&latin1_s)` must not veto a decodable VNI/TCVN3
+    // candidate when `0xCD` ('Í' in Latin-1) is preceded by a word-boundary delimiter.
+    let leading_space_vni = b" \xCD I\xD7 I\xD7 a\xF8 1234567890";
+    assert_eq!(
+        detect_encoding(leading_space_vni, None),
+        DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::Heuristic }
+    );
+    assert_eq!(decode_text(leading_space_vni, &DecodeOptions::default()).as_deref(), Ok(" Í I× I× à 1234567890"));
+
+    for delim in *b" \t\n(-" {
+        let mut payload = vec![delim];
+        payload.extend_from_slice(b"\xCD I\xD7 I\xD7 a\xF8 1234567890");
+        let expected = format!("{}Í I× I× à 1234567890", delim as char);
+        assert_eq!(
+            detect_encoding(&payload, None),
+            DetectionResult::HighConfidence { encoding: LegacyEncoding::Vni, evidence: EncodingEvidence::Heuristic },
+            "failed detection for delimiter {:?}",
+            delim as char
+        );
+        assert_eq!(
+            decode_text(&payload, &DecodeOptions::default()).as_deref(),
+            Ok(expected.as_str()),
+            "failed decoding for delimiter {:?}",
+            delim as char
+        );
+    }
+
     // 2. Why (detect.rs VNI hint veto): `U\xF4\xF9` (`Uớ`) is valid VNI, so TCVN3
     // pair-matching must not veto a `VNI-Times` font hint when VNI decodes cleanly in Strict mode.
     let vni_hinted = b"U\xF4\xF9 123456789012";

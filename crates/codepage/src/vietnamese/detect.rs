@@ -430,12 +430,13 @@ pub(crate) fn detect_encoding_with_mode(input: &[u8], metadata: Option<&Encoding
     }
 
     let latin1_s: String = input.iter().map(|&b| b as char).collect();
-    if is_already_unicode_vietnamese(&latin1_s) {
-        return DetectionResult::Unknown;
-    }
 
-    // Why: Validate each scored candidate against the full byte payload in `mode` before
-    // ranking so an undecodable candidate (e.g. TCVN3 hitting unmapped 0xCD) never beats a
+    // Why: `input` is already known to be invalid UTF-8 here, so do not run the Latin-1
+    // Unicode-preservation guard before candidate scoring and full-input decode validation;
+    // otherwise valid VNI bytes preceded by a delimiter (e.g. `b" \xCD..."`) look like
+    // Latin-1 `'Í'` and get prematurely vetoed as `Unknown`.
+    // Validate each scored candidate against the full byte payload in `mode` before ranking
+    // so an undecodable candidate (e.g. TCVN3 hitting unmapped 0xCD) never beats a
     // candidate that decodes the entire input cleanly.
     let (vni_valid, tcvn_valid, vni_score, tcvn_score) = score_vietnamese_encodings(&latin1_s);
     let vni_decodable = vni_valid && super::vni::decode_vni(input, mode).is_ok();
