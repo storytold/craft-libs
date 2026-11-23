@@ -472,7 +472,7 @@ fn picking_the_grid_it_already_reads_reports_nothing() {
 }
 
 #[trial]
-fn stepping_the_closed_select_moves_between_sizes_and_never_picks_custom() {
+fn the_closed_select_steps_between_sizes_and_the_reported_rule_never_fires_for_custom() {
     let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
     let grid = fixture.by_label("Grid").expect("the Grid select");
     fixture.click(&grid);
@@ -482,7 +482,10 @@ fn stepping_the_closed_select_moves_between_sizes_and_never_picks_custom() {
     assert!(reported(&edits).is_empty(), "opening the list and closing it with Escape picks nothing");
     fixture.key(Key::ArrowUp, Modifiers::NONE);
     fixture.settle();
-    assert!(reported(&edits).is_empty(), "the step back from Default holds: Custom… is not a step to pick");
+    assert!(
+        reported(&edits).is_empty(),
+        "the step back from Default reports nothing to the app: the un-stepped entry and the committed-only rule together keep keys from ever picking Custom…"
+    );
     fixture.key(Key::ArrowDown, Modifiers::NONE);
     fixture.settle();
     assert_eq!(reported(&edits), vec![WarpFieldsEdit::Grid(3)], "the steps between the sizes keep working");
