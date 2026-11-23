@@ -111,6 +111,32 @@ fn unrelated_wrappers_are_not_claimed_but_explicit_hints_reject_bad_content() {
 }
 
 #[test]
+fn unrelated_prefix_is_bounded_and_retains_partial_evidence_and_errors() {
+    let plain = [b"other format ".as_slice(), &vec![b'x'; CHUNK * 4]].concat();
+    let limits = Limits { probe_bytes: 37, ..Limits::default() };
+    for (_, bytes) in wrappers(&plain[..1024]) {
+        match probe_prefix(&bytes, None, limits, &|| true).unwrap() {
+            PrefixProbe::Unrelated { bytes, error } => {
+                assert_eq!(&*bytes, &plain[..37]);
+                assert!(error.is_none());
+            }
+            PrefixProbe::Xcf(_) => panic!("unrelated source was claimed"),
+        }
+    }
+    let mut short = gzip(b"<svg/>");
+    let crc_offset = short.len() - 8;
+    short[crc_offset] ^= 1;
+    match probe_prefix(&short, None, limits, &|| true).unwrap() {
+        PrefixProbe::Unrelated { bytes, error } => {
+            assert_eq!(&*bytes, b"<svg/>");
+            assert!(matches!(error, Some(Error::Invalid(_))));
+        }
+        PrefixProbe::Xcf(_) => panic!("unrelated source was claimed"),
+    }
+    assert!(matches!(probe_prefix(&short, None, limits, &|| false), Err(Error::Cancelled)));
+}
+
+#[test]
 fn provisional_prefix_does_not_validate_the_unread_trailer_but_full_read_does() {
     let plain = image();
     for (wrapper, bytes) in wrappers(&plain) {

@@ -82,6 +82,14 @@ pub enum Probe<'a> {
     Xcf(Source<'a>),
 }
 
+/// The same XCF recognition, retaining bounded evidence for caller-owned fallback.
+/// Unrelated evidence is provisional and may include a decoder error; no format
+/// other than XCF is claimed or fully decoded here.
+pub enum PrefixProbe<'a> {
+    Unrelated { bytes: Cow<'a, [u8]>, error: Option<Error> },
+    Xcf(Source<'a>),
+}
+
 /// A provisional source. Compressed sources keep their one live decoder.
 pub struct Source<'a> {
     original: &'a [u8],
@@ -144,16 +152,41 @@ impl<'a> Source<'a> {
 /// content an error; otherwise an unrecognized inflated signature is unrelated.
 /// Cancellation always wins, including inside headers and empty members.
 pub fn probe<'a>(bytes: &'a [u8], hint: Option<Wrapper>, limits: Limits, keep_going: &'a dyn Fn() -> bool) -> Result<Probe<'a>> {
+    match probe_inner(bytes, hint, limits, keep_going, false)? {
+        PrefixProbe::Unrelated { .. } => Ok(Probe::Unrelated),
+        PrefixProbe::Xcf(source) => Ok(Probe::Xcf(source)),
+    }
+}
+
+/// Like [`probe`], but reads at most `limits.probe_bytes` of unrelated decoded
+/// evidence for a caller's own format selection. Full fallback validation remains
+/// the caller's responsibility. Cancellation is fatal, never fallback evidence.
+pub fn probe_prefix<'a>(bytes: &'a [u8], hint: Option<Wrapper>, limits: Limits, keep_going: &'a dyn Fn() -> bool) -> Result<PrefixProbe<'a>> {
+    probe_inner(bytes, hint, limits, keep_going, true)
+}
+
+fn probe_inner<'a>(
+    bytes: &'a [u8],
+    hint: Option<Wrapper>,
+    limits: Limits,
+    keep_going: &'a dyn Fn() -> bool,
+    unrelated_prefix: bool,
+) -> Result<PrefixProbe<'a>> {
     let state = Rc::new(State { keep_going, cancelled: Cell::new(false), consumed: Cell::new(0) });
     state.check()?;
     if limits.probe_bytes < MAGIC.len() || limits.max_inflated < MAGIC.len() {
         return Err(invalid("XCF transport limits cannot hold its signature"));
     }
     if bytes.starts_with(MAGIC) {
-        return Ok(Probe::Xcf(Source { original: bytes, bytes: Cow::Borrowed(bytes), decoder: None, wrapper: None, limits, state }));
+        return Ok(PrefixProbe::Xcf(Source { original: bytes, bytes: Cow::Borrowed(bytes), decoder: None, wrapper: None, limits, state }));
     }
+    let prefix_limit = limits.probe_bytes.min(limits.max_inflated);
     let Some(wrapper) = Wrapper::sniff(bytes) else {
-        return if hint.is_some() { Err(invalid("missing XCF wrapper signature")) } else { Ok(Probe::Unrelated) };
+        return if hint.is_some() {
+            Err(invalid("missing XCF wrapper signature"))
+        } else {
+            Ok(PrefixProbe::Unrelated { bytes: Cow::Borrowed(bytes.get(..bytes.len().min(prefix_limit)).unwrap_or_default()), error: None })
+        };
     };
     let input = Input { remaining: bytes, state: Rc::clone(&state) };
     let mut decoder: Box<dyn Read + 'a> = match wrapper {
@@ -170,35 +203,48 @@ pub fn probe<'a>(bytes: &'a [u8], hint: Option<Wrapper>, limits: Limits, keep_go
             Ok(count) => length += count,
             Err(error) => {
                 let error = state.decode_error(error);
-                return if error == Error::Cancelled || hint.is_some() { Err(error) } else { Ok(Probe::Unrelated) };
+                return if error == Error::Cancelled || hint.is_some() {
+                    Err(error)
+                } else {
+                    Ok(PrefixProbe::Unrelated { bytes: Cow::Owned(magic.get(..length).unwrap_or_default().to_vec()), error: Some(error) })
+                };
             }
         }
     }
     state.check()?;
-    if length != magic.len() || magic != MAGIC {
-        return if hint.is_some() {
-            Err(invalid("wrapper does not hold a plain XCF; recursive wrappers are unsupported"))
-        } else {
-            Ok(Probe::Unrelated)
-        };
+    let is_xcf = length == magic.len() && magic == MAGIC;
+    if !is_xcf && hint.is_some() {
+        return Err(invalid("wrapper does not hold a plain XCF; recursive wrappers are unsupported"));
     }
     let mut output = Vec::new();
-    append(&mut output, &magic, limits.max_inflated)?;
-    let prefix_limit = limits.probe_bytes.min(limits.max_inflated);
+    append(&mut output, magic.get(..length).ok_or_else(|| invalid("invalid XCF prefix length"))?, limits.max_inflated)?;
     let mut chunk = [0; CHUNK];
-    while output.len() < prefix_limit {
+    let mut error = None;
+    while (is_xcf || unrelated_prefix) && output.len() < prefix_limit {
         state.check()?;
         let capacity = (prefix_limit - output.len()).min(CHUNK);
-        let count = decoder
-            .read(chunk.get_mut(..capacity).ok_or_else(|| invalid("invalid XCF prefix capacity"))?)
-            .map_err(|error| state.decode_error(error))?;
+        let count = match decoder.read(chunk.get_mut(..capacity).ok_or_else(|| invalid("invalid XCF prefix capacity"))?) {
+            Ok(count) => count,
+            Err(cause) => {
+                let cause = state.decode_error(cause);
+                if is_xcf || cause == Error::Cancelled {
+                    return Err(cause);
+                }
+                error = Some(cause);
+                break;
+            }
+        };
         if count == 0 {
             break;
         }
         append(&mut output, chunk.get(..count).ok_or_else(|| invalid("invalid XCF prefix length"))?, limits.max_inflated)?;
     }
     state.check()?;
-    Ok(Probe::Xcf(Source { original: bytes, bytes: Cow::Owned(output), decoder: Some(decoder), wrapper: Some(wrapper), limits, state }))
+    if is_xcf {
+        Ok(PrefixProbe::Xcf(Source { original: bytes, bytes: Cow::Owned(output), decoder: Some(decoder), wrapper: Some(wrapper), limits, state }))
+    } else {
+        Ok(PrefixProbe::Unrelated { bytes: Cow::Owned(output), error })
+    }
 }
 
 fn append(output: &mut Vec<u8>, bytes: &[u8], limit: usize) -> Result<()> {
