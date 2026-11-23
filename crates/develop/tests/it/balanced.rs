@@ -374,6 +374,8 @@ fn a_caller_demosaicking_its_own_mosaic_gets_the_same_clip_mask() {
         let mut four_colour = n.clone();
         four_colour.cfa.as_mut().unwrap().pattern[0] = 3;
         assert!(sensor::clip_mask(&four_colour, crop, method, CLIP).is_none(), "{name}: a colour index past blue");
+        let huge = sensor::Normalized { width: usize::MAX, height: 2, data: Vec::new(), ..n.clone() };
+        assert!(sensor::clip_mask(&huge, Rect::new(0, 0, 1, 1), method, CLIP).is_none(), "{name}: dimensions past usize");
     }
 }
 

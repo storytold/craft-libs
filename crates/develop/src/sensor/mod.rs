@@ -280,7 +280,7 @@ pub fn clip_mask(n: &Normalized, crop: Rect, method: Method, clip: f32) -> Optio
         && crop.height > 0
         && crop.x.checked_add(crop.width).is_some_and(|r| r <= w)
         && crop.y.checked_add(crop.height).is_some_and(|b| b <= h);
-    if !clip.is_finite() || clip <= 0.0 || !fits || n.data.len() != w * h {
+    if !clip.is_finite() || clip <= 0.0 || !fits || w.checked_mul(h) != Some(n.data.len()) {
         return None;
     }
     let is_clipped = |v: &f32| *v >= clip;
