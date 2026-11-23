@@ -6,6 +6,8 @@
 
 use crate::{Cursor, Error, MAX_METADATA_BYTES, MAX_PAYLOAD, MAX_STRING, Result};
 
+pub mod paths;
+
 /// Limits for one property or parasite list.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
