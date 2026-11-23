@@ -133,7 +133,7 @@ fn press_and_move(fixture: &mut Fixture, from: Pos2, by: Vec2) {
 fn a_fixed_floating_window_ignores_edge_drags_and_still_moves_by_its_title() {
     let window = Floating::single(100, vec![FIXED], 0, WINDOW_AT);
     let layout = Layout::new(Some(Node::tabs(vec![DOCKED], 0)), vec![window]);
-    let mut bed = bed(layout);
+    let mut bed = bed_with(layout, DockConfig::default().title_bar_docks(false));
     let right = Pos2::new(WINDOW_AT.right() - 1.0, WINDOW_AT.center().y);
     let bottom = Pos2::new(WINDOW_AT.center().x, WINDOW_AT.bottom() - 1.0);
     for (from, by) in [(right, Vec2::new(40.0, 0.0)), (bottom, Vec2::new(0.0, 40.0))] {
@@ -147,7 +147,7 @@ fn a_fixed_floating_window_ignores_edge_drags_and_still_moves_by_its_title() {
     press_and_move(&mut bed.fixture, from, by);
     assert!(dragging(&bed));
     bed.fixture.frame(vec![release(from + by)]).settle();
-    let rect = bed.workspace.borrow().layout().floating[0].rect;
+    let rect = bed.workspace.borrow().layout().floating.first().expect("the window stays floating").rect;
     assert_ne!(rect.min, WINDOW_AT.min, "title drag moves the fixed window");
     assert_eq!(rect.size(), WINDOW_AT.size(), "title drag keeps the fixed window's size");
 }
