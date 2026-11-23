@@ -197,9 +197,6 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
-    /// The inline editor takes the focus this pass, when the card shows one: for an editor the panel opens.
-    #[prop]
-    focus_editor: bool,
     /// The key that submits the reply box.
     submit_key: SubmitKey,
     /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
@@ -239,7 +236,6 @@ impl<'r> CommentRow<'r> {
             editing: None,
             reply: "",
             focus_reply: false,
-            focus_editor: false,
             submit_key: SubmitKey::default(),
             focus_edit: false,
             actions: CardActions::default(),
@@ -914,9 +910,8 @@ impl Component for CommentRow<'_> {
             badges: &self.badges,
             reply_submit: self.submit_key,
             ctx: &cx.ctx,
-            // The editor the panel opens takes the focus before the reply box, as either opening does.
-            focus_reply: self.focus_reply && !self.focus_editor,
-            focus_edit: self.focus_edit || self.focus_editor,
+            focus_reply: self.focus_reply,
+            focus_edit: self.focus_edit,
             reply_id: None,
             events: &mut events,
         };

@@ -130,10 +130,8 @@ pub struct CommentsPanelState {
     pub search_open: bool,
     /// The thread the next `show` reveals, once.
     revealing: Option<ThreadId>,
-    /// The message being edited inline: (thread, message index, text). [`edit`](Self::edit) opens it with the focus.
+    /// The message being edited inline: (thread, message index, text). [`edit`](Self::edit) opens it.
     pub editing: Option<(ThreadId, usize, String)>,
-    /// The inline editor takes the focus the next time its card is built, once.
-    focus_editor: bool,
     /// The selected card's reply draft.
     pub reply: String,
     /// The "Add a comment" box's draft.
@@ -155,12 +153,11 @@ impl CommentsPanelState {
         self.revealing = Some(thread);
     }
 
-    /// Opens the inline editor on message `index` of `thread` (0: the comment) with `text`, and has the editor take
-    /// the focus the next time its card is built, once: for an editor the app opens (a new comment's note), as a
-    /// double click on a card or the message menu's Edit opens one.
+    /// Opens the inline editor on message `index` of `thread` (0: the comment) with `text`: for an editor the app
+    /// opens (a new comment's note), as a double click on a card or the message menu's Edit opens one. Like every
+    /// inline editor, it takes the keyboard in the pass its card first shows it, once.
     pub fn edit(&mut self, thread: ThreadId, index: usize, text: impl Into<String>) {
         self.editing = Some((thread, index, text.into()));
-        self.focus_editor = true;
     }
 }
 
@@ -471,7 +468,7 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, value: T) {
 
 /// Makes `next` the selection; true when its threads changed. A new lead drops the reply draft, which belongs to the
 /// old lead's card, and an edit of another thread; an edit of the new lead itself stays, so a draft the app could not
-/// write back (a document that refused it) is there again, with the keyboard, when its card leads again.
+/// write back (a document that refused it) is there again when its card leads again.
 fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> bool {
     let changed = next.items != state.selected.items;
     if next.lead != state.selected.lead {
@@ -480,7 +477,6 @@ fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> b
         if !kept {
             state.editing = None;
         }
-        state.focus_editor = kept;
     }
     state.selected = next;
     changed
@@ -680,8 +676,6 @@ impl<H: Value> CommentsPanel<'_, H> {
             let mut selection = card_selection(&state.selected);
             let reply: &str = &state.reply;
             let editing = state.editing.as_ref().map(|(thread, index, text)| (*thread, *index, text.as_str()));
-            let focus_editor = state.focus_editor;
-            let mut editor_built = false;
             let mut openers = Vec::new();
             let out = CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped, select_mode)
                 .revealing(revealing.map(CardKey::Thread))
@@ -696,7 +690,6 @@ impl<H: Value> CommentsPanel<'_, H> {
                             .map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
                         let is_lead = lead == Some(thread.id);
                         let editing = editing.filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (index, text));
-                        editor_built |= editing.is_some();
                         if is_lead {
                             openers.extend((0..thread.messages.len()).map(|index| (index, item.part_opener(MORE.at(index as u64)))));
                         }
@@ -704,19 +697,23 @@ impl<H: Value> CommentsPanel<'_, H> {
                             .state(chosen.contains(&thread.id), !read_only && !thread.locked, now)
                             .lead(is_lead)
                             .focus_reply(is_lead && item.row.activated_by_key)
-                            .focus_editor(focus_editor && editing.is_some())
                             .submit_key(reply_submit)
                             .drafts(editing, if is_lead { reply } else { "" })
                     }
                 });
-            // The editor's card took the focus request this pass.
-            if editor_built {
-                state.focus_editor = false;
-            }
             let list = out.response.clone();
             let clicks = out.activation_clicks;
-            let buttons: Vec<(usize, Response)> =
-                openers.into_iter().filter_map(|(index, opener)| Some((index, out.opener(opener)?.clone()))).collect();
+            let mut buttons: Vec<(usize, Response)> = Vec::new();
+            // The collection may build the lead's card more than once in a pass: each message's menu opens once, from
+            // the last build's "..." button, so no two menus share a base id.
+            for (index, opener) in openers.into_iter().rev() {
+                if !buttons.iter().any(|(seen, _)| *seen == index)
+                    && let Some(button) = out.opener(opener)
+                {
+                    buttons.push((index, button.clone()));
+                }
+            }
+            buttons.reverse();
             let group_page = |at: usize| match source.entries.iter().find(|(key, _)| *key == CardKey::Group(at)) {
                 Some((_, RowEntry::Group { page, .. })) => *page,
                 _ => None,
