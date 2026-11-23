@@ -75,7 +75,8 @@ impl BodyCx<'_> {
 
 impl BodyHooks<'_> {
     /// Records for the container's hooks whether this pass's primary press went down on its own surface
-    /// (`BodyCx::surface_pressed`): no shape of last pass under the press takes it, and the press lies in the
+    /// (`BodyCx::surface_pressed`): no shape of last pass under the press takes it, nor a component's text widget
+    /// egui gives it to (a focused field's), and the press lies in the
     /// container's rect on its layer; and whether that press is the second of a double click
     /// (`BodyCx::surface_double_pressed`), read from the same press's click count; and whether this pass's primary
     /// release ends a press that went down there (`BodyCx::surface_clicked`). The press origin waits in the press slot
@@ -90,11 +91,11 @@ impl BodyHooks<'_> {
             areas::layer_at(&ctx, pos) == Some(layer) && rect.contains(at)
         };
         let surface = if sensed {
-            pass.frame
-                .as_ref()
-                .and_then(|frame| frame.press)
-                .filter(|press| press.button == PointerButton::Primary)
-                .filter(|press| inside(press.origin) && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none())
+            pass.frame.as_ref().and_then(|frame| frame.press).filter(|press| press.button == PointerButton::Primary).filter(|press| {
+                inside(press.origin)
+                    && pointer::press_winner(&ctx, press.origin, pass.press_targets).is_none()
+                    && !pointer::text_takes_press(&ctx, pass.press_targets)
+            })
         } else {
             None
         };

@@ -1100,6 +1100,14 @@ fn registered_in(layers: &LayerRecord, widget: Id) -> bool {
     layers.values().any(|roots| roots.values().any(|root| root.widgets.contains(&widget)))
 }
 
+/// Whether egui gives the latest press to a component's text widget (a focused field's), as `targets` name its
+/// widgets: the press is that text's, though it goes to no root and has no winner (`find_under`).
+pub(crate) fn text_takes_press(ctx: &Context, targets: PressTargets) -> bool {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        targets.click.is_some_and(|widget| !record.last_grounds.contains(&widget) && record.last_texts.contains_key(&widget))
+    })
+}
+
 /// Whether the egui widget `widget`, one of the latest press's targets, is one no component registered or made for its
 /// text, and no layer shows beneath everything on it, in the pass the press was hit-tested against: a raw egui widget.
 pub(crate) fn foreign_target(ctx: &Context, widget: Id) -> bool {
