@@ -45,3 +45,32 @@ fn a_removed_stop_hands_its_focus_to_no_neighbour_and_the_body_stays() {
     assert_eq!(craft_ui::testing::focus::egui_focused(&frames.ctx), None, "no neighbour inherits the focus");
     assert!((top.get() - start).abs() < 0.5, "the body keeps its offset: content top {} from {start}", top.get());
 }
+
+/// A component that asks for the focus in the pass of a press on another component keeps it: the press's own focus
+/// move at the pass's end does not take it back, as a text editor that appears under a click on the canvas and asks
+/// for the keys keeps them. Guards against the end hook's press move overriding every request of the pass but a
+/// layer's that appeared in it.
+#[trial]
+fn a_request_in_a_press_pass_keeps_the_focus_from_the_press() {
+    use craft_behavior::{Input, Sense};
+    use craft_ui::runtime::focus::KeyUse;
+    use craft_ui::testing::focus::{Stop, egui_focused, named_id, press_shape, register_stop, widget};
+    let (canvas, editor) = (named_id("press_canvas"), named_id("press_editor"));
+    let at = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        let ctx = ui.ctx().clone();
+        let rect = widget(ui, canvas);
+        register_stop(&ctx, Stop::new(canvas, KeyUse::CANVAS));
+        press_shape(ui, rect, Sense::CLICK | Sense::TAKE_FOCUS, canvas);
+        at.set(rect);
+        widget(ui, editor);
+        register_stop(&ctx, Stop::new(editor, KeyUse::of(Input::Text)));
+        if ctx.input(|input| input.pointer.primary_pressed()) {
+            request(&ctx, FocusTarget::Id(editor));
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    craft_ui::testing::pointer::click(&mut frames, at.get().center(), &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(editor), "the request of the press's pass holds");
+}
