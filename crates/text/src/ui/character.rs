@@ -10,7 +10,7 @@ use craft_font_manager::Catalog;
 #[cfg(feature = "font-picker")]
 use craft_font_manager::axes::AxisSliders;
 #[cfg(feature = "font-picker")]
-use craft_font_manager::picker::{FontFilters, FontPickerSettings};
+use craft_font_manager::picker::{FontFilters, FontPickerSettings, HostFontGroup};
 use std::ops::RangeInclusive;
 #[cfg(feature = "font-picker")]
 use std::sync::Arc;
@@ -29,6 +29,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::{NamedOr, NumberName, NumberPick, NumberValue as _};
 use egui::{Response, Ui};
 
+pub(crate) mod format_text;
 pub(crate) mod paragraph;
 pub(crate) mod paragraph_dialog;
 pub(crate) mod rows;
@@ -36,6 +37,7 @@ pub(crate) mod rows;
 pub(crate) mod stories;
 pub(crate) mod style_options;
 
+pub use format_text::{FormatControl, FormatText, FormatTextChange, FormatTextOutput, FormatTextWords, ListKind};
 pub use paragraph::{ParagraphChange, ParagraphControls, ParagraphControlsOutput, ParagraphDirection, ParagraphValues, ParagraphWords, TextAlign};
 pub use paragraph_dialog::{
     AsianTypography, LineBreakOptions, LineSpacing, ParagraphAlign, ParagraphAnswer, ParagraphDialog, ParagraphDialogWords, ParagraphFormat,
@@ -178,21 +180,49 @@ impl<'a> FaceAxes<'a> {
 pub struct FontPickerSource<'a> {
     /// The catalog the picker lists.
     pub catalog: &'a Arc<Catalog>,
-    /// The picker's settings (stars, recents).
-    pub settings: Bind<'a, FontPickerSettings>,
-    /// The picker's filters.
-    pub filters: Bind<'a, FontFilters>,
+    /// The picker's settings (stars, recents); `None` for a caller without them.
+    pub settings: Option<Bind<'a, FontPickerSettings>>,
+    /// The picker's filters; `None` for a caller without them.
+    pub filters: Option<Bind<'a, FontFilters>>,
     /// The text the previews show; the family's name when `None`.
     pub preview_text: Option<&'a str>,
     /// The families the app serves.
     pub served: &'a [String],
+    /// The host's font rows, listed above the catalogue families.
+    pub host: &'a [HostFontGroup<'a>],
+    /// The key of the host row shown as the field's value.
+    pub current_host: Option<String>,
 }
 
 #[cfg(feature = "font-picker")]
 impl<'a> FontPickerSource<'a> {
-    /// A source over `catalog` with the app's `settings` and `filters`.
-    pub fn new(catalog: &'a Arc<Catalog>, settings: Bind<'a, FontPickerSettings>, filters: Bind<'a, FontFilters>) -> Self {
-        FontPickerSource { catalog, settings, filters, preview_text: None, served: &[] }
+    /// A source over `catalog`, with no settings, filters or host rows.
+    pub fn new(catalog: &'a Arc<Catalog>) -> Self {
+        FontPickerSource { catalog, settings: None, filters: None, preview_text: None, served: &[], host: &[], current_host: None }
+    }
+
+    /// The app's stars and recents.
+    pub fn settings(mut self, settings: Bind<'a, FontPickerSettings>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    /// The app's filters.
+    pub fn filters(mut self, filters: Bind<'a, FontFilters>) -> Self {
+        self.filters = Some(filters);
+        self
+    }
+
+    /// The host's font rows, listed above the catalogue families.
+    pub fn host(mut self, groups: &'a [HostFontGroup<'a>]) -> Self {
+        self.host = groups;
+        self
+    }
+
+    /// The key of the host row shown as the field's value.
+    pub fn current_host(mut self, key: Option<String>) -> Self {
+        self.current_host = key;
+        self
     }
 
     /// The text the previews show.
@@ -340,6 +370,8 @@ pub struct CharacterValues {
     pub language: Option<String>,
     /// The variable-font axis values of the selection, by axis tag; `None` while the selection mixes them or has none.
     pub axes: Option<Vec<([u8; 4], f32)>>,
+    /// Extra space after each character, in points; `None` while the selection mixes it.
+    pub char_spacing: Option<f32>,
 }
 
 impl CharacterValues {
@@ -366,6 +398,7 @@ impl CharacterValues {
             opentype: self.opentype.iter().copied().filter(|tag| other.opentype.contains(tag)).collect(),
             language: agree(&self.language, &other.language),
             axes: agree(&self.axes, &other.axes),
+            char_spacing: agree(&self.char_spacing, &other.char_spacing),
         }
     }
 }
@@ -416,6 +449,8 @@ pub enum CharacterChange {
     Language(String),
     /// The variable-font axis values, by axis tag.
     Axes(Vec<([u8; 4], f32)>),
+    /// Extra space after each character, in points.
+    CharSpacing(f32),
 }
 
 /// What the Character controls did this pass.
@@ -560,9 +595,9 @@ impl<'a> CharacterControls<'a> {
         let columns = if ui.available_width() < pair_width { &TWO_COLUMNS[..1] } else { &TWO_COLUMNS };
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &words, values, families, picker.as_mut());
+            let family = family_field(ui, &words, values, families, None, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &words, values, families);
+            let family = family_field(ui, &words, values, families, None);
             preview_family = family.preview;
             rested_family = family.rested;
             edits.extend(family.edits);
@@ -584,6 +619,7 @@ impl<'a> CharacterControls<'a> {
                     value: values.size,
                     range: SIZE_RANGE,
                     presets: &size_presets,
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, size);
                 edits.extend(number_change(event, CharacterChange::Size));
@@ -607,6 +643,7 @@ impl<'a> CharacterControls<'a> {
                     range: TRACKING_RANGE,
                     percent: false,
                     presets: &tracking_presets,
+                    disabled: None,
                 };
                 let (event, _) = lengths.plain(ui, tracking);
                 edits.extend(number_change(event, CharacterChange::Tracking));
@@ -619,6 +656,7 @@ impl<'a> CharacterControls<'a> {
                     range: SCALE_RANGE,
                     percent: true,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.plain(ui, vertical);
                 edits.extend(number_change(event, CharacterChange::VerticalScale));
@@ -629,6 +667,7 @@ impl<'a> CharacterControls<'a> {
                     range: SCALE_RANGE,
                     percent: true,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.plain(ui, horizontal);
                 edits.extend(number_change(event, CharacterChange::HorizontalScale));
@@ -640,6 +679,7 @@ impl<'a> CharacterControls<'a> {
                     value: values.baseline_shift,
                     range: SHIFT_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, shift);
                 edits.extend(number_change(event, CharacterChange::BaselineShift));

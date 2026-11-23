@@ -10,7 +10,7 @@ use crate::runtime::focus;
 use crate::runtime::frame;
 use crate::runtime::memory::sub;
 use crate::runtime::motion::Animate as _;
-use craft_behavior::{Flow, ItemLayout, PressPhase, SelectionChange, Sense};
+use craft_behavior::{Flow, ItemLayout, MiddleButton, PointerButton, PressPhase, SelectionChange, Sense};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
@@ -82,8 +82,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             _ => None,
         };
+        // Under `AutoScroll` a middle press on the rows starts or ends the latch (the items step's `middle_scroll`) and
+        // picks no row.
         if let PressPhase::Down { start, .. } = cx.core.press.phase
             && local(start.origin).y >= 0.0
+            && !(start.button == PointerButton::Middle && props.middle_button == MiddleButton::AutoScroll)
         {
             // A second press, slow or not, ends the wait of the first.
             self.drags.slow = None;
@@ -99,7 +102,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     // A command on the row, reported when the press ends as a click; the selection stays.
                     self.drags.command = Some(self.source.key(at));
                     self.move_lead(at, LeadSource::Pointer);
-                } else if !secondary_on_toggle {
+                } else if !secondary_on_toggle && (primary || !props.primary_picks) {
                     let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
                     let key = self.source.key(at);
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
@@ -136,7 +139,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if keep => {}
                         None => self.pick(comp, at, mods.shift, mods.cmd),
                     }
-                    self.move_lead(at, LeadSource::Pointer);
+                    // A modified click on a pick kept beside the current item changes the pick only: the lead, which the
+                    // host follows to the current item, stays.
+                    if !(props.picks_beside_current && primary && (mods.shift || mods.cmd)) {
+                        self.move_lead(at, LeadSource::Pointer);
+                    }
                     // A secondary press takes focus the way a primary press does: egui and the press classification only move it for the primary button.
                     if !primary && props.focus_on_press {
                         focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));
@@ -245,6 +252,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 {
                     self.events.push(CollectionEvent::CommandClick { key, mods: mods_now });
                 }
+                // The press machine makes a middle release a click only for a collection that senses `MIDDLE_CLICK`.
+                if click
+                    && start.button == PointerButton::Middle
+                    && props.middle_button != MiddleButton::AutoScroll
+                    && local(start.origin).y >= 0.0
+                    && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
+                {
+                    self.events.push(CollectionEvent::MiddleClick(self.source.key(at)));
+                }
                 if let Some(key) = self.drags.activate.take()
                     && click
                     && self.index_of(&key).is_some()
@@ -274,28 +290,29 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             _ => {}
         }
         // A secondary release on a row asks for its menu (9.2 rule 3); the row joins the selection unless it is in it.
-        // Something over the collection, or a part of a row or of the collection that takes presses and is under the
-        // pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
+        // Something over the collection, or a part of a row or of the collection that takes the secondary click itself
+        // (its own menu, L-198) and is under the pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
         // it.
         let released = crate::runtime::pointer::frame_raw(&ctx);
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
-            && hover.find(|hit| hit.part.is_some() && hit.sense.takes_press() && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
+            && hover.find(|hit| hit.part.is_some() && hit.sense.contains(Sense::CONTEXT_CLICK) && !hit.sense.contains(Sense::PICKS_ITEM)).is_none()
         {
             released.pos.filter(|pos| rect.contains(xf.map_or(*pos, |map| map.to_layer(*pos))))
         } else {
             None
         };
         let menu_row = menu_at.map(|pos| (pos, layout.hit(local(pos), offset)));
-        // A secondary release on the empty space asks for the collection's own menu.
+        // A secondary release on the empty space asks for the collection's own menu, which no item's menu is.
         if let Some((pos, None)) = menu_row {
+            self.drags.menu = None;
             self.events.push(CollectionEvent::EmptyContextMenu { at: pos });
         }
         if let Some((pos, Some(at))) = menu_row
             && self.source.enabled(at)
         {
-            if !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {
+            if !props.primary_picks && !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {
                 let column = if Self::selects_cells(comp) { layout.column_at(local(pos), offset) } else { None };
                 match column {
                     Some(column) => self.cell_press(comp, layout, at, column, false, false),
@@ -347,7 +364,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Reports a request for the menu of a row; the row keeps its menu button shown while a menu hung from the
     /// collection is open (`RowState::menu_open`).
     pub(super) fn ask_menu(&mut self, request: ContextMenuRequest<C::Key>) {
-        self.drags.menu = Some(request.key.clone());
+        self.drags.menu = Some(request.clone());
         self.events.push(CollectionEvent::ContextMenu(request));
     }
 

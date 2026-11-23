@@ -160,6 +160,14 @@ impl<'a> Bar<'a> {
         self
     }
 
+    /// Makes the bar compact: its members at the small control size and a tight pad around them, as a small floating
+    /// action bar beside an edit (PdfCraft's text box Done and Discard).
+    #[must_use]
+    pub fn compact(mut self) -> Self {
+        self.props = self.props.child_size(ControlSize::Sm).pad(Pad::Tight);
+        self
+    }
+
     /// Paints `kind` behind the bar instead of the chrome: a bar that floats on its own, as a canvas's task bar does,
     /// is a floating surface with its corners and shadow.
     #[must_use]

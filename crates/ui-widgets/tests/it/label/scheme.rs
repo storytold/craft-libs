@@ -57,6 +57,19 @@ fn a_form_and_an_inspector_lay_out_the_same_rows_their_own_way() {
     assert!(short.width() > kept.width() + SLACK, "an inspector's control fills the row, a form's keeps its width: {short:?} {kept:?}");
 }
 
+/// An inline form sets each caption at the row's start with a colon, its control right after it at its own width: the
+/// controls share no column.
+#[trial]
+fn an_inline_form_sets_each_control_right_after_its_caption() {
+    let form = rows(LabelScheme::Form);
+    let inline = rows(LabelScheme::Inline);
+    assert_eq!(colons(&inline), 2, "an inline form's captions end with a colon");
+    assert!((caption(&inline, SHORT).min.x - caption(&inline, LONG).min.x).abs() <= SLACK, "the captions start at the row's start");
+    let (short, long) = (control(&inline, SHORT), control(&inline, LONG));
+    assert!(short.min.x + SLACK < long.min.x, "no shared column: the short caption's control comes first: {short:?} {long:?}");
+    assert!((short.width() - control(&form, SHORT).width()).abs() <= SLACK, "the control keeps its width");
+}
+
 fn glyph_field(ui: &mut Ui) {
     let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("X")));
     Field::new("Horizontal position").side(side).show(ui, |ui, _| {

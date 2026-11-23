@@ -3,8 +3,8 @@
 use super::key::{EnvKey, Ink};
 use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
 use super::paint::{
-    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
-    scroll_bar_look_of,
+    AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, auto_scroll_mark_look, handle_look,
+    marker_look, reset_mark_look, rule_look, scroll_bar_look_of,
 };
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
@@ -255,7 +255,8 @@ impl<'a> StyleCx<'a> {
         self.values.get::<T>()
     }
 
-    /// The one constructor of `StyleColor`: a semantic token read or a token-group field becomes a style colour here.
+    /// The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
+    /// here. Content paint picks a role through `Draw::role`.
     pub fn color(&self, color: Rgba) -> StyleColor {
         StyleColor(egui_color(color))
     }
@@ -273,9 +274,15 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
+    /// needs: the inverse of [`ink_on`](Self::ink_on).
+    pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
+        self.color(craft_theme::ensure_contrast(Rgba::from(color.0), on, craft_theme::text_contrast_min(self.contrast())))
+    }
+
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
     pub fn focus_look(&self) -> FocusLook {
-        FocusLook::new(egui::Stroke::new(self.tokens.stroke.medium, self.color(self.tokens.color.line.focus).egui()), 0.0)
+        FocusLook::new(egui::Stroke::new(self.tokens.stroke.focus, self.color(self.tokens.color.line.focus).egui()), 0.0)
     }
 
     /// The colour text and icons of `tone` read in.
@@ -473,6 +480,11 @@ impl<'a> StyleCx<'a> {
     /// `PartBuilder::state_layer` gets it from the paint step; a look built over it reads it here.
     pub fn state_layer(&self) -> Stateful<StyleColor> {
         super::paint::state_layer_look(self.tokens)
+    }
+
+    /// The look of the auto-scroll mark.
+    pub fn auto_scroll_mark(&self) -> AutoScrollMarkLook {
+        auto_scroll_mark_look(self.tokens)
     }
 
     /// The look of the reset mark.

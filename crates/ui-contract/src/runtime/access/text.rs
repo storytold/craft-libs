@@ -99,7 +99,7 @@ pub(crate) fn fold_editor(ctx: &Context, widget: Id, owner: Id) {
 /// the widget's own node folds into it, so a component whose root edits its value through the text (a text field, a
 /// spin button, an editable combo box) is one node that takes focus and the text actions. Call it after the node's
 /// common facts.
-pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
+pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, value_override: Option<&str>) {
     adapter::fold_widget(ctx, facts.widget, owner);
     let mut entries = Vec::new();
     if !facts.masked {
@@ -122,7 +122,8 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
         let (focus_node, focus_at) = end_of(&entries, owner, focus)?;
         Some((anchor_node, anchor_at, focus_node, focus_at))
     });
-    let value = (!facts.masked).then_some(facts.text.as_str());
+    // An empty editor can name a mixed value without turning its label into editable text.
+    let value = (!facts.masked).then_some(if facts.text.is_empty() { value_override.unwrap_or(&facts.text) } else { &facts.text });
     if let Some(value) = value
         && crate::runtime::inspect::recording(ctx)
     {

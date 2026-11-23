@@ -247,11 +247,11 @@ impl Overlay {
         overlay
     }
 
-    /// A dialog: modal with no backdrop (the window behind stays at true contrast), floating, movable and resizable.
+    /// A dialog: modal with a dimmed backdrop, floating, movable and resizable.
     /// `.modeless()` gives rank `Window`.
     pub fn dialog() -> Overlay {
         let mut overlay = Overlay::base(
-            Rank::modal(Backdrop::None),
+            Rank::modal(Backdrop::Scrim),
             Place::Float(FloatPlace::centred()),
             OverlayFit::ContentCapped(DIALOG_SHARE),
             OwnerClass::Dialog,
@@ -279,6 +279,7 @@ impl Overlay {
     /// A modal: centred, content capped.
     pub fn modal() -> Overlay {
         let mut overlay = Overlay::dialog();
+        overlay.rank = Rank::modal(Backdrop::None);
         overlay.movable = false;
         overlay.resize = Resize::NONE;
         overlay
@@ -299,7 +300,8 @@ impl Overlay {
     /// A toast stack at `corner` of `body`, a rect in the opener's layer space: the end-bottom corner of a window's body.
     /// Tab reaches its cards, and focus returns from them to where it came from when the last one ends.
     pub fn toast(body: Rect, corner: Align2) -> Overlay {
-        let place = Place::anchored(Anchor::Corner(body, corner), Side::Above, Align::End);
+        let align = if corner == Align2::CENTER_BOTTOM { Align::Center } else { Align::End };
+        let place = Place::anchored(Anchor::Corner(body, corner), Side::Above, align);
         let mut overlay = Overlay::base(Rank::Toast, place, OverlayFit::ContentCapped(NOTE_SHARE), OwnerClass::Widget, FocusPolicy::TAB_LAYER);
         overlay.dismiss = Dismiss::new().outside(Outside::Keep);
         overlay

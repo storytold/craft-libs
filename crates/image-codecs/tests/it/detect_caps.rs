@@ -109,6 +109,34 @@ fn detect_heif_brands() {
 }
 
 #[test]
+fn ftyp_brands_respect_prefix_and_declared_bounds() {
+    let mut prefix = *b"\0\0\0\x1cftypisomavifavismif1xx";
+    for end in 0..12 {
+        assert!(ftyp_brands(&prefix[..end]).next().is_none(), "prefix length {end}");
+    }
+    assert!(ftyp_brands(b"\0\0\0\x0cmdatheic").next().is_none());
+    assert!(ftyp_brands(&prefix).eq([b"isom", b"avis", b"mif1"]));
+    assert!(ftyp_brands(&prefix[..18]).eq([b"isom"]));
+
+    prefix[..4].copy_from_slice(&20u32.to_be_bytes());
+    assert!(ftyp_brands(&prefix).eq([b"isom", b"avis"]));
+    prefix[..4].copy_from_slice(&8u32.to_be_bytes());
+    assert!(ftyp_brands(&prefix).eq([b"isom"]));
+}
+
+#[test]
+fn detect_ftyp_keeps_its_short_brand_scan() {
+    let mut prefix = [0; 68];
+    prefix[..12].copy_from_slice(b"\0\0\0\x44ftypheic");
+    prefix[64..68].copy_from_slice(b"avif");
+    assert!(ftyp_brands(&prefix).any(|brand| brand == b"avif"));
+    assert_eq!(detect(&prefix), Some(Format::Heif));
+
+    prefix[60..64].copy_from_slice(b"avif");
+    assert_eq!(detect(&prefix), Some(Format::Avif));
+}
+
+#[test]
 fn caps_are_internally_consistent() {
     for f in Format::ALL {
         let c = caps(f);

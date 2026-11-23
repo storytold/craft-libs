@@ -59,11 +59,25 @@ pub(crate) struct BarLabels {
 pub(crate) struct Rows<'a> {
     target: Target,
     preferred: &'a [(&'a str, char)],
+    /// Whether rows show their command's icon.
+    icons: bool,
+    /// Whether rows are a text line tall.
+    compact: bool,
 }
 
 impl<'a> Rows<'a> {
     pub(crate) fn new(target: Target) -> Self {
-        Rows { target, preferred: &[] }
+        Rows { target, preferred: &[], icons: true, compact: false }
+    }
+
+    pub(crate) fn icons(mut self, on: bool) -> Self {
+        self.icons = on;
+        self
+    }
+
+    pub(crate) fn compact(mut self, on: bool) -> Self {
+        self.compact = on;
+        self
     }
 
     pub(crate) fn preferred(mut self, preferred: &'a [(&'a str, char)]) -> Self {
@@ -167,8 +181,8 @@ impl<'a> Rows<'a> {
                 Node::Separator => {
                     Divider::horizontal().show(ui);
                 }
-                Node::Submenu { children, .. } => {
-                    if is_dead(children) {
+                Node::Submenu { children, enabled, .. } => {
+                    if !enabled || is_dead(children) {
                         MenuItem::submenu(label).enabled(false).show(ui);
                     } else {
                         Menu::submenu_row(ui, label, |ui, _| self.show(ui, children, &text.children));
@@ -192,7 +206,7 @@ impl<'a> Rows<'a> {
                 }
             }
             _ => {
-                command_row(ui, item, label, shortcut).show(ui);
+                command_row(ui, item, label, shortcut).no_icon(!self.icons).compact(self.compact).show(ui);
             }
         }
     }
@@ -248,7 +262,7 @@ fn checked(ui: &Ui, command: &CommandRef) -> Option<bool> {
 fn is_dead(nodes: &[Node]) -> bool {
     !nodes.iter().any(|node| match node {
         Node::Item(item) => item.enabled,
-        Node::Submenu { children, .. } => !is_dead(children),
+        Node::Submenu { children, enabled, .. } => *enabled && !is_dead(children),
         Node::Separator | Node::Standard { .. } => false,
     })
 }
