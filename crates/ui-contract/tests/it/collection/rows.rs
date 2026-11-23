@@ -213,6 +213,9 @@ impl Collection for Probe<'_> {
     fn rename_editor(&mut self, ui: &mut Ui, _: Bind<'_, String>, label: Rect, _: &str) -> Option<EditResponse<String>> {
         let (_, enter) = self.rename?;
         let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), EditEvents::new(), None);
+        // The probe field is no focus stop, so it asks for the focus a real text field keeps: a field that holds the focus
+        // and then loses it ends the rename.
+        request(ui.ctx(), FocusTarget::Id(editor.response.id));
         editor.submitted = enter.get();
         Some(editor)
     }
