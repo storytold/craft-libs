@@ -326,6 +326,32 @@ fn kept_extensions_carry_their_namespaces_and_undeclared_prefixes_are_not_kept()
     assert_eq!(reaction.attr("reactionType"), Some("2"));
 }
 
+/// A prefix kept markup only lists as ignorable, declared outside it, goes along too.
+#[test]
+fn kept_extensions_carry_the_namespaces_their_own_ignorable_lists() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:zz="urn:zz" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst mc:Ignorable="zz"><r:reactions><r:reaction reactionType="2"/></r:reactions></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let files = save(&comments_with_cex(&cex));
+    let written = text(&files, "word/commentsExtensible.xml");
+    assert!(written.contains(r#"mc:Ignorable="zz""#), "{written}");
+    assert!(written.contains(r#"xmlns:zz="urn:zz""#), "{written}");
+}
+
+/// Leaving the dates out keeps a namespace whose prefix happens to be `dateUtc`, so what uses it
+/// still opens.
+#[test]
+fn leaving_dates_out_keeps_a_namespace_named_date_utc() {
+    let cex = format!(
+        r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:r="{CR}"><x:commentExtensible x:durableId="5A1B2C3D"><x:extLst xmlns:dateUtc="urn:d"><r:reactions><r:reaction reactionType="2"><dateUtc:item dateUtc="2026-01-04T06:16:20Z"/></r:reaction></r:reactions></x:extLst></x:commentExtensible></x:commentsExtensible>"#
+    );
+    let mut doc = comments_with_cex(&cex);
+    doc.settings.remove_date_time = true;
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    let kept = back.comments.values().find_map(|c| c.extensions.clone()).unwrap_or_default();
+    assert!(kept.contains("dateUtc:item") && !kept.contains("2026-01-04"), "{kept}");
+}
+
 /// A local `w:date` with a `Z` (older files have no `dateUtc`) isn't saved as the UTC time either,
 /// so it doesn't shift by the user's offset after a round trip.
 #[test]

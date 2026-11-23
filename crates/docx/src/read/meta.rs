@@ -457,16 +457,24 @@ fn is_ignorable(k: &str, scope: &[(&str, &str)]) -> bool {
 }
 
 /// Whether every prefix `e` and its descendants use is declared, in the subtree (`path`, the
-/// prefixes declared on the way down) or in `outer`; the ones only `outer` declares are added to
-/// `needed`. An unprefixed element is in the default namespace, if one is declared.
-fn uses<'a>(e: &'a craft_xml::El, outer: &[(&'a str, &'a str)], path: &mut Vec<&'a str>, needed: &mut Vec<&'a str>) -> bool {
+/// declarations on the way down) or in `outer`; the ones only `outer` declares are added to
+/// `needed`. The prefixes an `mc:Ignorable` lists count as used. An unprefixed element is in the
+/// default namespace, if one is declared.
+fn uses<'a>(e: &'a craft_xml::El, outer: &[(&'a str, &'a str)], path: &mut Vec<(&'a str, &'a str)>, needed: &mut Vec<&'a str>) -> bool {
     let mark = path.len();
-    path.extend(e.ns_decls().map(|(p, _)| p));
+    path.extend(e.ns_decls());
     let attrs = e.attrs.iter().map(|(k, _)| k.as_str()).filter(|k| *k != "xmlns" && !k.starts_with("xmlns:"));
-    let prefixes = [e.name.split_once(':').map_or("", |(p, _)| p)].into_iter().chain(attrs.filter_map(|k| k.split_once(':').map(|(p, _)| p)));
+    let mut prefixes: Vec<&str> =
+        [e.name.split_once(':').map_or("", |(p, _)| p)].into_iter().chain(attrs.filter_map(|k| k.split_once(':').map(|(p, _)| p))).collect();
+    if e.attrs.iter().any(|(k, _)| k.ends_with(":Ignorable")) {
+        let scope: Vec<(&str, &str)> = outer.iter().chain(path.iter()).copied().collect();
+        if let Some((_, v)) = e.attrs.iter().find(|(k, _)| is_ignorable(k, &scope)) {
+            prefixes.extend(v.split_whitespace());
+        }
+    }
     let mut ok = true;
     for p in prefixes {
-        if p == "xml" || path.contains(&p) || needed.contains(&p) {
+        if p == "xml" || path.iter().any(|(d, _)| *d == p) || needed.contains(&p) {
             continue;
         }
         if outer.iter().any(|(o, _)| *o == p) {

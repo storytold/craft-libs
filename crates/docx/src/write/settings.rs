@@ -243,11 +243,12 @@ pub(super) fn write_comment_ids(
 
 /// A comment's kept extension list ([`craft_wordmodel::Comment::extensions`]) as markup to write
 /// inside its `w16cex:commentExtensible`: read back and written again, so only a well-formed
-/// `extLst` goes out. Its reactions name the people who reacted, so none goes out when personal
-/// information is removed on save; when dates and times are, its `dateUtc`s are left out.
+/// `extLst` goes out, within the limits it was read with. Its reactions name the people who
+/// reacted, so none goes out when personal information is removed on save; when dates and times
+/// are, its `dateUtc`s are left out (a namespace declaration named `dateUtc` stays).
 fn comment_extensions(markup: &str, names: bool, dates: bool) -> Option<String> {
     fn drop_dates(e: &mut craft_xml::El) {
-        e.attrs.retain(|(k, _)| k.rsplit(':').next() != Some("dateUtc"));
+        e.attrs.retain(|(k, _)| k.starts_with("xmlns:") || k.rsplit(':').next() != Some("dateUtc"));
         for kid in e.elements_mut() {
             drop_dates(kid);
         }
@@ -255,7 +256,7 @@ fn comment_extensions(markup: &str, names: bool, dates: bool) -> Option<String> 
     if names {
         return None;
     }
-    let mut el = craft_xml::parse(markup.as_bytes()).ok().filter(|e| e.local() == "extLst")?;
+    let (mut el, _) = xml::parse_as_written_counted(markup.as_bytes(), xml::MAX_ELEMENTS).ok().filter(|(e, _)| e.local() == "extLst")?;
     if dates {
         drop_dates(&mut el);
     }
