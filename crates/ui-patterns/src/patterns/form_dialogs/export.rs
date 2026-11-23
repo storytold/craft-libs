@@ -99,7 +99,9 @@ pub struct ExportFormat {
     pub quality: bool,
     /// The Quality scale this format offers: whole steps from its first to its last value, with the
     /// row captioning the two ends. `None`, which every format used before this row option existed,
-    /// keeps the 1 to 100 percent scale.
+    /// keeps the 1 to 100 percent scale. A value outside the scale is clamped into it, by the row, by
+    /// the format switch and by [`ExportOptions::fitted`]: an app that wants an older, wider quality
+    /// to land on the nearest step of a scale it owns maps it before it hands the settings here.
     #[prop]
     pub quality_scale: Option<std::ops::RangeInclusive<u8>>,
     /// Shows Lossless (WebP); Quality hides while it is checked.

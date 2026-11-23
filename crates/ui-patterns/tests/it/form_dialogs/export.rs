@@ -89,7 +89,6 @@ fn export_as_picks_a_format_and_constrains_the_size_by_its_check_box() {
     assert_eq!(options.borrow().size, ExportSize::pixels(900, 400), "unconstrained, the height stays");
 }
 
-/// The JPEG options dialog over `quality`, recording what OK answers.
 /// The formats of a host that names its own Quality steps for JPG; WebP names none.
 fn stepped_formats() -> Vec<ExportFormat> {
     vec![ExportFormat::new("jpg", "JPG").quality(true).quality_scale(1..=7), ExportFormat::new("webp", "WebP").quality(true)]
@@ -135,6 +134,37 @@ fn a_format_that_names_quality_steps_holds_its_row_to_them() {
     assert!(!shown.iter().any(|text| text == "Low"), "WebP's row shows no scale captions: {shown:?}");
 }
 
+/// Switching INTO a format that names Quality steps takes the app's default quality for that format
+/// and clamps it into the scale: the default 85 becomes the scale's last step. The framework does not
+/// know any app's own steps, so an app that wants an older, wider quality to land on its nearest step
+/// maps it before opening the dialog.
+#[trial]
+fn switching_into_a_stepped_format_clamps_the_quality_it_is_given() {
+    let formats = vec![
+        ExportFormat::new("png", "PNG").transparency(true),
+        ExportFormat::new("jpg", "JPG").quality(true).quality_scale(1..=7),
+        ExportFormat::new("webp", "WebP").quality(true),
+    ];
+    let options = Rc::new(RefCell::new(ExportOptions::default()));
+    let shared = Rc::clone(&options);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = shared.borrow_mut();
+        let _ = ExportAsDialog::new("Poster", document(), Bind::bound(&mut *current)).formats(formats.clone()).show(ui);
+    });
+    fixture.settle();
+    assert_eq!(
+        (options.borrow().format.as_str(), options.borrow().quality),
+        ("png", 85),
+        "the format the dialog opens on keeps the app's percent quality"
+    );
+    let format = fixture.by_label("Format").expect("the format select");
+    fixture.click(&format).settle();
+    let jpg = fixture.by_label("JPG").expect("the select offers JPG");
+    fixture.click(&jpg).settle();
+    assert_eq!(options.borrow().format, "jpg");
+    assert_eq!(options.borrow().quality, 7, "the switch clamps the 85 into the scale, at its last step");
+}
+
 /// The scale holds the settings a host comes back with, from a preset or its last-used memory, and
 /// leaves a format without one at 1 to 100.
 #[trial]
@@ -150,6 +180,7 @@ fn the_quality_scale_fits_the_settings_a_host_comes_back_with() {
     assert_eq!((fitted("webp", 85), fitted("webp", 140), fitted("webp", 0)), (85, 100, 1), "a format without a scale keeps 1 to 100");
 }
 
+/// The JPEG options dialog over `quality`, recording what OK answers.
 fn jpeg_dialog(quality: u8) -> (Fixture, Rc<RefCell<Vec<FormatOptions>>>) {
     let answers = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&answers);
