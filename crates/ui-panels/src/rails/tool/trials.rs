@@ -370,8 +370,8 @@ fn a_tools_own_icon_paints_its_button_and_its_flyout_row() {
     use crate::primitives::{Glyph, IconSpec};
     use crate::style::UiTokens;
 
-    /// An app's tool artwork: one ellipse across its rect, a shape nothing else on the rail paints, so the frame's
-    /// shapes say where the glyph painted.
+    // An app's tool artwork: one ellipse across its rect, a shape nothing else on the rail paints, so the frame's
+    // shapes say where the glyph painted.
     #[derive(crate::contract::MemoProps)]
     struct Artwork;
     impl Glyph for Artwork {
@@ -379,8 +379,8 @@ fn a_tools_own_icon_paints_its_button_and_its_flyout_row() {
             painter.add(egui::Shape::ellipse_filled(rect.center(), rect.size() / 2.0, color));
         }
     }
-    /// Where the glyph painted in the fixture's next frame. A frame that replays a memoized view repeats its shapes, so
-    /// the shapes of one frame show every place the glyph is on screen.
+    // Where the glyph painted in the fixture's next frame. A frame that replays a memoized view repeats its shapes, so
+    // the shapes of one frame show every place the glyph is on screen.
     let painted = |fixture: &mut Fixture| -> Vec<Rect> {
         fixture
             .frame_shapes()
