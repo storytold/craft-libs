@@ -70,6 +70,8 @@ RENDER_FEATURES = {
     "automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
     "theme-editor", "theme-store", "timeline", "dialogs", "font-manager", "update",
 }
+# The egui crates every framework crate builds on: a feature only a dev-dependency line asks of one rebuilds the framework.
+EGUI_FAMILY = {"egui", "epaint", "epaint_default_fonts", "emath", "ecolor"}
 REFUSED = {
     "--all-features": "it enables snapshot, system_fonts, color_fonts, all-languages and more, a set no loop uses, which rebuilds every dependency and the whole framework once; CI runs it",
     "--bins": "the gallery's binaries are 1 GB links each; build the one you need (`cl build gallery`)",
@@ -222,12 +224,19 @@ def doctor(top, packages, quiet=False):
         text = open(os.path.join(top, path)).read()
         if not re.search(pattern, text, re.M):
             problems.append(f"{path}: {why}")
+    asked = {}
+    for p in packages.values():
+        for d in p["dependencies"]:
+            if d["name"] in EGUI_FAMILY and d["kind"] is None:
+                asked.setdefault(d["name"], set()).update(d["features"])
     for p in packages.values():
         manifest = os.path.relpath(p["manifest_path"], top)
         for d in p["dependencies"]:
-            if d["name"] == "egui" and d["kind"] == "dev" and d["features"]:
-                problems.append(f"{manifest}: the egui dev-dependency asks for {d['features']}; a feature on a dev-dependency "
-                                "line changes egui under the framework between a crate's tests and its render")
+            extra = set(d["features"]) - asked.get(d["name"], set())
+            if d["name"] in EGUI_FAMILY and d["kind"] == "dev" and extra:
+                problems.append(f"{manifest}: the {d['name']} dev-dependency asks for {sorted(extra)}, which no normal line "
+                                f"(feature-root's included) asks for; it changes {d['name']} under the framework between the "
+                                "crate's tests and every other build")
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:
