@@ -126,6 +126,17 @@ fn list_comment_indent(mut line: &str, starts_block: bool) -> Option<usize> {
     None
 }
 
+/// Reprocess visible tails through list/comment containers, as the block pass does.
+/// Keep borrowed suffixes so each delimiter is scanned once and the source stays intact.
+fn reference_comment_tail(mut text: &str, mut column: usize) -> (Option<&str>, usize) {
+    loop {
+        let Some(tail) = block_comment_tail(text) else { return (None, column) };
+        let Some(nested_column) = list_comment_indent(tail, true) else { return (Some(tail), column) };
+        column = column.saturating_add(nested_column);
+        text = tail;
+    }
+}
+
 /// The same dedent boundary that ends an item in `parse_list`, including lazy continuations.
 fn list_item_ends(line: &str, content_indent: usize, after_blank: bool) -> bool {
     content_indent > 0
@@ -140,7 +151,7 @@ fn list_interrupts(marker: Marker, text: &str) -> bool {
 
 /// Remove only a visible reference definition; retain the comment's closing delimiters.
 fn take_comment_tail_reference(line: &mut String, refs: &mut Refs) -> bool {
-    let Some(tail) = block_comment_tail(line) else { return false };
+    let (Some(tail), _) = reference_comment_tail(line, 0) else { return false };
     let Some((label, dest)) = link_definition(tail) else { return false };
     let keep = line.len().saturating_sub(tail.len());
     refs.entry(label).or_insert(dest.into());
@@ -198,7 +209,11 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             comment_after_blank = is_blank(line);
         }
         if in_comment {
-            let tail = block_comment_tail(line);
+            let (tail, column) = reference_comment_tail(line, comment_indent);
+            comment_indent = column;
+            if list_item.is_none() && column > 0 {
+                list_item = Some((column, false));
+            }
             in_comment = tail.is_none();
             // parse_blocks reprocesses visible tails as source, including opening fences.
             open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
@@ -233,6 +248,7 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
         // Remember a valid surrounding item so its next marker starts a new block even when
         // an ordered number other than one could not interrupt a plain paragraph.
         if list_item.is_none()
+            && !thematic_break(t)
             && indent(line) < 4
             && let Some(m) = list_marker(t)
             && (starts_block || list_interrupts(m, t))
@@ -244,7 +260,11 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
         if let Some(column) = list_comment_indent(line, starts_block) {
             comment_indent = column;
             comment_after_blank = false;
-            let tail = block_comment_tail(line);
+            let (tail, column) = reference_comment_tail(line, comment_indent);
+            comment_indent = column;
+            if list_item.is_none() && column > 0 {
+                list_item = Some((column, false));
+            }
             in_comment = tail.is_none();
             // parse_blocks reprocesses visible tails as source, including opening fences.
             open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));

@@ -969,3 +969,64 @@ fn unclosed_list_comment_tail_fences_end_with_the_list_item() {
         );
     }
 }
+
+#[test]
+fn thematic_breaks_do_not_leave_list_state_before_ordered_text() {
+    for rule in ["* * *", "- - -", "_ _ _"] {
+        let md = format!("{rule}\ntext\n2. <!--\n\n   [x]: /right\n\n[x]");
+        let flow = parse(&md);
+        assert!(matches!(flow.blocks.first(), Some(FBlock::Para(p)) if p.kind == Kind::Rule));
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+}
+
+#[test]
+fn visible_comment_tails_can_open_list_comments_without_exposing_definitions() {
+    for (prefix, padding) in [
+        ("<!-- -->- <!--", "  "),
+        ("<!--\n-->2. <!--", "   "),
+        ("<!-- -->- <!-- -->- <!--", "    "),
+        ("<!-- first --><!-- second -->- - <!--", "    "),
+    ] {
+        let md = format!("{prefix}\n\n{padding}[x]: /wrong\n{padding}-->\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        let paras: Vec<_> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+        let links: Vec<_> =
+            paras.iter().flat_map(|p| &p.inlines).filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None }).collect();
+        assert_eq!(links, ["/right"], "{md}");
+        assert!(paras.iter().all(|p| !p.text().contains("/wrong")), "hidden definition remains hidden: {md}");
+    }
+    // A list introduced by a tail also establishes a block boundary for the next item.
+    let flow = parse("<!-- -->- <!-- -->text\n2. <!--\n\n   [x]: /wrong\n   -->\n\n[x]: /right\n\n[x]");
+    let links: Vec<_> = flow
+        .blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| &p.inlines)
+        .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+        .collect();
+    assert_eq!(links, ["/right"]);
+    for prefix in ["<!-- -->- <!-- -->", "<!--\n-->- <!--\n  -->", "<!-- -->- <!-- -->- <!-- -->"] {
+        let flow = parse(&format!("{prefix}Visible text"));
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.text() == "Visible text")), "{prefix}");
+        for suffix in ["[x]: /right\n\n[x]", "```\n    [x]: /wrong\n    ```\n\n[x]: /right\n\n[x]"] {
+            let md = format!("{prefix}{suffix}");
+            let flow = parse(&md);
+            let links: Vec<_> = flow
+                .blocks
+                .iter()
+                .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+                .flat_map(|p| &p.inlines)
+                .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+                .collect();
+            assert_eq!(links, ["/right"], "{md}");
+        }
+    }
+}
