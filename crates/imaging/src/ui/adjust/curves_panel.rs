@@ -14,21 +14,21 @@ use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, BodyCx, FieldLayout, LabelKind, SideLabel, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _,
-    ShowContainer as _, clicked,
+    Bind, BodyCx, CanvasGesture, CommandSet as _, Commands as _, Entry, FieldLayout, LabelKind, NoValue, Outcome, Pattern, Props, Remember as _,
+    Sampler as _, Show as _, ShowContainer as _, SideLabel, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
+use craft_ui::primitives::{Span, TextRun};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
-use craft_ui::primitives::{Span, TextRun};
 use egui::{Align, Id, Layout, Response, Ui, vec2};
 
 use super::context::{read_shown, write_shown};
 use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
-use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveEditorOutput, CurveRules};
 use crate::ui::curve::graph::CurveGraph;
+use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveEditorOutput, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
 
 /// The levels of a Curves value (8-bit tones) and the most points Photoshop allows.
@@ -165,20 +165,32 @@ fn display_check(ui: &mut Ui, cx: &mut BodyCx<'_>, key: &'static str, label: Lab
     } else {
         None
     };
-    let spans = TextRun::mnemonic(text.as_str(), at).spans.into_iter().map(|span| {
-        let mut owned = Span::new(span.text.into_owned());
-        owned.underline = span.underline;
-        owned
-    }).collect();
+    let spans = TextRun::mnemonic(text.as_str(), at)
+        .spans
+        .into_iter()
+        .map(|span| {
+            let mut owned = Span::new(span.text.into_owned());
+            owned.underline = span.underline;
+            owned
+        })
+        .collect();
     let side = SideLabel::new().kind(LabelKind::Hidden).layout(FieldLayout::After);
-    cx.labelled_with(ui, key, label, side, Checkbox::new(Bind::bound(value)).enabled(enabled), Text::styled(spans).role(TypeRole::Label).enabled(enabled));
+    cx.labelled_with(
+        ui,
+        key,
+        label,
+        side,
+        Checkbox::new(Bind::bound(value)).enabled(enabled),
+        Text::styled(spans).role(TypeRole::Label).enabled(enabled),
+    );
 }
 
 fn display_options(ui: &mut Ui, display: &mut DisplayOptions, words: &AdjustWords, composite: bool, pencil: bool) {
     Stack::new().id_salt("display-options").show(ui, |ui, cx| {
         Row::new().show(ui, |ui, _| {
             for (fine, name, icon) in [(false, words.grid_quarters.clone(), "grid-four"), (true, words.grid_tenths.clone(), "grid-nine")] {
-                let shown = ToggleButton::new(name, Bind::given(display.fine_grid == fine)).icon(IconId::new(icon)).icon_only().id_salt(fine).show(ui);
+                let shown =
+                    ToggleButton::new(name, Bind::given(display.fine_grid == fine)).icon(IconId::new(icon)).icon_only().id_salt(fine).show(ui);
                 if shown.value() == Some(&true) {
                     display.fine_grid = fine;
                 }
@@ -194,23 +206,42 @@ fn display_options(ui: &mut Ui, display: &mut DisplayOptions, words: &AdjustWord
 
 /// Keep the existing square graph's minimum. At narrow widths the options follow it rather than
 /// forcing a wider dialog or squeezing its fields; with room they occupy the measured middle column.
-fn editor_and_display(ui: &mut Ui, editor: CurveEditor<'_>, display: &mut DisplayOptions, words: &AdjustWords, composite: bool, pencil: bool, gap: f32) -> CurveEditorOutput {
+fn editor_and_display(
+    ui: &mut Ui,
+    editor: CurveEditor<'_>,
+    display: &mut DisplayOptions,
+    words: &AdjustWords,
+    composite: bool,
+    pencil: bool,
+    gap: f32,
+) -> CurveEditorOutput {
     let width = [words.channel_overlays.clone(), words.histogram.clone(), words.baseline.clone(), words.intersection_line.clone()]
-        .into_iter().map(|label| Checkbox::new(Bind::given(true)).label(label).measure_in(ui, Proposal::Ideal).x).fold(0.0, f32::max);
-    let buttons = 2.0 * ToggleButton::new(words.grid_quarters.clone(), Bind::given(true)).icon(IconId::new("grid-four")).icon_only().measure_in(ui, Proposal::Ideal).x + gap;
+        .into_iter()
+        .map(|label| Checkbox::new(Bind::given(true)).label(label).measure_in(ui, Proposal::Ideal).x)
+        .fold(0.0, f32::max);
+    let buttons = 2.0
+        * ToggleButton::new(words.grid_quarters.clone(), Bind::given(true))
+            .icon(IconId::new("grid-four"))
+            .icon_only()
+            .measure_in(ui, Proposal::Ideal)
+            .x
+        + gap;
     let width = width.max(buttons);
     let mut graph = CurveGraph::new("", Bind::given(Curve::identity(255.0)));
     let least = graph.measure_in(ui, Proposal::Min).x;
     if ui.available_width() >= least + gap + width {
         let graph_width = graph.measure_in(ui, Proposal::Width(ui.available_width() - width - gap)).x;
         ui.horizontal_top(|ui| {
-            let shown = ui.allocate_ui_with_layout(vec2(graph_width, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(graph_width);
-                editor.show(ui)
-            }).inner;
+            let shown = ui
+                .allocate_ui_with_layout(vec2(graph_width, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(graph_width);
+                    editor.show(ui)
+                })
+                .inner;
             display_options(ui, display, words, composite, pencil);
             shown
-        }).inner
+        })
+        .inner
     } else {
         let shown = editor.show(ui);
         display_options(ui, display, words, composite, pencil);
@@ -492,11 +523,8 @@ impl<'a> CurvesPanel<'a> {
                 editor = editor.sampler(|points: &[[f32; 2]]| sample(points));
             }
             let gap = cx.gap().unwrap_or(ui.spacing().item_spacing.x);
-            let shown = if context.is_dialog() {
-                editor_and_display(ui, editor, &mut display, &words, composite, pencil, gap)
-            } else {
-                editor.show(ui)
-            };
+            let shown =
+                if context.is_dialog() { editor_and_display(ui, editor, &mut display, &words, composite, pencil, gap) } else { editor.show(ui) };
             selected = shown.selected;
             let mapped = |one: Curve| {
                 let mut next = value.clone();
@@ -518,7 +546,11 @@ impl<'a> CurvesPanel<'a> {
             shown_channel = if picked == channel || !edit.is_empty() { channel } else { picked };
             write_shown(&mut channel_bind, cx, stored, shown_channel);
             let kept_channel = if channel_bind.is_some() { stored } else { shown_channel };
-            *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None }, display: if context.is_dialog() { display } else { state.display } };
+            *cx.keep::<Shown>() = Shown {
+                channel: kept_channel,
+                selected: if shown_channel == channel { selected } else { None },
+                display: if context.is_dialog() { display } else { state.display },
+            };
         });
         CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
     }
