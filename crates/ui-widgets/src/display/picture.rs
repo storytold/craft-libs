@@ -162,8 +162,15 @@ impl Component for Picture<'_> {
         if self.extent == PictureSize::Fill {
             // The room less the padding the pipeline adds, so the picture shrinks to a narrower room and never overflows it.
             // An unbounded room (a horizontal row or scroll) gives no width to fill: the icon side then sets the height.
-            let width = cx.room.filter(|room| room.is_finite()).map_or_else(|| self.aspect.of(cx.style.height), |room| room.max(0.0));
-            return Vec2::new(width, self.aspect.high(width));
+            // The aspect is the set one, else the SVG's own, else a square (`width` at a unit height).
+            let ratio = self.width(1.0);
+            let width = cx.room.filter(|room| room.is_finite()).map_or_else(|| self.width(cx.style.height), |room| room.max(0.0));
+            let height = match self.aspect {
+                Some(aspect) => aspect.high(width),
+                None if ratio > 0.0 && ratio.is_finite() => width / ratio,
+                None => width,
+            };
+            return Vec2::new(width, height);
         }
         let height = cx.style.height;
         Vec2::new(self.width(height), height)
