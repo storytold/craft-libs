@@ -501,6 +501,10 @@ impl StackDialog for HostedPdfExport {
                 }
                 let mut next = self.settings.clone();
                 set_serde_field(&mut next, field, value.clone())?;
+                // The passwords never go through JSON, so the settings read back keep the dialog's.
+                let security = &self.settings.security;
+                next.security.open_password.clone_from(&security.open_password);
+                next.security.permissions_password.clone_from(&security.permissions_password);
                 if field == "standard" {
                     apply_standard(&mut next);
                     if next.standard != Standard::None {

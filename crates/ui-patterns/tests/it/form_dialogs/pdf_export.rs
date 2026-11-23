@@ -93,8 +93,8 @@ fn the_hosted_dialog_takes_the_artboards_and_refuses_what_a_standard_disables() 
     }
 }
 
-/// Automation sets the two passwords the settings never serialise, as typing them does, never lists them, and is
-/// refused them under a standard, as the rows are.
+/// Automation sets the two passwords the settings never serialise, as typing them does, never lists them, keeps them
+/// through writes to the other settings, and is refused them under a standard, as the rows are.
 #[trial]
 fn the_hosted_dialog_takes_the_passwords_and_never_lists_them() {
     let ctx = Context::default();
@@ -104,8 +104,9 @@ fn the_hosted_dialog_takes_the_passwords_and_never_lists_them() {
     assert_eq!(set(&mut host, "security.openPassword", json!("open")), Ok(()));
     assert_eq!(set(&mut host, "security.permissionsPassword", json!("own")), Ok(()));
     assert!(set(&mut host, "security.openPassword", json!(7)).is_err(), "a password is text");
+    assert_eq!(set(&mut host, "security.copy", json!(false)), Ok(()));
     let security = host.get_mut_by_id::<HostedPdfExport>(id).expect("open").settings().security.clone();
-    assert_eq!((security.open_password.as_str(), security.permissions_password.as_str()), ("open", "own"));
+    assert_eq!((security.open_password.as_str(), security.permissions_password.as_str()), ("open", "own"), "kept through another write");
     assert_eq!(listed(&host, id, "security.openPassword"), Value::Null, "a password is never listed");
     assert_eq!(set(&mut host, "standard", json!("pdfX3")), Ok(()));
     assert!(set(&mut host, "security.openPassword", json!("other")).is_err(), "a standard takes no password");
