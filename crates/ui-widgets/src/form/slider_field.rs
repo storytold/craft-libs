@@ -92,6 +92,10 @@ pub struct SliderField<'a> {
     /// row, the Color panel's channels) instead of the number cell, and the slider takes the room it leaves.
     #[prop]
     field_sizing: Option<Sizing>,
+    /// The values with a caption each, drawn under the slider's track (the two ends of a named scale: "Low" and
+    /// "High"). Empty, which is how every caller had it before this prop existed, keeps a plain track.
+    #[prop]
+    marks_labelled: Vec<(f64, Label)>,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -146,6 +150,7 @@ impl<'a> SliderField<'a> {
             track_face: None,
             thumb: SliderThumb::Round,
             field_sizing: None,
+            marks_labelled: Vec::new(),
             field_width: 0.0,
             out_of_range: None,
         }
@@ -165,6 +170,7 @@ impl<'a> SliderField<'a> {
             thumb: self.thumb,
             reset: self.value.reset_value().copied(),
             field_sizing: self.field_sizing,
+            marks: self.marks_labelled.clone(),
         }
     }
 }
@@ -182,6 +188,8 @@ struct Look {
     /// The reset value of the composite's own binding, which both children restore on a double click.
     reset: Option<f64>,
     field_sizing: Option<Sizing>,
+    /// The captioned marks under the track, from the composite's `marks_labelled`.
+    marks: Vec<(f64, Label)>,
 }
 
 /// The composite's check, which its children check their values with.
@@ -208,6 +216,7 @@ impl Look {
             bind = bind.check_with(check, BindCheck::validity);
         }
         let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
+        let slider = if self.marks.is_empty() { slider } else { slider.marks_labelled(self.marks.clone()) };
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,
