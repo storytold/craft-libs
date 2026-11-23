@@ -62,7 +62,7 @@ impl SampleFace<'_> {
 /// face's sample in a list of bands sits at one height, and none is clipped. Its width is the sample's layout cut with
 /// an ellipsis where the room does not fit it (`faces::sample_text`, the layout `paint` draws). Without a ready face
 /// it reserves the most that layout can take, the room's width, so the face arriving never widens it.
-#[derive(craft_ui::contract::Component)]
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
 pub(crate) struct FontSample<'a> {
     #[common]
@@ -70,6 +70,9 @@ pub(crate) struct FontSample<'a> {
     text: Cow<'a, str>,
     face: SampleFace<'a>,
     points: f32,
+    /// The height of the band the sample is set in, from the caller's sizes (a list row's thumbnail side), instead of
+    /// [`LINE_EM`] of its size.
+    #[prop(quantity = "band height the caller's layout gives, in points")]
     band: Option<f32>,
 }
 
@@ -77,14 +80,6 @@ impl<'a> FontSample<'a> {
     /// A sample of `text` in `face` at `points`, named `label`.
     pub(crate) fn new(label: impl Into<Label>, text: impl Into<Cow<'a, str>>, face: SampleFace<'a>, points: f32) -> Self {
         FontSample { common: Common::new(), text: text.into(), face, points, band: None }.label(label)
-    }
-
-    /// The height of the band the sample is set in, from the caller's sizes (a list row's thumbnail side), instead of
-    /// [`LINE_EM`] of its size.
-    #[must_use]
-    pub(crate) fn band(mut self, height: f32) -> Self {
-        self.band = Some(height);
-        self
     }
 }
 
