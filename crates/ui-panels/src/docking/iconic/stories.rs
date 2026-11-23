@@ -5,7 +5,7 @@ use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
 use crate::docking::{ColumnBar, GroupAt, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
-use crate::runtime::commands::{CommandInput, CommandState};
+use crate::runtime::commands::{CommandState, CommandStates};
 use crate::runtime::env::{Env, Message};
 use crate::sections::Panel;
 use crate::testing::memory::global;
@@ -44,11 +44,10 @@ fn toggled(panel: &u8) -> PanelSpec {
 
 /// Brushes has something to show while it is closed, so its cell carries the marker; Swatches has something to show
 /// but is open, so its cell carries none; History has nothing to show.
-fn marked_states(input: CommandInput) -> CommandInput {
-    input
-        .state(PanelToggles::Brushes, CommandState::new().checked(false).marked(true).hint("3 new brushes"))
-        .state(PanelToggles::Swatches, CommandState::new().checked(true).marked(true).hint("2 new swatches"))
-        .state(PanelToggles::History, CommandState::new().checked(false))
+fn marked_states(states: &mut CommandStates) {
+    states.set(PanelToggles::Brushes, CommandState::new().checked(false).marked(true).hint("3 new brushes"));
+    states.set(PanelToggles::Swatches, CommandState::new().checked(true).marked(true).hint("2 new swatches"));
+    states.set(PanelToggles::History, CommandState::new().checked(false));
 }
 
 /// Shows `column` as a dock shows it: at the end edge of a stage, as wide as the rail, its flyouts opening over the

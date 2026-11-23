@@ -176,9 +176,9 @@ fn the_drawer_opens_on_the_side_it_is_given() {
 #[trial]
 fn the_edit_toolbar_button_takes_the_apps_icon() {
     use craft_ui::rails::{LastUsed, ToolRail};
+    let slots = Tracked::new(vec![slot(0, &[UNDO])]);
+    let last = Tracked::new(LastUsed::default());
     let mut fixture = Fixture::new(move |ui| {
-        let slots = [slot(0, &[UNDO])];
-        let last = LastUsed::default();
         let _ = ToolRail::new("Tools", &slots, &UNDO, &last)
             .edit_toolbar("Customize")
             .edit_icon(craft_behavior::IconId::new("settings"))

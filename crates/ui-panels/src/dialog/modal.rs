@@ -271,14 +271,6 @@ impl<'a> Dialog<'a> {
         self
     }
 
-    /// The least width of the dialog's content from the size role `least`, in place of `size.dialog.least`: a wide
-    /// dialog (`LeastWidth::WideDialog`) whose tabs hold tables.
-    #[must_use]
-    pub fn least_width(mut self, least: crate::contract::LeastWidth) -> Self {
-        self.props = self.props.least_width(least);
-        self
-    }
-
     /// The dialog reports the alert-dialog role instead of the dialog role.
     #[must_use]
     pub(super) fn alert(mut self) -> Self {

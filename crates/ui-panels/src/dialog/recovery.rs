@@ -5,7 +5,7 @@ use super::host::{DialogResult, StackDialog};
 use super::prompt::{Prompt, Reply, apply_to_all, buttons};
 use super::stack::{DialogId, DialogStack, dialog_id};
 use super::words::DialogWords;
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
+use crate::contract::{Bind, NoValue, Outcome};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::sections::DialogRole;
