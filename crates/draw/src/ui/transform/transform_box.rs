@@ -96,17 +96,18 @@ struct KeyPicked(Option<BoxPart>);
 const NUDGE: f64 = 1.0;
 const NUDGE_FAR: f64 = 10.0;
 
-/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a corner handle reaches 8 from
+/// The pointer distances, in standard handle sides (`size.handle.md`; at an 8 handle: a corner handle reaches 11 from
 /// its point and a side's midpoint handle 11, inside the box as outside; each side's band runs from half a point
 /// outside it (inside it, on a box whose inside is the tool's) to 13 outside, and the band's first quarter of the side from each corner, at most 13 along it, is that
 /// corner's; the reference point and the centre reach 12, the rotate pointer shows within 36 of a corner, the rotate
 /// band runs from 5 to 18 outside it). The midpoint reach and the side band are measured on the reference application
 /// at 100 %: a press 10 points inside at a side's midpoint, or 10 along the side from it, takes the side, one 12 inside
 /// moves the box; away from the midpoint a press on the side's line or inside it moves the box, one a point outside
-/// takes the side, and so does one 12 outside but not one 14 outside. The corner reach and the corners' share of the
-/// bands are PhotoCraft's: inside the box only a handle's own reach is the box's, so a press there off the handles
+/// takes the side, and so does one 12 outside but not one 14 outside. The corner reach is measured too (the reach
+/// probe of 2026-11-23: a press 10 along an axis from the corner takes it, 12 not; 8.5 on the diagonal does, 11.3
+/// not: a circle of about 11). The corners' share of the bands is PhotoCraft's: inside the box only a handle's own reach is the box's, so a press there off the handles
 /// reaches what lies under the box (a text editor under a paragraph frame).
-const HANDLE_REACH_IN_HANDLES: f32 = 1.0;
+const HANDLE_REACH_IN_HANDLES: f32 = 1.375;
 const EDGE_REACH_IN_HANDLES: f32 = 1.375;
 const SIDE_BAND_IN_HANDLES: f32 = 1.625;
 const HIT_IN_HANDLES: f32 = 1.5;
