@@ -83,3 +83,19 @@ fn a_second_press_of_a_held_key_runs_no_shortcut_again() {
     frames.frame(vec![key_release(Key::S, Modifiers::NONE)], &mut show);
     assert!(ran(&mut frames, &mut show, &field, vec![key_press(Key::S, Modifiers::NONE)]), "a press after the release runs it again");
 }
+
+/// A Cut with Cmd and Shift held is Cmd+Shift+X, the app's chord, not the focused field's Cut; a plain Cmd+X Cut stays
+/// the field's. Guards against a key stage that gave every clipboard event to a field that lists the edit, whatever
+/// the modifiers.
+#[trial]
+fn a_cut_with_shift_held_is_the_apps_chord() {
+    let field = RefCell::new(Field::default());
+    let mut frames = frames_for(Chord::new(Mods { shift: true, ..Mods::CMD }, ChordKey::X));
+    let mut show = window(&field);
+    settle(&mut frames, &mut show, true);
+    let shifted = vec![Event::ModifiersChanged(Modifiers::COMMAND | Modifiers::SHIFT), Event::Cut];
+    assert!(ran(&mut frames, &mut show, &field, shifted), "Cmd+Shift+X ran its command");
+    assert!(field.borrow().edits.is_empty(), "the field cut nothing: {:?}", field.borrow().edits);
+    assert!(!ran(&mut frames, &mut show, &field, vec![Event::ModifiersChanged(Modifiers::COMMAND), Event::Cut]), "Cmd+X runs no command");
+    assert_eq!(field.borrow().edits, [EditCommand::Cut], "a plain Cut is the field's");
+}

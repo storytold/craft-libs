@@ -63,7 +63,29 @@ struct Strip<'a> {
     bound: &'a dyn Fn(&Chord) -> bool,
 }
 
+/// The chord a clipboard event of `command` stands for with `mods` held: Cmd and the command's key, with the modifiers
+/// held beside Cmd (Cmd+Shift+V pastes in place).
+fn clip_chord(command: EditCommand, mods: Mods) -> (Key, KeyInput) {
+    let key = match command {
+        EditCommand::Cut => Key::X,
+        EditCommand::Paste => Key::V,
+        _ => Key::C,
+    };
+    let mut chord_mods = mods;
+    chord_mods.cmd = true;
+    (key, KeyInput::new(chord_mods).with_typed(key))
+}
+
 impl Strip<'_> {
+    /// Whether a clipboard event of `command` with `mods` held is the focused editor's edit: the platform sends it for
+    /// the edit's own chord, and for Cmd with Shift or Alt too (Cmd+Shift+X), which is another chord, the app's, unless
+    /// the editor lists that chord for the edit.
+    fn clip_is_edit(&self, command: EditCommand, mods: Mods) -> bool {
+        let (_, input) = clip_chord(command, mods);
+        !((mods.cmd || mods.ctrl) && (mods.shift || mods.alt))
+            || self.edit_chords.iter().any(|(edit, chord)| *edit == command && self.layout.matches(chord, &input, self.os))
+    }
+
     /// Whether the text the platform sends with the press `input` stands for is a shortcut's own and belongs to no
     /// field: Alt is held and the keymap binds the press to a command that is enabled, so it fires (S-L177). A platform
     /// sends its key's text with an Alt shortcut (Alt+Q on Linux). A bound Alt chord whose command is disabled does
@@ -153,7 +175,7 @@ impl Strip<'_> {
                 batch.egui_texts += 1;
                 true
             }
-            KeyEvent::Clip { command, text, .. } if (self.edits)(command) => {
+            KeyEvent::Clip { command, text, mods } if (self.edits)(command) && self.clip_is_edit(command, mods) => {
                 batch.clips.push((command, batch.place));
                 if text.is_some() {
                     batch.paste = text;
@@ -164,20 +186,13 @@ impl Strip<'_> {
             KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
             KeyEvent::Clip { command, mods, .. } => {
-                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord, with the
-                // modifiers held beside Cmd (Cmd+Shift+V pastes in place). The web sends the chord's press as well.
-                let key = match command {
-                    EditCommand::Cut => Key::X,
-                    EditCommand::Paste => Key::V,
-                    _ => Key::C,
-                };
-                let mut chord_mods = mods;
-                chord_mods.cmd = true;
-                let input = KeyInput::new(chord_mods).with_typed(key);
+                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The web
+                // sends the chord's press as well.
+                let (key, input) = clip_chord(command, mods);
                 let sent = batch
                     .shortcuts
                     .iter()
-                    .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == chord_mods && shortcut.input.typed == Some(key));
+                    .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == input.mods && shortcut.input.typed == Some(key));
                 if !sent && self.records {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false, at);
