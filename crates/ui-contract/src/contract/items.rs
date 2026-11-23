@@ -185,8 +185,27 @@ impl<S: Default> Default for Held<S> {
     }
 }
 
+/// The rows the item step walks in a pass: the source the caller gave, or the view `Collection::filtered` made of it,
+/// which the hooks own for the pass.
+enum Source<'s, K> {
+    Given(&'s dyn ItemSource<K>),
+    Filtered(Box<dyn ItemSource<K> + 's>),
+}
+
+impl<'s, K> std::ops::Deref for Source<'s, K> {
+    type Target = dyn ItemSource<K> + 's;
+
+    fn deref(&self) -> &(dyn ItemSource<K> + 's) {
+        match self {
+            Source::Given(given) => *given,
+            Source::Filtered(view) => &**view,
+        }
+    }
+}
+
 pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
-    source: &'s dyn ItemSource<C::Key>,
+    /// The rows of the pass: the read step applies the collection's filter once (`Collection::filtered`).
+    source: Source<'s, C::Key>,
     item: &'s mut ItemFn<'r, C>,
     layout: Option<Arc<C::ItemLayout>>,
     /// The layout's column count this pass, which a row pick's whole-row cells span.
@@ -221,6 +240,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     visible: Range<usize>,
     /// The rows built this pass with their rects, for `collection_response`.
     shown: Vec<ShownRow<C::Key>>,
+    /// The row under the pointer this pass, for `collection_response`.
+    hovered: Option<C::Key>,
     offset: f64,
     offset_at_read: f64,
     offset_x: f64,
@@ -273,7 +294,7 @@ struct Placement {
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     pub(super) fn new(source: &'s dyn ItemSource<C::Key>, item: &'s mut ItemFn<'r, C>) -> Self {
         ItemsHooks {
-            source,
+            source: Source::Given(source),
             item,
             layout: None,
             columns: 0,
@@ -294,6 +315,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             keyed_activation: None,
             visible: 0..0,
             shown: Vec::new(),
+            hovered: None,
             offset: 0.0,
             offset_at_read: 0.0,
             offset_x: 0.0,

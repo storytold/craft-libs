@@ -5,6 +5,7 @@ use super::show::named;
 use super::style::ListRowStyle;
 use super::thumb::{Thumb, ThumbSize};
 use super::trailing::{TrailingFace, TrailingItem, trailing_run};
+use crate::buttons::Link;
 use crate::contract::{ColumnAlign, PartsCx, RowHeight, WordSetCx as _};
 use crate::layout::{ShrinkOrder, ShrinkUnit, shrink_widths};
 use crate::list::toggle::ToggleState;
@@ -145,6 +146,22 @@ struct Bands {
     toggles: Vec<(usize, Rect, bool)>,
     /// Index into `texts`, the column's position in the row's cells, the cell's rect, whether it leads.
     texts: Vec<(usize, usize, Rect, bool)>,
+    /// Index into `statuses`, the column's position in the row's cells, the cell's rect.
+    statuses: Vec<(usize, usize, Rect)>,
+}
+
+/// Where the pieces of a status cell lie in its cell, in reading order: the tone icon's slot, the text and the action
+/// link.
+pub(super) struct StatusSlots {
+    pub(super) icon: Option<Rect>,
+    pub(super) text: Rect,
+    pub(super) action: Option<Rect>,
+}
+
+/// The framework link a status cell's action is: the face of its part, in the cell's type role and cut at its end
+/// where the slot is short.
+pub(super) fn action_link(text: &Label, role: TypeRole) -> Link {
+    Link::new(text.clone()).role(role).wrap(Wrap::Elide)
 }
 
 /// Where the parts of a row lie in its rect.
@@ -152,6 +169,8 @@ pub(super) struct Placed {
     pub(super) toggles: Vec<(usize, Rect)>,
     /// The text cells by index into `texts`, with the column's position in the row's cells.
     pub(super) texts: Vec<(usize, usize, Rect)>,
+    /// The status cells by index into `statuses`, with the column's position in the row's cells.
+    pub(super) statuses: Vec<(usize, usize, Rect)>,
     pub(super) dividers: Vec<f32>,
     pub(super) disclosure: Option<Rect>,
     pub(super) marker: Option<Rect>,
@@ -313,6 +332,7 @@ impl ListRow<'_> {
             self.toggle_columns.contains(key)
                 || self.toggles.iter().any(|toggle| toggle.column == *key)
                 || self.texts.iter().any(|text| text.column == *key)
+                || self.statuses.iter().any(|status| status.column == *key)
         };
         cells_of.iter().map(|(key, _)| key).find(|key| !claimed(key))
     }
@@ -365,7 +385,33 @@ impl ListRow<'_> {
             let Some(position) = cells_of.iter().position(|(column, _)| *column == text.column) else { continue };
             texts.push((at, position, cells_of[position].1, leads(position)));
         }
-        Bands { lead, trail, toggles, texts }
+        let mut statuses = Vec::new();
+        for (at, status) in self.statuses.iter().enumerate() {
+            let Some(position) = cells_of.iter().position(|(column, _)| *column == status.column) else { continue };
+            statuses.push((at, position, cells_of[position].1));
+        }
+        Bands { lead, trail, toggles, texts, statuses }
+    }
+
+    /// The pieces of the status cell `at` in its `cell`, inset as a text cell's text is, for a text and a link in
+    /// `role` as `measure` measures the text and the action's link. The action keeps its whole width
+    /// where the cell has room for it; the text
+    /// takes what the icon and the action leave and is cut there.
+    pub(super) fn status_slots(&self, at: usize, cell: Rect, sizes: &Sizes, rtl: bool, role: TypeRole, measure: StatusMeasure<'_>) -> StatusSlots {
+        let StatusMeasure { text_width, action_width } = measure;
+        let status = &self.statuses[at].status;
+        let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
+        let flow = Flow::new(room, rtl);
+        let icon = crate::notices::tone_icon(status.tone).map(|_| flow.span(0.0, sizes.icon.min(room.width())));
+        let from = icon.map_or(0.0, |icon| icon.width() + sizes.gap).min(room.width());
+        let action = status.action.as_ref().map(|action| action_width(action).min((room.width() - from).max(0.0)));
+        let free = (room.width() - from - action.map_or(0.0, |width| width + sizes.gap)).max(0.0);
+        let text = text_width(&TextRun::new(status.text.as_str()).role(role)).min(free);
+        StatusSlots {
+            icon,
+            text: flow.span(from, text),
+            action: action.map(|width| flow.span(from + text + if text > 0.0 { sizes.gap } else { 0.0 }, width)),
+        }
     }
 
     /// The alignment of a column's text and whether its figures are tabular.
@@ -399,7 +445,7 @@ impl ListRow<'_> {
         } else {
             columns
         };
-        let Bands { lead, trail, toggles: cells, texts } = self.bands(cells_of, rect, rtl);
+        let Bands { lead, trail, toggles: cells, texts, statuses } = self.bands(cells_of, rect, rtl);
         let flow = Flow::new(rect, rtl);
         let band_width = (rect.width() - lead - trail).max(0.0);
         let band = flow.span(lead, band_width);
@@ -493,9 +539,20 @@ impl ListRow<'_> {
         // Every item, optional ones included: at its ideal width the row shows everything.
         let all: f32 = widths.items.iter().map(|item| item.width + sizes.gap).sum();
         let ideal_width = min_width - least + all;
+        let label = match &self.document {
+            // Centred document text centres on the row, not on what the leading parts leave it: the label keeps the same
+            // inset at both ends, the larger of the two, so it still clears the leading and trailing parts. End-aligned
+            // text already ends at the row's end before its trailing items.
+            Some(rows) if rows.align == HAlign::Center => {
+                let inset = label_start.max(band_width - label_end);
+                inner.span(inset, (band_width - 2.0 * inset).max(0.0))
+            }
+            _ => inner.span(label_start, (label_end - label_start).max(0.0)),
+        };
         Placed {
             toggles,
             texts,
+            statuses,
             dividers,
             disclosure: disclosure_rect,
             marker: marker_rect,
@@ -503,7 +560,7 @@ impl ListRow<'_> {
             icon,
             first,
             extras,
-            label: inner.span(label_start, (label_end - label_start).max(0.0)),
+            label,
             items,
             min_width,
             ideal_width,
@@ -581,4 +638,10 @@ pub struct RowPlacement {
     pub disclosure: Option<Rect>,
     /// The label's least width under the fixed sizes.
     pub min_label: f32,
+}
+
+/// How a status cell's pieces measure: the text's width and the action link's.
+pub(super) struct StatusMeasure<'m> {
+    pub(super) text_width: &'m dyn Fn(&TextRun<'_>) -> f32,
+    pub(super) action_width: &'m dyn Fn(&Label) -> f32,
 }

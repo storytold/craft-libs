@@ -12,7 +12,7 @@ use crate::primitives::{HAlign, IconSpec, TextRun, Wrap};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::{EnvView, Label};
 use crate::style::{ComponentStyle, IconLook, Insets, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
-use craft_behavior::{Flow, IconId, Intent, Metrics, NavShape, PartKey, Proposal, Roving, Sense};
+use craft_behavior::{Flow, IconId, Metrics, NavShape, PartKey, Proposal, Roving, Sense};
 use craft_i18n::Format;
 use craft_theme::{Rgba, Stateful, States, Variant, variant::Tone};
 use egui::{Align, Pos2, Rect, Response, Vec2};
@@ -24,14 +24,23 @@ pub enum NoticeLayout {
     /// The icon at the reading start and the text beside it, across the width offered, with no surface.
     #[default]
     Inline,
+    /// A full-width status surface with button actions, above a document or workspace.
+    Bar,
     /// The inline layout on a floating surface, the card width wide where the room allows: a toast. A card of a status
     /// tone draws its edge and title in the tone's colour.
     Card,
+    /// The card on the inverse surface (`surface.inverse`, with `text.on_inverse`): light on a dark theme, dark on a
+    /// light one. Toasts use it. The size and layout are the card's; a status tone draws its icon and edge in the
+    /// tone's colour.
+    Toast,
     /// Icon, title, message and actions in a column centred in the room, at most the reading width wide: an empty
     /// state. The first action is the primary button and the others secondary, all as wide as the widest, side by side
     /// or stacked when they do not fit.
     Centred,
 }
+
+/// How many large icons wide the picture of a centred notice (an empty state) is.
+const EMPTY_ICON_IN_LARGE: f32 = 1.5;
 
 /// The icon of a notice.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -206,7 +215,8 @@ pub struct Notice<'a> {
     announce: Option<Politeness>,
     actions: Vec<NoticeAction>,
     lines: Vec<Label>,
-    /// The host's leaves under the actions of a centred notice, and their sizes in this pass.
+    /// The host's leaves: under the actions of a centred notice, between the bullet lines and the actions of an inline
+    /// or card notice; and their sizes in this pass.
     content: Vec<Box<dyn for<'r> Hosted<Notice<'r>> + 'a>>,
     content_sizes: Vec<Vec2>,
     placed: Option<Placed>,
@@ -244,6 +254,9 @@ struct Plan {
     lines: Vec<f32>,
     more: Option<f32>,
     actions: Vec<Vec2>,
+    /// The action index range and height of each wrapped row in a row layout; empty for the centred layout.
+    action_rows: Vec<(std::ops::Range<usize>, f32)>,
+    inline_actions: bool,
     dismiss: Option<Vec2>,
     /// The height of the head line in a row layout, where the icon, the first line of the text and the dismiss button
     /// share one centre line; and how far the text sits below the head's top to put its first line there.
@@ -305,22 +318,18 @@ impl<'a> Notice<'a> {
         self
     }
 
-    /// Hosts `component` under the actions of a centred notice, after the leaves added before it; its output goes to
-    /// `output` in the pass it is shown. Other layouts show no hosted leaves.
+    /// Hosts `component` after the leaves added before it: under the actions of a centred notice, and in an inline or
+    /// card notice under the message and its bullet lines, before the actions, across the whole width. Its output goes
+    /// to `output` in the pass it is shown.
     #[must_use]
     pub fn content<C: Show + 'a>(mut self, component: C, output: impl FnOnce(C::Output) + 'a) -> Self {
         self.content.push(Box::new(Hosting::new(component, output)));
         self
     }
 
-    /// Measures the hosted leaves for this pass; only a centred notice shows them.
+    /// Measures the hosted leaves for this pass.
     fn measure_content(&mut self, cx: &MeasureCx<'_, Self>) {
-        let centred = !self.row();
-        self.content_sizes = if centred {
-            self.content.iter_mut().enumerate().map(|(at, item)| item.measure(cx, (CONTENT, at), Proposal::Ideal)).collect()
-        } else {
-            Vec::new()
-        };
+        self.content_sizes = self.content.iter_mut().enumerate().map(|(at, item)| item.measure(cx, (CONTENT, at), Proposal::Ideal)).collect();
     }
 
     fn texts<'t>(&self, env: &EnvView<'_>, words: &NoticeWords, format: &Format, message: &'t str) -> Texts<'t> {
@@ -383,10 +392,13 @@ impl<'a> Notice<'a> {
     /// The sizes of the actions' faces; a centred notice's buttons all take the widest one's width.
     fn action_sizes(&self, cx: &MeasureCx<'_, Self>) -> Vec<Vec2> {
         let labels = self.action_labels(cx);
-        if self.row() {
+        if self.row() && self.layout != NoticeLayout::Bar {
             return labels.into_iter().map(|label| cx.face(Self::link(cx.style.message.role, label))).collect();
         }
         let sizes: Vec<Vec2> = labels.into_iter().enumerate().map(|(at, label)| cx.face(Self::button(at, label))).collect();
+        if self.layout == NoticeLayout::Bar {
+            return sizes;
+        }
         let widest = sizes.iter().map(|size| size.x).fold(0.0, f32::max);
         sizes.into_iter().map(|size| Vec2::new(widest, size.y)).collect()
     }
@@ -401,10 +413,17 @@ impl<'a> Notice<'a> {
         let actions = self.action_sizes(cx);
         let icon_width = if row { icon.map_or(0.0, |side| side + gap) } else { 0.0 };
         let dismiss_width = dismiss.map_or(0.0, |size| size.x + gap);
-        let column = if width.is_finite() { (width - icon_width - dismiss_width).max(0.0) } else { f32::INFINITY };
+        let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
+        let remaining = width - icon_width - dismiss_width - actions_width - gap;
+        let inline_actions = matches!(self.layout, NoticeLayout::Inline | NoticeLayout::Bar)
+            && !actions.is_empty()
+            && (!width.is_finite() || remaining >= actions_width);
+        let action_width = if inline_actions { actions_width + gap } else { 0.0 };
+        let column = if width.is_finite() { (width - icon_width - dismiss_width - action_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();
         let title_role = self.title_look(cx.style).role;
-        let mut title = texts.title.as_deref().map(|title| run(title, title_role));
+        let title_layout = texts.title.as_deref().map(|title| cx.layout_at(&self.run(title, title_role), column));
+        let mut title = title_layout.as_ref().map(|layout| layout.size());
         let brand = title.zip(texts.byline.as_deref()).map(|(name, byline)| {
             let byline = run(byline, cx.style.byline.role);
             let beside = name.x + gap + byline.x <= column;
@@ -413,40 +432,43 @@ impl<'a> Notice<'a> {
         if let Some((name, byline, beside)) = brand {
             title = Some(if beside { Vec2::new(name.x + gap + byline.x, name.y) } else { Vec2::new(name.x.max(byline.x), name.y + gap + byline.y) });
         }
-        let message = if texts.message.is_empty() { Vec2::ZERO } else { run(texts.message, cx.style.message.role) };
+        let message_role = if self.title.is_some() { cx.style.detail.role } else { cx.style.message.role };
+        let message_layout = (!texts.message.is_empty()).then(|| cx.layout_at(&self.run(texts.message, message_role), column));
+        let message = message_layout.as_ref().map_or(Vec2::ZERO, |layout| layout.size());
         let bullet = if texts.lines.is_empty() { 0.0 } else { cx.layout(&TextRun::new(BULLET).role(cx.style.line.role)).size().x + gap };
         // The bullet lines run under the icon and the dismiss button as well, across the whole width.
         let line_column = if width.is_finite() { (width - bullet).max(0.0) } else { f32::INFINITY };
         let line_sizes: Vec<Vec2> = texts.lines.iter().map(|line| cx.layout_at(&self.run(line, cx.style.line.role), line_column).size()).collect();
         let more = texts.more.as_deref().map(|more| cx.layout_at(&self.run(more, cx.style.more.role), width).size());
         let stack = cx.style.stack;
-        let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
-        // In a row layout the lines and the actions run from the content's start edge, under the icon.
-        let below_width = if row { actions_width } else { 0.0 };
+        let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
+        // In a row layout the lines, the hosted leaves and the actions run from the content's start edge, under the icon.
+        let below_width = if row { actions_width.max(content_width) } else { 0.0 };
         let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(below_width, |size| size.x.max(below_width)), f32::max);
         let lines_height = line_sizes.iter().chain(more.iter()).map(|size| stack + size.y).sum::<f32>();
+        let leaves_height = self.content_sizes.iter().map(|size| stack + size.y).sum::<f32>();
+        let action_rows = if row && !inline_actions { wrap_actions(&actions, width, gap) } else { Vec::new() };
         let stacked = !row && column.is_finite() && actions_width > column;
-        let actions_height = if stacked {
+        let actions_height = if row {
+            action_rows.iter().map(|(_, height)| *height).sum::<f32>() + gap * action_rows.len().saturating_sub(1) as f32
+        } else if stacked {
             actions.iter().map(|size| size.y).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32
         } else {
             actions.iter().map(|size| size.y).fold(0.0, f32::max)
         };
-        let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
-        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width - below_width).max(content_width);
+        let column_width = if row { 0.0 } else { actions_width.max(content_width) };
+        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(column_width);
         // The head line: the icon, the first line of the text and the dismiss button share its centre line.
-        let first_role = match (&texts.title, texts.message.is_empty()) {
-            (Some(_), _) => Some(title_role),
-            (None, false) => Some(cx.style.message.role),
-            (None, true) => None,
-        };
-        let first = first_role.map_or(0.0, |role| cx.tokens.typography.get(role).line_height);
-        let line = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y)).max(first);
+        let first = title_layout.as_ref().or(message_layout.as_ref()).and_then(|layout| layout.galley.rows.first()).map_or(0.0, |row| row.row.size.y);
+        let action_line = if inline_actions { actions.iter().map(|size| size.y).fold(0.0, f32::max) } else { 0.0 };
+        let line = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y)).max(first).max(action_line);
         let text_offset = (line - first) / 2.0;
-        // Lines and actions start under the head line.
+        // The head includes the complete wrapped message; details and stacked actions follow it.
         let head = (text_offset + title.map_or(0.0, |size| size.y) + message.y).max(line);
-        let with_actions = head + lines_height + if actions.is_empty() { 0.0 } else { stack.max(gap) + actions_height };
+        let with_actions =
+            head + lines_height + leaves_height + if actions.is_empty() || inline_actions { 0.0 } else { stack.max(gap) + actions_height };
         let (needs, height) = if row {
-            ((icon_width + text_width + dismiss_width).max(lines_width), with_actions)
+            ((icon_width + text_width + dismiss_width + action_width).max(lines_width), with_actions)
         } else {
             let parts = [icon, title.map(|size| size.y), Some(message.y), (!actions.is_empty()).then_some(actions_height)];
             let shown: Vec<f32> = parts.into_iter().flatten().chain(self.content_sizes.iter().map(|size| size.y)).collect();
@@ -462,6 +484,8 @@ impl<'a> Notice<'a> {
             lines,
             more: more.map(|size| size.y),
             actions,
+            action_rows,
+            inline_actions,
             dismiss,
             line,
             text_offset,
@@ -496,8 +520,31 @@ impl Component for Notice<'_> {
                 Insets::uniform(0.0),
                 0.0,
             ),
-            NoticeLayout::Card => {
-                let fill = StyleColor(cx.surface(SurfaceKind::Floating).fill);
+            NoticeLayout::Bar => {
+                let colors = &cx.tokens.color;
+                let ink = if key.tone == Tone::Neutral { normal } else { cx.color(key.tone.on_soft(cx.tokens)) };
+                let fill = match key.tone {
+                    Tone::Info => colors.status.info.bg,
+                    Tone::Good => colors.status.good.bg,
+                    Tone::Warn => colors.status.warn.bg,
+                    Tone::Bad => colors.status.bad.bg,
+                    Tone::Accent => colors.accent.soft,
+                    _ => colors.surface.panel,
+                };
+                (
+                    TextLook::new(TypeRole::BodyStrong, stateful(ink)),
+                    TextLook::new(TypeRole::Body, stateful(ink)),
+                    TextLook::new(TypeRole::Body, stateful(ink)),
+                    SurfaceLook::new(Stateful::new(cx.color(fill))),
+                    Insets::uniform(cx.tokens.space.pad.control),
+                    cx.tokens.space.gap.stack,
+                )
+            }
+            NoticeLayout::Card | NoticeLayout::Toast => {
+                let toast = key.layout == NoticeLayout::Toast;
+                let colors = &cx.tokens.color;
+                let fill = if toast { cx.color(colors.surface.inverse) } else { StyleColor(cx.surface(SurfaceKind::Floating).fill) };
+                let normal = if toast { cx.color(colors.text.on_inverse) } else { normal };
                 let mut surface =
                     SurfaceLook::new(Stateful::new(fill)).kind(SurfaceKind::Floating).radius(UiTokens::corner(cx.tokens.shape.radius.surface));
                 // A card of a status tone carries the tone on its edge and title; a neutral card keeps the surface's edge.
@@ -505,7 +552,8 @@ impl Component for Notice<'_> {
                     normal
                 } else {
                     surface = surface.border(stateful(tone), cx.tokens.stroke.thin).border_replaces_edge();
-                    tone
+                    // Tone text is tuned for the ordinary surfaces, not the inverse one.
+                    if toast { normal } else { tone }
                 };
                 (
                     TextLook::new(TypeRole::BodyStrong, stateful(title)),
@@ -525,10 +573,11 @@ impl Component for Notice<'_> {
                 0.0,
             ),
         };
-        let brand = TextLook::new(TypeRole::Display, stateful(normal));
-        let byline = TextLook::new(TypeRole::Label, stateful(faint));
-        let line = TextLook::new(message.role, stateful(muted));
-        let more = TextLook::new(message.role, stateful(faint));
+        let bar_ink = if key.layout == NoticeLayout::Bar { Some(message.color.clone()) } else { None };
+        let brand = TextLook::new(TypeRole::Display, bar_ink.clone().unwrap_or_else(|| stateful(normal)));
+        let byline = TextLook::new(TypeRole::Label, bar_ink.clone().unwrap_or_else(|| stateful(faint)));
+        let line = TextLook::new(message.role, bar_ink.clone().unwrap_or_else(|| stateful(muted)));
+        let more = TextLook::new(message.role, bar_ink.unwrap_or_else(|| stateful(faint)));
         NoticeStyle {
             surface,
             metrics: Metrics::new().padding(padding).gap(control.gap),
@@ -541,7 +590,12 @@ impl Component for Notice<'_> {
             detail,
             line,
             more,
-            icon: IconLook::new(control.icon, stateful(tone)),
+            icon: if key.layout == NoticeLayout::Centred {
+                // An empty state's picture: large and quiet above its message.
+                IconLook::new(cx.tokens.size.icon.lg * EMPTY_ICON_IN_LARGE, stateful(muted))
+            } else {
+                IconLook::new(control.icon, stateful(tone))
+            },
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }
     }
@@ -551,10 +605,12 @@ impl Component for Notice<'_> {
         let texts = self.texts(&cx.env, &cx.words::<NoticeWords>(), cx.format(), cx.resolved.label);
         let natural = self.plan(cx, &texts, f32::INFINITY).needs;
         let width = match (self.layout, cx.room) {
-            // The card is the card width wide, its padding included, where the room allows.
-            (NoticeLayout::Card, room) => {
+            // The card is as wide as its text, up to the card width (padding included) where the room allows. A card
+            // that hosts content (a progress bar) has no text width of its own and takes the card width.
+            (NoticeLayout::Card | NoticeLayout::Toast, room) => {
                 let padding = cx.style.metrics.padding;
-                let width = CARD_WIDTH - padding.start - padding.end;
+                let cap = CARD_WIDTH - padding.start - padding.end;
+                let width = if self.content_sizes.is_empty() { natural.min(cap) } else { cap };
                 room.map_or(width, |room| width.min(room))
             }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),
@@ -600,6 +656,14 @@ impl Component for Notice<'_> {
                 placed.dismiss = Some(Rect::from_min_size(Pos2::new(slot.min.x, on_line(size.y)), size));
                 flow = rest.take_end(gap).1;
             }
+            if plan.inline_actions {
+                for size in plan.actions.iter().rev() {
+                    let (slot, rest) = flow.take_end(size.x);
+                    placed.actions.push(Rect::from_min_size(Pos2::new(slot.min.x, on_line(size.y)), *size));
+                    flow = rest.take_end(gap).1;
+                }
+                placed.actions.reverse();
+            }
             let column = flow.rect();
             let mut y = column.top() + plan.text_offset;
             if let Some(size) = plan.title {
@@ -623,12 +687,13 @@ impl Component for Notice<'_> {
                 placed.more = Some(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), height)));
                 y += height;
             }
-            y += stack.max(gap);
-            let mut line = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), (rect.bottom() - y).max(0.0))), rtl);
-            for size in &plan.actions {
-                let (slot, rest) = line.take_start(size.x);
-                placed.actions.push(Rect::from_min_size(slot.min, *size));
-                line = rest.take_start(gap).1;
+            for size in &self.content_sizes {
+                y += stack;
+                placed.content.push(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), size.y)));
+                y += size.y;
+            }
+            if !plan.action_rows.is_empty() {
+                place_action_rows(&plan, rect, y + stack.max(gap), rtl, gap, &mut placed.actions);
             }
         } else {
             let mut y = rect.top() + ((rect.height() - plan.height) / 2.0).max(0.0);
@@ -721,7 +786,7 @@ impl Component for Notice<'_> {
                 }
             }
         }
-        if cx.part_activated(DISMISS).is_some() || (self.dismiss && cx.core.intents.take(Intent::Cancel)) {
+        if cx.part_activated(DISMISS).is_some() {
             self.dismissed = true;
         }
     }
@@ -763,14 +828,19 @@ impl Component for Notice<'_> {
         }
         for (at, label) in placed.labels.iter().cloned().enumerate() {
             let part = ACTION.at(at as u64);
-            if self.row() {
+            if self.row() && self.layout != NoticeLayout::Bar {
                 ui.face(part, Self::link(cx.style.message.role, label));
             } else {
                 ui.face(part, Self::button(at, label));
             }
         }
         if placed.dismiss.is_some() {
-            ui.face(DISMISS, IconButton::new(IconId::new(DISMISS_ICON)).label(words.dismiss.clone()));
+            // A toast's card is the inverse surface: its close glyph takes the card's text colour, not the panel ink.
+            let mut icon = IconSpec::svg(IconId::new(DISMISS_ICON));
+            if self.layout == NoticeLayout::Toast {
+                icon = icon.color(cx.style.message.color.off.rest);
+            }
+            ui.face(DISMISS, IconButton::new(icon).label(words.dismiss.clone()));
         }
         if let (Some(rect), Some(mut spec)) = (placed.icon, self.icon_spec()) {
             if spec.color.is_none() {
@@ -810,13 +880,54 @@ impl Component for Notice<'_> {
     }
 }
 
-/// The icon that marks `tone`; the neutral tone has none.
-fn tone_icon(tone: Tone) -> Option<&'static str> {
+/// Packs `actions` into rows at most `width` wide with `gap` between neighbours, keeping at least one action on every
+/// row so a single wide action never loops; infinite `width` keeps all actions on one row. Returns each row's index
+/// range and tallest height.
+fn wrap_actions(actions: &[Vec2], width: f32, gap: f32) -> Vec<(std::ops::Range<usize>, f32)> {
+    if actions.is_empty() {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    let (mut start, mut row_width, mut row_height) = (0_usize, 0.0_f32, 0.0_f32);
+    for (at, size) in actions.iter().enumerate() {
+        let next = if at > start { row_width + gap + size.x } else { size.x };
+        if at > start && width.is_finite() && next > width {
+            rows.push((start..at, row_height));
+            start = at;
+            row_width = size.x;
+            row_height = size.y;
+        } else {
+            row_width = next;
+            row_height = row_height.max(size.y);
+        }
+    }
+    rows.push((start..actions.len(), row_height));
+    rows
+}
+
+/// The icon that marks `tone`; the neutral tone has none. A list row's status cell marks its tone with it too.
+pub(crate) fn tone_icon(tone: Tone) -> Option<&'static str> {
     match tone {
         Tone::Info | Tone::Accent => Some("info"),
         Tone::Good => Some("success"),
         Tone::Warn => Some("warning"),
         Tone::Bad => Some("error"),
         _ => None,
+    }
+}
+
+/// Places a row notice's action rows across `rect` from `top` down, each action at its width and centred on its row.
+fn place_action_rows(plan: &Plan, rect: Rect, top: f32, rtl: bool, gap: f32, actions: &mut Vec<Rect>) {
+    let mut y = top;
+    for (range, row_height) in &plan.action_rows {
+        let mut line = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), *row_height)), rtl);
+        for size in plan.actions.get(range.clone()).unwrap_or_default() {
+            let width = size.x.min(line.rect().width().max(0.0));
+            let (slot, rest) = line.take_start(width);
+            let top = y + (*row_height - size.y) / 2.0;
+            actions.push(Rect::from_min_size(Pos2::new(slot.min.x, top), Vec2::new(width, size.y)));
+            line = rest.take_start(gap).1;
+        }
+        y += row_height + gap;
     }
 }

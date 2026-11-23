@@ -16,7 +16,8 @@ pub(crate) mod reference_point;
 
 pub use combo_box::{ComboBox, ComboBoxOutput};
 pub use date::{
-    Calendar, CalendarOutput, CalendarStyle, CalendarView, DateCodec, DatePicker, DatePrecision, PickedDate, local_month_grid, month_grid,
+    Calendar, CalendarOutput, CalendarPopover, CalendarPopoverStyle, CalendarStyle, CalendarView, DateCodec, DatePicker, DatePrecision, PickedDate,
+    local_month_grid, month_grid,
 };
 pub use dress::RowDress;
 pub use face::{FaceKind, SelectFace, SelectFaceStyle, toggle_on_key};

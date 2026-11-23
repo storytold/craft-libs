@@ -203,6 +203,8 @@ pub struct CxCore<'a> {
     pub(crate) fade: Option<crate::contract::steps::Fade>,
     /// The focus ring shape each part declared (`focus_shape`), in which step 13 draws the active part's ring.
     pub(crate) focus_shapes: Vec<((PartKey, Option<u64>), focus::FocusShape)>,
+    /// The focus ring shape the component declared for its own ring (`Cx::focus_shape`); its rect when `None`.
+    pub(crate) focus_shape: Option<focus::FocusShape>,
     /// Where the text part reserved the surface in the painter, so the field's surface paints beneath its text.
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.
@@ -255,6 +257,13 @@ impl<C: Component> Cx<'_, C> {
     /// pass. A component that does not call it in a pass keeps its own Tab stop in that pass.
     pub fn join_roving(&mut self) {
         self.core.roving_member = true;
+    }
+
+    /// The shape the component's own focus ring takes this pass, as a part's `focus_shape` shapes the part's: the
+    /// circle inside its rect, or a polygon of points on screen. Called from `update`; a component that does not call
+    /// it gets the ring round its rect.
+    pub fn focus_shape(&mut self, shape: focus::FocusShape) {
+        self.core.focus_shape = Some(shape);
     }
 
     /// Runs `command` as this component's own activation would, for a command that is not the component's bound

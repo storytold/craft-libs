@@ -86,6 +86,17 @@ impl ReviewStatus {
         [ReviewStatus::None, ReviewStatus::Accepted, ReviewStatus::Rejected, ReviewStatus::Cancelled, ReviewStatus::Completed];
 }
 
+/// One reviewer's latest status on a thread.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReviewerStatus {
+    /// The reviewer's name.
+    pub reviewer: String,
+    /// The status the reviewer set.
+    pub status: ReviewStatus,
+    /// The text of the status reply.
+    pub text: String,
+}
+
 /// An emoji reaction and who gave it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reaction {
@@ -110,6 +121,13 @@ pub struct CommentMessage {
     pub reactions: Vec<Reaction>,
     /// Read by the viewer (FigCraft's read state).
     pub read: bool,
+    /// Whether this message and its descendants may be deleted.
+    #[serde(default = "message_deletable")]
+    pub deletable: bool,
+}
+
+fn message_deletable() -> bool {
+    true
 }
 
 /// A comment and its replies.
@@ -126,8 +144,12 @@ pub struct CommentThread {
     pub color: Option<[u8; 3]>,
     /// The comment first, then its replies.
     pub messages: Vec<CommentMessage>,
-    /// The thread's review status.
-    pub status: ReviewStatus,
+    /// Each reviewer's latest status, oldest first.
+    pub statuses: Vec<ReviewerStatus>,
+    /// The statuses reviewers set on the thread's replies rather than on the comment: the search finds their text,
+    /// and the card shows only [`statuses`](Self::statuses).
+    #[serde(default)]
+    pub reply_statuses: Vec<ReviewerStatus>,
     /// Acrobat's per-comment checkmark.
     pub marked: bool,
     /// A locked thread can't be edited.
@@ -140,6 +162,11 @@ impl CommentThread {
     /// Replies, not counting the comment itself.
     pub fn replies(&self) -> usize {
         self.messages.len().saturating_sub(1)
+    }
+
+    /// The latest status set by anyone; [`ReviewStatus::None`] when no reviewer set one.
+    pub fn status(&self) -> ReviewStatus {
+        self.statuses.last().map_or(ReviewStatus::None, |reviewer| reviewer.status)
     }
 }
 
@@ -170,12 +197,18 @@ impl CommentFilter {
         *self = CommentFilter::default();
     }
 
-    /// Whether `thread` passes every list.
+    /// Whether `thread` passes every list. A status is each reviewer's own, so a thread hides by status only when
+    /// every reviewer's status is hidden; a thread no reviewer set a status on counts as [`ReviewStatus::None`].
     pub fn shows(&self, thread: &CommentThread) -> bool {
         let author = thread.messages.first().map_or("", |m| m.author.as_str());
+        let status_hidden = if thread.statuses.is_empty() {
+            self.hidden_statuses.contains(&ReviewStatus::None)
+        } else {
+            thread.statuses.iter().all(|reviewer| self.hidden_statuses.contains(&reviewer.status))
+        };
         !self.hidden_types.contains(&thread.kind)
             && !self.hidden_authors.iter().any(|hidden| hidden == author)
-            && !self.hidden_statuses.contains(&thread.status)
+            && !status_hidden
             && !self.hidden_colors.contains(&thread.color)
             && !self.hidden_checks.contains(&thread.marked)
     }
@@ -197,20 +230,36 @@ pub enum CommentSort {
     Color,
 }
 
-/// The order of `threads` by `sort`, as indices: page then position on the page (top to bottom),
-/// author A–Z, newest first, kind (by `kind_name`, the reader's name of a kind), colour; ties keep
+/// How threads on one page are ordered under the Page sort.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PageOrder {
+    /// By position on the page.
+    #[default]
+    Position,
+    /// In document order.
+    Document,
+}
+
+/// The order of `threads` by `sort`, as indices: page then, by `page_order`, position on the page (top to bottom) or
+/// document order; author A–Z, newest first, kind (by `kind_name`, the reader's name of a kind), colour; ties keep
 /// document order. A plain comment sorts before every kind.
 // pdfcraft: crates/ui-egui/src/panels/comments_panel.rs:115 `show` (sorting),
 // `tools/comments/state.rs:297` `SortBy`.
-pub fn sort_threads(threads: &[CommentThread], sort: CommentSort, kind_name: impl Fn(AnnotationKind) -> String) -> Vec<usize> {
+pub fn sort_threads(threads: &[CommentThread], sort: CommentSort, page_order: PageOrder, kind_name: impl Fn(AnnotationKind) -> String) -> Vec<usize> {
     let mut order: Vec<usize> = (0..threads.len()).collect();
     fn first(thread: &CommentThread) -> Option<&CommentMessage> {
         thread.messages.first()
     }
     match sort {
+        // The sort is stable: under document order the threads of a page keep the order `threads` lists them in.
         CommentSort::Page => order.sort_by(|&a, &b| {
             let (a, b) = (&threads[a], &threads[b]);
-            a.anchor.page().cmp(&b.anchor.page()).then_with(|| a.anchor.vertical().total_cmp(&b.anchor.vertical()))
+            let by_page = a.anchor.page().cmp(&b.anchor.page());
+            match page_order {
+                PageOrder::Position => by_page.then_with(|| a.anchor.vertical().total_cmp(&b.anchor.vertical())),
+                PageOrder::Document => by_page,
+            }
         }),
         CommentSort::Author => order.sort_by_key(|&i| first(&threads[i]).map(|m| m.author.to_lowercase()).unwrap_or_default()),
         CommentSort::Date => order.sort_by_key(|&i| std::cmp::Reverse(first(&threads[i]).map(|m| m.modified.unwrap_or(m.created)))),
@@ -220,11 +269,13 @@ pub fn sort_threads(threads: &[CommentThread], sort: CommentSort, kind_name: imp
     order
 }
 
-/// Whether `thread` matches the search `query`: in any message's text or author, or the reader's
-/// name of the kind (`kind_name`), ignoring case (and the Turkish dotted and dotless i, as
-/// PdfCraft's `fold_case` does) through `folder`.
+/// Whether `thread` matches the search `query`: in any message's text or author, the text of a
+/// reviewer's status reply on the comment or on one of its replies, or the reader's name of the kind (`kind_name`), ignoring case (and the
+/// Turkish dotted and dotless i, as PdfCraft's `fold_case` does) through `folder`.
 // pdfcraft: crates/ui-egui/src/panels/comments_panel.rs:104 `matches`, `:107` `any_contains`.
 pub fn matches(thread: &CommentThread, query: &str, folder: &Folder, kind_name: impl Fn(AnnotationKind) -> String) -> bool {
     let has = |text: &str| folder.contains(text, query);
-    thread.kind.is_some_and(|kind| has(&kind_name(kind))) || thread.messages.iter().any(|m| has(&m.text) || has(&m.author))
+    thread.kind.is_some_and(|kind| has(&kind_name(kind)))
+        || thread.messages.iter().any(|m| has(&m.text) || has(&m.author))
+        || thread.statuses.iter().chain(&thread.reply_statuses).any(|reviewer| has(&reviewer.text))
 }

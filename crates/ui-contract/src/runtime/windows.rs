@@ -226,23 +226,35 @@ pub(crate) fn install(
     frame: Option<Decision>,
     app_id: String,
 ) {
+    // The watch may read the desktop's settings, so it is built outside the lock.
     let layouts = frame.as_ref().map(LayoutWatch::new);
-    let shell = match &frame {
-        Some(decision) => {
-            let window = (*shell.window).clone().chrome(chrome_of(&decision.frame));
-            shell.window(window)
-        }
-        None => shell,
-    };
     shared(ctx, |shared| {
         shared.shell = Some(shell);
         shared.app_id = app_id;
         shared.system = Some(system);
         shared.store = store;
-        shared.desktop = frame.as_ref().map(|decision| decision.desktop.clone());
-        shared.root_frame = frame.map(|decision| decision.frame);
-        shared.layouts = layouts;
+        match frame.zip(layouts) {
+            Some((decision, layouts)) => keep_root_frame(shared, decision, layouts),
+            None => {
+                shared.desktop = None;
+                shared.root_frame = None;
+                shared.layouts = None;
+            }
+        }
     });
+}
+
+/// Keeps `decision` as the root window's frame: the frame and desktop [`WindowHost::frame`] and
+/// [`WindowHost::desktop`] read, the caption layout watch `layouts` built for it, and the root shell window's chrome.
+/// `install` and [`WindowHost::set_root_frame`] both keep their decision through it.
+fn keep_root_frame(shared: &mut Shared, decision: Decision, layouts: LayoutWatch) {
+    shared.shell = shared.shell.take().map(|shell| {
+        let window = (*shell.window).clone().chrome(chrome_of(&decision.frame));
+        shell.window(window)
+    });
+    shared.desktop = Some(decision.desktop);
+    shared.root_frame = Some(decision.frame);
+    shared.layouts = Some(layouts);
 }
 
 /// Before the pass, from `set_input`, outside every egui lock: reads the OS services and refreshes the window
@@ -281,11 +293,13 @@ fn size_changed(before: egui::Vec2, now: egui::Vec2) -> bool {
 /// ([`Caps::OS_RESIZES_UNDECORATED`]), a size change of a window the OS may resize under a held primary press (the
 /// size of a window that is not resizable is the app's own). While the OS runs a tracked move
 /// ([`Caps::OS_MOVES_TRACKED`]) it sends no key events, so every window's modifiers are the system's command modifier
-/// alone. Reads only the raw input, the system's button and modifier state and the viewport's record. Returns whether
-/// it added an event.
+/// alone. A wheel turn with no pointer egui knows of is placed at the system pointer ([`locate_wheel`]). Reads only the
+/// raw input, the system's pointer, button and modifier state and the viewport's record. Returns whether it added an
+/// event.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let viewport = input.viewport_id;
     replay_caption_events(ctx, viewport, input);
+    let located = locate_wheel(ctx, input);
     let base = base_shell(ctx);
     let undecorated = base.caps.contains(Caps::OS_RESIZES_UNDECORATED) && window_info(ctx, viewport, &base).chrome == WindowChrome::Integrated;
     let size = viewports::inner_size_in(input, viewport);
@@ -327,7 +341,33 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             shared.presses.push((viewport, frame));
         });
     }
-    released
+    released || located
+}
+
+/// #1518: after the user switches back to a window, the platform sends no pointer move until the mouse moves, so a
+/// wheel turn finds no pointer and scrolls nothing. When `input` turns the wheel, brings no pointer move or leave of its
+/// own, and egui knows no pointer in the viewport, a move to the system pointer (read in [`set_input`]) goes before
+/// the wheel, where that pointer lies inside the window. It acts on this input's own wheel event only: a rerun pass of
+/// the frame has no events, and the next pass knows the pointer, so the move is added once. Returns whether it added it.
+fn locate_wheel(ctx: &Context, input: &mut RawInput) -> bool {
+    let wheel = input.events.iter().any(|event| matches!(event, egui::Event::MouseWheel { .. }));
+    let moved = input.events.iter().any(|event| matches!(event, egui::Event::PointerMoved(_) | egui::Event::PointerGone));
+    if !wheel || moved {
+        return false;
+    }
+    let viewport = input.viewport_id;
+    // egui pushes the viewport after this hook, so its pointer is read by id.
+    if ctx.input_for(viewport, |state| state.pointer.latest_pos()).is_some() {
+        return false;
+    }
+    let Some(inner) = input.viewports.get(&viewport).and_then(|info| info.inner_rect) else { return false };
+    let Some(desktop) = shared(ctx, |shared| shared.system_pointer) else { return false };
+    let local = Pos2::ZERO + (desktop - inner.min);
+    if !Rect::from_min_size(Pos2::ZERO, inner.size()).contains(local) {
+        return false;
+    }
+    input.events.insert(0, egui::Event::PointerMoved(local));
+    true
 }
 
 /// The begin hook (H5), where the viewport is current: refreshes its window info, and raises the modal's window
@@ -607,10 +647,10 @@ fn follow_activity(ctx: &Context) {
 
 /// On the root window's focus gain, re-reads the desktop's caption layout and gives the root frame the change.
 fn follow_layout(ctx: &Context, focused: bool) {
-    shared(ctx, |shared| {
+    let gained = shared(ctx, |shared| {
         let gained = focused && !std::mem::replace(&mut shared.root_focused, focused);
         if !gained {
-            return;
+            return false;
         }
         if let Some(layouts) = &mut shared.layouts
             && layouts.on_focus()
@@ -618,5 +658,9 @@ fn follow_layout(ctx: &Context, focused: bool) {
         {
             captions.layout = layouts.layout().clone();
         }
+        true
     });
+    if gained {
+        crate::runtime::env::system::set_active(ctx, true);
+    }
 }

@@ -1,6 +1,7 @@
-//! `Button`, `IconButton`, `ToggleButton`, `SplitButton` and `Link`.
+//! `Button`, `IconButton`, `ToggleButton`, `SplitButton`, `Link` and `CommandSearch`.
 
 pub mod button;
+pub mod command_search;
 pub(crate) mod face;
 pub mod icon_button;
 pub mod link;
@@ -14,8 +15,9 @@ use crate::contract::MemoProps;
 use crate::runtime::env::EnvValue;
 
 pub use button::{Button, ButtonOutput, ButtonStyle};
+pub use command_search::{CommandSearch, CommandSearchStyle};
 pub use face::Arrangement;
-pub use icon_button::{IconButton, IconButtonStyle, PopupMark};
+pub use icon_button::{IconButton, IconButtonStyle, PopupMark, PressFocus};
 pub use link::{Link, LinkStyle};
 pub use split_button::{SplitButton, SplitButtonStyle, SplitMenu, SplitOutput};
 pub use toggle_button::{ToggleButton, ToggleButtonStyle};

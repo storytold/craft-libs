@@ -90,7 +90,10 @@ impl Intents {
         }
     }
 
-    /// Takes the next move.
+    /// Takes the next move, whichever it is: for a component that acts on every move. A move taken is the component's,
+    /// so the Page Up, Page Down, Home and End it takes never reach the scroll owner around it (a page view under a
+    /// focused page part); a component that acts on some moves takes those with [`take_move_where`](Self::take_move_where)
+    /// and leaves the rest.
     pub fn take_move(&mut self) -> Option<(NavMove, MoveMods)> {
         self.take_move_where(|_, _| true)
     }
@@ -278,38 +281,42 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
     }
 }
 
-/// Offers the window's intents to `take` while nothing in the window has framework focus or the focused stop is the
-/// window's document canvas (`KeyUse::chrome_key`) or one of its canvas controls (`focus::is_canvas_member`), and
-/// writes back what it left untaken. `take` returns whether it took any. `false` when another stop is focused or
-/// nothing was taken.
+/// Offers the window's intents and the focused framework stop's unused Escape to `take`, and writes back what it
+/// left untaken. `take` returns whether it took any.
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
-/// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with the document
-/// canvas or a canvas control focused, the Escape that stop, the canvas's sessions, its tool and every scope around
-/// it left. A component or a
+/// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with a framework
+/// stop focused, its unused Escape. A component or a
 /// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
 /// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
 /// component took. `rtl` reads horizontal moves in the window's direction.
 pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
-    let canvas = match focus::focused_rec(ctx) {
-        Some(rec) if rec.stop.keys.chrome_key || focus::is_canvas_member(ctx, &rec) => Some(rec.stop.id),
-        Some(_) => return false,
-        None => None,
-    };
+    offer_window_intents(ctx, rtl, take)
+}
+
+/// Offers window intents to a canvas while the canvas or one of its controls has focus, or nothing has focus.
+/// Other focused controls get the opportunity to use their Escape before the window reads it.
+pub fn with_canvas_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
+    if focus::focused_rec(ctx).is_some_and(|rec| !rec.stop.keys.chrome_key && !focus::is_canvas_member(ctx, &rec)) {
+        return false;
+    }
+    offer_window_intents(ctx, rtl, take)
+}
+
+fn offer_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
+    let focused = focus::focused_rec(ctx).map(|rec| rec.stop.id);
     let mut window = intents_of(ctx, None, rtl);
-    // The focused canvas's or canvas control's leftover Escape is offered as the window's; it stays in that stop's
-    // slot until taken.
-    let lent_cancel = canvas
-        .filter(|canvas| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*canvas), &Intent::Cancel))
-        .map(|canvas| {
+    // The focused stop's leftover Escape stays in its slot until taken.
+    let lent_cancel =
+        focused.filter(|id| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*id), &Intent::Cancel)).map(|id| {
             window.items.push((Intent::Cancel, false));
-            (canvas, window.items.len() - 1)
+            (id, window.items.len() - 1)
         });
     let taken = take(&mut window);
-    if let Some((canvas, at)) = lent_cancel {
+    if let Some((id, at)) = lent_cancel {
         let (_, cancel_taken) = window.items.remove(at);
         if cancel_taken && !crate::runtime::measure::active(ctx) {
-            current(ctx, |stage| take_from(stage, Some(canvas), &Intent::Cancel));
+            current(ctx, |stage| take_from(stage, Some(id), &Intent::Cancel));
         }
     }
     if taken {
@@ -415,7 +422,7 @@ pub(crate) fn lent_taken(ctx: &Context) -> u64 {
 
 /// Takes the window's untaken `Cancel` (Escape) while nothing has focus.
 pub(crate) fn take_window_cancel(ctx: &Context) -> bool {
-    with_window_intents(ctx, false, |window| window.take(Intent::Cancel))
+    with_canvas_window_intents(ctx, false, |window| window.take(Intent::Cancel))
 }
 
 /// Writes back what a component left untaken, so a scope's `Submit` and `Cancel` rules see it.

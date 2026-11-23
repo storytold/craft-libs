@@ -236,6 +236,8 @@ pub(crate) struct Pass {
     last: Vec<OpenEntry>,
     /// The layers whose bodies are running and the tier each shows in, innermost last.
     drawing: Vec<(Id, Tier)>,
+    /// Whether each body of `drawing` is that of a layer fading out, in the same order.
+    exiting: Vec<bool>,
     /// The side of its anchor each anchored layer was placed on this pass, set before its body runs.
     sides: Vec<(Id, Side)>,
     /// The map from its parent's layer space to screen space of each layer container shown this pass, set by its host
@@ -302,6 +304,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
                 pass.last.clear();
             }
             pass.drawing.clear();
+            pass.exiting.clear();
             pass.sides.clear();
             pass.spaces.clear();
             pass.activated.clear();
@@ -513,6 +516,7 @@ pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side
     let reopened = reopened(ctx, id, exiting);
     with_pass(ctx, |pass| {
         pass.drawing.push((id, tier));
+        pass.exiting.push(exiting);
         if let Some(side) = side {
             pass.sides.push((id, side));
         }
@@ -622,7 +626,14 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
 pub(crate) fn end_layer(ctx: &Context) {
     with_pass(ctx, |pass| {
         pass.drawing.pop();
+        pass.exiting.pop();
     });
+}
+
+/// Whether the running code is inside the body of a layer that fades out, which takes no input: nor does any layer
+/// opened inside it.
+pub(crate) fn drawing_exiting(ctx: &Context) -> bool {
+    with_pass(ctx, |pass| pass.exiting.iter().any(|exiting| *exiting))
 }
 
 /// Records that the component `id` was activated: the innermost layer whose body is running around it, other than the

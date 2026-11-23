@@ -190,6 +190,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         read_only: resolved.read_only,
         focusable,
         clickable: resolved.enabled && input.sense.contains(Sense::CLICK),
+        context_menu: crate::runtime::egui::access::offers_context_menu(ctx, id),
         keeps_name: resolved.keeps_name,
         scrolls: input.scrolls,
         access: &access,
@@ -219,7 +220,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
     };
     if let Some(facts) = core.text_access.take().or_else(editor_record) {
-        crate::runtime::access::text::report_text(ctx, id, &facts);
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.value.as_deref());
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
@@ -317,6 +318,7 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             read_only: core.resolved.read_only,
             focusable: false,
             clickable: false,
+            context_menu: false,
             keeps_name: false,
             scrolls: (false, false),
             access: &access,

@@ -39,6 +39,9 @@ pub enum HeaderStrength {
     Caption,
     /// A window's drag bar: one text row high (`size.row.text`), with label text; its action parts shrink to the row.
     Bar,
+    /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
+    /// dialog's group names ("PAGES TO PRINT").
+    Overline,
 }
 
 /// What a title row's action parts ask the container to do.
@@ -162,7 +165,7 @@ pub struct TitleRowStyle {
 /// An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional
 /// subtitle at the band's end (faint caption text: the target's kind), a lead (a disclosure bound to the container's
 /// open state, or a check box bound to its gate) and action parts. A row too narrow for all its texts drops the
-/// subtitle, then the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
+/// subtitle, then cuts the note, before it elides the title; an elided title shows whole in a tooltip. A click on the title
 /// band toggles a disclosure lead, as a click on the lead does.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct TitleRow<'a> {
@@ -188,6 +191,10 @@ pub struct TitleRow<'a> {
     /// An icon before the title, painted in the style's icon colour unless the spec names another.
     #[prop]
     icon: Option<IconSpec<'a>>,
+    /// The ink of that icon: the accent for a dialog's lock or warning mark.
+    #[style_key]
+    #[prop]
+    icon_ink: Ink,
     /// Whether the row takes the whole width offered, so its actions sit at the end edge; off, it is as wide as its
     /// parts.
     #[prop]
@@ -233,6 +240,7 @@ impl<'a> TitleRow<'a> {
             note: None,
             subtitle: None,
             icon: None,
+            icon_ink: Ink::OnPanel,
             fill: true,
             lead_name: None,
             handle: false,
@@ -285,7 +293,7 @@ impl<'a> TitleRow<'a> {
     }
 
     /// Divides the room left between the lead and the actions: the icon, the title, the note after it and the subtitle
-    /// at the end. The subtitle shows when every text fits whole, the note when the title and the note do.
+    /// at the end. The subtitle shows when every text fits whole; the note uses the room after the title.
     fn place(&self, mut band: Flow, cx: &PartsCx<'_, Self>) -> Placed {
         // A disclosure's glyph sits a gap before the title, as a title's own icon does; the gap is part of the title band,
         // so a click beside the glyph toggles too.
@@ -319,7 +327,7 @@ impl<'a> TitleRow<'a> {
                 band = rest.take_end(cx.gap()).1;
             }
         }
-        if self.note.is_some() && title + note <= band.rect().width() {
+        if self.note.is_some() && title + cx.gap() < band.rect().width() {
             let (title, rest) = band.take_start(title);
             let (_, rest) = rest.take_start(cx.gap());
             return Placed { icon, handle, title, note: Some(rest.rect()), subtitle };
@@ -342,9 +350,10 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
             HeaderStrength::Bar => (cx.tokens.size.row.text, TypeRole::Label, text.normal),
+            HeaderStrength::Overline => (cx.control().height, TypeRole::Caption, text.faint),
         };
         let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
-        let (ink, disabled) = (cx.ink(Ink::OnPanel), cx.color(text.disabled));
+        let (ink, disabled) = (cx.ink(key.icon_ink), cx.color(text.disabled));
         TitleRowStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, height)).gap(cx.control().gap),
             text: TextLook::new(role, Stateful::new(shade).off(States::new(shade, shade, shade, disabled))),
@@ -494,13 +503,15 @@ impl Component for TitleRow<'_> {
             }
             ui.draw().icon(rect, icon);
         }
-        let mut title = TextRun::new(cx.resolved.label).role(role).elide();
-        if self.strength == HeaderStrength::Caption {
+        let overline = self.strength == HeaderStrength::Overline;
+        let capitals = overline.then(|| cx.resolved.label.to_uppercase());
+        let mut title = TextRun::new(capitals.as_deref().unwrap_or(cx.resolved.label)).role(role).elide();
+        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Overline) {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
         ui.draw().text_on_centre_line(placed.title, &title);
         if let (Some(rect), Some(note)) = (placed.note, &self.note) {
-            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()));
+            ui.draw().text_on_centre_line(rect, &note_run(note.as_str()).elide());
         }
         if let (Some(rect), Some(subtitle)) = (placed.subtitle, &self.subtitle) {
             let run = subtitle_run(subtitle.as_str(), cx.style.subtitle.role).color(cx.resolve(&cx.style.subtitle.color));
@@ -510,6 +521,9 @@ impl Component for TitleRow<'_> {
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
         access.level(self.level);
+        if let Some(note) = &self.note {
+            access.description(format!("\u{b7} {}", note.as_str()));
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleOutput {

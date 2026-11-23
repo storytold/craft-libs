@@ -116,6 +116,9 @@ pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     /// Shows the Edit Toolbar button after the last slot, named by the label.
     #[prop(into)]
     edit_toolbar: Option<Label>,
+    /// The icon of the Edit Toolbar button; an ellipsis unless set (a settings gear is production's).
+    #[prop(into)]
+    edit_icon: Option<IconId>,
     /// The toolbar is being edited: the buttons are dragged and take drops, and show no flyouts.
     #[prop(flag)]
     editing: bool,
@@ -148,6 +151,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             last_used,
             opens: Side::End,
             edit_toolbar: None,
+            edit_icon: None,
             editing: false,
             hidden: None,
             footer: None,
@@ -176,6 +180,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             hidden: self.hidden,
             editing: self.editing,
             edit_label: self.edit_toolbar.clone(),
+            edit_icon: self.edit_icon.clone(),
             opens: self.opens,
             columns: self.columns,
         }
@@ -197,6 +202,7 @@ struct GridProps<'a, T: PlainData> {
     hidden: Option<&'a Tracked<Vec<T>>>,
     editing: bool,
     edit_label: Option<Label>,
+    edit_icon: Option<IconId>,
     opens: Side,
     columns: usize,
     sent: Outbox<'a, RailEvent<T>>,
@@ -210,6 +216,7 @@ struct Draw<'a, T: PlainData> {
     hidden: Option<&'a Tracked<Vec<T>>>,
     editing: bool,
     edit_label: Option<Label>,
+    edit_icon: Option<IconId>,
     opens: Side,
     columns: usize,
 }
@@ -225,6 +232,7 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
             hidden: self.hidden,
             editing: self.editing,
             edit_label: self.edit_label.clone(),
+            edit_icon: self.edit_icon.clone(),
             opens: self.opens,
             columns: self.columns,
             sent: Outbox::new(events),
@@ -282,7 +290,8 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                     }
                                     None => {
                                         let label = props.edit_label.clone().unwrap_or(Label::Empty);
-                                        let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
+                                        let icon = props.edit_icon.clone().unwrap_or_else(|| IconId::new("more"));
+                                        let more = IconButton::new(icon).id_salt("edit-toolbar").label(label).show(ui);
                                         edit_toolbar = Some(more.response.id);
                                     }
                                 }

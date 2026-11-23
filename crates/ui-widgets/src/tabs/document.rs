@@ -7,7 +7,8 @@ pub(crate) mod stories;
 
 use super::{Tab, TabStrip};
 use crate::contract::{
-    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, ReorderRule, ShowCollection as _, ShowContainer as _,
+    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, Props as _, ReorderRule, ShowCollection as _,
+    ShowContainer as _, Sizing,
 };
 use crate::layout_components::Row;
 use crate::runtime::drag::OsFile;
@@ -35,12 +36,26 @@ pub struct DocumentTab<D> {
     pub detail: Option<Label>,
     /// The accessible name of the close button, for a tab whose close cancels the opening.
     pub close_label: Option<Label>,
+    /// Hover text; `DocumentTabs::show` passes it as the tab's tooltip. A tab whose label is cut shows the full label, then this text on the next line.
+    pub tooltip: Option<Label>,
+    /// The tab can be dragged and key-moved, and other tabs can be dropped past it (default true).
+    pub movable: bool,
 }
 
 impl<D> DocumentTab<D> {
     /// A closable, unmodified tab for document `id` named `label`.
     pub fn new(id: D, label: impl Into<Label>) -> Self {
-        DocumentTab { id, label: label.into(), modified: false, closable: true, progress: None, detail: None, close_label: None }
+        DocumentTab {
+            id,
+            label: label.into(),
+            modified: false,
+            closable: true,
+            progress: None,
+            detail: None,
+            close_label: None,
+            tooltip: None,
+            movable: true,
+        }
     }
 
     /// Unsaved changes.
@@ -77,6 +92,37 @@ impl<D> DocumentTab<D> {
         self.close_label = Some(label.into());
         self
     }
+
+    /// Whether the tab can be moved: dragged or key-moved, with no other tab dropped past it.
+    #[must_use]
+    pub fn movable(mut self, on: bool) -> Self {
+        self.movable = on;
+        self
+    }
+
+    /// Hover text for the tab.
+    #[must_use]
+    pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+}
+
+/// Whether moving `moved` to `to`, a position among the tabs left once the moved ones are taken out, leaves every tab
+/// that does not move at the place it holds: no unmovable tab is moved, and none is passed by a moved one.
+fn keeps_fixed<D: PartialEq>(tabs: &[DocumentTab<D>], moved: &[D], to: usize) -> bool {
+    if tabs.iter().all(|tab| tab.movable) {
+        return true;
+    }
+    if tabs.iter().any(|tab| !tab.movable && moved.contains(&tab.id)) {
+        return false;
+    }
+    let mut order: Vec<&D> = tabs.iter().map(|tab| &tab.id).filter(|id| !moved.contains(id)).collect();
+    let at = to.min(order.len());
+    for (n, id) in moved.iter().enumerate() {
+        order.insert(at + n, id);
+    }
+    tabs.iter().enumerate().filter(|(_, tab)| !tab.movable).all(|(place, tab)| order.get(place) == Some(&&tab.id))
 }
 
 /// What the tabs of a group did this pass, in the order they happened.
@@ -142,7 +188,7 @@ pub struct DocumentTabsOutput<D> {
     pub hovered: Option<D>,
 }
 
-type Area<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
+type Area<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// The tab strip of one document group. Give the strips of all groups the same `accepts` rule (the default takes
 /// every group) and a tab dropped from one reaches the other as `DroppedInto`.
@@ -208,13 +254,13 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     }
 
     /// Host content before the tabs, at the reading start, as wide as it measures.
-    pub fn leading(mut self, area: impl FnOnce(&mut Ui) + 'a) -> Self {
+    pub fn leading(mut self, area: impl FnMut(&mut Ui) + 'a) -> Self {
         self.leading = Some(Box::new(area));
         self
     }
 
     /// Host content after the tabs, at the reading end, as wide as it measures.
-    pub fn trailing(mut self, area: impl FnOnce(&mut Ui) + 'a) -> Self {
+    pub fn trailing(mut self, area: impl FnMut(&mut Ui) + 'a) -> Self {
         self.trailing = Some(Box::new(area));
         self
     }
@@ -223,22 +269,36 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     pub fn show(self, ui: &mut Ui) -> DocumentTabsOutput<D> {
         let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing, large, takes_files } = self;
         let source = keyed(tabs, |tab: &DocumentTab<D>| tab.id.clone()).with_text(|tab| Cow::Borrowed(tab.label.as_str()));
-        let mut strip = TabStrip::new(label).takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true));
-        if takes_files {
-            strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
-        }
-        if tear_off {
-            strip = strip.tear_off();
-        }
-        if large {
-            strip = strip.large();
-        }
-        if let Some(document) = selected {
-            strip = strip.shown(document);
-        }
-        if reorderable {
-            strip = strip.reorder(ReorderRule::new());
-        }
+        let make_strip = || {
+            let mut strip = TabStrip::new(label.clone())
+                .takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true))
+                .can_close(move |key: &D| tabs.iter().any(|tab| &tab.id == key && tab.closable));
+            if takes_files {
+                strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
+            }
+            if tear_off {
+                strip = strip.tear_off();
+            }
+            if large {
+                strip = strip.large();
+            }
+            if let Some(document) = selected.clone() {
+                strip = strip.shown(document);
+            }
+            if reorderable {
+                strip = strip
+                    .reorder(ReorderRule::new())
+                    // The held tab is the preview; production shows no filename badge beside the pointer.
+                    .drag_badge(false)
+                    .can_drag(move |key: &D| tabs.iter().find(|tab| &tab.id == key).is_none_or(|tab| tab.movable))
+                    .accepts(move |drag: &ListDrag<D>, _, insert| {
+                        // `insert` counts every tab; `keeps_fixed` takes the place among the tabs left without the dragged ones.
+                        let passed = tabs.iter().take(insert).filter(|tab| drag.keys.contains(&tab.id)).count();
+                        keeps_fixed(tabs, &drag.keys, insert - passed)
+                    });
+            }
+            strip
+        };
         let hovered = std::cell::RefCell::new(None);
         let show_strip = |ui: &mut Ui, strip: TabStrip<'_, D>| {
             strip.show_items(ui, &source, &mut |key, cx| {
@@ -261,24 +321,64 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 if let Some(close) = &document.close_label {
                     tab = tab.close_label(close.clone());
                 }
+                if let Some(tooltip) = &document.tooltip {
+                    tab = tab.tooltip(tooltip.clone());
+                }
                 tab
             })
         };
         let shown = if leading.is_none() && trailing.is_none() {
-            Ok(show_strip(ui, strip))
+            Ok(show_strip(ui, make_strip()))
         } else {
-            let (mut strip, mut leading, mut trailing) = (Some(strip), leading, trailing);
+            let (mut leading, mut trailing) = (leading, trailing);
             let mut shown = None;
-            let row = Row::new().show(ui, |ui, _| {
-                if let Some(area) = leading.take() {
+            // The row measures more than once to reserve non-filling children before sharing the
+            // remaining width. Recreate the strip and show both areas on every sweep.
+            let row = Row::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+                if let Some(area) = leading.as_mut() {
                     area(ui);
                 }
-                if let Some(strip) = strip.take() {
-                    shown = Some(show_strip(ui, strip));
+                let strip = show_strip(ui, make_strip());
+                if let Some(area) = trailing.as_mut() {
+                    // The strip fills the row less the room the control took last pass; the control follows the last tab
+                    // when every tab shows, and is the row's last item when they overflow.
+                    let memory = ui.scope_id().with("document-tabs-trailing-width");
+                    let held = crate::runtime::memory::with_session(ui.ctx(), memory, |held: &mut f32| *held);
+                    // design: allow[contract/allocate](the tabs are a plain `show`, not a component: the slot keeps last pass's room for the trailing area)
+                    let slot = ui.allocate_exact_size(egui::vec2(held, strip.response.response.rect.height()), egui::Sense::hover()).0;
+                    let all_show = strip.tab_rects.len() == tabs.len();
+                    let after = match strip.tab_rects.last() {
+                        Some((_, rect)) if all_show => Some(rect.right() + ui.spacing().item_spacing.x),
+                        None => Some(strip.response.response.rect.left()),
+                        _ => None,
+                    };
+                    // Overflowing, the control ends at the row's end edge; it never runs past it.
+                    let (room, layout) = match after {
+                        Some(at) if !ui.layout().prefer_right_to_left() => {
+                            let end = slot.right().min(ui.clip_rect().right().max(slot.left()));
+                            let left = at.min(slot.left()).min(end - held).max(strip.response.response.rect.left());
+                            (
+                                egui::Rect::from_min_max(egui::pos2(left, slot.top()), egui::pos2(slot.right().max(left + 400.0), slot.bottom())),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                            )
+                        }
+                        _ => {
+                            // The row's own edge can lie past what the bar leaves it: end at the visible edge.
+                            let end = slot.right().min(ui.clip_rect().right().max(slot.left()));
+                            (
+                                egui::Rect::from_min_max(egui::pos2(end - slot.width(), slot.top()), egui::pos2(end, slot.bottom())),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                            )
+                        }
+                    };
+                    let builder = egui::UiBuilder::new().max_rect(room).layout(layout);
+                    let drawn = ui.scope_builder(builder, |ui| area(ui)).response.rect.width();
+                    if (drawn - held).abs() > 0.5 {
+                        crate::runtime::memory::with_session(ui.ctx(), memory, |held: &mut f32| *held = drawn);
+                        ui.ctx().request_repaint();
+                    }
                 }
-                if let Some(area) = trailing.take() {
-                    area(ui);
-                }
+                shown = Some(strip);
             });
             shown.ok_or(row.output)
         };

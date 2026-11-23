@@ -409,6 +409,8 @@ struct PreparedText {
     caret_visible: bool,
     commit_now: bool,
     was_focused: bool,
+    /// The window lost focus in this pass while the text part had it.
+    window_blur: bool,
     /// The part's edit menu is open and holds its editing focus.
     menu_open: bool,
 }
@@ -458,7 +460,8 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let caret_placed =
         state.preedit.is_none() && adapter::place_caret(&ctx, widget, state.draft.as_deref().unwrap_or(&decl.shown), decl.options.caret);
     serve_access(core, state, widget, current, read_only);
-    if std::mem::take(&mut state.select_all) {
+    let select_all = (std::mem::take(&mut state.select_all) || decl.options.select_all) && !crate::runtime::ime::composing(&ctx, widget);
+    if select_all {
         let len = state.draft.as_deref().unwrap_or(current).chars().count();
         adapter::select(&ctx, widget, 0, len);
     }
@@ -472,7 +475,7 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let frame = crate::runtime::pointer::frame_raw(&ctx);
     let by_pointer = !frame.buttons.is_empty() && frame.pos.is_some_and(|at| core.visible.contains(at));
     if arrived_before {
-        arrive(&ctx, widget, decl, state, by_pointer);
+        arrive(&ctx, widget, decl, state, by_pointer, select_all);
     }
     let out = adapter::run(
         state,
@@ -507,11 +510,20 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     if left_for_part {
         state.focused = false;
     }
-    let commit_now = commit_now || (was_focused && left_for_part);
+    // A window deactivation is no edit's end: the draft stays for the next Enter or a press elsewhere.
+    let window_blur = was_focused && crate::runtime::pointer::with_pass_raw(&ctx, |pointer| pointer.focus_lost);
+    let commit_now = (commit_now || (was_focused && left_for_part)) && !window_blur;
     // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
     let back_from_menu = menu_held && state.held_selection.is_none();
+    // A caller can request focus after showing the field. Retry the selection in the next pass so that focus gain
+    // cannot replace it with the default caret, while still selecting before typing in this pass.
+    if decl.options.select_all && select_all && !out.focused {
+        state.select_all = true;
+        crate::runtime::egui::repaint::request(&ctx);
+    }
+    // A select asked for in the pass that brings focus (`Cx::select_all_text`) is kept, as `select_on_focus` keeps it.
     if out.focused && !left_for_part && !was_focused && !back_from_menu && !arrived_before {
-        arrive(&ctx, widget, decl, state, by_pointer);
+        arrive(&ctx, widget, decl, state, by_pointer, select_all);
     }
     if state.select_on_click {
         if out.clicked && out.focused {
@@ -522,25 +534,26 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
             state.select_on_click = false;
         }
     }
-    PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, menu_open: held }
+    PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, window_blur, menu_open: held }
 }
 
 /// Places the caret of the text part's widget `widget` as focus arrives on the part: where the codec puts it, or over
-/// the whole text for `select_on_focus`. `select_on_focus` is for focus by key or request: focus a pointer press
-/// brings (`by_pointer`) keeps the caret or range the pointer makes, and a plain click selects the whole text once it
-/// is released (`TextState::select_on_click`).
-fn arrive(ctx: &egui::Context, widget: egui::Id, decl: &TextPart, state: &mut TextState, by_pointer: bool) {
+/// the whole text for `select_on_focus`, or when a select was asked for (`select_all`). `select_on_focus` is for focus
+/// by key or request: focus a pointer press brings (`by_pointer`) keeps the caret or range the pointer makes, and a
+/// plain click selects the whole text once it is released (`TextState::select_on_click`).
+fn arrive(ctx: &egui::Context, widget: egui::Id, decl: &TextPart, state: &mut TextState, by_pointer: bool, select_all: bool) {
     let len = decl.shown.chars().count();
     // A dialog that opens on this field selects its whole text whatever the codec's caret, so typing replaces it
     // (photocraft#15540).
-    let opened = crate::runtime::focus::focused_rec(ctx)
-        .and_then(|rec| crate::runtime::focus::origin(ctx, &rec))
-        .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
-    if by_pointer && decl.options.select_on_focus && !opened {
+    let opened = !decl.options.keep_caret_on_open
+        && crate::runtime::focus::focused_rec(ctx)
+            .and_then(|rec| crate::runtime::focus::origin(ctx, &rec))
+            .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
+    if by_pointer && decl.options.select_on_focus && !opened && !select_all {
         state.select_on_click = true;
         return;
     }
-    match if opened { Caret::All } else { decl.caret } {
+    match if opened || select_all { Caret::All } else { decl.caret } {
         Caret::All => adapter::select(ctx, widget, 0, len),
         // A bound caret is where the app put it: focus arriving keeps it.
         _ if decl.options.caret.is_some() => {}
@@ -576,15 +589,14 @@ pub(crate) fn run<C: Component>(
     }
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
-    let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, menu_open } = text;
+    let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused, window_blur, menu_open } = text;
     if part.options.complete.is_some() {
         drive_completions(cx, &mut state);
     }
+    if window_blur && state.end == Some(End::Blur) {
+        state.end = None;
+    }
     if part.options.holds_drafts {
-        // A window deactivation leaves the draft for the next Enter or a press elsewhere (L-52).
-        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_raw(&ctx, |pointer| pointer.focus_lost) {
-            state.end = None;
-        }
         // A press the focus service held for this part keeps focus; the draft shows as its value would.
         if state.end.is_none() && crate::runtime::focus::held_draft(&ctx) == Some(id) {
             state.end = Some(End::Rewrite { refuses: false });
