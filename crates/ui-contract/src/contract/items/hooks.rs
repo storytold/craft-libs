@@ -333,7 +333,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let base_env = Self::rows_env(comp, env, id, cx.core.resolved.size, own).derive(|scoped| scoped.extend_values(values));
         let known = self.known(comp, false);
         let known_at_read = self.known(comp, true);
+        let declared = self.offset;
         let revealed = self.place_reveal(comp, ui, (id, cx.core.env, &base_env), (&mut layout, &known), rect);
+        // The parts (the scroll bar's thumb among them) stand at the offset before the reveal moved it: the next pass
+        // declares them where the rows now are, and a memoized view around the rows runs it instead of replaying this.
+        if self.offset != declared {
+            crate::runtime::egui::repaint::request(&ctx);
+        }
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
