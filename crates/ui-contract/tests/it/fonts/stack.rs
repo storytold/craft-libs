@@ -204,3 +204,17 @@ fn variable_faces_draw_at_regular_weight() {
     set.tweak.coords.push(*b"wght", 300.0);
     assert!(!set_weight(&mut set, 400));
 }
+
+/// The embedded Inter subsets keep their TrueType hinting tables so skrifa runs Inter's native bytecode
+/// interpreter (`Engine::AutoFallback`) instead of falling back to the generic autohinter.
+#[trial]
+fn the_default_inter_faces_keep_their_truetype_hinting() {
+    use skrifa::MetadataProvider as _;
+
+    let defaults = craft_ui::fonts::deflated_default_definitions();
+    for name in ["Inter-Regular", "Inter-SemiBold"] {
+        let data = defaults.font_data.get(name).unwrap_or_else(|| panic!("{name} is in the default fonts"));
+        let face = skrifa::FontRef::from_index((*data.font).as_ref(), data.index).unwrap_or_else(|e| panic!("parse {name}: {e}"));
+        assert!(face.outline_glyphs().prefer_interpreter(), "{name} should retain TrueType hinting for skrifa's interpreter");
+    }
+}
