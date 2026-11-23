@@ -411,12 +411,8 @@ impl Component for Navigator<'_> {
         if let Some(wheel) = cx.take_wheel()
             && !running
         {
-<<<<<<< HEAD
+            // The preview's plain wheel zooms under every scheme: the Document and Acrobat schemes zoom only with Ctrl or Cmd.
             let options = NavigationOptions { wheel: WheelScheme::Zoom, ..self.navigation };
-=======
-            // The preview's plain wheel zooms under every scheme: the Document scheme zooms only with Ctrl or Cmd.
-            let options = NavigationOptions { zoom_with_wheel: true, wheel: WheelScheme::Photoshop, ..self.navigation };
->>>>>>> origin/next
             let (line, os) = (craft_behavior::WheelNotch::DEFAULT.points(0.0), cx.env.shell().os);
             let action = cx.memory::<WheelNavigation>().read(&wheel, line, os, &options);
             if let Some(action @ (WheelAction::Zoom(_) | WheelAction::SnapZoom(_))) = action {

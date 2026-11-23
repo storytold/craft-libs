@@ -70,16 +70,13 @@ pub(super) struct Rules {
     pub image: bool,
     pub auto_center: bool,
     pub fills_uncovered: bool,
-<<<<<<< HEAD
     /// The smallest side a resize may leave, in document units: a step that would go under it keeps the last frame.
     pub min_side: f64,
     /// The quad the frame is bounded to: a step that would leave the frame outside it keeps the last frame.
     pub area: Option<[Point; 4]>,
-=======
     /// An edge or corner drag, and a move, may take the frame past `bounds`, turned or not: the crop grows the canvas
     /// there, as in the reference application (a document crop, not one bounded by a placed picture's source).
     pub resize_grows: bool,
->>>>>>> origin/next
     /// The canvas's snapping, with this pass's tolerance.
     pub snap: Option<Snap>,
     pub os: Platform,
@@ -131,15 +128,12 @@ impl Rules {
                 } else {
                     at.resized(*part, by, hold, mods.alt)
                 };
-<<<<<<< HEAD
                 // A step that would leave a side under the minimum keeps the last frame, as a step the bounds refuse
                 // does: the resize stops there instead of crossing it.
                 if !next.size_ok(self.min_side) {
                     return Some(drag.last);
                 }
-=======
                 grows = self.resize_grows;
->>>>>>> origin/next
                 (next, true, self.ratio.is_some() || mods.shift)
             }
             Kind::Turn { grab } => {
@@ -162,13 +156,8 @@ impl Rules {
         if !next.is_finite() {
             return None;
         }
-<<<<<<< HEAD
-        let kept = match self.bounds {
+        let kept = match self.bounds.filter(|_| !grows) {
             Some(bounds) => next.within(bounds, resizing, held),
-=======
-        match self.bounds.filter(|_| !grows) {
-            Some(bounds) => next.within(bounds, resizing, held).or(Some(drag.last)),
->>>>>>> origin/next
             None => Some(next),
         };
         kept.filter(|kept| self.area.is_none_or(|area| inside_quad(kept, &area))).or(Some(drag.last))

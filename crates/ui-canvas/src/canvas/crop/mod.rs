@@ -185,7 +185,6 @@ pub struct CropOverlay<'a> {
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
-<<<<<<< HEAD
     /// What a press outside the frame does: turns it, applies the crop, or draws a new frame.
     #[prop]
     outside: CropOutside,
@@ -198,6 +197,9 @@ pub struct CropOverlay<'a> {
     /// unit (`MIN_FRAME`) always applies.
     #[prop(quantity = "document units")]
     min_side: f64,
+    /// What the crop is bounded by: the document, or one placed picture's source.
+    #[prop]
+    scope: CropScope,
     report: Report,
 }
 
@@ -212,11 +214,6 @@ pub enum CropOutside {
     Apply,
     /// The press draws a new frame.
     NewFrame,
-=======
-    /// What the crop is bounded by: the document, or one placed picture's source.
-    #[prop]
-    scope: CropScope,
-    report: Report,
 }
 
 /// What a crop is of.
@@ -239,7 +236,6 @@ impl CropScope {
     pub const fn object(source: DocRect) -> Self {
         CropScope::Object { source }
     }
->>>>>>> origin/next
 }
 
 impl<'a> CropOverlay<'a> {
@@ -260,13 +256,10 @@ impl<'a> CropOverlay<'a> {
             auto_center: false,
             fills_uncovered: false,
             hidden: false,
-<<<<<<< HEAD
             outside: CropOutside::default(),
             area: None,
             min_side: MIN_SIDE,
-=======
             scope: CropScope::default(),
->>>>>>> origin/next
             report: Report::default(),
         }
         .label(label)
@@ -281,12 +274,9 @@ impl<'a> CropOverlay<'a> {
             image: self.image_mode,
             auto_center: self.auto_center,
             fills_uncovered: self.fills_uncovered,
-<<<<<<< HEAD
             min_side: self.min_side,
             area: self.area,
-=======
             resize_grows: matches!(self.scope, CropScope::Document),
->>>>>>> origin/next
             snap: canvas_snap(env),
             os: env.shell().os,
         }
@@ -705,14 +695,16 @@ impl Component for CropOverlay<'_> {
             }
             let _ = declared;
         }
-<<<<<<< HEAD
         let outside = HitPriority::new(HitLevel::Background, u8::MAX);
         match self.outside {
+            // Outside a picture's frame there is no turn part, so a press there reaches the picture beneath.
             CropOutside::Turn => {
-                cx.part(TURN, HitShape::Rect(rect))
-                    .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
-                    .priority(outside)
-                    .pointer_only("the options bar's angle field sets the frame's angle");
+                if self.turns() {
+                    cx.part(TURN, HitShape::Rect(rect))
+                        .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
+                        .priority(outside)
+                        .pointer_only("the options bar's angle field sets the frame's angle");
+                }
             }
             CropOutside::Apply => {
                 cx.part(OUTSIDE, HitShape::Rect(rect))
@@ -735,14 +727,6 @@ impl Component for CropOverlay<'_> {
                     .cursor(CursorIcon::Crosshair)
                     .pointer_only("the options bar's size fields set the frame");
             }
-=======
-        // Outside a picture's frame there is no turn part, so a press there reaches the picture beneath.
-        if self.turns() {
-            cx.part(TURN, HitShape::Rect(rect))
-                .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
-                .priority(HitPriority::new(HitLevel::Background, u8::MAX))
-                .pointer_only("the options bar's angle field sets the frame's angle");
->>>>>>> origin/next
         }
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
     }

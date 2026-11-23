@@ -7,11 +7,7 @@ use crate::contract::{Props as _, Show as _};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use craft_behavior::kurbo::{Point, Vec2};
-<<<<<<< HEAD
-use craft_behavior::overlay::Align;
-=======
-use craft_behavior::overlay::Side;
->>>>>>> origin/next
+use craft_behavior::overlay::{Align, Side};
 use egui::Ui;
 
 /// The corners of a crop frame turned by a few degrees about the document's middle: the Crop tool hangs its bar from

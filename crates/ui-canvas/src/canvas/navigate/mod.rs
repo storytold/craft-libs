@@ -17,11 +17,7 @@ mod wheel;
 pub(crate) use autoscroll::{MiddleAutoscroll, paint_mark};
 pub use bar::{NavigateBar, NavigateBarOutput};
 pub use keys::PageKey;
-<<<<<<< HEAD
-pub use options::{NavigationOptions, WheelScheme};
-=======
 pub use options::{MiddleButton, NavigationOptions, WheelScheme};
->>>>>>> origin/next
 pub use wheel::{WheelAction, WheelInput, WheelNavigation};
 
 use super::frame_step;
