@@ -868,3 +868,48 @@ fn a_prompts_readers_give_what_it_shows() {
         assert!(fixture.by_label(label).is_some(), "the {label:?} button is shown");
     }
 }
+
+/// A question with an OK armed after half a second, shown under the same ids whatever it asks about: an install
+/// approval asking about module `key`.
+struct Approval {
+    key: &'static str,
+}
+
+impl StackDialog for Approval {
+    type Result = ();
+
+    fn id(&self) -> DialogId {
+        dialog_id(self.key)
+    }
+
+    fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
+        let shown = Dialog::new("Install")
+            .id_salt("approval")
+            .buttons([FooterButton::new("OK", DialogRole::Accept).armed_after(0.5), FooterButton::new("Cancel", DialogRole::Cancel)])
+            .show(ui, |_, _| {});
+        shown.output.closed.map(|_| DialogResult::Ok(()))
+    }
+}
+
+/// Tb-8 (6): a question the host puts in place of another between two frames waits its own delay before its armed OK
+/// takes a click, though its footer has the same ids: the footer counted on from the question before.
+#[trial]
+fn a_new_question_in_place_of_another_waits_again_for_its_armed_answer() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = running(&host);
+    let first = host.borrow_mut().open(Approval { key: "a" });
+    fixture.frame(vec![egui::Event::WindowFocused(true)]);
+    fixture.idle(60);
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().cancel_by_id(&ctx, first), "the first question goes");
+    host.borrow_mut().open(Approval { key: "b" });
+    let click_ok = |fixture: &mut Fixture| {
+        let ok = fixture.by_label("OK").expect("the OK button is shown");
+        fixture.click(&ok).idle(2);
+    };
+    click_ok(&mut fixture);
+    assert!(host.borrow().is_open::<Approval>(), "a click on the new question's OK before its delay answers nothing");
+    fixture.idle(60);
+    click_ok(&mut fixture);
+    assert!(host.borrow().is_empty(), "after its delay the OK answers it");
+}

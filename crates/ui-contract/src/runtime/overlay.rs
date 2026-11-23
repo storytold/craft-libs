@@ -742,6 +742,13 @@ pub fn stack_place<R>(ctx: &Context, place: usize, dialog: Id, show: impl FnOnce
     out
 }
 
+/// The host's dialog whose `stack_place` runs now: a component inside it tells one dialog from the next one a host
+/// shows at the same place with the same ids.
+#[doc(hidden)]
+pub fn running_dialog(ctx: &Context) -> Option<Id> {
+    with_pass(ctx, |pass| pass.dialog)
+}
+
 /// A dialog host opened a dialog in this pass: it is the top layer from now on, so the Escape that arrived in this
 /// pass is its, and nothing beneath it gets a Cancel or a claimed Escape, wherever focus is now.
 #[doc(hidden)]

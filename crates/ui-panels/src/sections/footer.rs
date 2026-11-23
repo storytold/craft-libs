@@ -23,7 +23,7 @@ use craft_theme::{
     Variant,
     variant::{Emphasis, Tone},
 };
-use egui::{Context, Pos2, Rect, Response, Ui};
+use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -562,11 +562,13 @@ impl EnvValue for ArmedFor {
     }
 }
 
-/// What a footer with armed buttons keeps between frames: the seconds it has been shown and the frame it last was.
+/// What a footer with armed buttons keeps between frames: the seconds it has been shown, the frame it last was, and
+/// the host's dialog it was shown for.
 #[derive(Clone, Copy, Default)]
 struct Arming {
     shown: f64,
     frame: Option<u64>,
+    dialog: Option<Id>,
 }
 
 #[derive(Default)]
@@ -831,12 +833,15 @@ impl Component for FooterBar {
         let focused = WindowHost::of(&ctx).facts(pass.viewport).is_some_and(|facts| facts.focused);
         let held =
             !crate::runtime::pointer::frame(&ctx).buttons.is_empty() || keys::held(&ctx).iter().any(|key| matches!(key, Key::Enter | Key::Space));
+        let dialog = crate::runtime::overlay::running_dialog(&ctx);
         let arming = cx.keep::<Arming>();
-        let continues = arming.frame.is_some_and(|last| pass.frame_nr == last || pass.frame_nr == last + 1);
+        // A host's next dialog shown in the same place with the same ids waits its own delay.
+        let continues = arming.dialog == dialog && arming.frame.is_some_and(|last| pass.frame_nr == last || pass.frame_nr == last + 1);
         if !(continues && focused) {
             arming.shown = 0.0;
         }
         arming.frame = Some(pass.frame_nr);
+        arming.dialog = dialog;
         if focused && !(held && arming.shown < longest) {
             arming.shown += pass.elapsed;
         }
