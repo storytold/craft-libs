@@ -764,9 +764,9 @@ fn an_edited_character_style_read_under_another_id_keeps_the_files_name() {
 }
 
 /// Many of the file's styles WordCraft has under one id (`My-Custom`, `My.Custom`…), one edited:
-/// the save looks each name up once, not every name for every style.
+/// editing the shared id rewrites only the definitions that were read into it.
 #[test]
-fn many_styles_sharing_an_id_save_quickly() {
+fn many_styles_sharing_an_id_keep_unedited_definitions() {
     use std::sync::Arc;
     let names: Vec<String> =
         (0..6_000u32).map(|i| format!("My{}Custom", (0..13).map(|b| if i >> b & 1 == 1 { '-' } else { '.' }).collect::<String>())).collect();
@@ -778,9 +778,7 @@ fn many_styles_sharing_an_id_save_quickly() {
     let mut d = opened(&s, &used);
     let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
     Arc::make_mut(&mut d.styles).get_mut(&id).unwrap().chr.size = Some(21.0);
-    let t = std::time::Instant::now();
     let saved = styles_of(&export(&d).unwrap());
-    assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
     assert_eq!(saved.matches(r#"fo:font-size="21pt""#).count(), 500, "the ones read into it");
     assert_eq!(saved.matches(r#"fo:font-size="9pt""#).count(), 5_500, "the others as read");
 }
@@ -964,4 +962,36 @@ fn line_numbering_changed_in_the_first_section_is_saved() {
     first.line_numbers.as_mut().expect("line numbering as read").count_by = 3;
     let s = styles_of(&export(&d).unwrap());
     assert!(s.contains(r#"text:increment="3""#) && !s.contains(r#"text:increment="5""#), "the change: {s}");
+}
+
+#[test]
+fn rewriting_shared_style_names_scales_linearly_in_name_lookups() {
+    use std::{
+        cell::Cell,
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
+    let lookups = |n: usize| {
+        let defs: BTreeMap<String, Arc<str>> = (0..n).map(|i| (format!("common:Name{i}"), Arc::from("<style:style/>"))).collect();
+        let ids = defs.keys().map(|key| (key.clone(), "Shared".to_string())).collect();
+        let changed = BTreeSet::from(["common:Shared".to_string()]);
+        let calls = Cell::new(0usize);
+        let ours = |id: &str| {
+            calls.set(calls.get() + 1);
+            id.to_string()
+        };
+        let rewritten = super::super::kept::rewritten_defs(
+            r#"<office:styles><style:style style:name="Shared" style:family="paragraph"/></office:styles>"#,
+            &defs,
+            &changed,
+            &ids,
+            &ours,
+        );
+        assert_eq!(rewritten.len(), n);
+        calls.get()
+    };
+    let small = lookups(16);
+    let large = lookups(128);
+    assert!(small > 0);
+    assert!(large <= 8 * small, "name lookups grew faster than the input: {small} -> {large}");
 }
