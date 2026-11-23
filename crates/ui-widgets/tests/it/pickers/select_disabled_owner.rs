@@ -60,7 +60,11 @@ fn held_popup_retires(disabled: &'static str) {
     assert_eq!(current.node, trigger.node, "disabling does not substitute the owner's identity");
     assert!(fixture.tree().is_disabled_key(current.node), "the real disabled state reached the current owner");
     assert!(fixture.ctx().input(|input| input.pointer.primary_down()), "retirement is checked before any pointer release");
-    assert_eq!(fixture.tree().with_role(Role::LIST_BOX_OPTION).len(), 0, "a disabled implicit owner retires all popup options after two ordinary idle frames, before release");
+    assert_eq!(
+        fixture.tree().with_role(Role::LIST_BOX_OPTION).len(),
+        0,
+        "a disabled implicit owner retires all popup options after two ordinary idle frames, before release"
+    );
     assert!(fixture.tree().with_role(Role::LIST_BOX).is_empty(), "the actual popup shell is retired too");
     assert_eq!(value(&mut fixture), 1, "disable preserves the original bound value");
     assert_eq!(terminal_edits(&mut fixture), 0, "retirement produces no Commit or Set");

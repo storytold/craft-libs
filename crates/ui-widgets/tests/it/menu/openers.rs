@@ -149,7 +149,6 @@ fn a_menu_button_hangs_its_arrow_under_the_end_of_its_glyph() {
     }
 }
 
-
 /// Space on a focused icon button that opens a menu opens the menu, as a click does.
 #[trial]
 fn space_on_a_focused_menu_opener_opens_its_menu() {
