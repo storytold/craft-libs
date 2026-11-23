@@ -316,41 +316,6 @@ fn a_blend_row_steps_and_picks_by_its_keys_inside_the_dialog() {
     assert_eq!(held().as_deref(), Some("multiply"), "Down on the closed list skips the greyed mode");
 }
 
-<<<<<<< HEAD
-/// The y of each thin horizontal line in `shapes`.
-
-/// `separated_at(index)` draws the framework's list separator before that option of a choice row's open list and
-/// between no other two: a separator placed by the wrong index, or one drawn on every option, would split the standard
-/// paper sizes from the wrong neighbour.
-#[trial]
-fn a_choice_row_draws_its_separator_before_the_named_option() {
-    let sizes: Vec<(String, Label)> = [("letter", "Letter"), ("legal", "Legal"), ("a4", "A4"), ("custom", "Custom")]
-        .into_iter()
-        .map(|(id, label)| (id.to_owned(), label.into()))
-        .collect();
-    let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
-    let values = Rc::new(RefCell::new(DialogFields::new()));
-    let shown = values.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        let _ = ParamRows::new("Page Setup", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
-    });
-    fixture.room(Vec2::new(1200.0, 800.0));
-    fixture.settle();
-    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the choice field shows");
-    fixture.click(&field);
-    fixture.idle(3);
-
-    let line_of = |fixture: &Fixture, text: &str| {
-        let run = fixture.texts().iter().rev().find(|run| run.text == text).unwrap_or_else(|| panic!("the list shows {text}"));
-        run.rect
-    };
-    let (letter, legal, a4, custom) = (line_of(&fixture, "Letter"), line_of(&fixture, "Legal"), line_of(&fixture, "A4"), line_of(&fixture, "Custom"));
-    // The separator is a row of its own in the open list: the step from A4 to Custom is wider than the step between two
-    // options with none between them, and those two steps are equal.
-    let plain = legal.top() - letter.top();
-    assert!((a4.top() - legal.top() - plain).abs() < 0.5, "no separator between Legal and A4: {letter:?} {legal:?} {a4:?}");
-    assert!(custom.top() - a4.top() > plain + 1.0, "a separator between A4 and Custom: A4 {a4:?}, Custom {custom:?}, plain step {plain}");
-=======
 #[trial]
 fn paired_parameter_fields_15539_keep_their_controls_and_values() {
     let values = Rc::new(RefCell::new(DialogFields::new()));
@@ -412,7 +377,39 @@ fn paired_parameter_fields_15539_leave_no_gap_when_both_are_hidden() {
     assert!(hidden.by_label("Mode").is_none() && hidden.by_label("Opacity").is_none());
     let absent = rows(vec![before, after], &Rc::new(RefCell::new(DialogFields::new())));
     assert_eq!(gap(&hidden), gap(&absent), "a hidden pair uses no space");
->>>>>>> origin/next
+}
+
+/// `separated_at(index)` draws the framework's list separator before that option of a choice row's open list and
+/// between no other two: a separator placed by the wrong index, or one drawn on every option, would split the standard
+/// paper sizes from the wrong neighbour.
+#[trial]
+fn a_choice_row_draws_its_separator_before_the_named_option() {
+    let sizes: Vec<(String, Label)> = [("letter", "Letter"), ("legal", "Legal"), ("a4", "A4"), ("custom", "Custom")]
+        .into_iter()
+        .map(|(id, label)| (id.to_owned(), label.into()))
+        .collect();
+    let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Page Setup", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 800.0));
+    fixture.settle();
+    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the choice field shows");
+    fixture.click(&field);
+    fixture.idle(3);
+
+    let line_of = |fixture: &Fixture, text: &str| {
+        let run = fixture.texts().iter().rev().find(|run| run.text == text).unwrap_or_else(|| panic!("the list shows {text}"));
+        run.rect
+    };
+    let (letter, legal, a4, custom) = (line_of(&fixture, "Letter"), line_of(&fixture, "Legal"), line_of(&fixture, "A4"), line_of(&fixture, "Custom"));
+    // The separator is a row of its own in the open list: the step from A4 to Custom is wider than the step between two
+    // options with none between them, and those two steps are equal.
+    let plain = legal.top() - letter.top();
+    assert!((a4.top() - legal.top() - plain).abs() < 0.5, "no separator between Legal and A4: {letter:?} {legal:?} {a4:?}");
+    assert!(custom.top() - a4.top() > plain + 1.0, "a separator between A4 and Custom: A4 {a4:?}, Custom {custom:?}, plain step {plain}");
 }
 
 /// A pattern row shows the first pattern for a stored id the rows lack without writing it, a pick writes the pattern's
@@ -517,26 +514,6 @@ fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
     assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
 }
 
-<<<<<<< HEAD
-/// A row marked `beside_previous` stands on the line of the row before it, where an unmarked one stands below.
-#[trial]
-fn a_row_beside_the_previous_one_shares_its_line() {
-    let top = |beside: bool| {
-        let second = Param::number("second", "Second", 1.0, 1.0, 0);
-        let params = vec![Param::number("first", "First", 1.0, 1.0, 0), if beside { second.beside_previous() } else { second }];
-        let values = Rc::new(RefCell::new(DialogFields::new()));
-        let shown = values.clone();
-        let mut fixture = Fixture::new(move |ui| {
-            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
-        });
-        fixture.settle();
-        let at = |name: &str| fixture.texts().iter().find(|text| text.text.contains(name)).map(|text| text.rect.center().y);
-        at("First").zip(at("Second")).map(|(first, second)| second - first)
-    };
-    let (stacked, beside) = (top(false), top(true));
-    assert!(stacked.is_some_and(|gap| gap > 10.0), "unmarked rows stack: {stacked:?}");
-    assert!(beside.is_some_and(|gap| gap.abs() < 3.0), "a beside row shares the line: {beside:?}");
-=======
 // A text row with `max_chars` stops typing at its limit, and the host's `set` refuses longer text; the limit counts
 // characters, not bytes.
 #[trial]
@@ -632,5 +609,24 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
             assert_eq!(held.int("copies"), Some(1));
         }
     }
->>>>>>> origin/next
+}
+
+/// A row marked `beside_previous` stands on the line of the row before it, where an unmarked one stands below.
+#[trial]
+fn a_row_beside_the_previous_one_shares_its_line() {
+    let top = |beside: bool| {
+        let second = Param::number("second", "Second", 1.0, 1.0, 0);
+        let params = vec![Param::number("first", "First", 1.0, 1.0, 0), if beside { second.beside_previous() } else { second }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+        });
+        fixture.settle();
+        let at = |name: &str| fixture.texts().iter().find(|text| text.text.contains(name)).map(|text| text.rect.center().y);
+        at("First").zip(at("Second")).map(|(first, second)| second - first)
+    };
+    let (stacked, beside) = (top(false), top(true));
+    assert!(stacked.is_some_and(|gap| gap > 10.0), "unmarked rows stack: {stacked:?}");
+    assert!(beside.is_some_and(|gap| gap.abs() < 3.0), "a beside row shares the line: {beside:?}");
 }

@@ -508,12 +508,8 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         };
         let mut dialog = Dialog::new(title)
             .closable(closable)
-<<<<<<< HEAD
             .close_unchanged(close_unchanged)
-            .close_on_enter(ok_enabled && enter_confirms)
-=======
             .close_on_enter(enter_confirms && if no_ok { enter_extra } else { ok_enabled })
->>>>>>> origin/next
             .outer_gesture(outer_gesture)
             .button_place(button_place);
         dialog = match close {

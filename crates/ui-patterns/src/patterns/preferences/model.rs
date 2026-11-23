@@ -123,7 +123,8 @@ pub struct RowSpec<'a> {
     /// decimals. Ignored by other kinds.
     pub step: Option<f64>,
     /// A choice row: `Some(true)` draws its options as a segmented (pill) control, `Some(false)` as a drop-down; by
-    /// default a short choice of up to five options is segmented. Ignored by other kinds.
+    /// default a drop-down, and on a card ([`PreferencesLayout::Cards`](super::PreferencesLayout::Cards)) a short
+    /// choice of up to five options is segmented. Ignored by other kinds.
     pub pills: Option<bool>,
     /// The control and the value it shows.
     pub kind: RowKind<'a>,
@@ -320,28 +321,12 @@ pub trait PreferencesModel {
     fn set_color(&mut self, key: &str, color: Srgba) {
         self.set(key, PrefValue::Color(color.into()));
     }
-<<<<<<< HEAD
-    /// Draws a [`RowKind::Custom`] row's control, returning whether its draft changed this pass.
-    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool;
-    /// Draws a [`PageSpec::custom`] page, returning whether its draft changed this pass.
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool;
-    /// Whether the draft differs from the saved settings: enables Apply.
-    fn differs(&self) -> bool;
-    /// Whether OK may close the window.
-    fn can_ok(&self) -> bool {
-        true
-    }
-    /// Commits the draft. `Err` keeps it and the window open and shows the message.
-    fn apply(&mut self) -> Result<(), String>;
-    /// Drops the draft and undoes previews (the language).
-    fn cancel(&mut self);
-=======
     /// Draws a [`RowKind::Custom`] row's control, which the window labels from the row's label (an empty label shows
-    /// an empty one), or a [`RowKind::CustomRows`] row's whole rows, labels included.
-    fn custom_row(&mut self, ui: &mut Ui, key: &str);
-    /// Draws a [`PageSpec::custom`] page.
-    fn custom_page(&mut self, ui: &mut Ui, page: &str);
->>>>>>> origin/next
+    /// an empty one), or a [`RowKind::CustomRows`] row's whole rows, labels included. Returns whether the row changed
+    /// the draft this pass, so an edit made there clears a failed apply's message as any row's edit does.
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool;
+    /// Draws a [`PageSpec::custom`] page, returning whether it changed the draft this pass.
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool;
     /// Resets the page's rows in the draft to their defaults.
     fn reset_page(&mut self, page: &str);
     /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in

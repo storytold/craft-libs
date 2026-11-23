@@ -7,7 +7,7 @@ pub(crate) mod stories;
 #[cfg(doc)]
 use super::model::PreferencesModel;
 use super::model::{Closed, PreferencesDraft, PreferencesOutput};
-use super::page::PreferencesPage;
+use super::page::{PreferencesLayout, PreferencesPage};
 use super::words::PreferencesWords;
 use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogOutput};
@@ -23,11 +23,15 @@ use egui::{Ui, Vec2, vec2};
 use std::cell::RefCell;
 use std::sync::Arc;
 
-/// The size the window opens at until the user resizes it.
-<<<<<<< HEAD
-pub const DEFAULT_SIZE: Vec2 = vec2(640.0, 720.0); // design: allow[literal-size/vec2](the window's own opening size in points)
+/// The size the window opens at until the user resizes it, with the page list ([`PreferencesLayout::Paged`]).
+pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0);
 /// The least size the window may be resized to.
-pub const MIN_SIZE: Vec2 = vec2(420.0, 320.0); // design: allow[literal-size/vec2](the window's own least size in points)
+pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
+/// The size a window of cards ([`PreferencesLayout::Cards`]) opens at: one column of cards needs no room for a page
+/// list.
+const CARDS_SIZE: Vec2 = vec2(640.0, 720.0);
+/// The least size a window of cards may be resized to.
+const CARDS_MIN_SIZE: Vec2 = vec2(420.0, 320.0);
 
 /// When preferences changes are applied.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -39,11 +43,6 @@ pub enum PreferencesMode {
     /// Apply changes as they happen; OK closes the window.
     Live,
 }
-=======
-pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0);
-/// The least size the window may be resized to.
-pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
->>>>>>> origin/next
 
 /// What the window keeps between passes; the host owns it and binds it with [`PreferencesWindow::new`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -74,6 +73,9 @@ pub struct PreferencesState {
 /// - **Buttons.** OK applies and closes, Apply applies and stays (enabled while the draft differs), Cancel drops the
 ///   draft. A failed apply keeps the window open and shows its message in the footer. Enter activates OK and Escape
 ///   cancels, once the search text, a field's own gesture and a popup have had them.
+/// - **Layout.** [`layout`](PreferencesWindow::layout) passes a [`PreferencesLayout`] to the page:
+///   [`PreferencesLayout::Cards`] shows one scrolling column of cards with the search's match count, and the window
+///   opens narrower, as it needs no room for a page list.
 /// - **Live mode.** [`PreferencesMode::Live`] applies changes as they occur and shows only OK, which closes without
 ///   applying again. Closing the window does not cancel changes. A failed apply shows its message until another edit.
 /// - **Nested dialogs.** While [`PreferencesModel::nested_open`] is true the window takes no input and refuses to
@@ -97,6 +99,7 @@ pub struct PreferencesWindow<'a> {
     #[prop]
     remember: Option<SaveKey>,
     mode: PreferencesMode,
+    layout: PreferencesLayout,
 }
 
 /// What the body, the footer and the buttons' guard share during one pass: the host, the window's state as the pass
@@ -151,7 +154,14 @@ impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
 impl<'a> PreferencesWindow<'a> {
     /// A window over the host's `state`.
     pub fn new(state: Bind<'a, PreferencesState>) -> Self {
-        PreferencesWindow { state, title: None, embedded: false, remember: None, mode: PreferencesMode::Staged }
+        PreferencesWindow { state, title: None, embedded: false, remember: None, mode: PreferencesMode::Staged, layout: PreferencesLayout::Paged }
+    }
+
+    /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
+    #[must_use]
+    pub fn layout(mut self, layout: PreferencesLayout) -> Self {
+        self.layout = layout;
+        self
     }
 
     /// Selects whether changes are staged or applied while the window is open.
@@ -162,13 +172,8 @@ impl<'a> PreferencesWindow<'a> {
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
-<<<<<<< HEAD
-    pub fn show<H: PreferencesModel + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember, mode } = self;
-=======
     pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember } = self;
->>>>>>> origin/next
+        let PreferencesWindow { state, title, embedded, remember, mode, layout } = self;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
@@ -185,6 +190,10 @@ impl<'a> PreferencesWindow<'a> {
         let buttons =
             if mode == PreferencesMode::Live { vec![ok] } else { vec![ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)] };
 
+        let (size, least) = match layout {
+            PreferencesLayout::Paged => (DEFAULT_SIZE, MIN_SIZE),
+            PreferencesLayout::Cards => (CARDS_SIZE, CARDS_MIN_SIZE),
+        };
         let mut open = true;
         // Filed by a swatch press in this pass.
         let mut pick_color = None;
@@ -200,7 +209,7 @@ impl<'a> PreferencesWindow<'a> {
         let mut dialog = Dialog::new(title.clone())
             .collection_body()
             .resizable(true)
-            .overlay(|overlay| overlay.size(DEFAULT_SIZE).min_size(MIN_SIZE))
+            .overlay(|overlay| overlay.size(size).min_size(least))
             .close_on_enter(can_ok)
             .on_pick(|button, cx| {
                 if button.role() == DialogRole::Other && !nested {
@@ -228,38 +237,15 @@ impl<'a> PreferencesWindow<'a> {
                 let mut guard = session.borrow_mut();
                 let session = &mut *guard;
                 session.begin(cx);
-<<<<<<< HEAD
-                let matcher = Matcher::new(&env.folder(), session.work.search.trim());
-                let snap = body::snapshot(&*session.host, &matcher);
-                let mut out = BodyOut::default();
-                body::show_body(ui, &mut *session.host, &snap, &mut session.work, &words, &units, &mut out);
-                if let Some(request) = out.rows.pick_color.take() {
+                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).layout(layout).show(ui, &mut *session.host);
+                if let Some(request) = shown.pick_color {
                     pick_color = Some(request);
-                }
-                let edits = out.edits();
-                if !edits.is_empty() || out.reset.is_some() || out.custom_changed || out.rows.custom_changed {
-                    session.work.error = None;
-                }
-                for (key, value) in edits {
-                    session.host.set(&key, value);
-                }
-                if let Some(page) = &out.reset {
-                    session.host.reset_page(page);
                 }
                 session.host.nested(ui);
                 if mode == PreferencesMode::Live && session.work.error.is_none() && session.host.differs() {
                     session.apply(cx);
                 }
-                let selected = session.work.selected.clone();
-                session.page = snap.shown.iter().find(|page| page.id == selected).or(snap.shown.first()).map(|page| page.id.clone());
-=======
-                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).show(ui, &mut *session.host);
-                if let Some(request) = shown.pick_color {
-                    pick_color = Some(request);
-                }
-                session.host.nested(ui.ctx());
                 session.page = shown.page;
->>>>>>> origin/next
                 session.commit(cx);
             });
 

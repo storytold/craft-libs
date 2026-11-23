@@ -4,11 +4,7 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-<<<<<<< HEAD
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, IconicMode, PanelSpec, group_heights};
-=======
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupSize, PanelSpec, PanelSpecs, group_heights};
->>>>>>> origin/next
+use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupSize, IconicMode, PanelSpec, PanelSpecs, group_heights};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
@@ -281,9 +277,10 @@ fn a_floating_stepped_windows_left_and_top_edge_drags_keep_the_opposite_edge() {
 }
 
 /// Two side panels in one group, named and with a line of content each.
+#[derive(PlainData)]
 struct Sides;
 
-impl DockPanels<u32> for Sides {
+impl PanelSpecs<u32> for Sides {
     fn spec(&self, panel: &u32) -> PanelSpec {
         PanelSpec::new(match panel {
             10 => "Alpha",
@@ -291,7 +288,9 @@ impl DockPanels<u32> for Sides {
             _ => "Canvas",
         })
     }
+}
 
+impl DockPanels<u32> for Sides {
     fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
         match panel {
             10 => Text::new("Alpha body").show(ui),
@@ -301,13 +300,16 @@ impl DockPanels<u32> for Sides {
     }
 }
 
+#[derive(PlainData)]
 struct RailWithFooter;
 
-impl DockPanels<u32> for RailWithFooter {
+impl PanelSpecs<u32> for RailWithFooter {
     fn spec(&self, panel: &u32) -> PanelSpec {
         PanelSpec::new(format!("Panel {panel}"))
     }
+}
 
+impl DockPanels<u32> for RailWithFooter {
     fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
 
     fn rail_footer(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -327,18 +329,16 @@ fn rail_footer_stays_clear_of_icons_on_either_dock_side() {
         } else {
             Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), dock)
         };
-        let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
-        let held = Rc::clone(&workspace);
+        let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+        let (held, specs) = (Rc::clone(&workspace), Tracked::new(RailWithFooter));
         let actions = Rc::new(RefCell::new(Vec::new()));
         let seen = Rc::clone(&actions);
         let mut fixture = Fixture::new(move |ui| {
-            let mut workspace = held.borrow().clone();
-            let out =
-                DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut RailWithFooter, DockConfig::default().iconic_mode(IconicMode::Rail))
-                    .rail_footer(10)
-                    .show(ui);
+            let mut workspace = Arc::clone(&held.borrow());
+            let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+            let out = DockArea::new("Rail dock", Bind::given(Arc::clone(&workspace)), &specs, &mut RailWithFooter, config).rail_footer(10).show(ui);
             for action in out.actions {
-                drop(workspace.apply(action.clone(), false, |_| Permissions::ALL));
+                drop(Arc::make_mut(&mut workspace).apply(action.clone(), false, |_| Permissions::ALL));
                 seen.borrow_mut().push(action);
             }
             *held.borrow_mut() = workspace;
@@ -378,14 +378,14 @@ fn rail_footer_stays_clear_of_icons_on_either_dock_side() {
 fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses_it() {
     let side = Column::new(vec![Group::new(vec![10, 11], 0)]).with_iconic(true);
     let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, vec![side]));
-    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
-    let held = Rc::clone(&workspace);
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Sides));
     let mut fixture = Fixture::new(move |ui| {
-        let mut workspace = held.borrow().clone();
+        let mut workspace = Arc::clone(&held.borrow());
         let config = DockConfig::default().iconic_mode(IconicMode::Rail);
-        let out = DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut Sides, config).show(ui);
+        let out = DockArea::new("Rail dock", Bind::given(Arc::clone(&workspace)), &specs, &mut Sides, config).show(ui);
         for action in out.actions {
-            drop(workspace.apply(action, false, |_: &u32| Permissions::ALL));
+            drop(Arc::make_mut(&mut workspace).apply(action, false, |_: &u32| Permissions::ALL));
         }
         *held.borrow_mut() = workspace;
     });
@@ -398,7 +398,7 @@ fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses
             .find(|button| craft_ui::testing::access::name(tree, button.node) == Some(name))
             .unwrap_or_else(|| panic!("the rail shows the {name} icon"))
     };
-    let iconic = || end_columns(&workspace.borrow().layout)[0].iconic;
+    let iconic = || end_columns(workspace.borrow().layout())[0].iconic;
     let shown = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text);
 
     let beta = icon(&fixture, "Beta");
@@ -418,13 +418,16 @@ fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses
     assert!(!shown(&fixture, "Alpha body"), "and its panel no longer shows");
 }
 
+#[derive(PlainData)]
 struct RailWithMenu;
 
-impl DockPanels<u32> for RailWithMenu {
+impl PanelSpecs<u32> for RailWithMenu {
     fn spec(&self, panel: &u32) -> PanelSpec {
         PanelSpec::new(format!("Panel {panel}"))
     }
+}
 
+impl DockPanels<u32> for RailWithMenu {
     fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
 
     fn rail_footer(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
@@ -443,11 +446,11 @@ impl DockPanels<u32> for RailWithMenu {
 fn a_menu_opens_from_the_rail_footer() {
     let side = Column::new(vec![Group::new(vec![10, 11], 0)]).with_iconic(true);
     let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, vec![side]));
-    let workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let workspace = Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())));
+    let specs = Tracked::new(RailWithMenu);
     let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut RailWithMenu, DockConfig::default().iconic_mode(IconicMode::Rail))
-            .rail_footer(10)
-            .show(ui);
+        let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+        DockArea::new("Rail dock", Bind::given(Arc::clone(&workspace)), &specs, &mut RailWithMenu, config).rail_footer(10).show(ui);
     });
     fixture.room(Vec2::new(900.0, 500.0)).settle();
     let opener = fixture.by_label("Rail menu").expect("the rail menu button");

@@ -3,15 +3,10 @@
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
-<<<<<<< HEAD
-use craft_ui::patterns::form_dialogs::{AboutDialog, AboutInfo, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
-use craft_ui::testing::{Fixture, trial};
-=======
 use craft_ui::patterns::form_dialogs::{
     AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit,
 };
 use craft_ui::testing::{Fixture, access, trial};
->>>>>>> origin/next
 use egui::Vec2;
 use serde_json::json;
 use std::cell::RefCell;
@@ -64,47 +59,6 @@ fn a_click_on_a_name_in_the_grab_bag_reports_its_profile() {
     assert!(!fixture.by_role(Role::TABLE).is_empty(), "Table shows the contributors as a table");
 }
 
-<<<<<<< HEAD
-/// The names of the grab bag, in the order it shows them.
-fn grab_bag(fixture: &Fixture) -> Vec<String> {
-    fixture.by_role(Role::LINK).iter().filter_map(|link| fixture.tree().name_of(link.node).map(str::to_owned)).collect()
-}
-
-/// Picks `entry` from the Sort list.
-fn sort_by(fixture: &mut Fixture, entry: &str) {
-    let sort = fixture.by_label("Sort").expect("the Sort list");
-    fixture.click(&sort).idle(4);
-    let pick = fixture.by_label(entry).unwrap_or_else(|| panic!("the Sort list offers {entry}"));
-    fixture.click(&pick).idle(10);
-}
-
-// The name order ignores the `@` of a username and the case, so display names and usernames interleave; someone
-// with no commit date sorts after everyone with one, by first and by last commit. A slip reorders the credits.
-#[trial]
-fn contributors_sort_by_name_without_at_or_case_and_undated_last() {
-    let credits = Credits::new(
-        vec![
-            Contributor::new("carl").counts(0, 9).active("2025-01-01T10:00:00Z", "2026-01-01T10:00:00Z"),
-            Contributor::new("zed").display_name("Bea").counts(1, 0),
-            Contributor::new("alice").counts(0, 3).active("2025-03-01T10:00:00Z", "2025-04-01T10:00:00Z"),
-        ],
-        Vec::new(),
-        12,
-    );
-    let mut fixture = Fixture::new(move |ui| {
-        let _ = AboutDialog::new(&INFO, &credits).tab(Bind::given(AboutTab::Contributors)).show(ui);
-    });
-    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
-    assert_eq!(grab_bag(&fixture), ["@carl", "@alice", "@zed"], "oldest first commit first, the undated last");
-
-    sort_by(&mut fixture, "Last commit");
-    assert_eq!(grab_bag(&fixture), ["@alice", "@carl", "@zed"], "oldest last commit first, the undated last");
-
-    let display = fixture.by_label("Display name").expect("Show offers Display name");
-    fixture.click(&display).idle(10);
-    sort_by(&mut fixture, "Name (A\u{2013}Z)");
-    assert_eq!(grab_bag(&fixture), ["@alice", "Bea", "@carl"], "names compare without the `@` and the case");
-=======
 // The listed layout stands the name, version, blurb, links and built-with line in one column from the start edge,
 // the links in the community-then-links order, one to a line; a link click reports its URL and the button is Close.
 #[trial]
@@ -220,7 +174,47 @@ fn the_listed_about_shows_tab_faces() {
     let (listed, centred) = (inset(AboutLayout::Listed), inset(AboutLayout::Centred));
     assert!(centred.abs() < 1.0, "a centred tab is its text: {centred}");
     assert!(listed > 3.0, "a listed tab is a face with its title set in: {listed}");
->>>>>>> origin/next
+}
+
+/// The names of the grab bag, in the order it shows them.
+fn grab_bag(fixture: &Fixture) -> Vec<String> {
+    fixture.by_role(Role::LINK).iter().filter_map(|link| fixture.tree().name_of(link.node).map(str::to_owned)).collect()
+}
+
+/// Picks `entry` from the Sort list.
+fn sort_by(fixture: &mut Fixture, entry: &str) {
+    let sort = fixture.by_label("Sort").expect("the Sort list");
+    fixture.click(&sort).idle(4);
+    let pick = fixture.by_label(entry).unwrap_or_else(|| panic!("the Sort list offers {entry}"));
+    fixture.click(&pick).idle(10);
+}
+
+// The name order ignores the `@` of a username and the case, so display names and usernames interleave; someone
+// with no commit date sorts after everyone with one, by first and by last commit. A slip reorders the credits.
+#[trial]
+fn contributors_sort_by_name_without_at_or_case_and_undated_last() {
+    let credits = Credits::new(
+        vec![
+            Contributor::new("carl").counts(0, 9).active("2025-01-01T10:00:00Z", "2026-01-01T10:00:00Z"),
+            Contributor::new("zed").display_name("Bea").counts(1, 0),
+            Contributor::new("alice").counts(0, 3).active("2025-03-01T10:00:00Z", "2025-04-01T10:00:00Z"),
+        ],
+        Vec::new(),
+        12,
+    );
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&INFO, &credits).tab(Bind::given(AboutTab::Contributors)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    assert_eq!(grab_bag(&fixture), ["@carl", "@alice", "@zed"], "oldest first commit first, the undated last");
+
+    sort_by(&mut fixture, "Last commit");
+    assert_eq!(grab_bag(&fixture), ["@alice", "@carl", "@zed"], "oldest last commit first, the undated last");
+
+    let display = fixture.by_label("Display name").expect("Show offers Display name");
+    fixture.click(&display).idle(10);
+    sort_by(&mut fixture, "Name (A\u{2013}Z)");
+    assert_eq!(grab_bag(&fixture), ["@alice", "Bea", "@carl"], "names compare without the `@` and the case");
 }
 
 #[trial]

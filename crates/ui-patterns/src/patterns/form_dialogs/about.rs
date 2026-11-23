@@ -229,13 +229,9 @@ impl Outcome for AboutOutput {
 
 /// Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button.
 ///
-<<<<<<< HEAD
 /// - **About.** The app's mark when it has one, the blurb, the version, the community button and the link row
-///   centred, then "Part of" with the suite's logo when it has one, the built-with line faint.
-=======
-/// - **About.** The blurb, the version, the community button and the link row centred, the built-with line faint; or,
-///   with [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
->>>>>>> origin/next
+///   centred, then "Part of" with the suite's logo when it has one, the built-with line faint; or, with
+///   [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
 /// - **Contributors.** Show (Username, Display name, Real name), Sort (the list, with a button to reverse) and View
 ///   (Grab bag or Table). The grab bag flows the names as links: a click reports the contributor's profile URL as the
 ///   link (nothing for one without a profile), and the link's tooltip is the summary. The table has every figure; a
@@ -385,43 +381,6 @@ impl Shown<'_> {
     /// The About tab, laid out as [`AboutLayout`] says.
     fn about(&self, ui: &mut Ui, link: &RefCell<Option<String>>) {
         let (words, info) = (self.words, self.info);
-<<<<<<< HEAD
-        let dark = Env::of(ui).view().mode() == Mode::Dark;
-        Stack::new().show(ui, |ui, _| {
-            if let Some(mark) = &info.mark {
-                Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                    Picture::svg(mark.label.clone(), mark.source(dark)).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
-                });
-            }
-            Text::new(info.blurb.clone()).show(ui);
-            Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                if let Some(community) = &info.community
-                    && clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui))
-                {
-                    *link.borrow_mut() = Some(community.url.clone());
-                }
-            });
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                for (at, item) in info.links.iter().enumerate() {
-                    if at > 0 && item.icon.is_none() && info.links.get(at - 1).is_some_and(|previous| previous.icon.is_none()) {
-                        Text::new("·").shade(Shade::Faint).show(ui);
-                    }
-                    let activated = if let Some(icon) = &item.icon {
-                        clicked(&Button::new(item.label.clone()).icon(icon.clone()).variant(Variant::GHOST).id_salt(("link", at)).show(ui))
-                    } else {
-                        clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui))
-                    };
-                    if activated {
-                        *link.borrow_mut() = Some(item.url.clone());
-                    }
-                }
-            });
-            if let Some(logo) = &info.part_of {
-                Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                    Text::new(words.part_of.clone()).shade(Shade::Muted).show(ui);
-                    Picture::svg(logo.label.clone(), logo.source(dark)).show(ui);
-=======
         if self.layout == AboutLayout::Listed {
             // Three blocks set apart by the item gap, as WordCraft's About spaced them: the name, version and blurb; the
             // links; the built-with line.
@@ -442,9 +401,16 @@ impl Shown<'_> {
             });
             return;
         }
+        let dark = Env::of(ui).view().mode() == Mode::Dark;
         // Four blocks set apart by the section gap: the blurb and version at the start edge, the community button and
-        // the link row each centred across the body, the built-with line at the start edge.
+        // the link row each centred across the body, the built-with line at the start edge. The app's mark, when it has
+        // one, is centred above them, and "Part of" with the suite's logo, when it has one, follows the link row.
         Stack::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
+            if let Some(mark) = &info.mark {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    Picture::svg(mark.label.clone(), mark.source(dark)).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
+                });
+            }
             Stack::new().show(ui, |ui, _| {
                 Text::new(info.blurb.clone()).show(ui);
                 Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
@@ -459,14 +425,25 @@ impl Shown<'_> {
             if !info.links.is_empty() {
                 Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
                     for (at, item) in info.links.iter().enumerate() {
-                        if at > 0 {
+                        // A dot sets apart two text links; a link with an icon is a button of its own.
+                        if at > 0 && item.icon.is_none() && info.links.get(at - 1).is_some_and(|previous| previous.icon.is_none()) {
                             Text::new("·").shade(Shade::Faint).show(ui);
                         }
-                        if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
+                        let activated = if let Some(icon) = &item.icon {
+                            clicked(&Button::new(item.label.clone()).icon(icon.clone()).variant(Variant::GHOST).id_salt(("link", at)).show(ui))
+                        } else {
+                            clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui))
+                        };
+                        if activated {
                             *link.borrow_mut() = Some(item.url.clone());
                         }
                     }
->>>>>>> origin/next
+                });
+            }
+            if let Some(logo) = &info.part_of {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    Text::new(words.part_of.clone()).shade(Shade::Muted).show(ui);
+                    Picture::svg(logo.label.clone(), logo.source(dark)).show(ui);
                 });
             }
             Text::new(info.built_with.clone()).shade(Shade::Faint).show(ui);

@@ -2,27 +2,17 @@
 //! tool rail the host takes has the dock's grip strip on top.
 
 use craft_behavior::Axis;
-<<<<<<< HEAD
-use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
-use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, BodyCx, Scroll, Show as _, ShowContainer as _};
-use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockPanels, GroupAt, PanelSpec};
-use craft_ui::layout_components::Stack;
-use craft_ui::patterns::dock::DockArea;
-use craft_ui::testing::{Fixture, pointer, trial};
-use egui::{Rect, Ui, Vec2};
-use std::cell::Cell;
-=======
 use craft_behavior::dock::{Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, PlainData, Tracked};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, BodyCx, PlainData, Scroll, Show as _, ShowContainer as _, Tracked};
+use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockGrid, DockPanels, DockSizes, DragUnit, GroupAt, GroupDrag, PanelSpec, PanelSpecs};
+use craft_ui::layout_components::Stack;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
 use craft_ui::testing::{Fixture, last_pass_runs, pointer, trial};
 use egui::{Rect, Shape, Ui, Vec2};
 use std::cell::{Cell, RefCell};
->>>>>>> origin/next
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -75,49 +65,6 @@ fn a_group_view_lays_out_and_clips_to_its_group_rect() {
     assert!(rect.contains_rect(clip), "the view's clip {clip:?} lies in its group's rect {rect:?}");
 }
 
-<<<<<<< HEAD
-/// A panel whose body lists more rows than its group shows, with a footer of one action.
-struct Listed;
-
-impl DockPanels<usize> for Listed {
-    fn spec(&self, _: &usize) -> PanelSpec {
-        PanelSpec::new("Findings").footer()
-    }
-
-    fn body(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
-            for row in 0..60 {
-                Text::new(format!("Row {row}")).show(ui);
-            }
-        });
-    }
-
-    fn footer(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        Button::new("Apply all").show(ui);
-    }
-}
-
-/// A panel's footer is pinned under its body: it shows inside the group while the body is taller than the group, and
-/// stays where it is when the body scrolls.
-#[trial]
-fn a_panels_footer_stays_in_view_under_a_scrolling_body() {
-    let workspace = Workspace::new(Layout::new(Some(Node::tabs(vec![1], 0)), Vec::new()));
-    let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::given(workspace.clone()), &mut Listed, DockConfig::default()).show(ui);
-    });
-    let room = Vec2::new(400.0, 300.0);
-    fixture.room(room).settle();
-    let footer = fixture.by_label("Apply all").expect("the footer shows its action").rect;
-    assert!(footer.bottom() <= room.y, "the footer lies inside the group: {footer:?}");
-    let row = |fixture: &Fixture| fixture.by_label("Row 0").expect("the first row").rect;
-    let before = row(&fixture);
-    assert!(before.bottom() <= footer.top(), "the body lies above the footer: {before:?}, footer {footer:?}");
-
-    fixture.frame(vec![egui::Event::PointerMoved(before.center())]);
-    fixture.frame(vec![pointer::wheel(-120.0)]).settle();
-    assert!(row(&fixture).top() < before.top(), "the body scrolls: {before:?}, then {:?}", row(&fixture));
-    assert_eq!(fixture.by_label("Apply all").map(|action| action.rect), Some(footer), "the footer stays where it was");
-=======
 /// The tool rail of the grip trial: a panel with a rail grid, which the host shows itself.
 const RAIL: usize = 7;
 /// The height the host's rail measures at.
@@ -262,5 +209,51 @@ fn a_floating_tool_rails_grip_moves_its_window() {
         "the window moved by the pointer's travel {travel:?}, keeping the grabbed point under it: {before:?} -> {after:?}"
     );
     assert_eq!(layout.borrow().as_ref().map(|l| l.floating.len()), Some(1), "still one floating window");
->>>>>>> origin/next
+}
+
+/// A panel whose body lists more rows than its group shows, with a footer of one action.
+#[derive(PlainData)]
+struct Listed;
+
+impl PanelSpecs<usize> for Listed {
+    fn spec(&self, _: &usize) -> PanelSpec {
+        PanelSpec::new("Findings").footer()
+    }
+}
+
+impl DockPanels<usize> for Listed {
+    fn body(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
+            for row in 0..60 {
+                Text::new(format!("Row {row}")).show(ui);
+            }
+        });
+    }
+
+    fn footer(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        Button::new("Apply all").show(ui);
+    }
+}
+
+/// A panel's footer is pinned under its body: it shows inside the group while the body is taller than the group, and
+/// stays where it is when the body scrolls.
+#[trial]
+fn a_panels_footer_stays_in_view_under_a_scrolling_body() {
+    let mut workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![1], 0)), Vec::new())));
+    let specs = Tracked::new(Listed);
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut workspace), &specs, &mut Listed, DockConfig::default()).show(ui);
+    });
+    let room = Vec2::new(400.0, 300.0);
+    fixture.room(room).settle();
+    let footer = fixture.by_label("Apply all").expect("the footer shows its action").rect;
+    assert!(footer.bottom() <= room.y, "the footer lies inside the group: {footer:?}");
+    let row = |fixture: &Fixture| fixture.by_label("Row 0").expect("the first row").rect;
+    let before = row(&fixture);
+    assert!(before.bottom() <= footer.top(), "the body lies above the footer: {before:?}, footer {footer:?}");
+
+    fixture.frame(vec![egui::Event::PointerMoved(before.center())]);
+    fixture.frame(vec![pointer::wheel(-120.0)]).settle();
+    assert!(row(&fixture).top() < before.top(), "the body scrolls: {before:?}, then {:?}", row(&fixture));
+    assert_eq!(fixture.by_label("Apply all").map(|action| action.rect), Some(footer), "the footer stays where it was");
 }

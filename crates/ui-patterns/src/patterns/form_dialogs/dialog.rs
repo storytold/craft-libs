@@ -25,12 +25,9 @@ use crate::display::{Shade, Text};
 use crate::form::SliderFieldLayout;
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
-<<<<<<< HEAD
 use crate::notices::{Notice, NoticeLayout};
 use crate::style::DataColor;
 use crate::tabs::{Tab, TabKind, TabStrip};
-=======
->>>>>>> origin/next
 
 use crate::primitives::ContentPainterCx;
 use crate::runtime::env::{Env, Label};
@@ -45,13 +42,8 @@ use crate::sections::{DialogRole, FooterButton};
 
 use crate::contract::LabelScheme;
 use craft_theme::Srgba;
-<<<<<<< HEAD
 use craft_theme::variant::Tone;
 use egui::{Context, Pos2, Rect, Response, Ui};
-=======
-use egui::load::SizedTexture;
-use egui::{Context, Pos2, Response, Ui};
->>>>>>> origin/next
 use serde_json::Value;
 
 use std::borrow::Cow;
@@ -89,15 +81,9 @@ pub enum ParamLayout {
 }
 
 impl ParamLayout {
-<<<<<<< HEAD
-    /// Whether a dialog that previews stands its buttons in a column beside the body.
-    fn side_buttons(self) -> bool {
-        !matches!(self, ParamLayout::Stacked | ParamLayout::Document)
-=======
     /// Where a dialog that previews stands its buttons: in a column beside the body, or across the foot.
     fn button_place(self) -> ButtonPlace {
-        if matches!(self, ParamLayout::Stacked) { ButtonPlace::Foot } else { ButtonPlace::Side }
->>>>>>> origin/next
+        if matches!(self, ParamLayout::Stacked | ParamLayout::Document) { ButtonPlace::Foot } else { ButtonPlace::Side }
     }
 
     /// How the range rows arrange their slider and number field.
@@ -260,18 +246,11 @@ pub struct ParamDialogOutput {
     /// The point of the preview picture a click landed on this pass (`PreviewOutput::clicked`): an eyedropper on the
     /// preview samples there.
     pub preview_click: Option<Pos2>,
-<<<<<<< HEAD
     /// The id of the extra footer button or the custom row's button pressed this pass (`ParamDialog::extra_buttons`,
     /// `CustomContext::request_action`).
     pub action: Option<String>,
     /// The step the preview pager took this pass (`ParamDialog::preview_pager`).
     pub preview_step: Option<PagerStep>,
-    /// The answer OK would have given, the pass OK was pressed on a dialog that holds its OK for the host.
-    pub(crate) held: Option<ParamResult>,
-=======
-    /// The id of the extra footer button pressed this pass (`ParamDialog::extra_buttons`).
-    pub footer_action: Option<String>,
->>>>>>> origin/next
     /// The picture point at the centre of the view the preview pane drew this pass; `None` without a preview.
     pub(crate) preview_centre: Option<Pos2>,
 }
@@ -436,15 +415,12 @@ pub struct ParamDialog<'a> {
     /// The colours the colour rows show in place of their values in this pass, by row key.
     #[prop(vis = "pub(crate)")]
     preview_colors: Vec<(String, Srgba)>,
-<<<<<<< HEAD
-    /// The lines the host shows under the rows, after `below` ([`HostedParamDialog::set_notes`]).
-    #[prop(vis = "pub(crate)")]
-    host_notes: Vec<Label>,
-=======
     /// OK files the values in `held` and the dialog stays open; a refusal shows until the values change.
     #[prop(vis = "pub(crate)")]
     held: Option<&'a mut HeldAnswer<DialogFields>>,
->>>>>>> origin/next
+    /// The lines the host shows under the rows, after `below` ([`HostedParamDialog::set_notes`]).
+    #[prop(vis = "pub(crate)")]
+    host_notes: Vec<Label>,
 }
 
 /// What `ParamDialog::shaped` applies to the built [`Dialog`].
@@ -507,11 +483,8 @@ impl<'a> ParamDialog<'a> {
             values_opened: None,
             centre: None,
             preview_colors: Vec::new(),
-<<<<<<< HEAD
-            host_notes: Vec::new(),
-=======
             held: None,
->>>>>>> origin/next
+            host_notes: Vec::new(),
         }
     }
 
@@ -623,11 +596,8 @@ impl<'a> ParamDialog<'a> {
             values_opened,
             centre,
             preview_colors,
-<<<<<<< HEAD
-            host_notes,
-=======
             held,
->>>>>>> origin/next
+            host_notes,
         } = self;
         let env = Env::of(ui);
         let layout = layout.unwrap_or_else(|| env.view().get::<DialogLayout>().0);
@@ -653,11 +623,7 @@ impl<'a> ParamDialog<'a> {
             // The tab strip is a collection in the body, as a browse list is.
             .collection_body(collection_body || tabbed)
             .closable(closable)
-<<<<<<< HEAD
             .close_unchanged(close_unchanged)
-            .accept_stays_open(hold)
-=======
->>>>>>> origin/next
             .answers(answers);
         if let Some(held) = held {
             form = form.held(held);
@@ -720,14 +686,12 @@ impl<'a> ParamDialog<'a> {
         let mut live = Live::default();
         let mut rows = None;
         let mut shown_preview = ShownPreview::default();
-<<<<<<< HEAD
-        let mut latest = None::<DialogFields>;
         let body = DialogRows {
             title: &title,
             shared: &params,
             tabs: &tabs,
             place: shared_rows,
-            patterns: &patterns,
+            patterns: patterns.as_ref(),
             preview_colors: &preview_colors,
             sliders: layout.sliders(),
             // A tabbed document dialog (Document Properties) is an aligned form: no colons, one caption column, the
@@ -739,14 +703,8 @@ impl<'a> ParamDialog<'a> {
         let shown = form.show(ui, |ui, cx, values| {
             if cx.first() && !host_opened {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
-                Self::open_values(&every, &patterns, saved.as_ref(), values);
-=======
-        let shown = form.show(ui, |ui, cx, values| {
-            if cx.first() && !host_opened {
-                let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
                 let offered = patterns.as_ref().map(|source| source.rows(ui.ctx(), &Env::of(ui))).unwrap_or_default();
-                Self::open_values(&params, &offered, saved.as_ref(), values);
->>>>>>> origin/next
+                Self::open_values(&every, &offered, saved.as_ref(), values);
             }
             for answer in cx.take_answers() {
                 let answered = match &answer {
@@ -783,23 +741,11 @@ impl<'a> ParamDialog<'a> {
             if let (Some(point), Some(PreviewState::Ready(texture))) = (centre, &preview) {
                 live.view = live.view.centred_on(point, texture.size);
             }
-<<<<<<< HEAD
             // The `tab` binding, when there is one, says which tab shows; the dialog's memory does otherwise.
             let last = tabs.len().saturating_sub(1);
             let bound_tab = match tab.as_mut().map(|bind| bind.reborrow().read(&mut **cx)) {
                 Some(Some(Mixed::Same(at))) => Some(at),
                 _ => None,
-=======
-            let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| {
-                let mut shown = ParamRows::new(title.clone(), &params, Bind::bound(values)).preview_colors(&preview_colors).sliders(layout.sliders());
-                if let Some(source) = patterns.as_ref() {
-                    shown = shown.patterns(source);
-                }
-                if let Some(canvas) = canvas {
-                    shown = shown.canvas(canvas);
-                }
-                rows = Some(shown.show(ui));
->>>>>>> origin/next
             };
             let held_tab = bound_tab.unwrap_or_else(|| cx.memory::<OpenTab>().0).min(last);
             let mut shown_tab = held_tab;
@@ -835,18 +781,11 @@ impl<'a> ParamDialog<'a> {
                 }
                 (None, _) => show_rows(ui, values),
             }
-<<<<<<< HEAD
             if let Some(bind) = tab.as_mut().filter(|_| bound_tab != Some(shown_tab)) {
                 let event = EditEvent::set(bound_tab.map_or(Mixed::Mixed, Mixed::Same), shown_tab, title.as_str().into(), None);
                 let _ = bind.reborrow().write(&mut **cx, &event);
             }
             cx.memory::<OpenTab>().0 = shown_tab;
-            // The host's refusal of the held OK stays until a value changes.
-            if let Some((reason, _)) = refusal.as_ref().filter(|(_, refused)| *refused == *values) {
-                Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
-            }
-=======
->>>>>>> origin/next
             if let Some(BelowRows(draw)) = &below {
                 draw(ui, values);
             }
@@ -866,21 +805,15 @@ impl<'a> ParamDialog<'a> {
             Some(ResetPick::Extra(at)) => extra_buttons.get(at).map(|(id, _)| id.clone()),
             _ => None,
         };
-<<<<<<< HEAD
         // Footer and row buttons share one channel. The rows' own slot is emptied, so a host that absorbs the rows
         // files the press once.
         let action = rows.as_mut().and_then(|rows: &mut ParamRowsOutput| rows.action.take()).or(pressed);
-        let closed = shown.closed.is_some();
-        let (result, held) = match (shown.accepted, pick, latest) {
-            // A read-only dialog answers with no values, whichever way it closes.
-            _ if read_only => (closed.then(|| Self::result(key, &every, None, DialogFields::new())), None),
-            (Some(fields), _, _) => (Some(Self::result(key, &every, remember, fields)), None),
-            (None, Some(ResetPick::Accept), Some(fields)) if hold => (None, Some(Self::result(key, &every, remember, fields))),
-            _ => (None, None),
+        // A read-only dialog answers with no values, whichever way it closes.
+        let result = if read_only {
+            shown.closed.is_some().then(|| Self::result(key, &every, None, DialogFields::new()))
+        } else {
+            shown.accepted.map(|fields| Self::result(key, &every, remember, fields))
         };
-=======
-        let result = shown.accepted.map(|fields| Self::result(key, &params, remember, fields));
->>>>>>> origin/next
         ParamDialogOutput {
             response: shown.response,
             closed: shown.closed,
@@ -890,13 +823,8 @@ impl<'a> ParamDialog<'a> {
             preview_on: shown.preview_on,
             comparing: shown.comparing,
             preview_click: shown_preview.clicked,
-<<<<<<< HEAD
             action,
             preview_step: shown_preview.step,
-            held,
-=======
-            footer_action,
->>>>>>> origin/next
             preview_centre: shown_preview.centre,
         }
     }
@@ -1041,7 +969,7 @@ struct DialogRows<'p> {
     shared: &'p [Param],
     tabs: &'p [ParamTab],
     place: SharedRows,
-    patterns: &'p [PresetRow<String>],
+    patterns: Option<&'p PresetSource<'p, String>>,
     preview_colors: &'p [(String, Srgba)],
     sliders: SliderFieldLayout,
     /// The label scheme the layout sets for the rows.
@@ -1055,10 +983,12 @@ impl DialogRows<'_> {
     /// The rows `params` over `values`, their group named `label`; `read_only` for the rows of a read-only tab.
     fn group(&self, ui: &mut Ui, label: &Label, params: &[Param], read_only: bool, values: &mut DialogFields) -> ParamRowsOutput {
         let mut rows = ParamRows::new(label.clone(), params, Bind::bound(values))
-            .patterns(self.patterns)
             .preview_colors(self.preview_colors)
             .sliders(self.sliders)
             .read_only(self.read_only || read_only);
+        if let Some(source) = self.patterns {
+            rows = rows.patterns(source);
+        }
         if let Some(scheme) = self.labels {
             rows = rows.labels(scheme);
         }
@@ -1207,7 +1137,10 @@ fn show_preview(
     let pane = pane.show(ui);
     // Under the pane the row is there before the picture is: a dialog sized from its first pass keeps room for it.
     let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
-    let step = extras.pager.as_ref().and_then(|pager| Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| pager.clone().show(ui)).inner.flatten());
+    let step = extras
+        .pager
+        .as_ref()
+        .and_then(|pager| Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| pager.clone().show(ui)).inner.flatten());
     live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown.clone());
     ShownPreview { clicked: pane.clicked, centre: picture.map(|size| pane.shown.centre(size)), step }
 }
@@ -1337,15 +1270,10 @@ impl HostedParamDialog {
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-<<<<<<< HEAD
         let ParamDialog { params, tabs, remember, patterns, previews, .. } = build(&mut fields);
-        let (params, patterns) = (every_param(params, &tabs).into_owned(), patterns.into_owned());
-=======
-        let ParamDialog { params, remember, patterns, previews, .. } = build(&mut fields);
         // No pass runs here: the rows are built in the root scope, whose words name them; only their keys are read.
         let patterns = patterns.map(|source| source.rows(ctx, &Env::of_root(ctx))).unwrap_or_default();
-        let params = params.into_owned();
->>>>>>> origin/next
+        let params = every_param(params, &tabs).into_owned();
         let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
         let id = dialog_id(key.as_str());
@@ -1546,10 +1474,15 @@ impl HostedParamDialog {
 
     /// The answer OK gives with `fields`: the key, the part a remembering dialog saves and this dialog's id, as the
     /// dialog's own build says them.
+    /// A read-only dialog answers with no values, as its OK does.
     fn result_of(&mut self, fields: DialogFields) -> ParamResult {
-        let ParamDialog { key, params, remember, .. } = (self.build)(&mut self.fields);
-        let params = params.into_owned();
-        let mut result = ParamDialog::result(key, &params, remember, fields);
+        let ParamDialog { key, params, tabs, remember, read_only, .. } = (self.build)(&mut self.fields);
+        let params = every_param(params, &tabs).into_owned();
+        let mut result = if read_only {
+            ParamDialog::result(key, &params, None, DialogFields::new())
+        } else {
+            ParamDialog::result(key, &params, remember, fields)
+        };
         result.id = self.id;
         result
     }
@@ -1721,11 +1654,6 @@ impl StackDialog for HostedParamDialog {
         if let Some(point) = centre {
             dialog = dialog.centre_on(point);
         }
-<<<<<<< HEAD
-        // OK waits for the host's answer: a second OK cannot file over the held one.
-        if self.held.is_waiting() {
-            dialog = dialog.ok_enabled(false);
-        }
         if let Err(reason) = &self.ready {
             dialog = dialog.ok_enabled(false).ok_reason(reason.clone());
         }
@@ -1733,9 +1661,6 @@ impl StackDialog for HostedParamDialog {
             dialog = dialog.host_notes(self.notes.clone());
         }
         if let Some(picture) = self.picture.clone() {
-=======
-        if let Some(picture) = self.picture {
->>>>>>> origin/next
             dialog = dialog.preview(picture);
         }
         if let Some(pager) = self.pager.clone() {
@@ -1800,24 +1725,10 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             return None;
         }
-<<<<<<< HEAD
-        let ParamDialog { key, params, tabs, remember, ok_enabled, read_only, .. } = (self.build)(&mut self.fields);
+        let ok_enabled = (self.build)(&mut self.fields).ok_enabled;
         if !ok_enabled || self.ready.is_err() {
             return None;
         }
-        let params = every_param(params, &tabs).into_owned();
-        // A read-only dialog answers with no values, as its OK does.
-        let mut result = if read_only {
-            ParamDialog::result(key, &params, None, DialogFields::new())
-        } else {
-            ParamDialog::result(key, &params, remember, self.fields.clone())
-        };
-=======
-        let ok_enabled = (self.build)(&mut self.fields).ok_enabled;
-        if !ok_enabled {
-            return None;
-        }
->>>>>>> origin/next
         if self.hold {
             self.held.file(self.fields.clone());
             return None;
