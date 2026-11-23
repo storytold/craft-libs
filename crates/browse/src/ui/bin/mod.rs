@@ -23,8 +23,8 @@ mod free_view;
 mod icon;
 mod list;
 mod search;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::cell::RefCell;
 use std::hash::Hash;

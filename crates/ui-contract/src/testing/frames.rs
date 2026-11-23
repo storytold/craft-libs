@@ -246,6 +246,22 @@ impl Frames {
         self.files.dropped = names.iter().map(|name| (*name).to_owned()).collect();
     }
 
+    /// The hovering files drop on the window in the next frame as a web page drops them, with neither path nor bytes:
+    /// the page reads the file `name` asynchronously, and its `bytes` arrive after that frame. The fixture opens the read
+    /// in the drop frame and posts the file into the file inbox after it, as the wasm read does; the pass after it
+    /// delivers the drop once.
+    pub fn read_dropped(&mut self, name: &str, bytes: &[u8]) {
+        self.files.hovered.clear();
+        self.files.read.push((name.to_owned(), bytes.to_vec()));
+    }
+
+    /// The hovering files drop on the window in the next frame as a browser on the desktop hands a file over: by the
+    /// relative name `name`, which locates no file, with its `bytes` at hand.
+    pub fn drop_with_bytes(&mut self, name: &str, bytes: &[u8]) {
+        self.files.hovered.clear();
+        self.files.given.push((name.to_owned(), bytes.to_vec()));
+    }
+
     /// Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls
     /// [`advance`](Self::advance). Held-pointer repeats, hover delays and animations then wait for the test.
     pub fn still_clock(&mut self) {
@@ -289,7 +305,23 @@ impl Frames {
             self.told = self.modifiers;
             events.insert(0, fixture::modifiers_changed(self.modifiers));
         }
-        let files = fixture::OsFiles { hovered: self.files.hovered.clone(), dropped: std::mem::take(&mut self.files.dropped) };
+        // A real pointer button event carries the modifiers held as it happens, and a new press reads its event's
+        // modifiers (F-144): a generated press or release that names none (`pointer::press`) carries the held ones.
+        if self.modifiers != egui::Modifiers::NONE {
+            for event in &mut events {
+                if let Event::PointerButton { modifiers, .. } = event
+                    && *modifiers == egui::Modifiers::NONE
+                {
+                    *modifiers = self.modifiers;
+                }
+            }
+        }
+        let files = fixture::OsFiles {
+            hovered: self.files.hovered.clone(),
+            dropped: std::mem::take(&mut self.files.dropped),
+            read: std::mem::take(&mut self.files.read),
+            given: std::mem::take(&mut self.files.given),
+        };
         let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, viewport, events, files, ui);
         match &mut self.paint {
             Some(Recorded(paint)) => {

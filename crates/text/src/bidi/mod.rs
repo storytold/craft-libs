@@ -415,4 +415,4 @@ fn l1_reset(class: BidiClass, trailing: &mut bool) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

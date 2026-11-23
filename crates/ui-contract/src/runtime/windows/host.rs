@@ -5,7 +5,8 @@ use super::native::{WindowAction, act};
 use super::placement::placement_of;
 use super::shell::{base_shell, shell_of, window_info};
 use super::spec::frame_of;
-use super::{Record, shared};
+use super::{Record, keep_root_frame, shared};
+use crate::runtime::egui::access::{AccessTree, Declared, NodeKey};
 use crate::runtime::egui::injected::{self, InjectedPointer, Released};
 use crate::runtime::egui::input_filter;
 use crate::runtime::egui::screenshot::{ScreenshotFacts, ScreenshotSlot};
@@ -16,7 +17,7 @@ use craft_behavior::{Monitor, PointerButton};
 use craft_host::target::{Caps, ShellInfo, WindowState};
 use craft_keymap::{Chord, Key, Mods};
 use craft_window::desktop::Desktop;
-use craft_window::policy::Frame;
+use craft_window::policy::{Decision, Frame, LayoutWatch};
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 
 /// What the OS tells about a window, in desktop points.
@@ -117,6 +118,12 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
+    /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
+    /// while AccessKit is off.
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<crate::runtime::egui::access::TreeUpdate> {
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
+    }
+
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
     /// held after it, and a button held by earlier injected input stays down, so the move drags. With `rest` (seconds)
     /// the input counts as processed only once the pointer has rested that long. As a window never reports a NaN or
@@ -214,6 +221,53 @@ impl WindowHost {
         injected::inject_ime(&self.ctx, viewport, event);
     }
 
+    /// Hovers the files over `at` and, with `drop`, drops them in the following injected step, through the same
+    /// hovered and dropped file input a window's drag session fills.
+    pub fn inject_files(&self, viewport: ViewportId, at: Option<Pos2>, paths: Vec<std::path::PathBuf>, drop: bool) {
+        injected::inject_files(&self.ctx, viewport, at, paths, drop);
+    }
+
+    /// Queues one AccessKit action request (click, focus or context menu) on `node` as one injected step behind
+    /// earlier injected input.
+    pub fn inject_access(&self, viewport: ViewportId, node: NodeKey, action: Declared) {
+        injected::inject_access(&self.ctx, viewport, node, action);
+    }
+
+    /// Turns AccessKit output on, so [`access_tree`](Self::access_tree) and
+    /// [`access_tree_view`](Self::access_tree_view) have each viewport's settled tree from then on.
+    pub fn keep_access_tree(&self) {
+        crate::runtime::egui::access::keep_trees(&self.ctx);
+    }
+
+    /// [`access_tree`](Self::access_tree) as a tree to walk: `None` before the viewport's first pass or while
+    /// AccessKit is off ([`keep_access_tree`](Self::keep_access_tree) turns it on).
+    pub fn access_tree_view(&self, viewport: ViewportId) -> Option<AccessTree> {
+        crate::runtime::egui::access::kept_tree(&self.ctx, viewport)
+    }
+
+    /// Changes the open root window's frame to `decision`'s and returns true: the window gets the commands
+    /// [`policy::reframe`](craft_window::policy::reframe) gives, and [`frame`](Self::frame),
+    /// [`desktop`](Self::desktop) and the root shell's chrome follow at once. A change of caption buttons alone sends
+    /// no command, and the decision in force changes nothing. A change to or from the inset frame cannot reach an open
+    /// window: it keeps the current decision and returns false. Call it when the app's decision changes (the user's
+    /// title bar setting); between calls the caption layout follows the desktop.
+    pub fn set_root_frame(&self, decision: Decision) -> bool {
+        let (installed, desktop) = shared(&self.ctx, |shared| (shared.root_frame.clone(), shared.desktop.clone()));
+        let current = installed.unwrap_or_else(|| frame_in(&self.ctx, ViewportId::ROOT));
+        let Some(commands) = craft_window::policy::reframe(&current, &decision.frame) else { return false };
+        if current == decision.frame && desktop.as_ref() == Some(&decision.desktop) {
+            return true;
+        }
+        // The watch may read the desktop's settings, so it is built outside the lock.
+        let layouts = LayoutWatch::new(&decision);
+        shared(&self.ctx, |shared| keep_root_frame(shared, decision, layouts));
+        for command in commands {
+            viewports::command(&self.ctx, ViewportId::ROOT, command);
+        }
+        self.ctx.request_repaint_of(ViewportId::ROOT);
+        true
+    }
+
     /// Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass
     /// has not run and the queue behind it; what is dropped counts as withdrawn
     /// ([`take_injected_withdrawn`](Self::take_injected_withdrawn)). Called from the raw input hook, so every
@@ -270,6 +324,13 @@ impl WindowHost {
         shared(&self.ctx, |shared| shared.system_pointer.or(shared.source_pointer))
     }
 
+    /// The main window's native handle (the Win32 `HWND` value, read through the safe `HasWindowHandle` API), `None` on
+    /// other platforms and where no window is open. A driver dialog takes it as its owner.
+    pub fn main_window_handle(&self) -> Option<std::num::NonZeroIsize> {
+        // The root window's OS window comes from eframe's handle (`route_root`), read through `HasWindowHandle`.
+        PerViewport::<Record>::with(&self.ctx, ViewportId::ROOT, |record| record.native.clone())?.raw_handle()
+    }
+
     /// Moves the system pointer to `to` in desktop points; false where the platform cannot.
     pub fn warp_pointer(&self, to: Pos2) -> bool {
         let system = shared(&self.ctx, |shared| shared.system.clone());
@@ -310,13 +371,32 @@ impl WindowHost {
         monitors(&self.ctx)
     }
 
+    /// The monitor `viewport`'s window lies on: the one its top-left corner is on, the rule its scale
+    /// ([`WindowFacts::scale`]) falls back to. `None` before the window has reported its rect, or where the platform
+    /// lists no monitor under the corner.
+    pub fn monitor_of(&self, viewport: ViewportId) -> Option<Monitor> {
+        let facts = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts)?;
+        monitor_of(&self.ctx, &facts)
+    }
+
     /// Places `viewport`'s outer rect at `outer`: its position, and the inner size that leaves the window's
-    /// decoration as it is. False when a command could not go out.
+    /// decoration as it is. A minimized window is restored first, and a placement below the window's smallest inner
+    /// size lowers that size to the placed one, so the window takes the place it is given. False when a command could
+    /// not go out.
     pub fn set_outer(&self, viewport: ViewportId, outer: Rect) -> bool {
-        let decoration = self.facts(viewport).and_then(|facts| facts.outer.map(|current| current.size() - facts.inner.size())).unwrap_or(Vec2::ZERO);
-        let moved = act(&self.ctx, viewport, WindowAction::SetOuterPosition(outer.min));
-        let sized = act(&self.ctx, viewport, WindowAction::SetInnerSize((outer.size() - decoration).max(Vec2::ZERO)));
-        moved && sized
+        let facts = self.facts(viewport);
+        let decoration = facts.and_then(|facts| facts.outer.map(|current| current.size() - facts.inner.size())).unwrap_or(Vec2::ZERO);
+        let inner = (outer.size() - decoration).max(Vec2::ZERO);
+        let mut sent = true;
+        if facts.is_some_and(|facts| facts.state == WindowState::Minimized) {
+            sent &= act(&self.ctx, viewport, WindowAction::Restore);
+        }
+        let least = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.min_size);
+        if let Some(least) = least.filter(|least| inner.x < least.x || inner.y < least.y) {
+            sent &= act(&self.ctx, viewport, WindowAction::SetMinInnerSize(least.min(inner)));
+        }
+        sent &= act(&self.ctx, viewport, WindowAction::SetOuterPosition(outer.min));
+        sent & act(&self.ctx, viewport, WindowAction::SetInnerSize(inner))
     }
 
     /// The viewport of the container `id` while its window is open.
@@ -348,16 +428,21 @@ impl WindowHost {
         under.into_iter().map(|(viewport, _)| viewport).collect()
     }
 
-    /// Who draws the running viewport's frame, and the caption buttons it shows.
+    /// Who draws the running viewport's frame, and the caption buttons it shows. An inset frame whose window was
+    /// measured with the traffic lights at the right end says so ([`MacInset::lights_right`](craft_window::policy::MacInset)).
     pub fn frame(&self) -> Frame {
         let viewport = pass::current_viewport(&self.ctx);
-        if viewport == ViewportId::ROOT
-            && let Some(frame) = shared(&self.ctx, |shared| shared.root_frame.clone())
-        {
-            return frame;
+        let frame = match shared(&self.ctx, |shared| shared.root_frame.clone()) {
+            Some(frame) if viewport == ViewportId::ROOT => frame,
+            _ => frame_in(&self.ctx, viewport),
+        };
+        match frame {
+            Frame::Inset(inset) if !inset.lights_right => {
+                let right = PerViewport::<Record>::with_existing(&self.ctx, viewport, |record| record.lights.lights_right()).unwrap_or(false);
+                Frame::Inset(inset.with_lights_right(right))
+            }
+            frame => frame,
         }
-        let captions = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.captions.clone());
-        frame_of(window_info(&self.ctx, viewport, &base_shell(&self.ctx)).chrome, captions)
     }
 
     /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app
@@ -388,19 +473,29 @@ impl WindowHost {
     }
 }
 
+/// The frame of `viewport`'s window as its chrome and the caption buttons it was opened with tell it, for a window
+/// with no installed decision.
+fn frame_in(ctx: &Context, viewport: ViewportId) -> Frame {
+    let captions = PerViewport::<Record>::with(ctx, viewport, |record| record.captions.clone());
+    frame_of(window_info(ctx, viewport, &base_shell(ctx)).chrome, captions)
+}
+
 /// The connected monitors in physical pixels; none where the platform does not list them.
 pub(super) fn monitors(ctx: &Context) -> Vec<Monitor> {
     let system = shared(ctx, |shared| shared.system.clone());
     system.map(|system| system.monitors()).unwrap_or_default()
 }
 
-/// The scale of a window with `facts`: the platform's report, else the scale of the monitor the window's top-left
-/// corner lies on. A corner is on a monitor when its pixel position at that monitor's scale is inside the monitor.
+/// The monitor the top-left corner of a window with `facts` lies on. A corner is on a monitor when its pixel position
+/// at that monitor's scale is inside the monitor.
+pub(super) fn monitor_of(ctx: &Context, facts: &viewports::Facts) -> Option<Monitor> {
+    let corner = facts.outer.or(facts.inner)?.min;
+    monitors(ctx).into_iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale))
+}
+
+/// The scale of a window with `facts`: the platform's report, else the scale of its monitor ([`monitor_of`]).
 pub(super) fn scale_of(ctx: &Context, facts: &viewports::Facts) -> Option<f32> {
-    facts.native_scale.or_else(|| {
-        let corner = facts.outer.or(facts.inner)?.min;
-        monitors(ctx).iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale)).map(|monitor| monitor.scale)
-    })
+    facts.native_scale.or_else(|| monitor_of(ctx, facts).map(|monitor| monitor.scale))
 }
 
 /// Records the pointer of the viewport a drag runs in, `local` in that viewport's coordinates, as a desktop

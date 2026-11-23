@@ -9,15 +9,13 @@ use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, Set
 use crate::runtime::commands::ResolvedCommand;
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
-use crate::runtime::keys;
+use crate::runtime::{inspect, keys, pass_state};
 use crate::style::Flags;
 use craft_behavior::Sense;
 use egui::Id;
 
-/// What step 16 reads that the pass computed before: whether step 8 made the node and the part declarations.
+/// What step 16 reads that the pass computed before: the part declarations, the sense and the container facts.
 pub(crate) struct ReportIn<'a> {
-    /// The node step 8 created, `None` for a role with no node or while AccessKit is off.
-    pub node: bool,
     pub decls: &'a Decls,
     pub sense: Sense,
     /// The container's `ContainerProps.live`.
@@ -26,6 +24,8 @@ pub(crate) struct ReportIn<'a> {
     pub scrolls: (bool, bool),
     /// The roving group the component's own stop is in.
     pub group: Option<Id>,
+    /// The roving group of the component's body, which it owns: its report writes its members' places in the set.
+    pub owns: Option<Id>,
     /// The expanded state of a collapsible container, unless `Component::access` says otherwise.
     pub expanded: Option<bool>,
     /// The position the component reports itself, ahead of its group's and its item facts'.
@@ -59,6 +59,14 @@ pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)>
 pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) -> Option<String> {
     let validity = register_validity(p);
     report_access(p, facts, input, validity.as_ref().map(|(text, _)| text.clone()));
+    // The body's members have run and reported: each that left its place to the group takes it among this pass's
+    // members.
+    if let Some(group) = input.owns {
+        let ctx = &p.core_ref().ctx;
+        for (member, position) in focus::group_positions(ctx, group) {
+            access::write_set_position(ctx, member, position);
+        }
+    }
     crate::contract::cx::write_cursor(p.core_ref());
     validity.filter(|(_, shown)| !shown).map(|(text, _)| text)
 }
@@ -77,7 +85,14 @@ fn register_validity(p: &dyn ErasedPass<'_>) -> Option<(String, bool)> {
 fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>, validity: Option<String>) {
     let core = p.core_ref();
     let (ctx, id) = (&core.ctx, core.id);
-    let (mut access, value_text) = p.access();
+    // Without a node, `Access` is read only for a merged role's facts, and for its role when the roles the type may
+    // report include both a role with a node and none, which leave the label scope differently. Otherwise (AccessKit
+    // off, or a role with no node) the component's access data is never built.
+    let roles = || std::iter::once(&facts.role).chain(facts.alt_roles);
+    let merges = roles().any(|role| *role == Role::Merged);
+    let node_or_none = roles().any(|role| matches!(role, Role::Node(_))) && roles().any(|role| *role == Role::None);
+    let reads_access = core.node || merges || node_or_none;
+    let (mut access, value_text) = if reads_access { p.access() } else { (Access::default(), p.value_text()) };
     if let Some(text) = &value_text {
         match &mut access.numeric {
             Some(numeric) => numeric.text = Some(text.clone()),
@@ -89,6 +104,9 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
     let flags = core.state.flags;
     let resolved = core.resolved;
+    // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
+    // for the inspected region, which keytips place their badges by.
+    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
     let paint = core.paint.borrow();
     if role == Role::Merged {
         let facts = scope::Merged {
@@ -98,18 +116,25 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
             enabled: resolved.enabled,
         };
         scope::finish(ctx, id, Some(facts));
+        scope::leave(ctx, id);
         return;
     }
     scope::finish(ctx, id, None);
-    let carried = scope::carried_name(ctx, id);
+    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
+    // then stays only as the place of the children shown inside it, which assistive technology passes over: left
+    // unwritten it would be reported as a node of unknown role.
     let Role::Node(role) = role else {
+        if core.node {
+            access::pass_through(ctx, id);
+        }
         scope::leave(ctx, id);
         return;
     };
-    if !input.node {
+    if !core.node {
         return;
     }
     // Facts that only a node shows are built after the node check.
+    let carried = scope::carried_name(ctx, id);
     for node in &mut access.nodes {
         if let Some(toggle) = core.toggles.iter().find(|toggle| toggle.part == node.part) {
             node.expanded = Some(toggle.open);
@@ -134,9 +159,11 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if access.position.is_none() {
         access.position = input.position;
     }
+    // A member of a roving group that gives no place of its own takes it from the group's owner, which knows the
+    // members of the pass only after they all ran; its item facts' place stands until then.
+    let group_place = input.group.filter(|_| access.position.is_none());
     if access.position.is_none() {
-        access.position =
-            input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
+        access.position = core.env.facts_of(id).map(|facts| facts.position);
     }
     let inner_of = access::fold::owner_of(ctx, id);
     let folded = access::fold::take(ctx, id);
@@ -163,6 +190,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         read_only: resolved.read_only,
         focusable,
         clickable: resolved.enabled && input.sense.contains(Sense::CLICK),
+        context_menu: crate::runtime::egui::access::offers_context_menu(ctx, id),
         keeps_name: resolved.keeps_name,
         scrolls: input.scrolls,
         access: &access,
@@ -180,12 +208,21 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         }
     } else {
         access::report(ctx, &own);
+        if let Some(group) = group_place {
+            focus::takes_group_position(ctx, id, group);
+        }
     }
     if let Some(folded) = &folded {
         keys::register_node(ctx, id, folded.inner, None, focusable);
     }
-    if let Some(facts) = core.text_access.take() {
-        crate::runtime::access::text::report_text(ctx, id, &facts);
+    let editor_record = || {
+        let widget = core.editor.as_ref()?.widget;
+        pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
+    };
+    if let Some(facts) = core.text_access.take().or_else(editor_record) {
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.value.as_deref());
+    } else if let Some(editor) = &core.editor {
+        crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);
@@ -281,6 +318,7 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             read_only: core.resolved.read_only,
             focusable: false,
             clickable: false,
+            context_menu: false,
             keeps_name: false,
             scrolls: (false, false),
             access: &access,
@@ -289,4 +327,16 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             ltr_axis: core.resolved.ltr_axis,
         },
     );
+}
+
+/// The text facts an editor body reported through its `EditorHandle` in the running pass, by editor widget: the
+/// owning component's report step reads its own (owed by ribbon-w5, S-L168). Pass-local, so nothing outlives the pass.
+#[derive(Default)]
+pub(crate) struct EditorRecords(std::collections::HashMap<egui::Id, crate::runtime::access::text::TextFacts>);
+
+/// Puts `facts` in the running pass's record for the editor part `widget`.
+pub(crate) fn note_editor_facts(ctx: &egui::Context, widget: egui::Id, facts: crate::runtime::access::text::TextFacts) {
+    pass_state::with::<EditorRecords, _>(ctx, |records| {
+        records.0.insert(widget, facts);
+    });
 }

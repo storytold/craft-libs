@@ -5,7 +5,7 @@
 use super::proxy::{preview_rect, proxy_quad, view_center_for, zoom_to_document_rect};
 use crate::canvas::AppPaint;
 use crate::canvas::zoom_motion::{self, Steer};
-use crate::canvas::{CanvasWords, NavigationOptions, PageKey, ViewCommands, WheelAction, WheelNavigation};
+use crate::canvas::{CanvasWords, NavigationOptions, PageKey, ViewCommands, WheelAction, WheelNavigation, WheelScheme};
 use crate::canvas_data::ProxyColor;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Name, Outcome, PaintUi,
@@ -306,6 +306,12 @@ impl Component for Navigator<'_> {
         Some(self.view.reborrow())
     }
 
+    /// The canvas settles the view a drag of the view box proposes to whole device pixels, so the view the app writes
+    /// back is the drag's own value, not the app changing the view under it, and the drag goes on (photocraft#16403).
+    fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
+        crate::canvas::scrollbars::settled_as_proposed(proposed, host)
+    }
+
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         cx.part(WELL, rect).sense(Sense::CLICK | Sense::DRAG).pointer_only(POINTER_ONLY);
         let Some(view) = cx.value().copied() else { return };
@@ -405,7 +411,8 @@ impl Component for Navigator<'_> {
         if let Some(wheel) = cx.take_wheel()
             && !running
         {
-            let options = NavigationOptions { zoom_with_wheel: true, ..self.navigation };
+            // The preview's plain wheel zooms under every scheme: the Document and Acrobat schemes zoom only with Ctrl or Cmd.
+            let options = NavigationOptions { wheel: WheelScheme::Zoom, ..self.navigation };
             let (line, os) = (craft_behavior::WheelNotch::DEFAULT.points(0.0), cx.env.shell().os);
             let action = cx.memory::<WheelNavigation>().read(&wheel, line, os, &options);
             if let Some(action @ (WheelAction::Zoom(_) | WheelAction::SnapZoom(_))) = action {
@@ -426,7 +433,11 @@ impl Component for Navigator<'_> {
 
         take_navigation(cx, &mut next, running, document);
 
-        let next = centred(&next, next.center, document);
+        // Only a centre the Navigator moved in this pass is kept inside the document. A view the canvas, its scroll
+        // bars, the Hand or the app put past the document (the pasteboard, with Overscroll on) stays where it is: pulled
+        // back here, every pass, it stopped the scroll bars at the document's edge and ended their drags
+        // (photocraft#16328, photocraft#12025).
+        let next = if next.center == view.center { next } else { centred(&next, next.center, document) };
         if next == view {
             return;
         }

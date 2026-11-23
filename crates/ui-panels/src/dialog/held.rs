@@ -21,7 +21,7 @@ pub enum HeldOk {
 /// hands the answer to the app once ([`take`](HeldAnswer::take)), and closes with [`finish`](HeldAnswer::finish) once
 /// the app accepted it; a refusal keeps the refused answer beside its reason, so the dialog can show the reason until
 /// its values change.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HeldAnswer<T> {
     filed: Option<T>,
     /// `take` has not handed out `filed` yet.
@@ -90,6 +90,14 @@ impl<T> HeldAnswer<T> {
     /// Why the app refused the last held answer, and that answer; `None` once OK filed again or the refusal ended.
     pub fn refusal(&self) -> Option<(&Label, &T)> {
         self.refused.as_ref().map(|(reason, answer)| (reason, answer))
+    }
+
+    /// Takes back the held OK without a refusal: nothing is held, OK is enabled again, and the values stay.
+    pub fn withdraw(&mut self) {
+        self.filed = None;
+        self.untaken = false;
+        self.accepted = false;
+        self.refused = None;
     }
 
     /// Ends the refusal shown so far (the values it refused changed).

@@ -1,17 +1,19 @@
 //! Painting annotations on the canvas: [`AnnotationOverlay`].
 
-use craft_behavior::{Input, Metrics};
+use std::borrow::Cow;
+
+use craft_behavior::{IconId, Input, Metrics};
 use craft_ui::canvas::canvas_space;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::fonts::FontRef;
-use craft_ui::primitives::{DataWidth, DocRun, DocText, Draw, Handle, HandleShape, PaintShape, StrokeWidth};
+use craft_ui::primitives::{DataWidth, DocRun, DocText, Draw, Handle, HandleShape, IconSpec, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, HandleLook, StateSet, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Response};
 use kurbo::{Point, Rect};
 
 use super::tool::{color32, corners};
-use crate::annotate::{Annotation, AnnotationHandle, AnnotationId, AnnotationKind, handles};
+use crate::annotate::{Annotation, AnnotationEdit, AnnotationId, AnnotationKind, callout_leader, handles, marker_rect};
 
 /// The ellipse inscribed in `rect`, as a closed run of page points.
 pub(super) fn ellipse_points(rect: Rect) -> Vec<Point> {
@@ -83,6 +85,27 @@ fn closed(mut points: Vec<Pos2>) -> PaintShape {
     PaintShape::Path(points)
 }
 
+/// Strokes the pictogram of `kind` into the screen `slot` with `line`.
+fn paint_pictogram(kind: AnnotationKind, slot: egui::Rect, line: &impl Fn(PaintShape)) {
+    for (run, is_closed) in pictogram(kind) {
+        let points: Vec<Pos2> = run.iter().map(|&(x, y)| slot.min + egui::vec2(x * slot.width(), y * slot.height())).collect();
+        line(if is_closed { closed(points) } else { PaintShape::Path(points) });
+    }
+}
+
+/// A commented markup's marker in the screen `slot`, with a leader to the top right of its last quad. It takes the
+/// annotation's colour at full strength, so a faint highlight still shows its marker.
+fn paint_marker(draw: &Draw<'_>, a: &Annotation, slot: egui::Rect, to_screen: &impl Fn(Point) -> Pos2) {
+    let [r, g, b] = a.color;
+    let color = DataColor::new(egui::Color32::from_rgb(r, g, b));
+    let line = |shape: PaintShape| draw.stroke(&shape, StrokeWidth::Thin, color);
+    if let Some(target) = a.points.chunks(4).last().map(|quad| around(quad.iter().map(|&p| to_screen(p)))) {
+        line(PaintShape::Path(vec![slot.left_bottom(), target.right_top()]));
+    }
+    // PLAN: assumed Draw::data_icon(&self, Rect, &IconSpec, DataColor) (pdf-comments-w5)
+    draw.data_icon(slot, &IconSpec::svg(IconId::new("note")), color);
+}
+
 fn paint_annotation(draw: &Draw<'_>, a: &Annotation, to_screen: &impl Fn(Point) -> Pos2, (text_size, icon_side): (f32, f32), hairline: f32) {
     use AnnotationKind as K;
     let scale = (to_screen(Point::new(1.0, 0.0)) - to_screen(Point::ZERO)).length();
@@ -133,7 +156,8 @@ fn paint_annotation(draw: &Draw<'_>, a: &Annotation, to_screen: &impl Fn(Point) 
                 line(closed(scalloped(&corners, width * CLOUD_BUMP)));
             }
         }
-        K::Ink => {
+        // A freehand highlight is ink at its own width, translucent through its colour's opacity.
+        K::Ink | K::FreehandHighlight => {
             for s in &a.strokes {
                 line(PaintShape::Path(map(s)));
             }
@@ -141,6 +165,10 @@ fn paint_annotation(draw: &Draw<'_>, a: &Annotation, to_screen: &impl Fn(Point) 
         K::Rectangle => line(closed(map(&corners(a.rect)))),
         K::Oval => line(closed(map(&ellipse_points(a.rect)))),
         K::TextBox | K::Callout => {
+            let leader = if a.kind == K::Callout { callout_leader(a) } else { Vec::new() };
+            if leader.len() > 1 {
+                line(PaintShape::Path(map(&leader)));
+            }
             let r = screen_rect(a.rect, to_screen);
             line(PaintShape::Rect(r, CornerRadius::ZERO));
             // The text is document-scaled: the body size at zoom 1, wrapped at the box's width.
@@ -151,10 +179,7 @@ fn paint_annotation(draw: &Draw<'_>, a: &Annotation, to_screen: &impl Fn(Point) 
         }
         K::Note | K::Attach | K::Caret => {
             let slot = egui::Rect::from_min_size(to_screen(Point::new(a.rect.x0, a.rect.y0)), egui::Vec2::splat(icon_side));
-            for (run, is_closed) in pictogram(a.kind) {
-                let points: Vec<Pos2> = run.iter().map(|&(x, y)| slot.min + egui::vec2(x * slot.width(), y * slot.height())).collect();
-                line(if is_closed { closed(points) } else { PaintShape::Path(points) });
-            }
+            paint_pictogram(a.kind, slot, &line);
         }
     }
 }
@@ -178,9 +203,11 @@ pub struct AnnotationOverlayStyle {
 }
 
 /// Draws a page's annotations over it: markups as translucent quads (highlight at the annotation's opacity, lines
-/// for underline and strike-out, a wave for squiggly), shapes and ink with their stroke, notes as their icon, text
-/// boxes with their text, and the handles of the selected ones. A canvas control shown with `show_at` at the
-/// canvas's rect and mapped through its view. It takes no pointer: the tool does.
+/// for underline and strike-out, a wave for squiggly), shapes, ink and freehand highlights with their stroke, notes as
+/// their icon, text boxes with their text and callouts with their leader, a marker beside each commented markup, the
+/// frames of the selected ones and the handles of the primary (the last selected). The in-flight edit (`live`) paints
+/// where it is going. A canvas control shown with `show_at` at the canvas's rect and mapped through its view. It takes
+/// no pointer: the tool does.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control, content_painter)]
 pub struct AnnotationOverlay<'a> {
@@ -188,12 +215,38 @@ pub struct AnnotationOverlay<'a> {
     common: Common,
     annotations: &'a [Annotation],
     selected: &'a [AnnotationId],
+    /// Which bodies the overlay paints; the host paints the rest with the page.
+    #[prop]
+    bodies: BodyPaint<'a>,
+    /// The in-flight edit, painted live.
+    #[prop]
+    live: Option<&'a AnnotationEdit>,
+}
+
+/// Which bodies the overlay paints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum BodyPaint<'a> {
+    /// Every body.
+    All,
+    /// Only these annotations' bodies.
+    Only(&'a [AnnotationId]),
+}
+
+impl BodyPaint<'_> {
+    /// Whether the overlay paints the body of `id`.
+    fn paints(self, id: AnnotationId) -> bool {
+        match self {
+            BodyPaint::All => true,
+            BodyPaint::Only(ids) => ids.contains(&id),
+        }
+    }
 }
 
 impl<'a> AnnotationOverlay<'a> {
     /// An overlay named `label` for `annotations`, with `selected` drawing handles.
     pub fn new(label: impl Into<Label>, annotations: &'a [Annotation], selected: &'a [AnnotationId]) -> Self {
-        AnnotationOverlay { common: Common::new(), annotations, selected }.label(label)
+        AnnotationOverlay { common: Common::new(), annotations, selected, bodies: BodyPaint::All, live: None }.label(label)
     }
 }
 
@@ -227,12 +280,33 @@ impl Component for AnnotationOverlay<'_> {
         let painter = ui.content_painter(cx);
         let draw = ui.draw();
         let hairline = 1.0 / cx.response.ctx.pixels_per_point();
-        for a in self.annotations {
+        // The annotations the in-flight edit changes, as it leaves them; the rest as they are.
+        let live = self.live;
+        let shown: Vec<Cow<'_, Annotation>> =
+            self.annotations.iter().map(|a| live.and_then(|edit| a.edited(edit)).map_or(Cow::Borrowed(a), Cow::Owned)).collect();
+        let bodies = self.bodies;
+        for a in shown.iter().filter(|a| bodies.paints(a.id)) {
             paint_annotation(&draw, a, &to_screen, (cx.style.text_size, cx.style.icon_side), hairline);
+        }
+        // Markers keep one size on screen, so their side in page units follows the zoom.
+        let scale = f64::from((to_screen(Point::new(1.0, 0.0)) - to_screen(Point::ZERO)).length());
+        if scale > 0.0 {
+            let icon_side = f64::from(cx.style.icon_side) / scale;
+            let room = cx.response.rect;
+            let page = space
+                .document()
+                .map_or_else(|| Rect::from_points(view.to_doc(room.min), view.to_doc(room.max)), |size| Rect::from_origin_size(Point::ZERO, size));
+            for a in &shown {
+                if let Some(marker) = marker_rect(a, page, icon_side) {
+                    paint_marker(&draw, a, screen_rect(marker, &to_screen), &to_screen);
+                }
+            }
         }
         let outline = |shape: PaintShape| draw.stroke(&shape, StrokeWidth::Thin, cx.style.line);
         let raw = &painter.painter;
-        for a in self.annotations.iter().filter(|a| self.selected.contains(&a.id)) {
+        // Handles go on the primary, the last selected; the others show their frame only.
+        let primary = self.selected.last();
+        for a in shown.iter().filter(|a| self.selected.contains(&a.id)) {
             if a.kind.is_markup() {
                 for quad in a.points.chunks(4) {
                     outline(ring(around(quad.iter().map(|&p| to_screen(p)))));
@@ -242,12 +316,12 @@ impl Component for AnnotationOverlay<'_> {
             } else {
                 outline(ring(screen_rect(a.rect, &to_screen)));
             }
-            for (handle, at) in handles(a) {
-                let shape = match handle {
-                    AnnotationHandle::Box(..) => HandleShape::Square,
-                    AnnotationHandle::Point(_) => HandleShape::Circle,
-                };
-                raw.extend(Handle::shapes(&cx.style.handle, shape, to_screen(at), &StateSet::default()));
+            if primary != Some(&a.id) {
+                continue;
+            }
+            for (_, at) in handles(a) {
+                // Every handle is round.
+                raw.extend(Handle::shapes(&cx.style.handle, HandleShape::Circle, to_screen(at), &StateSet::default()));
             }
         }
     }

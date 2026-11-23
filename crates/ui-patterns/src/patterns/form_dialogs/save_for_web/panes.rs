@@ -154,7 +154,7 @@ fn one_pane(ui: &mut Ui, panes: &Panes<'_>, live: &Live, pane: WebPane, at: usiz
         if let Some(point) = shown.clicked
             && let Some(number) = slice_at(panes.slices, point)
         {
-            reported.slice = Some(SliceClick { number, add: crate::runtime::pointer::frame(ui.ctx()).mods.shift });
+            reported.slice = Some(SliceClick { number, add: crate::runtime::pointer::mods(ui.ctx()).shift });
         }
         if reported.moved.is_none() {
             reported.moved = shown.view;

@@ -22,27 +22,26 @@
 //! }
 //! ```
 
-mod blend_if;
+pub(crate) mod blend_if;
 mod blending;
-mod contour;
-mod dialog;
-mod hosted;
+pub(crate) mod contour;
+pub(crate) mod dialog;
+pub(crate) mod hosted;
 mod labels;
 mod list;
 mod page;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod styles;
 
 pub use blend_if::{BlendIfBar, BlendIfWords};
 pub use contour::{
-    ContourAction, ContourEditorDialog, ContourField, ContourFieldOutput, ContourKey, ContourRequest, ContourWords, contour_rows, from_curve,
-    to_curve,
+    ContourAction, ContourEditorDialog, ContourField, ContourFieldOutput, ContourKey, ContourRequest, ContourSampler, ContourWords, contour_source,
+    from_curve, to_curve,
 };
 pub use dialog::{LayerStyleDialog, LayerStyleOutput};
 pub use hosted::{HostedLayerStyle, LayerStyleAsk};
 pub use labels::LayerStyleWords;
 pub use list::LayerStyleCommand;
-pub use styles::StylePresets;
 
 pub use crate::layer_style::LayerStylePage;

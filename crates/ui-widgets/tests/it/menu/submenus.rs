@@ -2,11 +2,9 @@
 //! and an open submenu stays open while the pointer heads for it across other rows.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Lazy, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::{MemoProps, MemoView, Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::{Menu, MenuItem};
-use craft_ui::testing::{Fixture, pointer, trial};
-use std::cell::Cell;
-use std::rc::Rc;
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, pointer, trial};
 use std::time::Duration;
 
 /// A menu with two submenu rows, Recent and Templates, the first with a submenu taller than the rows below it.
@@ -77,17 +75,25 @@ fn fills_in(shapes: &[egui::Shape], row: egui::Rect) -> usize {
         .count()
 }
 
+/// A view beside the menu: a status button.
+#[derive(MemoProps)]
+struct Status {}
+
+fn status(_: &mut Status, ui: &mut egui::Ui) {
+    Button::new("Status").show(ui);
+}
+
+/// The runs of the status view in the last frame.
+fn status_runs(fixture: &Fixture) -> usize {
+    last_frame_memo_runs(fixture.ctx()).iter().filter(|(name, _, run)| name.ends_with("Status") && *run == MemoRun::Ran).count()
+}
+
 /// Opening a submenu changes only the menu: the frame that moves the pointer onto its row runs one pass that lights the
-/// row and shows the submenu, and a settled region beside the menu runs in none of the frames until the menu rests.
+/// row and shows the submenu, and a memoized view beside the menu runs in none of the frames until the menu rests.
 #[trial]
 fn opening_a_submenu_runs_one_pass_and_nothing_outside_the_menu() {
-    let runs = Rc::new(Cell::new(0));
-    let counted = runs.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        Lazy::new("status", 0.0).settles(true).content(1).show(ui, |ui| {
-            counted.set(counted.get() + 1);
-            Button::new("Status").show(ui);
-        });
+    let mut fixture = Fixture::new(|ui| {
+        MemoView::new("status", Status {}, status).show(ui);
         let opener = Button::new("Open").show(ui);
         Menu::new("Main").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
             MenuItem::new("New").show(ui);
@@ -105,19 +111,20 @@ fn opening_a_submenu_runs_one_pass_and_nothing_outside_the_menu() {
     let recent = fixture.by_label("Recent").expect("the menu is open").rect;
     assert_eq!(fills_in(&fixture.frame_shapes(), recent), 0, "Recent is not lit before the pointer reaches it");
 
-    runs.set(0);
     let shapes = fixture.frame_shapes_with(vec![pointer::moved(recent.center())]);
     let opening = fixture.passes();
+    let mut runs = status_runs(&fixture);
     assert!(fills_in(&shapes, recent) > 0, "Recent is lit in the frame the pointer reaches it");
     assert!(fixture.by_label("Report.txt").is_some(), "the submenu shows in that frame");
     let mut follow_ups = Vec::new();
     while fixture.repaint_requested() && follow_ups.len() < 30 {
         fixture.frame(vec![]);
         follow_ups.push(fixture.passes());
+        runs += status_runs(&fixture);
     }
-    let counts = format!("passes {opening}, follow-up frames' passes {follow_ups:?}, region runs {}", runs.get());
+    let counts = format!("passes {opening}, follow-up frames' passes {follow_ups:?}, status view runs {runs}");
     assert_eq!(opening, 1, "the frame that opens the submenu runs one pass: {counts}");
     assert!(follow_ups.iter().all(|&passes| passes == 1), "every follow-up frame runs one pass: {counts}");
     assert!(!fixture.repaint_requested(), "the menu rests: {counts}");
-    assert_eq!(runs.get(), 0, "the settled region beside the menu runs while the submenu opens: {counts}");
+    assert_eq!(runs, 0, "the memoized view beside the menu runs while the submenu opens: {counts}");
 }

@@ -1,5 +1,6 @@
 //! `Area` with its left-top pivot, `Order`, sublayers, transform layers and `set_layer_order`.
 
+use crate::runtime::shift::Shift;
 #[cfg(feature = "testing")]
 use egui::Ui;
 use egui::emath::TSTransform;
@@ -57,6 +58,33 @@ pub(crate) fn layer_position(ctx: &Context, layer: LayerId) -> usize {
 /// were not there.
 pub(crate) fn layer_at(ctx: &Context, point: Pos2) -> Option<LayerId> {
     crate::runtime::sampler::layer_at(ctx, point).or_else(|| ctx.layer_id_at(point))
+}
+
+/// Whether some point of a screen segment belongs to this layer. A layer can begin or end only
+/// at an area edge, so testing one point between consecutive edges also finds subpixel gaps.
+pub(crate) fn layer_between(ctx: &Context, layer: LayerId, from: Pos2, to: Pos2) -> bool {
+    let visible = |point| layer_at(ctx, point) == Some(layer);
+    if visible(from) || visible(to) {
+        return true;
+    }
+    if from == to {
+        return false;
+    }
+    let mut cuts = vec![0.0, 1.0];
+    let delta = to - from;
+    let path = Rect::from_two_pos(from, to);
+    let hole = crate::runtime::sampler::hole_of_pass(ctx);
+    let bounds = interactive_layers(ctx, None).into_iter().map(|(_, rect)| rect).chain(hole.iter().flat_map(|hole| hole.bounds()));
+    for bounds in bounds.filter(|rect| rect.intersects(path)) {
+        let edges =
+            [(bounds.min.x, from.x, delta.x), (bounds.max.x, from.x, delta.x), (bounds.min.y, from.y, delta.y), (bounds.max.y, from.y, delta.y)];
+        cuts.extend(
+            edges.into_iter().filter(|(_, _, step)| *step != 0.0).map(|(edge, start, step)| (edge - start) / step).filter(|t| 0.0 < *t && *t < 1.0),
+        );
+    }
+    cuts.sort_unstable_by(f32::total_cmp);
+    cuts.dedup();
+    cuts.iter().copied().any(|t| visible(from.lerp(to, t))) || cuts.windows(2).any(|ends| visible(from.lerp(to, f32::midpoint(ends[0], ends[1]))))
 }
 
 /// The topmost layer under a screen position, as if `skipped` were not shown: the layer below a window that moves
@@ -211,6 +239,9 @@ pub(crate) struct LayerSpec {
     pub at: Pos2,
     /// Whether the layer takes input; a tooltip and the ghost layer never do.
     pub interactable: bool,
+    /// The accessibility node the layer's content hangs under, created before the layer shows: egui attaches the
+    /// layer's `Area`, and through it the content, below it.
+    pub root: Option<Id>,
 }
 
 /// What `show_layer` reports.
@@ -224,18 +255,79 @@ pub(crate) struct LayerShown {
 /// Shows an overlay layer: an `Area` with its left-top pivot at `spec.at`, never egui's default pivot. The motion
 /// service fades a layer in (`motion::layer_presence`), so egui's own fade-in of a new `Area` is off.
 pub(crate) fn show_layer(ctx: &Context, spec: &LayerSpec, body: impl FnOnce(&mut egui::Ui)) -> LayerShown {
-    let shown = egui::Area::new(spec.id)
+    let mut sizing = false;
+    let mut area = egui::Area::new(spec.id)
         .fade_in(false)
         .order(spec.tier.order())
         .pivot(egui::Align2::LEFT_TOP)
         .fixed_pos(spec.at)
         .constrain(false)
-        .interactable(spec.interactable)
-        .show(ctx, body);
+        .interactable(spec.interactable);
+    if let Some(root) = spec.root {
+        area = area.accessibility_parent(root);
+    }
+    let shown = area.show(ctx, |ui| {
+        sizing = ui.is_sizing_pass();
+        body(ui);
+    });
+    register_area(ctx, shown.response.layer_id, sizing);
     // The `Area`'s own widget senses a click over the whole layer, beneath the layer's widgets: it stands for none of
     // the layer's components.
     crate::runtime::pointer::record_layer_widget(ctx, shown.response.id);
     LayerShown { rect: shown.response.rect, layer: shown.response.layer_id }
+}
+
+/// The rect the content of the layer `spec` shows takes in this pass, before the layer shows: its left-top and the size
+/// egui keeps for its `Area`. `None` when the layer shows in an egui sizing pass, which paints and reports nothing.
+pub(crate) fn content_rect(ctx: &Context, spec: &LayerSpec) -> Option<Rect> {
+    egui::AreaState::load(ctx, spec.id).and_then(|state| state.size).map(|size| Rect::from_min_size(spec.at, size))
+}
+
+/// What an overlay layer's `Area` keeps in egui's memory for a pass it shows in: its egui layer, its left-top in
+/// screen space, its size and whether it takes input.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AreaRecord {
+    layer: LayerId,
+    at: Pos2,
+    size: Vec2,
+    interactable: bool,
+}
+
+/// A replay moves the left-top; the size stays.
+impl Shift for AreaRecord {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        AreaRecord { at: self.at.shifted(by), ..*self }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        AreaRecord { at: self.at.snapped(&to.at, within), ..*self }
+    }
+}
+
+/// Registers the `Area` of `layer` that was shown now (an egui sizing pass of it when `sizing`) as an overlay of the
+/// records open around it, which journal the registration: a replay shows the area again in egui's memory, as shown
+/// this pass with the place, size and input it had, so egui finds the layer and orders it. A sizing pass paints
+/// nothing and asks for the next pass, so the run that made it runs again.
+fn register_area(ctx: &Context, layer: LayerId, sizing: bool) {
+    let Some(state) = egui::AreaState::load(ctx, layer.id) else { return };
+    if sizing {
+        crate::runtime::replay::note_unsettled(ctx);
+    }
+    show_again(ctx, &AreaRecord { layer, at: state.left_top_pos(), size: state.size.unwrap_or_default(), interactable: state.interactable });
+}
+
+fn show_again(ctx: &Context, area: &AreaRecord) {
+    crate::runtime::replay::journal(ctx, || *area, show_again);
+    crate::runtime::replay::note_overlay(ctx, area.layer, Rect::from_min_size(area.at, area.size));
+    let became = egui::AreaState::load(ctx, area.layer.id).and_then(|state| state.last_became_visible_at);
+    let state = egui::AreaState {
+        pivot_pos: Some(area.at),
+        pivot: egui::Align2::LEFT_TOP,
+        size: Some(area.size),
+        interactable: area.interactable,
+        last_became_visible_at: became,
+    };
+    ctx.memory_mut(|memory| memory.areas_mut().set_state(area.layer, state));
 }
 
 /// What [`show_cover_layer`] shows: the layer's id and tier, the `screen` it covers, its `scrim`, the `through` canvas
@@ -263,6 +355,7 @@ pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
         Some(clear) => bands(screen, clear).into_iter().filter(|band| band.is_positive()).collect(),
         None => vec![screen],
     };
+    let mut sizing = false;
     egui::Area::new(id)
         .fade_in(false)
         .order(tier.order())
@@ -272,6 +365,7 @@ pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
         .interactable(absorbs)
         .sense(Sense::hover())
         .show(ctx, |ui| {
+            sizing = ui.is_sizing_pass();
             for rect in covered {
                 ui.painter().rect_filled(rect, 0.0, scrim);
                 let absorber = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -279,6 +373,7 @@ pub(crate) fn show_cover_layer(ctx: &Context, cover: CoverLayer) {
                 crate::runtime::egui::access::hide(ui.ctx(), absorber.id);
             }
         });
+    register_area(ctx, layer_of(tier, id), sizing);
 }
 
 /// The four rects of `screen` around `hole`: above, below, left of and right of it.
@@ -297,8 +392,15 @@ pub(crate) fn layer_rect(ctx: &Context, id: Id) -> Option<Rect> {
 }
 
 /// The viewport's safe rect: the room overlays must stay inside, the part of the content rect the user can see on
-/// the monitor and above its taskbar. Without a known monitor size it is the whole content rect.
+/// the monitor and above its taskbar. Without a known monitor size it is the whole content rect. A tracked input
+/// (`Input::Shell`), which the frame's root env observes.
 pub(crate) fn safe_rect(ctx: &Context) -> Rect {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Shell);
+    safe_rect_raw(ctx)
+}
+
+/// `safe_rect` without noting the read: for the root env, which moves `Input::Shell` by it.
+pub(crate) fn safe_rect_raw(ctx: &Context) -> Rect {
     let content = ctx.content_rect();
     ctx.input(|input| {
         let viewport = input.viewport();
@@ -420,19 +522,19 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
 }
 
 /// A host's own egui popup `id` at `at`, shown while egui's memory holds it open.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
 }
 
 /// Opens the host's egui popup `id`.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn open_host_popup(ctx: &Context, id: egui::Id) {
     egui::Popup::open_id(ctx, id);
 }
 
 /// Whether the host's egui popup `id` is open.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn host_popup_open(ctx: &Context, id: egui::Id) -> bool {
     egui::Popup::is_id_open(ctx, id)
 }

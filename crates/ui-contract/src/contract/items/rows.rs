@@ -46,7 +46,14 @@ pub(super) fn measured_id<K: std::hash::Hash>(collection: Id, key: &K) -> Id {
 /// Runs `f` with a reader of the heights the auto rows of the collection `collection` had in the last pass that built
 /// them: the rows the pass does not build, out of view, are placed by them (`runtime::lazy`).
 pub(super) fn measured_heights<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<f32>) -> R) -> R {
-    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|size| size.y)))
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|(size, _)| size.y)))
+}
+
+/// Runs `f` with a reader of what this pass measured of the rows of the collection `collection`, by the ids
+/// `measured_id` and `measured_width_id` give: the row's width and height, or its ideal and minimum widths; `None` for
+/// a row this pass has not measured. A row measured this pass is not measured again in it.
+pub(super) fn measured_this_pass<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).and_then(|(size, now)| now.then_some(size))))
 }
 
 /// The id an auto-width item's measured widths (ideal, then minimum) are kept under.
@@ -57,11 +64,11 @@ pub(super) fn measured_width_id<K: std::hash::Hash>(collection: Id, key: &K) -> 
 /// Runs `f` with a reader of the `(ideal, min)` widths the auto-width items of the collection `collection` had in the
 /// last pass that built them.
 pub(super) fn measured_widths<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<(f32, f32)>) -> R) -> R {
-    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|size| (size.x, size.y))))
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|(size, _)| (size.x, size.y))))
 }
 
-/// Records the size an auto row of the collection `collection` measured this pass; the row is placed by it in the same
-/// pass.
+/// Records the size an auto row of the collection `collection` measured this pass (its width and height, or its ideal
+/// and minimum widths); the row is placed by it in the same pass.
 pub(super) fn record_measure(ctx: &Context, collection: Id, id: Id, size: Vec2) {
     lazy::remember(ctx, collection, id, size);
 }
@@ -87,17 +94,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Whether the row at position `at` is selected.
     pub(super) fn holds(&self, at: usize) -> bool {
         let key = self.source.key(at);
-        self.selection.contains(RowAt::new(&key, at, self.source))
+        self.selection.contains(RowAt::new(&key, at, &*self.source))
     }
 
     /// The selection placed once in the source's order; the reads of a pass go by position.
     pub(super) fn placed(&self) -> PlacedSelection {
-        self.selection.placed(self.source)
+        self.selection.placed(&*self.source)
     }
 
     /// The keys of the selected rows of `selection`, in the display order.
     pub(super) fn selected_keys(&self, selection: &C::Selection) -> Vec<C::Key> {
-        selection.placed(self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
+        selection.placed(&*self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
     }
 
     /// The positions a gesture on the row at `at` (a drag, a stacking key, Delete) acts on, in the display order: the
@@ -120,10 +127,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// of the layout), active and anchored at its first cell.
     pub(super) fn select_rows(&mut self, comp: &C, from: usize, to: usize) {
         let Some(mut cells) = self.selection.cells().cloned() else { return };
-        let source = self.source;
-        let space = comp.cell_space(CellSpace::new(source, self.columns));
-        let range = space.keyed_range(space.whole_rows(from as u32, to as u32));
-        if cells.select_range(range, &space) {
+        // The space borrows the source the hooks own: it ends before the change takes the hooks mutably.
+        let picked = {
+            let space = comp.cell_space(CellSpace::new(&*self.source, self.columns));
+            let range = space.keyed_range(space.whole_rows(from as u32, to as u32));
+            cells.select_range(range, &space)
+        };
+        if picked {
             self.change(cells.change());
         }
     }
@@ -131,7 +141,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Runs `f` with the grid of the collection's cells (17.7): the source's rows, the layout's columns with the rows
     /// and columns it hides left out, and what the collection adds (`Collection::cell_space`).
     fn with_cell_space<R>(&self, comp: &C, layout: &C::ItemLayout, f: impl FnOnce(&CellSpace<'_, C::Key>) -> R) -> R {
-        let source = self.source;
+        let source = &*self.source;
         let row_hidden = |row: u32| !layout.shown(row as usize);
         let column_hidden = |column: u32| !layout.column_shown(column as usize);
         let space = comp.cell_space(CellSpace::new(source, layout.column_count() as u32).hidden_rows(&row_hidden).hidden_columns(&column_hidden));

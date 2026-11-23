@@ -4,8 +4,8 @@
 //! range every written value stays in and the step that arrows, the wheel and a scrub move by. A drag on a field that
 //! is not in edit scrubs it; a click enters edit, where a drag selects text.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::adorn::{Adornment, Placed, place, reserve};
 use super::words::TextWords;
@@ -22,8 +22,9 @@ use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
     Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
 };
-use craft_theme::{Stateful, States};
-use egui::{Rect, Vec2};
+use craft_theme::{Rgba, Stateful, States};
+use egui::{CornerRadius, Rect, Vec2};
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
@@ -115,9 +116,12 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The range typed, stepped and scrubbed values stay in.
     #[prop]
     range: Option<RangeInclusive<f64>>,
-    /// What one arrow press, one wheel notch and one point of scrub change; the default is 1.
+    /// What one arrow press, one wheel notch and one point of scrub change unless overridden. The default is 1.
     #[prop(quantity = "step")]
     step: Option<f64>,
+    /// The change per point of scrub, in shown units. An omitted, non-positive or non-finite rate uses the field step.
+    #[prop(quantity = "step")]
+    scrub_step: Option<f64>,
     /// Where an arrow press, a Page key and a wheel notch go from the current value, for values on a ladder (the zoom
     /// ladder); the step is ignored for them. The range still holds the result.
     #[prop(func = "Fn(f64, i32) -> f64")]
@@ -128,6 +132,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// Whether the unit is drawn inside the field or left to the host to draw after it.
     #[prop]
     unit_placement: UnitPlacement,
+    #[style_key]
+    status_zoom: bool,
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
     #[prop]
     presets: Option<&'a [Entry<NumberPick>]>,
@@ -135,6 +141,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// value at once, as far as the slider would, and the release closes the slider.
     #[prop]
     popup_slider: Option<RangeInclusive<f64>>,
+    /// Whether the popup slider snaps to the configured step; defaults to true.
+    #[prop]
+    snap_popup_slider: bool,
     /// A typed value goes to the nearest multiple of the step when it commits.
     #[prop]
     snap_typed: bool,
@@ -144,14 +153,22 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
     #[prop]
     automatic: bool,
+    /// A mixed field shows the word "Mixed" as its placeholder, not the dash (a size field over a selection of
+    /// several sizes).
+    #[prop]
+    mixed_word: bool,
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
+    /// The most decimals shown without trailing zeroes when the field has no codec or fixed precision, capped at 12.
+    #[prop]
+    max_decimals: Option<usize>,
     /// The lengths a length field keeps and shows (`NumberField::length`).
     lengths: Option<LengthUnits>,
     /// How many shown units make one stored unit, read from the env in measure and parts; 1 for a plain field.
     scale: f64,
     options: TextOptions,
+    positive_only: bool,
     scrub: bool,
     /// The popup slider's track length, read from the tokens in parts: a drag on its chevron moves the value as far
     /// as a drag on the slider would.
@@ -161,6 +178,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     leading: Vec<Adornment>,
     /// The unit and the chevrons after the text, measured in measure and parts for paint.
     trailing: Vec<Adornment>,
+    /// Width of the current value in this pass, including its caret.
+    value_width: f32,
 }
 
 impl<'a> NumberField<'a, Option<f64>> {
@@ -175,11 +194,7 @@ impl<'a> NumberField<'a, Option<f64>> {
     /// and its edit events are in the stored unit. `range` is in the stored unit and `popup_slider` and presets
     /// numbers too; the step is in the shown unit and defaults to the shown unit's own.
     pub fn length(label: impl Into<Label>, value: Bind<'a, Option<f64>>, lengths: LengthUnits) -> Self {
-        let mut field = Self::of(label, value);
-        field.lengths = Some(lengths);
-        field.unit_kind = Some(lengths.shown);
-        field.step = Some(lengths.shown.step());
-        field
+        Self::of(label, value).lengths(lengths)
     }
 }
 
@@ -187,6 +202,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// A number field named `label` over a value of another type, such as [`NamedOr`].
     pub fn named(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
         Self::of(label, value)
+    }
+
+    /// The lengths the field keeps and shows, as [`NumberField::length`] gives them: a named-number field reads and
+    /// shows lengths through the one units path.
+    #[must_use]
+    pub fn lengths(mut self, lengths: LengthUnits) -> Self {
+        self.lengths = Some(lengths);
+        self.unit_kind = Some(lengths.shown);
+        self.step = Some(lengths.shown.step());
+        self
     }
 
     fn of(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
@@ -197,23 +222,30 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             unit_kind: None,
             range: None,
             step: None,
+            scrub_step: None,
             stepper: None,
             unit: None,
             unit_placement: UnitPlacement::Inside,
+            status_zoom: false,
             presets: None,
             popup_slider: None,
+            snap_popup_slider: true,
             snap_typed: false,
             automatic: false,
+            mixed_word: false,
             commit_decimals: None,
             fixed_decimals: None,
+            max_decimals: None,
             lengths: None,
             scale: 1.0,
             options: TextOptions::default(),
+            positive_only: false,
             scrub: false,
             track: 0.0,
             picked: None,
             leading: Vec::new(),
             trailing: Vec::new(),
+            value_width: 0.0,
         }
         .label(label)
     }
@@ -229,9 +261,17 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
     #[must_use]
     pub(super) fn zoom_typing(mut self) -> Self {
-        self.options.tab_rewrites = true;
+        self.options.tab = crate::primitives::TabKey::Rewrites;
         self.options.holds_drafts = true;
+        self.positive_only = true;
         self
+    }
+
+    /// Keeps the entire zoom percentage together in an unframed well in the status bar.
+    #[must_use]
+    pub(super) fn status_zoom(mut self) -> Self {
+        self.status_zoom = true;
+        self.sizing(Sizing::Content)
     }
 
     /// A drag on the field's side label scrubs the value too, with or without the focus in the field.
@@ -257,7 +297,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The unit drawn inside the field after the number: the field's own, else the symbol of its unit kind; none when
     /// the host draws it after the field.
     fn shown_unit(&self, units: &Units) -> Option<Label> {
-        if self.unit_placement == UnitPlacement::After {
+        if self.status_zoom || self.unit_placement == UnitPlacement::After {
             return None;
         }
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
@@ -283,6 +323,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
+    /// Whether the field counts percent: it shows one decimal and its sign right after the number.
+    fn is_percent(&self) -> bool {
+        self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
+    }
+
+    /// Whether the field uses the dash for a missing or invalid value.
+    fn shows_blank(&self, shown: Option<&V>) -> bool {
+        shown.is_none() || non_finite(shown) || (self.status_zoom && shown.and_then(NumberValue::number).is_none())
+    }
+
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
     /// reads every length spelling).
     fn number_codec(&self, units: &Units) -> NumberCodec {
@@ -292,17 +342,20 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
                 None => units.reader(self.unit_kind),
             };
             let codec = NumberCodec::new(reader, self.decimals());
-            if self.fixed_decimals.is_some() { codec.fixed() } else { codec }
+            if self.fixed_decimals.is_some() || self.is_percent() { codec.fixed() } else { codec }
         })
     }
 
-    /// The decimals the field shows: its codec's, else its fixed decimals, else its unit kind's.
+    /// The decimals the field shows: its codec's, fixed or maximum precision, else its unit kind's.
     fn shown_decimals(&self) -> RangeInclusive<usize> {
-        match (&self.codec, self.fixed_decimals, self.unit_kind) {
-            (Some(codec), _, _) => 0..=codec.decimals(),
-            (None, Some(fixed), _) => fixed..=fixed,
-            (None, None, Some(kind)) => kind.decimals(),
-            (None, None, None) => 0..=DEFAULT_DECIMALS,
+        match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
+            (Some(codec), _, _, _) => 0..=codec.decimals(),
+            // A percentage reads "100.0%": one decimal, written in full.
+            (None, _, _, Some(UnitKind::Percent)) => 1..=1,
+            (None, Some(fixed), _, _) => fixed..=fixed,
+            (None, None, Some(max), _) => 0..=max.min(12),
+            (None, None, None, Some(kind)) => kind.decimals(),
+            (None, None, None, None) => 0..=DEFAULT_DECIMALS,
         }
     }
 
@@ -329,7 +382,9 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             snap: self.snap_typed,
             decimals: self.commit_decimals,
             mixed,
+            positive_only: self.positive_only,
             names,
+            suffix: self.status_zoom.then(|| units.symbol(UnitKind::Percent)),
             scale: self.scale,
             value: PhantomData,
         }
@@ -352,12 +407,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
         let shared = content_sized(cx);
-        let unit = self.shown_unit(&cx.env.units()).map(|unit| {
+        // A mixed field that reads "Mixed" has no number for a unit to follow: the word takes the room.
+        let worded = self.mixed_word && cx.value().is_none();
+        let unit = self.shown_unit(&cx.env.units()).filter(|_| !worded).map(|unit| {
             let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
             if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
         });
-        let chevrons =
-            chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
+        let arrow = crate::controls::disclosure::DisclosureGlyph::dropdown_of(cx.env.get());
+        let chevrons = chevrons.iter().map(|(key, name)| Adornment::button(*key, arrow.clone(), name.clone()));
         unit.into_iter().chain(chevrons).collect()
     }
 
@@ -374,7 +431,28 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
 
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
     fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
-        place(rect, &style.field, &self.leading, &self.trailing, rtl)
+        let mut field = style.field.clone();
+        let mut content = rect;
+        let mut placed = place(content, &field, &self.leading, &self.trailing, rtl);
+        if placed.text.width() < self.value_width {
+            field.metrics.gap = 0.0;
+            placed = place(content, &field, &self.leading, &self.trailing, rtl);
+            let missing = (self.value_width - placed.text.width()).max(0.0);
+            let padding = field.metrics.padding;
+            let available = padding.start + padding.end;
+            if available > 0.0 {
+                let fraction = (missing / available).min(1.0);
+                let start = padding.start * fraction;
+                let end = padding.end * fraction;
+                field.metrics.padding.start -= start;
+                field.metrics.padding.end -= end;
+                let (left, right) = if rtl { (end, start) } else { (start, end) };
+                content.min.x -= left;
+                content.max.x += right;
+                placed = place(content, &field, &self.leading, &self.trailing, rtl);
+            }
+        }
+        placed
     }
 
     /// The alert for `typed`, a typed number the rule held to its range, in shown units; `kept` is the committed
@@ -399,12 +477,23 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     type Style = NumberStyle;
     type Output = NumberOutput<V>;
 
-    fn style(cx: &StyleCx<'_>, _: NumberFieldStyleKey<V>) -> NumberStyle {
+    fn style(cx: &StyleCx<'_>, key: NumberFieldStyleKey<V>) -> NumberStyle {
         let field = FieldStyle::at(cx);
+        let mut surface = field.surface.clone();
+        if key.status_zoom {
+            surface.kind = None;
+            surface.radius = CornerRadius::ZERO;
+            // Use the theme's recessed field color; focus and invalid states still use the usual borders.
+            surface.fill = Stateful::new(cx.color(cx.tokens.color.surface.sunken));
+            let clear = cx.color(Rgba::TRANSPARENT);
+            if let Some(border) = &mut surface.border {
+                border.off = States::new(clear, clear, clear, clear);
+            }
+        }
         let faint = cx.color(cx.tokens.color.text.faint);
         let muted = cx.color(cx.tokens.color.text.muted);
         NumberStyle {
-            surface: field.surface.clone(),
+            surface,
             // The width is the value area, at most a number cell, and the adornments beside it, at least a cell
             // (`measure`); the style's minimum is only the height.
             metrics: field.clone().sized_by_content().metrics,
@@ -434,8 +523,15 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let content = content_sized(cx);
         // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        let sample = codec.sample(cx.value().unwrap_or(&blank));
-        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
+        let shown = cx.value();
+        let no_zoom_value = self.status_zoom && self.shows_blank(shown);
+        let (sample, role) = if no_zoom_value {
+            // Text editors draw their hint in the proportional face.
+            (Cow::Borrowed(BLANK), self.options.role)
+        } else {
+            (codec.sample(shown.unwrap_or(&blank)), TypeRole::Mono)
+        };
+        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(role));
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
@@ -460,17 +556,26 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         self.leading = Self::before_text(cx);
         self.trailing = self.after_text(cx, &chevrons);
+        let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        self.value_width = cx.value().map_or(0.0, |value| {
+            let text = self.ruled(&cx.env.units(), false, names).format(value);
+            cx.field_text(&TextRun::new(&text).role(TypeRole::Mono)).x
+        });
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
         if let Some(slot) = placed.leading.first() {
             cx.label_part(*slot);
         }
         let text = placed.text;
-        self.options.centred = true;
+        // A percentage reads "100.0%": the number stands against its sign, not in the middle of the room.
+        self.options.centred = !self.is_percent();
+        self.options.end_aligned = self.is_percent();
         self.options.mono = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
-            if shown.is_none() || non_finite(shown) {
+            if self.mixed_word && shown.is_none() {
+                self.options.placeholder = Some(cx.words::<TextWords>().mixed.clone());
+            } else if self.shows_blank(shown) {
                 self.options.placeholder = Some(BLANK.into());
             } else if self.automatic {
                 self.options.placeholder = Some(cx.words::<TextWords>().automatic.clone());
@@ -504,11 +609,12 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         proposed == host || (proposed.named() == host.named() && at_precision(proposed) == at_precision(host))
     }
 
-    /// A drag on the body of a field not in edit, or on its side label with `scrub_by_label`, moves a step a point;
+    /// A drag on the body of a field not in edit, or on its side label with `scrub_by_label`, moves by the scrub step per point;
     /// a drag on the popup slider's chevron moves the value as far as the same drag on the slider.
     fn scrub(&self) -> Option<Scrub<V>> {
         let rule = self.rule();
-        let drag = ValueDrag::relative(rule.step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
+        let step = self.scrub_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step);
+        let drag = ValueDrag::relative(step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
         // Rounded to the field's decimals, so a scrubbed value carries no float noise. The step is not a grid
         // here: an Alt drag moves by a share of it.
         let decimals = self.decimals();
@@ -603,7 +709,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     /// text value, the selection and the text actions to the same node.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let rule = self.rule();
-        let numeric = match self.shown_number(cx.value()) {
+        // A value that is not finite shows the dash, as a mixed one does, and has no number to read.
+        let numeric = match self.shown_number(cx.value()).filter(|value| value.is_finite()) {
             Some(value) => Numeric::new(value, rule.bounds()),
             None => Numeric::empty(rule.bounds()),
         };
@@ -630,7 +737,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             glyph.paint(ui, *at, cx.resolve(&cx.style.handle), self.options.role);
         }
         for (key, name) in chevrons {
-            ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
+            ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown_of(cx.env.get())).label(name));
         }
     }
 

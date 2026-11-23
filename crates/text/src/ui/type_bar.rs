@@ -29,8 +29,8 @@ use crate::ui::type_options::{TextAntiAlias, TextOrientation, TypeOptionWords};
 #[cfg(feature = "font-picker")]
 use crate::ui::character::FontPickerSource;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The type bar's tooltips, English by default (PhotoCraft's). Family, alignment and direction names are
@@ -178,9 +178,9 @@ impl<'a> TypeBar<'a> {
                 .extend(toggle.events.map(|on| TypeBarChange::Orientation(if on { TextOrientation::Vertical } else { TextOrientation::Horizontal })));
 
             #[cfg(feature = "font-picker")]
-            let family = family_field(ui, &character_words, character, families, picker.as_mut());
+            let family = family_field(ui, &character_words, character, families, None, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let family = family_field(ui, &character_words, character, families);
+            let family = family_field(ui, &character_words, character, families, None);
             preview_family = family.preview;
             rested_family = family.rested;
             edits.extend(family.edits.into_iter().map(|event| event.map(TypeBarChange::Character)));
@@ -190,7 +190,8 @@ impl<'a> TypeBar<'a> {
 
             // The size glyph the Character panel's size row shows.
             let side = mark(GlyphLabel::text("tT"), None, FieldLayout::Inside);
-            let size = LengthRow { label: bar_words.size.clone(), side, value: character.size, range: SIZE_RANGE, presets: &size_presets };
+            let size =
+                LengthRow { label: bar_words.size.clone(), side, value: character.size, range: SIZE_RANGE, presets: &size_presets, disabled: None };
             let (event, _) = lengths.row(ui, size);
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 

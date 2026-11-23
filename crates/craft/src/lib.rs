@@ -16,6 +16,8 @@ pub use craft_affinity as affinity;
 pub use craft_ai as ai;
 #[cfg(feature = "ai-core")]
 pub use craft_ai_core as ai_core;
+#[cfg(feature = "android-res")]
+pub use craft_android_res as android_res;
 #[cfg(feature = "anicraft-format")]
 pub use craft_anicraft_format as anicraft_format;
 #[cfg(feature = "assuan")]
@@ -24,6 +26,8 @@ pub use craft_assuan as assuan;
 pub use craft_atomic as atomic;
 #[cfg(feature = "audio")]
 pub use craft_audio as audio;
+#[cfg(feature = "audio-dsp")]
+pub use craft_audio_dsp as audio_dsp;
 #[cfg(feature = "automation")]
 pub use craft_automation as automation;
 pub use craft_behavior as behavior;
@@ -33,6 +37,8 @@ pub use craft_ber as ber;
 pub use craft_browse as browse;
 #[cfg(feature = "captions")]
 pub use craft_captions as captions;
+#[cfg(feature = "cdr")]
+pub use craft_cdr as cdr;
 #[cfg(feature = "cfb")]
 pub use craft_cfb as cfb;
 #[cfg(feature = "cloud")]
@@ -279,6 +285,8 @@ pub use craft_platform as platform;
 pub use craft_plist as plist;
 #[cfg(feature = "plotter")]
 pub use craft_plotter as plotter;
+#[cfg(feature = "png")]
+pub use craft_png as png;
 #[cfg(feature = "ppt-binary")]
 pub use craft_ppt_binary as ppt_binary;
 #[cfg(feature = "pptx")]
@@ -311,6 +319,8 @@ pub use craft_raw as raw;
 pub use craft_review as review;
 #[cfg(feature = "rtf")]
 pub use craft_rtf as rtf;
+#[cfg(feature = "sbs")]
+pub use craft_sbs as sbs;
 #[cfg(feature = "score")]
 pub use craft_score as score;
 #[cfg(feature = "scraft-format")]

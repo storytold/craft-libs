@@ -37,7 +37,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
     pub fn new(mut w: W, opts: WriterOptions) -> Result<Self> {
         let start = w.stream_position()?;
         let mut b = BoxBuf::new();
-        write_ftyp(&mut b, opts.brand);
+        write_ftyp(&mut b, opts.brand, &opts.compatible_brands);
         let pad = b.len() as u64;
         b.leaf(if opts.brand == Brand::Mov { b"wide" } else { b"free" }, &[]);
         let mdat = b.len() as u64;

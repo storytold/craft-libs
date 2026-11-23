@@ -1,7 +1,7 @@
 //! The lead and the selection: picks, ranges, and where the lead starts and follows.
 
 use super::{ItemsHooks, Placement};
-use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListDrag, SelectMode};
+use crate::contract::collection::{CollectionEvent, HoverLead, LeadOnOpen, LeadSource, ListDrag, SelectMode};
 use crate::contract::{Collection, Cx};
 use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
 use egui::{Pos2, Rect, Vec2};
@@ -23,7 +23,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     }
 
     pub(super) fn range(&self, from: usize, to: usize) -> Vec<C::Key> {
-        let keys = (from.min(to)..=from.max(to)).filter(|&at| self.source.enabled(at) && !self.source.is_section(at)).map(|at| self.source.key(at));
+        let keys = (from.min(to)..=from.max(to))
+            .filter(|&at| self.source.enabled(at) && (!self.source.is_section(at) || self.source.selectable_section(at)))
+            .map(|at| self.source.key(at));
         if from <= to { keys.collect() } else { keys.rev().collect() }
     }
 
@@ -72,9 +74,16 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         clicks > 1 && self.holds(at)
     }
 
+    /// The position of the collection's current item (`CollectionProps::current`) when nothing is picked.
+    fn current_when_unpicked(&self, comp: &C) -> Option<usize> {
+        let current = comp.items().current.as_deref().and_then(|key| key.downcast_ref::<C::Key>())?;
+        let at = self.index_of(current)?;
+        self.placed().rows().is_empty().then_some(at)
+    }
+
     /// A press or key that selects row `at` the way the modifiers say.
     pub(super) fn pick(&mut self, comp: &C, at: usize, extend: bool, toggle: bool) {
-        if self.source.section_stop(at) {
+        if self.source.section_stop(at) && !self.source.selectable_section(at) {
             return;
         }
         let key = self.source.key(at);
@@ -86,11 +95,19 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 self.select_rows(comp, anchor, at);
             }
             SelectMode::Multi | SelectMode::Cells => {
+                // With nothing picked, the current item counts as picked: a modified click adds to it, as a file
+                // manager's or a page grid's does.
+                let seed = if extend || toggle { self.current_when_unpicked(comp) } else { None };
                 if extend {
-                    let anchor = self.anchor_at(self.lead.at);
+                    let anchor = self.selection.anchor().and_then(|key| self.index_of(key)).or(seed).unwrap_or(self.lead.at);
                     self.change(SelectionChange::Set(self.range(anchor, at)));
                 } else if toggle {
-                    self.change(SelectionChange::Toggle(key));
+                    match seed.filter(|&current| current != at) {
+                        Some(current) => self.change(SelectionChange::Set(vec![self.source.key(current), key])),
+                        None => self.change(SelectionChange::Toggle(key)),
+                    }
+                } else if comp.items().picks_beside_current {
+                    self.change(SelectionChange::Clear);
                 } else {
                     self.change(SelectionChange::Set(vec![key]));
                 }
@@ -115,7 +132,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// The pointer's position, in screen space, while it is over the collection.
     fn hovered_pos(cx: &Cx<'_, C>) -> Option<Pos2> {
-        crate::runtime::pointer::frame(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
+        crate::runtime::pointer::frame_raw(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
     }
 
     /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,
@@ -135,20 +152,21 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         layout.hit(local, offset).filter(|&row| self.source.enabled(row) && !self.source.is_section(row) && layout.shown(row))
     }
 
-    /// The lead follows a moving pointer over the rows, and the selection follows the lead the way it does for the
-    /// arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
+    /// The lead follows a moving pointer over the rows; with `HoverLead::LeadAndSelection` the selection follows the
+    /// lead the way it does for the arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
     /// with no movement to measure, and a modifier change under a resting pointer leaves the lead where the keys put it.
-    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
-        let moved = crate::runtime::pointer::with_pass_pointer(&cx.core.ctx, |pass| {
-            pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. }))
-        });
+    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement, hover: HoverLead) {
+        let moved =
+            crate::runtime::pointer::with_pass_raw(&cx.core.ctx, |pass| pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. })));
         if !moved {
             return;
         }
         let Some(row) = Self::hovered_pos(cx).and_then(|pos| self.row_under(layout, at, pos)) else { return };
         if self.lead.key.as_ref() != Some(&self.source.key(row)) {
             self.move_lead(row, LeadSource::Pointer);
-            self.pick(comp, row, false, false);
+            if hover == HoverLead::LeadAndSelection {
+                self.pick(comp, row, false, false);
+            }
         }
     }
 
@@ -177,7 +195,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             return;
         }
-        let Some(row) = crate::runtime::pointer::frame(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
+        let Some(row) = crate::runtime::pointer::frame_raw(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
         if self.holds(row) {
             return;
         }

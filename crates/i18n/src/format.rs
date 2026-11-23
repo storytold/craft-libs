@@ -38,6 +38,8 @@ pub struct Format {
     pub(crate) marks: Marks,
     /// The decimal and group marks of the written form, read once from a number that shows both.
     separators: (char, Option<char>),
+    /// Unique per format built (`generation`).
+    generation: u64,
 }
 
 impl Format {
@@ -50,7 +52,15 @@ impl Format {
         }
         let decimal = data::provider()
             .and_then(|p| DecimalFormatter::try_new_with_buffer_provider(p, (&locale).into(), DecimalFormatterOptions::default()).ok());
-        let mut format = Format { decimal, group: None, point: None, percent: ("", "%"), marks: Marks::default(), separators: ('.', None) };
+        let mut format = Format {
+            decimal,
+            group: None,
+            point: None,
+            percent: ("", "%"),
+            marks: Marks::default(),
+            separators: ('.', None),
+            generation: crate::words::next_generation(),
+        };
         // The locale's own separators and digits, read from a number that shows them all.
         let probe = format.parts(&Decimal::try_from_str("-1234567.5").unwrap_or_default());
         let latin = probe.integer.starts_with(|c: char| c.is_ascii_digit());
@@ -82,6 +92,12 @@ impl Format {
         format.marks = Marks::new(&point, &group, !comma);
         format.separators = format.written_separators();
         format
+    }
+
+    /// Which format this is: a format writes every number the same for its whole life, and one built anew gets a new
+    /// generation. What keys on the numbers a format writes keys on this.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The decimal and group marks numbers are written with, in the digits of the format. The group mark is

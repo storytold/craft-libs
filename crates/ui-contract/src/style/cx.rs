@@ -3,22 +3,24 @@
 use super::key::{EnvKey, Ink};
 use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
 use super::paint::{
-    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
-    scroll_bar_look_of,
+    AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, auto_scroll_mark_look, handle_look,
+    marker_look, reset_mark_look, rule_look, scroll_bar_look_of,
 };
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;
 use crate::fonts::stack_facts;
-use crate::runtime::env::{AppValues, Scale, StyleValue};
+use crate::runtime::env::{AppValues, MotionPolicy, Scale, StyleValue};
+use crate::runtime::motion::{MotionSpec, Presence};
 use crate::runtime::pass_state;
 use craft_behavior::ControlMetrics;
 use craft_host::target::Os;
 use craft_i18n::Direction;
 use craft_theme::Stroke as StrokeStep;
 use craft_theme::{BySize, Contrast, ControlSize, Flags, RadiusStep, Rgba, Size, Stateful, States, TokenGroup, Variant, VariantLook, variant::Tone};
-use egui::{Color32, Context, CornerRadius};
+use egui::{Color32, Context, CornerRadius, Id};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::Arc;
 
 /// How the icon-only buttons of a scope show their glyph, set by the container that holds them
@@ -68,6 +70,11 @@ pub struct StyleCx<'a> {
     line_ratio: f32,
     ctx: &'a Context,
     values: &'a AppValues,
+    /// The component whose motion memory `exiting` reads, and the motion policy it runs under; set by the collection
+    /// hook for the layout it asks of the component.
+    owner: Option<(Id, MotionPolicy)>,
+    /// The `Ui` a collection's layout hook measures faces in; none elsewhere.
+    pub(crate) measuring: Option<&'a egui::Ui>,
 }
 
 /// A variant's look as style parts.
@@ -129,6 +136,11 @@ impl<'a> StyleCx<'a> {
         self.tokens.density()
     }
 
+    /// The component set of the scope, for a component that maps it to one of its named variants.
+    pub fn set(&self) -> craft_theme::ComponentSet {
+        self.env::<craft_theme::ComponentSet>()
+    }
+
     /// A style context for the scope the pipeline or an app colour hook runs in.
     #[expect(clippy::too_many_arguments, reason = "one argument per input the style cache key covers")]
     #[doc(hidden)]
@@ -160,6 +172,8 @@ impl<'a> StyleCx<'a> {
             line_ratio,
             ctx,
             values,
+            owner: None,
+            measuring: None,
         }
     }
 
@@ -186,6 +200,30 @@ impl<'a> StyleCx<'a> {
     pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
         let env = crate::runtime::env::Env::of_root(ctx);
         f(&StyleCx::of_env(ctx, &env))
+    }
+
+    /// The same context measuring faces in `ui`; the collection hook calls it before it asks for a layout.
+    pub(crate) fn measured_by<'b>(&self, ui: &'b egui::Ui) -> StyleCx<'b>
+    where
+        'a: 'b,
+    {
+        StyleCx { measuring: Some(ui), ..*self }
+    }
+
+    /// The same context scoped to the component `id`, whose keyed presences `exiting` reads under `policy`.
+    pub(crate) fn owned_by(&self, id: Id, policy: MotionPolicy) -> StyleCx<'a> {
+        StyleCx { owner: Some((id, policy)), ..*self }
+    }
+
+    /// The keyed presences of `name` in the motion memory of the component this context is scoped to, for the keys
+    /// not among `listed` (the keys its source lists now): each is still fading out, with the payload it was last
+    /// given and the presence it has at this pass's clock, as `Animate::exiting` computes it. It reads without
+    /// driving, so a collection's `item_layout` can keep the room of an item that is leaving until its exit ends.
+    /// Empty outside a collection's layout.
+    pub fn exiting<P: Clone + Send + Sync + 'static>(&self, name: &'static str, spec: MotionSpec, listed: &[impl Hash]) -> Vec<(Presence, P)> {
+        let Some((id, policy)) = self.owner else { return Vec::new() };
+        let listed: Vec<Id> = listed.iter().map(crate::runtime::motion::key_id).collect();
+        crate::runtime::motion::peek_exiting(self.ctx, id, policy, name, spec, &listed)
     }
 
     /// The same context with another variant.
@@ -217,7 +255,8 @@ impl<'a> StyleCx<'a> {
         self.values.get::<T>()
     }
 
-    /// The one constructor of `StyleColor`: a semantic token read or a token-group field becomes a style colour here.
+    /// The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
+    /// here. Content paint picks a role through `Draw::role`.
     pub fn color(&self, color: Rgba) -> StyleColor {
         StyleColor(egui_color(color))
     }
@@ -235,22 +274,20 @@ impl<'a> StyleCx<'a> {
         self.color(craft_theme::ensure_contrast(start, fill, craft_theme::text_contrast_min(self.contrast())))
     }
 
+    /// The ink of a glyph or label in the data colour `color` on the surface `on`, pushed to the contrast the text
+    /// needs: the inverse of [`ink_on`](Self::ink_on).
+    pub fn ink_of(&self, color: DataColor, on: Rgba) -> StyleColor {
+        self.color(craft_theme::ensure_contrast(Rgba::from(color.0), on, craft_theme::text_contrast_min(self.contrast())))
+    }
+
     /// The one builder of the focus ring: the line's focus colour at the medium stroke, on the shape's edge.
     pub fn focus_look(&self) -> FocusLook {
-        FocusLook::new(egui::Stroke::new(self.tokens.stroke.medium, self.color(self.tokens.color.line.focus).egui()), 0.0)
+        FocusLook::new(egui::Stroke::new(self.tokens.stroke.focus, self.color(self.tokens.color.line.focus).egui()), 0.0)
     }
 
     /// The colour text and icons of `tone` read in.
     pub fn tone(&self, tone: Tone) -> StyleColor {
-        let c = &self.tokens.color;
-        self.color(match tone {
-            Tone::Accent => c.accent.text,
-            Tone::Info => c.status.info.fg,
-            Tone::Good => c.status.good.fg,
-            Tone::Warn => c.status.warn.fg,
-            Tone::Bad => c.status.bad.fg,
-            _ => c.text.normal,
-        })
+        self.color(tone.ink(self.tokens))
     }
 
     /// The tinted background text and icons of `tone` sit on: the status or accent background, and the sunken surface
@@ -443,6 +480,11 @@ impl<'a> StyleCx<'a> {
     /// `PartBuilder::state_layer` gets it from the paint step; a look built over it reads it here.
     pub fn state_layer(&self) -> Stateful<StyleColor> {
         super::paint::state_layer_look(self.tokens)
+    }
+
+    /// The look of the auto-scroll mark.
+    pub fn auto_scroll_mark(&self) -> AutoScrollMarkLook {
+        auto_scroll_mark_look(self.tokens)
     }
 
     /// The look of the reset mark.

@@ -15,8 +15,8 @@ use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerButton, PressPhase, Sense, Value};
 use egui::{Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The face over the whole button.
 const FACE: PartKey = PartKey::new("face");

@@ -8,6 +8,7 @@ use crate::contract::{Bind, FooterSlot, Props as _, Show as _, ShowContainer as 
 use crate::display::Text;
 use crate::layout::GridFit;
 use crate::layout_components::{Grid, Row};
+use crate::runtime::env::Label;
 use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -69,6 +70,9 @@ pub fn hosted_with<D: StackDialog, K: PartialEq + 'static>(
 /// The opener of the Grid options dialogs.
 const GRID_OPTIONS: &str = "Grid Options…";
 
+/// The opener of the dialog with a title note.
+const COMMENT_PROPERTIES: &str = "Comment Properties…";
+
 /// The open state a story's dialog binds, behind the button that opens it: dialogs start closed, and the button opens
 /// the real one.
 fn opener<'d>(ui: &mut Ui, data: &'d mut StoryData, label: &'static str) -> &'d mut bool {
@@ -109,6 +113,19 @@ fn dialog_with_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .footer(|ui, _| {
             Checkbox::new(Bind::given(false)).label("Don't ask again").show(ui);
         })
+        .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+/// Dialog with a title note.
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_with_title_note(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let shown: StoryOutput = Dialog::new("Comment Properties")
+        .title_note("3 comments selected")
+        .opened(Bind::bound(opener(ui, data, COMMENT_PROPERTIES)))
         .show(ui, |ui, _| body(ui, &mut checks))
         .into();
     *data.value("checks", [true, false]) = checks;
@@ -203,6 +220,31 @@ fn dialog_modeless(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into();
     *data.value("checks", [true, false]) = checks;
     shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_with_refusal(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let refused = *data.value("refused", true);
+    let shown: StoryOutput = Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .refusal(move || refused.then(|| Label::from("The grid is finer than the document allows.")))
+        .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_nudge(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .show(ui, |ui, _| {
+            Text::new("Press beside this dialog: it shakes, or its edge flashes twice with reduced motion.").show(ui);
+        })
+        .into()
 }
 
 #[story(DialogFrame<'static>, covers = [Default], drive = Drive::Custom(close_box))]

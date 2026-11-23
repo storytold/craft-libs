@@ -1,5 +1,5 @@
-//! The command search of the Help menu: [`HelpEntry`], a command found by its label, its English label or its menu
-//! path, and [`search_order`], which ranks the entries for a query.
+//! The command search of the Help menu: [`HelpEntry`], a command found by its label, its English label, its menu
+//! path or its command id, and [`search_order`], which ranks the entries for a query.
 
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
@@ -65,23 +65,30 @@ impl HelpEntry {
 }
 
 /// The entries matching `query`, best first and in menu order within a rank, at most `MAX_RESULTS`. Each entry is
-/// its `[label, english label, menu path]` texts, matched by `folder` (case and accents folded). A label or English
-/// label that matches ranks before an entry found only through its path; within each, the matcher's rank decides.
-pub fn search_order(folder: &Folder, query: &str, texts: &[[&str; 3]]) -> Vec<usize> {
-    let query = query.trim();
-    if query.is_empty() {
+/// its `[label, english label, menu path, command id]` texts, matched by `folder` (case and accents folded). Every
+/// word of the query must match one of an entry's texts. A word found in the label or English label ranks before one
+/// found only in the path or command id; an entry ranks by its worst tier, then by the worst matcher rank among its
+/// words, then by menu order.
+pub fn search_order(folder: &Folder, query: &str, texts: &[[&str; 4]]) -> Vec<usize> {
+    let matchers: Vec<Matcher> = query.split_whitespace().map(|word| Matcher::new(folder, word)).collect();
+    if matchers.is_empty() {
         return Vec::new();
     }
-    let matcher = Matcher::new(folder, query);
     let mut ranked: Vec<_> = texts
         .iter()
         .enumerate()
-        .filter_map(|(at, [label, english, path])| {
-            let named = [label, english].into_iter().filter_map(|text| matcher.score(text)).map(|found| found.rank).min();
-            match named {
-                Some(found) => Some((0_u8, found, at)),
-                None => matcher.score(path).map(|found| (1, found.rank, at)),
+        .filter_map(|(at, [label, english, path, id])| {
+            let mut worst = (0_u8, None);
+            for matcher in &matchers {
+                let named = [label, english].into_iter().filter_map(|text| matcher.score(text)).map(|found| found.rank).min();
+                let (tier, rank) = match named {
+                    Some(rank) => (0_u8, rank),
+                    None => (1, [path, id].into_iter().filter_map(|text| matcher.score(text)).map(|found| found.rank).min()?),
+                };
+                worst.0 = worst.0.max(tier);
+                worst.1 = worst.1.max(Some(rank));
             }
+            Some((worst.0, worst.1, at))
         })
         .collect();
     ranked.sort();

@@ -41,8 +41,8 @@ use egui::{Context, Response, Ui};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The dialog's words, English by default.

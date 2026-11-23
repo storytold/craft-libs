@@ -1,8 +1,8 @@
 //! The accessibility bridge: a page view draws pages as pictures, so on its own it is one opaque node to a screen
 //! reader. The bridge describes the text under it, the way a browser describes a page: each paragraph a Paragraph,
 //! Heading (with its level) or ListItem (grouped in Lists, with its ListMarker), holding one TextRun per laid-out line
-//! with its characters' screen positions; tables are Table > Row > Cell, pictures Images named by their alt text,
-//! hyperlinks Links around their runs. The page view's own node is the Document; the nodes below it are its
+//! with its characters' screen positions; tables are Table > Row > Cell, pictures Images named by their alt text (at
+//! their place on screen when they have one), hyperlinks Links to their URL around their runs. The page view's own node is the Document; the nodes below it are its
 //! sub-nodes, and the document's text selection is the Document's text selection.
 //!
 //! The app describes the pages it was asked for through [`AccessDescriber`]. The bridge builds nothing unless a
@@ -51,7 +51,8 @@ pub enum BlockRole {
     Row,
     /// A table cell.
     Cell,
-    /// A picture or chart named by its alt text.
+    /// A picture or chart named by its alt text, with no place on screen of its own; a placed one is
+    /// [`AccessBuilder::image`].
     Image(String),
     /// A hyperlink to `url`.
     Link(String),
@@ -205,6 +206,16 @@ impl AccessBuilder {
         Some(at)
     }
 
+    /// A placed picture or chart under `parent`, named by its alt text, at `bounds` on screen: a floating picture's
+    /// placed rectangle or the box of the text it is anchored in. A picture with no place on screen is a
+    /// [`BlockRole::Image`] block. Bounds that are not finite are left out.
+    // wordcraft: crates/ui-egui/src/a11y.rs:180-185, :398-406.
+    pub fn image(&mut self, parent: Option<AccessNode>, alt: impl Into<String>, bounds: Rect) -> Option<AccessNode> {
+        let at = self.block(parent, BlockRole::Image(alt.into()))?;
+        self.built(at)?.bounds = bounds.is_finite().then_some(bounds);
+        Some(at)
+    }
+
     /// One laid-out line's text under `parent`, with each character's screen x and width and the line's screen
     /// rectangle; word starts are worked out from the text.
     // wordcraft: crates/ui-egui/src/a11y.rs:431 `Builder::flush`, :501 `push_char`, :515 `word_starts`.
@@ -312,8 +323,11 @@ fn emit(access: &mut Access, built: &AccessBuilder, at: AccessNode) {
         }
         Kind::Block(role) => match role {
             BlockRole::Paragraph => access.node(part, Role::PARAGRAPH),
-            BlockRole::Heading(level) => access.node(part, Role::HEADING).level(usize::from((*level).clamp(1, 9))),
-            BlockRole::ListItem { level, .. } => access.node(part, Role::LIST_ITEM).level(usize::from(*level) + 1),
+            // AccessKit's level is zero-based (`Node::set_level`; its Windows adapter adds one for UI Automation), so
+            // outline level 1 to 9 goes in as 0 to 8 and list level 0 to 8 as it is: a Heading 1 reaches a screen
+            // reader as level 1, not 2 (WordCraft #3173).
+            BlockRole::Heading(level) => access.node(part, Role::HEADING).level(usize::from((*level).clamp(1, 9) - 1)),
+            BlockRole::ListItem { level, .. } => access.node(part, Role::LIST_ITEM).level(usize::from((*level).min(8))),
             BlockRole::Table => {
                 let sub = access.node(part, Role::TABLE);
                 sub.grid = GridPlace::grid(node.parts, node.columns);
@@ -344,7 +358,7 @@ fn emit(access: &mut Access, built: &AccessBuilder, at: AccessNode) {
                 let label = built.text_below(at);
                 let sub = access.node(part, Role::LINK);
                 sub.name = Name::Text(if label.is_empty() { url.clone() } else { label });
-                sub
+                sub.url(url.clone())
             }
         },
     };

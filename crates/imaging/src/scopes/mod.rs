@@ -15,7 +15,7 @@
 mod clipping;
 mod statistics;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod vectorscope;
 
 pub use clipping::{ChannelMask, ClippedChannels, ClippingMask, clipping};

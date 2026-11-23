@@ -1,14 +1,14 @@
 //! [`LevelsEditor`]: a levels adjustment's histogram, input thumbs and fields, output bar, thumbs
 //! and fields, editing one channel's [`Levels`].
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::ops::RangeInclusive;
 
 use craft_behavior::{Metrics, Mixed, Proposal, Sense, decimals_for_step};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Outcome, PaintUi, Props as _, Role, WordSetCx as _,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Outcome, PaintUi, Props as _, Role, Sizing, WordSetCx as _,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::runtime::env::Label;
@@ -165,10 +165,6 @@ pub struct LevelsEditorStyle {
     bar_row: f32,
     /// The height of a row of fields.
     fields: f32,
-    /// The width of a levels field: three digits.
-    field: f32,
-    /// The width of the gamma field: a value like 9.99.
-    gamma_field: f32,
     /// The width the editor asks for when the parent offers none.
     width: f32,
     /// The light end of the output bar: the channel's bar colour.
@@ -256,6 +252,8 @@ pub struct LevelsEditor<'a> {
     #[prop]
     captions: bool,
     clip: Option<LevelsClip>,
+    /// The width of a levels field and of the gamma field, as the fields measure themselves (`measure`).
+    field_widths: [f32; 2],
 }
 
 impl<'a> LevelsEditor<'a> {
@@ -274,6 +272,7 @@ impl<'a> LevelsEditor<'a> {
             stale: false,
             captions: true,
             clip: None,
+            field_widths: [0.0; 2],
         }
         .label(label)
     }
@@ -325,6 +324,17 @@ impl<'a> LevelsEditor<'a> {
     fn plot<'c>(&self, words: &LevelsWords, data: &'c HistogramData) -> Histogram<'c> {
         let plot = Histogram::new(words.histogram.clone(), data).height(PlotHeight::Standard).bordered();
         if self.stale { plot.stale(StaleMark::Mark(Label::Empty)) } else { plot }
+    }
+
+    /// The three input fields (black, gamma, white) showing `base`, with the thumbs at `placed`.
+    fn input_fields<'c>(&self, words: &LevelsWords, base: &Levels, placed: [f64; 3]) -> [NumberField<'c>; 3] {
+        let labels = [words.in_black.clone(), words.gamma.clone(), words.in_white.clone()];
+        let values = [base.in_black, base.gamma, base.in_white];
+        std::array::from_fn(|i| {
+            let step = if i == 1 { GAMMA_STEP } else { self.step };
+            let field = self.field(labels[i].clone(), values[i], input_range(self, i, placed), step);
+            if i == 1 { field.fixed_decimals(decimals_for_step(GAMMA_STEP)) } else { field }
+        })
     }
 
     /// A field named `label` showing `value`, within `range`.
@@ -431,8 +441,6 @@ impl Component for LevelsEditor<'_> {
             row: control.icon,
             bar_row: control.icon + cx.tokens.size.ramp.bar,
             fields: row,
-            field: cx.text_width(TypeRole::Body, "000") + 2.0 * control.pad_x,
-            gamma_field: cx.text_width(TypeRole::Body, "0.00") + 2.0 * control.pad_x,
             width: cx.tokens.size.plot.width,
             bar: key.channel.bar(cx),
         }
@@ -448,6 +456,13 @@ impl Component for LevelsEditor<'_> {
         let empty = HistogramData::tone(&[0u32; 256], self.channel);
         let mut plot = self.plot(&words, self.histogram.unwrap_or(&empty));
         let plot = cx.child("plot", &mut plot, Proposal::Width(width)).y;
+        let base = cx.value().copied().unwrap_or_else(|| Levels::identity(self.range.clone()));
+        let placed = self.input_row(&words, cx.value().copied()).rules().placed(&base.input());
+        let mut widths = [0.0f32; 3];
+        for (i, field) in self.input_fields(&words, &base, placed).into_iter().enumerate() {
+            widths[i] = cx.child(("in-field", i), &mut field.sizing(Sizing::Content), Proposal::Ideal).x;
+        }
+        self.field_widths = [widths[0].max(widths[2]), widths[1]];
         Vec2::new(width, fixed_height(self.captions, cx.style) + plot)
     }
 
@@ -484,20 +499,16 @@ impl Component for LevelsEditor<'_> {
         let empty = HistogramData::tone(&[0u32; 256], self.channel);
         let plot = Rect::from_x_y_ranges(input.travel, at(rows.plot).y_range());
         ui.child("plot", plot, self.plot(&words, self.histogram.unwrap_or(&empty)));
-        let fields = field_rects(rows.fields_in, cx.style.field, cx.style.gamma_field, 3);
-        let labels = [words.in_black.clone(), words.gamma.clone(), words.in_white.clone()];
-        let values = [base.in_black, base.gamma, base.in_white];
-        let typed: Vec<_> = (0..3)
-            .map(|i| {
-                let step = if i == 1 { GAMMA_STEP } else { self.step };
-                let field = self.field(labels[i].clone(), values[i], input_range(self, i, placed), step);
-                let field = if i == 1 { field.fixed_decimals(decimals_for_step(GAMMA_STEP)) } else { field };
-                ui.child(("in-field", i), at(fields[i]), field)
-            })
+        let fields = field_rects(rows.fields_in, self.field_widths[0], self.field_widths[1], 3);
+        let typed: Vec<_> = self
+            .input_fields(&words, &base, placed)
+            .into_iter()
+            .enumerate()
+            .map(|(i, field)| ui.child(("in-field", i), at(fields[i]), field))
             .collect();
 
         let output = ui.child("output", at(rows.output), self.output_row(&words, shown, &bar));
-        let fields = field_rects(rows.fields_out, cx.style.field, 0.0, 2);
+        let fields = field_rects(rows.fields_out, self.field_widths[0], 0.0, 2);
         let (low, high) = self.ends();
         let out_labels = [words.out_black.clone(), words.out_white.clone()];
         let out_values = [base.out_black, base.out_white];

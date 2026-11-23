@@ -1,7 +1,7 @@
 //! Library sections: tables beside `T`'s keys in the same document.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use web_time::Instant;
 
 use toml_edit::{DocumentMut, Item};
 

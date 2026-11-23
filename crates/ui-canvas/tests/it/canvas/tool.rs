@@ -10,7 +10,8 @@ use craft_ui::canvas::{
     NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, ToolRegion,
     canvas_space, tool_pass,
 };
-use craft_ui::contract::{Bind, Lazy, Sampler as _, Show as _, ShowContainer as _};
+use craft_ui::contract::tooltip::DELAY;
+use craft_ui::contract::{Bind, MemoProps, MemoView, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::primitives::Draw;
@@ -21,7 +22,7 @@ use craft_ui::runtime::windows::WindowHost;
 use craft_ui::style::DataColor;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
+use craft_ui::testing::{Fixture, MemoRun, ToolFixture, last_frame_memo_runs, pointer, trial};
 use craft_ui::text::NumberField;
 use egui::{Color32, Id, Key, Modifiers, Pos2, Rect, Shape, Vec2};
 use std::cell::{Cell, RefCell};
@@ -106,6 +107,45 @@ fn a_drag_reaches_the_tool_as_one_press_drags_and_one_release() {
     assert_eq!(phases.last(), Some(&GesturePhase::Commit), "{phases:?}");
     assert_eq!(phases.iter().filter(|phase| **phase == GesturePhase::Begin).count(), 1, "one Begin: {phases:?}");
     assert_eq!(phases.iter().filter(|phase| **phase == GesturePhase::Commit).count(), 1, "one Commit: {phases:?}");
+}
+
+#[trial]
+fn escape_mid_drag_cancels_the_tool_once_and_its_release_reaches_nothing() {
+    let mut fixture = ToolFixture::new("Document", Recorder::default());
+    let from = fixture.canvas().rect.center();
+    fixture.drag_and_escape_from(from, BY);
+    let tool = fixture.tool();
+    let calls = &tool.calls;
+    assert_eq!(calls.first(), Some(&Call::Press), "the drag starts with the press: {calls:?}");
+    assert_eq!(tool.count(Call::Cancel(CancelReason::Escape)), 1, "Escape cancels the gesture once: {calls:?}");
+    assert_eq!(calls.iter().filter(|call| matches!(call, Call::Cancel(_))).count(), 1, "one cancel, with its reason: {calls:?}");
+    let cancel = calls.iter().position(|call| matches!(call, Call::Cancel(_))).expect("the tool is cancelled");
+    assert!(calls[cancel + 1..].is_empty(), "no drag or release reaches the tool after the cancel: {calls:?}");
+    assert_eq!(tool.count(Call::Release), 0, "the release after Escape reaches no release: {calls:?}");
+}
+
+#[trial]
+fn a_release_before_escape_in_one_frame_commits_the_drag() {
+    let mut fixture = ToolFixture::new("Document", Recorder::default());
+    let from = fixture.canvas().rect.center();
+    let to = from + BY;
+    fixture.press_at(from).move_to(to);
+    fixture.fixture().frame(vec![pointer::release(to), key_press(Key::Escape, Modifiers::NONE)]).idle(2);
+    let tool = fixture.tool();
+    assert_eq!(tool.count(Call::Release), 1, "the earlier release commits: {:?}", tool.calls);
+    assert_eq!(tool.count(Call::Cancel(CancelReason::Escape)), 0, "Escape does not cancel an ended drag: {:?}", tool.calls);
+}
+
+#[trial]
+fn escape_before_a_release_in_one_frame_cancels_the_drag() {
+    let mut fixture = ToolFixture::new("Document", Recorder::default());
+    let from = fixture.canvas().rect.center();
+    let to = from + BY;
+    fixture.press_at(from).move_to(to);
+    fixture.fixture().frame(vec![key_press(Key::Escape, Modifiers::NONE), pointer::release(to)]).idle(2);
+    let tool = fixture.tool();
+    assert_eq!(tool.count(Call::Cancel(CancelReason::Escape)), 1, "the earlier Escape cancels: {:?}", tool.calls);
+    assert_eq!(tool.count(Call::Release), 0, "the later release does not commit: {:?}", tool.calls);
 }
 
 #[trial]
@@ -221,6 +261,45 @@ fn a_gesture_cancelled_by_the_app_starts_no_new_one_while_the_button_stays_down(
 
     fixture.press_at(from).release_at(from);
     assert_eq!(fixture.tool().count(Call::Press), 2, "the next press starts a gesture again: {:?}", fixture.tool().calls);
+}
+
+#[trial]
+fn a_body_hides_the_pointer_over_the_canvas_over_the_tools_cursor_while_it_asks() {
+    let hide = Rc::new(Cell::new(false));
+    let asks = Rc::clone(&hide);
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let tool = RefCell::new(Recorder::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        shown_room.set(room);
+        let view = CanvasView::new(room, Point::new(600.0, 450.0), 1.0);
+        Canvas::new("Document").document(DOCUMENT).view(view).show_at(ui, room.shrink(40.0), |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut());
+                if asks.get() {
+                    pass.hide_pointer(ui);
+                }
+            }
+        });
+    });
+    fixture.settle();
+    let hidden =
+        |fixture: &Fixture| craft_ui::runtime::cursor::current(fixture.ctx()) == Some(Cursor::Painted(craft_behavior::PaintedCursor::Hidden));
+    let (over, beside) = (room.get().center(), room.get().min + Vec2::splat(10.0));
+    fixture.frame(vec![pointer::moved(over)]);
+    fixture.frame(Vec::new());
+    assert!(!hidden(&fixture), "precondition: the tool's cursor shows over the canvas");
+    hide.set(true);
+    fixture.frame(Vec::new());
+    assert!(hidden(&fixture), "the body's request hides the pointer over the canvas");
+    fixture.frame(vec![pointer::moved(beside)]);
+    fixture.frame(Vec::new());
+    assert!(!hidden(&fixture), "beside the canvas the pointer shows");
+    fixture.frame(vec![pointer::moved(over)]);
+    hide.set(false);
+    fixture.frame(Vec::new());
+    assert!(!hidden(&fixture), "once the body stops asking, the pointer shows again");
 }
 
 /// A tool with a rubber band that follows the hovering pointer, which asks for the hover autoscroll when `scrolls`.
@@ -669,7 +748,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     let at = rig.centre();
 
     // Command at the press, up mid-drag: the stand-in keeps the gesture to the release.
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
+    rig.fixture.hold(Modifiers::COMMAND).frame_held(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
     rig.fixture.hold(Modifiers::NONE).frame(vec![pointer::moved(at + BY * 2.0)]).frame(vec![pointer::release(at + BY * 2.0)]);
     let calls = rig.calls();
     assert_eq!(calls.first().map(String::as_str), Some("command press"), "{calls:?}");
@@ -704,7 +783,11 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     main.ignores = Some(StandInKey::Command);
     let mut rig = Rig::new(main, &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
+    rig.fixture
+        .hold(Modifiers::COMMAND)
+        .frame_held(vec![pointer::press(at)])
+        .frame(vec![pointer::moved(at + BY)])
+        .frame(vec![pointer::release(at + BY)]);
     let calls = rig.calls();
     assert_eq!(&calls[..2], ["main press", "command press"], "{calls:?}");
     assert_eq!(calls.last().map(String::as_str), Some("command release"), "{calls:?}");
@@ -715,7 +798,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     main.refuses = Some(StandInKey::Alt);
     let mut rig = Rig::new(main, &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::ALT).frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
+    rig.fixture.hold(Modifiers::ALT).frame_held(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
     assert_eq!(rig.calls().first().map(String::as_str), Some("alt press"), "{:?}", rig.calls());
 
     // The hover cursor is the stand-in's while its key is held, no gesture runs and the selected tool does not take
@@ -737,7 +820,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     let mut rig = Rig::with(main, &log, None, Setup { momentary: Some(Momentary::new(NavigationOptions::default())), ..Setup::default() });
     let at = rig.centre();
     rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at), key_press(Key::Space, Modifiers::COMMAND)]);
-    rig.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
+    rig.fixture.frame_held(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
     assert!(rig.calls().is_empty(), "neither the selected tool nor a stand-in sees a press under a momentary tool: {:?}", rig.calls());
 
     // With the Hand selected, Cmd at a press is Zoom In, not the Command stand-in.
@@ -748,7 +831,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     momentary.hand_selected(true);
     let mut rig = Rig::with(main, &log, None, Setup { momentary: Some(momentary), ..Setup::default() });
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
+    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at)]).frame_held(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
     assert!(!rig.calls().iter().any(|call| call == "command press"), "Cmd over the selected Hand is Zoom In: {:?}", rig.calls());
 }
 
@@ -761,7 +844,7 @@ fn a_gesture_a_stand_in_holds_is_cancelled_on_the_stand_in() {
     main.refuses = Some(StandInKey::Command);
     let mut rig = Rig::new(main, &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
+    rig.fixture.hold(Modifiers::COMMAND).frame_held(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
     rig.log.borrow_mut().clear();
     let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
     let cancelled = {
@@ -906,23 +989,29 @@ impl CanvasTool for Painter {
     }
 }
 
-/// A stroke on the canvas, whose tool asks for a repaint in every drag, runs neither of the settled panels beside it
-/// (each shows a content version), from its press to its release, and each of its move frames runs one pass.
+/// A panel beside the canvas, showing its name.
+#[derive(MemoProps)]
+struct SidePanel {
+    name: &'static str,
+}
+
+fn side_panel(props: &mut SidePanel, ui: &mut egui::Ui) {
+    Text::new(props.name).show(ui);
+}
+
+/// A stroke on the canvas, whose tool asks for a repaint in every drag, runs neither of the panels beside it (each a
+/// memoized view), from its press to its release, and each of its move frames runs one pass.
 #[trial]
 fn a_stroke_runs_no_settled_panel_beside_the_canvas_and_one_pass_per_move() {
     let painter = Rc::new(RefCell::new(Painter::default()));
-    let runs: Rc<[Cell<usize>; 2]> = Rc::default();
     let canvas = Rc::new(Cell::new(Id::NULL));
-    let (shown_painter, shown_runs, shown_canvas) = (Rc::clone(&painter), Rc::clone(&runs), Rc::clone(&canvas));
+    let (shown_painter, shown_canvas) = (Rc::clone(&painter), Rc::clone(&canvas));
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let (side, document) = room.split_left_right_at_x(room.left() + 160.0);
         in_region(ui, side, |ui| {
-            for (at, name) in ["Layers", "Navigator"].into_iter().enumerate() {
-                Lazy::new(name, 0.0).settles(true).content(1).show(ui, |ui| {
-                    shown_runs[at].set(shown_runs[at].get() + 1);
-                    Text::new(name).show(ui);
-                });
+            for name in ["Layers", "Navigator"] {
+                MemoView::new(name, SidePanel { name }, side_panel).show(ui);
             }
         });
         in_region(ui, document, |ui| {
@@ -946,12 +1035,12 @@ fn a_stroke_runs_no_settled_panel_beside_the_canvas_and_one_pass_per_move() {
     let host = WindowHost::of(&ctx);
     let mut frames = Vec::new();
     while !host.injected_idle() && frames.len() < 64 {
-        runs.iter().for_each(|runs| runs.set(0));
         fixture.frame(Vec::new());
-        frames.push((fixture.passes(), [runs[0].get(), runs[1].get()]));
+        let runs = last_frame_memo_runs(fixture.ctx()).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count();
+        frames.push((fixture.passes(), runs));
     }
     assert!(painter.borrow().drags > 0, "the moves reach the tool, which asks for repaints");
-    assert!(frames.iter().all(|(_, runs)| *runs == [0, 0]), "no settled panel runs during the stroke: {frames:?}");
+    assert!(frames.iter().all(|(_, runs)| *runs == 0), "no panel runs during the stroke: {frames:?}");
     let moves = &frames[1..frames.len() - 1];
     assert!(moves.iter().all(|(passes, _)| *passes == 1), "each move frame runs one pass: {frames:?}");
 }
@@ -1279,12 +1368,33 @@ fn moves_inside_the_click_distance_reach_a_tool_that_takes_every_move() {
     }
 }
 
+/// A right-click during a drag asks for the menu where it came up and leaves the drag to the tool: no release and no
+/// cancel until the primary button comes up (a dragged comment keeps moving while its page menu opens).
+#[trial]
+fn a_secondary_click_during_a_drag_asks_for_the_menu_and_the_drag_goes_on() {
+    let log = Log::default();
+    let mut rig = Rig::new(Probe::new("main", &log), &log, None);
+    let at = rig.centre();
+    let menu = at + BY;
+    rig.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(menu)]);
+    rig.fixture.frame(vec![pointer::secondary(menu, true)]).frame(vec![pointer::secondary(menu, false)]);
+    let asked = rig.contexts.borrow().clone();
+    assert_eq!(asked.iter().map(|request| request.at).collect::<Vec<_>>(), [menu], "the secondary release asks once, where it came up");
+    let calls = rig.calls();
+    assert!(!calls.iter().any(|call| call.ends_with("release") || call.ends_with("cancel")), "the drag goes on: {calls:?}");
+    rig.fixture.frame(vec![pointer::moved(menu + BY)]).frame(vec![pointer::release(menu + BY)]);
+    let calls = rig.calls();
+    assert_eq!(calls.iter().filter(|call| call.ends_with("press")).count(), 1, "one gesture: {calls:?}");
+    assert_eq!(calls.last().map(String::as_str), Some("main release"), "it ends on the primary release: {calls:?}");
+    assert_eq!(rig.contexts.borrow().len(), 1, "and asks no more");
+}
+
 #[trial]
 fn a_secondary_click_the_tool_did_not_take_asks_for_the_menu() {
     let log = Log::default();
     let mut rig = Rig::new(Probe::new("main", &log), &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::SHIFT).frame(vec![pointer::secondary(at, true)]);
+    rig.fixture.hold(Modifiers::SHIFT).frame_held(vec![pointer::secondary(at, true)]);
     rig.fixture.hold(Modifiers::NONE).frame(vec![pointer::secondary(at, false)]);
     let asked = rig.contexts.borrow().clone();
     assert_eq!(asked.len(), 1, "{asked:?}");
@@ -1588,6 +1698,102 @@ fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
         "Show Transformation Values off: nothing paints, the rows are still reported"
     );
     assert_eq!(readout_during_a_drag(true, Some(false)), (true, true), "a hud paints with Show Transformation Values off");
+}
+
+/// The tip [`Tipping`] asks for.
+const TIP: &str = "Follow the link";
+
+/// A tool that asks for a tip on every hover and claims every press.
+struct Tipping;
+
+impl CanvasTool for Tipping {
+    fn hover(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        cx.tip(TIP);
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Follow command")
+    }
+}
+
+/// Guards the host's tip rule: the tool answers only when the pointer moves, so the host must keep its tip while the
+/// pointer rests through the tooltip delay, and drop it at a press.
+#[trial]
+fn a_hovering_tools_tip_shows_at_the_pointer_and_a_press_hides_it() {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let tool = RefCell::new(Tipping);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().tip.is_some());
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    let tip = fixture.texts().iter().find(|run| run.text == TIP).map(|run| run.rect);
+    let tip = tip.expect("the tip shows once the pointer rested for the tooltip delay");
+    assert!(tip.min.y >= centre.y, "the tip hangs below the pointer: {tip:?} for {centre:?}");
+    assert!(reported.get(), "the host reports the standing tip");
+    fixture.frame(vec![pointer::press(centre)]);
+    fixture.settle();
+    assert!(!fixture.texts().iter().any(|run| run.text == TIP), "a press hides the tip");
+    assert!(!reported.get(), "a press drops the tip");
+}
+
+/// After a handled press comes up, a pointer that rests where it was gets the tool's tip again, as the WordCraft
+/// canvas showed a link's tip again after a Ctrl+click on it. The press drops the tip and the tool answers only on a
+/// hover, so the host hovers once at the resting pointer when a press ends. Before that, a still pointer never got
+/// the tip back.
+#[trial]
+fn a_pointer_resting_after_a_handled_press_gets_the_tip_again() {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let tool = RefCell::new(Tipping);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().tip.is_some());
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(reported.get(), "the hover asks for the tip");
+    fixture.frame(vec![pointer::press(centre)]);
+    fixture.settle();
+    assert!(!reported.get(), "the press drops the tip");
+    fixture.frame(vec![pointer::release(centre)]);
+    fixture.settle();
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(reported.get(), "the host reports the tip again with the pointer resting where the press was");
+    assert!(fixture.texts().iter().any(|run| run.text == TIP), "the tip shows again once the pointer rested for the tooltip delay");
 }
 
 /// A tool that keeps the points of its gesture: the press and every drag.

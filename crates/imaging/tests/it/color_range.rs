@@ -2,14 +2,20 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use craft_behavior::PixelSize;
-use craft_imaging::ui::color_range::{ColorRangeDialog, ColorRangeSelect, ColorRangeValue, SampleSign, SampleTool};
+use craft_host::target::Os;
+use craft_imaging::selection::PreviewMode;
+use craft_imaging::ui::color_range::{ColorRangeDialog, ColorRangeSelect, ColorRangeValue, HostedColorRange, SampleSign, SampleTool};
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::contract::Bind;
+use craft_ui::contract::{Bind, Role};
+use craft_ui::dialog::DialogHost;
+use craft_ui::fonts::{I18nScripts, UiFonts};
 use craft_ui::primitives::Revision;
+use craft_ui::runtime::env::Scale;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Color32, ColorImage, Modifiers, Pos2, Rect, vec2};
+use egui::{Color32, ColorImage, Modifiers, Pos2, Rect, Vec2, vec2};
 
 /// The proxy: 40 × 20 pixels shown in a square well, so the picture is letterboxed and the well has room off it. It is
 /// large enough that the fitted zoom stays inside the pane's zoom range, so the picture spans the well's width.
@@ -158,4 +164,78 @@ fn preview_presses_and_drags_sample_add_and_subtract_in_order() {
     fixture.click_at(cell(well, 5.0, 2.0));
     fixture.settle();
     assert_eq!(samples().order.len(), count);
+}
+
+/// Open the same form used by Select > Color Range with a ready image and mask.
+fn hosted_fixture(room: Vec2) -> (Rc<RefCell<DialogHost>>, Fixture) {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    UiFonts::new(&I18nScripts).install(fixture.ctx());
+    fixture.os(Os::Windows).scale(Scale::new(1.25)).room(room);
+    let mut dialog = HostedColorRange::new("Color Range", ColorRangeValue::default(), DOCUMENT);
+    dialog.set_preview(Some(Arc::new(Flat)), Some(Arc::new(Flat)), SCALE, None);
+    host.borrow_mut().open(dialog);
+    fixture.settle().idle(10);
+    (host, fixture)
+}
+
+#[trial]
+fn color_range_15558_hosted_controls_fit_at_125_percent() {
+    for room in [vec2(1600.0, 1000.0), vec2(1280.0, 800.0)] {
+        let (_, fixture) = hosted_fixture(room);
+        let dialog = fixture.by_role(Role::DIALOG)[0].rect;
+        for (label, role) in [
+            ("Eyedropper", Role::RADIO_BUTTON),
+            ("Add to Sample", Role::RADIO_BUTTON),
+            ("Subtract from Sample", Role::RADIO_BUTTON),
+            ("Invert", Role::CHECK_BOX),
+            ("Selection", Role::RADIO_BUTTON),
+            ("Image", Role::RADIO_BUTTON),
+            ("Selection Preview", Role::COMBO_BOX),
+        ] {
+            let target = fixture
+                .by_role(role)
+                .into_iter()
+                .find(|target| fixture.tree().name_of(target.node) == Some(label))
+                .unwrap_or_else(|| panic!("missing {label} at {room:?}"));
+            assert!(target.rect.width() > 0.0 && dialog.contains_rect(target.rect), "{label}: {:?} outside {dialog:?} at {room:?}", target.rect);
+        }
+        let hint = fixture.texts().iter().find(|text| text.text == "Sample: foreground color").expect("sample source hint");
+        assert!(hint.clip.contains_rect(hint.rect), "sample source hint is clipped");
+    }
+}
+
+#[trial]
+fn color_range_15558_hosted_controls_respond_to_pointer() {
+    let (host, mut fixture) = hosted_fixture(vec2(1280.0, 800.0));
+    let well = fixture.by_label("Color Range preview").expect("preview pane").rect;
+    let click = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).expect(label);
+        fixture.click_at(target.center()).settle();
+    };
+    let tool = || host.borrow_mut().get_mut::<HostedColorRange>().expect("open").tool();
+    let samples = || host.borrow_mut().get_mut::<HostedColorRange>().expect("open").value().samples.clone();
+
+    fixture.click_at(cell(well, 2.0, 3.0)).settle();
+    click(&mut fixture, "Add to Sample");
+    assert_eq!(tool(), SampleTool::Add);
+    fixture.click_at(cell(well, 5.0, 3.0)).settle();
+    assert_eq!(samples().add, [[12.0, 17.0], [27.0, 17.0]]);
+    click(&mut fixture, "Subtract from Sample");
+    assert_eq!(tool(), SampleTool::Subtract);
+    fixture.click_at(cell(well, 7.0, 3.0)).settle();
+    assert_eq!(samples().subtract, [[37.0, 17.0]]);
+    click(&mut fixture, "Eyedropper");
+    assert_eq!(tool(), SampleTool::Sample);
+
+    click(&mut fixture, "Invert");
+    click(&mut fixture, "Image");
+    click(&mut fixture, "Selection Preview");
+    click(&mut fixture, "Black Matte");
+    let mut host = host.borrow_mut();
+    let dialog = host.get_mut::<HostedColorRange>().expect("open after pointer input");
+    assert!(dialog.value().invert);
+    assert!(dialog.shows_image());
+    assert_eq!(dialog.preview_mode(), PreviewMode::BlackMatte);
 }

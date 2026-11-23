@@ -4,27 +4,31 @@ use super::drag::Drags;
 use super::geometry::bar_track;
 use super::header::HeaderMemory;
 use super::members::Member;
-use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, key_hash, section_part};
+use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, Source, key_hash, section_part};
 use super::{request, rows};
 use crate::contract::ValueOf;
 use crate::contract::collection::{
-    CollectionEvent, ColumnLayout, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
+    CollectionEvent, CollectionProps, ColumnLayout, ContextMenuRequest, DropAt, Gestures, HoverLead, ItemsOut, OpenChange, PendingDrop, Rename,
+    RowState, ShownRow,
 };
-use crate::contract::cx::{BodyCx, Pointer as _};
+use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
 use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, PartsCx, Props, Show as _, Sizing};
-use crate::primitives::{HiddenContent, ScrollBar, SurfaceSlot};
-use crate::runtime::access::{self, Role, SetPosition};
+use crate::primitives::{AutoScrollMark, HiddenContent, ScrollBar, SurfaceSlot};
+use crate::runtime::access::{self, Role};
 use crate::runtime::egui::{alloc, areas, child, response};
 use crate::runtime::env::WheelScope;
 use crate::runtime::env::{AppValues, ArenaId, Env, ItemFacts, ThemeScope};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::{focus, keys, layout_memory, lazy, overlay, wheel};
-use crate::style::{ComponentStyle as _, StyleCx, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
+use crate::style::auto_scroll_mark_look;
+use crate::style::{ComponentStyle as _, SurfaceKind, UiTokens, scroll_bar_look, surface_style};
 use craft_behavior::{
-    Axis, CancelReason, EditEvent, Intent, ItemLayout, Mixed, Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
+    Axis, Buttons, CancelReason, EditEvent, Intent, ItemLayout, MiddleButton, MiddleScroll, Mixed, MoveMods, NavMove, PointerButton, PressPhase,
+    Proposal, ScrollPos, ScrollSpan, SelectionModel, Sense, WheelRoom, WheelTaker,
 };
+use craft_keymap::Chord;
 use egui::{Context, Id, Pos2, Rect, Ui, UiBuilder, Vec2};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -55,7 +59,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn key_role(&self, comp: &C) -> craft_behavior::KeyRole {
         let props = comp.items();
         craft_behavior::KeyRole::new()
-            .reorderable(props.reorder.is_some())
+            .reorderable(props.reorder.map(|rule| rule.keys))
+            .reorder_axis(props.overflow)
             .pages(props.pages)
             .rename(props.rename)
             .type_ahead(props.type_ahead)
@@ -80,17 +85,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn read(&mut self, comp: &mut C, stage: &mut MemoryStage, id: Id, env: &Env) {
         let ctx = stage.ctx().clone();
         let natural = comp.items().natural_height;
-        // The scroll along the rows' overflow axis belongs to the collection: a body that scrolls along it too is a
-        // second owner.
         let overflow = comp.items().overflow;
-        let shared = env.scroll_owner.is_some() && if overflow == Axis::X { env.unbounded.0 } else { env.unbounded.1 };
         self.capped = comp.items().max_rows.is_some();
         debug_assert!(
-            !shared || natural || self.capped,
+            !shares_scroll(comp.items(), env) || natural || self.capped,
             "a collection owns its scroll: show it outside a body that scrolls along its rows, cap its rows, or give it the natural height (16.3)"
         );
-        // A capped collection is bounded by its rows, so it scrolls them inside a scrolling body too.
-        self.scrolls = self.capped || (!natural && !shared);
+        self.scrolls = scrolls_rows(comp.items(), env);
         self.own_wheel = crate::contract::Component::sense(comp).intersects(Sense::WHEELS);
         self.overflow = overflow;
         self.selection = match comp.selection() {
@@ -101,13 +102,23 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             None => stage.session::<Held<C::Selection>>(sub(id, "selection")).0.clone(),
         };
         self.selection_at_read = self.selection.clone();
+        self.renaming = stage.session::<Renaming<C::Key>>(sub(id, "rename")).clone();
+        // The pass walks the collection's view of the source. The view keeps the row whose rename runs, or is asked
+        // for, whether or not it matches, so the row is named in place.
+        let kept = self.renaming.key.clone().or_else(|| request::peek_rename::<C::Key>(&ctx, id));
+        if let Source::Given(given) = self.source
+            && let Some(view) = comp.filtered(given, env, kept.as_ref())
+        {
+            self.source = Source::Filtered(view);
+        }
         self.previous = stage.session::<LastLayout<C::ItemLayout>>(sub(id, "item_layout")).0.take();
         let bound = comp.column_layout().map(|bind| match bind.get() {
             Some(Mixed::Same(layout)) => layout,
             _ => ColumnLayout::default(),
         });
         self.column_layout_at_read = bound.clone();
-        self.header.read(stage, id, comp.items(), bound);
+        let hosted: Vec<_> = comp.items().columns.iter().map(|spec| spec.key.clone()).filter(|key| comp.hosts_header(key)).collect();
+        self.header.read(stage, id, comp.items(), bound, hosted);
         self.drags = stage.session::<Drags<C::Key>>(sub(id, "drags")).clone();
         self.lead = stage.session::<Lead<C::Key>>(sub(id, "lead")).clone();
         // A collection in a layer starts from `lead_on_open` at every opening of the layer, not only the first.
@@ -127,7 +138,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if self.lead.key.is_none() {
             self.lead.key = self.selection.lead().filter(|key| self.index_of(key).is_some()).cloned();
         }
-        self.renaming = stage.session::<Renaming<C::Key>>(sub(id, "rename")).clone();
+        (self.lead_at_read, self.renaming_at_read) = (self.lead.key.clone(), self.renaming.key.clone());
         let scrolled = match comp.scroll() {
             Some(bind) => match bind.get() {
                 Some(Mixed::Same(pos)) => Scrolled { y: pos.y, x: pos.x, anchor: None },
@@ -164,102 +175,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     fn measured_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Vec2 {
         let id = cx.core.id;
         self.record_largest(comp, at, id);
-        self.extent(comp, at.ui, at.at, id, at.scx)
+        self.items_extent(comp, at, id)
     }
 
     fn pass_extent(&mut self, comp: &mut C, at: &Measuring<'_, '_>, _style: &C::Style, _shown: Option<Arc<ValueOf<C>>>) -> Vec2 {
         let id = at.resolved.id;
         self.record_largest(comp, at, id);
-        self.extent(comp, at.ui, at.at, id, at.scx)
-    }
-
-    fn extent(&mut self, comp: &C, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
-        let room = match at {
-            ShowAt::Rect(rect) => rect.size(),
-            ShowAt::Flow => crate::layout::flow_room(ui),
-        };
-        self.room = room;
-        self.indent_step = scx.control().icon;
-        let env = Env::of(ui);
-        let room = Self::inner_room(comp, scx.tokens, room);
-        // Where the enclosing body does not give the width, the collection takes its width from its content, whether
-        // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
-        // across the width the column settles on.
-        let held = env.content_column || crate::layout::in_grid_content_column(ui);
-        self.from_content = (!env.gives_width() && (crate::runtime::measure::active(ui.ctx()) || !held), env.content.1);
-        self.header.measure(scx);
-        self.header.read_content(ui.ctx(), id);
-        let bounded = room.x.is_finite();
-        let item = comp.measures_items().then(|| layout_memory::measured(ui.ctx(), sub(id, "largest")).map(|measured| measured.took)).flatten();
-        // Under a body that does not give the width, the measuring run lays the rows out at the width the collection
-        // asks for, so the height it reports is the one it has at that width (a grid's rows at its columns).
-        let from_content = self.from_content.0 && !self.content_sized(comp);
-        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, ui, id, room, item, scx));
-        let width = match (bounded, self.content_sized(comp)) {
-            (true, false) => asked.unwrap_or(room.x),
-            // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
-            (_, _) if self.source.is_empty() => {
-                if bounded {
-                    room.x
-                } else {
-                    0.0
-                }
-            }
-            // An unbounded room (a horizontally scrolling body) takes the widest row, as a content-sized collection does.
-            (_, _) => {
-                let floor = env.get::<crate::contract::overlay::LayerFloor>().0;
-                let widest = layout_memory::measured(ui.ctx(), sub(id, "largest")).map_or(0.0, |measured| measured.took.x);
-                // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
-                // the widest row it would get.
-                let columns = if self.header.has_columns() { self.header.content_width() } else { 0.0 };
-                widest.max(columns).max(comp.ideal_width(item, scx)).max(floor).min(room.x)
-            }
-        };
-        let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
-        let mut layout = comp.item_layout_from(previous, self.source, width, item, scx);
-        if self.header.has_columns() {
-            layout.set_columns(&self.header.columns(width));
-        }
-        let ctx = ui.ctx();
-        rows::measured_heights(ctx, id, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
-        if layout.auto_widths() {
-            rows::measured_widths(ctx, id, |width| {
-                for at in 0..self.source.len() {
-                    if let Some((ideal, min)) = width(rows::measured_width_id(id, &self.source.key(at))) {
-                        layout.set_width(at, ideal, min);
-                    }
-                }
-            });
-        }
-        let content = layout.content_size();
-        self.content = Vec2::new(content.x as f32, content.y as f32);
-        let props = comp.items();
-        let row = props.row_height.of(scx);
-        let floor = rows_height(&layout, self.source.len(), props.min_rows, row);
-        let cap = props.max_rows.map(|rows| rows_height(&layout, self.source.len(), rows, row).max(floor));
-        self.columns = layout.column_count() as u32;
-        self.layout = Some(Arc::new(layout));
-        let empty = if self.source.is_empty() { comp.empty_height(width, ui, scx) } else { 0.0 };
-        let rows = self.content.y.max(empty).max(floor);
-        let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
-        if !(self.scrolls && room.y.is_finite()) {
-            let wide = if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx)) } else { self.content.x };
-            return Vec2::new(wide, height);
-        }
-        // A scrolling collection in a bounded room: `Content` takes its rows up to the room, `Fill` the room.
-        let wide = if self.content_sized(comp) {
-            self.content.x
-        } else if from_content {
-            asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx))
-        } else {
-            0.0
-        };
-        match comp.props(Internal::new()).sizing {
-            // Under a body sized from its content along the height, the rows take up to the room, as a content-sized
-            // collection's do: the body has no room of its own to hand it.
-            Sizing::Fill => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
-            Sizing::Content | Sizing::FillWidth => Vec2::new(wide, height.min(room.y)),
-        }
+        self.items_extent(comp, at, id)
     }
 
     fn pad(&self, comp: &C, tokens: &UiTokens) -> f32 {
@@ -275,8 +197,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
-            (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
-            (true, Sizing::Fill) => size.y.min(self.room.y),
+            (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
+            (true, Sizing::Fill | Sizing::FillHeight) => size.y.min(self.room.y),
             (true, Sizing::Content | Sizing::FillWidth) => size.y.min(self.room.y),
             (false, _) => size.y,
         };
@@ -341,28 +263,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     }
 
     fn updated(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
-        use crate::contract::Pointer as _;
         let rect = self.rows_rect(cx);
         let view = rect.height();
         let rtl = cx.core.flow.is_rtl();
         self.xf = comp.props(Internal::new()).transform.map(|zoom| areas::body_map(rect.min, zoom.scale, zoom.offset));
-        if let Some(range) = cx.scroll_moved(SCROLL) {
-            self.offset = range.start;
-        }
-        if self.scrolls {
-            // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
-            let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
-            let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx);
-            if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
-                // The rows scroll along y only: the reveal moves them along it and passes the rest on.
-                let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
-                let (by, shown) = crate::contract::steps::reveal_move(asked, along);
-                self.offset += f64::from(by.y);
-                if !quiet {
-                    crate::contract::Focus::reveal(cx, shown);
-                }
-            }
-        }
+        let (offset, unpaged) = scroll_rows(cx.core, rect, self.scrolls, self.offset, self.max_offset(view));
+        self.offset = offset;
+        let swallowed = self.scrolls && self.middle_scroll(comp, cx);
         self.offset = self.offset.clamp(0.0, self.max_offset(view));
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
@@ -375,29 +282,53 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key));
         let props = comp.items().clone();
+        if cx.core.resolved.enabled
+            && props.deletable
+            && props.delete_target == crate::contract::DeleteTarget::FocusOrHover
+            && !cx.core.memory.is_peek()
+            && !crate::runtime::measure::active(&cx.core.ctx)
+        {
+            crate::runtime::keys::register_hover_delete(&cx.core.ctx, cx.core.id);
+        }
         let Some(layout) = self.layout.take() else { return };
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         let at = Placement { rect, offset, rtl };
         // A press lands on the rows the user saw: the offset of the last pass, before this pass's wheel share (8.3).
         let seen = Placement { offset: ScrollPos { x: self.offset_x_at_read, y: self.offset_at_read }, ..at };
-        self.edge_step(cx);
-        self.press_step(comp, cx, &props, &layout, seen);
-        if props.lead_follows_hover {
-            self.hover_lead(comp, cx, &layout, seen);
+        if !swallowed {
+            self.edge_step(cx);
+            self.press_step(comp, cx, &props, &layout, seen);
+            if props.select_under_drag {
+                self.drag_select(comp, cx, &layout, seen);
+            }
+            self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
+            self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
         }
-        if props.select_under_drag {
-            self.drag_select(comp, cx, &layout, seen);
+        if props.hover_lead != HoverLead::Off {
+            self.hover_lead(comp, cx, &layout, seen, props.hover_lead);
         }
-        self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
-        self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
+        // The moves a control in the rows left that do not page them (an arrow a region's fallback collection takes)
+        // navigate the rows as the collection's own keys do.
+        for (mv, mods) in unpaged {
+            cx.core.intents.push(craft_behavior::Intent::Move(mv, mods));
+        }
         self.navigate(comp, cx, &layout, view, header_held);
         self.switch_page(comp, cx, &props, &layout);
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key)).or(lead_at);
+        if matches!(props.select, crate::contract::SelectMode::Multi | crate::contract::SelectMode::Cells)
+            && !header_held
+            && self.renaming.key.is_none()
+            && cx.core.intents.untaken(&Intent::Cancel)
+            && !self.placed().rows().is_empty()
+            && cx.core.intents.take(Intent::Cancel)
+        {
+            self.change(craft_behavior::SelectionChange::Clear);
+        }
         self.intent_actions(comp, cx, &props, lead_at, header_held);
         self.context_key(cx, &layout, at, lead_at);
         self.delete_key(cx, &props, lead_at);
         self.toggle_by_access(cx, &layout, at);
-        self.node_by_access(comp, cx, &layout, at);
+        self.node_by_access(comp, cx, &props, &layout, at);
         self.reorder_and_rename(comp, cx, &props, lead_at);
         self.requested_rename(comp, cx, &props, &layout);
         self.requested_reveal(comp, &layout);
@@ -437,34 +368,16 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         let rtl = env.direction.is_rtl();
         let node = matches!(C::ROLE, Role::Node(_));
-        let (child_size, child_glyphs) = (comp.props(Internal::new()).child_size, comp.props(Internal::new()).child_glyphs);
         // The rows sit on the surface the collection paints, else on the one the collection sits on.
         let own = surface.or_else(|| cx.style.surface().and_then(|look| look.kind_in(&cx.core.state)));
-        let base_env = env.derive(|scoped| {
-            scoped.extend_values(values);
-            scoped.arena = Some(ArenaId::new(id));
-            scoped.size = child_size.unwrap_or(cx.core.resolved.size);
-            if let Some(role) = child_glyphs {
-                scoped.glyphs = role;
-            }
-            scoped.surface = SurfaceKind::under(own, scoped.surface);
-            // The rows lay out their own content: no line or first line of the body around reaches them.
-            scoped.row_line = None;
-            scoped.first_line = None;
-        });
-        self.place_reveal(comp, ui, (id, cx.core.env, &base_env), &mut layout, rect);
+        let base_env = Self::rows_env(comp, env, id, cx.core.resolved.size, own).derive(|scoped| scoped.extend_values(values));
+        let known = self.known(comp, false);
+        let known_at_read = self.known(comp, true);
+        let revealed = self.place_reveal(comp, ui, (id, cx.core.env, &base_env), (&mut layout, &known), rect);
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
-            let size = self.content.max(rect.size());
-            let left = if rtl { rect.max.x + self.offset_x as f32 - size.x } else { rect.min.x - self.offset_x as f32 };
-            let content = Rect::from_min_size(Pos2::new(left, rect.min.y - self.offset as f32), size);
-            crate::runtime::egui::widgets::note_scroll_region(&ctx, rect.intersect(ui.clip_rect()), content);
-            // The header row scrolls sideways with the rows.
-            if let Some(header) = self.header.view() {
-                let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
-                crate::runtime::egui::widgets::note_scroll_region(&ctx, header.intersect(ui.clip_rect()), row);
-            }
+            note_scroll_regions(ui, rect, self.content, offset, rtl, self.header.view());
         }
         let sheet = Self::selects_cells(comp);
         let columns: Vec<u64> = match layout.grid() {
@@ -478,7 +391,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(scope) = command_scope {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
-        self.header.paint(ui, cx, env, id, rtl);
+        self.header.paint(ui, cx, comp, env, id, rtl);
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
         focus::registration::record_tree(&ctx, id, tree);
@@ -486,12 +399,22 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let lead = self.lead.key.clone();
         let mut lead_child = None;
         let striped = comp.items().striped;
-        let current: Option<C::Key> = comp.items().current.as_deref().and_then(|key| key.downcast_ref::<C::Key>()).cloned();
         let mut stripe: Option<(usize, usize)> = None;
         let transform = comp.props(Internal::new()).transform;
         let (parent, clip) = (ui.layer_id(), rect.intersect(ui.clip_rect()));
         let forward = areas::Forward { root: id, sense: response::to_egui(cx.core.root_sense), rect: cx.core.rect.intersect(ui.clip_rect()) };
-        let placed = self.selection.placed(self.source);
+        let placed = known.placed.clone();
+        let tolerance = craft_behavior::layout_memory::measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
+        // What this pass measured of the rows it builds, before any of them is built: (width and height, widths).
+        let fresh: Vec<(Option<Vec2>, Option<Vec2>)> = rows::measured_this_pass(&ctx, id, |fresh| {
+            order
+                .iter()
+                .map(|&at| {
+                    let key = self.source.key(at);
+                    (fresh(rows::measured_id(id, &key)), fresh(rows::measured_width_id(id, &key)))
+                })
+                .collect()
+        });
         let mut row_groups = Vec::with_capacity(order.len());
         let mut shown_rows: Vec<ShownRow<C::Key>> = Vec::with_capacity(order.len());
         // A section row the component declares as its own `section_part` reports its own node; any other one is the
@@ -508,6 +431,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let outcome = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id));
         let hover_at = ctx.pointer_latest_pos().filter(|_| outcome.hover.any());
         let over_at = ctx.pointer_latest_pos().filter(|_| outcome.contains);
+        self.hovered = None;
         let menu_open = self.drags.menu.is_some() && crate::contract::overlay::container_open::opened_from(&ctx, cx.core.id);
         // A double click on a column's edge fits the column to its widest cell among the rows built here, in view.
         let fit = self.header.fit.as_ref().map(|(column, _)| column.clone());
@@ -522,7 +446,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 (members_ui, installed)
             });
             let mut members = Vec::new();
-            for at in order.into_iter() {
+            for (place, at) in order.into_iter().enumerate() {
                 if self.source.section_stop(at) {
                     continue;
                 }
@@ -531,45 +455,35 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let row_group = rows::row_group(item_id);
                 row_groups.push(row_group);
                 let mut row = self.screen(&layout, rect, at, offset, rtl);
+                let odd = striped && {
+                    let run = self.stripe_run(stripe, at);
+                    stripe = Some((at, run));
+                    run.is_multiple_of(2) && !self.source.is_section(at)
+                };
+                let (known_state, mut flags) = self.known_row(at, &known, odd);
+                // A row step 5 measured whose measured state this pass's input changed since is measured again.
+                let restated = !revealed.contains(&at) && self.known_row(at, &known_at_read, odd).0 != known_state;
                 let state = RowState {
-                    selected: placed.holds_row(at),
-                    lead: lead.as_ref() == Some(&key),
-                    renaming: self.renaming.key.as_ref() == Some(&key),
-                    striped: striped && {
-                        let run = self.stripe_run(stripe, at);
-                        stripe = Some((at, run));
-                        run.is_multiple_of(2) && !self.source.is_section(at)
-                    },
                     dragging: self.drags.grabbed.as_ref() == Some(&key),
                     drop_target: matches!(&self.drags.pending, Some(PendingDrop::Drop(DropAt::Onto(over))) if *over == key),
-                    current: current.as_ref() == Some(&key),
-                    open: self.source.has_children(at) && self.source.open(at),
                     hovered: hover_at.is_some_and(|pos| row.contains(pos)),
                     pointer_over: over_at.is_some_and(|pos| row.contains(pos)),
                     pressed: self.pressed.as_ref().filter(|(held, _)| *held == at).map(|(_, pressed)| pressed.clone()),
-                    menu_open: self.drags.menu.as_ref() == Some(&key) && menu_open,
-                    sub_row: self.source.sub_row(at),
-                    continued: at + 1 < len && self.source.sub_row(at + 1).is_some(),
-                    last: at + 1 == len,
+                    menu_open: self.drags.menu.as_ref().is_some_and(|request| request.key == key) && menu_open,
                     activated_by_key: self.keyed_activation.as_ref() == Some(&key),
-                    ..RowState::default()
+                    ..known_state
                 };
-                let mut flags = crate::style::Flags::empty();
-                flags.set(crate::style::Flags::SELECTED, state.selected);
+                // A drag's pointer is over the drop place, not a row the app reads as hovered.
+                if state.hovered && self.drags.grabbed.is_none() {
+                    self.hovered = Some(key.clone());
+                }
                 let child = if state.lead { rows::child_focus(&ctx, row_group) } else { None };
                 lead_child = lead_child.or(child);
                 // A list that never takes key focus (a popup list: the host forwards its keys) shows its lead always.
                 flags.set(crate::style::Flags::LEAD, state.lead && (focused || child.is_some() || !comp.items().focus_on_press));
-                flags.set(crate::style::Flags::EXPANDED, state.open);
                 flags.set(crate::style::Flags::DRAGGING, state.dragging);
                 flags.set(crate::style::Flags::DROP_TARGET, state.drop_target);
-                flags.set(crate::style::Flags::CURRENT, state.current);
-                let mut position = SetPosition::new(at - self.source.section_stops_before(at))
-                    .of(len - self.source.section_stops_before(len))
-                    .columns(columns.len());
-                if tree {
-                    position = position.level(self.source.depth(at) + 1);
-                }
+                let position = self.row_position(at, columns.len(), tree);
                 let mut cells = Vec::new();
                 layout.cells(at, offset, &mut cells);
                 for (_, cell) in &mut cells {
@@ -601,6 +515,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     memory: &mut *cx.core.memory,
                 };
                 icx.memory.claim(icx.id);
+                #[cfg(feature = "testing")]
+                crate::runtime::measure::count_row_build(&ctx, item_id);
                 let item = (self.item)(&key, &mut icx);
                 let mut item = comp.dress(item, &state);
                 let tip = icx.tip.take();
@@ -640,11 +556,29 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 };
                 // A row is a run or a member, so one of the two is there.
                 if let Some((measure_ui, _)) = row_ui.as_ref().or(members_ui.as_ref()) {
-                    if layout.is_auto(at) && !self.measured_for_reveal.contains(&at) {
+                    // A row this pass measured is placed by that measure. A row it did not measure (one the reveal's
+                    // scroll or a kept lead brings in) is measured here. A restated row is measured again with its new
+                    // state; a size other than the one the pass placed by asks for the frame's discard pass, so the
+                    // rerun places it from step 5.
+                    let (measured_size, measured_widths) = fresh[place];
+                    if layout.auto_widths() && (measured_widths.is_none() || restated) {
+                        let widths = Vec2::new(item.measure_in(measure_ui, Proposal::Ideal).x, item.measure_in(measure_ui, Proposal::Min).x);
+                        rows::record_measure(&ctx, id, rows::measured_width_id(id, &key), widths);
+                        if measured_widths.is_some_and(|before| (before - widths).abs().max_elem() > tolerance) {
+                            layout_memory::ask_discard(&ctx);
+                        }
+                        Arc::make_mut(&mut layout).set_width(at, widths.x, widths.y);
+                        row = self.screen(&layout, rect, at, offset, rtl);
+                    }
+                    let measured_size = measured_size.filter(|size| (size.x - row.width()).abs() <= tolerance);
+                    if layout.is_auto(at) && (measured_size.is_none() || restated) {
                         let measured = item.measure_in(measure_ui, Proposal::Width(row.width())).y;
                         #[cfg(feature = "testing")]
                         crate::runtime::measure::count_row_measure(&ctx, rows::measured_id(id, &key));
                         rows::record_measure(&ctx, id, rows::measured_id(id, &key), Vec2::new(row.width(), measured));
+                        if measured_size.is_some_and(|before| (before.y - measured).abs() > tolerance) {
+                            layout_memory::ask_discard(&ctx);
+                        }
                         if measured != row.height() {
                             Arc::make_mut(&mut layout).set_height(at, measured);
                             row = self.screen(&layout, rect, at, offset, rtl);
@@ -656,15 +590,10 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                             fit_widest = fit_widest.max(*width);
                         }
                     }
-                    if layout.auto_widths() {
-                        let ideal = item.measure_in(measure_ui, Proposal::Ideal).x;
-                        let min = item.measure_in(measure_ui, Proposal::Min).x;
-                        rows::record_measure(&ctx, id, rows::measured_width_id(id, &key), Vec2::new(ideal, min));
-                        Arc::make_mut(&mut layout).set_width(at, ideal, min);
-                        row = self.screen(&layout, rect, at, offset, rtl);
-                    }
                 }
-                shown_rows.push(ShownRow::new(key.clone(), row, shown_cells.clone()));
+                // A member has no node of its own: it reports as a sub-node of the collection's.
+                let row_node = if C::MEMBERS { super::members::lead_node(id, &key) } else { item_id };
+                shown_rows.push(ShownRow::new(key.clone(), row_node, row, shown_cells.clone()).with_hover(state.hovered));
                 let Some((mut row_ui, installed)) = row_ui else {
                     debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
                     let shown = shown_rows.len() - 1;
@@ -725,7 +654,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let size = layout.content_size();
         self.content = Vec2::new(size.x as f32, size.y as f32);
         if self.scrolls && !ui.is_sizing_pass() && !crate::runtime::measure::active(&ctx) {
-            self.follow_anchor(comp, (&ctx, id), &layout, rect.size());
+            self.follow_anchor(comp, (&ctx, id), &layout, (rect, rtl));
         }
         if self.ended_rename {
             self.renaming = Renaming::default();
@@ -765,7 +694,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             // The rows blend into the surface they sit on.
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
-            ui.painter().extend(ScrollBar::fades(&look, rect, hidden, background));
+            ui.painter().extend(ScrollBar::fades(rect, hidden, background));
             if self.shows_bar(rect) {
                 let track = bar_track(rect, look.thickness, rtl);
                 let content = f64::from(self.content.y);
@@ -773,6 +702,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 let state = cx.core.scroll_bar_state(SCROLL);
                 ui.painter().extend(ScrollBar::shapes(&look, track, Axis::Y, rtl, &span, &state));
             }
+            middle_mark(ui, env, cx.core.memory.session::<MiddleScroll>(sub(id, "middle")), rect);
         }
         self.layout = Some(layout);
     }
@@ -818,6 +748,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             bind.apply(&EditEvent::set(Mixed::Same(before), self.header.layout().clone(), label, doc_key));
         }
         *cx.core.memory.session::<HeaderMemory>(sub(id, "columns")) = self.header.persist();
+        // The menu a request of this pass asks for opens after the collection shows, so it counts as open in this
+        // pass; an older request goes once no menu hung from the collection is open.
+        let asked = self.events.iter().any(|event| matches!(event, CollectionEvent::ContextMenu(_)));
+        if !asked && !crate::contract::overlay::container_open::opened_from(&cx.core.ctx, id) {
+            self.drags.menu = None;
+        }
         *cx.core.memory.session::<Drags<C::Key>>(sub(id, "drags")) = self.drags.clone();
         self.header.report(&cx.core.ctx, id, cx);
         *cx.core.memory.session::<Renaming<C::Key>>(sub(id, "rename")) = self.renaming.clone();
@@ -827,6 +763,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             shown: std::mem::take(&mut self.shown),
             activation_clicks: self.activation_clicks,
             pending_drop: self.drags.pending.clone(),
+            hovered: self.hovered.take(),
+            menu: self.drags.menu.clone().filter(|request| self.index_of(&request.key).is_some()),
+            auto_scrolling: cx.core.memory.session::<MiddleScroll>(sub(id, "middle")).active(),
         }));
         cx.core.visible_rows = self.visible.clone();
         cx.core.gestures = Gestures::of(comp.items());
@@ -834,31 +773,133 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 }
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
-    /// After the rows of the real run were built in a view of `view` (its size), at the offset the run read: the anchor
-    /// rule (`lazy::follow`) moves the offset by how far a change of the heights of rows before the anchor's row
-    /// moved it, and the pass runs again. A bound offset is the app's and keeps no anchor.
-    fn follow_anchor(&mut self, comp: &mut C, (ctx, id): (&Context, Id), layout: &C::ItemLayout, view: Vec2) {
+    /// After the rows of the real run were built in the rows rect `rect`, at the offset the run read: the anchor rule
+    /// (`lazy::follow`) moves the offset by how far a change of the heights of rows before the anchor's row moved it,
+    /// and the pass runs again. A bound offset is the app's and keeps no anchor.
+    ///
+    /// A zoom the collection takes in this pass names its own anchor once the anchor an earlier pass named is in place:
+    /// the row under `Collection::zoom_anchor`'s point, at its place in this pass's layout, the one the zoom changes
+    /// from. `settle` keeps it with the offset and the next pass, laid out at the new zoom, puts that row back where it
+    /// is now. While a zoom runs over several passes, the row that pass shifts back keeps its anchor.
+    fn follow_anchor(&mut self, comp: &mut C, (ctx, id): (&Context, Id), layout: &C::ItemLayout, (rect, rtl): (Rect, bool)) {
         if comp.scroll().is_some() {
             self.anchor = None;
             return;
         }
+        let view = rect.size();
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
+        let source = &*self.source;
         let named = self.anchor.map(|anchor| anchor.child);
-        let mut placed = lazy::Placed::default();
+        let mut placed = lazy::Placed::named(named, None, (false, true));
         // Frozen rows and section rows can stay put while the rows scroll: only a row that scrolls names the position.
         let first = layout.first_navigable();
-        for at in self.visible.clone().filter(|&at| at >= first && layout.shown(at) && !self.source.section_stop(at)) {
+        let scrolling = |at: usize| at >= first && layout.shown(at) && !source.section_stop(at);
+        // The zoom event the read step reported in this pass, the only place the pass keeps its point.
+        let wheel = self.events.iter().rev().find_map(|event| match event {
+            CollectionEvent::Zoom { about, .. } => Some(*about),
+            _ => None,
+        });
+        let zoom_at = comp.zoom_anchor(wheel);
+        for at in self.visible.clone().filter(|&at| scrolling(at)) {
             let row = layout.rect(at, offset);
             let item = sub(id, ("key", key_hash(&self.source.key(at))));
-            placed.note((named, (false, true)), item, Vec2::new(0.0, row.min.y), row.size());
+            placed.note(item, Vec2::new(0.0, row.min.y), row.size());
+        }
+        // A zoom reflows the rows, so the anchor's row may lie outside the rows this pass built: the layout still
+        // knows where it is.
+        if let (Some(child), None) = (named, placed.anchor) {
+            let away = (0..source.len()).filter(|&at| scrolling(at)).find(|&at| sub(id, ("key", key_hash(&source.key(at)))) == child);
+            if let Some(at) = away {
+                let row = layout.rect(at, offset);
+                placed.note(child, Vec2::new(0.0, row.min.y), row.size());
+            }
         }
         let moved = Vec2::new(0.0, (self.offset - self.offset_at_read) as f32);
         let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
+        // The anchor an earlier pass named is followed first: egui spreads one wheel notch's zoom over the passes of
+        // several frames, and each of them lays the rows out at the zoom the pass before it stepped to.
         if let Some(shift) = lazy::follow(&mut self.anchor, &placed, moved, view, room, (false, true)) {
             self.offset += f64::from(shift.y);
             log::debug!(target: crate::runtime::egui::sizing::RERUN_LOG, "collection {id:?} keeps its anchor row in place by {shift:?}");
             crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::Layout);
+            return;
         }
+        // With the earlier anchor in place, a zoom in this pass names the row under its point, at its place in this
+        // pass's layout.
+        if let Some(point) = zoom_at {
+            let point = self.xf.map_or(point, |map| map.to_layer(point));
+            let under = self.visible.clone().filter(|&at| scrolling(at)).find(|&at| self.screen(layout, rect, at, offset, rtl).contains(point));
+            if let Some(at) = under {
+                let child = sub(id, ("key", key_hash(&source.key(at))));
+                self.anchor = Some(lazy::Anchor { child, at: Vec2::new(0.0, layout.rect(at, offset).min.y) });
+            }
+        }
+    }
+}
+
+/// The latch's mark over the rows in `rect`, at the place the middle press latched; nothing while no latch is held.
+fn middle_mark(ui: &Ui, env: &Env, scroll: &MiddleScroll, rect: Rect) {
+    if let Some(anchor) = scroll.anchor() {
+        let mark = AutoScrollMark::shapes(&auto_scroll_mark_look(&env.tokens), anchor);
+        ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).extend(mark);
+    }
+}
+
+impl<C: Collection> ItemsHooks<'_, '_, C> {
+    /// Middle-button auto-scroll (`MiddleButton::AutoScroll`) on the rows' offset, once per pass of the real run. The
+    /// collection's own middle press latches it (the arena gave the press to the collection, so a layer over the rows
+    /// keeps its own); while latched, any middle press ends it, as do Escape, the window losing focus and a wheel
+    /// notch. The press itself picks no row (`press_step`). A rerun pass of a frame carries none of the frame's
+    /// presses, releases, keys or wheel (`runtime/pointer.rs`, `PointerFrame`) and its elapsed time is 0
+    /// (`frame::facts`), so it steps no time and counts no held pass: the offset moves once per frame. The latch, the
+    /// gesture state of one press, lives in the collection's session memory beside `Drags`.
+    fn middle_scroll(&mut self, comp: &C, cx: &mut Cx<'_, C>) -> bool {
+        let props = comp.items();
+        if props.middle_button != MiddleButton::AutoScroll {
+            return false;
+        }
+        let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
+        if cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx) {
+            return false;
+        }
+        let frame = crate::runtime::pointer::frame(&ctx);
+        let own_press = match cx.core.press.phase {
+            PressPhase::Down { start, .. } if start.button == PointerButton::Middle => Some(start.origin),
+            _ => None,
+        };
+        // A middle press moves no focus, so a claim of the collection's own would miss Escape: the latch captures it
+        // as a mode does (`keys::capture`), whichever component has focus.
+        let escape = Chord::plain(craft_keymap::Key::Escape);
+        let escaped = keys::take_claimed(&ctx, id, escape);
+        let blurred = crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| {
+            pointer.focus_lost || pointer.events.iter().any(|event| matches!(event, craft_behavior::PointerEvent::Gone))
+        });
+        let wheeled = frame.scroll != Vec2::ZERO || frame.zoom != 1.0;
+        let scroll = cx.core.memory.session::<MiddleScroll>(sub(id, "middle"));
+        let swallowed = scroll.swallows(cx.core.press.phase);
+        if scroll.active() && (escaped || blurred || wheeled) {
+            scroll.cancel();
+        } else if scroll.active() && !swallowed {
+            if let Some(press) = frame.press.filter(|press| press.button == PointerButton::Middle) {
+                scroll.press(press.origin, own_press.is_some());
+            }
+        } else if !swallowed && let Some(at) = own_press {
+            scroll.press(at, true);
+        }
+        if scroll.active() && frame.release == Some(PointerButton::Middle) {
+            scroll.release();
+        }
+        if !scroll.active() {
+            return swallowed;
+        }
+        let dt = crate::runtime::frame::facts(&ctx).elapsed.clamp(0.0, 0.1);
+        let held = frame.buttons.contains(Buttons::MIDDLE);
+        let by = frame.pos.map_or(Vec2::ZERO, |pointer| scroll.step(pointer, held, dt, props.invert_middle));
+        // `step` is negative with the pointer below the latch, as the wheel's share is: the rows scroll toward the end.
+        self.offset -= f64::from(by.y);
+        keys::capture(&ctx, id, escape);
+        crate::runtime::egui::repaint::request(&ctx);
+        swallowed
     }
 }
 
@@ -879,29 +920,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let editor = comp.rename_editor(row_ui, Bind::bound(&mut draft), label, &name);
         self.renaming.draft = draft;
         if let Some(editor) = editor {
-            if !self.renaming.focused {
-                focus::request_now(ctx, focus::FocusTarget::Id(editor.response.id));
-                self.renaming.focused = true;
-            }
             let gesture = self.renaming.gesture;
             let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
-            // The editor's gesture end, if the pass has one, ends the rename.
-            let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
-            let edited = !editor.events.is_empty();
-            if end.is_some() {
-                self.refocus = focus::is_focused(ctx, editor.response.id);
-            }
-            // The editor claims Escape for the whole rename, as a text part with a draft does: Escape does not leave the
-            // row. One the editor leaves untaken (it holds no draft yet) cancels the rename.
-            keys::hold_escape(ctx, editor.response.id);
-            let escaped = !edited && focus::is_focused(ctx, editor.response.id) && {
-                let mut intents = keys::intents_of(ctx, Some(editor.response.id), rtl);
-                let left = intents.take(Intent::Cancel);
-                keys::settle(ctx, Some(editor.response.id), &intents);
-                left
-            };
+            let (end, escaped) = rename_input(ctx, &editor, rtl, &mut self.renaming.focused, &mut self.refocus);
             match end {
-                None if edited => {}
+                None if !editor.events.is_empty() => {}
                 None if escaped => {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Escape, Some(before))));
                     self.ended_rename = true;
@@ -945,12 +968,211 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 }
 
+/// Apply the collection's wheel displacement, the page and end moves a descendant left untaken and any reveal left by
+/// a descendant. Returns the offset and the moves addressed to the collection that did not page its rows, in order.
+fn scroll_rows(core: &mut CxCore<'_>, rect: Rect, scrolls: bool, mut offset: f64, maximum: f64) -> (f64, Vec<(NavMove, MoveMods)>) {
+    if let Some(range) = core.scroll_moved(SCROLL) {
+        offset = range.start;
+    }
+    let (ctx, id) = (core.ctx.clone(), core.id);
+    let quiet = core.memory.is_peek() || crate::runtime::measure::active(&ctx);
+    // The moves are taken once, in the real run (peeked while measuring). A control in a row left a page or end move
+    // untaken: the collection, its rows' scroll owner, pages the rows.
+    let view = f64::from(rect.height());
+    // A region's fallback collection (F-116) takes every move its region passed it as its own keys, page and end
+    // included (L-319); the page and end moves a control in the rows left page the rows.
+    let (scrolled, mut unpaged) = crate::contract::steps::scroll_and_fallback_moves(&ctx, id, quiet);
+    for (mv, mods) in scrolled {
+        let span = ScrollSpan::new(0.0..maximum + view, offset..offset + view);
+        match craft_behavior::scroll::jump(&span, mv).filter(|_| scrolls) {
+            Some(range) => offset = range.start,
+            None => unpaged.push((mv, mods)),
+        }
+    }
+    if scrolls {
+        // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
+        if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
+            // The rows scroll along y only: the reveal moves them along it and passes the rest on.
+            let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
+            let (by, shown) = crate::contract::steps::reveal_move(asked, along);
+            offset += f64::from(by.y);
+            if !quiet {
+                crate::contract::Focus::reveal(core, shown);
+            }
+        }
+    }
+    (offset.clamp(0.0, maximum), unpaged)
+}
+
+/// Record the scrolled rows and their header at the same horizontal offset.
+fn note_scroll_regions(ui: &Ui, rect: Rect, content_size: Vec2, offset: ScrollPos, rtl: bool, header: Option<Rect>) {
+    let size = content_size.max(rect.size());
+    let left = if rtl { rect.max.x + offset.x as f32 - size.x } else { rect.min.x - offset.x as f32 };
+    let content = Rect::from_min_size(Pos2::new(left, rect.min.y - offset.y as f32), size);
+    crate::runtime::egui::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
+    // The header row scrolls sideways with the rows.
+    if let Some(header) = header {
+        let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
+        crate::runtime::egui::widgets::note_scroll_region(ui.ctx(), header.intersect(ui.clip_rect()), row);
+    }
+}
+
+/// Focus and Escape belong to the editor until the rename ends, independent of the row's key type.
+fn rename_input(
+    ctx: &Context,
+    editor: &crate::contract::EditResponse<String>,
+    rtl: bool,
+    focused: &mut bool,
+    refocus: &mut bool,
+) -> (Option<EditEvent<String>>, bool) {
+    let id = editor.response.id;
+    if !*focused {
+        focus::request_now(ctx, focus::FocusTarget::Id(id));
+        *focused = true;
+    }
+    let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
+    if end.is_some() {
+        *refocus = focus::is_focused(ctx, id);
+    }
+    keys::hold_escape(ctx, id);
+    let escaped = editor.events.is_empty() && focus::is_focused(ctx, id) && {
+        let mut intents = keys::intents_of(ctx, Some(id), rtl);
+        let left = intents.take(Intent::Cancel);
+        keys::settle(ctx, Some(id), &intents);
+        left
+    };
+    (end, escaped)
+}
+
 /// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the row height `row` for
 /// each one it does not have.
-fn rows_height(layout: &impl ItemLayout, len: usize, rows: u16, row: f32) -> f32 {
+pub(super) fn rows_height(layout: &impl ItemLayout, len: usize, rows: u16, row: f32) -> f32 {
     let rows = usize::from(rows);
     let laid = rows.min(len);
     let top = if len == 0 { 0.0 } else { layout.rect(0, ScrollPos::default()).min.y };
     let built = if laid == 0 { 0.0 } else { layout.rect(laid - 1, ScrollPos::default()).max.y - top };
     built + (rows - laid) as f32 * row
+}
+
+impl<C: Collection> ItemsHooks<'_, '_, C> {
+    /// Step 5 in both runs: what the rows take in the room `measuring` gives. The auto rows in view are measured
+    /// first (`measure_ahead`), so the collection takes its size, and places its rows, by this pass's measure.
+    fn items_extent(&mut self, comp: &C, measuring: &Measuring<'_, '_>, id: Id) -> Vec2 {
+        let (ui, scx) = (measuring.ui, measuring.scx);
+        let room = match measuring.at {
+            ShowAt::Rect(rect) => rect.size(),
+            ShowAt::Flow => crate::layout::flow_room(ui),
+        };
+        let env = Env::of(ui);
+        // The layout reads the component's own motion memory (`StyleCx::exiting`): an item leaving its source keeps
+        // its room until its exit ends.
+        let scx = &scx.measured_by(ui).owned_by(id, env.motion);
+        self.room = room;
+        self.indent_step = scx.control().icon;
+        let room = Self::inner_room(comp, scx.tokens, room);
+        // Where the enclosing body does not give the width, the collection takes its width from its content, whether
+        // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
+        // across the width the column settles on.
+        let held = env.content_column || crate::layout::in_grid_content_column(ui);
+        self.from_content = (!env.gives_width() && (crate::runtime::measure::active(ui.ctx()) || !held), env.content.1);
+        self.header.measure(scx);
+        self.header.read_content(ui.ctx(), id);
+        let bounded = room.x.is_finite();
+        let item = comp.measures_items().then(|| layout_memory::measured(ui.ctx(), sub(id, "largest")).map(|measured| measured.took)).flatten();
+        // Under a body that does not give the width, the measuring run lays the rows out at the width the collection
+        // asks for, so the height it reports is the one it has at that width (a grid's rows at its columns).
+        let from_content = self.from_content.0 && !self.content_sized(comp);
+        let asked = (from_content && !self.source.is_empty()).then(|| self.width_from_content(comp, ui, id, room, item, scx));
+        let width = match (bounded, self.content_sized(comp)) {
+            (true, false) => asked.unwrap_or(room.x),
+            // No rows: the empty state has no ideal width, so it takes the room, or none where the room is unbounded.
+            (_, _) if self.source.is_empty() => {
+                if bounded {
+                    room.x
+                } else {
+                    0.0
+                }
+            }
+            // An unbounded room (a horizontally scrolling body) takes the widest row, as a content-sized collection does.
+            (_, _) => {
+                let floor = env.get::<crate::contract::overlay::LayerFloor>().0;
+                let widest = layout_memory::measured(ui.ctx(), sub(id, "largest")).map_or(0.0, |measured| measured.took.x);
+                // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
+                // the widest row it would get.
+                let columns = if self.header.has_columns() { self.header.content_width() } else { 0.0 };
+                widest.max(columns).max(comp.ideal_width(item, self.source.len(), scx)).max(floor).min(room.x)
+            }
+        };
+        let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
+        let mut layout = comp.item_layout_from(previous, &*self.source, width, item, scx);
+        // An auto-width layout sets its items side by side: where its width comes from its rows, it takes their run at
+        // their ideal widths, not the widest one (a tab strip in a bar's unbounded row).
+        let run = (layout.auto_widths() && (asked.is_some() || !bounded) && !self.source.is_empty())
+            .then(|| self.run_in(ui, id, room).min(room.x))
+            .filter(|run| *run > width);
+        let (width, asked) = match run {
+            Some(run) => {
+                layout = comp.item_layout_from(Some(layout), &*self.source, run, item, scx);
+                (run, asked.map(|asked| asked.max(run)))
+            }
+            None => (width, asked),
+        };
+        if self.header.has_columns() {
+            layout.set_columns(&self.header.columns(width));
+        }
+        let ctx = ui.ctx();
+        rows::measured_heights(ctx, id, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
+        if layout.auto_widths() {
+            rows::measured_widths(ctx, id, |width| {
+                for at in 0..self.source.len() {
+                    if let Some((ideal, min)) = width(rows::measured_width_id(id, &self.source.key(at))) {
+                        layout.set_width(at, ideal, min);
+                    }
+                }
+            });
+        }
+        self.measure_ahead(comp, measuring, id, &mut layout, (width, room));
+        let content = layout.content_size();
+        self.content = Vec2::new(content.x as f32, content.y as f32);
+        let props = comp.items();
+        let row = props.row_height.of(scx);
+        let floor = rows_height(&layout, self.source.len(), props.min_rows, row);
+        let cap = props.max_rows.map(|rows| rows_height(&layout, self.source.len(), rows, row).max(floor));
+        self.columns = layout.column_count() as u32;
+        self.layout = Some(Arc::new(layout));
+        let empty = if self.source.is_empty() { comp.empty_height(width, ui, scx) } else { 0.0 };
+        let rows = self.content.y.max(empty).max(floor);
+        let height = cap.map_or(rows, |cap| rows.min(cap)) + self.header.height;
+        if !(self.scrolls && room.y.is_finite()) {
+            let wide = if from_content { asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx)) } else { self.content.x };
+            return Vec2::new(wide, height);
+        }
+        // A scrolling collection in a bounded room: `Content` takes its rows up to the room, `Fill` the room.
+        let wide = if self.content_sized(comp) {
+            self.content.x
+        } else if from_content {
+            asked.unwrap_or_else(|| self.width_from_content(comp, ui, id, room, item, scx))
+        } else {
+            0.0
+        };
+        match comp.props(Internal::new()).sizing {
+            // Under a body sized from its content along the height, the rows take up to the room, as a content-sized
+            // collection's do: the body has no room of its own to hand it.
+            Sizing::Fill | Sizing::FillHeight => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
+            Sizing::Content | Sizing::FillWidth => Vec2::new(wide, height.min(room.y)),
+        }
+    }
+}
+
+/// Whether a body around the collection, as its scope `env` names it, scrolls along the rows' overflow axis too: the
+/// scroll along that axis belongs to the collection, so such a body is a second owner.
+fn shares_scroll(props: &CollectionProps, env: &Env) -> bool {
+    env.scroll_owner.is_some() && if props.overflow == Axis::X { env.unbounded.0 } else { env.unbounded.1 }
+}
+
+/// Whether the collection scrolls its rows itself in the scope `env`: a capped one does, bounded by its rows, inside a
+/// scrolling body too; one with the natural height, or inside a body that scrolls along its rows, leaves the scroll to
+/// that body. Its rows' scope names it as their scroll owner then (`rows_env`).
+pub(super) fn scrolls_rows(props: &CollectionProps, env: &Env) -> bool {
+    props.max_rows.is_some() || (!props.natural_height && !shares_scroll(props, env))
 }

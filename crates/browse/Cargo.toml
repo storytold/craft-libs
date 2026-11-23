@@ -17,6 +17,7 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The browsing widgets (`craft_browse::ui`) and `FileThumbSource`.
 ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui", "dep:kurbo"]
@@ -37,6 +38,6 @@ kurbo = { workspace = true, optional = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 tempfile = "3"

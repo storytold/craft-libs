@@ -93,6 +93,47 @@ impl HitShape {
         }
     }
 
+    /// The shape moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: Vec2) -> Self {
+        let points = |points: &[Pos2]| points.iter().map(|point| *point + by).collect();
+        match self {
+            HitShape::Rect(rect) => HitShape::Rect(rect.translate(by)),
+            HitShape::Circle { center, radius } => HitShape::Circle { center: *center + by, radius: *radius },
+            HitShape::Segment { a, b } => HitShape::Segment { a: *a + by, b: *b + by },
+            HitShape::Polyline { points: line, closed, reach } => HitShape::Polyline { points: points(line), closed: *closed, reach: *reach },
+            HitShape::Polygon(polygon) => HitShape::Polygon(points(polygon)),
+            HitShape::OutsidePolygon { within, polygon } => HitShape::OutsidePolygon { within: within.translate(by), polygon: points(polygon) },
+        }
+    }
+
+    /// The shape with each coordinate taken from `to`'s where the two lie within `within` points, when both are the
+    /// same kind of shape with as many points: two shapes `==` finds equal after it differ by no more than `within`.
+    #[must_use]
+    pub fn snapped(&self, to: &HitShape, within: f32) -> Self {
+        let near = |value: f32, to: f32| if (value - to).abs() <= within { to } else { value };
+        let pos = |value: Pos2, to: Pos2| Pos2::new(near(value.x, to.x), near(value.y, to.y));
+        let rect = |value: Rect, to: Rect| Rect::from_min_max(pos(value.min, to.min), pos(value.max, to.max));
+        let points = |values: &[Pos2], to: &[Pos2]| {
+            if values.len() == to.len() { values.iter().zip(to).map(|(value, to)| pos(*value, *to)).collect() } else { values.to_vec() }
+        };
+        match (self, to) {
+            (HitShape::Rect(value), HitShape::Rect(to)) => HitShape::Rect(rect(*value, *to)),
+            (HitShape::Circle { center, radius }, HitShape::Circle { center: to_center, radius: to_radius }) => {
+                HitShape::Circle { center: pos(*center, *to_center), radius: near(*radius, *to_radius) }
+            }
+            (HitShape::Segment { a, b }, HitShape::Segment { a: to_a, b: to_b }) => HitShape::Segment { a: pos(*a, *to_a), b: pos(*b, *to_b) },
+            (HitShape::Polyline { points: line, closed, reach }, HitShape::Polyline { points: to_line, reach: to_reach, .. }) => {
+                HitShape::Polyline { points: points(line, to_line), closed: *closed, reach: near(*reach, *to_reach) }
+            }
+            (HitShape::Polygon(polygon), HitShape::Polygon(to_polygon)) => HitShape::Polygon(points(polygon, to_polygon)),
+            (HitShape::OutsidePolygon { within: area, polygon }, HitShape::OutsidePolygon { within: to_area, polygon: to_polygon }) => {
+                HitShape::OutsidePolygon { within: rect(*area, *to_area), polygon: points(polygon, to_polygon) }
+            }
+            _ => self.clone(),
+        }
+    }
+
     /// Whether `point` hits the shape grown to be at least `across` wide and high: the hit area of a part is never
     /// smaller than the pointer's target size.
     fn hit_across(&self, point: Pos2, across: f32) -> bool {
@@ -230,17 +271,44 @@ pub struct Shape<O> {
     pub local: bool,
     /// The least size across the hit area has, in points.
     pub min_across: f32,
+    /// The named stacking order: stacked parts of one priority rank by it before the nearest centre, the higher order
+    /// winning.
+    pub stacking: u32,
+    /// Whether a passed drag targets the arena root instead of the next shape.
+    pub drag_to_root: bool,
+}
+
+impl<O: Clone> Shape<O> {
+    /// The shape moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: Vec2) -> Self {
+        Shape { shape: self.shape.translated(by), owner: self.owner.clone(), ..*self }
+    }
+
+    /// The shape with its geometry and least size across taken from `to`'s where they lie within `within` points
+    /// ([`HitShape::snapped`]).
+    #[must_use]
+    pub fn snapped(&self, to: &Shape<O>, within: f32) -> Self {
+        let min_across = if (self.min_across - to.min_across).abs() <= within { to.min_across } else { self.min_across };
+        Shape { shape: self.shape.snapped(&to.shape, within), owner: self.owner.clone(), min_across, ..*self }
+    }
 }
 
 impl<O> Shape<O> {
     /// A shape of `owner` at stack `position`.
     pub const fn new(shape: HitShape, sense: Sense, owner: O, part: Option<PartRef>, priority: HitPriority, position: u32) -> Self {
-        Shape { shape, sense, owner, part, priority, position, local: false, min_across: 0.0 }
+        Shape { shape, sense, owner, part, priority, position, local: false, min_across: 0.0, stacking: 0, drag_to_root: false }
     }
 
     /// The hit area is at least `across` points wide and high.
     pub const fn min_across(mut self, across: f32) -> Self {
         self.min_across = across;
+        self
+    }
+
+    /// The shape's stacking order among shapes of its priority: the higher order wins before the nearest centre.
+    pub const fn stacking(mut self, order: u32) -> Self {
+        self.stacking = order;
         self
     }
 
@@ -281,10 +349,12 @@ pub struct Winner<O> {
     pub sense: Sense,
     /// Its shape lies in the body layer's space.
     pub local: bool,
+    /// A passed drag targets the arena root.
+    pub drag_to_root: bool,
 }
 
-/// The winner among `shapes` at `point`: stack position first, then level, sub-level, the nearest centre, the last
-/// registered. A press considers only shapes that sense a click or a drag.
+/// The winner among `shapes` at `point`: stack position first, then level, sub-level, stacking order, the nearest
+/// centre, the last registered. A press considers only shapes that sense a click or a drag.
 pub fn resolve<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFor) -> Option<Winner<O>> {
     resolve_mapped(shapes, point, what, |_| point)
 }
@@ -299,12 +369,19 @@ pub fn resolve_mapped<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFo
         .filter(|(_, shape)| what == ResolveFor::Hover || shape.sense.takes_press())
         .filter(|(_, shape)| shape.hits(at(shape)))
         .max_by(|(ia, a), (ib, b)| {
-            (a.position, a.priority.level, a.priority.sub)
-                .cmp(&(b.position, b.priority.level, b.priority.sub))
+            (a.position, a.priority.level, a.priority.sub, a.stacking)
+                .cmp(&(b.position, b.priority.level, b.priority.sub, b.stacking))
                 .then_with(|| distance(b).partial_cmp(&distance(a)).unwrap_or(Ordering::Equal))
                 .then(ia.cmp(ib))
         })
-        .map(|(index, shape)| Winner { index, owner: shape.owner, part: shape.part, sense: shape.sense, local: shape.local })
+        .map(|(index, shape)| Winner {
+            index,
+            owner: shape.owner,
+            part: shape.part,
+            sense: shape.sense,
+            local: shape.local,
+            drag_to_root: shape.drag_to_root,
+        })
 }
 
 #[cfg(test)]
@@ -339,6 +416,17 @@ mod tests {
         assert_eq!(owner(&near), Some(2));
         let tie = [shape(big(), Sense::CLICK, 1, 0, HitLevel::Body, 0), shape(big(), Sense::CLICK, 2, 0, HitLevel::Body, 0)];
         assert_eq!(owner(&tie), Some(2));
+    }
+
+    #[test]
+    fn stacked_parts_of_one_priority_rank_by_their_order_before_the_nearest_centre() {
+        let at = pos2(50.0, 50.0);
+        let owner = |shapes: &[Shape<u8>]| resolve(shapes, at, ResolveFor::Press).map(|w| w.owner);
+        let near = || shape(rect(40.0, 40.0, 20.0, 20.0), Sense::CLICK, 1, 0, HitLevel::Body, 0);
+        let far = || shape(rect(0.0, 0.0, 200.0, 200.0), Sense::CLICK, 2, 0, HitLevel::Body, 0);
+        assert_eq!(owner(&[far(), near()]), Some(1), "unstacked, the nearer centre wins");
+        assert_eq!(owner(&[far().stacking(1), near()]), Some(2), "the higher stacking order wins though the press is nearer the other's centre");
+        assert_eq!(owner(&[near().stacking(1), far().stacking(1)]), Some(1), "one order: the nearest centre decides");
     }
 
     #[test]

@@ -14,28 +14,27 @@ use craft_behavior::{Axis, EditEvent, EditEvents, Metrics, PartKey};
 use craft_cms::convert::CmykConverter;
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
-use craft_ui::choice::{ChoiceWords, Segmented, Swatch, SwatchFace};
+use craft_ui::choice::{ChoiceWords, Segmented, Swatch};
 use craft_ui::contract::{
     Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _, Pages,
     PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
-use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
-use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetState, ThumbInfo};
+use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetState};
 use craft_ui::primitives::textures::CachedTexture;
-use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
+use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth, WellFill};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx};
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
 
 use super::popover::compact_picker;
-use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, SwatchesWords, swatch_rows};
+use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, swatch_source};
 use crate::palette::{SwatchColor, SwatchGroup};
 
-mod paint_list;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod paint_list;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use paint_list::{PaintLink, PaintLinkKind, PaintList, PaintListEvent, PaintListOptions, PaintListOutput, PaintRow};
 
@@ -43,8 +42,6 @@ pub use paint_list::{PaintLink, PaintLinkKind, PaintList, PaintListEvent, PaintL
 const CHIP_WIDTH_IN_HEIGHTS: f32 = 1.5;
 /// The most tiles a pattern chip draws; a tile so small that more would fit is drawn as one stretched image.
 const MAX_TILES: f32 = 4096.0;
-/// The No Color diagonal stops this many control heights short of the chip's edges.
-const DIAGONAL_INSET_IN_HEIGHTS: f32 = 0.15;
 /// The chip's face: a mixed paint shows the colour well's mixed look.
 const WELL: PartKey = PartKey::new("well");
 /// The swatch list takes its content height up to this many small control heights, then scrolls, as the gradient
@@ -206,10 +203,8 @@ pub struct PaintChipStyle {
     radius: egui::CornerRadius,
     /// The ring on the chip's outline.
     edge: StyleColor,
-    /// The fill of an empty chip: the field's.
+    /// The fill of a picture chip with no texture yet: the field's.
     none_fill: StyleColor,
-    /// The No Color diagonal.
-    none_mark: StyleColor,
 }
 
 /// The last solid colour the chip held: a switch back to Solid starts from it.
@@ -429,7 +424,6 @@ impl Component for PaintChip<'_> {
             radius: metrics.radius,
             edge: cx.color(colors.line.control_edge),
             none_fill: cx.color(colors.surface.sunken),
-            none_mark: cx.color(colors.status.bad.solid),
         }
     }
 
@@ -475,8 +469,7 @@ impl Component for PaintChip<'_> {
         let solid = cx.memory::<LastSolid>().0.unwrap_or(self.fallback);
         let current = FillKind::of(&paint);
         let sampled = self.sampled;
-        let swatch_words = cx.words::<SwatchesWords>();
-        let recent_cells: Vec<(Label, Srgba)> = self.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
+        let recent = self.recent;
         let full_picker = self.full_picker;
         let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
         let solid_now = if let Paint::Solid(color) = &paint { Some(*color) } else { None };
@@ -506,29 +499,23 @@ impl Component for PaintChip<'_> {
                             compact_picker(name.clone(), Bind::given(PickedColor::rgb(*color)), sampled).alpha(true).eyedropper(true).show(ui);
                         shown.edit = picked.events;
                         shown.screen_pick = picked.screen_pick;
-                        if !recent_cells.is_empty() {
-                            Text::new(words.recent.clone()).shade(Shade::Faint).show(ui);
+                        if !recent.is_empty() {
+                            // A palette of no swatches: the recent row alone, under its caption.
                             let mut chosen = *color;
-                            let recent = SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &recent_cells).show(ui);
-                            shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
+                            let row =
+                                SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &[]).recent(words.recent.clone(), recent).show(ui);
+                            shown.picked = row.picked;
                         }
                         if let Some((groups, state)) = swatches.as_mut() {
                             let groups: &[SwatchGroup] = groups;
-                            let rows = swatch_rows(groups, &swatch_words);
+                            let source = swatch_source(groups, cmyk);
                             let colors: HashMap<&str, &SwatchColor> =
                                 groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
-                            let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
+                            let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &source)
                                 .toolbar(false)
                                 .row_menu(false)
                                 .default_open(DefaultOpen::None)
                                 .room_height(Env::of(ui).tokens.size.control.sm * SWATCH_ROWS)
-                                .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
-                                    if let SwatchKey::Swatch(name) = info.key
-                                        && let Some(color) = colors.get(name.as_str())
-                                    {
-                                        SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(painter, rect);
-                                    }
-                                })
                                 .show(ui);
                             for event in out.events {
                                 if let PresetEvent::Select { key: SwatchKey::Swatch(name), .. } = event
@@ -602,13 +589,7 @@ impl Component for PaintChip<'_> {
                 }
                 ui.draw().data_fill(&shape, DataColor::new(Color32::from(*color)));
             }
-            Paint::None => {
-                let draw = ui.draw();
-                draw.fill(&shape, style.none_fill);
-                let inner = well.shrink(style.height * DIAGONAL_INSET_IN_HEIGHTS);
-                let (from, to) = if cx.flow.is_rtl() { (inner.right_bottom(), inner.left_top()) } else { (inner.left_bottom(), inner.right_top()) };
-                draw.stroke(&PaintShape::Path(vec![from, to]), StrokeWidth::Medium, style.none_mark);
-            }
+            Paint::None => ui.draw().swatch_well(well, style.radius, WellFill::None),
             Paint::Gradient(preview) => {
                 painter.checker(well);
                 if !preview.stops.is_empty() {

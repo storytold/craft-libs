@@ -30,6 +30,12 @@ pub trait ItemLayout {
     /// The item under `point`.
     fn hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize>;
 
+    /// The item whose drop area contains `point`. Layouts with visible gaps can include those in a drop area while
+    /// leaving them out of ordinary pointer hits.
+    fn drop_hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
+        self.hit(point, offset)
+    }
+
     /// How arrow keys move through the items.
     fn nav(&self) -> NavShape;
 
@@ -37,6 +43,12 @@ pub trait ItemLayout {
     /// counting as a row of its own; `None` past the last row.
     fn row_len(&self, _row: usize) -> Option<usize> {
         None
+    }
+
+    /// `NavShape::RaggedGrid`: the columns a vertical move from row `from` to row `to` shifts the column by, when the rows
+    /// are offset against each other; 0 when they line up.
+    fn column_shift(&self, _from: usize, _to: usize) -> isize {
+        0
     }
 
     /// Whether item `at` takes a place in the layout; a hidden item (in a closed group) cannot take the lead.
@@ -99,7 +111,8 @@ pub trait ItemLayout {
 
     /// Whether the items are as wide as they measure themselves. A layout that asks for widths places the items
     /// from their measured ideal and minimum widths (`set_width`), so every item must be built and measured: its
-    /// `visible` lists all items, and the collection does not virtualise it.
+    /// `visible` lists all items, and the collection does not virtualise it. Its items sit side by side, so where the
+    /// collection's width comes from its rows (a room that does not bound it) it is their ideal widths' sum.
     fn auto_widths(&self) -> bool {
         false
     }

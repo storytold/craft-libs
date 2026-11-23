@@ -4,6 +4,7 @@ use super::BodyHooks;
 use super::inherit::own_surface;
 use super::placement::overlay_of;
 use super::regions::rect_of;
+use crate::contract::cx::CxCore;
 use crate::contract::{Container, ContainerProps, Cx, Scroll};
 use crate::primitives::{HiddenContent, ScrollBar};
 use crate::runtime::egui::pass;
@@ -29,6 +30,14 @@ pub const STRIP_FORWARD: PartKey = PartKey::new("body_scroll_strip_forward");
 
 /// Rows per second a region scrolls at while the pointer rests on one of its strips, in rows a control high.
 const STRIP_ROWS_PER_SECOND: f32 = 24.0;
+
+/// The child the scroll position of the scrolling body `body` is named by (`lazy::Anchor`), for trials.
+#[cfg(feature = "testing")]
+pub(crate) fn anchor_of(ctx: &Context, body: Id) -> Option<Id> {
+    crate::runtime::memory::with_session::<ScrollState, _>(ctx, crate::runtime::memory::sub(body, "scroll"), |state| {
+        state.anchor.map(|anchor| anchor.child)
+    })
+}
 
 /// The height of a scroll strip.
 pub(super) fn scroll_strip_height(tokens: &UiTokens) -> f32 {
@@ -186,7 +195,7 @@ impl BodyHooks<'_> {
             let content = Vec2::new(if scroll.horizontal_on() { ex } else { view.width() }, if scroll.vertical_on() { ey } else { view.height() });
             let offset = Vec2::new(self.offset.x as f32, self.offset.y as f32);
             let background = surface_style(tokens, SurfaceKind::under(own_surface(props, cx), env.surface)).fill;
-            ui.painter().extend(ScrollBar::fades(&look, view, HiddenContent::new(content, view.size(), offset, rtl), background));
+            ui.painter().extend(ScrollBar::fades(view, HiddenContent::new(content, view.size(), offset, rtl), background));
         }
         if let Some(view) = self.view {
             use crate::contract::Pointer as _;
@@ -230,7 +239,7 @@ impl BodyHooks<'_> {
         if let Some(range) = cx.scroll_moved(SCROLL_X) {
             offset.x = range.start;
         }
-        self.access_scroll(scroll, &mut offset, cx);
+        self.access_scroll(scroll, &mut offset, cx.core);
         let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
         let offset = self.clamped(scroll, view, offset);
         if offset != self.offset {
@@ -239,11 +248,11 @@ impl BodyHooks<'_> {
     }
 
     /// AccessKit scroll actions aimed at the container's node, applied to `offset`: a page along an axis, or an offset.
-    fn access_scroll<C: Container>(&self, scroll: Scroll, offset: &mut ScrollPos, cx: &mut Cx<'_, C>) {
+    fn access_scroll(&self, scroll: Scroll, offset: &mut ScrollPos, core: &mut CxCore<'_>) {
         use craft_behavior::{AccessAction as Action, AccessData as ActionData};
-        let rtl = cx.core.env.direction().is_rtl();
+        let rtl = core.env.direction().is_rtl();
         let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
-        while let Some(request) = cx.core.intents.take_scroll_access(false) {
+        while let Some(request) = core.intents.take_scroll_access(false) {
             let (vertical, toward_end) = match request.action {
                 Action::ScrollUp => (true, false),
                 Action::ScrollDown => (true, true),

@@ -1,7 +1,7 @@
 //! Focus scopes, key use and the programmatic focus target (spec 9.3, 9.4).
 
 use craft_behavior::{CancelRule, DocKey, EditCommand, Input, OwnerClass, PartRef, ScopeKind};
-use craft_keymap::Chord;
+use craft_keymap::{Chord, Mods};
 use egui::Id;
 
 /// Where focus goes the first time a scope is pushed.
@@ -20,6 +20,19 @@ pub enum Initial {
     Key(&'static str),
     /// Focus stays; a collection keeps its anchor.
     KeepAnchor,
+}
+
+/// A one-shot request for focus on a component's stop (`Props::request_focus`), for what opens without a layer of its
+/// own (an inline editor, a view's search field): a layer names its stop with `Initial` instead. The component
+/// sends it in the one pass it asks for focus, and the focus service takes it there once the component's stops
+/// are registered; the press that opened the component then leaves the focus where the request put it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FocusRequest {
+    /// The component's stop takes the focus.
+    Take,
+    /// The component's stop takes the focus when nothing holds it.
+    WhenNone,
 }
 
 /// What Enter does in a scope after the focused component declined it.
@@ -53,6 +66,13 @@ pub struct FocusPolicy {
     /// In a `KeepAnchor` layer, Enter on a text opener activates the layer's list; off, the opener keeps Enter and
     /// Tab alone takes the list's lead (a completion list that leaves Enter to the field's own commit).
     pub list_enter: bool,
+    /// In a `KeepAnchor` layer, the collection the opener hands its list keys to (Up, Down, Page keys, Home and End,
+    /// Enter and Tab as the layer's rules say). Without one the opener keeps its keys.
+    pub list: Option<Id>,
+    /// In a dialog whose Escape closes it, the Escape keeps the typing in the focused field: the field commits its
+    /// draft as on leaving it, and the dialog then closes. Off (the default), one Escape cancels the typing with the
+    /// dialog. A window that applies its rows as they change (a live Preferences window) keeps what was typed.
+    pub escape_keeps_typing: bool,
 }
 
 impl FocusPolicy {
@@ -66,6 +86,8 @@ impl FocusPolicy {
         cancel: CancelRule::Ignore,
         pages: false,
         list_enter: true,
+        list: None,
+        escape_keeps_typing: false,
     };
     /// A pane: an F6 stop.
     pub const PANE: FocusPolicy = FocusPolicy { kind: ScopeKind::Pane, ..FocusPolicy::NONE };
@@ -79,6 +101,8 @@ impl FocusPolicy {
         cancel: CancelRule::Close,
         pages: false,
         list_enter: true,
+        list: None,
+        escape_keeps_typing: false,
     };
     /// A popup: focus moves in, Escape closes and focus returns to the opener.
     pub const POPUP: FocusPolicy = FocusPolicy {
@@ -90,6 +114,8 @@ impl FocusPolicy {
         cancel: CancelRule::Close,
         pages: false,
         list_enter: true,
+        list: None,
+        escape_keeps_typing: false,
     };
     /// A menu: like a popup.
     pub const MENU: FocusPolicy = FocusPolicy { kind: ScopeKind::Menu, ..FocusPolicy::POPUP };
@@ -124,6 +150,18 @@ impl FocusPolicy {
     /// Whether Enter on a text opener activates the layer's list.
     pub const fn list_enter(mut self, on: bool) -> Self {
         self.list_enter = on;
+        self
+    }
+
+    /// The collection in the layer that takes the opener's list keys.
+    pub const fn list(mut self, list: Id) -> Self {
+        self.list = Some(list);
+        self
+    }
+
+    /// Whether Escape in this dialog keeps the focused field's typing ([`FocusPolicy::escape_keeps_typing`]).
+    pub const fn escape_keeps_typing(mut self, on: bool) -> Self {
+        self.escape_keeps_typing = on;
         self
     }
 
@@ -280,6 +318,10 @@ pub struct KeyUse {
     /// The arrows are nudges for the component's content (a canvas tool or control), not moves: they arrive as
     /// `Intents::take_nudge`.
     pub nudge: bool,
+    /// The modifiers a document canvas (`chrome_key`) acts on with the arrows: while nothing in the window has the
+    /// focus, an arrow pressed with one of them is the canvas's nudge alone, and an arrow with any other is no nudge and
+    /// stays the app's shortcut (Alt+Left of a view history). A canvas lists what its tool and body act on.
+    pub nudge_mods: NudgeMods,
     /// The component acts on Delete and Backspace (`Intent::Delete`: text edits, deleting a selection or a canvas
     /// control's object). A component that does not leaves them to the commands around the focus; a canvas tool claims
     /// them instead (`CanvasTool::claims`).
@@ -330,6 +372,7 @@ impl KeyUse {
         moves: false,
         chrome_key: true,
         nudge: true,
+        nudge_mods: NudgeMods::STEPS,
         deletes: false,
         submits: false,
         end: EndKey::LastItem,
@@ -371,6 +414,7 @@ impl KeyUse {
             moves: false,
             chrome_key: false,
             nudge: false,
+            nudge_mods: NudgeMods::NONE,
             deletes: owner_text,
             submits: false,
             end: EndKey::LastItem,
@@ -465,8 +509,55 @@ impl KeyUse {
         self
     }
 
+    /// The same use with `nudge_mods` as the modifiers a document canvas acts on with the arrows.
+    pub const fn with_nudge_mods(mut self, nudge_mods: NudgeMods) -> Self {
+        self.nudge_mods = nudge_mods;
+        self
+    }
+
+    /// Whether the component is a document canvas's editor part: the document (`chrome_key`) holding its editor's
+    /// text keys. It types letters as a text field does, but it is the document the window's menu keys act over, not
+    /// a field inside the chrome.
+    pub const fn is_document_editor(&self) -> bool {
+        self.chrome_key && matches!(self.owner, OwnerClass::Text)
+    }
+
     /// Whether the component claims `chord`.
     pub fn claims_chord(&self, chord: &Chord) -> bool {
         self.claims.contains(chord)
+    }
+}
+
+/// A set of modifier combinations held with the arrows (`KeyUse::nudge_mods`): each is matched exactly, so Shift alone
+/// does not admit Shift with Alt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NudgeMods(u16);
+
+impl NudgeMods {
+    /// No arrow.
+    pub const NONE: NudgeMods = NudgeMods(0);
+    /// The plain arrows and the arrows with Shift: the step and the large step every nudge reads.
+    pub const STEPS: NudgeMods = NudgeMods::NONE.with(Mods::NONE).with(Mods::SHIFT);
+
+    /// The same set with `mods` in it.
+    #[must_use]
+    pub const fn with(self, mods: Mods) -> Self {
+        NudgeMods(self.0 | Self::bit(mods))
+    }
+
+    /// Every combination of either set.
+    #[must_use]
+    pub const fn union(self, other: NudgeMods) -> Self {
+        NudgeMods(self.0 | other.0)
+    }
+
+    /// Whether `mods` is in the set.
+    pub const fn contains(self, mods: Mods) -> bool {
+        self.0 & Self::bit(mods) != 0
+    }
+
+    const fn bit(mods: Mods) -> u16 {
+        let at = (mods.cmd as u16) | ((mods.ctrl as u16) << 1) | ((mods.alt as u16) << 2) | ((mods.shift as u16) << 3);
+        1 << at
     }
 }

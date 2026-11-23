@@ -264,6 +264,81 @@ pub fn write(doc: &Document, default_font: &str) -> String {
     o
 }
 
+/// Writes PowerPoint-compatible Outline/RTF (`\s1`–`\s9` heading styles and `\outlinelevel`).
+///
+/// Each slide starts with a level-0 title paragraph (`\s1\outlinelevel0\sb240\b\fs32 …\b0\par`),
+/// followed by body paragraphs at indent level `0..=8` (`\s2`–`\s9`, `\outlinelevel1`–`9`,
+/// `\li360`–`3240`, `\fs24`).
+pub struct OutlineWriter {
+    out: String,
+}
+
+impl OutlineWriter {
+    /// Starts an Outline/RTF document with `default_font` as `\f0\fswiss` and the `\s1`–`\s9`
+    /// heading stylesheet.
+    pub fn new(default_font: &str) -> Self {
+        let mut out = format!("{{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1{{\\fonttbl{{\\f0\\fswiss {};}}}}\n{{\\stylesheet", esc_font(default_font));
+        for n in 1..=9 {
+            let _ = write!(out, "{{\\s{n}\\li{}\\fi-360\\level{n} heading {n};}}", 360 * n);
+        }
+        out.push_str("}\n");
+        Self { out }
+    }
+
+    /// Starts a slide title paragraph (`\pard\s1\outlinelevel0\sb240\b\fs32 `).
+    pub fn begin_title(&mut self) {
+        self.out.push_str("\\pard\\s1\\outlinelevel0\\sb240\\b\\fs32 ");
+    }
+
+    /// Ends a slide title paragraph (`\b0\par\n`).
+    pub fn end_title(&mut self) {
+        self.out.push_str("\\b0\\par\n");
+    }
+
+    /// Starts a body paragraph at outline indent `level` (`0..=8`, clamped).
+    pub fn begin_body(&mut self, level: u8) {
+        let lvl = u32::from(level.min(8));
+        let _ = write!(self.out, "\\pard\\s{}\\outlinelevel{}\\li{}\\fs24 ", (lvl + 2).min(9), lvl + 1, 360 * (lvl + 1));
+    }
+
+    /// Ends a body paragraph (`\par\n`).
+    pub fn end_body(&mut self) {
+        self.out.push_str("\\par\n");
+    }
+
+    /// Appends an inline line break (`\line `).
+    pub fn line_break(&mut self) {
+        self.out.push_str("\\line ");
+    }
+
+    /// Appends a text run, wrapping in `{\b\i\ul ...}` when any of those flags are set.
+    pub fn run(&mut self, text: &str, bold: bool, italic: bool, underline: bool) {
+        if !(bold || italic || underline) {
+            push_esc(&mut self.out, text);
+            return;
+        }
+        self.out.push('{');
+        if bold {
+            self.out.push_str("\\b");
+        }
+        if italic {
+            self.out.push_str("\\i");
+        }
+        if underline {
+            self.out.push_str("\\ul");
+        }
+        self.out.push(' ');
+        push_esc(&mut self.out, text);
+        self.out.push('}');
+    }
+
+    /// Closes the RTF document (`}\n`) and returns the output.
+    pub fn finish(mut self) -> String {
+        self.out.push_str("}\n");
+        self.out
+    }
+}
+
 #[cfg(test)]
 #[path = "write_tests.rs"]
 mod tests;

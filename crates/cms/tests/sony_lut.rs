@@ -44,3 +44,19 @@ fn inherited_tolerance_is_explicit() {
     assert!(lut.values[0][2].is_nan());
     assert_eq!(lut.values[1], [0.0; 3]);
 }
+
+#[test]
+fn spi3d_duplicate_coordinates_keep_the_last_value() {
+    // Forward order: the last row (1 1 1) is replaced by a second 0 0 0, which wins, and 1 1 1
+    // keeps the lattice's zero.
+    let mut text = String::from("SPILUT 1.0\n3 3\n2 2 2\n");
+    for i in 0..7 {
+        let (r, g, b) = (i & 1, (i >> 1) & 1, i >> 2);
+        text.push_str(&format!("{r} {g} {b} 1 1 1\n"));
+    }
+    text.push_str("0 0 0 5 5 5\n");
+    let lut = parse_spi3d(&text).unwrap();
+    assert_eq!(lut.values[0], [5.0; 3]);
+    assert_eq!(lut.values[7], [0.0; 3]);
+    assert_eq!(lut.values[1], [1.0; 3]);
+}

@@ -1,5 +1,6 @@
 //! `Span`: one styled stretch of a text run.
 
+use craft_theme::variant::Tone;
 use std::borrow::Cow;
 
 /// One styled stretch of a run.
@@ -22,8 +23,12 @@ pub struct Span<'a> {
     pub highlight: bool,
     /// Underlined in the span's colour, `stroke.thin` wide, along the bottom of the line box.
     pub underline: bool,
+    /// Struck through in the span's colour, `stroke.thin` wide, as `underline` draws its line.
+    pub strikethrough: bool,
     /// The role's semibold face, at the role's size.
     pub strong: bool,
+    /// Underlined in the ink of this tone.
+    pub flag: Option<Tone>,
 }
 
 impl<'a> Span<'a> {
@@ -38,8 +43,16 @@ impl<'a> Span<'a> {
             shortcut: false,
             highlight: false,
             underline: false,
+            strikethrough: false,
             strong: false,
+            flag: None,
         }
+    }
+
+    /// Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
+    pub fn flag(mut self, tone: Tone) -> Self {
+        self.flag = Some(tone);
+        self
     }
 
     /// Italic.
@@ -81,6 +94,12 @@ impl<'a> Span<'a> {
     /// Underlined: a link, or the mnemonic letter of a menu title.
     pub fn underline(mut self) -> Self {
         self.underline = true;
+        self
+    }
+
+    /// Struck through: text that stands for something removed or done.
+    pub fn strikethrough(mut self) -> Self {
+        self.strikethrough = true;
         self
     }
 

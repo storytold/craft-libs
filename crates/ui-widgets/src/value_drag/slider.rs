@@ -17,8 +17,8 @@ use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The track the thumb rides on.
 pub(crate) const TRACK: PartKey = PartKey::new("track");
@@ -96,6 +96,11 @@ pub struct Slider<'a> {
     track_face: Option<TrackFace<'a>>,
     /// The kept part of the range, its ends drawn across the track ([`Slider::trim`]).
     trim: Option<(f64, f64)>,
+    /// The track asks for a short field's length (`size.length.short`) in place of a track's (`size.length.track`):
+    /// a slider beside a number in a document dialog's line, as production's Opacity.
+    #[style_key]
+    #[prop]
+    short: bool,
 }
 
 /// The shape of a slider's thumb.
@@ -129,6 +134,7 @@ impl<'a> Slider<'a> {
             value_text: None,
             track_face: None,
             trim: None,
+            short: false,
         }
     }
 
@@ -185,9 +191,9 @@ impl Component for Slider<'_> {
     type Style = SliderStyle;
     type Output = EditResponse<f64>;
 
-    fn style(cx: &StyleCx<'_>, _: SliderStyleKey) -> SliderStyle {
+    fn style(cx: &StyleCx<'_>, key: SliderStyleKey) -> SliderStyle {
         let control = cx.control();
-        let length = cx.tokens.size.length.track;
+        let length = if key.short { cx.tokens.size.length.short } else { cx.tokens.size.length.track };
         SliderStyle {
             // Where a row shrinks it, the track narrows down to a square of the control's height.
             metrics: Metrics::new().min_size(Vec2::new(length, control.height)).least_width(control.height),

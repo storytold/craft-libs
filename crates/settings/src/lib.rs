@@ -32,7 +32,7 @@
 //!
 //! let (mut store, report) = SettingsStore::<Prefs>::open(Location::Auto);
 //! store.update(|p| p.appearance.theme = "dark".into());
-//! // Call `store.tick(Instant::now())` every frame and `store.flush()` on exit.
+//! // Call `store.tick(web_time::Instant::now())` every frame and `store.flush()` on exit.
 //! ```
 #![warn(missing_docs)]
 
@@ -44,28 +44,30 @@ mod names;
 pub mod presets;
 pub mod remember;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiles;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod recovery;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 #[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
 pub mod testing;
 
+pub use document::MergeRule;
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
 #[cfg(not(target_arch = "wasm32"))]
 pub use files::DiskFiles;
+#[cfg(target_arch = "wasm32")]
+pub use files::LocalStorageFiles;
+/// The browser's settings storage under its former name.
+#[cfg(target_arch = "wasm32")]
+#[deprecated(note = "use `LocalStorageFiles::new(cap)`")]
+pub type BrowserFiles = LocalStorageFiles;
 pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
-#[cfg(not(target_arch = "wasm32"))]
 pub use paths::{Location, Portable, Probe, Resolved, Rule};
 #[cfg(not(target_arch = "wasm32"))]
 pub use profiles::{ProfileError, Profiles};
 pub use remember::{Remembered, RememberedSection};
-#[cfg(not(target_arch = "wasm32"))]
 pub use store::{OpenOptions, SettingsStore, SharedSettings};
 pub use toml_edit::DocumentMut;
 
@@ -106,6 +108,13 @@ pub trait Settings: Serialize + DeserializeOwned + Default + Clone + PartialEq {
     fn migrate(from: u32, doc: &mut DocumentMut) -> Result<(), MigrateError> {
         let _ = (from, doc);
         Ok(())
+    }
+
+    /// The rule for merging the item at `path` when another process wrote the file meanwhile. The default
+    /// merges key by key.
+    fn merge_rule(path: &[&str]) -> MergeRule {
+        let _ = path;
+        MergeRule::ByKey
     }
 }
 

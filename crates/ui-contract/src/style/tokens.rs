@@ -2,7 +2,7 @@
 
 use crate::fonts::{SEMIBOLD, StackFacts};
 use crate::primitives::IconSet;
-use craft_theme::{AppSizes, Appearance, Contrast, GroupValues, IconPackId, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
+use craft_theme::{AppId, AppSizes, Appearance, Contrast, GroupValues, IconPackId, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
 use egui::{CornerRadius, FontFamily, FontId};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -58,9 +58,10 @@ impl UiTokens {
         Self::with_icons(tokens, contrast, density, IconSet::default())
     }
 
-    /// The tokens `theme` resolves to under `appearance` and `sizes`, drawing the icon pack the theme names.
-    pub fn of_theme(theme: &ThemeDef, appearance: Appearance, sizes: &AppSizes) -> Self {
-        let tokens = Arc::new(resolve_sized(theme, appearance, None, sizes).tokens);
+    /// The tokens `theme` resolves to under `appearance` and `sizes`, with the pins of `app` (`None`: no app's), drawing
+    /// the icon pack the theme names.
+    pub fn of_theme(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId>, sizes: &AppSizes) -> Self {
+        let tokens = Arc::new(resolve_sized(theme, appearance, app, sizes).tokens);
         Self::with_icons(tokens, appearance.contrast, appearance.size, theme_icons(theme.icon_pack.as_ref()))
     }
 
@@ -87,6 +88,11 @@ impl UiTokens {
     /// The source tokens.
     pub fn tokens(&self) -> &Arc<Tokens> {
         &self.tokens
+    }
+
+    /// Whether the resolved source tokens used by text layout are equal.
+    pub(crate) fn same_source_tokens(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tokens, &other.tokens) || self.tokens == other.tokens
     }
 
     /// The theme's token-group values.

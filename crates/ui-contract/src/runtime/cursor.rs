@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// cap cursors at 256 and fall back to slow software cursors, or reject them, past that.
 const MAX_SIDE_LINUX: u16 = 255;
 /// The largest side elsewhere: winit's limit; AppKit sets none on an `NSCursor` image.
-const MAX_SIDE: u16 = 2048;
+pub(crate) const MAX_SIDE: u16 = 2048;
 
 /// A cursor image in straight (not premultiplied) RGBA, row by row, its hotspot on the centre pixel.
 #[derive(Clone, Debug, PartialEq)]
@@ -95,13 +95,17 @@ fn push(ctx: &Context, cursor: Cursor, priority: CursorPriority, region: Option<
 /// blocked cursor. A system cursor goes out through the viewport's output; a painted cursor hides the system one and
 /// is left for the overlay host, which paints it or hands it back as an image ([`show_image`]), except a badged
 /// system cursor, which keeps its base and has only the badge painted. The window's image from the last pass is
-/// cleared: egui keeps it until it is replaced.
+/// cleared: egui keeps it until it is replaced. Over the resize areas of a window the OS resizes from its own frame
+/// the cursor is the default whatever was requested: the OS shows its resize cursor there, and any other fights it.
 pub(crate) fn end_pass(ctx: &Context) {
     let blocked = windows::blocking_modal(ctx).is_some();
-    let won = PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
+    let viewport = pass::current_viewport(ctx);
+    let to_os = !blocked && over_os_resize_area(ctx, viewport);
+    let won = PerViewport::<State>::with(ctx, viewport, |state| {
         let (won, region) = match pick_index(&state.requests) {
             _ if blocked => (Some(Cursor::System(CursorIcon::NotAllowed)), None),
-            Some(at) => (Some(state.requests[at].0.clone()), state.regions[at]),
+            _ if to_os => (Some(Cursor::System(CursorIcon::Default)), None),
+            Some(at) => (state.requests.get(at).map(|(cursor, _)| cursor.clone()), state.regions.get(at).copied().flatten()),
             None => (None, None),
         };
         state.requests.clear();
@@ -120,6 +124,18 @@ pub(crate) fn end_pass(ctx: &Context) {
         Some(_) => output::set_cursor(ctx, CursorIcon::None),
         None => {}
     }
+}
+
+/// Whether the pointer lies in the resize areas of `viewport`'s window where the OS resizes it from its own frame
+/// (`windows::os_resizes`).
+fn over_os_resize_area(ctx: &Context, viewport: ViewportId) -> bool {
+    if !windows::os_resizes(ctx, viewport) {
+        return false;
+    }
+    let Some(hover) = crate::runtime::pointer::pass_pointer(ctx).hover else { return false };
+    let content = pass::content_rect(ctx);
+    let at = hover - content.min;
+    craft_window::mac::in_resize_area([content.width(), content.height()], [at.x, at.y])
 }
 
 /// The cursor the last pass of the running viewport settled on; `None` is the default arrow.

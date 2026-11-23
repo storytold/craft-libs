@@ -3,8 +3,8 @@
 
 mod place;
 pub mod reading;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use reading::GuideReading;
 
@@ -479,7 +479,7 @@ impl Component for Guides<'_> {
     /// `run_pointer` reads only declared parts, so this is the one gate of the pointer.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
         let held = cx.press_slot::<HeldGuide>().is_some() || cx.gesture_running();
-        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || held));
+        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::mods(cx.ui.ctx()).cmd || held));
         let (Some(space), Some(guides), true) = (canvas_space(&cx.env), cx.value(), takes) else { return };
         let mut any = false;
         for &at in &place::keyboard_order(guides) {
@@ -526,10 +526,11 @@ impl Component for Guides<'_> {
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
             let color = if self.selected == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let look = RuleLook { color, width: RuleWidth::Points(style.width) };
             match guide.line {
-                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(style.width) }, a, b, ppp)),
+                GuideLine::Solid => painter.painter.extend(Rule::shapes(&look, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),
-                GuideLine::Dots => painter.dashed(&[a, b], Dashes::new(style.width, style.gap), StrokeWidth::Thin, color),
+                GuideLine::Dots => painter.painter.extend(Rule::dotted(&look, a, b, style.gap, ppp)),
             }
             if focused == Some(guide.key.get()) && (b - a).length() > 0.0 {
                 painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, style.width), ppp));
