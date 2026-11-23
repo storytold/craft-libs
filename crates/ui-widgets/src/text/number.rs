@@ -303,9 +303,10 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         if self.derives(value) { None } else { self.unit_label(units) }
     }
 
-    /// Whether `value` is shown as a derived value: the field is `derived` and the value is a number it shows.
+    /// Whether `value` is shown as a derived value: the field is `derived` and the value is a number it shows, not a
+    /// blank, a mixed value or a name.
     fn derives(&self, value: Option<&V>) -> bool {
-        self.derived && !self.shows_blank(value) && value.is_some_and(|value| value.named().is_none())
+        self.derived && !self.shows_blank(value) && value.is_some_and(|value| value.named().is_none() && value.number().is_some())
     }
 
     /// `number`, as the field writes it, as a derived value: in parentheses with its unit.
