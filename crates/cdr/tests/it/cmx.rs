@@ -705,6 +705,41 @@ fn after_stray_bytes_a_page_a_list_cuts_short_only_without_the_recovery_is_judge
     assert_eq!(names, [name]);
 }
 
+#[test]
+fn after_stray_bytes_a_page_whose_check_stops_at_a_limit_is_not_replaced_by_a_page_inside_it() {
+    // Stray bytes, then letters whose body holds the start of a page of one square. That page's last
+    // instruction carries the page of thirty squares that follows the letters, and ends where it
+    // ends. At a chunk limit that stops the check of the page of thirty squares while the check of
+    // the page inside the letters fits, the page inside the letters never takes its place.
+    let squares = (1..=30).map(|i| square(&attrs(Some(1), None, false), 0, 0, 100 * i));
+    let p = page(&[begin_page(None), begin_layer("P", None)].into_iter().chain(squares).chain([end_layer()]).collect::<Vec<_>>());
+    let carried = long_instr(-1, &p);
+    let head = &carried[..carried.len() - p.len()];
+    let q = ["Q", "Qa"]
+        .iter()
+        .map(|n| [begin_page(None), begin_layer(n, None), square(&attrs(Some(1), None, false), 0, 0, 2000), end_layer(), head.to_vec()].concat())
+        .find(|body| body.len() % 2 == 0)
+        .unwrap();
+    let mut b = vec![1u8; 2];
+    b.extend(b"abcd");
+    b.extend((q.len() as u32 + 8).to_le_bytes());
+    b.extend(b"page");
+    b.extend(((q.len() + p.len()) as u32).to_le_bytes());
+    b.extend(q);
+    b.extend(p);
+    let mut children = vec![cont(b'4', 1e-7)];
+    children.extend(tables());
+    children.push(b);
+    let f = riff(&children);
+    let names = |d: &Drawing| d.pages.iter().filter_map(|p| p.layers.first()).map(|l| l.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&read_checked(&f, Limits::default()).unwrap()), ["P"]);
+    for chunks in 1..200 {
+        if let Ok(d) = read_checked(&f, Limits { chunks, ..Limits::default() }) {
+            assert_eq!(names(&d), ["P"], "{chunks}: {:?}", d.warnings);
+        }
+    }
+}
+
 /// A page that fills with color 1, then, inside a list, letters spelling `page` whose length runs
 /// past the list and that hold another page and a color table of one red entry, then `after`.
 fn page_and_recovered_red(after: &[Vec<u8>]) -> Vec<u8> {

@@ -392,8 +392,8 @@ fn step(b: &[u8], pos: usize, end: usize) -> Option<(usize, Option<usize>)> {
 /// same lists) or both end, and `alt` reads at least what `first` reads until then (R53). The page
 /// `alt` starts at reads with objects and without damage in its instructions. Each chunk the reader
 /// uses that `first` reads before that point, `alt` reads too, with the same body, unless it is a
-/// page that reads without objects. The pages judged spend `left`; when it runs out, the walks do
-/// not meet.
+/// page that reads without objects. The pages judged spend `left`; when it runs out, or when the
+/// read of a page judged stops, the walks do not meet.
 fn rejoins(b: &[u8], first: &Walk, alt: &Walk, budget: &Budget, left: &mut usize) -> Option<Vec<usize>> {
     let meet = first.at.iter().find(|q| alt.at.contains(q)).map(|(q, _)| *q).or((first.ended && alt.ended).then_some(usize::MAX))?;
     let uses = |q: usize| q < meet && id_at(b, q).is_some_and(|id| READ_IDS.contains(&id));
@@ -414,7 +414,7 @@ fn rejoins(b: &[u8], first: &Walk, alt: &Walk, budget: &Budget, left: &mut usize
 }
 
 /// Whether the page chunk at `at` reads with objects, and whether its instructions read with
-/// damage ([`judge_page`]); `None` when `left` does not cover its body.
+/// damage ([`judge_page`]); `None` when `left` does not cover its body or the read stops.
 fn page_reads(b: &[u8], at: usize, end: usize, budget: &Budget, left: &mut usize) -> Option<(bool, bool)> {
     let stop = chunk_stop(b, at).map_or(end, |stop| stop.min(end));
     let Some(body) = b.get(at + 8..stop) else { return Some((false, true)) };
@@ -424,10 +424,10 @@ fn page_reads(b: &[u8], at: usize, end: usize, budget: &Budget, left: &mut usize
 /// Whether page `c` reads with objects, and whether its instructions read with damage. It is read
 /// with empty tables whose missing entries are not reported, and with a copy of `budget` so that the
 /// read's own budget is not spent. The length of its body is taken from `left` first; `None` when
-/// `left` holds less.
+/// `left` holds less, or when the read stops.
 fn judge_page(c: &Chunk, budget: &Budget, left: &mut usize) -> Option<(bool, bool)> {
     *left = left.checked_sub(c.body.len())?;
-    Some(judgement(c, budget).map_or((false, true), |(objects, damaged, _)| (objects, damaged)))
+    judgement(c, budget).ok().map(|(objects, damaged, _)| (objects, damaged))
 }
 
 /// Whether page `c` reads with objects, whether its instructions read with damage, and whether
