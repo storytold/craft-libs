@@ -15,6 +15,7 @@
 //! Layer modes, colour tags and composite settings are kept as the numbers GIMP wrote; what
 //! they mean to an application is the application's to decide.
 
+pub mod samples;
 #[cfg(test)]
 mod tests;
 mod tiles;
@@ -134,17 +135,17 @@ impl Precision {
             },
             _ => match code {
                 100 => p(1, false, true),
-                150 => p(1, false, false),
+                150 | 175 => p(1, false, false),
                 200 => p(2, false, true),
-                250 => p(2, false, false),
+                250 | 275 => p(2, false, false),
                 300 => p(4, false, true),
-                350 => p(4, false, false),
+                350 | 375 => p(4, false, false),
                 500 => p(2, true, true),
-                550 => p(2, true, false),
+                550 | 575 => p(2, true, false),
                 600 => p(4, true, true),
-                650 => p(4, true, false),
+                650 | 675 => p(4, true, false),
                 700 => p(8, true, true),
-                750 => p(8, true, false),
+                750 | 775 => p(8, true, false),
                 c => Err(invalid(format!("unknown precision {c}"))),
             },
         }
@@ -556,6 +557,7 @@ impl Image {
 
 /// A parsed XCF file: its [`Image`] and the pixels behind it.
 pub struct Xcf<'a> {
+    precision_code: u32,
     c: Cursor<'a>,
     image: Image,
     channels: Vec<usize>,
@@ -592,7 +594,8 @@ impl<'a> Xcf<'a> {
         if (width as usize).saturating_mul(height as usize).saturating_mul(16) > MAX_PIXEL_BYTES {
             return Err(invalid("the canvas exceeds the 1 GiB pixel limit"));
         }
-        let precision = if version >= 4 { Precision::from_header(version, c.u32()?)? } else { Precision::GAMMA8 };
+        let precision_code = if version >= 4 { c.u32()? } else { 150 };
+        let precision = Precision::from_header(version, precision_code)?;
         let base_type = match base_type {
             0 => BaseType::Rgb,
             1 => BaseType::Gray,
@@ -652,7 +655,7 @@ impl<'a> Xcf<'a> {
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }
-        Ok(Xcf { c, image, channels, meta_budget: Cell::new(meta_budget) })
+        Ok(Xcf { precision_code, c, image, channels, meta_budget: Cell::new(meta_budget) })
     }
 
     /// The file's header and structure.
@@ -716,30 +719,14 @@ impl<'a> Xcf<'a> {
             return Err(Error::Cancelled);
         }
         let precision = self.image.precision;
-        let mut c = self.c.at(hptr);
-        let (w, h, bpp) = (c.u32()?, c.u32()?, c.u32()? as usize);
-        if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
-            return Err(invalid(format!("drawable size {w}x{h} is out of range")));
-        }
-        let expected_bpp = source_channels.checked_mul(precision.bytes).ok_or_else(|| invalid("bpp overflow"))?;
-        if bpp != expected_bpp {
-            return Err(invalid(format!("{bpp} bytes per pixel where {expected_bpp} were expected")));
-        }
+        let head = self.hierarchy_head(hptr, source_channels)?;
+        let (w, h, bpp) = (head.width, head.height, head.bpp);
         let channels = if indexed { source_channels + 2 } else { source_channels };
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
-        let lptr = c.ptr()?;
-        if lptr == hptr {
-            return Err(invalid("a hierarchy cannot be its own level"));
-        }
-        let mut l = self.c.at(lptr);
-        if (l.u32()?, l.u32()?) != (w, h) {
-            return Err(invalid("the level does not match its hierarchy"));
-        }
         let across = w.div_ceil(TILE) as usize;
-        let down = h.div_ceil(TILE) as usize;
-        let tiles = tile_offsets(&mut l, lptr, across * down, keep_going)?;
+        let tiles = self.hierarchy_tiles(&head, false, keep_going)?;
         if !keep_going() {
             return Err(Error::Cancelled);
         }
