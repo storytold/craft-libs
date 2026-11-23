@@ -1,12 +1,13 @@
 //! `PresetFooter`: the actions, the thumbnail size slider and the count of a preset panel's footer.
 
 use super::words::PresetWords;
-use crate::contract::{Bind, EditResponse, ListDrag, NoValue, Outcome, Show as _};
+use crate::contract::{Bind, EditResponse, ListDrag, NoValue, Outcome, Props as _, Show as _};
 use crate::display::{Elide, Text};
 use crate::runtime::env::Env;
 use crate::sections::{FooterAction, FooterBar};
 use crate::tile_grid::{ThumbnailSlider, TileZoom};
 use craft_behavior::IconId;
+use craft_theme::ControlSize;
 use egui::{Response, Ui};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -135,7 +136,8 @@ impl<'a> PresetFooterOptions<'a> {
 ///   (left out by `new_group(false)`), then the host's [`FooterAction`]s. Their names come from [`PresetWords`].
 /// - **Host actions.** A disabled action takes no click. An action that `accepts_drops` takes presets dragged from
 ///   any preset list and reports [`PresetFooterEvent::CustomDrop`].
-/// - **Slider.** Edits the zoom binding within `range` (the ladder by default); omitted by `slider(false)`.
+/// - **Slider.** Edits the zoom binding within `range` (the ladder by default), at the small control size, so its
+///   thumb stays in scale with a narrow panel; omitted by `slider(false)`.
 /// - **Options.** The host's choices come as one [`PresetFooterOptions`] value.
 #[must_use = "show the footer with `show`"]
 #[derive(crate::contract::Pattern)]
@@ -208,7 +210,7 @@ impl<K: Clone + Send + Sync + 'static> PresetFooter<'_, K> {
             if let Some(add) = &leading {
                 add(ui);
             }
-            let edit = slider.then(|| ThumbnailSlider::new(words.thumb_size.clone(), zoom.reborrowed(), range).show(ui));
+            let edit = slider.then(|| ThumbnailSlider::new(words.thumb_size.clone(), zoom.reborrowed(), range).size(ControlSize::Sm).show(ui));
             if let Some(n) = count {
                 Text::new(words.count.text(n as u64, &env.format().integer(n as u64))).elide(Elide::End).show(ui);
             }
