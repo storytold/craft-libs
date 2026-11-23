@@ -217,6 +217,9 @@ struct TabPress {
     input: KeyInput,
     /// An auto-repeat of a key that is still held.
     repeat: bool,
+    /// When and where among the frame's events it arrived, as a [`Shortcut`] has them.
+    at: Option<f64>,
+    place: usize,
 }
 
 #[derive(Clone)]

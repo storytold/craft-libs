@@ -421,7 +421,7 @@ impl Strip<'_> {
                 true
             }
             PressUse::Tab => {
-                batch.tabs.push(TabPress { input: *input, repeat });
+                batch.tabs.push(TabPress { input: *input, repeat, at, place: batch.place });
                 false
             }
             PressUse::CtrlTab => {
@@ -838,8 +838,10 @@ pub fn textless_paste(ctx: &Context) -> bool {
 
 /// Takes the Tab and F6 moves the input hook recorded, for the focus service's begin hook. The pass's root env is
 /// installed by now, so a bare Tab that passes the chrome gate and has a chrome command bound to it becomes that
-/// command's toggle for the running viewport; any other Tab moves focus. A repeat of a toggling press is dropped: it
-/// neither toggles again nor moves focus.
+/// command's toggle for the running viewport; one the keymap binds to another enabled command instead (an app command
+/// the chrome command yielded the chord to) is that command's press, which the routing hook after this one hands the
+/// dispatcher; any other Tab moves focus. A repeat of a toggling or firing press is dropped: it neither acts again nor
+/// moves focus.
 pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
     let (mut nav, tabs) = current(ctx, |stage| {
         let mut nav = std::mem::take(&mut stage.batch.nav);
@@ -851,10 +853,19 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
     }
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let gate = tab_toggles_now(ctx);
+    let layout = layout_of(ctx);
+    let fires = |input: &KeyInput| layout.candidates(input).iter().any(|chord| commands::runs_now(ctx, chord));
     for press in tabs {
         match gate.then(|| chrome_toggle_of(ctx, &press.input)).flatten() {
             Some(toggle) if !press.repeat => request_chrome_toggle(ctx, viewport, toggle),
             Some(_) => {}
+            None if gate && fires(&press.input) => {
+                if !press.repeat {
+                    let TabPress { input, at, place, .. } = press;
+                    let shortcut = Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at, place };
+                    current(ctx, |stage| stage.batch.shortcuts.push(shortcut));
+                }
+            }
             None => nav.tabs.push(!press.input.mods.shift),
         }
     }

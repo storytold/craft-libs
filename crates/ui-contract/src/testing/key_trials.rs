@@ -276,3 +276,36 @@ fn a_dialog_opened_in_a_pass_takes_its_escape_after_focus_moved() {
     press(&mut frames, &mut show, Key::Escape, Modifiers::NONE);
     assert_eq!(cancels.get(), 1, "the dialog opened in the pass takes it");
 }
+
+/// A bare Tab that an app command took from Toggle Panels (the window shortcut yields its default chord to the app's
+/// binding) runs that command where Tab would toggle the panels, and still moves focus from a text field. Guards
+/// against a Tab gate that only took chrome commands, so an app command bound to Tab never ran.
+#[trial]
+fn tab_runs_the_app_command_bound_to_it_where_it_would_toggle_the_panels() {
+    use crate::runtime::commands::{AppCatalog, Binding, CommandDef, Scope};
+    let catalog = Binding::parse("Tab")
+        .ok()
+        .and_then(|binding| AppCatalog::new(vec![CommandDef::new("trialTab.dock", "Dock", Scope::app()).with_default(binding)], 1).ok());
+    assert!(catalog.is_some(), "the trial's catalog is valid");
+    let mut show = with_canvas;
+    let mut frames = Frames::new();
+    frames.root({
+        let mut root = RootEnv::default();
+        root.tab_toggles_chrome = true;
+        root
+    });
+    if let Some(catalog) = catalog {
+        frames.commands(CommandInput::new().catalog(catalog));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    let mut tab = |frames: &mut Frames| {
+        frames.frame(vec![key_press(Key::Tab, Modifiers::NONE), key_release(Key::Tab, Modifiers::NONE)], &mut show);
+        let out = take_output(&frames.ctx);
+        (out.chrome_toggles, out.fired.into_iter().map(|fired| fired.command.id).collect::<Vec<_>>())
+    };
+    assert_eq!(tab(&mut frames), (Vec::new(), vec!["trialTab.dock".to_owned()]), "nothing focused: the app's command runs");
+    assert_eq!(egui_focused(&frames.ctx), None, "and the press moved no focus");
+    focus_on(&mut frames, &mut with_canvas, "field");
+    assert!(tab(&mut frames).1.is_empty(), "a text field keeps Tab as its focus move");
+}
