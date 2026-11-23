@@ -557,8 +557,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         let accepts = Cell::new(ok_enabled);
         let body_pick = Cell::new(false);
         let shown = dialog.show(ui, |ui, cx| {
-            // A measuring run sees no answers and no opening pass: the real run that follows still has both.
-            let measuring = measuring_run;
+            // A measuring run sees no answers and no opening pass: the real run that follows still has both. The dialog
+            // measures its body in a run of its own too (a re-layout under a child dialog), inside a real run of the form.
+            let measuring = measuring_run || crate::runtime::measure::active(ui.ctx());
             let first = cx.appeared() && !measuring;
             let mut held = bind.borrow_mut();
             let before = match held.reborrow().read(cx) {
