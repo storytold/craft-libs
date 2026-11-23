@@ -149,7 +149,7 @@ fn a_document_tab_strip_in_the_bar_takes_the_free_width() {
             Title::new("One.pdf"),
             |ui, _| {
                 Button::new("Home").show(ui);
-                DocumentTabs::new("Documents", &tabs).reorderable(true).selected(0).show(ui);
+                let _ = DocumentTabs::new("Documents", &tabs).reorderable(true).selected(0).show(ui);
                 Button::new("Open").show(ui);
             },
             |ui, _| {
@@ -187,7 +187,7 @@ fn a_trailing_control_of_overflowing_tabs_stays_clear_of_the_bars_controls() {
             Title::new("x"),
             |ui, _| {
                 Button::new("Home").show(ui);
-                DocumentTabs::new("Documents", &tabs)
+                let _ = DocumentTabs::new("Documents", &tabs)
                     .reorderable(true)
                     .selected(0)
                     .trailing(|ui| {

@@ -206,7 +206,7 @@ impl SplitPane {
 }
 
 /// One pane as [`SplitViews::show_panes`] gives it to the pane's body.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct SplitPaneAt {
     /// The pane's number in reading order, as [`SplitViewsOutput::activated`] and [`TabDropTarget::Pane`] count it.
@@ -218,7 +218,7 @@ pub struct SplitPaneAt {
 }
 
 /// The panes of the innermost split views, as the views laid them out in the pass, for their body.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 struct SplitPanes(Arc<[SplitPaneAt]>);
 
 impl EnvValue for SplitPanes {
@@ -339,7 +339,7 @@ impl<D: Clone> DropTarget<ListDrag<D>> for TabTarget<'_, D> {
 
     fn mark(&self, (drop, area): &Self::Drop) -> DropMark {
         match drop.target {
-            TabDropTarget::SplitEnd => DropMark::Split(*area),
+            TabDropTarget::SplitEnd => DropMark::region(*area),
             TabDropTarget::Pane(_) => DropMark::Into(*area),
         }
     }

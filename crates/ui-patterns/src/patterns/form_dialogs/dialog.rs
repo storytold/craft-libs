@@ -60,7 +60,7 @@ craft_ui::words! {
 }
 
 /// How a parameter dialog arranges its rows, its preview pane and its buttons.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ParamLayout {
     /// The preview pane to the right of the rows, under the zoom row. A dialog that previews has its buttons in a
@@ -102,7 +102,7 @@ impl ParamLayout {
 
 /// The layout a [`ParamDialog`] takes when it names none: set once for an app on the root's values
 /// (`RootEnv::values`), so every dialog of the app lays out alike.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 pub struct DialogLayout(pub ParamLayout);
 
 impl crate::runtime::env::EnvValue for DialogLayout {

@@ -87,8 +87,7 @@ fn param_rows_enable_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Param::new("engine", "Engine", ParamKind::choice(vec![("builtin".to_owned(), "Built-in".into())], None)).disabled(),
         Param::new("dpi", "Resolution", ParamKind::int(Some(72), Some(600), 300)).disabled(),
     ];
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Recognize Text", &params, Bind::bound(fields)).show(ui).into()
+    ParamRows::new("Recognize Text", &params, data.bind("fields", DialogFields::new())).show(ui).into()
 }
 
 /// Options with descriptions and a disabled option with its reason, on a Choice row and a Radio row.
@@ -105,8 +104,7 @@ fn param_rows_option_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOut
         described(Param::new("engine", "Engine", ParamKind::choice(modes(), Some("fast".to_owned())))),
         described(Param::new("quality", "Quality", ParamKind::radio(modes(), Some("accurate".to_owned())))),
     ];
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Recognize Text", &params, Bind::bound(fields)).show(ui).into()
+    ParamRows::new("Recognize Text", &params, data.bind("fields", DialogFields::new())).show(ui).into()
 }
 
 /// A Choice row whose open list has a separator line between the standard paper sizes and the custom one.
@@ -119,8 +117,7 @@ fn param_choice_separated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         ("custom".to_owned(), "Custom".into()),
     ];
     let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Page Setup", &params, Bind::bound(fields)).show(ui).into()
+    ParamRows::new("Page Setup", &params, data.bind("fields", DialogFields::new())).show(ui).into()
 }
 
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]

@@ -365,6 +365,19 @@ pub(crate) fn settled_as_proposed(proposed: &CanvasView, host: &CanvasView) -> b
         && (proposed.center.y - host.center.y).abs() < reach
 }
 
+/// Whether `host` is `proposed` passed through f32 layout units: its centre and zoom equal in f32 and every other
+/// field equal.
+fn rounded_as_proposed(proposed: &CanvasView, host: &CanvasView) -> bool {
+    let magnitude = proposed.center.x.abs().max(proposed.center.y.abs()).max(host.center.x.abs()).max(host.center.y.abs());
+    let mut rounded = *proposed;
+    rounded.center = host.center;
+    rounded.zoom = host.zoom;
+    rounded == *host
+        && craft_behavior::same_in_f32_at(proposed.center.x, host.center.x, magnitude)
+        && craft_behavior::same_in_f32_at(proposed.center.y, host.center.y, magnitude)
+        && craft_behavior::same_in_f32(proposed.zoom, host.zoom)
+}
+
 /// The four corners of a document rectangle.
 fn doc_corners(doc: DocRect) -> [Point; 4] {
     [Point::new(doc.x0, doc.y0), Point::new(doc.x1, doc.y0), Point::new(doc.x1, doc.y1), Point::new(doc.x0, doc.y1)]
@@ -498,8 +511,11 @@ impl Component for CanvasScrollbars<'_> {
     /// comes back with its centre moved by under a point (photocraft#16006): that is the drag's own value, not the app
     /// changing the view under it, and the drag goes on. A different zoom, turn, mirroring or aspect, or a centre a
     /// point or more away, is a change.
+    ///
+    /// A host that maps a proposed centre through its own layout (a scroll offset in points) and back writes back a
+    /// view that differs from the proposal by f32 rounding only, zoom included: that is not a change either.
     fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
-        settled_as_proposed(proposed, host)
+        settled_as_proposed(proposed, host) || rounded_as_proposed(proposed, host)
     }
 
     /// The bars: `PartsCx::scroll` runs the thumb drag and the page press in the pipeline.
@@ -519,19 +535,6 @@ impl Component for CanvasScrollbars<'_> {
         if let Some(corner) = bars.corner {
             cx.part(CORNER, corner).sense(Sense::CLICK).pointer_only("the corner only reserves space between the two scroll bars");
         }
-    }
-
-    /// The host maps a proposed centre through its own layout (a scroll offset in points) and back, so the view it
-    /// writes back differs from the proposal by rounding only; that is not a change under the drag.
-    fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
-        let magnitude = proposed.center.x.abs().max(proposed.center.y.abs()).max(host.center.x.abs()).max(host.center.y.abs());
-        let mut rounded = *proposed;
-        rounded.center = host.center;
-        rounded.zoom = host.zoom;
-        rounded == *host
-            && craft_behavior::same_in_f32_at(proposed.center.x, host.center.x, magnitude)
-            && craft_behavior::same_in_f32_at(proposed.center.y, host.center.y, magnitude)
-            && craft_behavior::same_in_f32(proposed.zoom, host.zoom)
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

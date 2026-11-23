@@ -3,10 +3,9 @@
 use crate::buttons::ToggleButton;
 use crate::contract::{Bind, BodyCx, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
 use crate::dialog::{Dialog, DialogOutput};
-use crate::display::{Icon, Progress, Shade, Text};
+use crate::display::{Progress, Shade, Text};
 use crate::form::{Field, FieldGroup, Help};
 use crate::layout_components::{Row, Stack};
-use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::overlay::CloseReason;

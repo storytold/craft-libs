@@ -4,7 +4,7 @@
 use crate::buttons::IconButton;
 use crate::contract::{
     Bind, Common, Component, Cx, DisabledLook, Focus as _, Input, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role,
-    Show as _, ShowContainer as _, Styled as _,
+    Show as _, ShowContainer as _,
 };
 use crate::display::{Progress, Text};
 use crate::layout_components::Row;

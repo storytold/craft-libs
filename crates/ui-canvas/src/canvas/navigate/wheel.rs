@@ -143,15 +143,13 @@ impl WheelNavigation {
             return Some(WheelAction::Zoom(f64::from(factor)));
         }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
-        if options.wheel == WheelScheme::Document {
-            return self.classify_document(input, notch, scroll_finite);
-        }
         let plain = !input.mods.cmd && !input.mods.ctrl;
         // Whether the modifiers zoom, the zoom factor of one line, and whether Shift turns the zoom into ladder steps.
         let (zooms, line_factor, ladder) = match options.wheel {
             WheelScheme::Scroll => (Self::alt_gesture(input.mods, input.os), Self::NOTCH, true),
             WheelScheme::Zoom => (plain && !input.mods.alt, Self::NOTCH, true),
             WheelScheme::Acrobat => (!plain, WheelScheme::ACROBAT_NOTCH, false),
+            WheelScheme::Document => return self.classify_document(input, notch, scroll_finite),
         };
         if zooms && ladder && input.mods.shift {
             return scroll_finite.then(|| self.snap(input.along(), notch)).flatten().map(WheelAction::SnapZoom);

@@ -11,7 +11,6 @@ use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails};
 use crate::runtime::env::{Env, Label};
-use crate::runtime::memory::Remember as _;
 use crate::sections::{FooterAction, FooterBar};
 use craft_behavior::{ColumnKey, ColumnWidth, GesturePhase, IconId, Selection, SelectionChange, keyed};
 use craft_keymap::Mods;
