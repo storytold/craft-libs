@@ -256,9 +256,15 @@ pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, O
         return (body(ui), None);
     }
     let open = Open { layer: ui.layer_id(), elements: Vec::new(), parts: Vec::new(), stack: Vec::new(), labels: Vec::new() };
+    let noted = crate::runtime::replay::mark(&ctx);
     pass_state::with::<Log, _>(&ctx, |log| log.open.push(open));
     let out = body(ui);
     let Some(open) = pass_state::with::<Log, _>(&ctx, |log| log.open.pop()) else { return (out, None) };
+    // What the body's components noted belongs to this region: a replay of a view around it adds only the region's
+    // own record (below), not those elements to whatever region is open there.
+    if let Some(noted) = noted {
+        crate::runtime::replay::withdraw(&ctx, noted, replay_step);
+    }
     let recorded = Arc::new(finish(&ctx, open));
     keep(&ctx, key, &recorded);
     // A memoized view that replays this region keeps its record as the run left it.
@@ -418,13 +424,125 @@ fn name_from_labels(elements: &mut [Element]) {
     }
 }
 
+/// A call a component made to the open region's record. Each is noted in the journal of the records open around it
+/// (`replay::journal`), so a memoized view that replays inside a region adds to the region what its run added: the
+/// elements, their parts, facts and commands, and the labels that name them. The hit areas and the Tab order need no
+/// step: the sensing and focus services replay their own registrations, and [`finish`] reads those for the elements.
+#[derive(Clone, Debug, PartialEq)]
+enum Step {
+    /// [`open_element`].
+    Open { id: Id, component: &'static str, layer: Layer },
+    /// [`close_element`].
+    Close { id: Id, rect: Rect, content: Rect },
+    /// [`note_command`].
+    Command { id: Id, command: Option<CommandRef> },
+    /// [`node_facts`].
+    Facts { id: Id, part: Option<PartRef>, rect: Rect, facts: Facts },
+    /// [`labelled`].
+    Label { node: Id, label: Id },
+}
+
+/// A replay at another place moves the boxes the step records.
+impl crate::runtime::Shift for Step {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        match self {
+            Step::Close { id, rect, content } => Step::Close { id: *id, rect: by.rect(*rect), content: by.rect(*content) },
+            Step::Facts { id, part, rect, facts } => Step::Facts { id: *id, part: *part, rect: by.rect(*rect), facts: facts.clone() },
+            other => other.clone(),
+        }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        match (self, to) {
+            (Step::Close { id, rect, content }, Step::Close { rect: to_rect, content: to_content, .. }) => {
+                Step::Close { id: *id, rect: rect.snapped(to_rect, within), content: content.snapped(to_content, within) }
+            }
+            (Step::Facts { id, part, rect, facts }, Step::Facts { rect: to_rect, .. }) => {
+                Step::Facts { id: *id, part: *part, rect: rect.snapped(to_rect, within), facts: facts.clone() }
+            }
+            (other, _) => other.clone(),
+        }
+    }
+}
+
+/// Makes the call `step` stands for in the innermost open region; returns whether a region took it.
+fn apply(ctx: &Context, step: &Step) -> bool {
+    pass_state::with::<Log, _>(ctx, |log| {
+        let Some(open) = log.open.last_mut() else { return false };
+        match step {
+            Step::Open { id, component, layer } => {
+                let element = Element {
+                    id: *id,
+                    part: None,
+                    component: *component,
+                    depth: open.stack.len(),
+                    rect: Rect::NOTHING,
+                    content: Rect::NOTHING,
+                    facts: None,
+                    stop: None,
+                    command: None,
+                };
+                open.stack.push(open.elements.len());
+                open.elements.push((element, *layer));
+            }
+            Step::Close { id, rect, content } => {
+                let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == *id) else { return true };
+                let index = open.stack[at];
+                open.stack.truncate(at);
+                let element = &mut open.elements[index].0;
+                element.rect = *rect;
+                element.content = *content;
+            }
+            Step::Command { id, command } => {
+                let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == *id) else { return true };
+                let index = open.stack[at];
+                open.elements[index].0.command = command.clone();
+            }
+            Step::Facts { id, part, rect, facts } => {
+                let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id) else { return true };
+                match part {
+                    None => owner.0.facts = Some(facts.clone()),
+                    Some(part) => {
+                        let (component, depth) = (owner.0.component, owner.0.depth + 1);
+                        open.parts.retain(|element| !(element.id == *id && element.part == Some(*part)));
+                        open.parts.push(Element {
+                            id: *id,
+                            part: Some(*part),
+                            component,
+                            depth,
+                            rect: *rect,
+                            content: *rect,
+                            facts: Some(facts.clone()),
+                            stop: None,
+                            command: None,
+                        });
+                    }
+                }
+            }
+            Step::Label { node, label } => open.labels.push((*node, *label)),
+        }
+        true
+    })
+}
+
+/// What a replay of a noted step calls.
+fn replay_step(ctx: &Context, step: &Step) {
+    apply(ctx, step);
+}
+
+/// Makes the call `step` stands for and, when a region took it, notes it for the replay of a memoized view around it.
+/// With no region open nothing is built or noted.
+fn run(ctx: &Context, step: Step) -> bool {
+    let took = apply(ctx, &step);
+    if took {
+        crate::runtime::replay::journal(ctx, || step, replay_step);
+    }
+    took
+}
+
 /// Records that a label scope named the node of the component `node` by the label's node `label`.
 pub(crate) fn labelled(ctx: &Context, node: Id, label: Id) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        if let Some(open) = log.open.last_mut() {
-            open.labels.push((node, label));
-        }
-    });
+    run(ctx, Step::Label { node, label });
 }
 
 /// Whether the components shown in `ui` report their nodes for an inspected region: a region is open and the run is
@@ -441,51 +559,21 @@ pub(crate) fn open_element(ui: &Ui, id: Id, component: &'static str) -> bool {
     if measure::active(ctx) {
         return false;
     }
-    let layer = ui.layer_id();
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return false };
-        // The type's own name: generic arguments go first, so `Select<'_, alloc::string::String>` is `Select`.
-        let component = component.split('<').next().unwrap_or(component);
-        let component = component.rsplit("::").next().unwrap_or(component);
-        let element = Element {
-            id,
-            part: None,
-            component,
-            depth: open.stack.len(),
-            rect: Rect::NOTHING,
-            content: Rect::NOTHING,
-            facts: None,
-            stop: None,
-            command: None,
-        };
-        open.stack.push(open.elements.len());
-        open.elements.push((element, layer));
-        true
-    })
+    // The type's own name: generic arguments go first, so `Select<'_, alloc::string::String>` is `Select`.
+    let component = component.split('<').next().unwrap_or(component);
+    let component = component.rsplit("::").next().unwrap_or(component);
+    run(ctx, Step::Open { id, component, layer: ui.layer_id() })
 }
 
 /// Ends the record [`open_element`] started for `id`, with the box the component took and the box inside its padding.
 pub(crate) fn close_element(ctx: &Context, id: Id, rect: Rect, content: Rect) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
-        let index = open.stack[at];
-        open.stack.truncate(at);
-        let element = &mut open.elements[index].0;
-        element.rect = rect;
-        element.content = content;
-    });
+    run(ctx, Step::Close { id, rect, content });
 }
 
 /// Notes the command bound to the control `id` in the open region's record; the report step calls it with the
 /// component's resolved command. It does nothing outside a region or for a component whose record is not open.
 pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
-        let index = open.stack[at];
-        open.elements[index].0.command = command;
-    });
+    run(ctx, Step::Command { id, command });
 }
 
 /// Notes the text value the text adapter wrote on the node of the component `id` (`report_text`), unless the node
@@ -502,26 +590,5 @@ pub(crate) fn note_text_value(ctx: &Context, id: Id, value: &str) {
 
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.
 pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rect, facts: Facts) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == id) else { return };
-        match part {
-            None => owner.0.facts = Some(facts),
-            Some(part) => {
-                let (component, depth) = (owner.0.component, owner.0.depth + 1);
-                open.parts.retain(|element| !(element.id == id && element.part == Some(part)));
-                open.parts.push(Element {
-                    id,
-                    part: Some(part),
-                    component,
-                    depth,
-                    rect,
-                    content: rect,
-                    facts: Some(facts),
-                    stop: None,
-                    command: None,
-                });
-            }
-        }
-    });
+    run(ctx, Step::Facts { id, part, rect, facts });
 }

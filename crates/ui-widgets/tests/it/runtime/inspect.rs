@@ -3,13 +3,13 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
-use craft_ui::contract::{Bind, CommandSet, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::InspectOverlay;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::inspect::{self, Recorded};
-use craft_ui::testing::{Fixture, trial};
-use egui::{Id, Rect};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
+use egui::{Id, Rect, Ui};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -167,4 +167,60 @@ fn a_region_names_generic_components_and_lists_text_values() {
     let field = recorded.elements.iter().find(|element| element.component == "TextField").expect("the field is recorded");
     let value = field.facts.as_ref().and_then(|facts| facts.value.as_deref());
     assert_eq!(value, Some("abc"), "the field's facts list its text as the value");
+}
+
+/// A view showing one button, as a panel shows its slots in a memoized grid.
+#[derive(MemoProps)]
+struct Grid {
+    label: &'static str,
+}
+
+fn grid(props: &mut Grid, ui: &mut Ui) {
+    Button::new(props.label).show(ui);
+}
+
+/// What an inspected region records of a button in a memoized view and of a button beside it.
+fn grid_and_footer(recorded: &Recorded) -> (Option<(usize, &inspect::Element)>, Option<(usize, &inspect::Element)>) {
+    let named = |name: &str| {
+        recorded.elements.iter().enumerate().find(|(_, element)| {
+            element.part.is_none() && element.component == "Button" && element.facts.as_ref().and_then(|facts| facts.name.as_deref()) == Some(name)
+        })
+    };
+    (named("Slot"), named("Footer"))
+}
+
+#[trial]
+fn a_region_keeps_the_components_of_a_memoized_view_in_the_passes_it_replays() {
+    let key = Id::NULL.with("trial.inspect.memo");
+    let seen: Rc<RefCell<Option<Arc<Recorded>>>> = Rc::new(RefCell::new(None));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (_, recorded) = inspect::record(ui, key, |ui| {
+            Stack::new().show(ui, |ui, _| {
+                MemoView::new("grid", Grid { label: "Slot" }, grid).show(ui);
+                Button::new("Footer").show(ui);
+            })
+        });
+        if recorded.is_some() {
+            *out.borrow_mut() = recorded;
+        }
+    });
+    let replayed =
+        |fixture: &Fixture| last_frame_memo_runs(fixture.ctx()).iter().any(|(of, _, run)| of.contains("Grid") && *run == MemoRun::Replayed);
+    let mut replays = 0;
+    for frame in 0..8 {
+        fixture.frame(Vec::new());
+        replays += usize::from(replayed(&fixture));
+        let seen = seen.borrow();
+        let recorded = seen.as_deref().expect("the region ran");
+        let (slot, footer) = grid_and_footer(recorded);
+        let (slot_at, slot) = slot.unwrap_or_else(|| panic!("frame {frame}: the memoized view's button is recorded: {:?}", recorded.elements));
+        let (footer_at, footer) = footer.unwrap_or_else(|| panic!("frame {frame}: the button beside the view is recorded"));
+        assert!(slot_at < footer_at, "frame {frame}: the view's button is recorded before the one after it");
+        assert_eq!(slot.depth, footer.depth, "frame {frame}: both sit in the same stack");
+        assert!(slot.rect.is_positive() && slot.facts.as_ref().is_some_and(|facts| facts.interactive), "frame {frame}: {slot:?}");
+        assert!(recorded.hits.iter().any(|hit| hit.owner == slot.id && hit.rect.is_positive()), "frame {frame}: the view's button has its hit area");
+        assert!(slot.stop.is_some() && slot.stop < footer.stop, "frame {frame}: Tab order runs through both, the view's button first");
+    }
+    assert!(replays > 0, "the view replayed in some of the passes");
 }
