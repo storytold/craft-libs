@@ -24,9 +24,11 @@ pub mod ime;
 pub mod layout;
 pub mod localized;
 pub mod menu;
+pub mod numeric;
 pub mod panes;
 pub mod presence;
 pub mod printing;
+pub mod ruler;
 pub mod shapes;
 #[cfg(feature = "share")]
 pub mod share;
