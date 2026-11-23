@@ -447,8 +447,8 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
     assert_eq!(calls[0], calls[1], "a settled frame builds as many rows for 2,000 layers as for 200");
 }
 
-/// The icons painted wholly inside the bottom corner of the thumbnail `thumb` (a badge's glyph, not the kind glyph
-/// centred on the tile): each textured mesh's bounds, texture and tint.
+/// The icons painted wholly inside the bottom corner of the thumbnail `thumb`, leaving out the kind glyph centred on
+/// the tile (on a small thumbnail it reaches into the corner too): each textured mesh's bounds, texture and tint.
 fn badge_icons(shapes: &[egui::Shape], thumb: egui::Rect) -> Vec<(egui::Rect, egui::TextureId, egui::Color32)> {
     let corner = egui::Rect::from_min_max(thumb.max - Vec2::splat(18.5), thumb.max + Vec2::splat(0.5));
     shapes
@@ -459,7 +459,7 @@ fn badge_icons(shapes: &[egui::Shape], thumb: egui::Rect) -> Vec<(egui::Rect, eg
             }
             _ => None,
         })
-        .filter(|(rect, ..)| corner.contains_rect(*rect))
+        .filter(|(rect, ..)| corner.contains_rect(*rect) && (rect.center() - thumb.center()).length() > 0.5)
         .collect()
 }
 
