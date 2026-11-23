@@ -14,6 +14,7 @@ pub(crate) mod latch;
 pub(crate) mod memory;
 pub(crate) mod pen;
 pub(crate) mod pointer;
+pub(crate) mod repeats;
 pub(crate) mod theme_app;
 pub(crate) mod typed_keys;
 pub(crate) mod wheel;

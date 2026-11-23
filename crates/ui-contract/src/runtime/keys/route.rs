@@ -132,7 +132,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     for command in queued {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
-    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts);
+    let over: Vec<bool> = batch.presses.iter().map(held_press).collect();
+    let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts, &over);
     withdraw_taken(ctx, target.as_ref(), &batch, &held, &withdrawn_texts);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
     // PLAN: a repeat Tab of a held-over key is not gated; `take_nav` reads `batch.tabs` before this hook runs (owner: focus).
@@ -244,8 +245,16 @@ pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], b
 /// (`holds_press`). The owner is the focused component's class, or `Blocked` while a modal layer is stacked above the
 /// focus; inside a layer its `Overlay.keys` class ranks with the component's. A `Recorder` keeps every key and a `Menu`
 /// its navigation keys (`keeps_key`); a text field keeps the text its presses typed. `consumed` is what
-/// routing did with each press and `taken_texts` whether a component took each text of the pass.
-fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consumed: &[Taken], taken_texts: &[bool]) -> (Shortcuts, Vec<bool>) {
+/// routing did with each press, `taken_texts` whether a component took each text of the pass, and `over` whether each
+/// press is a repeat of a key held over a modal layer's opening or closing, which runs no shortcut either.
+fn owned_shortcuts(
+    ctx: &Context,
+    target: Option<&StopRec>,
+    batch: &Batch,
+    consumed: &[Taken],
+    taken_texts: &[bool],
+    over: &[bool],
+) -> (Shortcuts, Vec<bool>) {
     let scopes = target.map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default();
     let owner = owner_at(ctx, target, &scopes, None);
     let own = target.map(|rec| rec.stop.keys.owner);
@@ -271,7 +280,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .iter()
         .map(|shortcut| {
             let key = shortcut.input.typed.or(shortcut.input.physical);
-            !keeps_key(owner, key, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at])
+            !keeps_key(owner, key, shortcut.input.mods) && !shortcut.press.is_some_and(|at| held[at] || over[at])
         })
         .collect();
     let keys = batch.shortcuts.iter().zip(&kept).filter(|(_, stays)| **stays).map(|(shortcut, _)| *shortcut).collect();

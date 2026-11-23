@@ -285,7 +285,7 @@ struct View {
     gens: ViewGens,
 }
 /// A press's double-press matcher, its time, and whether a binding's command accepts the press where it lands.
-type ChordMatch<'a> = (&'a mut Matcher, f64, &'a dyn Fn(&CommandRef) -> bool);
+type ChordMatch<'a> = (&'a mut Matcher, f64, bool, &'a dyn Fn(&CommandRef) -> bool);
 
 /// What a resolution read besides the board's own generation and the gate.
 #[derive(Default)]
@@ -867,12 +867,12 @@ impl KeyScopes {
         f(&Active { panel, contexts: &contexts, typing }, outer)
     }
 
-    /// What a press of `input` runs, read through `layout`. With `matcher` and the press's time the press counts toward
-    /// a double press; without, it is matched on its own. With a matcher, a binding of a command `accept` refuses
-    /// (disabled where the press lands) is passed over for the press's next binding.
+    /// What a press of `input` runs, read through `layout`. With `matcher`, the press's time and whether it is a held
+    /// key's repeat, a press counts toward a double press; without, it is matched on its own. With a matcher, a binding
+    /// of a command `accept` refuses (disabled where the press lands) is passed over for the press's next binding.
     fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<ChordMatch<'_>>) -> Option<Hit> {
         self.matching(typing, |active, outer| match matcher {
-            Some((matcher, now, accept)) => matcher.press_where(layout, &self.keymap, &Press { input, repeat: false, now, active, outer }, accept),
+            Some((matcher, now, repeat, accept)) => matcher.press_where(layout, &self.keymap, &Press { input, repeat, now, active, outer }, accept),
             None => Matcher::single(layout, &self.keymap, input, active, outer),
         })
     }
@@ -2052,6 +2052,24 @@ pub(crate) fn begin(ctx: &Context) {
         let hit = if time - wait.since >= wait.delay { Some(wait.hold) } else { wait.tap }?;
         press(hit, Some(wait.key), time, place)
     };
+    // A binding whose command is disabled where the press lands (a window command with no floating window, a canvas's
+    // view command it does not offer) is passed over: the press runs the next binding of its chord, in an outer scope,
+    // or of its next chord candidate, as if the disabled one were unbound.
+    let enabled = |command: &CommandRef| {
+        let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
+        resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
+    };
+    // Whether a text component has the keys for `shortcut`'s press; one that lets command keys through leaves their
+    // presses to the app's commands.
+    let typing_at = |shortcut: &keys::Shortcut| {
+        let command_key = shortcuts.command_keys
+            && shortcuts
+                .layout
+                .candidates(&shortcut.input)
+                .first()
+                .is_some_and(|chord| TypingRule::CommandKeysOnly.fires(chord, keys.keymap.platform()));
+        shortcuts.typing && !shortcut.canvas && !command_key
+    };
     let (mut fired, mut dimmed) = (Vec::new(), Vec::new());
     let mut changes = shortcuts.mods.iter().map(|(index, _)| *index).peekable();
     for (index, shortcut) in shortcuts.keys.iter().enumerate() {
@@ -2070,28 +2088,26 @@ pub(crate) fn begin(ctx: &Context) {
                 let held = with(ctx, |board| key.and_then(|key| board.held.iter().position(|held| held.key == key)).map(|at| board.held.remove(at)));
                 fired.extend(held.map(|held| release_fired(held, shortcut.input.mods, time, Some(shortcut.place))));
             }
-            _ => {
+            FirePhase::Repeat => {
+                // A held key's repeat (`RootEnv::shortcuts_repeat`) runs its chord's command again, on its own: it
+                // completes no double press and settles no wait, and the key a momentary or tool command holds stays
+                // held by its press. The key of a wait or of a hold binding repeats nothing.
+                let typing = typing_at(shortcut);
+                if wait.as_ref().is_some_and(|wait| Some(wait.key) == key) || keys.hold(&shortcuts.layout, &shortcut.input, typing).is_some() {
+                    continue;
+                }
+                let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, true, &enabled)));
+                let repeated = tap.and_then(|tap| press(tap, None, time, Some(shortcut.place)));
+                fired.extend(repeated.map(|fired| Fired { phase: FirePhase::Repeat, ..fired }));
+            }
+            FirePhase::Press => {
                 // Another key's press settles the wait first: keys act in the order they went down.
                 fired.extend(settle(wait.take(), time, Some(shortcut.place)));
-                // A binding whose command is disabled where the press lands (a window command with no floating
-                // window, a canvas's view command it does not offer) is passed over: the press runs the next binding
-                // of its chord, in an outer scope, or of its next chord candidate, as if the disabled one were unbound.
-                let enabled = |command: &CommandRef| {
-                    let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
-                    resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
-                };
-                // A text component that lets command keys through leaves their presses to the app's commands.
-                let command_key = shortcuts.command_keys
-                    && shortcuts
-                        .layout
-                        .candidates(&shortcut.input)
-                        .first()
-                        .is_some_and(|chord| TypingRule::CommandKeysOnly.fires(chord, keys.keymap.platform()));
-                let typing = shortcuts.typing && !shortcut.canvas && !command_key;
+                let typing = typing_at(shortcut);
                 let hold = key
                     .filter(|_| !typing && !modal_at_start)
                     .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
-                let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled)));
+                let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, false, &enabled)));
                 match (hold, tap) {
                     (Some((key, hold)), tap) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
                     (None, Some(tap)) => fired.extend(press(tap, key, time, Some(shortcut.place))),
