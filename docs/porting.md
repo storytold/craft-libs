@@ -189,14 +189,10 @@ channel.finish_captures(finished, &mut |path, bytes| self.write_automation_file(
 let settle = settle_ms(ctx.global_style().animation_time);
 while let Some(req) = channel.next_request() {
     let reply = match req.method.as_str() {
-<<<<<<< HEAD
         "ui.screenshot" => match ScreenshotParams::from_params(&req.params) {
-            Ok(params) => Reply::screenshot(self.next_capture_token(), params, ViewportId::ROOT),
+            Ok(params) => Reply::screenshot(self.next_capture_token(), params, viewport),
             Err(e) => Reply::from_result(Err(e)),
         },
-=======
-        "ui.screenshot" => Reply::screenshot(self.next_capture_token(), path_param(&req.params), viewport),
->>>>>>> origin/next
         "ui.resize" => { /* send ViewportCommand::InnerSize */ Reply::from_result(Ok(json!(null))) }
         "ui.set" => Reply::from_result(self.ui_set(&req.params)),
         other => Reply::from_result(Err(format!("unknown method {other}"))),

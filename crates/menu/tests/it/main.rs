@@ -1,13 +1,8 @@
 //! The integration binary of craft-menu: every test is a registered trial.
 
-<<<<<<< HEAD
-mod bar;
-mod layout;
-mod mnemonic;
-mod native;
-=======
 #[cfg(target_os = "macos")]
 mod appkit;
+pub(crate) mod bar;
 pub(crate) mod from_items;
 pub(crate) mod keytips;
 pub(crate) mod layout;
@@ -16,7 +11,6 @@ pub(crate) mod mnemonic;
 pub(crate) mod native;
 pub(crate) mod ribbon;
 pub(crate) mod ribbon_gallery;
->>>>>>> origin/next
 mod sample;
 pub(crate) mod shortcuts;
 pub(crate) mod title_bar;

@@ -34,13 +34,11 @@ agents = ["craft-control/agents", "dep:craft-host"]
 # The screenshot reply's PNG and its inline base64 (the control channel builds on every target with `ui`).
 base64 = "0.23"
 craft-behavior = { workspace = true, optional = true }
-<<<<<<< HEAD
-craft-host = { workspace = true, optional = true }
-=======
 # The agents code without a UI toolkit (settings, the launcher's switch, the connection file, the
 # CLI's live client), re-exported by `agents` so every app shares one copy.
 craft-control = { workspace = true }
->>>>>>> origin/next
+# The recorded actions' file picks (`ui`) go through the host on every target.
+craft-host = { workspace = true, optional = true }
 craft-keymap = { workspace = true, optional = true }
 craft-theme = { workspace = true }
 craft-ui = { workspace = true, optional = true }
@@ -48,27 +46,12 @@ egui = { workspace = true, optional = true }
 png = "0.17"
 serde = { workspace = true }
 serde_json = { workspace = true }
-<<<<<<< HEAD
 # `std::time::Instant` panics on wasm; this is the same type on native.
 web-time = "1.1"
 
-# The server and client, the token files, the profiler and the trace.
+# The server, client, token files, profiler and trace.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-platform = { workspace = true }
-craft-ai-agents = { workspace = true, optional = true }
-craft-atomic = { workspace = true, optional = true }
-craft-flags = { workspace = true, optional = true }
-=======
-web-time = "1.1"
-# The screenshot queue encodes and inlines PNGs on every target the control channel builds for.
-base64 = "0.22"
-png = "0.17"
-
-# The server, client, profiler and trace.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-platform = { workspace = true }
-craft-host = { workspace = true, optional = true }
->>>>>>> origin/next
 getrandom = "0.3"
 hmac = "0.12"
 log = "0.4"

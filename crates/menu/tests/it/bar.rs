@@ -1,19 +1,20 @@
 //! The in-window bar's own rules over the model.
 
 use craft_menu::{Item, Menu, MenuBar, MenuBarUi, Node};
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Fixture, trial};
 
 /// A submenu the app disables stays greyed and never opens, though its rows could be chosen
 /// (Open Recent with a placeholder row while the app keeps no recent files).
 #[trial]
 fn a_disabled_submenu_is_greyed_and_does_not_open() {
-    let bar = MenuBar::new(vec![Menu::new(
+    let bar = Tracked::new(MenuBar::new(vec![Menu::new(
         "File",
         vec![
             Node::submenu("Open Recent", vec![Item::new("file.recent.a", "notes.txt").into()]).enabled(false),
             Node::submenu("Export", vec![Item::new("file.export.pdf", "PDF").into()]),
         ],
-    )]);
+    )]));
     let mut fixture = Fixture::new(move |ui| {
         MenuBarUi::new(&bar).show(ui);
     });

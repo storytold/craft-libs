@@ -92,13 +92,8 @@ impl At {
 
     fn in_space(p: &Params<'_>, pos: Pos2) -> Result<Self, String> {
         Ok(match p.choice("coordinates", "coordinates", &["screen", "document"])?.unwrap_or("screen") {
-<<<<<<< HEAD
-            "document" => Self::Document(pos),
+            "document" => Self::Document(pos, p.uint_field("page")?.map_or(0, |page| usize::try_from(page).unwrap_or(usize::MAX))),
             _ => Self::Screen(pos),
-=======
-            "document" => Self::Document(pos2(x, y), p.uint_field("page")?.map_or(0, |page| usize::try_from(page).unwrap_or(usize::MAX))),
-            _ => Self::Screen(pos2(x, y)),
->>>>>>> origin/next
         })
     }
 

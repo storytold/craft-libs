@@ -419,7 +419,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn stacked_parts_of_one_priority_rank_by_their_order_before_the_nearest_centre() {
         let at = pos2(50.0, 50.0);
         let owner = |shapes: &[Shape<u8>]| resolve(shapes, at, ResolveFor::Press).map(|w| w.owner);
@@ -428,7 +427,9 @@ mod tests {
         assert_eq!(owner(&[far(), near()]), Some(1), "unstacked, the nearer centre wins");
         assert_eq!(owner(&[far().stacking(1), near()]), Some(2), "the higher stacking order wins though the press is nearer the other's centre");
         assert_eq!(owner(&[near().stacking(1), far().stacking(1)]), Some(1), "one order: the nearest centre decides");
-=======
+    }
+
+    #[test]
     fn a_polyline_hits_within_its_own_reach_and_a_bad_reach_is_a_lines() {
         let points = vec![pos2(0.0, 0.0), pos2(100.0, 0.0)];
         let line = HitShape::polyline(points.clone(), false);
@@ -440,6 +441,5 @@ mod tests {
         for bad in [f32::NAN, f32::INFINITY, -1.0] {
             assert_eq!(HitShape::polyline_within(points.clone(), false, bad), line);
         }
->>>>>>> origin/next
     }
 }

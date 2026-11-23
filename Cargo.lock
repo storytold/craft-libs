@@ -2059,13 +2059,9 @@ version = "0.1.0"
 name = "craft-automation"
 version = "0.1.0"
 dependencies = [
-<<<<<<< HEAD
  "base64 0.23.1",
  "craft-ai-agents",
  "craft-atomic",
-=======
- "base64 0.22.1",
->>>>>>> origin/next
  "craft-behavior",
  "craft-control",
  "craft-host",
@@ -3731,11 +3727,7 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
-<<<<<<< HEAD
  "craft-theme",
-=======
- "craft-host",
->>>>>>> origin/next
  "craft-ui",
  "craft-winprint-gdi",
  "egui",
@@ -3938,10 +3930,6 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
-<<<<<<< HEAD
-=======
- "wasm-bindgen-test",
->>>>>>> origin/next
  "web-sys",
  "web-time",
 ]
@@ -4364,11 +4352,7 @@ dependencies = [
  "smallvec",
  "syn 2.0.119",
  "toml",
-<<<<<<< HEAD
  "wasm-bindgen-futures",
-=======
- "typeid",
->>>>>>> origin/next
  "web-time",
 ]
 

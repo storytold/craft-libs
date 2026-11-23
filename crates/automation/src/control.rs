@@ -14,10 +14,6 @@
 //! two happened, once, between the UI thread and the transport.
 
 use std::sync::mpsc::{Receiver, Sender};
-<<<<<<< HEAD
-=======
-use web_time::Instant;
->>>>>>> origin/next
 
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
@@ -140,22 +136,15 @@ pub enum Reply {
 }
 
 impl Reply {
-<<<<<<< HEAD
-    /// A `ui.screenshot` reply for `token` of `viewport` with what [`ScreenshotParams::from_params`] read: the PNG
-    /// goes to `params.path` or is inlined when `None`, and shows `params.region` or the whole window.
-    pub fn screenshot(token: u64, params: ScreenshotParams, viewport: egui::ViewportId) -> Self {
-        Self::Screenshot { token, path: params.path, region: params.region, viewport }
-=======
     /// A `ui.accessTree` reply: held until the window's settled access tree is available.
     pub fn access_tree() -> Reply {
         Reply::AccessTree
     }
 
-    /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
-    /// when `None`.
-    pub fn screenshot(token: u64, path: Option<String>, viewport: egui::ViewportId) -> Self {
-        Self::Screenshot { token, path, viewport }
->>>>>>> origin/next
+    /// A `ui.screenshot` reply for `token` of `viewport` with what [`ScreenshotParams::from_params`] read: the PNG
+    /// goes to `params.path` or is inlined when `None`, and shows `params.region` or the whole window.
+    pub fn screenshot(token: u64, params: ScreenshotParams, viewport: egui::ViewportId) -> Self {
+        Self::Screenshot { token, path: params.path, region: params.region, viewport }
     }
 
     /// `Done` with the [`result_reply`] of a method's result.
@@ -220,15 +209,10 @@ impl ControlChannel {
             }
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
-<<<<<<< HEAD
+            Reply::AccessTree => self.tree_waiters.push(reply),
             Reply::Screenshot { token, path, region, viewport } => {
                 let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
                 if let Err((reply, e)) = self.captures.admit(request, motion::now()) {
-=======
-            Reply::AccessTree => self.tree_waiters.push(reply),
-            Reply::Screenshot { token, path, viewport } => {
-                if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
->>>>>>> origin/next
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }

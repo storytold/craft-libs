@@ -38,11 +38,6 @@ pub mod dock;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
-<<<<<<< HEAD
-// The native client reads `REPLY_DEADLINE` without `ui`; the control channel reads the validators on every target.
-#[cfg(any(feature = "ui", not(target_arch = "wasm32")))]
-=======
->>>>>>> origin/next
 pub mod protocol;
 #[cfg(feature = "ui")]
 pub mod screenshot;

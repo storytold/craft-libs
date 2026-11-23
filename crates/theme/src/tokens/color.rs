@@ -326,13 +326,8 @@ impl ColorTokens {
                 inverse: c,
                 shadow: c,
             },
-<<<<<<< HEAD
             text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c, on_inverse: c },
-            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, focus: c },
-=======
-            text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c },
             line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
->>>>>>> origin/next
             accent: AccentColors {
                 solid: c,
                 hover: c,
@@ -657,7 +652,15 @@ impl ColorToken {
         };
         matches!(
             self,
-            SurfaceBackground | SurfaceCanvas | SurfaceCanvasPattern | SurfaceChrome | SurfacePanel | SurfaceRaised | SurfaceSunken | SurfaceKnob | SurfaceInverse
+            SurfaceBackground
+                | SurfaceCanvas
+                | SurfaceCanvasPattern
+                | SurfaceChrome
+                | SurfacePanel
+                | SurfaceRaised
+                | SurfaceSunken
+                | SurfaceKnob
+                | SurfaceInverse
         )
     }
 }

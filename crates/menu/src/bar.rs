@@ -83,13 +83,6 @@ pub struct MenuBarUi<'a> {
     compact: bool,
 }
 
-<<<<<<< HEAD
-impl<'a> MenuBarUi<'a> {
-    /// The bar for `bar`, already laid out ([`crate::layout`]), on [`Target::current`].
-    pub fn new(bar: &'a MenuBar) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: Target::current(), english: None, preferred: &[], keyboard: None, help_search: false, icons: true, compact: false }
-    }
-=======
 /// Every input of the bar's view.
 #[derive(MemoProps)]
 struct BarProps<'a> {
@@ -99,13 +92,14 @@ struct BarProps<'a> {
     keyboard: bool,
     help: Option<usize>,
     label: Label,
+    icons: bool,
+    compact: bool,
 }
->>>>>>> origin/next
 
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
     pub fn new(bar: &'a Tracked<MenuBar>) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: None, preferred: &[], keyboard: None, help_search: false }
+        MenuBarUi { bar, target: None, preferred: &[], keyboard: None, help_search: false, icons: true, compact: false }
     }
 }
 
@@ -158,16 +152,7 @@ impl<'a> MenuBarUi<'a> {
     /// the root window instead.
     pub fn show(self, ui: &mut Ui) -> MenuBarOutput {
         let env = Env::of(ui);
-<<<<<<< HEAD
-        let rows = Rows::new(self.target).english(self.english).preferred(self.preferred).icons(self.icons).compact(self.compact);
-        let labels =
-            rows.labels(&self.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
-        let shared = &rows;
-        let titles: Vec<MenuTitle<'_>> =
-            self.bar.menus.iter().zip(labels).map(|(menu, label)| MenuTitle::new(label, move |ui| shared.show(ui, &menu.children))).collect();
-=======
         let target = self.target.unwrap_or_else(|| Target::of_shell(env.view().shell()));
->>>>>>> origin/next
         let help = self.help_search.then(|| self.bar.menus.iter().position(|menu| menu.role == MenuRole::Help)).flatten();
         let props = BarProps {
             bar: self.bar,
@@ -176,6 +161,8 @@ impl<'a> MenuBarUi<'a> {
             keyboard: self.keyboard.unwrap_or(target != Target::Mac),
             help,
             label: env.words::<BarWords>().label.clone(),
+            icons: self.icons,
+            compact: self.compact,
         };
         MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING })
     }
@@ -183,7 +170,7 @@ impl<'a> MenuBarUi<'a> {
 
 /// The bar's view: the titles through [`craft_ui::menu::MenuBar`], each menu's rows as command rows.
 fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
-    let rows = Rows::new(props.target).preferred(props.preferred);
+    let rows = Rows::new(props.target).preferred(props.preferred).icons(props.icons).compact(props.compact);
     let env = Env::of(ui);
     let os = env.view().shell().os;
     // The text of every menu is worked out once for these inputs and kept: a pass that shows an open menu again writes none of it.

@@ -525,7 +525,6 @@ struct Open<T> {
     dragging: bool,
     /// Moved past slop on a target that senses no drag: the click is gone and nothing starts.
     abandoned: bool,
-<<<<<<< HEAD
     /// Moved past slop in this pass on a target that clicks and passes its drag (`Sense::PASSES_DRAG`), with the
     /// pointer at the pass's end: no click and no drag until [`PressMachine::hand_over`] gives the press its new
     /// target. The next pass abandons a press no shape took.
@@ -533,13 +532,11 @@ struct Open<T> {
     /// A press passed to this target ([`PressPick::passed`]) whose drag has not started: it reports nothing, and a
     /// release or cancel ends it unreported. Its move past slop starts the drag with `DragStart`, as a hand-over does.
     silent: bool,
-=======
     /// The pointer left the window ([`PointerEvent::Gone`]): the click is gone, but a target that senses a drag still
     /// starts it from the moves that follow. The button is still down and the window keeps getting the pointer's moves
     /// and release while it is outside, so a press near a window edge (a window's resize grip) that leaves the window
     /// before it passes slop still drags.
     left: bool,
->>>>>>> origin/next
     /// A pass reported the press: later passes within slop report `Held`, not `Down`.
     reported: bool,
     /// A pass reported the drag's start: later passes report `Drag`.
@@ -558,11 +555,7 @@ impl<T> Open<T> {
 
     /// A release now is a click.
     fn clicks(&self) -> bool {
-<<<<<<< HEAD
-        !self.dragging && !self.abandoned && self.passing.is_none() && self.sense.contains(Sense::CLICK)
-=======
-        !self.dragging && !self.abandoned && !self.left && self.sense.contains(Sense::CLICK)
->>>>>>> origin/next
+        !self.dragging && !self.abandoned && !self.left && self.passing.is_none() && self.sense.contains(Sense::CLICK)
     }
 }
 
@@ -700,7 +693,6 @@ impl<T: Copy> PressMachine<T> {
                             let sense = if capture_only && !clicks { pick.sense - Sense::CLICK } else { pick.sense };
                             (pick, sense, clicks)
                         })
-<<<<<<< HEAD
                         .filter(|(_, sense, clicks)| match button {
                             PointerButton::Primary => true,
                             PointerButton::Middle => *clicks || sense.contains(Sense::DRAG),
@@ -715,26 +707,13 @@ impl<T: Copy> PressMachine<T> {
                                 start: PressStart::new(at, button, time, clicks),
                                 dragging: false,
                                 abandoned: false,
+                                left: false,
                                 passing: None,
                                 silent,
                                 reported: silent,
                                 drag_reported: false,
                                 released_at: None,
                             }
-=======
-                        .filter(|(_, sense, clicks)| !capture_only || *clicks || sense.contains(Sense::DRAG))
-                        .map(|(target, sense, _)| (target, sense))
-                        .map(|(target, sense)| Open {
-                            target,
-                            sense,
-                            start: PressStart::new(at, button, time, clicks),
-                            dragging: false,
-                            abandoned: false,
-                            left: false,
-                            reported: false,
-                            drag_reported: false,
-                            released_at: None,
->>>>>>> origin/next
                         });
                 }
                 PointerEvent::Released { button, pos: at } => {

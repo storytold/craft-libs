@@ -7,14 +7,11 @@ use std::sync::Arc;
 
 use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
-<<<<<<< HEAD
-use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings, HostFontGroup, HostFontRow, SIMILAR_COUNT, family_rows};
-=======
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, HostFontGroup, HostFontRow, MissingAdvice,
+    SIMILAR_COUNT, family_rows,
 };
->>>>>>> origin/next
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::buttons::ControlPlace;
 use craft_ui::contract::tooltip::DELAY;
@@ -44,14 +41,11 @@ struct Seen {
     rested: Vec<String>,
     /// The family the open list proposes as a live preview, as the last pass reported it.
     preview: Option<String>,
-<<<<<<< HEAD
-    /// The keys of the host rows picked, in order.
-    host_picks: Vec<String>,
-=======
     actions: Vec<usize>,
     /// The id of the shown picker, as the last pass reported it.
     id: Option<egui::Id>,
->>>>>>> origin/next
+    /// The keys of the host rows picked, in order.
+    host_picks: Vec<String>,
 }
 
 fn rig(catalog: Arc<Catalog>, served: Vec<String>) -> (Fixture, Rc<RefCell<Seen>>) {

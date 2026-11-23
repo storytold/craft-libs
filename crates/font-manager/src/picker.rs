@@ -18,19 +18,12 @@ use craft_host::Section;
 use craft_theme::variant::Tone;
 use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
-<<<<<<< HEAD
     Access, Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
-};
-use craft_ui::fonts::FontRef;
-use craft_ui::list::{ThumbSize, TrailingPart};
-=======
-    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
 };
 use craft_ui::controls::disclosure::DisclosureGlyph;
+use craft_ui::fonts::FontRef;
 use craft_ui::list::{ListRow, ThumbSize};
->>>>>>> origin/next
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{EnvView, Label};
 use craft_ui::runtime::memory::StageAccess;
@@ -416,13 +409,10 @@ pub struct FontPickerOutput {
     /// of the open list (Photoshop previews on hover). It ends when the pointer leaves the rows, the list closes
     /// (Escape, a press outside) or a row is picked. The field's value and text stay.
     pub preview: Preview<String>,
-<<<<<<< HEAD
-    /// The key of the host face or action row run in this pass; a host pick does not write the `family` binding.
-    pub host_picked: Option<String>,
-=======
     /// The index of the action row picked, in the `actions` the host gave.
     pub action: Option<usize>,
->>>>>>> origin/next
+    /// The key of the host face or action row run in this pass; a host pick does not write the `family` binding.
+    pub host_picked: Option<String>,
 }
 
 impl Outcome for FontPickerOutput {
@@ -461,13 +451,10 @@ fn text_key() -> TextKey<String> {
 struct FamilyCodec {
     infos: Arc<FamilyInfos>,
     language: String,
-<<<<<<< HEAD
-    /// The name of the host row shown as the field's value, which stands in for the family's name.
-    host: Option<String>,
-=======
     /// A typed name that is no installed family is a value too (Word's font box applies it as typed).
     free: bool,
->>>>>>> origin/next
+    /// The name of the host row shown as the field's value, which stands in for the family's name.
+    host: Option<String>,
 }
 
 impl FamilyCodec {
@@ -611,15 +598,6 @@ pub struct FontPicker<'a> {
     /// Families the host can fetch but that are not installed, listed with the served mark.
     #[prop]
     served: &'a [String],
-<<<<<<< HEAD
-    /// Host groups listed above the catalogue families, in order, with a separator between groups.
-    #[prop]
-    host: &'a [HostFontGroup<'a>],
-    /// The key of the host row shown as the field's value.
-    #[prop]
-    current_host: Option<String>,
-    host_picked: Option<String>,
-=======
     /// How the list is laid out: the library picker, or Word's plain font box.
     #[prop]
     kind: FontPickerKind,
@@ -633,7 +611,13 @@ pub struct FontPicker<'a> {
     #[prop]
     advice: MissingAdvice,
     action: Option<usize>,
->>>>>>> origin/next
+    /// Host groups listed above the catalogue families, in order, with a separator between groups.
+    #[prop]
+    host: &'a [HostFontGroup<'a>],
+    /// The key of the host row shown as the field's value.
+    #[prop]
+    current_host: Option<String>,
+    host_picked: Option<String>,
 }
 
 impl<'a> FontPicker<'a> {
@@ -651,17 +635,14 @@ impl<'a> FontPicker<'a> {
             preview: Preview::Unchanged,
             preview_text: None,
             served: &[],
-<<<<<<< HEAD
-            host: &[],
-            current_host: None,
-            host_picked: None,
-=======
             kind: FontPickerKind::default(),
             actions: &[],
             shown_as: None,
             advice: MissingAdvice::default(),
             action: None,
->>>>>>> origin/next
+            host: &[],
+            current_host: None,
+            host_picked: None,
         }
         .label(label)
         .enabled(catalog.is_ready())
@@ -678,14 +659,11 @@ impl<'a> FontPicker<'a> {
         all
     }
 
-<<<<<<< HEAD
-    fn codec(&self, env: &EnvView<'_>) -> FamilyCodec {
-        FamilyCodec { infos: infos(self.catalog), language: ui_language(env), host: self.host_name() }
-=======
     /// The note for `family` when it is shown in another face because the catalog lacks it, by the rule the Missing
-    /// Fonts dialog uses: the missing-font sentence, then the advice the host chose.
+    /// Fonts dialog uses: the missing-font sentence, then the advice the host chose. A host row shown as the value
+    /// has none.
     fn missing_note(&self, family: &str, words: &MissingFontsWords) -> Option<Label> {
-        let face = self.shown_as.filter(|_| self.catalog.is_ready())?;
+        let face = self.shown_as.filter(|_| self.catalog.is_ready() && self.host_name().is_none())?;
         let status = document_fonts(self.catalog, &[DocumentFont::new(family, "", None)]).into_iter().next()?.status;
         if status != FontStatus::Missing {
             return None;
@@ -699,8 +677,7 @@ impl<'a> FontPicker<'a> {
     }
 
     fn codec(&self, infos: Arc<FamilyInfos>, env: &EnvView<'_>) -> FamilyCodec {
-        FamilyCodec { infos, language: ui_language(env), free: self.kind == FontPickerKind::Plain }
->>>>>>> origin/next
+        FamilyCodec { infos, language: ui_language(env), free: self.kind == FontPickerKind::Plain, host: self.host_name() }
     }
 
     /// The name of the host row `current_host` names, which the field shows in place of the family.
@@ -840,12 +817,10 @@ impl Component for FontPicker<'_> {
         }
         let mut options = TextOptions::new();
         options.select_on_focus = true;
-<<<<<<< HEAD
         options.mixed = cx.value().is_none();
         if options.mixed {
             options.placeholder = Some(cx.words::<FontPickerWords>().mixed.clone());
         }
-=======
         if !self.catalog.is_ready() {
             // The first scan runs on a background thread; the field asks again until it ends.
             self.catalog.scan_in_background();
@@ -855,7 +830,6 @@ impl Component for FontPicker<'_> {
             return;
         }
         let codec = self.codec(infos_of(cx.ui.ctx(), cx.id, self.catalog), &cx.env);
->>>>>>> origin/next
         cx.text(text_key(), placed.text, &codec, &family, &options);
     }
 
@@ -968,10 +942,14 @@ impl Component for FontPicker<'_> {
             settings.note_recent(family);
             write(&mut bind, &mut cx, settings, "Recent font");
         }
-<<<<<<< HEAD
-        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested, host_picked }
-=======
-        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested, action: self.action }
->>>>>>> origin/next
+        FontPickerOutput {
+            edit,
+            picked,
+            preview: self.preview,
+            picked_style: self.picked_style,
+            rested: self.rested,
+            action: self.action,
+            host_picked,
+        }
     }
 }

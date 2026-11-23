@@ -469,12 +469,7 @@ impl Component for PaintChip<'_> {
         let solid = cx.memory::<LastSolid>().0.unwrap_or(self.fallback);
         let current = FillKind::of(&paint);
         let sampled = self.sampled;
-<<<<<<< HEAD
-        let swatch_words = cx.words::<SwatchesWords>();
         let recent = self.recent;
-=======
-        let recent_cells: Vec<(Label, Srgba)> = self.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
->>>>>>> origin/next
         let full_picker = self.full_picker;
         let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
         let solid_now = if let Paint::Solid(color) = &paint { Some(*color) } else { None };

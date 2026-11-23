@@ -453,8 +453,17 @@ impl Node {
 
     /// An enabled submenu shown on every platform.
     pub fn submenu(label: impl Into<String>, children: Vec<Node>) -> Node {
-<<<<<<< HEAD
-        Node::Submenu { label: label.into(), children, role: None, platforms: Platforms::ALL, enabled: true }
+        Node::Submenu { label: label.into(), english: None, children, role: None, platforms: Platforms::ALL, enabled: true }
+    }
+
+    /// Set the English name of an item's label or a submenu's title.
+    pub fn english(mut self, english: impl Into<String>) -> Node {
+        match &mut self {
+            Node::Item(it) => it.english = Some(english.into()),
+            Node::Submenu { english: e, .. } => *e = Some(english.into()),
+            Node::Separator | Node::Standard { .. } => {}
+        }
+        self
     }
 
     /// Set whether an item can be chosen or a submenu opened:
@@ -463,16 +472,6 @@ impl Node {
         match &mut self {
             Node::Item(it) => it.enabled = on,
             Node::Submenu { enabled, .. } => *enabled = on,
-=======
-        Node::Submenu { label: label.into(), english: None, children, role: None, platforms: Platforms::ALL }
-    }
-
-    /// Set the English name of an item's label or a submenu's title.
-    pub fn english(mut self, english: impl Into<String>) -> Node {
-        match &mut self {
-            Node::Item(it) => it.english = Some(english.into()),
-            Node::Submenu { english: e, .. } => *e = Some(english.into()),
->>>>>>> origin/next
             Node::Separator | Node::Standard { .. } => {}
         }
         self
@@ -765,18 +764,6 @@ pub fn from_items(tops: &[&str], rows: &[Row]) -> MenuBar {
 /// Drop separators at the start or end of a level and collapse runs of them, and drop empty
 /// submenus, at every depth, in place. A submenu holding only a disabled placeholder (`No Recent Files`)
 /// stays.
-<<<<<<< HEAD
-pub fn tidy(nodes: Vec<Node>) -> Vec<Node> {
-    let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
-    for n in nodes {
-        let n = match n {
-            Node::Submenu { label, children, role, platforms, enabled } => {
-                let children = tidy(children);
-                if children.is_empty() {
-                    continue;
-                }
-                Node::Submenu { label, children, role, platforms, enabled }
-=======
 pub fn tidy(nodes: &mut Vec<Node>) {
     let mut previous_separator = true;
     nodes.retain_mut(|node| {
@@ -784,7 +771,6 @@ pub fn tidy(nodes: &mut Vec<Node>) {
             tidy(children);
             if children.is_empty() {
                 return false;
->>>>>>> origin/next
             }
         }
         let separator = matches!(node, Node::Separator);
