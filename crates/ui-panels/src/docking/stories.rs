@@ -4,14 +4,10 @@ use super::SplitFramesCx as _;
 use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
-<<<<<<< HEAD
-use super::{DockCommands, DockGroup, DockPanels, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelTitle, SplitArea, Splitter, WindowMenuRows};
-use crate::buttons::Button;
-=======
 use super::{
     DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows,
 };
->>>>>>> origin/next
+use crate::buttons::Button;
 use crate::contract::SizeLimits;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};
@@ -105,7 +101,7 @@ fn a_group_in_a_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(DockGroup<'static, usize>, covers = [Default])]
 fn a_group_with_a_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
-    DockGroup::new(LAYERS, &panels, panels[0].key)
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key)
         .footer(|ui, _| {
             Button::new("Apply All").show(ui);
         })
@@ -118,7 +114,7 @@ fn a_group_with_a_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(DockGroup<'static, usize>, covers = [Default])]
 fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = vec![title_of(LAYERS).count(Some(3)).caption(Some("2 hidden".into())), title_of(CHANNELS).count(Some(4))];
-    DockGroup::new(LAYERS, &panels, panels[0].key).show(ui, |_, _| ()).output.into()
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
 }
 
 /// A click on the panel menu button opens the group's panel menu.

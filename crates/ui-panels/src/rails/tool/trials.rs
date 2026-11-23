@@ -156,7 +156,6 @@ fn the_tool_rail_shows_its_buttons_icons_in_its_glyph_role() {
     assert!(tool.color.off.rest != tool.color.off.hover, "a tool rail icon rests quieter than under the pointer");
 }
 
-<<<<<<< HEAD
 /// A searchable drawer over the Drawing (Move, Brush, Pencil) and Retouching (Eraser, Clone Stamp) groups, with the
 /// clone stamp titled "Klonstempel" as a translation would show it, after typing `query` into its search field.
 fn searched(query: &str) -> Fixture {
@@ -207,7 +206,8 @@ fn a_searchable_drawer_keeps_a_heading_only_with_a_matching_tool() {
     let by_id = searched(&id);
     assert!(shown(&by_id, "Eraser") && shown(&by_id, "Retouching"), "the command id {id} finds the eraser");
     assert!(!shown(&by_id, "Drawing") && !shown(&by_id, "Brush"), "the command id {id} hides the other group");
-=======
+}
+
 /// What a rail scene saw: the footer's runs, the rail's reports and the Edit Toolbar response, per frame.
 #[derive(Default)]
 struct Seen {
@@ -280,7 +280,6 @@ fn a_click_on_a_slot_selects_its_tool_once() {
     fixture.click_at(brush.center());
     fixture.settle();
     assert_eq!(seen.borrow().selected, [1], "the click selected the brush once");
->>>>>>> origin/next
 }
 
 fn near(a: f32, b: f32) -> bool {

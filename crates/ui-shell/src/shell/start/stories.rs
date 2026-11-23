@@ -1,14 +1,9 @@
 //! Stories of `StartScreen`.
 
-<<<<<<< HEAD
-use super::{FolderListing, PinnedFile, PinnedFolder, StartLink, StartPlace, StartScreen};
+use super::{FolderListing, PinnedFile, PinnedFolder, StartLayout, StartLink, StartPlace, StartScreen};
 use crate::buttons::Button;
 use crate::contract::{Bind, Props as _, Show as _};
 use crate::notices::Notice;
-=======
-use super::{StartLayout, StartLink, StartScreen};
-use crate::contract::Bind;
->>>>>>> origin/next
 use crate::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::runtime::env::Label;
 use crate::shell::{RecentFile, RecentList, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
@@ -132,7 +127,6 @@ fn screen(
     if let Some(hint) = extras.drop_hint {
         start = start.drop_hint(Label::from(hint.to_owned()));
     }
-<<<<<<< HEAD
     if extras.host_sections {
         start = start
             .section(StartPlace::BeforeRecent, |ui, _| {
@@ -142,12 +136,7 @@ fn screen(
                 let _ = Button::new(Label::from("Browse Samples…".to_owned())).id_salt("samples").show(ui);
             });
     }
-    let shown = start.show(ui).into();
-    *data.value("choice", Choice::default()) = choice;
-    shown
-=======
     start.show(ui).into()
->>>>>>> origin/next
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]

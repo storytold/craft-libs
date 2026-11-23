@@ -74,14 +74,9 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
 
 /// A grouped tool can also be dragged from the drawer into its own slot.
 #[trial]
-<<<<<<< HEAD
 fn a_grouped_tool_also_drags_from_the_drawer() {
-    let entry = stories().into_iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
-=======
-fn only_a_tool_off_the_toolbar_drags() {
     let registry = Registry::of(&[craft_ui::testing::register]);
     let entry = registry.stories().iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
->>>>>>> origin/next
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
     let opener = fixture.by_label("Edit Toolbar").expect("the rail's Edit Toolbar button");

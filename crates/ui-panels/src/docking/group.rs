@@ -9,28 +9,18 @@ use super::{PanelDrag, PanelKey, PanelTitle, Titles};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
 use crate::contract::{
-<<<<<<< HEAD
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, FooterRegion, HeaderEdge, HeaderParts,
-    HeaderRegion, ListDrag, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role,
-    Show as _, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
-=======
-    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion,
-    ListDrag, MeasureCx, MemoProps, MemoView, Name, Outbox, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _,
-    Role, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
->>>>>>> origin/next
+    HeaderRegion, ListDrag, MeasureCx, MemoProps, MemoView, Name, Outbox, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _,
+    PopupKind, Props as _, Role, Show as _, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::display::{Shade, Text};
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
-<<<<<<< HEAD
-use crate::sections::FooterBar;
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind, TypeRole};
-=======
 use crate::runtime::memory::sub;
-use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind};
->>>>>>> origin/next
+use crate::sections::FooterBar;
+use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
@@ -374,13 +364,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The host's items before the tab strip.
     #[prop(func = "FnMut(&mut egui::Ui, &mut BodyCx<'_>)")]
     extra: Option<HeaderHook<'a>>,
-<<<<<<< HEAD
     /// The shown panel's footer, pinned under the body: [`footer`](DockGroup::footer).
     footer: Option<HeaderHookFn<'a>>,
-    /// The size of the group this pass, for the drag ghost.
-=======
     /// The size of the group this pass, where its drag starts.
->>>>>>> origin/next
     size: Vec2,
     reported: Reported,
 }
@@ -418,7 +404,6 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         .label(title)
     }
 
-<<<<<<< HEAD
     /// The shown panel's footer: the closure fills a footer bar pinned under the body, across the group, that stays in
     /// view while the body scrolls. A minimized group shows none.
     #[must_use]
@@ -428,10 +413,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
         self
     }
 
-    /// Whether the panel menu button shows: it is asked for and the menu has rows.
-=======
     /// Whether the panel menu button shows: it is asked for and the group has a menu.
->>>>>>> origin/next
     fn shows_menu_button(&self) -> bool {
         self.panel_menu_shown && self.menu.is_some()
     }
@@ -603,18 +585,16 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         HeaderParts::NONE.end(band + button)
     }
 
-<<<<<<< HEAD
     fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
         if let Some(content) = self.footer.as_mut() {
             FooterBar::body().show(ui, |ui, bar| content(ui, bar));
         }
     }
 
-    /// The host's items and the tab strip, on one line, a tab with its panel's count; then the shown panel's caption.
-=======
-    /// The host's items, then the tab row, on one line. The tab row is a memoized view (`tab_row`): it runs when its
-    /// tabs, its room or the input on it change, else it replays, and what the user did on it comes out of its outbox.
->>>>>>> origin/next
+    /// The host's items, then the tab row, on one line; then the shown panel's caption. The tab row is a memoized view
+    /// (`tab_row`): it runs when its tabs, its room or the input on it change, else it replays, and what the user did
+    /// on it comes out of its outbox. A titled group shows the shown panel's title, count and close button in place of
+    /// the tab row.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         for (command, state) in self.command_states.drain(..) {
             cx.publish(command, state);
@@ -623,13 +603,6 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             self.reported.commands.push(command);
         }
         let started = drop::started(&cx.env);
-<<<<<<< HEAD
-        let (panels, active, closable, wheel_selects, titled) = (self.panels, self.active, self.closable, self.wheel_selects_tabs, self.titled);
-        let close_name = words.close_panel.clone();
-        let menu_rows = self.menu.clone();
-        let panel_menu = words.panel_menu.clone();
-=======
->>>>>>> origin/next
         let mut extra = self.extra.take();
         let env = crate::runtime::env::Env::of(ui);
         let rtl = env.direction.is_rtl();
@@ -639,13 +612,35 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         // A raw egui layout: the host's items and the tab row sit side by side, and the header column's flow facts are
         // not theirs. The tab row takes the rest of the line, so the strip's empty room is its own, and nothing but the
         // memoized tab row runs in it, so a settled header replays.
-        let layout = if rtl { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+        let titled = self.titled;
+        let cross = if titled { egui::Align::Center } else { egui::Align::Min };
+        let layout = if rtl { egui::Layout::right_to_left(cross) } else { egui::Layout::left_to_right(cross) };
         let mut sent = Vec::new();
         let strip = ui
             .with_layout(layout, |ui| {
                 ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
+                let shown = self.panels.as_slice().iter().find(|panel| panel.key == self.active);
+                if titled && let Some(panel) = shown {
+                    Text::new(panel.title.clone()).role(TypeRole::Title).show(ui);
+                    if let Some(count) = panel.count {
+                        let count = env.format().integer(u64::try_from(count).unwrap_or(u64::MAX));
+                        Text::new(count).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+                    }
+                }
                 if let Some(hook) = extra.as_mut() {
                     hook.run(ui, cx);
+                }
+                if titled {
+                    let close_name = cx.words::<DockWords>().close_panel.clone();
+                    if let Some(panel) = shown.filter(|panel| self.closable && panel.closable) {
+                        let name = Label::from(close_name.fill(&[("name", panel.title.as_str())]));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(name).show(ui).clicked() {
+                                sent.push(TabEvent::Closed(panel.key));
+                            }
+                        });
+                    }
+                    return None;
                 }
                 let row = TabRow {
                     anchor: self.anchor.clone(),
@@ -668,105 +663,6 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         }
         let size = self.size;
         let reported = &mut self.reported;
-<<<<<<< HEAD
-        let drags = crate::runtime::drag::started(ui.ctx());
-        let ctx = ui.ctx().clone();
-        let cross = if titled { egui::Align::Center } else { egui::Align::Min };
-        let layout = if rtl { egui::Layout::right_to_left(cross) } else { egui::Layout::left_to_right(cross) };
-        ui.with_layout(layout, |ui| {
-            ui.spacing_mut().item_spacing.x = gap; // design: allow[style-mutation](the header lays its title cells with an egui layout and sets that layout's gap)
-            let shown = panels.iter().find(|panel| panel.key == active);
-            if titled {
-                if let Some(panel) = shown {
-                    Text::new(panel.title.clone()).role(TypeRole::Title).show(ui);
-                    if let Some(count) = panel.count {
-                        let count = env.format().integer(u64::try_from(count).unwrap_or(u64::MAX));
-                        Text::new(count).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
-                    }
-                }
-            }
-            if let Some(hook) = extra.as_mut() {
-                hook.run(ui, cx);
-            }
-            if titled {
-                let panel_name = shown.map_or_else(String::new, |panel| panel.title.as_str().to_owned());
-                let can_close = closable && shown.is_some_and(|panel| panel.closable);
-                if can_close {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if IconButton::new(IconId::new("close"))
-                            .size(ControlSize::Sm)
-                            .label(Label::from(close_name.fill(&[("name", panel_name.as_str())])))
-                            .show(ui)
-                            .clicked()
-                        {
-                            reported.closed.push(active);
-                        }
-                    });
-                }
-                return;
-            }
-            let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
-            let closes = |panel: &PanelTitle| closable && panel.closable;
-            let kind = if panels.iter().any(closes) { TabKind::Document } else { TabKind::Panel };
-            let mut strip = TabStrip::new(name.clone())
-                .kind(kind)
-                .shown(active)
-                .tear_off()
-                .natural_height(true)
-                .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
-                .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }));
-            if wheel_selects {
-                strip = strip.wheel_selects();
-            }
-            let strip = strip.show_items(ui, &source, &mut |key, _| {
-                let panel = panels.iter().find(|panel| &panel.key == key);
-                let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
-                // The panel's toggle command marks its tab as it marks the panel's rail button, with the hint to say why.
-                let resolved = panel.and_then(|panel| panel.command.clone()).map(|command| commands::resolve(&ctx, command));
-                let marked = resolved.as_ref().is_some_and(|resolved| IconButton::shows_marker(resolved));
-                let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(marked);
-                if let Some(count) = panel.and_then(|panel| panel.count) {
-                    tab = tab.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
-                }
-                match resolved.and_then(|resolved| resolved.hint).filter(|_| marked) {
-                    Some(hint) => tab.tooltip(hint),
-                    None => tab,
-                }
-            });
-            let strip_id = strip.response.response.id;
-            // A press on the group's empty body focuses its panel, as in Photoshop.
-            if surface_pressed {
-                focus::request(ui.ctx(), FocusTarget::Id(strip_id));
-            }
-            for event in strip.response.events {
-                if let crate::contract::CollectionEvent::Selection(craft_behavior::SelectionChange::Set(keys)) = event {
-                    reported.picked = keys.last().copied().or(reported.picked);
-                }
-            }
-            if let Some(dock) = dock {
-                register_insertions(ui.ctx(), dock, &anchor, panels, &strip.tab_rects, rtl);
-            }
-            reported.drag_started |= crate::runtime::drag::started(ui.ctx()) != drags
-                && crate::runtime::drag::active::<PanelDrag>(ui.ctx()).is_some_and(|drag| drag.from == from);
-            reported.picked = strip.picked.or(reported.picked);
-            reported.closed.extend(strip.closed);
-            reported.menu = strip.menu.or(reported.menu.take());
-            reported.torn_off = strip.torn_off.or(reported.torn_off.take());
-            // The strip's empty room is a handle the group is dragged by; a double click on it minimizes the group.
-            reported.empty_drag |= strip.empty_drag;
-            reported.toggle_minimized |= strip.empty_double;
-            if !menu_rows.is_empty() {
-                let rows = menu_rows.clone();
-                let shown = Menu::context(panel_menu.clone(), &strip.response.response)
-                    .show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked);
-                reported.item = shown.inner.flatten().or(reported.item);
-            }
-        });
-        if let Some(caption) = panels.iter().find(|panel| panel.key == active).and_then(|panel| panel.caption.clone()) {
-            Text::new(caption).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
-        }
-        self.extra = extra;
-=======
         for event in sent {
             match event {
                 TabEvent::Picked(key) => reported.picked = Some(key),
@@ -787,7 +683,9 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                 }
             }
         }
->>>>>>> origin/next
+        if let Some(caption) = self.panels.as_slice().iter().find(|panel| panel.key == self.active).and_then(|panel| panel.caption.clone()) {
+            Text::new(caption).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        }
     }
 }
 
@@ -841,14 +739,26 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         .shown(active)
         .tear_off()
         .natural_height(true)
+        .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
         .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
         strip = strip.wheel_selects();
     }
+    let ctx = ui.ctx().clone();
     let strip = strip.show_items(ui, &source, &mut |key, _| {
         let panel = panels.iter().find(|panel| &panel.key == key);
         let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
-        Tab::new(title).closable(panel.is_some_and(closes))
+        // The panel's toggle command marks its tab as it marks the panel's rail button, with the hint to say why.
+        let resolved = panel.and_then(|panel| panel.command.clone()).map(|command| commands::resolve(&ctx, command));
+        let marked = resolved.as_ref().is_some_and(|resolved| IconButton::shows_marker(resolved));
+        let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(marked);
+        if let Some(count) = panel.and_then(|panel| panel.count) {
+            tab = tab.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+        }
+        match resolved.and_then(|resolved| resolved.hint.clone()).filter(|_| marked) {
+            Some(hint) => tab.tooltip(hint),
+            None => tab,
+        }
     });
     for event in strip.response.events {
         if let crate::contract::CollectionEvent::Selection(craft_behavior::SelectionChange::Set(keys)) = event

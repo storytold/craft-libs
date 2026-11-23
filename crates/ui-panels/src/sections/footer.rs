@@ -396,28 +396,19 @@ impl DialogRole {
     /// accepting one, then a destructive proceed) and the answers that close the question after them, before Cancel;
     /// macOS and Linux put the accepting button last.
     fn rank(self, windows: bool) -> u8 {
-<<<<<<< HEAD
-        let rank = match self {
-            DialogRole::Other => 0,
-            DialogRole::Destructive => 1,
-            DialogRole::Cancel => 2,
-            DialogRole::Alternative => 3,
-            DialogRole::Accept => 4,
-        };
-        if windows { 4 - rank } else { rank }
-=======
         match (windows, self) {
             (false, DialogRole::Other | DialogRole::Alternate) => 0,
             (false, DialogRole::Destructive) => 1,
             (false, DialogRole::Cancel) => 2,
-            (false, DialogRole::Accept) => 3,
+            (false, DialogRole::Alternative) => 3,
+            (false, DialogRole::Accept) => 4,
             (true, DialogRole::Accept) => 0,
             (true, DialogRole::Destructive) => 1,
-            (true, DialogRole::Alternate) => 2,
-            (true, DialogRole::Cancel) => 3,
-            (true, DialogRole::Other) => 4,
+            (true, DialogRole::Alternative) => 2,
+            (true, DialogRole::Alternate) => 3,
+            (true, DialogRole::Cancel) => 4,
+            (true, DialogRole::Other) => 5,
         }
->>>>>>> origin/next
     }
 }
 
@@ -539,20 +530,16 @@ enum Content {
 }
 
 /// The indexes of `roles` in display order: by role rank, and in the given order within a rank. A column puts
-/// `Accept` on top, `Alternate` and `Cancel` under it on every platform, then the others.
+/// `Accept` on top, `Alternate`, `Cancel` and `Alternative` under it on every platform, then the others.
 pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..roles.len()).collect();
     if column {
         order.sort_by_key(|&at| match roles[at] {
             DialogRole::Accept => 0,
-<<<<<<< HEAD
-            DialogRole::Cancel => 1,
-            DialogRole::Alternative => 2,
-=======
             DialogRole::Alternate => 1,
             DialogRole::Cancel => 2,
->>>>>>> origin/next
-            DialogRole::Destructive | DialogRole::Other => 3,
+            DialogRole::Alternative => 3,
+            DialogRole::Destructive | DialogRole::Other => 4,
         });
     } else {
         order.sort_by_key(|&at| roles[at].rank(windows));
@@ -659,22 +646,14 @@ impl FooterBar {
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let place = |ui: &mut Ui, shown: &mut Shown| {
-<<<<<<< HEAD
                     for at in display_order(&roles, os == Os::Windows, column) {
-=======
-                    for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
->>>>>>> origin/next
                         let button = &buttons[at];
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-<<<<<<< HEAD
                             // Production shows Cancel as plain text beside the accented answer.
                             DialogRole::Cancel => Variant::GHOST,
-                            DialogRole::Other | DialogRole::Alternative => Variant::SECONDARY,
-=======
-                            DialogRole::Cancel | DialogRole::Alternate | DialogRole::Other => Variant::SECONDARY,
->>>>>>> origin/next
+                            DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => Variant::SECONDARY,
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {

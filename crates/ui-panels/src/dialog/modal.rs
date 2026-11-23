@@ -101,22 +101,17 @@ pub struct Dialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
-<<<<<<< HEAD
+    /// Where the buttons stand.
+    place: ButtonPlace,
     /// A muted note after the title.
     #[prop(into)]
     title_note: Option<Label>,
     /// An icon of the catalog before the title, in the accent ink.
     title_icon: Option<craft_behavior::IconId>,
-    /// The footer stands in a column at the end edge, beside the whole body.
-    side: bool,
     /// While the body reports its fields unchanged ([`Dialog::report_changed`]), a Close button stands in place of the
     /// OK and Cancel pair.
     #[prop]
     close_unchanged: bool,
-=======
-    /// Where the buttons stand.
-    place: ButtonPlace,
->>>>>>> origin/next
     closed: Option<CloseReason>,
     picked: Option<usize>,
     /// The body ran in this pass: the header region marks it.
@@ -158,14 +153,10 @@ impl<'a> Dialog<'a> {
             buttons: Vec::new(),
             enter: false,
             closable: true,
-<<<<<<< HEAD
+            place: ButtonPlace::Foot,
             title_note: None,
             title_icon: None,
-            side: false,
             close_unchanged: false,
-=======
-            place: ButtonPlace::Foot,
->>>>>>> origin/next
             closed: None,
             picked: None,
             body_shown: false,
@@ -335,17 +326,13 @@ impl<'a> Dialog<'a> {
         self
     }
 
-<<<<<<< HEAD
     /// Reports from the body whether the dialog's fields differ from the ones it opened with; read by a dialog that
     /// [`close_unchanged`](Dialog::close_unchanged).
     pub fn report_changed(cx: &mut BodyCx<'_>, changed: bool) {
         cx.memory::<Reported>().unchanged = !changed;
     }
 
-    /// The footer region: in the end region's column, else across the foot.
-=======
     /// The footer region: in the end region's column, in the body's slot, or across the foot.
->>>>>>> origin/next
     fn footer_region(&self) -> FooterRegion {
         match self.place {
             ButtonPlace::Foot => FOOTER,

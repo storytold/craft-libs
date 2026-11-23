@@ -387,21 +387,15 @@ impl<'a> FloatingGroup<'a> {
     /// Shows the group; `body` fills the area under the title row unless the group is minimized.
     pub fn show_group<R>(mut self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<FloatingGroupOutput, R> {
         let env = Env::of(ui);
-<<<<<<< HEAD
-        let header = title_row(&env.tokens);
-        (self.header, self.rtl) = (header, env.direction.is_rtl());
-        if self.grip {
-            self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
-        }
-        let mount = self.mount(header);
-=======
         // A window in the app window keeps the band over its title row that a layer the user moves keeps for its top
         // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
         let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
         let sizes = self.scale.map_or(sizes, |scale| sizes.at_scale(scale));
         (self.header, self.chrome, self.rtl) = (sizes.title_row, sizes.window_chrome(self.native.is_none()), env.direction.is_rtl());
+        if self.grip {
+            self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
+        }
         let mount = self.mount();
->>>>>>> origin/next
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
         let shown = self.show(ui, |ui, cx| (!minimized).then(|| body(ui, cx)));

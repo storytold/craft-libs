@@ -2,14 +2,10 @@
 //! on the dialog host: the default answer and the Apply to All box.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
-<<<<<<< HEAD
 use super::{
-    BlockingOverlay, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog, StandardPrompt,
-    UnsavedChangesDialog,
+    BlockingOverlay, ButtonPlace, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog,
+    StandardPrompt, UnsavedChangesDialog,
 };
-=======
-use super::{BlockingOverlay, ButtonPlace, Dialog};
->>>>>>> origin/next
 use crate::buttons::Button;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowContainer as _};
@@ -23,11 +19,8 @@ use crate::testing::input::key_press;
 use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, off_foot, same_column};
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
-<<<<<<< HEAD
-use craft_quit::{CloseAnswer, CloseScope};
-=======
 use craft_behavior::ColumnWidth;
->>>>>>> origin/next
+use craft_quit::{CloseAnswer, CloseScope};
 use egui::{Key, Modifiers, Rect, Ui};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

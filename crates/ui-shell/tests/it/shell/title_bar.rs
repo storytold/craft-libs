@@ -131,7 +131,6 @@ fn the_window_title_is_sent_once_per_change() {
     assert!(titles(&out).is_empty(), "an embedded shell sends no title");
 }
 
-<<<<<<< HEAD
 /// The leading content of a bar is a row as wide as the bar: a document tab strip beside the Home and Open buttons
 /// takes the width they and the title leave, and its tabs show and are in the tree. The strip used to be laid out at
 /// its minimum there, with no tab drawn or reachable.
@@ -205,7 +204,8 @@ fn a_trailing_control_of_overflowing_tabs_stays_clear_of_the_bars_controls() {
     let open = fixture.by_label("Open").expect("the Open button").rect;
     let discord = fixture.by_label("Discord").expect("the Discord button").rect;
     assert!(open.right() <= discord.left() + 0.5, "Open {open:?} runs under Discord {discord:?}");
-=======
+}
+
 /// What the action-title trial saw: the passes that reported an activation, and the bar's rect.
 #[derive(Clone, Copy)]
 struct TitleSeen {
@@ -266,5 +266,4 @@ fn an_action_title_is_a_button_and_reports_its_activation() {
         "the long title {:?} is cut to fit inside the bar {bar:?}",
         title.rect
     );
->>>>>>> origin/next
 }
