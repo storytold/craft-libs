@@ -275,7 +275,7 @@ impl std::ops::Deref for HueSaturationOutput {
 }
 
 /// What a colour of the image becomes under a Hue/Saturation value; see [`HueSaturationEditor::adjusted`].
-pub type AdjustedFn = dyn Fn(&HueSaturation, Srgba) -> Srgba;
+pub type AdjustedFn<'a> = dyn Fn(&HueSaturation, Srgba) -> Srgba + 'a;
 
 /// Hue/Saturation.
 ///
@@ -303,7 +303,7 @@ pub type AdjustedFn = dyn Fn(&HueSaturation, Srgba) -> Srgba;
 pub struct HueSaturationEditor<'a> {
     label: Label,
     value: Bind<'a, HueSaturation>,
-    adjusted: Option<&'a AdjustedFn>,
+    adjusted: Option<&'a AdjustedFn<'a>>,
     range: Option<Option<usize>>,
     context: AdjustContext,
 }
@@ -317,7 +317,7 @@ impl<'a> HueSaturationEditor<'a> {
     /// What a colour of the image becomes under a value: the host runs its engine. The lower spectrum bar asks for 37
     /// full hues under the shown value, each edited range's swatch for its centre colour under a value holding only
     /// that range, and Colorize's swatch for a mid grey under the shown value. Without it every colour stays as it is.
-    pub fn adjusted(mut self, adjusted: &'a AdjustedFn) -> Self {
+    pub fn adjusted(mut self, adjusted: &'a AdjustedFn<'a>) -> Self {
         self.adjusted = Some(adjusted);
         self
     }

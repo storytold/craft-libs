@@ -2,7 +2,7 @@
 
 use craft_theme::Srgba;
 use craft_ui::choice::{RadioGroup, Swatch, SwatchShape};
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Row;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Shape, vec2};
