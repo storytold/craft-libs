@@ -54,7 +54,8 @@ pub struct PageBlending {
 /// The blending colour space of page `index` of `pdf`, or `None` when there is no such page.
 pub fn page_blending(pdf: &Pdf, index: usize, intent: IntentUse) -> Option<PageBlending> {
     let page = pdf.pages().get(index)?;
-    let declared = page.raw().get::<Dict<'_>>(b"Group").and_then(|g| g.get::<Object<'_>>(b"CS"));
+    // A null entry is an absent one (§7.3.9).
+    let declared = page.raw().get::<Dict<'_>>(b"Group").and_then(|g| g.get::<Object<'_>>(b"CS")).filter(|cs| !matches!(cs, Object::Null(_)));
     if let Some(cs) = declared {
         return Some(PageBlending { in_ink: subtractive(&cs, page.resources(), 0), from: BlendingFrom::PageGroup });
     }
@@ -206,6 +207,12 @@ mod tests {
         for intent in [IntentUse::IfSubtractive, IntentUse::Always] {
             assert_eq!(blending(&doc, intent), PageBlending { in_ink: true, from: BlendingFrom::OutputIntent }, "{intent:?}");
         }
+    }
+
+    #[test]
+    fn a_null_page_group_space_is_no_space() {
+        let doc = pdf(&group("null"), "", INTENT, &[PROFILE_CMYK]);
+        assert_eq!(blending(&doc, IntentUse::IfSubtractive), PageBlending { in_ink: true, from: BlendingFrom::OutputIntent });
     }
 
     #[test]
