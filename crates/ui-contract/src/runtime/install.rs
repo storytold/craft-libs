@@ -1,10 +1,11 @@
 //! `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
-use crate::runtime::egui::{input, plugin};
-use crate::runtime::env::{SystemReader, system};
+use crate::runtime::egui::{clipboard, input, plugin};
+use crate::runtime::env::{self, SystemReader, system};
 use crate::runtime::pen::PenSource;
 use crate::runtime::{commands, frame, pen, windows};
 use crate::style::{DuplicateStyle, StyleReplacements};
+use craft_host::Jobs;
 use craft_host::target::ShellInfo;
 use craft_window::policy::Decision;
 use craft_window::restore::Store;
@@ -42,6 +43,12 @@ pub struct InstallSpec {
     /// Whether the stories' command sets (`#[command(story)]`) load: the gallery and the story fixtures show
     /// stories, an app does not, so a story's keys never reach an app's keymap.
     pub stories: bool,
+    /// The clipboard the host installs (system, browser event, memory); without one the runtime uses
+    /// `Clipboard::new(EguiClipboard)`.
+    pub clipboard: Option<craft_platform::clipboard::Clipboard>,
+    /// Where the context's background work (document faces, texture loads) runs while no host is installed; none
+    /// runs it on `craft_host::default_jobs()`. A host's jobs come first.
+    pub jobs: Option<Arc<dyn Jobs>>,
 }
 
 /// The modifiers the mouse wheel zooms and scrolls sideways with.
@@ -82,7 +89,21 @@ impl InstallSpec {
             app_id: String::new(),
             pen: None,
             stories: false,
+            clipboard: None,
+            jobs: None,
         }
+    }
+
+    /// Runs the context's background work on `jobs` while no host is installed.
+    pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self {
+        self.jobs = Some(jobs);
+        self
+    }
+
+    /// Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
+    pub fn clipboard(mut self, clipboard: craft_platform::clipboard::Clipboard) -> Self {
+        self.clipboard = Some(clipboard);
+        self
     }
 
     /// Loads the stories' command sets too, for an install that shows stories.
@@ -201,6 +222,8 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     input::set_wheel_modifiers(ctx, spec.wheel.zoom, spec.wheel.sideways);
     system::install(ctx, spec.system);
     pen::install(ctx, spec.pen);
+    env::install_jobs(ctx, spec.jobs);
+    clipboard::install(ctx, spec.clipboard);
     windows::install(ctx, with_browser_caps(spec.shell_info), spec.window_system, spec.placement, spec.frame, spec.app_id);
     frame::set_frame_layers(ctx, spec.frame_layers);
     frame::seed_hooked_passes(ctx);

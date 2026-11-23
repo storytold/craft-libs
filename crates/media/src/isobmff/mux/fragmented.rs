@@ -54,7 +54,7 @@ impl<W: Write> FragmentedWriter<W> {
         let qt = self.opts.brand == Brand::Mov;
         let ts = self.opts.movie_timescale.max(1);
         let mut b = BoxBuf::new();
-        write_ftyp(&mut b, self.opts.brand);
+        write_ftyp(&mut b, self.opts.brand, &self.opts.compatible_brands);
         let m = b.start(b"moov");
         write_mvhd(&mut b, ts, 0, self.tracks.len() as u32 + 1);
         for t in &self.tracks {

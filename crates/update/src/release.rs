@@ -365,7 +365,7 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

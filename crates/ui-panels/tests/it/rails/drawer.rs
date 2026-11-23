@@ -1,10 +1,11 @@
 //! The drawer's own logic: how an edit changes the toolbar and what a drop on the rail asks for, and which of its tools
 //! drag, where the rail leaves group gaps and which side the drawer opens on.
 
+use craft_ui::contract::Tracked;
 use craft_ui::rails::{DropAt, RailTool, ToolSlot, ToolbarEdit, apply_toolbar_edit};
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::runtime::drag;
-use craft_ui::testing::{Fixture, stories, trial};
+use craft_ui::testing::{Fixture, Registry, trial};
 use egui::Vec2;
 
 const UNDO: u8 = 1;
@@ -48,10 +49,10 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
 
     let open = Rc::new(Cell::new(false));
     let shown = open.clone();
+    let slots = Tracked::new(vec![slot(0, &[UNDO]), slot(1, &[REDO])]);
+    let last = Tracked::new(LastUsed::default());
     let mut fixture = Fixture::new(move |ui| {
-        let slots = [slot(0, &[UNDO]), slot(1, &[REDO])];
         let groups = [DrawerGroup::new("Edit", vec![tool(UNDO), tool(REDO), tool(CUT)])];
-        let last = LastUsed::default();
         let rail = ToolRail::new("Tools", &slots, &UNDO, &last).edit_toolbar("Customize").show_rail(ui, |_, _| {});
         let opener = rail.edit_toolbar.expect("the rail shows its Edit Toolbar button");
         if craft_ui::contract::clicked(&opener) {
@@ -74,7 +75,8 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
 /// A tool already on the toolbar is dimmed and does not drag; a tool that is not on it drags to the rail.
 #[trial]
 fn only_a_tool_off_the_toolbar_drags() {
-    let entry = stories().into_iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
+    let registry = Registry::of(&[craft_ui::testing::register]);
+    let entry = registry.stories().iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
     let opener = fixture.by_label("Edit Toolbar").expect("the rail's Edit Toolbar button");
@@ -121,9 +123,9 @@ fn a_click_on_a_tool_selects_it_and_no_row_stays_selected() {
 #[trial]
 fn a_slot_that_ends_a_group_leaves_a_wider_gap_than_slots_within_a_group() {
     use craft_ui::rails::{LastUsed, ToolRail};
-    let mut fixture = Fixture::new(|ui| {
-        let slots = [slot(0, &[UNDO]), ToolSlot::ending_group(1, vec![tool(REDO)]), slot(2, &[CUT])];
-        let last = LastUsed::default();
+    let slots = Tracked::new(vec![slot(0, &[UNDO]), ToolSlot::ending_group(1, vec![tool(REDO)]), slot(2, &[CUT])]);
+    let last = Tracked::new(LastUsed::default());
+    let mut fixture = Fixture::new(move |ui| {
         ToolRail::new("Tools", &slots, &UNDO, &last).show_rail(ui, |_, _| {});
     });
     fixture.room(Vec2::new(60.0, 300.0)).settle();

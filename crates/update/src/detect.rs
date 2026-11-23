@@ -155,4 +155,4 @@ pub mod linux;
 pub mod freebsd;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

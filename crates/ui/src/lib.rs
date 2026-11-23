@@ -10,6 +10,8 @@
 //! `presence`) from craft-cloud-ui, which is still raw egui.
 #![warn(missing_docs)]
 
+extern crate self as craft_ui;
+
 #[cfg(feature = "cloud")]
 pub use craft_cloud_ui::cloud;
 #[cfg(feature = "esign")]
@@ -19,7 +21,7 @@ pub use craft_cloud_ui::presence;
 pub use craft_cloud_ui::{account, share};
 pub use craft_ui_canvas::{canvas, canvas_controls, dialog};
 #[cfg(feature = "testing")]
-pub use craft_ui_contract::testing_registered;
+pub use craft_ui_contract::registry;
 #[doc(hidden)]
 pub use craft_ui_contract::{__private, __register_command_set, __register_contract, __register_pattern};
 pub use craft_ui_contract::{InstallError, InstallSpec, contract, fonts, install, layout, primitives, runtime, style, words};
@@ -46,34 +48,32 @@ pub mod patterns {
 pub mod testing {
     pub use craft_ui_canvas::testing::*;
 
-    crate::testing_registered!();
+    #[cfg(feature = "suite")]
+    crate::registry!();
 
-    /// A crate's `registered`.
-    type Registered = fn() -> Vec<&'static Registration>;
-
-    /// The crates of the library, each with its `registered`.
-    const LIBRARY: [(&str, Registered); 7] = [
-        ("craft-ui", registered),
-        ("craft-ui-contract", craft_ui_contract::testing::registered),
-        ("craft-ui-widgets", craft_ui_widgets::testing::registered),
-        ("craft-ui-panels", craft_ui_panels::testing::registered),
-        ("craft-ui-canvas", craft_ui_canvas::testing::registered),
-        ("craft-ui-patterns", craft_ui_patterns::testing::registered),
-        ("craft-ui-shell", craft_ui_shell::testing::registered),
+    /// The framework crates whose suite items form the library.
+    #[cfg(feature = "suite")]
+    const LIBRARY: [fn(&mut Registry); 7] = [
+        register,
+        craft_ui_contract::testing::register,
+        craft_ui_widgets::testing::register,
+        craft_ui_panels::testing::register,
+        craft_ui_canvas::testing::register,
+        craft_ui_patterns::testing::register,
+        craft_ui_shell::testing::register,
     ];
 
-    /// Every registration declared in the library crates of the library: this crate and the six it re-exports.
-    /// Types declared in integration binaries are fixtures and are left out.
-    pub fn library_registrations() -> Vec<&'static Registration> {
-        // A crate's registrations run only in a binary that links the crate; naming each crate's `registered`
-        // links them all.
-        let library = std::hint::black_box(LIBRARY);
-        crate::contract::registrations()
-            .into_iter()
-            .filter(|registration| {
-                library.iter().any(|(name, _)| *name == registration.crate_name())
-                    && registration.crate_target() == registration.crate_name().replace('-', "_")
-            })
-            .collect()
+    /// Adds the framework library crates to a registry.
+    #[cfg(feature = "suite")]
+    pub fn register_library(registry: &mut Registry) {
+        for register in LIBRARY {
+            register(registry);
+        }
+    }
+
+    /// The suite items declared by the framework library crates.
+    #[cfg(feature = "suite")]
+    pub fn library_registrations() -> Registry {
+        Registry::of(&LIBRARY)
     }
 }

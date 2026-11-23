@@ -1,16 +1,16 @@
 //! Text and number fields: `TextField<C>` and `NumberField` on the text part (18.3).
 
 mod adorn;
-mod alt_text;
-mod chips;
+pub(crate) mod alt_text;
+pub(crate) mod chips;
 mod completions;
-mod hex;
-mod linked;
-mod number;
-mod selectable_text;
-mod text_field;
+pub(crate) mod hex;
+pub(crate) mod linked;
+pub(crate) mod number;
+pub(crate) mod selectable_text;
+pub(crate) mod text_field;
 mod words;
-mod zoom_field;
+pub(crate) mod zoom_field;
 
 pub use adorn::{Adornment, Placed, place, reserve};
 pub use alt_text::{AltText, AltTextField, AltTextFieldStyle, AltTextWords};
@@ -72,6 +72,32 @@ impl FieldStyle {
     pub fn sized_by_content(mut self) -> FieldStyle {
         self.metrics = self.metrics.min_size(Vec2::new(0.0, self.metrics.min_size.y)).ideal_width(0.0);
         self
+    }
+
+    /// The style of a field with no field length to widen it past its shortest width (`size.length.short`): a field
+    /// that keeps that width whatever it shows.
+    #[must_use]
+    pub fn shortest(mut self) -> FieldStyle {
+        self.metrics = self.metrics.ideal_width(self.metrics.min_size.x);
+        self
+    }
+
+    /// The style of a field held at the length `width` (a `size.length` token), whatever value it shows: a ribbon's
+    /// font box at the small field length, as wide as a word processor's whichever family it shows. A row that lacks
+    /// room still narrows it to `size.length.short`.
+    #[must_use]
+    pub fn held_at(mut self, width: f32) -> FieldStyle {
+        let width = if width.is_finite() { width.max(self.metrics.min_size.x) } else { self.metrics.min_size.x };
+        self.metrics = self.metrics.ideal_width(width);
+        self
+    }
+
+    /// The width of a field that holds `chars` characters: `chars` times the width of a `0` in the body face (CSS's
+    /// `ch`), plus the field's padding on both sides. [`held_at`](Self::held_at) takes it as the field's length.
+    pub fn chars_width(cx: &StyleCx<'_>, chars: u16) -> f32 {
+        let digit = cx.text_width(crate::style::TypeRole::Body, "0");
+        let digit = if digit.is_finite() && digit > 0.0 { digit } else { 0.0 };
+        f32::from(chars) * digit + 2.0 * cx.control().pad_x
     }
 
     /// The field's padding, gap and minimum size.

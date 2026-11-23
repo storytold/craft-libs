@@ -14,7 +14,7 @@ use super::keyboard::KeyboardState;
 use super::pages::TabSet;
 use super::rows::{self, AreaEntry, AreaId, Built, Filter, RowCache, View};
 use super::words::Say;
-use super::{ConflictMode, JSON_FORMAT, Options, Outcome, summary};
+use super::{ConflictMode, JSON_FORMAT, Layout, Options, Outcome, summary};
 
 /// What the dialog edits this frame.
 pub(crate) struct Env<'e> {
@@ -216,6 +216,8 @@ pub struct DialogState {
     // ---- The view's own state ----
     /// The chip of the selected row that Enter and Delete act on.
     pub(crate) chip: usize,
+    /// The row of the selected command's current keys picked for Remove in [`Layout::CommandLists`].
+    pub(crate) keys_pick: Option<usize>,
     /// Typed entry in the detail pane, and the parse error shown under it.
     pub(crate) typing: Option<String>,
     /// The typed-entry field takes key focus on its first pass.
@@ -261,6 +263,7 @@ impl DialogState {
             changed: false,
             outcome: None,
             chip: 0,
+            keys_pick: None,
             typing: None,
             typing_focus: false,
             type_error: None,
@@ -378,6 +381,8 @@ impl DialogState {
             self.context = None;
             self.field = None;
             self.chip = 0;
+            // The command's first key, as in Word; a command without keys has nothing at that row.
+            self.keys_pick = Some(0);
             self.typing = None;
             self.type_error = None;
         }
@@ -404,6 +409,7 @@ impl DialogState {
     /// Selects a command and shows its row: area All, no search, no filter.
     pub(crate) fn go_to(&mut self, command: &CommandRef) {
         self.select_row(command);
+        self.keys_pick = None;
         self.area = AreaId::All;
         self.query.clear();
         self.filter = Filter::All;
@@ -670,6 +676,8 @@ impl DialogState {
     /// After any edit: drop the conflict bar, refresh the field's holders, report Changed.
     fn edited(&mut self, env: &Env) {
         self.changed = true;
+        // The picked row is a position among the command's keys, which the edit may have moved.
+        self.keys_pick = None;
         self.conflict = None;
         if let Some(f) = self.field.take() {
             self.set_field(env, f.command, f.binding.trigger);
@@ -690,6 +698,14 @@ impl DialogState {
     /// × on a chip, or Remove.
     pub(crate) fn remove(&mut self, env: &mut Env, command: &CommandRef, binding: &Binding) {
         self.edit(env, |s, km| s.remove(km, command, binding));
+    }
+
+    /// Remove in [`Layout::CommandLists`]: takes away the key picked among the selected command's keys.
+    pub(crate) fn remove_picked(&mut self, env: &mut Env) {
+        let (Some(command), Some(at)) = (self.selected.clone(), self.keys_pick) else { return };
+        if let Some(binding) = env.keymap.bindings(&command).get(at).cloned() {
+            self.remove(env, &command, &binding);
+        }
     }
 
     /// Clear: no shortcut.
@@ -752,6 +768,11 @@ impl DialogState {
     /// When that undoes edits, Changed follows, so the app rebuilds its menus (and saves, if it
     /// saved the edits live).
     pub(crate) fn cancel(&mut self, env: &mut Env) {
+        // Each edit of the command lists is applied at once and has no Cancel, so closing keeps them.
+        if env.options.layout == Layout::CommandLists {
+            self.ok(env);
+            return;
+        }
         let mut undone = false;
         if let Some(opened) = self.opened.take() {
             undone = *env.keymap.overrides() != opened.overrides;

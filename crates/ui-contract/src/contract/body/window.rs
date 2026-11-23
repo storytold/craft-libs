@@ -13,7 +13,7 @@ use crate::runtime::env::{EnvView, ShellEntry};
 use crate::runtime::memory::sub;
 use crate::runtime::windows::{self, ResizeEdge, WindowAction, WindowHit};
 use crate::runtime::{keys, pointer};
-use crate::style::ComponentStyle as _;
+use crate::style::{ComponentStyle as _, UiTokens};
 use craft_behavior::{CursorIcon, GesturePhase, HitLevel, HitPriority, PartKey, PointerEvent, PressPhase};
 use craft_host::target::{Caps, WindowChrome, WindowState};
 use craft_keymap::{Chord, Key, Mods};
@@ -26,8 +26,9 @@ const GRIP: PartKey = PartKey::new("resize_grip");
 /// Which move and resize parts of the body step stand for the OS window of `viewport` (16.3, 21.2): the one rule
 /// every move band and grip of an OS window reads. Both need a frame the app draws (the chrome is not `Native`). The
 /// band stands on a maximized window too, so its double click restores the window and a drag is the platform's (it
-/// restores and moves); the grips stand only on a window that is neither maximized nor full screen. The parts stand
-/// whether or not a hit-test sink is installed: the sink reads them as the window's exclusive parts.
+/// restores and moves); the grips stand only on a window that is neither maximized nor full screen, nor one the OS
+/// resizes from its own frame (`windows::os_resizes`: AppKit's edges, where app grips would contest its presses). The
+/// parts stand whether or not a hit-test sink is installed: the sink reads them as the window's exclusive parts.
 #[derive(Clone, Copy)]
 struct WindowParts {
     band: bool,
@@ -43,9 +44,35 @@ impl WindowParts {
     fn of(ctx: &Context, viewport: ViewportId) -> WindowParts {
         let window = windows::shell_of(ctx, viewport).window;
         let framed_by_app = window.chrome != WindowChrome::Native;
-        let sized_by_os = matches!(window.state, WindowState::Maximized | WindowState::Fullscreen);
+        let sized_by_os = matches!(window.state, WindowState::Maximized | WindowState::Fullscreen) || windows::os_resizes(ctx, viewport);
         WindowParts { band: framed_by_app && window.state != WindowState::Fullscreen, grips: framed_by_app && !sized_by_os }
     }
+}
+
+/// The band a layer keeps clear at its top for its top grip, so that grip never lies over the header: the grip's
+/// width ([`grip_band`]) on a layer whose header is on a line of its own and whose top grip or a top corner's stands,
+/// or that the user moves: a floating window keeps the band while it has no top grip (collapsed, minimized), so its
+/// header stays where it was. None elsewhere, nor on a layer whose band moves the window below it. The regions start
+/// below the band, or below the padding where that is deeper. An OS window keeps none: its grips, the platform's or
+/// the app's, lie over its title bar as an OS title bar's resize edge does.
+pub(super) fn top_band(props: &ContainerProps, ctx: &Context, id: Id, tokens: &UiTokens) -> f32 {
+    let overlay = match &props.mount {
+        Mount::Layer(overlay) => overlay,
+        Mount::Viewport { fallback, .. } if !windows::mount_window(ctx, id) => fallback,
+        _ => return 0.0,
+    };
+    if !props.header.is_some_and(|header| !header.inline) || overlay.moves_window {
+        return 0.0;
+    }
+    let pinned = Pinned::of(overlay, ctx, id, false);
+    let top = [(0, -1), (-1, -1), (1, -1)].into_iter().any(|(dx, dy)| grip_stands(overlay.resize.edges, pinned, dx, dy));
+    if top || overlay.movable { grip_band(tokens) } else { 0.0 }
+}
+
+/// The width of a window's edge grips, and of the band a layer keeps clear above its header for its top grip:
+/// `size.handle.sm`. A corner grip reaches twice as far along each of its edges.
+pub fn grip_band(tokens: &UiTokens) -> f32 {
+    tokens.tokens().size.handle.sm
 }
 
 /// Whether the platform answers the hit test of `viewport`'s undecorated window itself, as it does for a window whose
@@ -97,6 +124,9 @@ pub(super) struct WindowMode {
     kind: Option<WindowModeKind>,
     restore: Placement,
     began: Option<Rect>,
+    /// The rect the layer had when a press went down on its move band or a grip, until the press ends: a drag that
+    /// starts from the press runs from it.
+    pressed: Option<Rect>,
     moving: Option<WindowMove>,
     sizing: Option<WindowSize>,
     /// The index in `GRIPS` of the grip a drag holds, from its `DragStart` to its release: `move_parts` keeps it
@@ -108,6 +138,23 @@ impl WindowMode {
     /// The grip a drag holds, for `move_parts`.
     pub(super) fn held(&self) -> Option<usize> {
         self.held
+    }
+
+    /// The rect a drag of the move band of the layer `id` puts the layer at in this pass, before the bounds keep it:
+    /// the rect the layer had when the press went down, moved by the pointer's travel since. `window_drag` reports the
+    /// same rect for the step. `None` while no move by the band runs. The layer host shows the layer there
+    /// (`shown_placement`) before the container's pass runs, so the layer stands under the pointer in the frame of
+    /// each step, whoever owns its placement.
+    pub(super) fn running_move(&self, ctx: &Context, id: Id) -> Option<Rect> {
+        if self.pressed.is_none() && self.began.is_none() {
+            return None;
+        }
+        let (began, start, pos) = match crate::primitives::sensing::part_press(ctx, id, MOVE_BAND.into()).press.phase {
+            PressPhase::DragStart { start, pos, .. } => (self.pressed?, start, pos),
+            PressPhase::Drag { start, pos, .. } | PressPhase::Release { start, pos, .. } => (self.began?, start, pos),
+            _ => return None,
+        };
+        Some(began.translate(pos - start.origin))
     }
 }
 
@@ -173,6 +220,11 @@ pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
     rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
 }
 
+/// `rect` kept inside `bounds`, when the layer has bounds.
+pub(super) fn kept_in(rect: Rect, bounds: Option<Rect>) -> Rect {
+    bounds.map_or(rect, |bounds| keep_inside(rect, bounds))
+}
+
 /// What every change of a layer's rect keeps to: the least and most size, and the rect it stays inside.
 struct Limits {
     min: Vec2,
@@ -187,8 +239,7 @@ impl Limits {
 
     /// `rect` moved by `delta`, kept inside the bounds.
     fn moved(&self, rect: Rect, delta: Vec2) -> Rect {
-        let rect = rect.translate(delta);
-        self.bounds.map_or(rect, |bounds| keep_inside(rect, bounds))
+        kept_in(rect.translate(delta), self.bounds)
     }
 
     /// `rect` with the edges `dx` and `dy` (-1: low edge, 1: high edge, 0: none) moved by `delta`, within the size
@@ -350,14 +401,7 @@ impl BodyHooks<'_> {
             if mode.kind == Some(kind) {
                 mode = WindowMode::default();
             } else {
-                mode = WindowMode {
-                    kind: Some(kind),
-                    restore: current.clone(),
-                    began: Some(current.rect_over(rect)),
-                    moving: None,
-                    sizing: None,
-                    held: None,
-                };
+                mode = WindowMode { kind: Some(kind), restore: current.clone(), began: Some(current.rect_over(rect)), ..WindowMode::default() };
                 self.reports.push(step(current.rect_over(rect), GesturePhase::Begin));
             }
         }
@@ -409,7 +453,8 @@ impl BodyHooks<'_> {
     }
 
     /// A drag of the move band or a grip of a layer (not an OS window): the layer follows the pointer within the
-    /// limits, and each step is reported. Escape, which cancels the press, restores the placement from before.
+    /// limits, and each step is reported. The drag runs from the rect the layer had when the press went down. Escape,
+    /// which cancels the press, restores the placement from before.
     pub(super) fn window_drag<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
         let Some(overlay) = overlay_of(props) else { return };
         // A band that moves the window below starts the OS move of the window the layer is shown in.
@@ -428,9 +473,11 @@ impl BodyHooks<'_> {
         let mut pressed = vec![(None, phase((MOVE_BAND, None)))];
         pressed.extend((0..GRIPS.len()).map(|index| (Some(index), phase((GRIP, Some(index as u64))))));
         let Some((grip, phase)) = pressed.into_iter().find_map(|(grip, phase)| match phase? {
-            phase @ (PressPhase::DragStart { .. } | PressPhase::Drag { .. } | PressPhase::Release { .. } | PressPhase::Cancel { .. }) => {
-                Some((grip, phase))
-            }
+            phase @ (PressPhase::Down { .. }
+            | PressPhase::DragStart { .. }
+            | PressPhase::Drag { .. }
+            | PressPhase::Release { .. }
+            | PressPhase::Cancel { .. }) => Some((grip, phase)),
             _ => None,
         }) else {
             return;
@@ -438,8 +485,14 @@ impl BodyHooks<'_> {
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
         let (origin, pos, gesture) = match phase {
+            PressPhase::Down { .. } => {
+                self.mode.pressed = Some(current.rect_over(rect));
+                return;
+            }
             PressPhase::DragStart { start, pos, .. } => {
-                self.mode.began = Some(current.rect_over(rect));
+                // The layer host shows this pass at the step's rect already (`running_move`): the drag runs from where
+                // the layer stood at the press.
+                self.mode.began = Some(self.mode.pressed.unwrap_or_else(|| current.rect_over(rect)));
                 self.mode.restore = current.clone();
                 self.mode.held = grip;
                 (start.origin, Some(pos), GesturePhase::Begin)
@@ -449,6 +502,9 @@ impl BodyHooks<'_> {
             PressPhase::Cancel { start, .. } => (start.origin, None, GesturePhase::Cancel),
             _ => return,
         };
+        if matches!(gesture, GesturePhase::Commit | GesturePhase::Cancel) {
+            self.mode.pressed = None;
+        }
         let Some(began) = self.mode.began else { return };
         let (dx, dy, _) = grip.map_or((0, 0, CursorIcon::Grab), |index| GRIPS[index]);
         let kind = if grip.is_some() { PlacementKind::Size(edge_of(dx, dy)) } else { PlacementKind::Move };
@@ -701,7 +757,6 @@ impl BodyHooks<'_> {
     /// drag holds (`WindowMode::held`), which stays declared until its release.
     pub(super) fn move_parts<C: Container>(props: &ContainerProps, regions: &Regions, rect: Rect, held: Option<usize>, pcx: &mut PartsCx<'_, C>) {
         let ctx = pcx.ui.ctx().clone();
-        let handle = pcx.tokens.tokens().size.handle.sm;
         let reason = "the Move and Size commands of the window command set do the same";
         let os = os_window(props, &ctx, pcx.id, &pcx.env);
         let stands = match (&props.mount, os) {
@@ -723,46 +778,58 @@ impl BodyHooks<'_> {
         let band = move_band(props, regions, rect);
         if props.header.is_some() && movable && band.is_positive() {
             // The band lies under the line's own parts and children, like the reorder band, so they keep their presses.
-            let part = pcx
-                .part(MOVE_BAND, band)
-                .sense(craft_behavior::Sense::DRAG)
-                .cursor(CursorIcon::Grab)
-                .drag_cursor(CursorIcon::Grabbing)
-                .pointer_only(reason);
+            // On a window the OS frames (macOS `Inset`) it keeps the arrow, as an OS title bar does: the OS's resize
+            // areas cover its ends and top edge, and a cursor set over them fights the OS's.
+            let moved = os.or(moves_window.then(|| pass::current_viewport(&ctx)));
+            let os_bar = moved.is_some_and(|viewport| windows::shell_of(&ctx, viewport).window.chrome == WindowChrome::Inset);
+            let mut part = pcx.part(MOVE_BAND, band).sense(craft_behavior::Sense::DRAG).pointer_only(reason);
+            if !os_bar {
+                part = part.cursor(CursorIcon::Grab).drag_cursor(CursorIcon::Grabbing);
+            }
             if let Some(hit) = exclusive(WindowHit::Move).or(moves_window.then_some(WindowHit::Move)) {
                 part.exclusive(hit);
             }
         }
-        // The grips of a layer straddle its edge; those of a window lie inside it, where the window has pixels. They
-        // stack above the body (`over`), so a root in the body never covers their inner half (8.3).
-        let (edges, inset) = match &props.mount {
-            Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => (overlay.resize.edges, 0.0),
-            Mount::Window { resize } => (resize.edges, handle / 2.0),
-            _ => (ResizeEdges::NONE, 0.0),
+        let edges = match &props.mount {
+            Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => overlay.resize.edges,
+            Mount::Window { resize } => resize.edges,
+            _ => ResizeEdges::NONE,
         };
         if edges == ResizeEdges::NONE || !stands.grips {
             return;
         }
+        // Every grip lies inside the frame, where a window has pixels and a layer's own rect takes the pointer: an edge
+        // grip `handle` deep, a corner grip twice that along each of its edges, the edge grips between the corners.
+        // They stack above the body (`over`), so a root in the body never covers them (8.3), and each takes exactly its
+        // rect (`exact_hit`), as the platform's hit test does for an exclusive grip. The top corners of a layer that
+        // keeps a band over its header (`top_band`) are only as tall as the band, so no grip lies over the header.
+        let handle = grip_band(pcx.tokens);
+        let corner = 2.0 * handle;
+        let top = top_band(props, &ctx, pcx.id, pcx.tokens);
         let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
         let caller_sizes = overlay_of(props).is_some_and(|overlay| overlay.resize.by_caller);
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
             if held != Some(index) && !grip_stands(edges, pinned, dx, dy) {
                 continue;
             }
-            let along = |edge: i8, low: f32, high: f32| match edge {
-                -1 => (low - handle / 2.0 + inset, low + handle / 2.0 + inset),
-                1 => (high - handle / 2.0 - inset, high + handle / 2.0 - inset),
-                _ => (low + handle / 2.0 + inset, high - handle / 2.0 - inset),
+            let span = |edge: i8, low: f32, high: f32, deep: f32| match edge {
+                -1 => (low, low + deep),
+                1 => (high - deep, high),
+                _ => (low + corner, high - corner),
             };
-            let (x0, x1) = along(dx, rect.min.x, rect.max.x);
-            let (y0, y1) = along(dy, rect.min.y, rect.max.y);
-            let level = if dx != 0 && dy != 0 { HitLevel::Handle } else { HitLevel::Edge };
+            let at_corner = dx != 0 && dy != 0;
+            let deep = if at_corner { corner } else { handle };
+            let tall = if at_corner && dy == -1 && top > 0.0 { top } else { deep };
+            let (x0, x1) = span(dx, rect.min.x, rect.max.x, deep);
+            let (y0, y1) = span(dy, rect.min.y, rect.max.y, tall);
+            let level = if at_corner { HitLevel::Handle } else { HitLevel::Edge };
             let part = pcx
                 .part(GRIP.at(index as u64), Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1)))
                 .sense(craft_behavior::Sense::DRAG)
                 .priority(HitPriority::new(level, 0))
                 .cursor(cursor)
                 .pointer_only(reason)
+                .exact_hit()
                 .over();
             // The grips of a window its caller sizes are the app's (`window_resize`), never the platform's.
             if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))).filter(|_| !caller_sizes) {

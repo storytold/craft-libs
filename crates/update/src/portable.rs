@@ -472,4 +472,4 @@ fn single_top_folder(files: &[PathBuf]) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

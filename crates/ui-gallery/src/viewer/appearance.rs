@@ -1,7 +1,7 @@
 //! The choices of the options bar: the named options of each root value, the theme list and the Variants axes.
 
 use craft_i18n::Direction;
-use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Size, TextSize, ThemeDef, ThemeId, builtins};
+use craft_theme::{ComponentSet, ContrastChoice, ModeChoice, MotionChoice, Size, TextSize, ThemeDef, ThemeId, builtins};
 use craft_ui::contract::Entry;
 use craft_ui::runtime::env::Scale;
 
@@ -66,6 +66,7 @@ choices!(TEXT_SIZES: TextSize = [
     (TextSize::Large, "large", "Large"),
 ]);
 choices!(DENSITIES: Size = [(Size::Compact, "compact", "Compact"), (Size::Comfortable, "comfortable", "Comfortable")]);
+choices!(SETS: ComponentSet = [(ComponentSet::Creative, "creative", "Creative"), (ComponentSet::Productivity, "productivity", "Productivity")]);
 choices!(MOTIONS: MotionChoice = [
     (MotionChoice::Full, "full", "Off"),
     (MotionChoice::Reduced, "reduced", "On"),
@@ -80,7 +81,7 @@ choices!(SCALES: Scale = [
 choices!(DIRECTIONS: Direction = [(Direction::Ltr, "ltr", "LTR"), (Direction::Rtl, "rtl", "RTL")]);
 
 /// What a Variants view repeats the story over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum VariantAxis {
     /// Every built-in theme.
@@ -91,6 +92,8 @@ pub enum VariantAxis {
     Contrast,
     /// Compact and comfortable density.
     Size,
+    /// The creative and the productivity component set.
+    Set,
     /// Left to right and right to left.
     Direction,
     /// Small and medium controls.
@@ -101,11 +104,12 @@ pub enum VariantAxis {
 
 impl VariantAxis {
     /// Every axis, in menu order.
-    pub const ALL: [VariantAxis; 7] = [
+    pub const ALL: [VariantAxis; 8] = [
         VariantAxis::Theme,
         VariantAxis::Mode,
         VariantAxis::Contrast,
         VariantAxis::Size,
+        VariantAxis::Set,
         VariantAxis::Direction,
         VariantAxis::ControlSize,
         VariantAxis::DirectionAndControlSize,
@@ -118,6 +122,7 @@ impl VariantAxis {
             VariantAxis::Mode => "Every mode (light, dark)",
             VariantAxis::Contrast => "Every contrast (standard, high)",
             VariantAxis::Size => "Every size (compact, comfortable)",
+            VariantAxis::Set => "Every set (creative, productivity)",
             VariantAxis::Direction => "Every direction (LTR, RTL)",
             VariantAxis::ControlSize => "Every control size (Sm, Md)",
             VariantAxis::DirectionAndControlSize => "Every direction and control size",

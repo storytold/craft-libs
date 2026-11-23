@@ -10,6 +10,11 @@ pub(crate) fn set_text_cursor(ui: &mut Ui, visible: bool) {
     }
 }
 
+/// The width of the caret an editable text draws past its last letter: the one value measuring and styling both read.
+pub(crate) fn caret_width(ctx: &Context) -> f32 {
+    ctx.global_style().visuals.text_cursor.stroke.width
+}
+
 /// Paints the selected text of `ui`'s text edits in `ink` on `fill`.
 pub(crate) fn set_text_selection(ui: &mut Ui, fill: egui::Color32, ink: egui::Color32) {
     let selection = &mut ui.visuals_mut().selection;

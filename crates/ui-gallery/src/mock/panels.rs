@@ -3,25 +3,26 @@
 use super::model::{Document, Layer, Panel, Tool};
 use super::tools::{MarqueeTool, MoveTool, Tools};
 use super::words::MockWords;
+use craft_behavior::CanvasView;
 use craft_behavior::dock::Permissions;
 use craft_behavior::geometry::Directions;
-use craft_behavior::kurbo::Rect as DocRect;
+use craft_behavior::kurbo::{Rect as DocRect, Size};
 use craft_behavior::{ColumnKey, ColumnWidth, PixelSize, RulerUnits, Ticks, keyed};
 use craft_ui::canvas::{
     Canvas, CanvasScrollbars, CanvasSpace, NoTool, PageFrame, Pasteboard, PixelRect, RasterDisplay, RasterSource, RulerText, Rulers, ToolHost,
     tool_pass,
 };
 use craft_ui::canvas_controls::{Guides, Marquee};
-use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
-    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
+    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
-use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
+use craft_ui::contract::{SizeLimits, Tracked};
+use craft_ui::docking::{DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::list::{ListRow, ToggleCell};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::primitives::textures::Revision;
-use craft_ui::rails::{LastUsed, ToolRail};
+use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::shell::CanvasPanel;
 use craft_ui::table::Table;
@@ -44,20 +45,23 @@ pub(super) struct Panels<'a> {
     pub(super) tool: Tool,
     pub(super) tools: &'a mut Tools,
     /// The tool each toolbar slot showed last; the toolbar writes it.
-    pub(super) last_used: &'a mut LastUsed<Tool>,
+    pub(super) last_used: &'a mut Tracked<LastUsed<Tool>>,
+    /// The toolbar's slots.
+    pub(super) slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
     /// The tool the toolbar picked in this pass.
     pub(super) picked: Option<Tool>,
-    /// The context the toolbar's grid is measured in.
-    pub(super) ctx: &'a egui::Context,
 }
+
+/// The dock's panel specs: fixed for the mock's four panels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::PlainData)]
+pub struct MockSpecs;
 
 impl Panels<'_> {
     /// The toolbar's rail in the rect the dock gives it, or its height at a width: as many tool columns as the width
     /// holds. The rail's own padding surrounds the buttons, so no group padding applies.
     fn toolbar(&mut self, ui: &mut Ui, at: GroupAt) -> f32 {
-        let slots = Tool::slots();
-        let (current, last_used) = (self.tool, self.last_used.clone());
-        let rail = ToolRail::new("Tools", &slots, &current, &last_used);
+        let current = self.tool;
+        let rail = ToolRail::new("Tools", self.slots, &current, self.last_used);
         match at {
             GroupAt::Measure(width) => rail.measure_rail(ui, width, |_, _| {}).y,
             GroupAt::Show(rect) => {
@@ -66,7 +70,7 @@ impl Panels<'_> {
                     self.picked = output.select;
                 }
                 if let Some(next) = output.last_used {
-                    *self.last_used = next;
+                    **self.last_used = next;
                 }
                 rect.height()
             }
@@ -76,7 +80,7 @@ impl Panels<'_> {
     /// The document tab's title: the name, the zoom of the device and the current layer.
     fn tab_title(&self, ui: &Ui, cx: &BodyCx<'_>) -> String {
         let document = &self.document;
-        let zoom = CanvasSpace::new(document.view, ui.pixels_per_point()).zoom_device() * 100.0;
+        let zoom = CanvasSpace::new(*document.view, ui.pixels_per_point()).zoom_device() * 100.0;
         let layer = document.current_layer().map_or("", |layer| layer.name.as_str());
         cx.words::<MockWords>().tab_title.fill(&[("name", &document.title), ("zoom", &cx.format().integer(zoom.round() as i64)), ("layer", layer)])
     }
@@ -91,13 +95,13 @@ fn name(panel: Panel) -> &'static str {
     }
 }
 
-impl DockPanels<Panel> for Panels<'_> {
+impl PanelSpecs<Panel> for MockSpecs {
     fn spec(&self, panel: &Panel) -> PanelSpec {
         let spec = PanelSpec::new(name(*panel)).limits(SizeLimits::default());
         match panel {
             Panel::Canvas => spec.canvas(),
             // The toolbar's column is whole tool columns wide.
-            Panel::Tools => spec.grid(ToolRail::<Tool>::dock_grid(self.ctx, Tool::slots().len())),
+            Panel::Tools => spec.grid(DockGrid::rail(Tool::slots().len())),
             _ => spec,
         }
     }
@@ -110,12 +114,14 @@ impl DockPanels<Panel> for Panels<'_> {
             _ => Permissions::ALL,
         }
     }
+}
 
+impl DockPanels<Panel> for Panels<'_> {
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         match panel {
             Panel::Navigator => {
-                let size = self.document.size;
-                let _ = NavigatorPanel::new("Navigator", Bind::bound(&mut self.document.view), size).show(ui);
+                let props = NavigatorProps { view: craft_ui::contract::bind_tracked!(self.document.view), size: self.document.size };
+                let _ = MemoView::new("navigator", props, navigator).show(ui);
             }
             Panel::Layers => layers(ui, cx, self.document),
             Panel::Canvas | Panel::Tools => {}
@@ -208,7 +214,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let page = DocRect::new(0.0, 0.0, document.size.width, document.size.height);
     let pages = [PageFrame::new(page)];
     let pixels = document.pixel_size();
-    let (view, show_rulers) = (document.view, document.rulers);
+    let (view, show_rulers) = (*document.view, document.rulers);
     let editing = matches!(tool, Tool::Move | Tool::Marquee);
     let canvas_id = ui.scope_id().with("mock document canvas");
     // What the host reported; none in a measuring run, where it does not run.
@@ -252,12 +258,24 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     document.zero = zero;
     let reported: craft_ui::canvas::ToolHostResponse = reported.unwrap_or_default();
     if let Some(next) = scrolled.or(reported.view) {
-        document.view = next;
+        *document.view = next;
     }
 }
 
 /// The layer table: an eye column and a name column over the layers, top first, with several layers selectable and
 /// the lead being the current layer.
+/// What the Navigator shows: the document's view, which it pans and zooms, and the document's size.
+#[derive(MemoProps)]
+struct NavigatorProps<'a> {
+    view: Bind<'a, CanvasView>,
+    size: Size,
+}
+
+/// The Navigator, a memoized view: it runs when the view or the document's size changes or the pointer is over it.
+fn navigator(props: &mut NavigatorProps<'_>, ui: &mut Ui) {
+    let _ = NavigatorPanel::new("Navigator", props.view.reborrowed(), props.size).show(ui);
+}
+
 fn layers(ui: &mut Ui, cx: &mut BodyCx<'_>, document: &mut Document) {
     let columns = vec![
         ColumnSpec::new(VISIBLE, "Visible", ColumnWidth::Controls(1.5)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),

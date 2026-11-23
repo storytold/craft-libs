@@ -18,6 +18,7 @@ pub use cache::{Accepted, accepted_variant};
 pub use craft_behavior::{ControlMetrics, Insets, Metrics};
 #[doc(hidden)]
 pub use craft_theme::GroupValues;
+pub use craft_theme::LetterCase;
 pub use craft_theme::{FlagMask, Flags, Mix, Resolve, State, StateMix, Stateful, States, TokenGroup, Tokens, TypeRole, Variant};
 pub use craft_ui_macros::{ComponentStyle, TokenGroup};
 pub(crate) use cx::control_metrics;

@@ -207,7 +207,7 @@ impl HistogramData {
 }
 
 /// A range of whole levels (bin positions) a plot has selected, both ends included.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct LevelRange {
     /// The first level.

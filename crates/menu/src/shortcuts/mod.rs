@@ -47,6 +47,7 @@
 //! | Outcome | The app |
 //! |---|---|
 //! | `Ok` | Saves `Profiles` (with sets) or `keymap.overrides()`. |
+//! | `Ok` in [`Layout::CommandLists`] | Close: there is no Cancel, each edit is applied at once and reported as `Changed`, so closing keeps them. |
 //! | `Cancel` | Nothing to save: the keymap and the sets are as they were at open. When Cancel undid edits, `Changed` follows. |
 //! | `Changed` | Updates its menus, or saves at once if it saves live. It comes after each edit and after a Cancel that undid edits. When a pass also has another outcome, `Changed` comes on the next pass; `is_open()` stays true until it has. |
 //! | `Import { formats }` | Opens a file of one of the formats, then calls [`ShortcutsDialog::import_json`] (craft-keymap JSON, [`JSON_FORMAT`]) or reads it into a `ForeignSet` and calls [`ShortcutsDialog::review_import`]. |
@@ -103,17 +104,17 @@ macro_rules! fill {
 
 mod codec;
 mod import_offer;
-mod keyboard;
+pub(crate) mod keyboard;
 mod pages;
-mod recorder;
+pub(crate) mod recorder;
 mod review;
 mod rows;
 mod sets;
 mod state;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 pub mod summary;
-mod view;
+pub(crate) mod view;
 mod words;
 
 pub use codec::ChordCodec;
@@ -257,6 +258,18 @@ impl Format {
     }
 }
 
+/// How the dialog arranges its body.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Layout {
+    /// The table of the catalog beside the detail pane.
+    #[default]
+    Table,
+    /// Word's Customize Keyboard: a Categories list beside a Commands list, then the command's keys,
+    /// the New Shortcut recorder, the holder line and the Assign and Remove buttons.
+    CommandLists,
+}
+
 /// A rule an app adds for which bindings a command may get; `Err` carries the message shown.
 pub type Accept = Box<dyn Fn(&CommandDef, &Binding) -> Result<(), String>>;
 
@@ -304,6 +317,9 @@ pub struct Options {
     pub summary: bool,
     /// The app's extra rule for which bindings a command may get.
     pub accept: Option<Accept>,
+    /// [`Layout::Table`]: how the body is arranged. The keymap, the `accept` rule, the conflict mode
+    /// and undo are the same in every layout.
+    pub layout: Layout,
 }
 
 impl Default for Options {
@@ -327,6 +343,7 @@ impl Default for Options {
             export_formats: Vec::new(),
             summary: true,
             accept: None,
+            layout: Layout::Table,
         }
     }
 }
@@ -381,6 +398,56 @@ impl<'a> ShortcutsDialog<'a> {
     pub fn sets(mut self, profiles: &'a mut Profiles, builtins: &'a Builtins<'a>) -> Self {
         self.sets = Some((profiles, builtins));
         self
+    }
+
+    /// Sets the value `field` names in `state`, as the user editing that control would
+    /// (`search`, `area`, `command`, `pressed`; `assign` true presses Assign; `remove` takes the text
+    /// of one of the command's keys, as [`DialogSnapshot::keys`] reports it), for automation. It builds the words `Env` that `DialogState::set_field` needs. `Err` says why
+    /// the field was refused.
+    pub fn set_json_field(self, ui: &Ui, state: &mut DialogState, field: &str, value: &serde_json::Value) -> Result<(), String> {
+        use craft_ui::dialog::FieldRefusal;
+        let rejects = || FieldRefusal::Rejects(value).message(field);
+        let inactive = || FieldRefusal::Inactive.message(field);
+        self.with_env(&Say::of(ui), |env| -> Result<(), String> {
+            state.begin(env);
+            match field {
+                "search" => state.set_query(value.as_str().ok_or_else(rejects)?.to_owned()),
+                "area" => {
+                    let key = value.as_str().ok_or_else(rejects)?;
+                    let area = state.areas.iter().find(|area| view::area_key(&area.id) == key).map(|area| area.id.clone()).ok_or_else(rejects)?;
+                    state.set_area(area);
+                }
+                "command" => {
+                    let command = value.as_str().and_then(CommandRef::parse_key).filter(|command| env.keymap.bindable(command).is_some());
+                    state.select_row(&command.ok_or_else(rejects)?);
+                }
+                "pressed" => {
+                    let trigger = Trigger::parse(value.as_str().ok_or_else(rejects)?).map_err(|_| rejects())?;
+                    let command = state.selected.clone().ok_or_else(inactive)?;
+                    state.set_field(env, command, trigger);
+                }
+                "assign" => match value {
+                    serde_json::Value::Bool(true) => {
+                        if state.field.is_none() {
+                            return Err(inactive());
+                        }
+                        state.assign_field(env);
+                    }
+                    serde_json::Value::Bool(false) => {}
+                    _ => return Err(rejects()),
+                },
+                "remove" => {
+                    let wanted = Binding::parse(value.as_str().ok_or_else(rejects)?).map_err(|_| rejects())?;
+                    let command = state.selected.clone().ok_or_else(inactive)?;
+                    if !env.keymap.bindings(&command).contains(&wanted) {
+                        return Err(rejects());
+                    }
+                    state.remove(env, &command, &wanted);
+                }
+                _ => return Err(FieldRefusal::Unknown.message(field)),
+            }
+            Ok(())
+        })
     }
 
     /// Sets the dialog's [`Options`].
@@ -454,6 +521,8 @@ enum Act {
     Summarize,
     Ok,
     Cancel,
+    /// Close in [`Layout::CommandLists`]: it answers as OK.
+    Close,
 }
 
 /// The footer's buttons and what each one does. Their enabled state is set after the body has run.
@@ -465,6 +534,13 @@ fn footer(env: &Env<'_>) -> (Vec<FooterButton>, Vec<Act>) {
         acts.push(act);
     };
     let editable = env.options.editable;
+    if env.options.layout == Layout::CommandLists {
+        if editable {
+            add(Act::ResetAll, word!(env, reset_all_more), DialogRole::Other, true);
+        }
+        add(Act::Close, word!(env, close), DialogRole::Accept, false);
+        return (buttons, acts);
+    }
     if editable {
         add(Act::Undo, word!(env, undo), DialogRole::Other, true);
         add(Act::Redo, word!(env, redo), DialogRole::Other, true);
@@ -516,7 +592,7 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
                     Act::Undo => idle && state.can_undo(),
                     Act::Redo => idle && state.can_redo(),
                     Act::ResetAll => idle && !env.keymap.overrides().is_empty(),
-                    Act::Ok => idle,
+                    Act::Ok | Act::Close => idle,
                     Act::Cancel => idle,
                     Act::Summarize => true,
                 });
@@ -549,7 +625,7 @@ fn frame(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> ShortcutsOu
         Some(Act::Redo) => state.redo(env),
         Some(Act::ResetAll) => state.ask_reset_all(),
         Some(Act::Summarize) => state.summarize(env),
-        Some(Act::Ok) => state.ok(env),
+        Some(Act::Ok | Act::Close) => state.ok(env),
         Some(Act::Cancel) | None => {}
     }
     match closed {

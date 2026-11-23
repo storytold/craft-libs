@@ -5,7 +5,7 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story}
 use egui::Ui;
 
 use super::list::{CardKey, CommentList, RowEntry, Rows};
-use super::row::CommentRow;
+use super::row::{CardActions, CommentRow};
 use super::{CommentsPanel, CommentsPanelState};
 use crate::annotate::AnnotationKind;
 use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ThreadId};
@@ -94,4 +94,14 @@ fn comment_row_selected_with_replies(ui: &mut Ui, _: &mut StoryData) -> StoryOut
     let thread = thread(1, 1, "The margin is too narrow on this page.", 2);
     show_as_only_item(ui, CommentRow::card(&thread, "Ana: The margin is too narrow on this page.".into()).state(true, true, NOW).drafts(None, ""))
         .into()
+}
+
+#[story(CommentRow<'static>, covers = [], drive = Drive::Never)]
+fn comment_row_selected_card_with_buttons(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let thread = thread(1, 1, "The margin is too narrow on this page.", 1);
+    let row = CommentRow::card(&thread, "Ana: The margin is too narrow on this page.".into())
+        .state(true, true, NOW)
+        .actions(CardActions::Buttons)
+        .drafts(None, "");
+    show_as_only_item(ui, row).into()
 }

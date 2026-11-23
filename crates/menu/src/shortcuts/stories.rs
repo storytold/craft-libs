@@ -11,7 +11,7 @@ use egui::Ui;
 
 use super::state::{DialogState, Env, Target};
 use super::words::Say;
-use super::{DialogTab, Options, ShortcutsDialog};
+use super::{DialogTab, Layout, Options, ShortcutsDialog};
 
 #[allow(clippy::panic, reason = "the story's own fixed chords are valid")]
 fn binding(text: &str) -> Binding {
@@ -134,6 +134,26 @@ fn read_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(ShortcutsDialog<'static>, covers = [], drive = Drive::Never)]
 fn named_sets(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     scene(ui, &Options::default(), Setup { sets: true, ..Setup::default() }, |_, _| {})
+}
+
+fn command_lists_options() -> Options {
+    Options::default().with(|o| {
+        o.layout = Layout::CommandLists;
+        o.sort_by_label = true;
+    })
+}
+
+#[story(ShortcutsDialog<'static>, covers = [], drive = Drive::Never)]
+fn command_lists(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    scene(ui, &command_lists_options(), Setup::default(), |_, state| state.select(&"file.save".into()))
+}
+
+#[story(ShortcutsDialog<'static>, covers = [], drive = Drive::Never)]
+fn command_lists_conflict(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    scene(ui, &command_lists_options(), Setup::default(), |env, state| {
+        state.select(&"file.export".into());
+        state.set_field(env, "file.export".into(), binding("Cmd+S").trigger);
+    })
 }
 
 #[story(ShortcutsDialog<'static>, covers = [], drive = Drive::Never)]

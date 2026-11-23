@@ -60,7 +60,9 @@ impl ActionsSettings {
 
 /// The Actions panel's persisted section: Button Mode and the collapsed sets.
 /// Selection and expansion are not persisted.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, craft_ui::contract::MemoProps, craft_ui::contract::PlainData,
+)]
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ActionsSettings {
@@ -72,7 +74,7 @@ pub struct ActionsSettings {
 
 /// A row of the tree: a set header, an action or one of its steps. Also the selection (one row at
 /// a time) and the list's key.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum ActionSelection {
     /// The set header of this name.
@@ -89,7 +91,7 @@ pub enum ActionSelection {
 /// The panel remaps `selected` itself when it reports a [`Reorder`](ActionsEvent::Reorder)
 /// that moves a row, since it owns the selection. After a [`Delete`](ActionsEvent::Delete) the
 /// app clears `selected` (the panel cannot tell which rows the delete removed).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct ActionsPanelState {
     /// The persisted section.

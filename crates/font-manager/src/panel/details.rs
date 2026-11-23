@@ -1,9 +1,9 @@
 //! The details sheet: a family's every style in its own face, its facts and languages, and
 //! installing or removing it whole or a style at a time.
 
-mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod rows;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 
@@ -497,7 +497,7 @@ impl Sheet {
                     };
                     SampleFace::Face { catalog, owner: *owner, face }
                 }
-                None => SampleFace::Interface,
+                None => SampleFace::Missing,
             };
             StyleRow::new(line, &self.title, &self.sample, points, face, words)
         });

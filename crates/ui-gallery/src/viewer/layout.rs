@@ -1,19 +1,56 @@
 //! The viewer's dock layouts: the panels of each workspace, the default arrangements, what the user may do with a
 //! panel, and the saved form of a layout.
 //!
-//! A saved layout names a component tab by its component's registered name. A name the catalog no longer has loads as a
-//! panel the reconciliation drops, so a layout saved by another build costs at most its component tabs.
+//! A saved layout names a component tab by its component's registered name. Loading resolves each name through the
+//! catalog and drops the tabs it does not list, so a layout saved by another build costs at most its component tabs.
 
-use super::catalog::display_name;
+use super::catalog::{Catalog, display_name};
 use super::state::Workspace;
 use craft_behavior::Axis;
 use craft_behavior::dock::{Column, DockEdge, Group, Layout, Node, Permissions, SplitSize, Workspace as Dock};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Arc;
+
+/// The name of a component tab: its component's registered type name, owned by the layout that holds the tab.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui::contract::MemoProps)]
+pub struct TabName(Arc<str>);
+
+/// Saved as the name's text.
+impl Serialize for TabName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for TabName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(TabName(String::deserialize(deserializer)?.into()))
+    }
+}
+
+impl TabName {
+    /// The registered type name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for TabName {
+    fn from(name: &str) -> Self {
+        TabName(name.into())
+    }
+}
+
+impl std::ops::Deref for TabName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
 
 /// A panel of the viewer's dock layouts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PanelId {
     /// The component tree.
@@ -29,7 +66,7 @@ pub enum PanelId {
     /// The centre's first tab: every component of one level.
     Overview,
     /// A centre tab with every story of one component, by the component's registered type name.
-    Component(&'static str),
+    Component(TabName),
     /// The theme workspace's centre: the mock app or the Controls level.
     Preview,
     /// The picked token's detail.
@@ -41,8 +78,13 @@ pub enum PanelId {
 }
 
 impl PanelId {
+    /// The tab of the component registered as `type_name`.
+    pub fn component(type_name: &str) -> Self {
+        PanelId::Component(type_name.into())
+    }
+
     /// The panel's title.
-    pub fn title(self) -> String {
+    pub fn title(&self) -> String {
         match self {
             PanelId::Components => "Components".to_owned(),
             PanelId::Stories => "Stories".to_owned(),
@@ -59,7 +101,7 @@ impl PanelId {
     }
 
     /// Whether the layout of `workspace` holds the panel. The token browser is in both.
-    pub fn in_workspace(self, workspace: Workspace) -> bool {
+    pub fn in_workspace(&self, workspace: Workspace) -> bool {
         match self {
             PanelId::Components | PanelId::Stories | PanelId::Properties | PanelId::Inspect | PanelId::Overview | PanelId::Component(_) => {
                 workspace == Workspace::Components
@@ -77,72 +119,6 @@ impl PanelId {
             PanelId::Overview => Permissions::ALL.movable(false).floatable(false).closable(false),
             _ => Permissions::ALL.closable(matches!(self, PanelId::Component(_))),
         }
-    }
-}
-
-/// [`PanelId`] as saved: the same variants, with a component tab named by an owned string.
-#[derive(Serialize, Deserialize)]
-enum PanelRepr {
-    Components,
-    Stories,
-    Properties,
-    Inspect,
-    Tokens,
-    Overview,
-    Component(String),
-    Preview,
-    Detail,
-    Problems,
-    AppSizes,
-}
-
-/// The names of the component tabs read from saved layouts. A tab name is a `&'static str`, so each distinct name is
-/// kept once for the process.
-fn interned(name: String) -> &'static str {
-    static NAMES: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
-    let mut names = NAMES.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(known) = names.get(name.as_str()) {
-        return known;
-    }
-    let leaked: &'static str = Box::leak(name.into_boxed_str());
-    names.insert(leaked);
-    leaked
-}
-
-impl Serialize for PanelId {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let repr = match *self {
-            PanelId::Components => PanelRepr::Components,
-            PanelId::Stories => PanelRepr::Stories,
-            PanelId::Properties => PanelRepr::Properties,
-            PanelId::Inspect => PanelRepr::Inspect,
-            PanelId::Tokens => PanelRepr::Tokens,
-            PanelId::Overview => PanelRepr::Overview,
-            PanelId::Component(name) => PanelRepr::Component(name.to_owned()),
-            PanelId::Preview => PanelRepr::Preview,
-            PanelId::Detail => PanelRepr::Detail,
-            PanelId::Problems => PanelRepr::Problems,
-            PanelId::AppSizes => PanelRepr::AppSizes,
-        };
-        repr.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for PanelId {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match PanelRepr::deserialize(deserializer)? {
-            PanelRepr::Components => PanelId::Components,
-            PanelRepr::Stories => PanelId::Stories,
-            PanelRepr::Properties => PanelId::Properties,
-            PanelRepr::Inspect => PanelId::Inspect,
-            PanelRepr::Tokens => PanelId::Tokens,
-            PanelRepr::Overview => PanelId::Overview,
-            PanelRepr::Component(name) => PanelId::Component(interned(name)),
-            PanelRepr::Preview => PanelId::Preview,
-            PanelRepr::Detail => PanelId::Detail,
-            PanelRepr::Problems => PanelId::Problems,
-            PanelRepr::AppSizes => PanelId::AppSizes,
-        })
     }
 }
 
@@ -180,17 +156,18 @@ pub fn default_for(workspace: Workspace) -> Dock<PanelId> {
 }
 
 /// `saved` made valid for `workspace`: a layout that fails validation is replaced by the default, panels of the other
-/// workspace and component tabs `known` rejects are dropped, and missing panels come back where the default has them.
-pub fn reconciled(mut saved: Dock<PanelId>, workspace: Workspace, known: &dyn Fn(&str) -> bool) -> Dock<PanelId> {
+/// workspace and component tabs `catalog` does not list are dropped, and missing panels come back where the default has
+/// them.
+pub fn reconciled(mut saved: Dock<PanelId>, workspace: Workspace, catalog: &Catalog) -> Dock<PanelId> {
     let registered = |panel: &PanelId| {
         panel.in_workspace(workspace)
             && match panel {
-                PanelId::Component(name) => known(name),
+                PanelId::Component(name) => catalog.component_named(name).is_some(),
                 _ => true,
             }
     };
     saved.reconcile(registered, PanelId::permissions, &default_for(workspace));
-    saved.hidden.retain(|(panel, _)| registered(panel));
+    saved.forget_hidden(|panel| !registered(panel));
     saved
 }
 
@@ -199,19 +176,20 @@ pub fn save(layout: &Dock<PanelId>) -> String {
     serde_json::to_string(layout).unwrap_or_default()
 }
 
-/// The layout saved as `text`, made valid for `workspace`; the default when the text is empty or unreadable.
-pub fn load(text: &str, workspace: Workspace, known: &dyn Fn(&str) -> bool) -> Dock<PanelId> {
-    serde_json::from_str::<Dock<PanelId>>(text).ok().map_or_else(|| default_for(workspace), |saved| reconciled(saved, workspace, known))
+/// The layout saved as `text`, made valid for `workspace` with the component tabs `catalog` lists; the default when the
+/// text is empty or unreadable.
+pub fn load(text: &str, workspace: Workspace, catalog: &Catalog) -> Dock<PanelId> {
+    serde_json::from_str::<Dock<PanelId>>(text).ok().map_or_else(|| default_for(workspace), |saved| reconciled(saved, workspace, catalog))
 }
 
 /// The component tabs `layout` holds, in layout order.
-pub fn open_tabs(layout: &Dock<PanelId>) -> Vec<&'static str> {
+pub fn open_tabs(layout: &Dock<PanelId>) -> Vec<TabName> {
     layout
-        .layout
+        .layout()
         .panels()
         .into_iter()
         .filter_map(|panel| match panel {
-            PanelId::Component(name) => Some(*name),
+            PanelId::Component(name) => Some(name.clone()),
             _ => None,
         })
         .collect()

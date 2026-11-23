@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
+#[cfg(not(target_arch = "wasm32"))]
 use craft_font_catalog::Catalog;
 pub use craft_font_store::UserSource;
 #[cfg(not(target_arch = "wasm32"))]

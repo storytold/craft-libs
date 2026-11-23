@@ -1,8 +1,8 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
-//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows,
-//! injected keys across a focus loss, non-finite injected points, a repeated injected press, the window that has the
-//! keys, and `act`.
+//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
+//! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
+//! loss, non-finite injected points, a repeated injected press, the window that has the keys, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -154,6 +154,23 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
     }
 }
 
+/// A window that closes leaves the next frame's input, as an integration drops it, so the modal it showed in its last
+/// pass blocks no other window: the root window's close request then reaches the app in that frame.
+#[trial]
+fn a_closed_windows_modal_no_longer_blocks_the_root_close() {
+    let windows = Windows::new();
+    modal_frame(&windows);
+    windows.frame(vec![], vec![], |_| {});
+    windows.root_info(ViewportInfo { events: vec![ViewportEvent::Close], ..ViewportInfo::default() });
+    let (listed, asked) = (Cell::new(true), Cell::new(false));
+    windows.frame(vec![], vec![], |ui| {
+        listed.set(ui.ctx().input(|input| input.raw.viewports.contains_key(&child())));
+        asked.set(craft_ui::runtime::windows::root_close_requested(ui.ctx()));
+    });
+    assert!(!listed.get(), "the closed window is gone from the input");
+    assert!(asked.get(), "the closed window's modal refuses no close");
+}
+
 /// L-17: the user clicking the main window while a modal in another window blocks it brings the modal's window
 /// forward with it, in the pass the main window gains focus; a pass without a focus change sends nothing.
 #[trial]
@@ -205,6 +222,12 @@ impl Palette {
             Some(spec) => Mount::viewport_with(overlay, spec),
             None => Mount::viewport(overlay),
         };
+        Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
+    }
+
+    /// A tool window that may not be given less than `least`.
+    fn at_least(title: &'static str, least: Vec2) -> Self {
+        let mount = Mount::viewport_with(Overlay::floating().min_size(least), WindowSpec::tool());
         Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
     }
 
@@ -277,6 +300,81 @@ fn a_palette_drops_its_level_while_the_app_is_inactive() {
     assert_eq!(frame(false, false), inactive, "the frame after focus left every window");
     frame(true, false);
     assert_eq!(frame(true, false), on_top, "the frame after the main window took focus again");
+}
+
+/// A palette stands as an ordinary window while an app-modal layer in the main window blocks it, so the modal is never
+/// behind a palette: the frame after the modal opens builds the palette's window at the ordinary level, a later frame
+/// raises the main window above it once, by its level (egui ignores `Focus` for a window that has focus), and the
+/// palette stands above the app's windows again once the modal closes.
+#[trial]
+fn a_palette_stands_behind_the_window_that_holds_a_modal() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    let frame = |modal: bool| {
+        let out = windows.frame(vec![], vec![], |ui| {
+            windows.child_info(ViewportInfo { focused: Some(false), ..ViewportInfo::default() });
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("save prompt").show(ui, |_, _| {});
+            }
+        });
+        let raise: Vec<ViewportCommand> = out
+            .commands
+            .iter()
+            .filter(|(id, command)| *id == ViewportId::ROOT && matches!(command, ViewportCommand::WindowLevel(_) | ViewportCommand::Focus))
+            .map(|(_, command)| command.clone())
+            .collect();
+        (builder_titled(&out, "tool").1.window_level, raise)
+    };
+    let (on_top, normal) = (Some(egui::WindowLevel::AlwaysOnTop), Some(egui::WindowLevel::Normal));
+    assert_eq!(frame(false), (on_top, vec![]), "no modal: the palette stands above the main window");
+    let frames: Vec<_> = (0..4).map(|_| frame(true)).collect();
+    assert_eq!(frames.last().map(|(level, _)| *level), Some(normal), "the modal open: the palette is an ordinary window");
+    let raises: Vec<usize> = frames.iter().enumerate().filter(|(_, (_, raise))| !raise.is_empty()).map(|(at, _)| at).collect();
+    let lowered = frames.iter().position(|(level, _)| *level == normal);
+    assert_eq!(raises.len(), 1, "the main window is raised once: {frames:?}");
+    assert!(lowered.is_some_and(|lowered| raises[0] > lowered), "the raise follows the frame that lowered the palette: {frames:?}");
+    let level = |level| ViewportCommand::WindowLevel(level);
+    assert_eq!(
+        frames[raises[0]].1,
+        vec![level(egui::WindowLevel::AlwaysOnTop), level(egui::WindowLevel::Normal)],
+        "the raise stands the main window above every window and back, without focus"
+    );
+    frame(false);
+    assert_eq!(frame(false), (on_top, vec![]), "the modal closed: the palette stands above again");
+}
+
+/// A palette's window is hidden while the main window is minimized and shown again at its place when the main window
+/// is restored, on Windows and Linux; a document window stays. On macOS a minimized main window leaves the app active,
+/// and its palettes stay.
+#[trial]
+fn palettes_hide_while_the_main_window_is_minimized() {
+    for os in [Os::Windows, Os::Linux, Os::Mac] {
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(os).caps(Caps::native(os)), Arc::new(FakeSystem::new())));
+        let frame = |minimized: bool| {
+            windows.root_info(ViewportInfo { minimized: Some(minimized), ..ViewportInfo::default() });
+            windows.frame(vec![], vec![], |ui| {
+                Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+                Palette::new("doc", Some(WindowSpec::document())).show(ui, |_, _| {});
+            })
+        };
+        let first = frame(false);
+        let (tool, doc) = (builder_titled(&first, "tool").0, builder_titled(&first, "doc").0);
+        frame(false);
+        let commands = |minimized: bool| -> Vec<(ViewportId, ViewportCommand)> { (0..3).flat_map(|_| frame(minimized).commands).collect() };
+        let sent = |commands: &[(ViewportId, ViewportCommand)], to: ViewportId| -> Vec<ViewportCommand> {
+            commands.iter().filter(|(id, _)| *id == to).map(|(_, command)| command.clone()).collect()
+        };
+        let (minimized, restored) = (commands(true), commands(false));
+        let hides = os != Os::Mac;
+        let visible = |on: bool| if hides { vec![ViewportCommand::Visible(on)] } else { vec![] };
+        let (tool_minimized, doc_minimized) = (sent(&minimized, tool), sent(&minimized, doc));
+        let (tool_restored, doc_restored) = (sent(&restored, tool), sent(&restored, doc));
+        assert_eq!(tool_minimized, visible(false), "{os:?}: the main window minimized: the palette is hidden, and nothing else is sent");
+        assert_eq!(tool_restored, visible(true), "{os:?}: the main window restored: the palette is shown where it was");
+        assert_eq!((doc_minimized, doc_restored), (vec![], vec![]), "{os:?}: a document window is left as it is");
+    }
 }
 
 /// A full-window container mounted in its own window opens a resizable OS window titled as the container where
@@ -403,6 +501,67 @@ fn a_content_sized_window_takes_its_content_size_once_it_reported_its_place() {
         taken.x >= CONTENT.x && taken.y >= CONTENT.y && taken.x < GIVEN.x && taken.y < GIVEN.y,
         "the window takes its content's size, not the room the OS gave it: {taken:?}"
     );
+}
+
+/// Placing a minimized window below its smallest inner size restores it and lowers that size to the placed one, so the
+/// window takes the place it is given.
+#[trial]
+fn placing_a_minimized_window_below_its_minimum_restores_it_at_the_placed_size() {
+    const PLACED: Rect = Rect { min: Pos2::new(10.0, 20.0), max: Pos2::new(50.0, 50.0) };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::at_least("tool", Vec2::new(200.0, 150.0)).show(ui, |_, _| {});
+        })
+    };
+    let first = frame();
+    let (id, _) = builder_titled(&first, "tool");
+    let given = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(400.0, 300.0));
+    windows.child_info(ViewportInfo {
+        inner_rect: Some(given),
+        outer_rect: Some(given),
+        native_pixels_per_point: Some(1.0),
+        minimized: Some(true),
+        ..ViewportInfo::default()
+    });
+    frame();
+    frame();
+    assert!(WindowHost::of(&windows.ctx).set_outer(id, PLACED), "the commands went out");
+    let sent: Vec<ViewportCommand> = frame().commands.into_iter().filter(|(window, _)| *window == id).map(|(_, command)| command).collect();
+    assert!(sent.contains(&ViewportCommand::Minimized(false)), "the window is restored: {sent:?}");
+    assert!(sent.contains(&ViewportCommand::InnerSize(PLACED.size())), "the window takes the placed size: {sent:?}");
+    let lowered = sent.iter().find_map(|command| match command {
+        ViewportCommand::MinInnerSize(size) => Some(*size),
+        _ => None,
+    });
+    let lowered = lowered.expect("the minimum went below the placed size");
+    assert!(lowered.x <= PLACED.width() && lowered.y <= PLACED.height(), "the minimum fits the placed size: {lowered:?}");
+}
+
+/// On a desktop of two monitors at different scales, a window whose corner lies on the second reports the second as
+/// its monitor, and, with no scale of its own from the platform, takes that monitor's scale: one rule finds both.
+#[trial]
+fn a_window_on_the_second_of_two_monitors_reports_that_monitor_and_its_scale() {
+    use craft_behavior::{Monitor, MonitorKey};
+    let system = Arc::new(FakeSystem::new());
+    let first = Monitor::new(MonitorKey::new("first", [1920, 1080]), [0, 0], [1920, 1080], 1.0);
+    let second = Monitor::new(MonitorKey::new("second", [2880, 1800]), [1920, 0], [2880, 1800], 2.0);
+    system.set_monitors(vec![first, second.clone()]);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+        })
+    };
+    let (id, _) = builder_titled(&frame(), "tool");
+    // 2000 points is past the first monitor at its scale of 1 and, at 4000 pixels, inside the second at its scale of 2.
+    let placed = Rect::from_min_size(Pos2::new(2000.0, 100.0), Vec2::new(400.0, 300.0));
+    windows.child_info(ViewportInfo { inner_rect: Some(placed), outer_rect: Some(placed), ..ViewportInfo::default() });
+    frame();
+    frame();
+    let host = WindowHost::of(&windows.ctx);
+    assert_eq!(host.monitor_of(id).map(|monitor| monitor.key), Some(second.key), "the window is on the second monitor");
+    assert_eq!(host.facts(id).and_then(|facts| facts.scale), Some(second.scale), "the window takes the second monitor's scale");
 }
 
 /// The OS windows the runtime opens carry the app id the app installed, as its main window does: docks and Wayland
@@ -612,4 +771,33 @@ fn a_floating_panel_opened_from_a_full_window_container_takes_input() {
     let probe = fixture.by_label("Probe").expect("the panel's probe is in the access tree");
     fixture.click(&probe).idle(2);
     assert_eq!(seen.borrow().activations, 1, "the click reaches the panel above the full-window container");
+}
+
+/// SG-30: X11 rejects a window title that holds a NUL, so `act` drops every NUL before it compares the title with the
+/// one it sent last: the window gets the title without it, a title sent again (or differing only by NULs) sends no
+/// second command, and a changed title sends one.
+#[trial]
+fn a_title_with_nul_reaches_the_window_without_it() {
+    use craft_ui::runtime::windows::{WindowAction, act};
+    let shell = ShellInfo::default().os(Os::Linux).backend(Backend::X11).caps(Caps::native(Os::Linux));
+    let windows = Windows::with(InstallSpec::new(shell, Arc::new(NoWindows)));
+    windows.frame(vec![], vec![], |_| {});
+    // The titles one frame that asks for `title` sends to the main window, over every pass of the frame.
+    let send = |title: &str| -> Vec<String> {
+        let out = windows.frame(vec![], vec![], |ui| {
+            act(ui.ctx(), ViewportId::ROOT, WindowAction::SetTitle(title.to_owned()));
+        });
+        out.commands
+            .iter()
+            .filter_map(|(id, command)| match command {
+                ViewportCommand::Title(sent) if *id == ViewportId::ROOT => Some(sent.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(send("Report\0 draft.docx"), ["Report draft.docx"], "the window gets the title without its NUL");
+    assert!(send("Report\0 draft.docx").is_empty(), "the same title again sends nothing");
+    assert!(send("Report draft.docx").is_empty(), "a title that differs only by NULs is the one already sent");
+    assert_eq!(send("Notes.docx"), ["Notes.docx"], "a changed title is sent");
+    assert_eq!(send("\0Report\0\0 draft.docx\0"), ["Report draft.docx"], "a title changed back is sent again, every NUL dropped");
 }

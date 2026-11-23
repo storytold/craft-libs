@@ -4,7 +4,7 @@
 use craft_keymap::Platform;
 use craft_timeline::ui::{TimecodeField, TimecodePanel, TimecodePanelSettings, TimecodeRow, TimecodeRowKind, TimecodeSource, TimecodeText};
 use craft_timeline::{FrameRate, Tick, TimeFormat};
-use craft_ui::contract::{Bind, Role, Show as _};
+use craft_ui::contract::{Role, Show as _};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, pointer, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
 
@@ -14,7 +14,7 @@ fn start() -> Tick {
 }
 
 fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TimecodeField::new("Time", Bind::bound(data.value("time", start())), TimeFormat::timecode(FrameRate::FPS_30)).show(ui).edit.into()
+    TimecodeField::new("Time", data.bind("time", start()), TimeFormat::timecode(FrameRate::FPS_30)).show(ui).edit.into()
 }
 
 fn fixture() -> Fixture {
@@ -60,7 +60,7 @@ fn rows() -> TimecodePanelSettings {
 
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let text = TimecodeText::new(|row| format!("{:?}", row.kind));
-    TimecodePanel::new("Timecode", Bind::bound(data.value("settings", rows())), text).show(ui).into()
+    TimecodePanel::new("Timecode", data.bind("settings", rows()), text).show(ui).into()
 }
 
 fn kinds(fixture: &mut Fixture) -> Vec<TimecodeRowKind> {

@@ -57,10 +57,10 @@ fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let disabled = *data.value("disabled", false);
     let fit = *data.value("fit", false);
     let units = units();
-    let unit = data.choice("unit", 0u8, &[("Pixels", 0), ("Inches", 1), ("Centimetres", 2), ("Points", 3)]);
+    let (unit, unit_at) = data.choice_at("unit", 0u8, &[("Pixels", 0), ("Inches", 1), ("Centimetres", 2), ("Points", 3)]);
     let out = FieldGroup::new("Select states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
         let first =
-            row("Units").show(ui, |ui, _| fitted(Select::new("Units", Bind::bound(unit), &units).size(size).enabled(!disabled), fit).show(ui));
+            row("Units").show(ui, |ui, _| fitted(Select::new("Units", unit_at.bind(unit), &units).size(size).enabled(!disabled), fit).show(ui));
         row("Resampling").show(ui, |ui, _| {
             fitted(Select::new("Resampling", Bind::bound(&mut 1u8), &resampling()).size(size).enabled(!disabled), fit).show(ui);
         });
@@ -85,19 +85,20 @@ fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Select<'static, u8>, covers = [], drive = Drive::Never)]
 fn select_first(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
-    Select::new("Blend mode", Bind::bound(data.value("first", 0u8)), &entries).show(ui).into()
+    Select::new("Blend mode", data.bind("first", 0u8), &entries).show(ui).into()
 }
 
 #[story(Select<'static, u8>, covers = [Mixed], drive = Drive::Never)]
 fn select_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
-    Select::new("Blend mode", Bind::bound_mixed(data.value("mixed", Mixed::<u8>::Mixed)), &entries).show(ui).into()
+    Select::new("Blend mode", data.bind_mixed("mixed", Mixed::<u8>::Mixed), &entries).show(ui).into()
 }
 
 #[story(Select<'static, u8>, covers = [Invalid], drive = Drive::Never)]
 fn select_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
-    let bind = Bind::bound(data.value("invalid", 2u8))
+    let bind = data
+        .bind("invalid", 2u8)
         .check(|mode| if *mode == 2 { Validity::Refuse(Message::new("Screen is not available here")) } else { Validity::Ok });
     Select::new("Blend mode", bind, &entries).show(ui).into()
 }
@@ -111,12 +112,18 @@ fn open_listbox(fixture: &mut Fixture) {
 #[story(Select<'static, u8>, covers = [Open], drive = Drive::Custom(open_listbox))]
 fn select_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
-    Select::new("Blend mode", Bind::bound(data.value("open", 1u8)), &entries).show(ui).into()
+    Select::new("Blend mode", data.bind("open", 1u8), &entries).show(ui).into()
+}
+
+#[story(Select<'static, u8>, covers = [Open], drive = Drive::Custom(open_listbox))]
+fn select_searchable_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = resampling();
+    Select::new("Resampling", data.bind("searchable_open", 2u8), &entries).searchable().show(ui).into()
 }
 
 #[story(Select<'static, u8>, covers = [], disabled_text = "Pick a layer first")]
 fn select_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
     let tooltip = data.tooltip("Blend mode of the layer");
-    Select::new("Blend mode", Bind::bound(data.value("mode", 0u8)), &entries).tooltip(tooltip).show(ui).into()
+    Select::new("Blend mode", data.bind("mode", 0u8), &entries).tooltip(tooltip).show(ui).into()
 }

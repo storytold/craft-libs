@@ -194,6 +194,15 @@ impl<'a> Tokenizer<'a> {
     }
 }
 
+fn reflected_control(at: Point, previous: Point) -> Point {
+    let reflect = |coordinate: f64, prior: f64| {
+        let doubled = coordinate * 2.0;
+        // If both inputs are finite and doubling overflows, round only the final value.
+        if doubled.is_infinite() && coordinate.is_finite() && prior.is_finite() { coordinate.mul_add(2.0, -prior) } else { doubled - prior }
+    };
+    Point::new(reflect(at.x, previous.x), reflect(at.y, previous.y))
+}
+
 /// Split `d` into subpaths, resolving relative commands and S/T control reflections while
 /// raising quadratic (`Q`/`T`) segments to cubics.
 pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
@@ -355,7 +364,7 @@ pub fn parse_path_with_quads(d: &str) -> Result<Vec<QuadSubpath>> {
                 cur = p;
             }
             b'S' => {
-                let c1 = prev_cubic.map_or(cur, |c2| cur * 2.0 - c2);
+                let c1 = prev_cubic.map_or(cur, |c2| reflected_control(cur, c2));
                 let (c2, p) = (point(args[0], args[1]), point(args[2], args[3]));
                 segs.push(QuadSegment::Cubic(c1, c2, p));
                 prev_cubic = Some(c2);
@@ -370,7 +379,7 @@ pub fn parse_path_with_quads(d: &str) -> Result<Vec<QuadSubpath>> {
                 cur = p;
             }
             b'T' => {
-                let reflect = prev_quad.map_or(cur, |q| cur * 2.0 - q);
+                let reflect = prev_quad.map_or(cur, |q| reflected_control(cur, q));
                 let p = point(args[0], args[1]);
                 segs.push(QuadSegment::Quad(reflect, p));
                 prev_quad = Some(reflect);
@@ -467,8 +476,13 @@ pub fn elliptical_params(p0: Point, p1: Point, rx: f64, ry: f64, phi: f64, large
     let angle = |ux: f64, uy: f64, vx: f64, vy: f64| {
         let dot = ux * vx + uy * vy;
         let det = ux * vy - uy * vx;
-        let denom = (ux.hypot(uy) * vx.hypot(vy)).max(f64::MIN_POSITIVE);
-        (dot / denom).clamp(-1.0, 1.0).acos().copysign(det)
+        if dot == 0.0 && det == 0.0 {
+            // Preserve the fallback for a degenerate vector.
+            std::f64::consts::FRAC_PI_2.copysign(det)
+        } else {
+            // The determinant retains tiny angles even when their cosine rounds to one.
+            det.atan2(dot)
+        }
     };
     let (ux, uy) = ((x1 - cxp) / rx, (y1 - cyp) / ry);
     let (vx, vy) = ((-x1 - cxp) / rx, (-y1 - cyp) / ry);
@@ -511,6 +525,21 @@ mod tests {
     }
 
     #[test]
+    fn smooth_cubic_matches_explicit_control_when_doubling_would_overflow() {
+        let smooth = "M1e308 0 C1e308 1 1e308 2 1e308 3 S1e308 5 1e308 6";
+        let explicit = "M1e308 0 C1e308 1 1e308 2 1e308 3 C1e308 4 1e308 5 1e308 6";
+        assert_eq!(parse_path(smooth).unwrap(), parse_path(explicit).unwrap());
+    }
+
+    #[test]
+    fn smooth_quadratic_matches_explicit_control_when_doubling_would_overflow() {
+        let smooth = "M0 -1e308 Q1 -1e308 2 -1e308 T4 -1e308";
+        let explicit = "M0 -1e308 Q1 -1e308 2 -1e308 Q3 -1e308 4 -1e308";
+        assert_eq!(parse_path_with_quads(smooth).unwrap(), parse_path_with_quads(explicit).unwrap());
+        assert_eq!(parse_path(smooth).unwrap(), parse_path(explicit).unwrap());
+    }
+
+    #[test]
     fn close_resets_smooth_control_history() {
         // After Z, S must not reflect the preceding C's control (20,20) → (0,0).
         let paths = parse_path("M10 10 C10 20 20 20 20 10 Z S30 0 30 10").unwrap();
@@ -529,6 +558,28 @@ mod tests {
         assert!((center.x - 5.0).abs() < 1e-10);
         assert!(center.y.abs() < 1e-10 && start.is_finite());
         assert!((sweep - std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn short_elliptical_arcs_keep_their_sweep_and_endpoints() {
+        let p0 = Point::ZERO;
+        let p1 = Point::new(1e-9, 0.0);
+        let rx = 1.0;
+        let ry = 2.0;
+        let short = 2.0 * (p1.x / (2.0 * rx)).asin();
+        for large in [false, true] {
+            for sweep in [false, true] {
+                let (center, start, delta) = elliptical_params(p0, p1, rx, ry, 0.0, large, sweep).unwrap();
+                let magnitude = if large { std::f64::consts::TAU - short } else { short };
+                let expected = if sweep { magnitude } else { -magnitude };
+                assert!((delta - expected).abs() < 1e-11, "large={large}, sweep={sweep}: {delta} vs {expected}");
+                let at = |angle: f64| Point::new(center.x + rx * angle.cos(), center.y + ry * angle.sin());
+                for (actual, expected) in [(at(start), p0), (at(start + delta), p1)] {
+                    let error = actual - expected;
+                    assert!(error.x.hypot(error.y) < 1e-11, "{actual:?} vs {expected:?}");
+                }
+            }
+        }
     }
 
     #[test]

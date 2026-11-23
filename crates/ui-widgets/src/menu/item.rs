@@ -7,7 +7,7 @@ use crate::contract::{
 };
 use crate::display::Kbd;
 use crate::list::RowStyleCx as _;
-use crate::primitives::{IconSpec, StrokeWidth, TextRun, glyph};
+use crate::primitives::{ContentPainterCx, IconSpec, StrokeWidth, TextRun, glyph};
 use crate::runtime::access::PopupKind;
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
@@ -71,6 +71,8 @@ pub struct MenuItemStyle {
     detail: TextLook,
     /// The least space between the label and the shortcut: `space.gap.section`.
     shortcut_gap: f32,
+    /// The least width of a row's sample: `size.thumb.lg`.
+    sample: f32,
     /// The gap between a submenu and its parent menu: `space.gap.tight`.
     submenu_gap: f32,
 }
@@ -89,8 +91,7 @@ pub struct MenuItemOutput {
     pub opens_submenu: bool,
     /// A submenu row's submenu is the open one of its level: show the `Menu` after the row.
     pub submenu_open: bool,
-    /// The row is its level's active row and paints with the row fill: the pointer moved onto it, or the keyboard
-    /// moved to it.
+    /// The row is its level's active row: the pointer moved onto it, or the keyboard moved to it.
     pub active: bool,
     /// The row's rect grown by the menu's padding: where a submenu hangs from, so its first row is level with this one
     /// and it starts at the popup's edge.
@@ -100,6 +101,10 @@ pub struct MenuItemOutput {
 }
 
 impl MenuItemOutput {
+    pub(super) fn sibling_submenu_open(&self) -> bool {
+        self.level.sibling_submenu_open(self.id)
+    }
+
     /// A submenu row's menu was shown at `rect` (`open`), or closed itself (`!open`).
     pub(crate) fn note_submenu(&self, open: bool, rect: Rect) {
         self.level.note_submenu(self.id, open, rect);
@@ -125,20 +130,56 @@ struct Columns {
     mark: f32,
     icon: f32,
     trail: f32,
+    /// The least width of the sample slot; zero for a row without a sample.
+    sample: f32,
 }
 
 /// Where the parts of a row's label line lie.
 struct Placed {
     mark: Rect,
     icon: Rect,
+    /// The room of the label and the sample, between the icon column and the shortcut.
     label: Rect,
     trail: Rect,
+}
+
+/// The label's and the sample's rects in the room `label` a row leaves them. The sample takes what the label's own
+/// width `want` and a `gap` leave, at least `least`, at the reading end beside the shortcut, so it mirrors under
+/// right-to-left; a `sample_only` row's sample takes the whole room and the label none. No sample (`least` zero):
+/// the label keeps the room.
+fn split_sample(label: Rect, rtl: bool, want: f32, least: f32, gap: f32, only: bool) -> (Rect, Option<Rect>) {
+    if least <= 0.0 {
+        return (label, None);
+    }
+    let flow = Flow::new(label, rtl);
+    if only {
+        return (flow.take_start(0.0).0, Some(label));
+    }
+    let width = (label.width() - want - gap).max(least).min(label.width());
+    let (sample, rest) = flow.take_end(width);
+    (rest.take_end(gap).1.rect(), Some(sample))
 }
 
 /// The label line of a row's content `area`: all of it but the detail line of height `detail` under it.
 fn label_line(area: Rect, detail: f32) -> Rect {
     Rect::from_min_max(area.min, pos2(area.max.x, (area.max.y - detail).max(area.min.y)))
 }
+
+/// What a menu row shows as its shortcut.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum MenuShortcut {
+    /// The bound command's chord; none for a row with no command.
+    #[default]
+    Command,
+    /// The caller's text, which wins over the command's chord.
+    Text(Label),
+    /// No shortcut.
+    Hidden,
+}
+
+/// What paints a menu row's sample into its rect.
+pub type MenuSamplePaint<'a> = Box<dyn FnOnce(&ContentPainterCx, Rect) + 'a>;
 
 /// A row of a menu: a label, an optional icon, a check or radio mark, shortcut text and a detail line under the label.
 /// A row bound to a command takes its label, shortcut, enabled and checked state from the command and fires it as a
@@ -158,6 +199,7 @@ fn label_line(area: Rect, detail: f32) -> Rect {
 ///   the text readable on (`MenuTint`); the active, open and disabled looks win over it. The row keeps its text, so the
 ///   colour is never the only cue.
 #[derive(crate::contract::Component, crate::contract::Props)]
+#[component(content_painter)]
 pub struct MenuItem<'a> {
     #[common]
     common: Common,
@@ -184,9 +226,14 @@ pub struct MenuItem<'a> {
     #[style_key]
     #[prop(into)]
     tint: Option<Rgba>,
-    /// Shortcut text at the end of the row, written by the caller; a command row shows its chord.
-    #[prop(into)]
-    shortcut: Option<Label>,
+    /// What the row shows as its shortcut: the bound command's chord, the caller's text, or nothing.
+    shortcut: MenuShortcut,
+    /// A sample between the label and the shortcut, painted by the closure into its rect.
+    #[prop(boxed = "FnOnce(&ContentPainterCx, Rect) + 'a", name = "sample")]
+    sample: Option<MenuSamplePaint<'a>>,
+    /// The sample is painted in place of the label.
+    #[prop(flag)]
+    sample_only: bool,
     /// Running the row leaves the menus open.
     #[prop]
     keep_open: bool,
@@ -197,6 +244,7 @@ pub struct MenuItem<'a> {
     opens: bool,
     open: bool,
     active: bool,
+    submenu_engaged: bool,
 }
 
 impl<'a> MenuItem<'a> {
@@ -213,13 +261,16 @@ impl<'a> MenuItem<'a> {
             mnemonic: None,
             detail: None,
             tint: None,
-            shortcut: None,
+            shortcut: MenuShortcut::default(),
+            sample: None,
+            sample_only: false,
             keep_open: false,
             entry: None,
             ran: false,
             opens: false,
             open: false,
             active: false,
+            submenu_engaged: false,
         }
         .label(label)
     }
@@ -279,12 +330,44 @@ impl<'a> MenuItem<'a> {
         }
     }
 
-    /// The shortcut as the `Kbd` that shows it.
+    /// The shortcut as the `Kbd` that shows it: the caller's text, even on a row whose command has a chord; nothing
+    /// when hidden; else the bound command's chord, and nothing for a row with no command or no chord.
     fn keys(&self, command: Option<&ResolvedCommand>) -> Option<Kbd> {
-        match (&self.command_ref, command) {
-            (Some(reference), Some(resolved)) if resolved.chord.is_some() => Some(Kbd::command(reference.clone())),
-            _ => self.shortcut.clone().map(Kbd::new),
+        match &self.shortcut {
+            MenuShortcut::Text(text) => Some(Kbd::new(text.clone())),
+            MenuShortcut::Hidden => None,
+            MenuShortcut::Command => match (&self.command_ref, command) {
+                (Some(reference), Some(resolved)) if resolved.chord.is_some() => Some(Kbd::command(reference.clone())),
+                _ => None,
+            },
         }
+    }
+
+    /// The shortcut text the caller set.
+    fn shortcut_text(&self) -> Option<&Label> {
+        match &self.shortcut {
+            MenuShortcut::Text(text) => Some(text),
+            MenuShortcut::Command | MenuShortcut::Hidden => None,
+        }
+    }
+
+    /// Shortcut text at the end of the row, written by the caller; it wins over the bound command's chord.
+    #[must_use]
+    pub fn shortcut(mut self, text: impl Into<Label>) -> Self {
+        self.shortcut = MenuShortcut::Text(text.into());
+        self
+    }
+
+    /// Shows no shortcut on the row, whatever the bound command's chord is.
+    #[must_use]
+    pub fn hide_shortcut(mut self) -> Self {
+        self.shortcut = MenuShortcut::Hidden;
+        self
+    }
+
+    /// Whether the sample takes the label's place: a `sample_only` row that has a sample.
+    fn sample_replaces_label(&self) -> bool {
+        self.sample_only && self.sample.is_some()
     }
 
     /// The parts of the label line `line`.
@@ -317,7 +400,12 @@ impl<'a> MenuItem<'a> {
         let command = cx.command();
         let (mark, icon) = self.lead_columns(cx.ui.ctx(), side, cx.gap(), command, level);
         let trail = if self.submenu { side } else { self.keys(command).map_or(0.0, |keys| cx.face(keys).x) };
-        Columns { mark, icon, trail }
+        Columns { mark, icon, trail, sample: self.sample_least(cx.style) }
+    }
+
+    /// The least width of the row's sample slot; zero without a sample.
+    fn sample_least(&self, style: &MenuItemStyle) -> f32 {
+        if self.sample.is_some() { style.sample } else { 0.0 }
     }
 
     /// The size of the detail line; zero without one.
@@ -362,6 +450,7 @@ impl Component for MenuItem<'_> {
             icon: IconLook::new(control.icon, ink(normal)),
             detail: TextLook::new(TypeRole::Caption, ink(muted)),
             shortcut_gap: tokens.space.gap.section,
+            sample: tokens.size.thumb.lg,
             submenu_gap: tokens.space.gap.tight,
         }
     }
@@ -379,7 +468,9 @@ impl Component for MenuItem<'_> {
         let label = if text.is_empty() { Vec2::ZERO } else { cx.layout_at(&run, f32::INFINITY).size() };
         let gap = cx.gap();
         let step = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
-        let rest = label.x.max(detail.x) + step(columns.trail, cx.style.shortcut_gap.max(gap));
+        // The sample follows the label at its least width, or stands in its place.
+        let shown = if self.sample_replaces_label() { columns.sample } else { label.x + step(columns.sample, gap) };
+        let rest = shown.max(detail.x) + step(columns.trail, cx.style.shortcut_gap.max(gap));
         let padding = cx.style.metrics.padding;
         // A row measured before the level's widest mark or icon read narrower columns: the body's group adds the
         // widest columns to what the rows reach past them.
@@ -432,7 +523,7 @@ impl Component for MenuItem<'_> {
         } else if !level.is_submenu() && (back || (forward && !self.submenu)) {
             let rtl = cx.flow.is_rtl();
             level.request_step(if back != rtl { MenuStep::Prev } else { MenuStep::Next });
-            frame::request_own_repaint(&ctx);
+            frame::request_repaint(&ctx);
         }
         let now = frame::clock(&ctx);
         let moving = ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
@@ -462,7 +553,7 @@ impl Component for MenuItem<'_> {
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
         if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
-            frame::request_own_repaint(&ctx);
+            frame::request_repaint(&ctx);
         }
         // A disabled row is never active.
         self.active = enabled && level.is_active(cx.id);
@@ -474,18 +565,26 @@ impl Component for MenuItem<'_> {
         let asked = enabled && (typed || cx.activation().is_some());
         if self.submenu {
             self.opens = asked || (enabled && forward) || (enabled && takes_over);
-            if self.opens && level.open_submenu(cx.id) {
-                frame::request_own_repaint(&ctx);
+            if self.opens {
+                let replaces_sibling = level.sibling_submenu_open(cx.id);
+                if level.open_submenu(cx.id) {
+                    // An earlier row may already have drawn the old submenu in this pass.
+                    if replaces_sibling && frame::discardable(&ctx) {
+                        frame::discard_pass(&ctx, "menu: a sibling replaced the open submenu");
+                    }
+                    frame::request_repaint(&ctx);
+                }
             }
             self.open = level.submenu_open(cx.id);
-            // The active row is in the open submenu: this row keeps only the open-submenu tint.
             if self.open && level.descended(cx.id, focused) {
+                // The active row is in the submenu. Keep the accent on its parent so the active path stays visible.
                 self.active = false;
+                self.submenu_engaged = enabled;
             }
             return;
         }
         if takes_over && level.clear_submenu() {
-            frame::request_own_repaint(&ctx);
+            frame::request_repaint(&ctx);
         }
         // The run closes the menus out from the one this row runs in: focus leaves them first, so the command reaches
         // the stop focus returns to.
@@ -514,9 +613,10 @@ impl Component for MenuItem<'_> {
     fn flags(&self) -> Flags {
         let mut flags = Flags::empty();
         flags.set(Flags::CHECKED, self.check == Some(true) || self.radio_mark == Some(true) || self.entry == Some(true));
-        flags.set(Flags::LEAD, self.active);
-        // The row whose submenu is open keeps the hover tint while another row is active.
-        flags.set(Flags::EMPHASIZED, self.open && !self.active);
+        let highlighted = self.active || self.submenu_engaged;
+        flags.set(Flags::LEAD, highlighted);
+        // If aim holds an open submenu while a sibling takes the highlight, keep the parent's quieter tint.
+        flags.set(Flags::EMPHASIZED, self.open && !highlighted);
         flags
     }
 
@@ -533,7 +633,7 @@ impl Component for MenuItem<'_> {
             detail.as_ref().map(|detail| TextRun::new(detail.as_str()).role(cx.style.detail.role).color(cx.resolve(&cx.style.detail.color)));
         let detail_height = detail_run.as_ref().map_or(0.0, |run| draw.layout(run, f32::INFINITY).size().y);
         let trail = if self.submenu { side } else { cx.part_if_declared(SHORTCUT).map_or(0.0, |part| part.rect.width()) };
-        let columns = Columns { mark: mark_column, icon: icon_column, trail };
+        let columns = Columns { mark: mark_column, icon: icon_column, trail, sample: self.sample_least(cx.style) };
         let line = label_line(cx.content_rect, detail_height);
         let placed = self.place(&columns, line, rtl, cx.style.shortcut_gap.max(gap));
         let ink = cx.resolve(&cx.style.icon.color);
@@ -556,11 +656,22 @@ impl Component for MenuItem<'_> {
         let mnemonic = if level.keyboard() || cx.modifiers().alt { level.mnemonic_of(cx.id).map(|(_, at)| at) } else { None };
         let look = self.label_look(cx.style);
         let run = TextRun::mnemonic(text.as_str(), mnemonic).elide().role(look.role).color(cx.resolve(&look.color));
-        let layout = draw.layout(&run, placed.label.width());
-        let size = layout.size();
-        let x = if rtl { placed.label.max.x - size.x } else { placed.label.min.x };
-        let y = placed.label.center().y - size.y / 2.0;
-        draw.galley(pos2(x, y), &layout);
+        let only = self.sample_replaces_label();
+        let want = if only { 0.0 } else { draw.layout(&run, f32::INFINITY).size().x };
+        let (label_room, sample_slot) = split_sample(placed.label, rtl, want, columns.sample, gap, only);
+        // A sample-only row draws no label: the label stays its accessible name and its mnemonic source.
+        if !only {
+            let layout = draw.layout(&run, label_room.width());
+            let size = layout.size();
+            let x = if rtl { label_room.max.x - size.x } else { label_room.min.x };
+            let y = label_room.center().y - size.y / 2.0;
+            draw.galley(pos2(x, y), &layout);
+        }
+        if let (Some(slot), Some(paint)) = (sample_slot, self.sample.take()) {
+            // The sample paints through the content painter, clipped to its slot; its data paths fade while the row
+            // is disabled (the `States` look).
+            ui.content_painter(cx).clipped(slot, |painter| paint(painter, slot));
+        }
         // The detail starts where the label starts, under the label line.
         if let Some(run) = &detail_run {
             let layout = draw.layout(&run.clone().elide(), placed.label.width());
@@ -600,8 +711,10 @@ impl Component for MenuItem<'_> {
         if let Some((letter, _)) = level.mnemonic_of(cx.id) {
             access.access_key(letter);
         }
-        if let Some(text) = &self.shortcut {
+        if let Some(text) = self.shortcut_text() {
             access.shortcut(cx.env.resolve(text).as_str().to_owned());
+        } else if self.shortcut == MenuShortcut::Hidden {
+            access.no_shortcut();
         }
         if cx.resolved.tooltip.is_none()
             && let Some(detail) = &self.detail

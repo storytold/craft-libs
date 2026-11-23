@@ -1,7 +1,7 @@
 //! The `Pointer` trait: presses, hover, drags and cursors, on `CxCore` and `Cx`.
 
 use super::context::{Activation, Cx, CxCore};
-use crate::contract::Component;
+use crate::contract::{Component, Hover};
 use crate::primitives::PartResult;
 use crate::runtime::drag::{self, DragPreview, DropTarget, DropZone, Typed, WindowDropTarget};
 use crate::runtime::egui::areas;
@@ -28,6 +28,8 @@ pub trait Pointer {
     fn press(&self) -> &PressState;
     /// The pointer is over the component's own shapes.
     fn hit(&self) -> bool;
+    /// The pointer's stay over the component: over it, entered, left, and clicked while it has stayed over.
+    fn hover(&self) -> Hover;
     /// Set only when the component's own shapes won the press and it was released as a click, or
     /// `Intent::Activate` was routed to it.
     fn activation(&self) -> Option<Activation>;
@@ -63,6 +65,15 @@ pub trait Pointer {
 }
 
 impl Pointer for CxCore<'_> {
+    /// Step 12 leaves the report; a run that stopped before it (a sizing pass) reports no stay, so its output never
+    /// repeats an `entered` or `left` the real pass reported.
+    fn hover(&self) -> Hover {
+        if !self.stated || self.face_mode {
+            return Hover::default();
+        }
+        self.memory.recall::<Hover>(crate::contract::steps::ShownState::hover_slot(self.id))
+    }
+
     fn part(&self, part: impl Into<PartRef>) -> &PartResult {
         let part = part.into();
         match self.results.get(&(part.key, part.index)) {
@@ -170,6 +181,10 @@ impl CxCore<'_> {
 }
 
 impl<C: Component> Pointer for Cx<'_, C> {
+    fn hover(&self) -> Hover {
+        self.core.hover()
+    }
+
     fn part(&self, part: impl Into<PartRef>) -> &PartResult {
         self.core.part(part)
     }
@@ -232,6 +247,22 @@ impl<C: Component> Pointer for Cx<'_, C> {
 
     fn scroll_moved(&self, key: PartKey) -> Option<Range<f64>> {
         self.core.scroll_moved(key)
+    }
+}
+
+impl<C: Component> Cx<'_, C> {
+    /// The value a primary-button sweep sets on this toggle. Only siblings in the same layout
+    /// participate. A control that uses this must sense both clicks and drags.
+    pub fn swept_toggle(&self, on: Option<bool>) -> Option<bool> {
+        let group = self.pointer_group?;
+        let target = crate::runtime::toggle_sweep::ToggleTarget {
+            id: self.id,
+            layer: self.response.layer_id,
+            visible: self.visible,
+            enabled: self.resolved.enabled && !self.resolved.read_only,
+            press: self.press().phase,
+        };
+        crate::runtime::toggle_sweep::value(&self.ctx, target, group, on)
     }
 }
 

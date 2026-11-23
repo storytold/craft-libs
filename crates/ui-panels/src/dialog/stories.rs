@@ -8,6 +8,7 @@ use crate::contract::{Bind, FooterSlot, Props as _, Show as _, ShowContainer as 
 use crate::display::Text;
 use crate::layout::GridFit;
 use crate::layout_components::{Grid, Row};
+use crate::runtime::env::Label;
 use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -203,6 +204,31 @@ fn dialog_modeless(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into();
     *data.value("checks", [true, false]) = checks;
     shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_with_refusal(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let refused = *data.value("refused", true);
+    let shown: StoryOutput = Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .refusal(move || refused.then(|| Label::from("The grid is finer than the document allows.")))
+        .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_nudge(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .show(ui, |ui, _| {
+            Text::new("Press beside this dialog: it shakes, or its edge flashes twice with reduced motion.").show(ui);
+        })
+        .into()
 }
 
 #[story(DialogFrame<'static>, covers = [Default], drive = Drive::Custom(close_box))]

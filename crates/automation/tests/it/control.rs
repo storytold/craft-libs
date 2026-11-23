@@ -123,6 +123,33 @@ fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
     assert!(rx.try_recv().is_err(), "nothing was dispatched");
 }
 
+/// A web page can reach loopback: a browser `POST` whose body is a valid `auth` line is refused at its request line
+/// and the connection closed, so neither the body's `auth` nor a request after it reaches the app.
+#[trial]
+fn a_browser_post_never_reaches_the_app() {
+    // Far longer than the trial, so the close comes from the refusal, not the deadline.
+    let (rx, server) = server::serve_with_deadline(TcpListener::bind("127.0.0.1:0").expect("bound"), TOKEN.into(), host(), Duration::from_secs(60))
+        .expect("started");
+    let mut stream = TcpStream::connect(server.addr).expect("connected");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+    let body = format!("{}\n{}\n", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}}), json!({"id": 2, "method": "test.ping"}));
+    write!(stream, "POST / HTTP/1.1\r\n").expect("written");
+    let refused = read_json(&mut reader).expect("a reply to the request line");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["error"], "authentication required", "{refused}");
+    // The rest of what the browser sends; the server may already have closed.
+    let _ = write!(stream, "Host: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    let _ = stream.flush();
+    let mut rest = String::new();
+    let closed = match reader.read_line(&mut rest) {
+        Ok(read) => read == 0,
+        Err(e) => !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    };
+    assert!(closed, "the connection closes after the refusal, answering nothing more: {rest:?}");
+    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "nothing reached the app");
+}
+
 /// A request line over `MAX_REQUEST_BYTES` without a newline gets an error reply and the connection is closed.
 #[trial]
 fn an_over_long_request_is_refused_and_closes_the_connection() {
@@ -343,4 +370,61 @@ fn a_repeated_auth_is_answered_already_authenticated_without_dispatching() {
     assert_eq!(after["id"], 9);
     assert_eq!(after["result"], "still serving");
     handler.join().expect("handler ran");
+}
+
+/// Ported from WordCraft (#7317). A request that is complete JSON but ends at EOF with no newline (the client wrote it
+/// and shut its end down) still reaches the app and is answered: a client cannot know it was dropped.
+#[trial]
+fn a_complete_json_request_at_eof_can_reach_the_app() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let handler = std::thread::spawn(move || {
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("the request reached the app");
+        assert_eq!(req.method, "test.once");
+        req.reply.send(json!({"ok": true, "result": "once"})).expect("replied");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "it ran exactly once");
+    });
+    let (mut stream, mut reader) = authenticated(server.addr);
+    stream.write_all(json!({"id": 3, "method": "test.once"}).to_string().as_bytes()).expect("written");
+    stream.shutdown(std::net::Shutdown::Write).expect("shut down");
+    let reply = read_json(&mut reader).expect("a reply");
+    assert_eq!((&reply["id"], &reply["result"]), (&json!(3), &json!("once")));
+    let mut rest = String::new();
+    assert_eq!(reader.read_line(&mut rest).expect("closed, not timed out"), 0, "closed after the last request: {rest:?}");
+    handler.join().expect("handler ran");
+}
+
+/// Ported from WordCraft (#7317). Connections that never authenticate cannot fill the server: past the limit a new
+/// one is refused, and a slot freed by a closed connection is admitted again.
+#[trial]
+fn idle_unauthenticated_connections_are_limited() {
+    use craft_automation::security::MAX_CONNECTIONS;
+    // Far longer than the trial, so only the limit refuses.
+    let (rx, server) = server::serve_with_deadline(TcpListener::bind("127.0.0.1:0").expect("bound"), TOKEN.into(), host(), Duration::from_secs(60))
+        .expect("started");
+    let idle: Vec<TcpStream> = (0..MAX_CONNECTIONS).map(|_| TcpStream::connect(server.addr).expect("connected")).collect();
+    // Admission is counted by the accept thread: it is done once the next connection is answered.
+    let refused = |addr| {
+        let stream = TcpStream::connect(addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        read_json(&mut BufReader::new(stream))
+    };
+    let reply = refused(server.addr).expect("a refusal");
+    assert_eq!(reply["ok"], false);
+    assert!(reply["error"].as_str().is_some_and(|e| e.contains("limit")), "{reply}");
+    drop(idle);
+    // The freed slots go back as the closed connections are noticed.
+    let started = motion::now();
+    loop {
+        let mut stream = TcpStream::connect(server.addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+        // A refused connection may already be closed when the request is written (Windows resets it).
+        let auth = json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}});
+        if writeln!(stream, "{auth}").is_ok() && read_json(&mut reader).is_some_and(|r| r["ok"] == true) {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "no slot came back");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(rx.try_recv().is_err());
 }

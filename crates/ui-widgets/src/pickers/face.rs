@@ -190,11 +190,14 @@ impl Component for SelectFace<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         // At its least the face elides its name to its readable least.
         let run = TextRun::new(cx.resolved.label).role(cx.style.text.role).elide();
-        let least = || cx.least_width(&run);
-        let mut text = match (self.name, cx.proposal) {
-            (true, Proposal::Min) => Vec2::new(least(), cx.layout_at(&run, f32::INFINITY).size().y),
-            (true, _) => cx.layout_at(&run, f32::INFINITY).size(),
-            (false, _) => Vec2::ZERO,
+        // A fitted box also needs the least to cap its text at.
+        let (mut text, least) = if !self.name {
+            (Vec2::ZERO, 0.0)
+        } else if cx.proposal == Proposal::Min || self.fit {
+            let least = cx.least(&run);
+            (if cx.proposal == Proposal::Min { least.size() } else { least.whole.size() }, least.width)
+        } else {
+            (cx.layout_at(&run, f32::INFINITY).size(), 0.0)
         };
         let caption = self.caption_run(&cx.style.caption).map_or(Vec2::ZERO, |run| cx.layout(&run).size());
         let picture = match (&self.thumb, caption.y > 0.0) {
@@ -208,7 +211,7 @@ impl Component for SelectFace<'_> {
             // least.
             let field = cx.style.field.metrics();
             let room = field.ideal_width - cx.style.metrics.padding.start - cx.style.metrics.padding.end - beside;
-            text.x = text.x.min(room.max(least()));
+            text.x = text.x.min(room.max(least));
         }
         Vec2::new(beside + text.x, text.y.max(picture))
     }
@@ -253,8 +256,8 @@ impl Component for SelectFace<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Opens the popup of a picker whose face part toggles it, from the keyboard: Enter and Space (an activation by key)
 /// toggle it. A click on the face reaches the popup through the part's `toggles`, so the pointer is not read here.

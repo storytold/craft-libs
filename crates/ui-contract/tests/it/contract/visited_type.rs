@@ -42,31 +42,48 @@ fn plain_box(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 // The visitor's story covers no state: a Default story is the registering package's to have. Its file sorts before
 // the home story's.
-craft_ui::testing::__private::inventory::submit! {
-    StoryRegistration::new(VISITOR, "craft_ui_visitor", std::any::type_name::<Visited>, Story::new("plain_box", plain_box)).at("a.rs", 1)
+fn visitor_story() -> StoryRegistration {
+    StoryRegistration::new(
+        VISITOR,
+        "craft_ui_visitor",
+        std::any::type_name::<Visited>,
+        <Visited as craft_ui::testing::Registered>::registration,
+        Story::new("plain_box", plain_box),
+    )
+    .at("a.rs", 1)
 }
 
-craft_ui::testing::__private::inventory::submit! {
+fn home_story() -> StoryRegistration {
     StoryRegistration::new(
         env!("CARGO_PKG_NAME"),
         "craft_ui_contract",
         std::any::type_name::<Visited>,
+        <Visited as craft_ui::testing::Registered>::registration,
         Story::new("home_box", plain_box).covers(&[Required::Default]),
     )
     .at("z.rs", 1)
 }
 
+pub(crate) fn register_fixture(registry: &mut craft_ui::testing::Registry) {
+    registry.add_story(visitor_story());
+    registry.add_story(home_story());
+}
+
+fn fixture_registry() -> craft_ui::testing::Registry {
+    craft_ui::testing::Registry::of(&[register_fixture])
+}
+
 #[trial]
 fn a_types_own_stories_list_before_another_packages() {
     let visited = std::any::type_name::<Visited>();
-    let names: Vec<&str> =
-        craft_ui::testing::stories().into_iter().filter(|entry| (entry.type_name)() == visited).map(|entry| entry.story.name).collect();
+    let registry = fixture_registry();
+    let names: Vec<&str> = registry.stories().iter().filter(|entry| (entry.type_name)() == visited).map(|entry| entry.story.name).collect();
     assert_eq!(names, ["home_box", "plain_box"], "the registering package's story comes first");
 }
 
 #[trial]
 fn stories_of_another_packages_type_run_its_cases_in_the_declaring_package() {
-    let trials = craft_ui::testing::suite::trials(VISITOR, &[]);
+    let trials = craft_ui::testing::suite::trials(VISITOR, &fixture_registry());
     let names: Vec<String> = trials.iter().map(|trial| trial.name().to_owned()).collect();
     let visited = std::any::type_name::<Visited>();
     assert!(names.contains(&format!("suite::{visited}::reads")), "the visitor runs the visited type's cases: {names:?}");

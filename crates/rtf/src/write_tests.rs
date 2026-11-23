@@ -36,3 +36,34 @@ fn fonts_match_without_regard_to_ascii_case() {
     // Both spellings of Arial are font 1; the default font's run names no font.
     assert!(out.contains("{\\f1 x}{\\f1 x}x\\par"), "{out}");
 }
+
+#[test]
+fn outline_writer_emits_powerpoint_headings_runs_and_unicode() {
+    let mut w = OutlineWriter::new("Liberation Sans");
+    w.begin_title();
+    w.run("First", true, false, false);
+    w.line_break();
+    w.run("Café 😀", false, true, true);
+    w.end_title();
+    w.begin_body(0);
+    w.run("Body", false, false, false);
+    w.end_body();
+    w.begin_body(12);
+    w.run("Deep", false, false, false);
+    w.end_body();
+    // Empty untitled slide title.
+    w.begin_title();
+    w.run("", false, false, false);
+    w.end_title();
+    let rtf = w.finish();
+
+    assert!(rtf.contains("{\\f0\\fswiss Liberation Sans;}"), "{rtf}");
+    assert!(rtf.contains("{\\s9\\li3240\\fi-360\\level9 heading 9;}"), "{rtf}");
+    assert!(rtf.contains("\\pard\\s1\\outlinelevel0\\sb240\\b\\fs32 {\\b First}\\line {\\i\\ul Caf\\u233? \\u-10179?\\u-8704?}\\b0\\par\n"), "{rtf}");
+    assert!(rtf.contains("\\pard\\s2\\outlinelevel1\\li360\\fs24 Body\\par\n"), "{rtf}");
+    assert!(rtf.contains("\\pard\\s9\\outlinelevel9\\li3240\\fs24 Deep\\par\n"), "{rtf}");
+    assert!(rtf.contains("\\pard\\s1\\outlinelevel0\\sb240\\b\\fs32 \\b0\\par\n"), "{rtf}");
+
+    let doc = crate::read(rtf.as_bytes()).unwrap();
+    assert_eq!(doc.blocks.len(), 4);
+}

@@ -6,6 +6,7 @@ use craft_layers::testing;
 use craft_layers::ui::mock::{FakeLayers, sub_row};
 use craft_layers::ui::panel::{ActivateOn, LayerDrop, LayersEvent, LayersPanel, MaskMove};
 use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerRowKey, LayerSelection, MaskInfo, SubRow, SubRowGroup, SubRows};
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Fixture, Target, pointer, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
@@ -19,7 +20,7 @@ const SMART: u32 = 2;
 
 /// The app around the panel: the tree it shows, what it reported and the layer it last called hovered.
 struct App {
-    tree: FakeLayers,
+    tree: Tracked<FakeLayers>,
     events: Vec<LayersEvent<u32>>,
     hovered: Option<u32>,
 }
@@ -58,12 +59,12 @@ fn apply(tree: &mut FakeLayers, event: &LayersEvent<u32>) {
 }
 
 fn rig(tree: FakeLayers) -> (Fixture, Shared) {
-    let app = Rc::new(RefCell::new(App { tree, events: Vec::new(), hovered: None }));
+    let app = Rc::new(RefCell::new(App { tree: Tracked::new(tree), events: Vec::new(), hovered: None }));
     let shared = Rc::clone(&app);
     let mut fixture = Fixture::new(move |ui| {
         let mut app = shared.borrow_mut();
         let App { tree, events, hovered } = &mut *app;
-        let out = LayersPanel::new(&*tree).show(ui);
+        let out = LayersPanel::new(tree).show(ui);
         for event in &out.events {
             apply(tree, event);
         }
@@ -400,12 +401,11 @@ fn long(count: usize) -> (FakeLayers, u32) {
     layer.effects_open = true;
     layer.smart_filters = Some(SubRows::new(SubRow::new("Smart Filters"), vec![sub_row("Gaussian Blur"), sub_row("Sharpen")]));
     tree.selection = LayerSelection::new(vec![1], Some(1), LayerPart::Pixels);
-    tree.revision = Some(1);
     (tree, id)
 }
 
-/// FW15: a long layer list asks the app only for the rows in view: a settled frame makes as many `info` and
-/// `sub_rows` calls for 2,000 layers as for 200, and an off-screen group or Smart Filter row lays out nothing.
+/// FW15: a long layer list builds only the rows in view: a settled frame builds as many rows for 2,000 layers as
+/// for 200, and an off-screen group or Smart Filter row lays out nothing.
 /// Scrolled into view they show; a filter selected there stays selected after it scrolls away again.
 #[trial]
 fn a_long_layer_list_asks_only_for_the_rows_in_view() {
@@ -413,9 +413,8 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
     for count in [200, 2_000] {
         let (tree, smart) = long(count);
         let (mut fixture, app) = rig(tree);
-        let _ = (app.borrow().tree.take_info_calls(), app.borrow().tree.take_sub_rows_calls());
         fixture.frame(vec![]);
-        calls.push((app.borrow().tree.take_info_calls(), app.borrow().tree.take_sub_rows_calls()));
+        calls.push(craft_ui::testing::row_builds(fixture.ctx()).iter().map(|(_, builds)| builds).sum::<u32>());
         for name in ["Closed Group", "Smart Object", "Gaussian Blur", "Sharpen"] {
             assert!(fixture.by_label(name).is_none(), "{count} layers: the off-screen row {name:?} lays out nothing");
         }
@@ -444,5 +443,6 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
         assert!(take(&app).iter().all(|event| !matches!(event, LayersEvent::Select(_))), "{count} layers: scrolling selects nothing");
         assert_eq!(app.borrow().tree.selection.sub_row, selected, "{count} layers: the filter stays selected");
     }
-    assert_eq!(calls[0], calls[1], "a settled frame asks for as many rows for 2,000 layers as for 200 (info, sub_rows)");
+    assert!(calls[0] > 0, "the rows in view are built");
+    assert_eq!(calls[0], calls[1], "a settled frame builds as many rows for 2,000 layers as for 200");
 }

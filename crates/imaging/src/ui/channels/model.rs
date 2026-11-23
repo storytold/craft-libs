@@ -115,23 +115,34 @@ pub struct ChannelRow<K> {
     /// The app's highlight: the targeted channel, or every colour row while the composite is
     /// targeted (PhotoCraft).
     pub targeted: bool,
+    /// The host supports deleting this individual process colour row. Off by default.
+    pub allow_color_deletion: bool,
 }
 
 impl<K> ChannelRow<K> {
     /// A visible, untargeted row.
     pub fn new(key: K, kind: ChannelKind, name: impl Into<String>) -> Self {
-        Self { key, kind, name: name.into(), visible: true, targeted: false }
+        Self { key, kind, name: name.into(), visible: true, targeted: false, allow_color_deletion: false }
+    }
+
+    pub(super) fn can_delete_color(&self) -> bool {
+        self.kind == ChannelKind::Color && self.allow_color_deletion
     }
 }
 
-/// The row the footer's Delete and Load act on: the targeted layer-mask, alpha, spot or Quick
-/// Mask row; else the composite when it is targeted; else the one targeted colour row; `None`
-/// with no rows or no target.
+/// Target-based commands prefer a targeted layer mask, alpha, spot or Quick Mask row.
+/// Otherwise they use the targeted composite or the first targeted process colour.
 pub fn targeted_row<K>(rows: &[ChannelRow<K>]) -> Option<&ChannelRow<K>> {
     let targeted = |kinds: fn(ChannelKind) -> bool| rows.iter().find(|row| row.targeted && kinds(row.kind));
     targeted(|kind| !matches!(kind, ChannelKind::Composite | ChannelKind::Color))
         .or_else(|| targeted(|kind| matches!(kind, ChannelKind::Composite)))
         .or_else(|| targeted(|kind| matches!(kind, ChannelKind::Color)))
+}
+
+/// Target-based deletion needs one component; an explicit row menu or drag already identifies it.
+pub(super) fn targeted_for_delete<K>(rows: &[ChannelRow<K>]) -> Option<&ChannelRow<K>> {
+    let row = targeted_row(rows)?;
+    (row.kind != ChannelKind::Color || rows.iter().filter(|row| row.targeted && row.kind == ChannelKind::Color).take(2).count() == 1).then_some(row)
 }
 
 /// What the Channels panel reports, in the order it happened.

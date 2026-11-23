@@ -3,6 +3,7 @@
 use super::{Elide, Shade, Text};
 use crate::contract::{Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::{Grid, Row};
+use crate::primitives::Span;
 use crate::style::TypeRole;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::ColumnWidth;
@@ -58,6 +59,26 @@ fn text_elided(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Text, covers = [], drive = Drive::Never)]
 fn text_toned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Text::new("Enter a value between 0 and 100").role(TypeRole::Caption).tone(Tone::Bad).show(ui).into()
+}
+
+/// Interface text of several spans: a match highlight, a strong word, an italic value, and words flagged by tone.
+#[story(Text, covers = [], drive = Drive::Never)]
+fn text_styled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Text::styled(vec![
+        Span::new("Find "),
+        Span::new("layer").highlight(),
+        Span::new(" in "),
+        Span::new("Background").strong(),
+        Span::new(" = "),
+        Span::new("0.5").italic().tabular(),
+        Span::new(", a "),
+        Span::new("mispelled").flag(Tone::Bad),
+        Span::new(" and a "),
+        Span::new("clumsy").flag(Tone::Info),
+        Span::new(" word."),
+    ])
+    .show(ui)
+    .into()
 }
 
 /// One line each, cut at the end, the middle and the start, a path that drops leading folders, and a right-to-left

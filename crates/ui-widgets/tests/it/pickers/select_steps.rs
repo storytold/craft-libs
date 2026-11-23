@@ -10,7 +10,7 @@ use egui::{Key, Modifiers, Ui};
 /// Entries 1 to 4; 2 and 4 are reached from the open list only.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two").stepped(false), Entry::new(3u8, "Three"), Entry::new(4u8, "Four").stepped(false)];
-    Select::new("Pick", Bind::bound(data.value("value", 4u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 4u8), &entries).show(ui).into()
 }
 
 /// The value after `key` on the focused, closed field holding `held`, and whether it offered Increment and Decrement.

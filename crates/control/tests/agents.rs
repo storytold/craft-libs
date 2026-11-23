@@ -201,6 +201,8 @@ fn config(dir: &Path, consent: Consent, made: &Arc<Made>) -> LiveConfig<Window, 
         },
     );
     cfg.poll = Duration::from_millis(5);
+    // No folder in the real Documents from a test; tests that want one set their own.
+    cfg.default_folder = None;
     cfg
 }
 
@@ -295,6 +297,34 @@ fn allowed_and_closed_runs_headless_with_the_apps_folders_unless_the_command_giv
     cfg.write_root = Some(PathBuf::from("/cli-out"));
     let f = headless_folders(TestLive::new(cfg).resolve());
     assert_eq!((f.read, f.write), (paths(&["/app-in"]), Some(PathBuf::from("/cli-out"))));
+}
+
+/// Agents allowed, app closed, "headless", no folders set: the app's default agent folder for
+/// both directions, created; the command's folders still win, and agents the person didn't let in
+/// never get the default.
+#[test]
+fn empty_folder_settings_fall_back_to_the_default_agent_folder() {
+    let dir = temp_dir("default-folder");
+    let default = dir.path().join("Agents").join("Test");
+    let made = Arc::new(Made::default());
+    let empty = |allowed| Consent::new(allowed, settings(WhenAppClosed::Headless, "", ""));
+
+    let mut cfg = config(dir.path(), empty(true), &made);
+    cfg.default_folder = Some(default.clone());
+    let f = headless_folders(TestLive::new(cfg).resolve());
+    assert_eq!((f.read, f.write), (vec![default.clone()], Some(default.clone())));
+    assert!(default.is_dir(), "the default folder is created");
+
+    let mut cfg = config(dir.path(), empty(true), &made);
+    cfg.default_folder = Some(default.clone());
+    cfg.write_root = Some(PathBuf::from("/cli-out"));
+    let f = headless_folders(TestLive::new(cfg).resolve());
+    assert_eq!((f.read, f.write), (vec![default.clone()], Some(PathBuf::from("/cli-out"))));
+
+    let mut cfg = config(dir.path(), empty(false), &made);
+    cfg.default_folder = Some(default);
+    let f = headless_folders(TestLive::new(cfg).resolve());
+    assert_eq!((f.read, f.write), (Vec::<PathBuf>::new(), None));
 }
 
 /// Agents allowed, app closed, "error": the call fails with words that name the app; the command's

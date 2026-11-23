@@ -4,7 +4,7 @@
 //! the mirroring for right-to-left. A component that draws its own dividers (a column bar, a margin handle) calls
 //! [`declare`] in its parts, `pointer` and [`keys`] in its update, and [`describe`] in its access, and declares `KeyUse::SPLITTER` for the arrow keys.
 
-use crate::contract::{Access, Component, Cx, Focus as _, Name, Numeric, PartsCx, Pointer as _, Role};
+use crate::contract::{Access, Component, Cx, Focus as _, Name, Numeric, PartBuilder, PartsCx, Pointer as _, Role};
 use craft_behavior::dock::DockEdge;
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps, step_value};
 use craft_behavior::{Axis, CursorIcon, Flow, HitLevel, HitPriority, NavMove, PartKey, PressPhase, Sense};
@@ -93,15 +93,16 @@ fn along_y(mv: NavMove) -> NavMove {
 }
 
 /// Declares the part `key.at(index)` for `divider`: an edge part above the panes that takes drags and is its own Tab
-/// stop. `rect` is the container's rect, which the bar is mirrored across for right-to-left.
-pub fn declare<C: Component>(cx: &mut PartsCx<'_, C>, rect: Rect, key: PartKey, index: u64, divider: &Divider) {
+/// stop. `rect` is the container's rect, which the bar is mirrored across for right-to-left. The part is returned for
+/// what a caller adds (a tooltip that names the edge).
+pub fn declare<'a, C: Component>(cx: &'a mut PartsCx<'_, C>, rect: Rect, key: PartKey, index: u64, divider: &Divider) -> PartBuilder<'a> {
     let bar = Flow::new(rect, cx.flow.is_rtl()).to_physical(divider.bar);
     cx.part(key.at(index), bar)
         .sense(Sense::DRAG | Sense::TAKE_FOCUS)
         .priority(HitPriority::new(HitLevel::Edge, 0))
         .cursor(divider.cursor())
         .focusable()
-        .over();
+        .over()
 }
 
 /// What the pointer did to the divider `key.at(index)` this pass.

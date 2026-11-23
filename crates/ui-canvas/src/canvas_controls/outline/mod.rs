@@ -3,8 +3,8 @@
 //! share one stroking function over `kit::outline` (halo and line) and `kit::dashed`.
 
 mod hover;
-#[cfg(feature = "testing")]
-pub(super) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
@@ -179,10 +179,10 @@ fn tint(mask: &HoverMask, color: Color32) -> ColorImage {
     ColorImage::new([width, height], pixels)
 }
 
-fn paint_mask(painter: &ContentPainterCx<'_>, view: &CanvasView, mask: &HoverMask, color: Color32) {
+fn paint_mask(painter: &ContentPainterCx<'_>, id: egui::Id, view: &CanvasView, mask: &HoverMask, color: Color32) {
     let ctx = painter.painter.ctx();
-    let store = TextureStore::<u64>::in_context(ctx, "canvas_controls.hover_mask", TextureStoreOptions::frames());
-    let texture = store.get_or_put(ctx, mask.generation(), Revision::of(&color.to_array()), || tint(mask, color));
+    let store = TextureStore::<(egui::Id, u64)>::in_context(ctx, "canvas_controls.hover_mask", TextureStoreOptions::frames());
+    let texture = store.get_or_put(ctx, (id, mask.generation()), Revision::of(&color.to_array()), || tint(mask, color));
     let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
     let mut mesh = Mesh::with_texture(texture.sized().id);
     for (pos, uv) in view.quad(mask.bounds()).into_iter().zip(uvs) {
@@ -250,7 +250,7 @@ impl Component for HoverOutline {
                     stroke_run(&painter, points, closed, self.color, style.medium);
                 }
             }
-            HoverShape::Mask(mask) => paint_mask(&painter, &view, mask, self.color.map_or(style.line.egui(), |color| color.0)),
+            HoverShape::Mask(mask) => paint_mask(&painter, cx.id, &view, mask, self.color.map_or(style.line.egui(), |color| color.0)),
         }
     }
 

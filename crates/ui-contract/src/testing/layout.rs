@@ -137,3 +137,15 @@ pub fn in_row_region<R>(ui: &mut Ui, rect: egui::Rect, body: impl FnOnce(&mut Ui
 pub fn allocate(ui: &mut Ui, size: Vec2) -> egui::Rect {
     crate::runtime::egui::alloc::space(ui, size)
 }
+
+/// The innermost scroll area `ui` lays content out for, as the area keys its scroll state.
+pub fn scroll_area(ui: &Ui) -> Option<Id> {
+    crate::runtime::env::Env::of(ui).view().lazy_view().map(|view| view.owner)
+}
+
+/// The child the scroll position of the scroll area `area` ([`scroll_area`]) is named by: the first child at or after
+/// the view's start in the last real run that laid the content out, which keeps what is in view in place while
+/// extents before it change.
+pub fn scroll_anchor(ctx: &egui::Context, area: Id) -> Option<Id> {
+    crate::contract::body::scroll::anchor_of(ctx, area)
+}

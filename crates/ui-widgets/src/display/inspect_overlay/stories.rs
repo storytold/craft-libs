@@ -3,7 +3,7 @@
 use super::InspectOverlay;
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::Stack;
 use crate::runtime::inspect;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -15,7 +15,7 @@ fn inspect_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (shown, recorded) = inspect::record(ui, key, |ui| {
         Stack::new().show(ui, |ui, _| {
             Button::new("Apply").show(ui);
-            Checkbox::new(Bind::bound(data.value("snap", true))).label("Snap to grid").show(ui);
+            Checkbox::new(data.bind("snap", true)).label("Snap to grid").show(ui);
         })
     });
     let rect = shown.output.rect;
