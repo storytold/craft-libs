@@ -160,7 +160,7 @@ pub fn inspect(host: &WindowHost, viewport: ViewportId, params: &Value) -> Resul
     let role = p.str_field("role")?.map(str::to_lowercase);
     let focused = p.bool_field("focused")?;
     let limit = usize::try_from(p.uint_field("limit")?.unwrap_or(DEFAULT_LIMIT)).unwrap_or(usize::MAX);
-    let tree = host.access_tree(viewport).ok_or_else(|| NO_TREE.to_owned())?;
+    let tree = host.access_tree_view(viewport).ok_or_else(|| NO_TREE.to_owned())?;
 
     let reported: HashSet<NodeKey> = tree.keys().into_iter().collect();
     let root = tree.root_key();

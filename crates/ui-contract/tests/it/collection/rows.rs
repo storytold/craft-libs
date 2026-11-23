@@ -566,24 +566,39 @@ fn enter_on_an_untyped_rename_commits_only_a_proposed_draft() {
     assert!(renamed("b").is_empty(), "a draft equal to the row's text reports no commit");
 }
 
-/// A rename requested from outside a settled region (`Lazy::settles` with a content version, as a docked panel's
-/// body) runs the region, so its collection takes the request and opens the rename field.
+/// The renaming list's view: its rows, its log and its Enter, which the trial reads.
+#[derive(craft_ui::contract::MemoProps)]
+struct RenamingPanel {}
+
+thread_local! {
+    /// The log, Enter and rows the renaming panel shows: a memoized view's props are plain data.
+    static RENAMING_PANEL: Cell<Option<(&'static Log, &'static Cell<bool>, &'static Words)>> = const { Cell::new(None) };
+}
+
+fn renaming_panel(_: &mut RenamingPanel, ui: &mut Ui) {
+    let Some((log, enter, words)) = RENAMING_PANEL.with(Cell::get) else { return };
+    let list = Probe::new(SelectMode::Single).id_salt("list").renaming("b", enter);
+    log.take(list.show_items(ui, words, &mut |key, _| ProbeRow::new(*key, log)));
+}
+
+/// A rename requested from outside a settled memoized view (a docked panel's body) runs the view, so its collection
+/// takes the request and opens the rename field.
 #[trial]
-fn a_rename_request_runs_the_settled_region_of_its_collection() {
-    use craft_ui::contract::Lazy;
-    let (log, enter, words) = (Log::new(), Cell::new(false), Words::flat(&["a", "b", "c"]));
+fn a_rename_request_runs_the_settled_view_of_its_collection() {
+    use craft_ui::contract::MemoView;
+    let log = Log::new();
+    let enter: &'static Cell<bool> = Box::leak(Box::new(Cell::new(false)));
+    let words: &'static Words = Box::leak(Box::new(Words::flat(&["a", "b", "c"])));
+    RENAMING_PANEL.with(|panel| panel.set(Some((log, enter, words))));
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
         in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
-            Lazy::new("panel", 0.0).settles(true).content(1).show(ui, |ui| {
-                let list = Probe::new(SelectMode::Single).id_salt("list").renaming("b", &enter);
-                log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
-            });
+            MemoView::new("panel", RenamingPanel {}, renaming_panel).show(ui);
         });
     };
     frames.idle(30, &mut show);
     request_rename(&frames.ctx, log.id(), &1_usize);
     frames.idle(3, &mut show);
     let begun = log.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { .. })));
-    assert!(begun, "the settled region ran and its collection opened the requested rename");
+    assert!(begun, "the settled view ran and its collection opened the requested rename");
 }

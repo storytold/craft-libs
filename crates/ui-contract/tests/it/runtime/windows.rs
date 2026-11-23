@@ -333,7 +333,7 @@ fn a_window_an_app_modal_in_another_window_blocks_takes_no_wheel() {
     use craft_ui::testing::wheel::{register, take};
     for open in [false, true] {
         let windows = Windows::new();
-        let view = egui::Id::new("view");
+        let view = egui::Id::unique("view");
         let taken = Cell::new(None);
         let frame = |events: Vec<Event>| {
             windows.frame(events, vec![], |ui| {
@@ -362,8 +362,8 @@ fn wheel_over_a_modal_never_reaches_a_view_under_it_during_a_drag() {
     use craft_behavior::{Sense, WheelTaker};
     use craft_ui::testing::wheel::{register, take};
     let windows = Windows::new();
-    let view = egui::Id::new("dragging view");
-    let modal_view = egui::Id::new("modal view");
+    let view = egui::Id::unique("dragging view");
+    let modal_view = egui::Id::unique("modal view");
     let taken = Cell::new(None);
     let modal_taken = Cell::new(None);
     let open = Cell::new(false);

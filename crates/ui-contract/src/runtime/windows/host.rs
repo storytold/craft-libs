@@ -233,14 +233,15 @@ impl WindowHost {
         injected::inject_access(&self.ctx, viewport, node, action);
     }
 
-    /// Turns AccessKit output on and, from then on, keeps each viewport's tree from the last presented frame.
+    /// Turns AccessKit output on, so [`access_tree`](Self::access_tree) and
+    /// [`access_tree_view`](Self::access_tree_view) have each viewport's settled tree from then on.
     pub fn keep_access_tree(&self) {
         crate::runtime::egui::access::keep_trees(&self.ctx);
     }
 
-    /// The kept AccessKit tree of `viewport`: `None` before its first presented frame or without
-    /// [`keep_access_tree`](Self::keep_access_tree).
-    pub fn access_tree(&self, viewport: ViewportId) -> Option<AccessTree> {
+    /// [`access_tree`](Self::access_tree) as a tree to walk: `None` before the viewport's first pass or while
+    /// AccessKit is off ([`keep_access_tree`](Self::keep_access_tree) turns it on).
+    pub fn access_tree_view(&self, viewport: ViewportId) -> Option<AccessTree> {
         crate::runtime::egui::access::kept_tree(&self.ctx, viewport)
     }
 

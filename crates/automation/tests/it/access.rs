@@ -96,7 +96,7 @@ fn inspect_lists_reported_nodes_in_tree_order_with_their_filters() {
 
     open.set(true);
     fx.idle(30);
-    let tree = host.access_tree(ViewportId::ROOT).expect("the kept tree");
+    let tree = host.access_tree_view(ViewportId::ROOT).expect("the kept tree");
     let behind = listed(&host, json!({}));
     assert!(!labels(&behind).contains(&"Open".to_owned()), "a node behind the modal is not listed: {behind}");
     assert!(labels(&behind).contains(&"Apply".to_owned()), "the modal's own button is: {behind}");

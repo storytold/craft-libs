@@ -294,7 +294,7 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Stage) -> R) -> R {
 }
 
 pub(crate) fn register_hover_delete(ctx: &Context, id: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_hover_delete(ctx, id));
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| register_hover_delete(ctx, id));
     current(ctx, |stage| {
         if !stage.hover_deletes.contains(&id) {
             stage.hover_deletes.push(id);

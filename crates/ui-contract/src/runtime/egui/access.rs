@@ -329,7 +329,7 @@ pub(crate) fn offer_context_menu(ctx: &Context, id: Id) {
     if written {
         ctx.accesskit_node_builder(id, |node| node.add_action(accesskit::Action::ShowContextMenu));
     }
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| offer_context_menu(ctx, id));
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| offer_context_menu(ctx, id));
 }
 
 /// Whether `id` has a `Trigger::Context` opener recorded in this pass.
@@ -337,51 +337,16 @@ pub(crate) fn offers_context_menu(ctx: &Context, id: Id) -> bool {
     with_emitted(ctx, |emitted| emitted.context.contains(&id))
 }
 
-/// The AccessKit trees automation reads ([`keep_trees`], [`kept_tree`]): an observation of finished output, kept
-/// apart from the pass state, which no pass reads.
-#[derive(Default)]
-struct KeptTrees {
-    /// Whether trees are kept: automation asked for them.
-    on: bool,
-    /// Each viewport's tree update from its last presented pass.
-    trees: HashMap<ViewportId, accesskit::TreeUpdate>,
-}
-
-fn with_kept<R>(ctx: &Context, f: impl FnOnce(&mut KeptTrees) -> R) -> R {
-    super::memory::Service::<KeptTrees>::run(ctx, f)
-}
-
-/// Turns AccessKit output on and keeps every viewport's tree from then on. The trees of closed viewports go in the
-/// frame loop's prune step.
+/// Turns AccessKit output on, so every viewport's pass settles an update ([`settle_output`]) that automation reads
+/// ([`kept_tree`]).
 pub(crate) fn keep_trees(ctx: &Context) {
-    let first = with_kept(ctx, |kept| !std::mem::replace(&mut kept.on, true));
-    if first {
-        crate::runtime::frame::register_prune(ctx, std::any::TypeId::of::<KeptTrees>(), prune_kept);
-    }
     ctx.enable_accesskit();
 }
 
-fn prune_kept(ctx: &Context, live: &[ViewportId]) {
-    with_kept(ctx, |kept| kept.trees.retain(|viewport, _| live.contains(viewport)));
-}
-
-/// The output hook's step: keeps a copy of the tree update `output` carries, for the viewport whose pass made it,
-/// while [`keep_trees`] is on. The update itself goes on to the platform untouched. A frame that reruns a pass keeps
-/// the last pass's tree, the one presented.
-pub(crate) fn keep_output(ctx: &Context, output: &FullOutput) {
-    // AccessKit off: no update, and nothing to look up.
-    let Some(update) = &output.platform_output.accesskit_update else { return };
-    let Some(viewport) = pass_state::with::<Reported, _>(ctx, |reported| reported.ended) else { return };
-    with_kept(ctx, |kept| {
-        if kept.on {
-            kept.trees.insert(viewport, update.clone());
-        }
-    });
-}
-
-/// The tree [`keep_trees`] kept for `viewport`; `None` before its first presented pass or while trees are not kept.
+/// The settled update of `viewport`'s last pass as a tree to walk; `None` before its first pass or while AccessKit is
+/// off.
 pub(crate) fn kept_tree(ctx: &Context, viewport: ViewportId) -> Option<AccessTree> {
-    with_kept(ctx, |kept| kept.trees.get(&viewport).cloned()).map(AccessTree::new)
+    settled_tree(ctx, viewport).map(AccessTree::new)
 }
 
 /// The tree update of a finished frame.

@@ -17,10 +17,6 @@ impl Plugin for RuntimePlugin {
         frame::input_hook(ctx, input);
     }
 
-    fn output_hook(&mut self, ctx: &Context, output: &mut FullOutput) {
-        crate::runtime::egui::access::keep_output(ctx, output);
-    }
-
     fn on_begin_pass(&mut self, ui: &mut Ui) {
         frame::begin_pass(ui);
     }

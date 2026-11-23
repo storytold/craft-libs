@@ -367,7 +367,7 @@ fn a_fill_child_of_a_content_sized_row_takes_its_measured_width_and_the_next_mem
 /// asks every frame must not make every frame run twice (egui's "request_discard has been called N frames in a row").
 #[trial]
 fn a_reveal_of_a_rect_in_a_scroll_bodys_view_runs_no_second_pass() {
-    let owner = egui::Id::new("revealed body");
+    let owner = egui::Id::unique("revealed body");
     let mut frames = Frames::new();
     let mut show = |ui: &mut egui::Ui| {
         let props = ContainerProps::new().sizing(Sizing::Fill).scroll(Scroll::vertical());

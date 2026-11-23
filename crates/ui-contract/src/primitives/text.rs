@@ -366,6 +366,7 @@ impl LayoutQuery<'_> {
                 shortcut: span.shortcut,
                 highlight: span.highlight,
                 underline: span.underline,
+                strikethrough: span.strikethrough,
                 strong: span.strong,
                 flag: span.flag,
             })

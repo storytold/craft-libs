@@ -265,7 +265,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             let mut in_view = Vec::new();
             layout.visible(ScrollPos { x: self.offset_x, y: self.offset.max(0.0) }, Vec2::new(width, high), &mut in_view);
             in_view.sort_unstable();
-            let source = self.source;
+            let source = &*self.source;
             // The rows of the view this pass has not measured: (row, its widths, its height).
             let todo: Vec<(usize, bool, bool)> = rows::measured_this_pass(&ctx, id, |fresh| {
                 in_view
@@ -394,13 +394,13 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         let current = comp.items().current.as_deref().and_then(|key| key.downcast_ref::<C::Key>()).cloned();
         if at_read {
             Known {
-                placed: self.selection_at_read.placed(self.source),
+                placed: self.selection_at_read.placed(&*self.source),
                 lead: self.lead_at_read.clone(),
                 renaming: self.renaming_at_read.clone(),
                 current,
             }
         } else {
-            Known { placed: self.selection.placed(self.source), lead: self.lead.key.clone(), renaming: self.renaming.key.clone(), current }
+            Known { placed: self.selection.placed(&*self.source), lead: self.lead.key.clone(), renaming: self.renaming.key.clone(), current }
         }
     }
 }

@@ -171,7 +171,7 @@ impl Focus {
 
 /// Queues `action` on the node `target` names in `viewport`'s kept access tree.
 fn inject_node(host: &WindowHost, viewport: ViewportId, target: &NodeTarget, action: Declared) -> Result<(), String> {
-    let tree = host.access_tree(viewport).ok_or_else(|| NO_TREE.to_owned())?;
+    let tree = host.access_tree_view(viewport).ok_or_else(|| NO_TREE.to_owned())?;
     let node = resolve(&tree, target, action)?;
     host.inject_access(viewport, node, action);
     Ok(())
