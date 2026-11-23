@@ -89,13 +89,12 @@ the vendor notes record the boundaries. Existing consumers remain on their immut
 revision until they explicitly adopt a new one.
 
 Consumers pin `craft-pdf` to a full `https://github.com/storytold/craft-libs` revision. This
-repository names its vendored crates by path, so reader, raster and plain `write` consumers
-use them without patches. Two features reach a vendored crate through a crates.io crate, and
-Cargo ignores dependency-local patches, so a consumer that enables one adds root
+repository names its vendored crates by path, so every feature uses them without patches
+except two, which reach a vendored crate through a crates.io crate. Cargo ignores
+dependency-local patches, so a consumer that enables one of the two adds root
 `[patch.crates-io]` entries at the same revision: `write-pdf` (and `craft-prepress/flatten`)
-patches `hayro-syntax` and `hayro-jbig2`, which `hayro-write` uses; `write-svg` patches
-`krilla`, which `krilla-svg` uses. Keep unrelated craft-ui/craft-print versions unchanged
-when adopting PDF.
+patches `hayro-syntax`, which `hayro-write` uses; `write-svg` patches `krilla`, which
+`krilla-svg` uses. Keep unrelated craft-ui/craft-print versions unchanged when adopting PDF.
 A pinned commit must be available remotely before a fresh public checkout can resolve it.
 
 Synthetic native and WASM contracts cover opening, caller limits, alpha, geometry, settings,
@@ -344,9 +343,17 @@ to the same commit:
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "<full-commit-id>", version = "=0.8.2" }
 ```
 
-Choose `write-pdf` only when embedding PDF pages; it also needs the `hayro-syntax` and
-`hayro-jbig2` patches described above. Cargo ignores dependency workspaces' root patches,
-so these go in the consuming workspace. A compile-time marker
+Choose `write-pdf` only when embedding PDF pages. `hayro-write` comes from crates.io, so a
+consumer that enables `write-pdf` (or `craft-prepress/flatten`) patches `hayro-syntax` to the
+same commit:
+
+```toml
+[patch.crates-io]
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "<full-commit-id>", version = "=0.7.2" }
+```
+
+Cargo ignores dependency workspaces' root patches, so these go in the consuming workspace.
+A compile-time marker
 rejects unpatched Krilla. Check the normal dependency graph separately from the test graph
 and ensure there is one Krilla source, including uses through `krilla-svg`. This writer
 migration does not change an application's reader backend or its other craft-libs pins.

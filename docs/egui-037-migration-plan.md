@@ -333,8 +333,8 @@ The only vendored packages are PDF readers/writer, not egui:
   workspace tests alone do not qualify the PDF backend. The root `[patch.crates-io]` must keep
   these entries while `craft-pdf` uses them.
 
-`crates/pdf/read-only-contract` is a nested workspace with its own `Cargo.lock` and a single
-`hayro-syntax` patch. It does not depend on egui and is unaffected by the workspace egui lock; do not
+`crates/pdf/read-only-contract` is a nested workspace with its own `Cargo.lock`. It does not
+depend on egui and is unaffected by the workspace egui lock; do not
 edit its lock as part of this migration. There are no vendored egui, eframe, egui-winit or winit
 sources in this repository.
 

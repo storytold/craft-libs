@@ -38,7 +38,7 @@ unresolvable `usecmap` and an unparseable tail are skipped instead of discarding
 CMap. Its tests `tests::bad_bfchar_entry_is_skipped` and `tests::unresolvable_usecmap_is_skipped`
 come with it. One local patch: a binary `usecmap` counts against the 16-level nesting limit
 as a text one does, so a self-referencing binary CMap stops instead of overflowing the stack.
-Consuming workspaces need a `hayro-cmap` patch entry beside the other Hayro entries.
+`hayro-interpret` names this copy by path, so consuming workspaces need no patch entry for it.
 
 `hayro-postscript` 0.1.0 is the crates.io package (upstream revision
 a2354aebaf86f5ab13e5fd6b6b0521306488bf9d), the PostScript token scanner `hayro-cmap` uses
@@ -53,8 +53,8 @@ ignored"), so `\737` decodes to `0xDF` instead of being dropped; code comments l
 `Craft patch (octal overflow, craft-libs #2321)`. Tests:
 `string::tests::literal_octal_overflow_keeps_the_low_eight_bits` and
 `string::tests::literal_octal_short_escape_stops_at_a_non_octal_byte`. Its `SOURCE.json` records the
-registry hashes. Consuming workspaces need a `hayro-postscript` patch entry beside the other
-Hayro entries.
+registry hashes. `hayro-cmap` names this copy by path, so consuming workspaces need no patch
+entry for it.
 
 Changes ported from PdfCraft pull requests that were open when they were ported, under the
 same MIT OR Apache-2.0 license. Code comments keep the pull request's patch numbers, except
@@ -358,7 +358,9 @@ standard-14 fonts and the CMYK ICC profile are retained. Attribution is in the r
 and ATTRIBUTION.md. The removed LAB.icc profile remains absent. Lopdf is not part of this
 snapshot: applications that need its editing or inspection compatibility keep owning it.
 
-Root Cargo patch entries are required in consuming workspaces. The writer-only feature
+Crates in this repository name the vendored crates by path, so a consuming workspace needs a
+root patch entry only where a crates.io crate depends on one (see the `craft-pdf` README).
+The writer-only feature
 remains independent; vendoring reader sources does not make them a writer dependency.
 
 The transferred snapshot includes the latest Lab Bradford adaptation, Type 3 rendering-mode

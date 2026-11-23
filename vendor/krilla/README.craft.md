@@ -53,8 +53,9 @@ catch. A caller must still discard other captured app state after a panic. Norma
 finalization, including checks for unbalanced state, remains unchanged.
 
 Public marker constants, `CRAFT_UNWIND_SAFE_DROP` and `CRAFT_UNWIND_POISONING`, let craft-pdf reject an accidentally
-unpatched dependency at compile time. Consumers must copy the Krilla root patch
-from the craft-pdf README because Cargo ignores dependency workspaces' patches.
+unpatched dependency at compile time. craft-pdf names this copy by path. A consumer that
+enables `write-svg` must also copy the Krilla root patch from the craft-pdf README, because
+`krilla-svg` comes from crates.io and Cargo ignores dependency workspaces' patches.
 
 The shared writer's native subprocess regression covers the previously aborting
 cleanup and a successful fresh export afterward. Native and WASM export tests
