@@ -20,11 +20,7 @@ workspace = true
 suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The review widgets (`craft_review::ui`).
-<<<<<<< HEAD
-ui = ["dep:craft-keymap", "dep:craft-ui", "dep:craft-host", "dep:craft-theme", "dep:egui"]
-=======
-ui = ["dep:craft-keymap", "dep:craft-pages", "craft-pages/ui", "dep:craft-ui", "dep:craft-host", "dep:craft-theme", "dep:egui", "dep:image"]
->>>>>>> origin/next
+ui = ["dep:craft-keymap", "dep:craft-pages", "craft-pages/ui", "dep:craft-ui", "dep:craft-host", "dep:craft-theme", "dep:egui"]
 # The stories and the integration tests (`tests/it`).
 screen-testing = ["ui", "craft-ui/testing", "craft-pages/screen-testing"]
 

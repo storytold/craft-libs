@@ -1,12 +1,8 @@
 //! Pages for stories and tests: a document of US Letter pages with generated pictures.
 
 use super::view::{PageSource, PlacedPage};
-<<<<<<< HEAD
-use craft_ui::primitives::textures::{FakeThumbSource, Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
-=======
 use craft_behavior::CanvasView;
-use craft_ui::primitives::textures::{FakeThumbSource, Revision, ThumbRender, ThumbRequest, ThumbSource};
->>>>>>> origin/next
+use craft_ui::primitives::textures::{FakeThumbSource, Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Vec2, pos2};
 use kurbo::Size;

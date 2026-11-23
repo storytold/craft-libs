@@ -37,15 +37,11 @@ use crate::comments::{CommentFilter, CommentSort, CommentThread, PageOrder, Revi
 
 use list::{CardKey, CommentList, RowEntry, Rows};
 use menus::{card_menu, filter_menu, pages_menu, sort_menu};
-<<<<<<< HEAD
 pub use menus::{comments_filter_menu, comments_more_menu};
-use row::{CommentRow, MORE};
-=======
 use row::MORE;
 
 pub(super) use list::CardEvent;
 pub(super) use row::{CardActions, CommentRow};
->>>>>>> origin/next
 
 /// Ages under this many seconds (one week) read relative; older ones read as a date.
 pub(crate) const AGE_SHOWN_AS_DATE: u64 = 7 * 24 * 60 * 60;
@@ -287,24 +283,15 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 /// - Cards in one collection, grouped under headings by [`sort_threads`]; under the Page sort a
 ///   heading names the page, shows the count of the page's comments before filtering and folds its
 ///   cards. A card shows the kind's icon, author, age (relative under a week, then the date), the
-<<<<<<< HEAD
 ///   text, a badge per reviewer's status, the checkmark, a lock icon and the replies, each with its own "..." menu.
 /// - Selected cards have the highlight; the lead (the first selected) has the accent bar, the reply box and "..."
 ///   (Edit, Set status, Delete, then the host's [`card_rows`](CommentsPanel::card_rows)). Locked threads and
-///   `read_only` hide the editing items. A double click on a card edits its comment in place.
+///   `read_only` hide the editing items. A double click on a card edits its comment in place; an inline editor
+///   takes the keyboard in the pass it opens. A new lead drops the reply draft and the edit of another thread; a
+///   card made the lead again keeps its own edit draft.
 /// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the lead card's reply box,
 ///   the [`reply_submit`](CommentsPanel::reply_submit) key in the reply box and Cmd+Enter (Ctrl+Enter off macOS) in
 ///   an inline editor post, Escape in a control of a card returns to the card.
-=======
-///   text, a status icon, the checkmark, a lock icon and the replies, each with its own "..." menu.
-/// - The selected card has the accent bar, the reply box and "..." (Edit, Set status, Delete).
-///   Locked threads and `read_only` hide the editing items. An inline editor takes the keyboard in
-///   the pass it opens. Selecting another card drops the reply draft and the edit of another
-///   thread; a card selected again keeps its own edit draft.
-/// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the selected
-///   card's reply box, Cmd+Enter (Ctrl+Enter off macOS) in the reply box or an inline editor posts,
-///   Escape in a control of a card returns to the card.
->>>>>>> origin/next
 ///
 /// ```ignore
 /// let out = CommentsPanel::new("Comments", &threads, &mut state).now(now).show(ui);
@@ -482,28 +469,18 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, value: T) {
     }
 }
 
-<<<<<<< HEAD
-/// Makes `next` the selection; true when its threads changed. A new lead drops the reply draft and the inline edit,
-/// which belong to the old lead's card.
+/// Makes `next` the selection; true when its threads changed. A new lead drops the reply draft, which belongs to the
+/// old lead's card, and an edit of another thread; an edit of the new lead itself stays, so a draft the app could not
+/// write back (a document that refused it) is there again, with the keyboard, when its card leads again.
 fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> bool {
     let changed = next.items != state.selected.items;
     if next.lead != state.selected.lead {
         state.reply.clear();
-        state.editing = None;
-        state.focus_editor = false;
-=======
-/// Makes `thread` the selected one; false when it already was. The reply draft and an edit of another thread go; an
-/// edit of `thread` itself stays, so a draft the app could not write back (a document that refused it) is there again
-/// when its card is selected again.
-fn select_thread(state: &mut CommentsPanelState, thread: ThreadId) -> bool {
-    let changed = state.selected != Some(thread);
-    if changed {
-        state.selected = Some(thread);
-        state.reply.clear();
-        if state.editing.as_ref().is_some_and(|(editing, ..)| *editing != thread) {
+        let kept = state.editing.as_ref().is_some_and(|(editing, ..)| Some(*editing) == next.lead);
+        if !kept {
             state.editing = None;
         }
->>>>>>> origin/next
+        state.focus_editor = kept;
     }
     state.selected = next;
     changed
@@ -709,7 +686,9 @@ impl<H: Value> CommentsPanel<'_, H> {
             let out = CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped, select_mode)
                 .revealing(revealing.map(CardKey::Thread))
                 .show_items(ui, &source, &mut |_, item| match &source.entries[item.at].1 {
-                    RowEntry::Group { title, count, open, page } => CommentRow::heading(title.clone(), count.clone(), *open, !by_page || page.is_none()),
+                    RowEntry::Group { title, count, open, page } => {
+                        CommentRow::heading(title.clone(), count.clone(), *open, !by_page || page.is_none())
+                    }
                     RowEntry::Card { thread, .. } => {
                         let name = thread
                             .messages

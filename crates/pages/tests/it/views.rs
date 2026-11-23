@@ -1,27 +1,21 @@
 //! The page view and the page preview: the scroll anchor under a zoom change, the wheel's page turns, the pictures
 //! the view asks for, the view's page and arrow keys and its zoom commands, and the preview's keys.
 
-<<<<<<< HEAD
-use craft_behavior::{GESTURE_GAP, kurbo};
-use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
-use craft_pages::ui::fixtures::{DemoPages, PAPER};
-use craft_pages::ui::{GoTo, PageBody, PagePreview, PageRevision, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
-use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, WheelScheme};
-use craft_ui::contract::{Bind, Role, Show as _};
-use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
-=======
 use craft_behavior::geometry::{CropBox, SnapKind, SnapOptions, SnapTarget};
-use craft_behavior::kurbo;
 use craft_behavior::{Axis, CancelReason, CanvasView, EditCommand};
+use craft_behavior::{GESTURE_GAP, kurbo};
 use craft_pages::layout::{Fit, LayoutOptions, PageDisplay, PagedLayout};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{
-    PagePreview, PageRegion, PageSnap, PageSource, PageView, PageViewState, PageViewWords, PlacedPage, ReadingNav, ReadingState, ReadingView,
+    GoTo, PageBody, PagePreview, PageRegion, PageRevision, PageSnap, PageSource, PageView, PageViewState, PageViewWords, PlacedPage, ReadingNav,
+    ReadingState, ReadingView,
 };
 use craft_theme::ComponentSet;
-use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer};
+use craft_ui::canvas::{
+    CanvasTool, CropOverlay, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, WheelScheme,
+};
 use craft_ui::contract::{Bind, Role, Show as _};
->>>>>>> origin/next
+use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 
 use craft_ui::primitives::textures::TextureStoreOptions;
 use craft_ui::primitives::{Draw, EditorPurpose};
@@ -31,10 +25,7 @@ use craft_ui::runtime::focus::EditSet;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Key, Modifiers, pos2, vec2};
 use std::cell::{Cell, RefCell};
-<<<<<<< HEAD
 use std::ops::Range;
-=======
->>>>>>> origin/next
 use std::rc::Rc;
 
 /// The default state with `change` applied.
@@ -1117,7 +1108,6 @@ fn the_reading_view_turns_on_the_wheel_but_leaves_cmd_or_ctrl_with_the_wheel_to_
     assert!(state.borrow().column > 0, "the wheel alone turns");
 }
 
-<<<<<<< HEAD
 /// A US Letter page, points.
 const LETTER: kurbo::Size = kurbo::Size::new(612.0, 792.0);
 
@@ -1918,7 +1908,8 @@ fn the_pasteboard_colour_of_a_page_view_paints_the_surround() {
     };
     assert!(!paints_black(None), "the default surround is the theme's");
     assert!(paints_black(Some(PasteboardColor::Black)), "a black pasteboard paints black round the pages");
-=======
+}
+
 /// The page whose tip text (one of `expected`, the words filled for pages 1, 2, ..) is painted in the latest frame.
 fn page_tip(fixture: &Fixture, expected: &[String]) -> Option<usize> {
     fixture.texts().iter().find_map(|run| expected.iter().position(|text| text.as_str() == &*run.text).map(|at| at + 1))
@@ -2056,7 +2047,7 @@ fn to_doc_and_from_doc_round_trip_and_page_at_doc_takes_the_nearest_page_outside
     let mut fixture = Fixture::new(move |ui| {
         PageView::new("Pages", &pages, &mut state, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, body| {
             let [first, second, ..] = body.pages else { return };
-            let last = body.pages[body.pages.len() - 1];
+            let last = &body.pages[body.pages.len() - 1];
             let at = kurbo::Point::new(100.0, 150.0);
             let doc = second.to_doc(&body.view, at);
             let back = second.from_doc(&body.view, doc);
@@ -2199,7 +2190,7 @@ impl CanvasTool for Snapper {
 /// page points: where the drag snapped to on screen, and where the line shows on page 2.
 fn drag_beside_the_line_on_page_two(state: PageViewState) -> (f32, f32) {
     let tool = Rc::new(RefCell::new(Snapper::default()));
-    let two: Rc<Cell<Option<(PlacedPage, CanvasView)>>> = Rc::default();
+    let two: Rc<RefCell<Option<(PlacedPage, CanvasView)>>> = Rc::default();
     let (shown_tool, seen) = (Rc::clone(&tool), Rc::clone(&two));
     let pages = DemoPages::new(4);
     let mut state = state;
@@ -2207,7 +2198,7 @@ fn drag_beside_the_line_on_page_two(state: PageViewState) -> (f32, f32) {
         let snap = PageSnap::new(SnapOptions::default()).page(1, vec![SnapTarget::new(Axis::Y, LINE_X, SnapKind::Guide)]);
         PageView::new("Pages", &pages, &mut state, PAPER).options(LayoutOptions::ACROBAT).snap(Some(snap)).show(ui, |ui, body| {
             if let Some(page) = body.pages.iter().find(|placed| placed.page == 1) {
-                seen.set(Some((*page, body.view)));
+                *seen.borrow_mut() = Some((page.clone(), body.view));
             }
             if let Some(pass) = body.pass {
                 let _ = ToolHost::new().run(ui, pass, &mut *shown_tool.borrow_mut());
@@ -2216,7 +2207,7 @@ fn drag_beside_the_line_on_page_two(state: PageViewState) -> (f32, f32) {
     });
     fixture.room(vec2(900.0, 700.0));
     fixture.settle();
-    let (page, _) = two.get().expect("page 2 shows");
+    let (page, _) = two.borrow().clone().expect("page 2 shows");
     let line = page.to_screen(kurbo::Point::new(LINE_X, 200.0));
     let from = line + vec2(30.0, 0.0);
     fixture.frame(vec![pointer::moved(from)]);
@@ -2224,7 +2215,7 @@ fn drag_beside_the_line_on_page_two(state: PageViewState) -> (f32, f32) {
     for step in 1..=3 {
         fixture.frame(vec![pointer::moved(from - vec2(9.0 * step as f32, 0.0))]);
     }
-    let (_, view) = two.get().expect("page 2 shows");
+    let (_, view) = two.borrow().clone().expect("page 2 shows");
     let snapped = tool.borrow().snapped.expect("the tool dragged");
     (view.to_screen(snapped).x, line.x)
 }
@@ -2365,7 +2356,7 @@ fn gone_to(page: usize, fraction: f64, rulers: bool) -> (Option<usize>, f64, f64
     });
     fixture.room(vec2(1280.0, 760.0));
     fixture.settle();
-    state.borrow_mut().go_to = Some((page, fraction));
+    state.borrow_mut().go_to = Some(GoTo::Top { page, fraction });
     fixture.idle(3);
     let (first, before, at) = *seen.borrow();
     (first, state.borrow().offset.1, before, at)
@@ -2545,5 +2536,4 @@ fn page_view_forwards_inactive_edits_to_its_editor_canvas() {
     inactive.set(EditSet::NONE.with(EditCommand::Undo).with(EditCommand::Redo));
     fixture.settle();
     assert!(resolve(fixture.ctx(), EditCommands::Cut).enabled, "active Cut resolves enabled on focused PageView");
->>>>>>> origin/next
 }

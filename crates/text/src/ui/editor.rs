@@ -557,13 +557,9 @@ impl Component for TextEditor<'_> {
     const ROLE: Role = Role::MULTILINE_TEXT_INPUT;
     const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
     /// Escape always ends the session, so the editor keeps it from its row and from the shortcuts while focused.
-<<<<<<< HEAD
     const KEYS: KeyUse = KeyUse::CODE.with_claims(&[ESCAPE]).with_holds_drafts();
-=======
-    const KEYS: KeyUse = KeyUse::CODE.with_claims(&[ESCAPE]);
     /// When the session ends, focus goes back to the stop it came from (the canvas), not to the stop before the editor.
     const FOCUS_SCOPE: FocusPolicy = FocusPolicy::TAB_LAYER;
->>>>>>> origin/next
     type Style = TextEditorStyle;
     type Output = TextEditorOutput;
 

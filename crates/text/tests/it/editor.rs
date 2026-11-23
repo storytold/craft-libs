@@ -215,7 +215,9 @@ fn a_field_editor_keeps_its_draft_when_its_popup_is_used() {
         CalendarPopover::new("Calendar", Bind::bound(&mut open), Bind::bound(&mut picked))
             .precisions(&[DatePrecision::Day])
             .overlay(|overlay| {
-                overlay.anchor(Anchor::Rect(bounds)).focus(FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor))
+                overlay
+                    .anchor(Anchor::Rect(bounds))
+                    .focus(FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor))
                     .dismiss(Dismiss::new().focus_left(false))
             })
             .show(ui, |_, _| {});
@@ -430,7 +432,6 @@ fn formatting_keys_follow_the_flow_and_fall_back_to_caret_moves() {
     assert_eq!(plain.selection.borrow().caret, before.saturating_sub(LINE), "the step the host did not take moved the caret a line up");
 }
 
-<<<<<<< HEAD
 /// A focused editor in `mode` over "abc", `masked` or not, with the caret after the text.
 fn field(mode: EditorMode, masked: bool) -> Session {
     let mut editor = session_on(Host { text: "abc".to_owned(), ..Host::default() }, None, false, mode, masked);
@@ -604,7 +605,8 @@ fn after_escape_closes_a_focused_editor_in_the_canvas_body_the_next_escape_reach
     assert_eq!(tool.borrow().cancels, 0, "the editor's Escape is not the tool's");
     fixture.frame(escape()).settle();
     assert_eq!(tool.borrow().cancels, 1, "the next Escape reaches the tool");
-=======
+}
+
 /// #15555: a session the app ends (Cmd+Enter, then the editor is not shown) on a canvas with rulers hands the focus back
 /// to the canvas it came from, not to the stop before the editor (the rulers' corner, whose arrows move the zero point),
 /// and the view stays where it was. Without rulers the canvas is that stop anyway.
@@ -651,5 +653,4 @@ fn an_ended_session_returns_the_focus_to_the_canvas_and_the_view_stays() {
         assert_eq!(focused(&fixture).as_deref(), Some("Document"), "rulers {rulers}: the focus went back to the canvas");
         assert_eq!(view.get(), before, "rulers {rulers}: the view stays");
     }
->>>>>>> origin/next
 }

@@ -315,11 +315,6 @@ fn paint_marks(
                 }
             }
         }
-<<<<<<< HEAD
-        if let Some(selection) = selection {
-            for rect in selection.rects_on(placed.page, text) {
-                draw.fill(&PaintShape::Rect(screen(rect), look.radius), look.selection);
-=======
         for area in areas.iter().filter(|area| area.page == placed.page) {
             let rect = screen(area.rect);
             let (fill, grow) = match area.kind {
@@ -332,10 +327,9 @@ fn paint_marks(
                 draw.stroke(&PaintShape::Path(vec![pos2(rect.min.x, rect.max.y), rect.max]), StrokeWidth::Thin, look.column_outline);
             }
         }
-        if let (Some(text), Some(selection)) = (text, selection.filter(|selection| selection.page == placed.page)) {
-            for rect in selection.rects(text) {
+        if let (Some(text), Some(selection)) = (text, selection) {
+            for rect in selection.rects_on(placed.page, text) {
                 fill_mark(draw, look, screen(rect), look.selection, 0.0);
->>>>>>> origin/next
             }
         }
     });
