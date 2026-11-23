@@ -31,6 +31,10 @@ const MAX_ENTRIES: usize = 64;
 const VERSION: u32 = 0xFFFF_FFFF;
 /// `iRes` of a check box that is checked.
 const CHECKED: u8 = 1;
+/// `iRes` of a field with no state or choice.
+const NO_CHOICE: u8 = 25;
+/// The size of a picture header (`PICF`) Word writes in front of a definition.
+const PICF_HEADER: usize = 0x44;
 /// The longest `w:ffData` markup the `.docx` reader keeps (`MAX_FORM` in `craft-docx`).
 const MAX_FFDATA_XML: usize = 64 * 1024;
 
@@ -108,6 +112,8 @@ fn attr(out: &mut String, s: &str) {
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
+            // The same escapes as the .docx writer, so both sides measure the same markup.
+            '\'' => out.push_str("&apos;"),
             c => out.push(c),
         }
     }
@@ -147,7 +153,11 @@ fn definition(data: &[u8], at: usize) -> Option<&[u8]> {
         [a, b] => usize::from(u16::from_le_bytes([*a, *b])),
         _ => return None,
     };
-    rest.get(header..total.min(rest.len()))
+    // The record must be the size it says and fit in the stream: a clipped record is not read.
+    if header != PICF_HEADER || total <= header {
+        return None;
+    }
+    rest.get(header..total)
 }
 
 /// The `w:ffData` for the `FFData` at `at` in the Data stream, or `None` when there is none or it
@@ -177,6 +187,9 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
         3 => Some("currentDate"),
         4 => Some("currentTime"),
         5 => Some("calculated"),
+        0 => None,
+        // Reserved values: a definition that does not say what it is gives no field definition.
+        _ if bits & 0b11 == 0 => return None,
         _ => None,
     };
     let max_len = cur.u16()?;
@@ -217,7 +230,11 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
             } else {
                 out.push_str("<w:sizeAuto/>");
             }
-            out.push_str(&format!("<w:default w:val=\"{}\"/>", u8::from(default != 0)));
+            // The default and the state are 0 or 1 (and 25 for no state); anything else is no definition.
+            if default > 1 || !matches!(res, 0 | CHECKED | NO_CHOICE) {
+                return None;
+            }
+            out.push_str(&format!("<w:default w:val=\"{default}\"/>"));
             if res == CHECKED {
                 out.push_str("<w:checked/>");
             } else if default != 0 {
@@ -233,7 +250,8 @@ pub(crate) fn read(data: &[u8], at: u32, work: &Work) -> Option<String> {
             // the w:default entry, so Word leaves it out when the first entry is chosen and the
             // default is the first; with another default a choice of 0 is written explicitly.
             let valid = |n: usize| n != 0 && n < entries.len();
-            if valid(usize::from(res)) || (res == 0 && valid(usize::from(default)) && !entries.is_empty()) {
+            let chosen = res != NO_CHOICE && valid(usize::from(res));
+            if chosen || (res == 0 && valid(usize::from(default))) {
                 out.push_str(&format!("<w:result w:val=\"{res}\"/>"));
             }
             if valid(usize::from(default)) {

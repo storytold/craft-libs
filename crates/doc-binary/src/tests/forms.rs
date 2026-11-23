@@ -181,6 +181,61 @@ fn a_first_entry_choice_is_written_when_the_default_is_another_entry() {
 }
 
 #[test]
+fn a_definition_of_another_kind_is_not_attached_to_a_field() {
+    let check = Ff { bits: 1, name: "Box", ..Ff::default() };
+    assert_eq!(form_of("FORMTEXT", with_picf(&ffdata_bytes(&check))), "");
+    assert_eq!(form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&check))), "");
+    assert!(form_of("FORMCHECKBOX", with_picf(&ffdata_bytes(&check))).contains("<w:checkBox>"));
+}
+
+#[test]
+fn a_picture_header_that_is_not_what_word_writes_gives_no_definition() {
+    let ff = ffdata_bytes(&TEXT);
+    // A header of another size, a total that is not past the header, and a record clipped by the stream.
+    let mut size = with_picf(&ff);
+    size[4..6].copy_from_slice(&0x40u16.to_le_bytes());
+    let mut empty = with_picf(&ff);
+    empty[..4].copy_from_slice(&0x44u32.to_le_bytes());
+    // The record says it is longer than the stream, though a whole definition is there.
+    let mut clipped = with_picf(&ff);
+    let total = (clipped.len() + 10) as u32;
+    clipped[..4].copy_from_slice(&total.to_le_bytes());
+    for (what, data) in [("size", size), ("empty", empty), ("clipped", clipped)] {
+        assert_eq!(form_of("FORMTEXT", data), "", "{what}");
+    }
+}
+
+#[test]
+fn values_a_form_field_cannot_hold_give_no_definition() {
+    // 26 entries: 25 is "no choice", not the 26th entry.
+    let names: Vec<&'static str> = (0..26).map(|_| "x").collect();
+    let entries: &'static [&'static str] = Box::leak(names.into_boxed_slice());
+    let none = Ff { bits: 2 | (25 << 2), name: "D", entries, ..Ff::default() };
+    let form = form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&none)));
+    assert!(form.contains("<w:ddList>") && !form.contains("<w:result"), "{form}");
+    // A check box default other than 0 or 1, a state other than 0, 1 or 25, and a reserved text type.
+    let default = Ff { bits: 1, name: "C", default: 2, ..Ff::default() };
+    assert_eq!(form_of("FORMCHECKBOX", with_picf(&ffdata_bytes(&default))), "");
+    let state = Ff { bits: 1 | (7 << 2), name: "C", ..Ff::default() };
+    assert_eq!(form_of("FORMCHECKBOX", with_picf(&ffdata_bytes(&state))), "");
+    let reserved = Ff { bits: 6 << 11, name: "T", ..Ff::default() };
+    assert_eq!(form_of("FORMTEXT", with_picf(&ffdata_bytes(&reserved))), "");
+}
+
+#[test]
+fn a_definition_is_measured_with_the_escapes_the_docx_reader_uses() {
+    // An apostrophe is six bytes (&apos;) once the .docx reader serialises it.
+    let entry: &'static str = Box::leak("'".repeat(1000).into_boxed_str());
+    let many: &'static [&'static str] = Box::leak(vec![entry; 11].into_boxed_slice());
+    let over = Ff { bits: 2, name: "A", entries: many, ..Ff::default() };
+    assert_eq!(form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&over))), "");
+    let few: &'static [&'static str] = Box::leak(vec![entry; 9].into_boxed_slice());
+    let under = Ff { bits: 2, name: "A", entries: few, ..Ff::default() };
+    let form = form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&under)));
+    assert!(form.contains("&apos;") && form.len() <= 64 * 1024, "{}", form.len());
+}
+
+#[test]
 fn a_text_field_keeps_its_kind() {
     for (n, name) in [(1u16, "number"), (2, "date"), (3, "currentDate"), (4, "currentTime"), (5, "calculated")] {
         let f = Ff { bits: n << 11, name: "T", ..Ff::default() };

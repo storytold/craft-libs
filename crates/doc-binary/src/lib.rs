@@ -982,7 +982,24 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
         return;
     }
     pb.push('\u{FFFC}', f.anchor);
-    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: f.form });
+    let form = if form_matches(&instr, &f.form) { f.form } else { String::new() };
+    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form });
+}
+
+/// A definition belongs to a form field of its own kind: `FORMTEXT` takes a text definition,
+/// `FORMCHECKBOX` a check box and `FORMDROPDOWN` a drop-down (values are escaped, so these tags
+/// cannot come from the text). No definition always matches.
+fn form_matches(instr: &str, form: &str) -> bool {
+    if form.is_empty() {
+        return true;
+    }
+    let keyword = instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
+    match keyword.as_str() {
+        "FORMTEXT" => form.contains("<w:textInput>"),
+        "FORMCHECKBOX" => form.contains("<w:checkBox>"),
+        "FORMDROPDOWN" => form.contains("<w:ddList>"),
+        _ => false,
+    }
 }
 
 /// Takes a legacy form field's definition from the U+0001 character whose CHPX is `chpx`, when
