@@ -1056,6 +1056,8 @@ pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
 /// and which is the top layer, so the dialog's own Escape rule decides this pass's Escape. A text field holding a
 /// draft there passes Escape on: one Escape cancels the dialog and its typing goes with it, as Word's dialogs do. A
 /// field in a popup or menu inside the dialog, or in no dialog (a ribbon box), keeps the Escape to revert its draft.
+/// Only a modal dialog counts: a modeless window's edits belong to the app, so its field reverts its own draft first
+/// and the next Escape closes the window.
 pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
     let Some(rec) = focused_rec(ctx) else {
         return false;
@@ -1072,7 +1074,9 @@ pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
         }
         None
     });
-    dialog.is_some_and(|id| crate::runtime::overlay::top(ctx) == Some(id))
+    dialog.is_some_and(|id| {
+        crate::runtime::overlay::top(ctx) == Some(id) && crate::runtime::overlay::entry(ctx, id).is_some_and(|entry| entry.rank.is_modal())
+    })
 }
 
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop
