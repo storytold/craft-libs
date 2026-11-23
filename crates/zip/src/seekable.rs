@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Read, Seek, SeekFrom};
 
-use crate::entry::has_traversal_component;
+use crate::entry::{has_traversal_component, has_traversal_component_bytes};
 use crate::{Budget, Error, MetadataReader, check_entry_count_seekable};
 
 /// Why an indexed seekable archive exceeded its caller's limits.
@@ -162,7 +162,7 @@ impl<R: Read + Seek> SeekableArchive<R> {
     /// Whether any entry in the archive contains path-traversal components (`..`, absolute paths,
     /// Windows drive prefixes, null bytes).
     pub fn has_traversal_component(&self) -> bool {
-        self.zip.file_names().any(|r| r.is_ok_and(|name| has_traversal_component(&name)))
+        self.zip.file_names_raw().any(has_traversal_component_bytes)
     }
 
     /// Locate a surviving entry by the absolute offset of its central directory record,
@@ -178,6 +178,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        if has_traversal_component_bytes(file.name_raw()) {
+            return Ok(None);
+        }
         let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
         if has_traversal_component(&name) {
             return Ok(None);
@@ -201,9 +204,7 @@ impl<R: Read + Seek> SeekableArchive<R> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
-        if let Ok(name) = file.name()
-            && has_traversal_component(&name)
-        {
+        if has_traversal_component_bytes(file.name_raw()) {
             return Ok(None);
         }
         Ok(Some(file.is_dir()))
@@ -215,9 +216,7 @@ impl<R: Read + Seek> SeekableArchive<R> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|e| Error::NotZip(e.to_string()))?;
-        if let Ok(name) = file.name()
-            && has_traversal_component(&name)
-        {
+        if has_traversal_component_bytes(file.name_raw()) {
             return Ok(None);
         }
         Ok(Some((file.size(), file.compressed_size())))

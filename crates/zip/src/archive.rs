@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
-use crate::entry::has_traversal_component;
+use crate::entry::{has_traversal_component, has_traversal_component_bytes};
 use crate::preflight::{ReadError, read_entry};
 use crate::{Budget, Error, check_entry_count};
 
@@ -97,6 +97,9 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        if has_traversal_component_bytes(file.name_raw()) {
+            return Ok(None);
+        }
         let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
         if has_traversal_component(&name) {
             return Ok(None);
@@ -120,9 +123,7 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
-        if let Ok(name) = file.name()
-            && has_traversal_component(&name)
-        {
+        if crate::entry::has_traversal_component_bytes(file.name_raw()) {
             return Ok(None);
         }
         Ok(Some(file.is_dir()))
@@ -134,9 +135,7 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
-        if let Ok(name) = file.name()
-            && has_traversal_component(&name)
-        {
+        if crate::entry::has_traversal_component_bytes(file.name_raw()) {
             return Ok(None);
         }
         Ok(Some(file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000)))
@@ -148,9 +147,7 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|e| Error::NotZip(e.to_string()))?;
-        if let Ok(name) = file.name()
-            && has_traversal_component(&name)
-        {
+        if has_traversal_component_bytes(file.name_raw()) {
             return Ok(None);
         }
         Ok(Some((file.size(), file.compressed_size())))
@@ -165,7 +162,7 @@ impl<'a> Archive<'a> {
     /// Whether any entry in the archive contains path-traversal components (`..`, absolute paths,
     /// Windows drive prefixes, null bytes).
     pub fn has_traversal_component(&self) -> bool {
-        self.zip.file_names().any(|r| r.is_ok_and(|name| has_traversal_component(&name)))
+        self.zip.file_names_raw().any(has_traversal_component_bytes)
     }
 
     /// Do two entries' compressed data ranges overlap? A format that stores many files in one

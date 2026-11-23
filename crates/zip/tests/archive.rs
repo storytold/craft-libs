@@ -1,7 +1,10 @@
 //! Reading archives within limits, duplicate names, and the writer.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use craft_zip::{Archive, Compression, Error, Limits, Writer, check_entry_count, has_traversal_component, sanitize_path, zip64_entry_count_sample};
+use craft_zip::{
+    Archive, Compression, Error, Limits, SeekableArchive, SeekableLimits, Writer, check_entry_count, has_traversal_component, sanitize_path,
+    zip64_entry_count_sample,
+};
 
 const ROOMY: Limits = Limits { max_entries: 1000, max_total_bytes: 1 << 20 };
 
@@ -302,4 +305,29 @@ fn writer_rejects_path_traversal_components() {
     assert!(matches!(writer.add(r"..\..\windows\system32", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
     assert!(matches!(writer.add("C:/test.txt", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
     assert!(matches!(writer.add_directory("../../etc/"), Err(Error::Write(msg)) if msg.contains("path traversal")));
+}
+
+#[test]
+fn raw_bytes_with_traversal_and_invalid_utf8_are_flagged() {
+    let mut bytes = archive(&[("xxxx", b"1", Compression::Stored)]);
+    let local = find(&bytes, b"PK\x03\x04", 0);
+    bytes[local + 30..local + 34].copy_from_slice(b"../\xff");
+    let central = find(&bytes, b"PK\x01\x02", 0);
+    bytes[central + 46..central + 50].copy_from_slice(b"../\xff");
+
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+    assert!(archive.has_traversal_component());
+    assert_eq!(archive.names().collect::<Vec<_>>(), Vec::<std::borrow::Cow<'_, str>>::new());
+    assert_eq!(archive.entry_name(0).unwrap(), None);
+    assert_eq!(archive.entry_sizes(0).unwrap(), None);
+    assert_eq!(archive.read_index(0, 10).unwrap(), None);
+
+    let mut seekable =
+        SeekableArchive::open(std::io::Cursor::new(bytes), SeekableLimits { max_entries: 100, max_metadata_bytes: 16_384, max_total_bytes: 1000 })
+            .unwrap();
+    assert!(seekable.has_traversal_component());
+    assert_eq!(seekable.names().collect::<Vec<_>>(), Vec::<std::borrow::Cow<'_, str>>::new());
+    assert_eq!(seekable.entry_name(0).unwrap(), None);
+    assert_eq!(seekable.entry_sizes(0).unwrap(), None);
+    assert_eq!(seekable.read_index(0, 10).unwrap(), None);
 }
