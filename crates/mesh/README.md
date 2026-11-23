@@ -8,7 +8,7 @@ a `Scene` into bytes. One Cargo feature per format, all on by default.
 | `stl` | STL, binary and ASCII | yes | binary and ASCII | none |
 | `obj` | Wavefront OBJ with MTL | yes | OBJ and MTL | none |
 | `ply` | PLY, ASCII and both binary byte orders | yes | no (no app writes PLY) | none |
-| `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` |
+| `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` (a dependency with every feature) |
 | `threemf` | 3MF, core and materials extension | yes | no | `craft-opc`, `craft-xml` |
 | `fbx` | FBX 6.x and 7.x, binary and ASCII | yes | no | `miniz_oxide` |
 | `dae` | COLLADA (`.dae`), scenes, transforms, cameras | yes | no | `craft-xml` |
@@ -22,7 +22,11 @@ USD is not here yet.
   `lights`, plus `external` (every other file the file names) and `warnings` (what was left out or
   repaired).
 - `Mesh`: a name, attribute pools (`positions` and `normals` as `f64`, `uv_sets`, per-position
-  `colors`, `joints` and `weights`) and `parts`.
+  `colors`, `joints` and `weights`) and `parts`, and glTF morph targets (`morph_targets`, each a
+  name and position, normal and tangent offsets, with their default `morph_weights`).
+- glTF's `extensions` and `extras` of the file, nodes, meshes and materials are kept on
+  `Scene`, `Node`, `Mesh` and `Material` as `serde_json` values (re-exported as
+  `craft_mesh::serde_json`), whole, the ones the reader also reads into the model included.
 - `Part`: the faces of a mesh that share a group name, a material and a smoothing group. A face is
   a polygon of three or more `Corner`s; each corner indexes a position and optionally a normal and
   a UV. Formats with separate indices (OBJ) are kept exactly, and polygons stay whole.
@@ -84,8 +88,10 @@ texture slots, UV set, sampler wrap modes and `KHR_texture_transform`, `KHR_mate
 `KHR_materials_unlit`, `KHR_materials_pbrSpecularGlossiness` (diffuse colour and texture, no
 metal, roughness from the glossiness); textures whose image is in `EXT_texture_webp`; images embedded
 in a buffer view or a `data:` URI, or named; skins; translation, rotation and scale animations;
-cameras; `KHR_lights_punctual`. Primitives of a mesh that name the same accessors share their
-vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials with
+cameras; `KHR_lights_punctual`; morph targets (POSITION, NORMAL and TANGENT offsets, dense or
+sparse, with the mesh's default `weights`, a node's own `weights` and names from
+`extras.targetNames`). Primitives of a mesh that name the same accessors and morph targets share
+their vertices. `write_glb` writes nodes, meshes (positions, normals, UV sets, colours), materials with
 their texture transforms and sampler wrap modes, and images; `write_glb_with_options` also writes
 each sampler's `magFilter` and `minFilter` when its `GlbWriteOptions` set them. The other
 formats' writers do not write texture transforms.
@@ -115,10 +121,12 @@ FBX 6.x files (a `Model` holds its mesh, `Properties60`, objects connected by na
 geometry, transforms, the hierarchy and materials. Not read: FBX 5 and older, 6.x textures,
 animation, skin deformers, blend shapes, cameras, lights, NURBS.
 
-Not read (glTF): required geometry extensions (Draco, meshopt) are `Error::Unsupported`. Points,
-lines and morph targets are left out and counted in a warning; scenes other than the default are
-named in one; other extensions are passed over.
-Not written: skins, animations, cameras, lights, and `.gltf` with separate files.
+Not read (glTF): required geometry extensions (Draco, meshopt) are `Error::Unsupported`. Points
+and lines are left out and counted in a warning, as are the morph targets of a mesh with more than
+`max_morph_targets`; scenes other than the default are named in one; animations of morph target
+weights are passed over.
+Not written: skins, morph targets, animations, cameras, lights, kept `extensions` and `extras`,
+and `.gltf` with separate files.
 
 ## Hostile input
 
@@ -137,8 +145,9 @@ mutations of every byte of good files.
 | `max_materials` | 100 000 | materials; images; OBJ material libraries; 3MF base materials and textures together |
 | `max_nodes` | 100 000 | nodes, and node visits when the hierarchy is walked (ends cycles); 3MF placed objects, build items and components |
 | `max_depth` | 64 | node nesting; 3MF component nesting (ends cycles) |
-| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; an FBX file's meshes, image bytes and parsed values (binary: 8 bytes per array element, and other values are not counted; ASCII: `size_of::<Prop>()` per value, each array element included, plus string bytes; record names and the overhead of records and their containers are not counted) |
+| `max_data_bytes` | 1 GiB | buffers and material libraries taken from the resolver; embedded image bytes; skin and animation values; morph targets and their offsets (8 bytes per value); the binary chunk `write_glb` builds; what a 3MF package inflates to, and its textures; an FBX file's meshes, image bytes and parsed values (binary: 8 bytes per array element, and other values are not counted; ASCII: `size_of::<Prop>()` per value, each array element included, plus string bytes; record names and the overhead of records and their containers are not counted) |
 | `max_extras` | 10 000 | skins, animations, cameras, lights, buffers (each); channels of one animation |
+| `max_morph_targets` | 256 | morph targets of one glTF mesh; a mesh with more is read in its base shape with a warning, not refused |
 
 Fixed bounds: a PLY header of 1 MiB, 64 elements and 256 properties per element; 2^24 components
 for glTF accessors without a buffer view, over the whole file; 10 000 parts in a 3MF package; FBX
