@@ -397,7 +397,7 @@ fn a_flyout_taller_than_the_room_below_its_icons_moves_up_inside_the_bounds() {
         let wanted = TALL_BODY.min(bounds.height());
         assert!(bounds.bottom() - icon.top() < TALL_BODY, "the bounds leave less room below the icon than the body takes: {icon:?} in {bounds:?}");
         assert!(bounds.contains_rect(rect), "{height}: the flyout {rect:?} stays inside {bounds:?}");
-        assert!(rect.height() >= wanted - 1.0, "{height}: the flyout {rect:?} takes the body's height {wanted}");
+        assert!(rect.height() > wanted || near(rect.height(), wanted), "{height}: the flyout {rect:?} takes the body's height {wanted}");
         assert!(rect.top() < icon.top(), "{height}: the flyout {rect:?} moves up from its icon {icon:?}");
     }
 }
