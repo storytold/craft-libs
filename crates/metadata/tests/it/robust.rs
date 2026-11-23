@@ -47,7 +47,12 @@ proptest! {
         s.push_str(&junk);
         s.extend(base.chars().skip(cut));
         let fresh = write_xmp(&Metadata { rating: Some(rating), ..Default::default() }, Some("{\"x\":1}"));
-        let rules = MergeRules { owned: &["xmp:Rating", "dc:title", "lc:*"], owned_if_present: &[], namespaces: &[LC] };
+        let rules = MergeRules {
+            owned: &["xmp:Rating", "dc:title", "lc:*"],
+            owned_if_present: &[],
+            onto_first: &[],
+            namespaces: &[LC],
+        };
         if let Ok(out) = merge_xmp(&s, &fresh, rules) {
             let d = parse_xmp(&out).unwrap();
             prop_assert_eq!(d.metadata.rating, Some(rating));
