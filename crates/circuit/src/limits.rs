@@ -9,7 +9,7 @@ pub struct Limits {
     pub input_bytes: usize,
     pub sheets: usize,
     pub parts: usize,
-    /// Pins, wire points, junctions and labels together, over all sheets.
+    /// Pins, wires, wire points, junctions and labels together, over all sheets.
     pub items: usize,
     /// Point and segment comparisons connection building may make.
     pub work: u64,
@@ -82,6 +82,7 @@ impl Project {
                 .saturating_add(sheet.pins.len())
                 .saturating_add(sheet.junctions.len())
                 .saturating_add(sheet.labels.len())
+                .saturating_add(sheet.wires.len())
                 .saturating_add(points);
             if items > limits.items {
                 return Err(Error::TooMany { what: "items", limit: limits.items });

@@ -56,6 +56,7 @@ fn a_wire_end_on_a_pin_is_connected_and_a_free_end_is_dangling() {
     let dangling: Vec<_> = findings(&p).into_iter().filter(|f| f.rule == Rule::DanglingWire).collect();
     assert_eq!(dangling.len(), 1, "only the stub's free end");
     assert_eq!(dangling[0].items[0].index, 1);
+    assert_eq!(dangling[0].at, Some((0, [2.0, 3.0])), "the finding points at the loose end, not the joined one");
 }
 
 #[test]

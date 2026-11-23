@@ -354,10 +354,19 @@ impl SegmentGrid {
 
 fn distance_sq(p: Point, a: Point, b: Point) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let (ax, ay) = (p[0] - a[0], p[1] - a[1]);
+    let (bx, by) = (p[0] - b[0], p[1] - b[1]);
     let len_sq = dx * dx + dy * dy;
-    let t = if len_sq > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len_sq).clamp(0.0, 1.0) } else { 0.0 };
-    let (qx, qy) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
-    qx * qx + qy * qy
+    if len_sq <= 0.0 || ax * dx + ay * dy <= 0.0 {
+        return ax * ax + ay * ay;
+    }
+    if bx * dx + by * dy >= 0.0 {
+        return bx * bx + by * by;
+    }
+    // Beside the segment: the distance to its line, from the cross product. Projecting a foot
+    // point and subtracting it from `p` would lose a small distance on a very long segment.
+    let cross = dx * ay - dy * ax;
+    cross * cross / len_sq
 }
 
 /// Joins labels that share a name: sheet labels on their sheet, global and supply labels
@@ -440,12 +449,8 @@ fn scope_rank(scope: LabelScope) -> u8 {
 
 fn name_net(mut d: Draft) -> Net {
     d.labels.sort_by(|a, b| scope_rank(a.0).cmp(&scope_rank(b.0)).then_with(|| natural_cmp(&a.1, &b.1)));
-    let mut label_names: Vec<String> = Vec::new();
-    for (_, name, _) in &d.labels {
-        if !label_names.contains(name) {
-            label_names.push(name.clone());
-        }
-    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    let label_names: Vec<String> = d.labels.iter().filter(|l| seen.insert(l.1.as_str())).map(|l| l.1.clone()).collect();
     let has_supply = d.labels.iter().any(|l| l.0 == LabelScope::Power);
     Net { name: label_names.first().cloned().unwrap_or_default(), label_names, has_supply, pins: d.pins, members: d.members }
 }
@@ -498,13 +503,15 @@ fn unique_names(project: &Project, nets: &mut [Net]) {
             repeated.push(i);
         }
     }
+    let mut next: HashMap<String, usize> = HashMap::new();
     for i in repeated {
         let base = nets[i].name.clone();
-        let mut n = 2usize;
+        let n = next.entry(base.clone()).or_insert(2);
         while taken.contains(&format!("{base}#{n}")) {
-            n += 1;
+            *n += 1;
         }
         nets[i].name = format!("{base}#{n}");
+        *n += 1;
         taken.insert(nets[i].name.clone());
     }
 }
@@ -517,12 +524,18 @@ fn name_counts(nets: &[Net]) -> HashMap<String, usize> {
     counts
 }
 
-/// The sheet of the label that gave a net its name, when that label is a sheet label.
+/// The sheet of the labels that gave a net its name, when all of them are sheet labels. A
+/// supply or global label of that name on the net wins, and its name reaches every sheet.
 fn sheet_scope_of(project: &Project, net: &Net) -> Option<usize> {
-    net.members.iter().find_map(|m| {
-        let label = project.sheets.get(m.sheet)?.labels.get(m.index).filter(|_| m.kind == ItemKind::Label)?;
-        (label.scope == LabelScope::Sheet && label.name == net.name).then_some(m.sheet)
-    })
+    let mut naming = net
+        .members
+        .iter()
+        .filter(|m| m.kind == ItemKind::Label)
+        .filter_map(|m| project.sheets.get(m.sheet)?.labels.get(m.index).map(|label| (m.sheet, label)))
+        .filter(|(_, label)| label.name == net.name)
+        .peekable();
+    let sheet = naming.peek()?.0;
+    naming.all(|(_, label)| label.scope == LabelScope::Sheet).then_some(sheet)
 }
 
 fn sheet_title(project: &Project, sheet: usize) -> String {

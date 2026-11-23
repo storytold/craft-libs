@@ -51,6 +51,38 @@ fn sheet_labels_join_on_their_own_sheet_only_and_global_labels_join_across_sheet
     assert!(joined(&global, &Connectivity::build(&global).unwrap(), ("R1", "1"), ("R2", "1")));
 }
 
+#[test]
+fn a_pin_on_a_very_long_wire_joins_it() {
+    let sheet = Sheet {
+        pins: vec![pin(0, "1", PinKind::Passive, [0.001, 0.0]), pin(1, "1", PinKind::Passive, [1e12, 0.0])],
+        wires: vec![wire(&[[1e12, 0.0], [-1e12, 0.0]])],
+        ..Sheet::default()
+    };
+    let p = project(vec![part("R1"), part("R2")], vec![sheet]);
+    assert!(joined(&p, &Connectivity::build(&p).unwrap(), ("R1", "1"), ("R2", "1")));
+}
+
+#[test]
+fn a_supply_net_keeps_its_name_when_another_sheet_uses_that_name_for_a_sheet_label() {
+    let supply = Sheet {
+        name: "Power".into(),
+        pins: vec![pin(0, "1", PinKind::Passive, [0.0, 0.0])],
+        labels: vec![label("X", LabelScope::Power, [0.0, 0.0]), label("X", LabelScope::Sheet, [0.0, 0.0])],
+        ..Sheet::default()
+    };
+    let other = Sheet {
+        name: "Logic".into(),
+        pins: vec![pin(1, "1", PinKind::Passive, [0.0, 0.0])],
+        labels: vec![label("X", LabelScope::Sheet, [0.0, 0.0])],
+        ..Sheet::default()
+    };
+    let p = project(vec![part("R1"), part("R2")], vec![supply, other]);
+    let conn = Connectivity::build(&p).unwrap();
+    let name_of = |sheet: usize| conn.nets.iter().find(|n| n.pins.iter().any(|i| i.sheet == sheet)).map(|n| n.name.as_str());
+    assert_eq!(name_of(0), Some("X"));
+    assert_ne!(name_of(1), Some("X"), "the sheet-only net is the one that gets qualified");
+}
+
 /// The same schematic with its items listed in another order and moved by a whole offset.
 fn reordered_and_moved(p: &Project, seed: usize, dx: f64, dy: f64) -> Project {
     let mut out = p.clone();

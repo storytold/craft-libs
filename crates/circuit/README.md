@@ -55,7 +55,7 @@ English text an app uses as its translation key; the crate holds no other user-f
 ## Limits
 
 `Project::from_json` reads at most 64 MiB, 10,000 sheets, 1,000,000 parts and 4,000,000 pins,
-wire points, junctions and labels together. Coordinates must be finite and no larger than 1e12.
+wires, wire points, junctions and labels together. Coordinates must be finite and no larger than 1e12.
 Connection building stops with `Error::TooComplex` after 400,000,000 comparisons instead of
 running on. `Limits` lowers or raises each bound.
 

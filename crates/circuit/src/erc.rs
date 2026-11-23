@@ -161,7 +161,7 @@ pub struct Finding {
     /// The parts it is about, as indices into [`Project::parts`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<usize>,
-    /// Sheet and position of the first item.
+    /// Sheet and position to look at: the first item's, or the loose end of a dangling wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<(usize, Point)>,
 }
@@ -173,7 +173,11 @@ pub fn check(project: &Project, conn: &Connectivity, settings: &Settings) -> Vec
         net_rules(&mut out, net);
     }
     for end in &conn.dangling_ends {
+        let before = out.findings.len();
         out.push(Rule::DanglingWire, None, vec![end.wire], Vec::new());
+        if let Some(finding) = out.findings.get_mut(before) {
+            finding.at = Some((end.wire.sheet, end.at));
+        }
     }
     for &label in &conn.floating_labels {
         out.push(Rule::FloatingLabel, None, vec![label], Vec::new());
