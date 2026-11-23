@@ -119,8 +119,8 @@ fn text_part<V>() -> TextKey<V> {
 }
 
 /// The text field every collection's `rename_editor` shows over an item's label: it selects the name on focus, so
-/// typing replaces it.
+/// typing replaces it. It caps nothing: the item's name is the app's, and a rename shows and edits all of it.
 pub(crate) fn rename_field(ui: &mut egui::Ui, draft: Bind<'_, String>, label: egui::Rect, name: &str) -> EditResponse<String> {
     use crate::contract::Show as _;
-    TextField::new(name.to_owned(), draft).select_on_focus().show_at(ui, label)
+    TextField::new(name.to_owned(), draft).select_on_focus().limit(None::<usize>).show_at(ui, label)
 }
