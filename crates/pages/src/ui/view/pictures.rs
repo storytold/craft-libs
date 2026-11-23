@@ -91,25 +91,19 @@ impl Component for PageMetrics {
 
     fn style(cx: &StyleCx<'_>, _: PageMetricsStyleKey) -> PageMetricsStyle {
         let tokens = cx.tokens;
-<<<<<<< HEAD
-        let inset = tokens.space.inset;
-        PageMetricsStyle {
-            metrics: Metrics::new(),
-            gap: inset.page_gap,
-            margin: inset.page_margin,
-            side: inset.page_side,
-            white_space_pad: tokens.space.gap.inline,
-            seam: tokens.stroke.thin,
-=======
         match cx.set() {
-            ComponentSet::Creative => PageMetricsStyle {
-                metrics: Metrics::new(),
-                gap: tokens.space.gap.section,
-                margin: tokens.space.pad.roomy,
-                side: tokens.size.rail.width,
-                white_space_pad: tokens.space.gap.inline,
-                seam: tokens.stroke.thin,
-            },
+            // The creative set's spacing is the theme's page insets.
+            ComponentSet::Creative => {
+                let inset = tokens.space.inset;
+                PageMetricsStyle {
+                    metrics: Metrics::new(),
+                    gap: inset.page_gap,
+                    margin: inset.page_margin,
+                    side: inset.page_side,
+                    white_space_pad: tokens.space.gap.inline,
+                    seam: tokens.stroke.thin,
+                }
+            }
             ComponentSet::Productivity => {
                 let gap = tokens.space.gap.section * PRODUCTIVITY_GAP_RATIO;
                 PageMetricsStyle {
@@ -121,7 +115,6 @@ impl Component for PageMetrics {
                     seam: tokens.stroke.thin,
                 }
             }
->>>>>>> origin/next
         }
     }
 
@@ -165,14 +158,8 @@ pub(super) struct PagePictures<'a> {
     common: Common,
     source: &'a dyn PageSource,
     pages: &'a [PlacedPage],
-<<<<<<< HEAD
     /// The page view's body, whose picture stores these are (`page_stores`).
     owner: Id,
-=======
-    near: &'a [(usize, Vec2)],
-    /// The pages whose pictures the stores keep, sorted; every other page's are dropped.
-    keep: &'a [usize],
->>>>>>> origin/next
     /// The document's paper under each picture.
     paper: DataColor,
     /// Sharp renders of the part in view wait: the view zooms or pans.
@@ -185,13 +172,8 @@ pub(super) struct PagePictures<'a> {
 }
 
 impl<'a> PagePictures<'a> {
-<<<<<<< HEAD
     pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], owner: Id, paper: DataColor) -> Self {
         PagePictures { common: Common::new(), source, pages, owner, paper, hold_detail: false, describer: None }
-=======
-    pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], near: &'a [(usize, Vec2)], keep: &'a [usize], paper: DataColor) -> Self {
-        PagePictures { common: Common::new(), source, pages, near, keep, paper, hold: false, describer: None }
->>>>>>> origin/next
     }
 }
 
@@ -205,7 +187,7 @@ impl Component for PagePictures<'_> {
     const SHOWS_LABEL: bool = false;
     const OVERLAYS: bool = false;
     type Style = PagePicturesStyle;
-    type Output = PagePicturesOutput;
+    type Output = Response;
 
     fn style(_: &StyleCx<'_>, _: PagePicturesStyleKey) -> PagePicturesStyle {
         PagePicturesStyle { metrics: Metrics::new() }
@@ -225,14 +207,8 @@ impl Component for PagePictures<'_> {
         let base = painter.painter.clone();
         let inside = base.clip_rect();
         let side = texture_side(&ctx);
-<<<<<<< HEAD
         let (thumbs, details) = page_stores(&ctx, self.owner, picture_options(&ctx));
         details.hold(self.hold_detail);
-=======
-        let PictureStores { thumbs, details } = PictureStores::of(&ctx, cx);
-        thumbs.hold(self.hold);
-        details.hold(self.hold);
->>>>>>> origin/next
         let ppp = painter.pixels_per_point();
         let paint = ThumbPaint::default().paper(self.paper).states(StateLook::Captioned);
         for placed in self.pages {
@@ -249,19 +225,6 @@ impl Component for PagePictures<'_> {
                 }
             }
         }
-<<<<<<< HEAD
-=======
-        for &(page, size) in self.near {
-            let request = ThumbRequest::for_cell(size.x.max(size.y), ppp);
-            thumbs.state(&ctx, self.source, &page, &request, Priority::NEAR);
-        }
-        // Pages scrolled out of reach give their pictures back (#811: a long scroll held every page it had shown);
-        // a part-in-view picture is only of use while its page shows.
-        let keep = self.keep;
-        thumbs.retain(&ctx, |page| keep.binary_search(page).is_ok());
-        let shown = self.pages;
-        details.retain(&ctx, |page| shown.iter().any(|p| p.page == *page));
->>>>>>> origin/next
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
@@ -274,45 +237,8 @@ impl Component for PagePictures<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> PagePicturesOutput {
-        let ctx = cx.response.ctx.clone();
-        let PictureStores { thumbs, details } = PictureStores::of(&ctx, &cx);
-        let resident = thumbs.cache().statistics(&ctx).entries + details.cache().statistics(&ctx).entries;
-        PagePicturesOutput { response: cx.response.clone(), resident }
-    }
-}
-
-/// What the pictures report: how many page pictures their stores hold.
-#[derive(Debug)]
-pub(super) struct PagePicturesOutput {
-    response: Response,
-    /// The entries of both stores: the pages' own pictures and the detail pictures.
-    pub(super) resident: usize,
-}
-
-impl Outcome for PagePicturesOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
-}
-
-/// The two stores of the page pictures, kept in the context under the component's id: the pages' own pictures, and
-/// the pictures of the part in view of a page larger than the texture side (a store of their own, so a page's two
-/// regions never share a key).
-struct PictureStores {
-    thumbs: Thumbnails<usize>,
-    details: Thumbnails<usize>,
-}
-
-impl PictureStores {
-    fn of(ctx: &egui::Context, cx: &Cx<'_, PagePictures<'_>>) -> Self {
-        let options = ThumbnailOptions::new().max_side(texture_side(ctx)).store(TextureStoreOptions::pages());
-        PictureStores {
-            thumbs: Thumbnails::in_context(ctx, cx.key("pictures"), options.clone()),
-            details: Thumbnails::in_context(ctx, cx.key("detail"), options),
-        }
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }
 

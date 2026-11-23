@@ -6,13 +6,8 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story}
 use egui::Ui;
 
 use super::list::{CardKey, CommentList, RowEntry, Rows};
-<<<<<<< HEAD
-use super::row::CommentRow;
-use super::{CommentsHeader, CommentsPanel, CommentsPanelState};
-=======
 use super::row::{CardActions, CommentRow};
-use super::{CommentsPanel, CommentsPanelState};
->>>>>>> origin/next
+use super::{CommentsHeader, CommentsPanel, CommentsPanelState};
 use crate::annotate::AnnotationKind;
 use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ReviewerStatus, ThreadId};
 

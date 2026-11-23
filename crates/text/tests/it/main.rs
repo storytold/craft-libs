@@ -2,22 +2,18 @@
 // Unwrapping, expecting and panicking on failure is fine in tests, unlike in shipped code.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-<<<<<<< HEAD
-mod editor;
-mod find_bar;
-mod find_matches;
-mod format_text;
-mod notes;
-mod path_text;
-=======
 pub(crate) mod editor;
 #[cfg(feature = "find")]
 pub(crate) mod find;
+#[cfg(feature = "find")]
+pub(crate) mod find_bar;
+#[cfg(feature = "find")]
+pub(crate) mod find_matches;
+pub(crate) mod format_text;
 pub(crate) mod hyperlink;
 pub(crate) mod notes;
 pub(crate) mod paragraph;
 pub(crate) mod path_text;
->>>>>>> origin/next
 
 pub(crate) mod ruler;
 pub(crate) mod style_options;

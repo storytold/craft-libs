@@ -7,12 +7,8 @@ use craft_theme::variant::{Emphasis, Tone as BadgeTone, Variant};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Remember as _, Role, WordSetCx as _, clicked};
 use craft_ui::controls::disclosure::DisclosureGlyph;
-<<<<<<< HEAD
 use craft_ui::display::Badge;
 use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, SubmitKey, TextRun, Wrap};
-=======
-use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
->>>>>>> origin/next
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::style::{ComponentStyle, DataColor, Ink, StyleColor, StyleCx, TypeRole};
@@ -116,17 +112,14 @@ enum Slot {
     EditCancel,
     ReplyField,
     ReplyPost,
-<<<<<<< HEAD
-    /// The badge of the reviewer status at this index of the thread's statuses.
-    Status(usize),
-=======
     /// The balloon button that puts the focus in the reply field.
     Reply,
     /// The balloon button that resolves or reopens the thread.
     Resolve,
     /// The balloon button that deletes the thread.
     Delete,
->>>>>>> origin/next
+    /// The badge of the reviewer status at this index of the thread's statuses.
+    Status(usize),
 }
 
 /// How many push buttons a row sizes: `push_index` gives each its place.
@@ -168,10 +161,9 @@ trait Sink {
 /// The "..." button of message `index` of a card: a part of the row that opens the message's menu.
 pub(super) const MORE: PartKey = PartKey::new("more");
 
-<<<<<<< HEAD
 /// Reply `index` of a card: the access node that names it.
 const REPLY: PartKey = PartKey::new("reply");
-=======
+
 /// What a card offers for acting on its thread.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum CardActions {
@@ -185,7 +177,6 @@ pub(crate) enum CardActions {
 /// The message whose inline editor a row showed at its last pass, if any.
 #[derive(Clone, Copy, Default)]
 struct EditShown(Option<usize>);
->>>>>>> origin/next
 
 /// A card or a heading of the card collection.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
@@ -206,13 +197,11 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
-<<<<<<< HEAD
-    /// The inline editor takes the focus this pass, when the card shows one.
+    /// The inline editor takes the focus this pass, when the card shows one: for an editor the panel opens.
     #[prop]
     focus_editor: bool,
     /// The key that submits the reply box.
     submit_key: SubmitKey,
-=======
     /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
     /// first click that opens an edit is enough to type.
     focus_edit: bool,
@@ -222,18 +211,13 @@ pub(crate) struct CommentRow<'r> {
     /// Limits each message's text to `rows` rows.
     #[prop(vis = "pub(crate)")]
     body_rows: Option<usize>,
->>>>>>> origin/next
     words: Option<Arc<CommentsWords>>,
     /// The heights the editor field and the reply field measured, for the paint of the same pass.
     heights: [f32; 2],
     /// The sizes the push buttons measured, for the paint of the same pass.
-<<<<<<< HEAD
-    buttons: [Vec2; 3],
+    buttons: [Vec2; PUSH_BUTTONS],
     /// The sizes the status badges measured, in the order of the thread's statuses, for the paint of the same pass.
     badges: Vec<Vec2>,
-=======
-    buttons: [Vec2; PUSH_BUTTONS],
->>>>>>> origin/next
     /// The messages whose "..." button the parts step declared.
     mores: Vec<usize>,
     /// Each reply's index and its rect on the screen, from the parts step.
@@ -255,21 +239,15 @@ impl<'r> CommentRow<'r> {
             editing: None,
             reply: "",
             focus_reply: false,
-<<<<<<< HEAD
             focus_editor: false,
             submit_key: SubmitKey::default(),
-            words: None,
-            heights: [0.0; 2],
-            buttons: [Vec2::ZERO; 3],
-            badges: Vec::new(),
-=======
             focus_edit: false,
             actions: CardActions::default(),
             body_rows: None,
             words: None,
             heights: [0.0; 2],
             buttons: [Vec2::ZERO; PUSH_BUTTONS],
->>>>>>> origin/next
+            badges: Vec::new(),
             mores: Vec::new(),
             replies: Vec::new(),
             events: Vec::new(),
@@ -398,12 +376,8 @@ impl CommentRow<'_> {
         let first = thread.messages.first();
         sink.kind(square(Pos2::new(pad, y), h), kind_icon(thread.kind), thread.color);
         let mut end = width - pad;
-<<<<<<< HEAD
-        if self.lead && self.editable {
-=======
         let menu = self.actions == CardActions::Menu;
-        if self.selected && self.editable && menu {
->>>>>>> origin/next
+        if self.lead && self.editable && menu {
             end -= h;
             sink.button(Slot::More(0), square(Pos2::new(end, y), h), "more", &words.more, false);
         }
@@ -633,15 +607,9 @@ struct Paint<'a, 'b> {
     thread: Option<ThreadId>,
     resolved: bool,
     heights: [f32; 2],
-<<<<<<< HEAD
-    buttons: [Vec2; 3],
+    buttons: [Vec2; PUSH_BUTTONS],
     badges: &'a [Vec2],
     reply_submit: SubmitKey,
-    /// The field that takes the focus as it shows (the reply box or the inline editor), and the context the request
-    /// goes to.
-    focus: Option<(Slot, &'a egui::Context)>,
-=======
-    buttons: [Vec2; PUSH_BUTTONS],
     /// The context focus requests go to.
     ctx: &'a egui::Context,
     /// Set when the reply box takes the focus as it shows.
@@ -650,7 +618,6 @@ struct Paint<'a, 'b> {
     focus_edit: bool,
     /// The reply field's id once it is shown, for the Reply button to focus.
     reply_id: Option<egui::Id>,
->>>>>>> origin/next
     events: &'a mut Vec<CardEvent>,
 }
 
@@ -756,12 +723,6 @@ impl Sink for Paint<'_, '_> {
         if out.escaped && slot == Slot::EditField {
             self.events.push(CardEvent::EditCancel);
         }
-<<<<<<< HEAD
-        if let Some((focused, ctx)) = self.focus
-            && focused == slot
-        {
-            focus::request(ctx, FocusTarget::Id(out.response.id));
-=======
         if slot == Slot::ReplyField {
             self.reply_id = Some(out.response.id);
             if self.focus_reply {
@@ -769,7 +730,6 @@ impl Sink for Paint<'_, '_> {
             }
         } else if self.focus_edit {
             focus::request(self.ctx, FocusTarget::Id(out.response.id));
->>>>>>> origin/next
         }
         height
     }
@@ -862,17 +822,11 @@ impl Component for CommentRow<'_> {
             muted: cx.color(color.text.muted),
             highlight: cx.color(color.surface.raised),
             bar: cx.color(color.accent.solid),
-<<<<<<< HEAD
+            card: cx.color(color.surface.raised),
+            border: cx.color(color.line.border),
             avatar: cx.color(color.line.border),
             avatar_ink: cx.color(color.text.normal),
             thread_line: cx.color(color.line.divider),
-=======
-            card: cx.color(color.surface.raised),
-            border: cx.color(color.line.border),
-            avatar: cx.color(color.accent.strong),
-            avatar_ink: cx.color(color.text.on_strong),
-            sunken: cx.color(color.surface.sunken),
->>>>>>> origin/next
             kind_icon: cx.tokens.size.icon.sm,
             glyph: cx.glyph(),
             bar_width: cx.tokens.stroke.thick,
@@ -891,11 +845,8 @@ impl Component for CommentRow<'_> {
         self.words = Some(cx.words::<CommentsWords>());
         let now = self.now;
         let age = |then: i64| age_text(&cx.env, then, now);
-<<<<<<< HEAD
-        let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; 3], more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
-=======
-        let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; PUSH_BUTTONS], more: Vec::new() };
->>>>>>> origin/next
+        let mut sink =
+            Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; PUSH_BUTTONS], more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
         let height = self.lay(cx.style, width, &age, &mut sink);
         self.heights = sink.fields;
         self.buttons = sink.buttons;
@@ -960,16 +911,13 @@ impl Component for CommentRow<'_> {
             resolved: self.thread.is_some_and(|t| t.resolved),
             heights: self.heights,
             buttons: self.buttons,
-<<<<<<< HEAD
             badges: &self.badges,
             reply_submit: self.submit_key,
-            focus: if self.focus_editor { Some((Slot::EditField, &cx.ctx)) } else { self.focus_reply.then_some((Slot::ReplyField, &cx.ctx)) },
-=======
             ctx: &cx.ctx,
-            focus_reply: self.focus_reply,
-            focus_edit: self.focus_edit,
+            // The editor the panel opens takes the focus before the reply box, as either opening does.
+            focus_reply: self.focus_reply && !self.focus_editor,
+            focus_edit: self.focus_edit || self.focus_editor,
             reply_id: None,
->>>>>>> origin/next
             events: &mut events,
         };
         self.lay(st, rect.width(), &age, &mut sink);

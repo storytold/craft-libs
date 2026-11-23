@@ -1,15 +1,9 @@
-<<<<<<< HEAD
-//! The column bar: a divider drag or an arrow key moves the two columns it divides.
+//! The column bar: a divider drag or an arrow key moves the two columns it divides. The Page Setup dialog's Document
+//! grid: the counts follow the kind, and a refused OK shows its reason.
 
-use craft_pages::ui::ColumnBar;
 use craft_pages::ui::reading::MAX_COLUMNS;
-=======
-//! The column bar: a divider drag moves the two columns it divides. The Page Setup dialog's Document grid: the counts
-//! follow the kind, and a refused OK shows its reason.
-
 use craft_pages::ui::{ColumnBar, PageSetupDialog};
 use craft_pages::{DocumentGrid, GridKind, MAX_GRID_COUNT, PageSetup};
->>>>>>> origin/next
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::dialog::HeldAnswer;
 use craft_ui::runtime::env::Label;
@@ -41,7 +35,6 @@ fn a_divider_moves_only_the_two_columns_it_divides() {
     assert!(close(widths[3], EQUAL), "the column past the pair is untouched: {widths:?}");
 }
 
-<<<<<<< HEAD
 /// A bar over `widths`, which every pass writes back.
 fn bar(widths: Vec<f64>) -> (Fixture, Rc<RefCell<Vec<f64>>>) {
     let widths = Rc::new(RefCell::new(widths));
@@ -89,7 +82,8 @@ fn an_arrow_moves_the_focused_divider_one_step_and_shift_ten() {
     assert!(close(jump, 10.0 * step), "Shift moves ten steps: {jump} after a step of {step}");
     let widths = widths.borrow();
     assert!(close(widths.iter().sum::<f64>(), EQUAL * COLUMNS as f64), "the total stays: {widths:?}");
-=======
+}
+
 #[trial]
 fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
     let start = PageSetup { grid: Some(DocumentGrid::new(GridKind::None, 40, 30)), ..PageSetup::default() };
@@ -166,5 +160,4 @@ fn page_setup_rows_stand_two_to_a_line() {
     let first = rect("Different First Page");
     assert!((rect("Mirror margins").min.x - first.min.x).abs() < 1.0, "Mirror margins stands at its section's start");
     assert!(first.max.y <= 900.0, "the last row is in view without scrolling: {first:?}");
->>>>>>> origin/next
 }

@@ -1,15 +1,9 @@
 //! Stories of the signature pad.
 
-<<<<<<< HEAD
 use super::{DrawPad, ScanEvent, SignaturePadDialog};
 use crate::signature::{SignatureDraft, SignatureImage, SignatureTab};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Show as _, Validity, clicked};
-=======
-use super::{DrawPad, SignaturePadDialog};
-use crate::signature::SignatureDraft;
-use craft_ui::contract::{Show as _, Validity};
->>>>>>> origin/next
+use craft_ui::contract::{Show as _, Validity, clicked};
 use craft_ui::dialog::StackDialog as _;
 use craft_ui::display::Text;
 use craft_ui::popover::DropVeil;

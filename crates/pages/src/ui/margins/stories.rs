@@ -11,12 +11,6 @@ use craft_ui::runtime::env::{Message, UnitKind};
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Ui, Vec2};
 
-<<<<<<< HEAD
-/// The document point the view is centred on.
-const CENTRE: Point = Point::new(180.0, 400.0);
-
-=======
->>>>>>> origin/next
 /// How far the drag moves the left edge, in drag thresholds.
 const DRAG_THRESHOLDS: f32 = 12.0;
 
