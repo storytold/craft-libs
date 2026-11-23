@@ -68,6 +68,8 @@ struct Strip<'a> {
 struct Arrival {
     /// The event's arrival time (`Arrived::at`).
     at: Option<f64>,
+    /// An input method's commit follows the event: a press it follows typed through the input method.
+    ime_next: bool,
     /// A key press follows the event: a text before it is that press's (the web sends a press's text first).
     press_next: bool,
 }
@@ -134,7 +136,8 @@ impl Strip<'_> {
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
                 let menu_keys = batch.menu.len();
-                let shortcut_text = self.shortcut_text(&input);
+                // Text an input method commits for the press is typing, whatever the press's chord binds.
+                let shortcut_text = self.shortcut_text(&input) && !arrival.ime_next;
                 let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
                 let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
@@ -147,6 +150,7 @@ impl Strip<'_> {
                 // The release key is kept for withheld presses too: the held-over rule matches repeats by it.
                 if let Some(press) = batch.presses.get_mut(pushed) {
                     press.release = input.physical.or(input.typed);
+                    press.ime = arrival.ime_next;
                     press.held = down.iter().copied().filter(|key| Some(*key) != press.release).collect();
                     if kept {
                         press.in_egui = Some(batch.egui_presses);
@@ -396,6 +400,7 @@ impl Strip<'_> {
                     canvas: true,
                     place: batch.place,
                     held: Vec::new(),
+                    ime: false,
                 });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
@@ -432,6 +437,7 @@ impl Strip<'_> {
                     canvas: false,
                     place: batch.place,
                     held: Vec::new(),
+                    ime: false,
                 });
                 false
             }
@@ -462,6 +468,7 @@ impl Strip<'_> {
                     canvas: false,
                     place: batch.place,
                     held: Vec::new(),
+                    ime: false,
                 });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
@@ -658,6 +665,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.stirred = false;
         stage.textless_paste = false;
         let mut place = 0;
+        let ime_presses = std::mem::take(&mut stage.ime_presses);
         let press_next: Vec<bool> = (0..events.len())
             .map(|at| matches!(events.get(at + 1).map(|arrived| &arrived.event), Some(egui::Event::Key { pressed: true, .. })))
             .collect();
@@ -682,7 +690,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
-            let arrival = Arrival { at: arrived.at, press_next: press_next.get(batch.place).copied().unwrap_or(false) };
+            let arrival = Arrival {
+                at: arrived.at,
+                ime_next: ime_presses.contains(&arrived.event),
+                press_next: press_next.get(batch.place).copied().unwrap_or(false),
+            };
             strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival)
         });
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
@@ -725,6 +737,18 @@ pub(crate) fn claims_press(ctx: &Context, input: &RawInput) -> impl Fn(&egui::Ev
         KeyEvent::Press { input: pressed, .. } => claims.iter().any(|chord| layout.matches(chord, &pressed, os)),
         _ => false,
     }
+}
+
+/// Notes the key presses of `events` that an input method's commit follows, before the IME stage takes the commits out
+/// of the input: the key stage reads such a press as typing through the input method (`Press::ime`).
+pub(crate) fn note_ime_presses(ctx: &Context, viewport: ViewportId, events: &[Arrived]) {
+    let commit = |event: &egui::Event| matches!(event, egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty());
+    let presses = events
+        .windows(2)
+        .filter(|pair| matches!(pair[0].event, egui::Event::Key { pressed: true, .. }) && commit(&pair[1].event))
+        .map(|pair| pair[0].event.clone())
+        .collect();
+    with(ctx, viewport, |stage| stage.ime_presses = presses);
 }
 
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus

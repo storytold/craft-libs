@@ -100,6 +100,21 @@ fn a_second_press_of_a_held_key_runs_no_shortcut_again() {
     assert!(ran(&mut frames, &mut show, &field, vec![key_press(Key::S, Modifiers::NONE)]), "a press after the release runs it again");
 }
 
+/// In a focused field, a bound Alt chord that an input method types through (its commit follows the press) is typing:
+/// the field takes the commit and the command does not run. With its key's text the press runs the command. Guards
+/// against a key stage that ran the command and let the input method's text through as well.
+#[trial]
+fn an_alt_chord_an_input_method_types_through_runs_no_command() {
+    let field = RefCell::new(Field::default());
+    let mut frames = frames_for(Chord::new(Mods::ALT, ChordKey::G));
+    let mut show = window(&field);
+    settle(&mut frames, &mut show, true);
+    let alt_g =
+        |then: Event| vec![Event::ModifiersChanged(Modifiers::ALT), key_press(Key::G, Modifiers::ALT), then, key_release(Key::G, Modifiers::ALT)];
+    assert!(ran(&mut frames, &mut show, &field, alt_g(text("g"))), "with its key's text the press runs the command");
+    assert!(!ran(&mut frames, &mut show, &field, alt_g(Event::Ime(ImeEvent::Commit("ğ".into())))), "an input method's commit is typing");
+}
+
 /// A Cut with Cmd and Shift held is Cmd+Shift+X, the app's chord, not the focused field's Cut; a plain Cmd+X Cut stays
 /// the field's. Guards against a key stage that gave every clipboard event to a field that lists the edit, whatever
 /// the modifiers.

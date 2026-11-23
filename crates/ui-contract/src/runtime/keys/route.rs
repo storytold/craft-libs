@@ -257,7 +257,11 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .iter()
         .zip(consumed)
         // The canvas's Space is never the focused stop's.
-        .map(|(press, taken)| !press.canvas && holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
+        .map(|(press, taken)| {
+            // Text an input method committed for the press goes to the text stop that has the IME.
+            let typed = press.text.is_some_and(|at| taken_texts[at]) || (press.ime && target.is_some_and(|rec| rec.stop.text));
+            !press.canvas && holds_press(owner, target, press, *taken == Taken::Yes, typed)
+        })
         .collect();
     // A shortcut without a press of its own (a release, or the clipboard event that stands for ⌘C) follows the owner by
     // its modifiers, as its press would.
@@ -374,6 +378,7 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
         canvas: false,
         place: 0,
         held: Vec::new(),
+        ime: false,
     };
     let driven = Driven::of(ctx, &rec);
     let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));

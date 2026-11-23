@@ -664,6 +664,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
     // to the focus are counted first, before the IME and key stages take theirs.
     keys::count_sent(ctx, viewport, &events);
+    keys::note_ime_presses(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {
