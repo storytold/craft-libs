@@ -1,5 +1,4 @@
-//! [`ColorWheel`]: a hue ring round a saturation and brightness triangle that turns with the hue, as PhotoCraft's
-//! Color Wheel.
+//! [`ColorWheel`]: a hue ring round a fixed saturation and brightness triangle, as PhotoCraft's Color Wheel.
 
 use super::channels::{channel_step, finite, primary, settled, spoken};
 use craft_behavior::{HitLevel, HitPriority, HitShape, Metrics, NavMove, PartKey, PressPhase, Sense};
@@ -84,12 +83,13 @@ impl WheelGeometry {
     }
 
     /// The part a press at `pos` takes: nothing beyond the ring's outer edge plus `grab_outer`,
-    /// the ring from `grab_inner` inside its inner edge, the triangle within.
+    /// the ring from `grab_inner` inside its inner edge, the triangle within; a press inside the
+    /// triangle is the triangle's, also where its corners reach into the ring's grab.
     pub fn part_at(&self, pos: Pos2, grab_outer: f32, grab_inner: f32) -> Option<WheelPart> {
         let d = pos.distance(self.center);
         if !d.is_finite() || d > self.outer + grab_outer {
             None
-        } else if d >= self.inner - grab_inner {
+        } else if d >= self.inner - grab_inner && !inside_triangle(self.corners(0.0), pos) {
             Some(WheelPart::Ring)
         } else {
             Some(WheelPart::Triangle)
@@ -101,10 +101,66 @@ impl WheelGeometry {
         self.center + hue_direction(hue) * ((self.inner + self.outer) / 2.0)
     }
 
-    /// The triangle's corners at `hue`, as `triangle_corners`, grown by `by` points.
-    pub fn corners(&self, hue: f32, by: f32) -> [Pos2; 3] {
-        triangle_corners(self.center, self.triangle + by, hue)
+    /// The triangle's corners, as `triangle_corners`, grown by `by` points.
+    pub fn corners(&self, by: f32) -> [Pos2; 3] {
+        triangle_corners(self.center, self.triangle + by)
     }
+
+    /// The outline of what a press on the triangle takes: the disc of radius `disc` round the
+    /// centre and the triangle with its corners `reach` points further out, whichever reaches
+    /// further along each direction from the centre.
+    pub fn triangle_reach(&self, disc: f32, reach: f32) -> Vec<Pos2> {
+        let corners = self.corners(reach);
+        // Every step round the ring, and the corners themselves so their tips are kept.
+        let mut angles: Vec<f32> = (0..RING_STEPS).map(|k| k as f32 / RING_STEPS as f32 * 360.0).collect();
+        angles.extend(CORNER_TURNS.map(|turn| (TOP + turn).rem_euclid(360.0)));
+        angles.sort_by(f32::total_cmp);
+        angles.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+        angles
+            .into_iter()
+            .map(|hue| {
+                let dir = hue_direction(hue);
+                let edge = ray_to_triangle(self.center, dir, corners).unwrap_or(0.0);
+                self.center + dir * edge.max(disc)
+            })
+            .collect()
+    }
+}
+
+/// The angle of the triangle's pure-hue corner: the top.
+const TOP: f32 = 90.0;
+/// The corners' turns from the top, counter-clockwise: pure hue, white, black.
+const CORNER_TURNS: [f32; 3] = [0.0, 120.0, 240.0];
+
+/// How far from `center` along `dir` the ray leaves the triangle `corners`; `None` when it doesn't
+/// cross an edge (a degenerate triangle, a centre outside it, a point that isn't finite).
+fn ray_to_triangle(center: Pos2, dir: Vec2, [a, b, c]: [Pos2; 3]) -> Option<f32> {
+    let cross = |u: Vec2, v: Vec2| u.x * v.y - u.y * v.x;
+    [(a, b), (b, c), (c, a)]
+        .into_iter()
+        .filter_map(|(u, v)| {
+            let edge = v - u;
+            let det = cross(dir, edge);
+            if det.abs() < 1e-6 {
+                return None;
+            }
+            let to = u - center;
+            let (t, along) = (cross(to, edge) / det, cross(to, dir) / det);
+            (t.is_finite() && t >= 0.0 && (-1e-4..=1.0 + 1e-4).contains(&along)).then_some(t)
+        })
+        .max_by(f32::total_cmp)
+}
+
+/// Whether `p` lies inside the triangle `corners` (on an edge counts); `false` for a degenerate
+/// triangle or a point that isn't finite.
+fn inside_triangle([a, b, c]: [Pos2; 3], p: Pos2) -> bool {
+    let side = |u: Pos2, v: Pos2| (v - u).x * (p - u).y - (v - u).y * (p - u).x;
+    let area = side(a, b) + side(b, c) + side(c, a);
+    if !area.is_finite() || area.abs() < 1e-6 {
+        return false;
+    }
+    let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
+    (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
 }
 
 /// The unit vector on screen at `hue` degrees: red (0) to the right, growing counter-clockwise.
@@ -120,10 +176,11 @@ pub fn hue_at(center: Pos2, p: Pos2) -> Option<f32> {
     a.is_finite().then(|| (a.rem_euclid(TAU).to_degrees().round()).rem_euclid(360.0))
 }
 
-/// The triangle's corners for `hue` degrees inside radius `r`: the pure hue at the hue's angle,
-/// white 120 degrees on and black 240 degrees on.
-pub fn triangle_corners(center: Pos2, r: f32, hue: f32) -> [Pos2; 3] {
-    [0.0, 120.0, 240.0].map(|turn| center + hue_direction(hue + turn) * r)
+/// The triangle's corners inside radius `r`: fixed whatever the hue, so the direction that adds
+/// saturation or brightness never changes. The pure hue is the top corner, white 120 degrees on
+/// (lower left) and black 240 degrees on (lower right).
+pub fn triangle_corners(center: Pos2, r: f32) -> [Pos2; 3] {
+    CORNER_TURNS.map(|turn| center + hue_direction(TOP + turn) * r)
 }
 
 /// The point of saturation `s` and brightness `b` (0 to 1) in the triangle: black + b (white -
@@ -166,6 +223,8 @@ pub struct ColorWheelStyle {
     triangle_inset: f32,
     /// A press this far outside the ring still takes it, and this far inside its inner edge.
     grab: f32,
+    /// How far past the triangle's corners a press still takes the triangle, at most half the ring's width.
+    corner_reach: f32,
     /// The edge round the ring and the triangle.
     edge: StyleColor,
     /// The knobs.
@@ -187,8 +246,9 @@ pub struct ColorWheelStyle {
 ///   part.
 /// - Keys on the focused ring: Left and Down lower the hue by 1 degree, Right and Up raise it, wrapping at 360;
 ///   Shift steps ten; Page Up and Page Down 36 degrees; Home 0, End 359. On the triangle: Left and Right saturation,
-///   Up and Down brightness; Shift ten; Page keys a tenth of brightness; Home and End saturation 0 and 100. The
-///   directions are not screen directions: the triangle turns with the hue.
+///   Up and Down brightness; Shift ten; Page keys a tenth of brightness; Home and End saturation 0 and 100.
+/// - The triangle stays put while the hue turns: pure hue at the top, white lower left, black lower right. A press
+///   inside it, or just past a corner where the corners reach into the ring's grab, sets saturation and brightness.
 /// - Two Tab stops, the ring and then the triangle.
 /// - AccessKit: a `Group` named `label` holding a `Slider` for the hue (0 to 360, step 1, increment, decrement and
 ///   set value) and a `Slider` for saturation and brightness (value text, no numeric value).
@@ -229,7 +289,7 @@ fn value_at(geometry: &WheelGeometry, base: &ModelValues, part: WheelPart, pos: 
             }
         }
         WheelPart::Triangle => {
-            if let Some((s, b)) = triangle_sv(geometry.corners(finite(base.values[0]), 0.0), pos) {
+            if let Some((s, b)) = triangle_sv(geometry.corners(0.0), pos) {
                 out.values[1] = (s * 100.0).round();
                 out.values[2] = (b * 100.0).round();
             }
@@ -300,6 +360,7 @@ impl Component for ColorWheel<'_> {
             outer_inset: tokens.space.gap.tight,
             triangle_inset: tokens.stroke.thin,
             grab: tokens.size.hit.target,
+            corner_reach: tokens.space.gap.tight,
             edge: cx.color(tokens.color.line.control_edge),
             knob: cx.marker(),
         }
@@ -318,18 +379,18 @@ impl Component for ColorWheel<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let geometry = ColorWheel::geometry(cx.style, rect);
         let reach = cx.style.grab;
-        let hue = finite(cx.value().copied().unwrap_or_else(blank).values[0]);
-        // The ring takes every press within its reach; the triangle takes the circle inside the ring's reach.
+        let corner_reach = cx.style.corner_reach.min((geometry.outer - geometry.inner) / 2.0).max(0.0);
+        // The ring takes every press within its reach; the triangle takes the circle inside the ring's reach and the
+        // triangle itself, whose corners reach into the ring's.
         cx.part(RING, HitShape::circle(geometry.center, geometry.outer + reach))
             .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
             .focusable()
             .focus_shape(FocusShape::Circle);
-        cx.part(TRIANGLE, HitShape::circle(geometry.center, (geometry.inner - reach).max(0.0)))
+        cx.part(TRIANGLE, HitShape::Polygon(geometry.triangle_reach((geometry.inner - reach).max(0.0), corner_reach)))
             .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
             .priority(HitPriority::new(HitLevel::Handle, 0))
             .focusable()
-            // The triangle turns with the hue, so its ring is rebuilt each pass.
-            .focus_shape(FocusShape::Polygon(geometry.corners(hue, 0.0).to_vec()));
+            .focus_shape(FocusShape::Polygon(geometry.corners(0.0).to_vec()));
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, ModelValues>> {
@@ -390,7 +451,7 @@ impl Component for ColorWheel<'_> {
         let geometry = ColorWheel::geometry(cx.style, cx.rect);
         let values = cx.value().copied().unwrap_or_else(blank);
         let [hue, saturation, brightness] = [0, 1, 2].map(|channel| finite(values.values[channel]));
-        let corners = geometry.corners(hue, 0.0);
+        let corners = geometry.corners(0.0);
         let painter = ui.content_painter(cx);
         painter.painter.add(ring_mesh(&geometry));
         painter.painter.add(triangle_mesh(corners, hue));
