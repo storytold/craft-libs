@@ -317,8 +317,9 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         self.scope
     }
 
-    fn focus(&self, _: &C) -> Option<crate::runtime::focus::FocusPolicy> {
-        (C::FOCUS_SCOPE != crate::runtime::focus::FocusPolicy::NONE).then_some(C::FOCUS_SCOPE)
+    fn focus(&self, comp: &C) -> Option<crate::runtime::focus::FocusPolicy> {
+        let scope = comp.focus_scope();
+        (scope != crate::runtime::focus::FocusPolicy::NONE).then_some(scope)
     }
 
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {

@@ -463,7 +463,12 @@ impl State {
                 None => return Vec::new(),
             },
         };
-        let found = self.find_stop(key).or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned());
+        // A request for a part lands on that part, never on another stop of its component: a part first declared in
+        // this pass registers its stop after `update` asks for it, and then takes the focus (the awaited stop below).
+        let found = self.find_stop(key).or_else(|| match key.1 {
+            Some(_) => None,
+            None => self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned(),
+        });
         match found {
             Some(rec) => self.focus_stop(rec),
             // An app's own widget, or a stop that registers later in this pass, which then takes the focus.
