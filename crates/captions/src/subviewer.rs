@@ -83,14 +83,7 @@ pub fn parse(text: &str) -> Result<Document> {
             if parse_timing(l).is_some() {
                 break;
             }
-            out.extend(split_br(l).into_iter().map(str::trim).filter(|p| !p.is_empty()).map(|p| {
-                let p = if p.contains('\u{ff0c}') && parse_timing(&p.replacen('\u{ff0c}', ",", 1)).is_some() {
-                    p.replacen('\u{ff0c}', ",", 1)
-                } else {
-                    p.to_string()
-                };
-                escape_markup(&p)
-            }));
+            out.extend(split_br(l).into_iter().map(str::trim).filter(|p| !p.is_empty()).map(escape_markup));
             i += 1;
         }
         if end <= start || out.is_empty() {
@@ -192,7 +185,14 @@ mod tests {
         assert!(written.contains("00:00:01.00，00:00:02.00"));
         let parsed = parse(&written).unwrap();
         assert_eq!(parsed.cues.len(), 2);
-        assert_eq!(parsed.cues[0].text, "00:00:01.00,00:00:02.00");
+        assert_eq!(parsed.cues[0].text, "00:00:01.00\u{ff0c}00:00:02.00");
         assert_eq!(parsed.cues[1].text, "Second cue");
+    }
+
+    #[test]
+    fn literal_fullwidth_comma_preserved_on_read() {
+        let raw = "[INFORMATION]\n[SUBTITLE]\n00:00:01.00,00:00:02.00\n00:00:01.00\u{ff0c}00:00:02.00\n\n";
+        let doc = parse(raw).unwrap();
+        assert_eq!(doc.cues[0].text, "00:00:01.00\u{ff0c}00:00:02.00");
     }
 }

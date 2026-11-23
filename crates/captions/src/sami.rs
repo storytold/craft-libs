@@ -224,11 +224,17 @@ pub fn write(doc: &Document) -> String {
             if lines.is_empty() { None } else { Some((c, lines)) }
         })
         .collect();
-    for (i, (c, lines)) in active_cues.iter().enumerate() {
-        let start_ms = tick_to_ms(c.start);
+    let mut resolved_cues: Vec<(i64, i64, &Vec<&str>)> = Vec::with_capacity(active_cues.len());
+    let mut prev_end = 0i64;
+    for (c, lines) in &active_cues {
+        let start_ms = tick_to_ms(c.start).max(prev_end);
         let end_ms = tick_to_ms(c.end).max(start_ms + 1);
+        prev_end = end_ms;
+        resolved_cues.push((start_ms, end_ms, lines));
+    }
+    for (i, &(start_ms, end_ms, lines)) in resolved_cues.iter().enumerate() {
         out.push_str(&format!("<SYNC Start={start_ms}><P Class=ENCC>{}\n", lines.join("<br>")));
-        let next_start = active_cues.get(i + 1).map(|(n, _)| tick_to_ms(n.start));
+        let next_start = resolved_cues.get(i + 1).map(|&(next_s, _, _)| next_s);
         if next_start != Some(end_ms) {
             out.push_str(&format!("<SYNC Start={end_ms}><P Class=ENCC>&nbsp;\n"));
         }
@@ -290,5 +296,28 @@ mod tests {
         assert_eq!(parsed.cues[0].start, ms_to_tick(100));
         assert_eq!(parsed.cues[0].end, ms_to_tick(101));
         assert_eq!(parsed.cues[1].start, ms_to_tick(500));
+    }
+
+    #[test]
+    fn adjacent_short_cues_do_not_collide_after_rounding() {
+        let t100 = ms_to_tick(100);
+        let t100_1 = Tick(t100.0 + crate::TICKS_PER_MS / 10);
+        let t200 = ms_to_tick(200);
+        let doc = Document {
+            cues: vec![
+                Cue { start: t100, end: t100_1, text: "First".into(), ..Default::default() },
+                Cue { start: t100_1, end: t200, text: "Second".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let encoded = write(&doc);
+        let back = parse(&encoded).unwrap();
+        assert_eq!(back.cues.len(), 2);
+        assert_eq!(back.cues[0].text, "First");
+        assert_eq!(tick_to_ms(back.cues[0].start), 100);
+        assert_eq!(tick_to_ms(back.cues[0].end), 101);
+        assert_eq!(back.cues[1].text, "Second");
+        assert_eq!(tick_to_ms(back.cues[1].start), 101);
+        assert_eq!(tick_to_ms(back.cues[1].end), 200);
     }
 }
