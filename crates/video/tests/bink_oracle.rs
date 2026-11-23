@@ -1,8 +1,8 @@
 //! Real Bink files against ffmpeg: every decoded frame matches ffmpeg's, sample for sample.
 //!
 //! No tool here can write a Bink file, and existing files are not ours to commit, so the test
-//! reads `*.bik` files from the directory named by `CRAFT_BINK_SAMPLES_DIR` (searched
-//! recursively) and is skipped when that is not set. `CRAFT_BINK_ORACLE_FRAMES` limits the
+//! reads `*.bik` files from the directory named by `CRAFT_BINK_SAMPLES` (searched
+//! recursively) and is skipped when that is not set. `CRAFT_BINK_FRAMES` limits the
 //! frames compared per file (default 100; 0 compares all of them).
 
 use std::io::Read;
@@ -25,11 +25,11 @@ fn samples(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
 
 #[test]
 fn real_files_decode_like_ffmpeg() {
-    let Some(dir) = std::env::var_os("CRAFT_BINK_SAMPLES_DIR").filter(|d| !d.is_empty()) else {
-        return craft_media_testkit::skip_test("bink oracle", "CRAFT_BINK_SAMPLES_DIR is not set");
+    let Some(dir) = std::env::var_os("CRAFT_BINK_SAMPLES").filter(|d| !d.is_empty()) else {
+        return craft_media_testkit::skip_test("bink oracle", "CRAFT_BINK_SAMPLES is not set");
     };
     let Some(ffmpeg) = craft_media_testkit::ffmpeg() else { return };
-    let limit = std::env::var("CRAFT_BINK_ORACLE_FRAMES").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(100);
+    let limit = std::env::var("CRAFT_BINK_FRAMES").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(100);
     let mut files = Vec::new();
     samples(Path::new(&dir), &mut files, 0);
     files.sort();

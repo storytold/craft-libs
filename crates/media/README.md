@@ -490,7 +490,7 @@ is refused), and a frame table bounded by the index entries the file could hold.
 
 Tests: hand-built files, truncation, invalid headers and random damage (never a panic).
 `tests/oracle_bink.rs` compares the stream, size and key flag of every packet with ffprobe's for the `.bik` files
-under `CRAFT_BINK_SAMPLES_DIR`, and is skipped when that is not set: no tool here writes Bink
+under `CRAFT_BINK_SAMPLES`, and is skipped when that is not set: no tool here writes Bink
 files, and existing ones are not ours to commit.
 
 ## `avi`

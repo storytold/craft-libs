@@ -232,6 +232,6 @@ Not verified: everything about revisions other than `f` and `i`, for which there
   checked against values observed from ffmpeg for the same constructions, and hostile input
   (never a panic).
 - `tests/bink_oracle.rs` compares every decoded frame with ffmpeg for the `.bik` files under
-  `CRAFT_BINK_SAMPLES_DIR` (`CRAFT_BINK_ORACLE_FRAMES` limits the frames per file). It is skipped
+  `CRAFT_BINK_SAMPLES` (`CRAFT_BINK_FRAMES` limits the frames per file). It is skipped
   when the variable is not set: no tool here writes Bink files, and existing ones are not ours
   to commit.

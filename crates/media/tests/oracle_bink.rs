@@ -2,7 +2,7 @@
 //! each packet match the packets ffprobe reads. Packet contents are not compared.
 //!
 //! No tool here can write a Bink file, and existing files are not ours to commit, so the test
-//! reads `*.bik` files from the directory named by `CRAFT_BINK_SAMPLES_DIR` (searched
+//! reads `*.bik` files from the directory named by `CRAFT_BINK_SAMPLES` (searched
 //! recursively) and is skipped when that is not set.
 
 use std::path::{Path, PathBuf};
@@ -37,8 +37,8 @@ fn ffprobe_packets(ffprobe: &Path, path: &Path) -> Vec<(usize, usize, bool)> {
 
 #[test]
 fn real_files_match_ffprobe() {
-    let Some(dir) = std::env::var_os("CRAFT_BINK_SAMPLES_DIR").filter(|d| !d.is_empty()) else {
-        return craft_media_testkit::skip_test("bink oracle", "CRAFT_BINK_SAMPLES_DIR is not set");
+    let Some(dir) = std::env::var_os("CRAFT_BINK_SAMPLES").filter(|d| !d.is_empty()) else {
+        return craft_media_testkit::skip_test("bink oracle", "CRAFT_BINK_SAMPLES is not set");
     };
     let Some(ffprobe) = craft_media_testkit::ffprobe() else { return };
     let mut files = Vec::new();
