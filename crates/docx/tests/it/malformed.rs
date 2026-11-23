@@ -179,8 +179,13 @@ fn many_fields_and_huge_attribute_values() {
 /// limit error, or the extras are dropped and the text survives (#3702, WC-06).
 #[test]
 fn millions_of_attributes_on_one_paragraph_are_capped() {
-    let attrs: String = (0..2_000_000).map(|i| format!(" a{i}=\"\"")).collect();
-    let x = format!("<w:document {W_NS}><w:body><w:p{attrs}><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
+    use std::fmt::Write as _;
+
+    let mut x = format!("<w:document {W_NS}><w:body><w:p");
+    for i in 0..2_000_000 {
+        write!(&mut x, " a{i}=\"\"").unwrap();
+    }
+    x.push_str("><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
     // Only the read is timed: deflating the test input in a debug build is not what is bounded.
     let z = doc_zip(x.as_bytes());
     let start = std::time::Instant::now();
