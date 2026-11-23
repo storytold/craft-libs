@@ -393,7 +393,8 @@ const MAX_COMMENT_EXTENSIONS: usize = 16 << 20;
 const MCE: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 /// `ext`, a descendant of `parents` (outermost first), as markup that stands on its own: it
-/// gets the parents' namespace declarations for the prefixes it uses, and the prefixes they mark
+/// gets the parents' namespace declarations for the prefixes it uses (Markup Compatibility's
+/// attributes included, [`compatibility_prefixes`]), and the prefixes they mark
 /// ignorable (`mc:Ignorable`) join its own. `None` when it uses a prefix nothing declares, which
 /// a save could only write as markup no reader accepts.
 fn standalone(ext: &craft_xml::El, parents: &[&craft_xml::El]) -> Option<String> {
@@ -451,26 +452,60 @@ fn declare<'a>(scope: &mut Vec<(&'a str, &'a str)>, e: &'a craft_xml::El) {
     }
 }
 
+/// Markup Compatibility's attributes whose values list prefixes.
+const MC_PREFIX_LISTS: [&str; 2] = ["Ignorable", "MustUnderstand"];
+
+/// Markup Compatibility's attributes whose values list qualified names (`p:name` or `p:*`).
+const MC_NAME_LISTS: [&str; 3] = ["ProcessContent", "PreserveElements", "PreserveAttributes"];
+
+/// Does the prefix `p` name Markup Compatibility, by the declarations in `scope`?
+fn is_mce(p: &str, scope: &[(&str, &str)]) -> bool {
+    scope.iter().rev().find(|(sp, _)| *sp == p).is_some_and(|(_, u)| *u == MCE)
+}
+
 /// Is the attribute named `k` Markup Compatibility's `Ignorable`, by the prefixes in `scope`?
 fn is_ignorable(k: &str, scope: &[(&str, &str)]) -> bool {
-    k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && scope.iter().rev().find(|(sp, _)| *sp == p).is_some_and(|(_, u)| *u == MCE))
+    k.split_once(':').is_some_and(|(p, local)| local == "Ignorable" && is_mce(p, scope))
+}
+
+/// The prefixes `e`'s Markup Compatibility attributes name, by the declarations in `scope`:
+/// those `Ignorable` and `MustUnderstand` list, those of the names `ProcessContent`,
+/// `PreserveElements` and `PreserveAttributes` list, and those an `mc:Choice`'s `Requires` lists.
+/// A reader resolves each against the declarations in scope, so each must stay declared.
+fn compatibility_prefixes<'a>(e: &'a craft_xml::El, scope: &[(&str, &str)]) -> Vec<&'a str> {
+    let (p, local) = e.name.split_once(':').unwrap_or(("", e.name.as_str()));
+    let choice = local == "Choice" && is_mce(p, scope);
+    let mut out = Vec::new();
+    for (k, v) in &e.attrs {
+        let tokens = v.split_whitespace();
+        match k.split_once(':') {
+            Some((p, local)) if MC_PREFIX_LISTS.contains(&local) && is_mce(p, scope) => out.extend(tokens),
+            Some((p, local)) if MC_NAME_LISTS.contains(&local) && is_mce(p, scope) => {
+                out.extend(tokens.map(|t| t.split_once(':').map_or("", |(p, _)| p)));
+            }
+            None if choice && k == "Requires" => out.extend(tokens),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Whether every prefix `e` and its descendants use is declared, in the subtree (`path`, the
 /// declarations on the way down) or in `outer`; the ones only `outer` declares are added to
-/// `needed`. The prefixes an `mc:Ignorable` lists count as used. An unprefixed element is in the
-/// default namespace, if one is declared.
+/// `needed`. The prefixes Markup Compatibility's attributes name count as used
+/// ([`compatibility_prefixes`]). An unprefixed element is in the default namespace, if one is
+/// declared.
 fn uses<'a>(e: &'a craft_xml::El, outer: &[(&'a str, &'a str)], path: &mut Vec<(&'a str, &'a str)>, needed: &mut Vec<&'a str>) -> bool {
     let mark = path.len();
     path.extend(e.ns_decls());
     let attrs = e.attrs.iter().map(|(k, _)| k.as_str()).filter(|k| *k != "xmlns" && !k.starts_with("xmlns:"));
     let mut prefixes: Vec<&str> =
         [e.name.split_once(':').map_or("", |(p, _)| p)].into_iter().chain(attrs.filter_map(|k| k.split_once(':').map(|(p, _)| p))).collect();
-    if e.attrs.iter().any(|(k, _)| k.ends_with(":Ignorable")) {
+    // Only an element that may carry them pays for building the scope.
+    let mc_attr = |k: &str| k.split_once(':').is_some_and(|(_, l)| MC_PREFIX_LISTS.contains(&l) || MC_NAME_LISTS.contains(&l));
+    if e.local() == "Choice" || e.attrs.iter().any(|(k, _)| mc_attr(k)) {
         let scope: Vec<(&str, &str)> = outer.iter().chain(path.iter()).copied().collect();
-        if let Some((_, v)) = e.attrs.iter().find(|(k, _)| is_ignorable(k, &scope)) {
-            prefixes.extend(v.split_whitespace());
-        }
+        prefixes.extend(compatibility_prefixes(e, &scope));
     }
     let mut ok = true;
     for p in prefixes {

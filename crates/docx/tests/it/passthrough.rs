@@ -338,6 +338,53 @@ fn kept_extensions_carry_the_namespaces_their_own_ignorable_lists() {
     assert!(written.contains(r#"xmlns:zz="urn:zz""#), "{written}");
 }
 
+/// The namespace `prefix` names on the first element called `name` in `root`, by the
+/// declarations on the way down.
+fn binding_at(root: &craft_xml::El, name: &str, prefix: &str) -> Option<String> {
+    fn find(e: &craft_xml::El, name: &str, prefix: &str, scope: &mut Vec<(String, String)>) -> Option<Option<String>> {
+        let mark = scope.len();
+        scope.extend(e.ns_decls().map(|(p, u)| (p.to_string(), u.to_string())));
+        let found = if e.name == name {
+            Some(scope.iter().rev().find(|(p, _)| p == prefix).map(|(_, u)| u.clone()))
+        } else {
+            e.elements().find_map(|k| find(k, name, prefix, scope))
+        };
+        scope.truncate(mark);
+        found
+    }
+    find(root, name, prefix, &mut Vec::new()).flatten()
+}
+
+/// A prefix kept markup names only in a Markup Compatibility attribute (`mc:Choice/@Requires`,
+/// `mc:MustUnderstand`, `mc:ProcessContent`, `mc:PreserveElements`, `mc:PreserveAttributes`),
+/// declared outside it, still names the same namespace where it's used after a save and a
+/// second round trip. A prefix nothing declares isn't kept.
+#[test]
+fn kept_extensions_carry_the_namespaces_their_compatibility_attributes_name() {
+    let cases = [
+        ("mc:Choice", r#"<mc:AlternateContent><mc:Choice Requires="q"><r:reactions/></mc:Choice><mc:Fallback/></mc:AlternateContent>"#),
+        ("r:reactions", r#"<r:reactions mc:MustUnderstand="q"/>"#),
+        ("r:reactions", r#"<r:reactions mc:ProcessContent="q:box"/>"#),
+        ("r:reactions", r#"<r:reactions mc:PreserveElements="q:*"/>"#),
+        ("r:reactions", r#"<r:reactions mc:PreserveAttributes="q:note"/>"#),
+    ];
+    let cex = |declare: &str, ext: &str| {
+        format!(
+            r#"<x:commentsExtensible xmlns:x="http://schemas.microsoft.com/office/word/2018/wordml/cex" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:r="{CR}"{declare}><x:commentExtensible x:durableId="5A1B2C3D" x:dateUtc="2026-01-02T09:00:00Z"><x:extLst>{ext}</x:extLst></x:commentExtensible></x:commentsExtensible>"#
+        )
+    };
+    for (name, ext) in cases {
+        let doc = comments_with_cex(&cex(r#" xmlns:q="urn:q""#, ext));
+        for files in [save(&doc), save(&craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap())] {
+            let written = text(&files, "word/commentsExtensible.xml");
+            let root = craft_xml::Options::default().strict().parse(written.as_bytes()).unwrap();
+            assert_eq!(binding_at(&root, name, "q").as_deref(), Some("urn:q"), "{ext}: {written}");
+        }
+        let c = comments_with_cex(&cex("", ext)).comments.values().next().cloned().unwrap();
+        assert!(c.extensions.is_none() && c.date_utc.is_some(), "{ext}: {c:?}");
+    }
+}
+
 /// Leaving the dates out keeps a namespace whose prefix happens to be `dateUtc`, so what uses it
 /// still opens.
 #[test]
