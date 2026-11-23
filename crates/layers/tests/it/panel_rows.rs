@@ -495,7 +495,8 @@ fn a_linked_smart_object_shows_a_chain_link_badge_red_while_its_file_is_missing(
         let shapes = fixture.frame_shapes();
         let badge = |info: &LayerInfo| {
             let row = node(&fixture, &info.name);
-            let thumb = testing::thumb_rect(fixture.ctx(), row.node.into(), info, LayerPart::Pixels).expect("the layer's thumbnail");
+            // The picture, and the badge on it, fill the thumbnail inside its 1-point frame.
+            let thumb = testing::thumb_rect(fixture.ctx(), row.node.into(), info, LayerPart::Pixels).expect("the layer's thumbnail").shrink(1.0);
             let description = fixture.tree().description_of(row.node).unwrap_or_default().to_owned();
             let icons = badge_icons(&shapes, thumb);
             assert_eq!(icons.len(), 1, "{size:?} {}: one badge glyph in the corner: {icons:?}", info.name);
