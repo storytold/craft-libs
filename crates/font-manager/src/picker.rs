@@ -449,6 +449,8 @@ struct Typing {
     lead: Option<String>,
     /// The lead's family was proposed by the pointer, so it ends when the pointer leaves the rows.
     lead_by_pointer: bool,
+    /// The pointer was over the open list's rows in the last pass.
+    over_rows: bool,
     hide_classes: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
@@ -735,8 +737,13 @@ impl Component for FontPicker<'_> {
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
         let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
         if before != draft {
+            // A press on a row can take the focus from the text, which ends the draft: the list stays, filtered by
+            // the draft, until the release picks the row.
+            let pressing_rows =
+                cx.memory::<Typing>().over_rows && cx.response.ctx.input(|input| input.pointer.any_down() || input.pointer.any_released());
             match &draft {
                 Some(_) => list.open(cx),
+                None if pressing_rows && list.is_open(cx) => cx.memory::<Typing>().draft = before,
                 None => list.close(cx),
             }
         }

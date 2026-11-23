@@ -678,6 +678,22 @@ fn a_class_narrows_the_list_and_all_classes_restores_it() {
     assert!(fx.by_label("Favorite Inter").is_some(), "every family is back");
 }
 
+#[trial]
+fn a_click_on_a_rows_sample_picks_its_family() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR]), vec![]);
+    open(&mut fx);
+    let inter = fx.by_label("Inter").expect("the Inter row");
+    let sample = fx
+        .texts()
+        .iter()
+        .find(|painted| painted.text == "Sample" && inter.rect.contains(painted.rect.center()))
+        .map(|painted| painted.rect.center())
+        .expect("Inter's row shows its sample");
+    fx.click_at(sample);
+    fx.settle();
+    assert_eq!(seen.borrow().picks, [("Inter".to_owned(), None)], "the click picks the row");
+}
+
 /// The open list loads its rows' faces through the host's jobs, never in a pass, and a list opened again over the
 /// same rows loads none of them again.
 #[trial]
