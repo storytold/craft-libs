@@ -1,5 +1,7 @@
 //! The reader on small packages written by hand.
 
+mod common;
+
 use craft_opc::{PackageOut, RelsOut};
 use craft_pptx::{Defaults, Geom, LayoutType, Master, PhType, Plain, Presentation, ShapeKind, Size};
 
@@ -103,6 +105,40 @@ fn shape<'a>(p: &'a Presentation, name: &str) -> &'a craft_pptx::Shape {
         }
     });
     found.unwrap_or_else(|| panic!("no shape {name}"))
+}
+
+#[test]
+fn direct_nested_compatibility_choice_imports_selected_shape() {
+    let before = sp(20, "Before choice", "", XFRM, "Before");
+    let outer_rejected = sp(21, "Outer rejected", "", XFRM, "Outer");
+    let selected = sp(22, "Nested selected", "", XFRM, "Selected");
+    let inner_rejected = sp(23, "Inner rejected", "", XFRM, "Inner");
+    let after = sp(24, "After choice", "", XFRM, "After");
+    let nested = format!(
+        r#"{before}<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:future="urn:example:future">
+            <mc:Choice Requires="future">{outer_rejected}</mc:Choice>
+            <mc:Fallback><mc:AlternateContent xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">
+                <mc:Choice Requires="p14">{selected}</mc:Choice>
+                <mc:Fallback>{inner_rejected}</mc:Fallback>
+            </mc:AlternateContent></mc:Fallback>
+        </mc:AlternateContent>{after}</p:spTree>"#
+    );
+    let bytes = common::rewrite(
+        &deck(),
+        |part, data| {
+            if part == "ppt/slides/slide1.xml" {
+                Some(std::str::from_utf8(data).unwrap().replace("</p:spTree>", &nested).into_bytes())
+            } else {
+                Some(data.to_vec())
+            }
+        },
+        &[],
+    );
+    let p = craft_pptx::import(&bytes, &Plain).unwrap();
+    let names: Vec<_> = p.slides[0].shapes.iter().map(|shape| shape.name.as_str()).collect();
+    assert!(names.ends_with(&["Before choice", "Nested selected", "After choice"]), "{names:?}");
+    assert_eq!(names.iter().filter(|&&name| name == "Nested selected").count(), 1);
+    assert!(!names.contains(&"Outer rejected") && !names.contains(&"Inner rejected"));
 }
 
 #[test]
@@ -217,23 +253,52 @@ fn other_files_are_refused() {
     assert!(craft_pptx::import_theme(&doc).is_err());
 }
 
-/// Groups nested past 32 levels are cut there; the rest of the slide is read.
-#[test]
-fn deep_group_nesting_is_cut() {
+/// A slide whose group tree is 40 levels deep, with a shape after it.
+fn deep_group_deck() -> Vec<u8> {
     let open = r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="0" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"#;
     let tree = format!("{}{}{}", open.repeat(40), sp(4, "Deep", "", XFRM, "x"), "</p:grpSp>".repeat(40));
     let pres = format!(r#"<p:presentation {NS}><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>"#);
     let slide = format!(r#"<p:sld {NS}><p:cSld><p:spTree>{tree}{}</p:spTree></p:cSld></p:sld>"#, sp(5, "Top", "", XFRM, "y"));
-    let bytes = package(
+    package(
         &[
             ("ppt/presentation.xml", CT_PRES, pres),
             ("ppt/slides/slide1.xml", "application/vnd.openxmlformats-officedocument.presentationml.slide+xml", slide),
         ],
         &[("", &[("officeDocument", "ppt/presentation.xml")]), ("ppt/presentation.xml", &[("slide", "slides/slide1.xml")])],
-    );
+    )
+}
+
+/// Groups nested past 32 levels are cut there; the rest of the slide is read.
+#[test]
+fn deep_group_nesting_is_cut() {
+    let bytes = deep_group_deck();
     let p = craft_pptx::import(&bytes, &Plain).unwrap();
     let mut depth = 0;
     craft_pptx::walk(&p.slides[0].shapes, &mut |_, d| depth = depth.max(d));
     assert_eq!(depth, 32, "33 levels of groups, the last one empty");
     assert!(p.slides[0].shapes.iter().any(|s| s.name == "Top"));
+}
+
+/// The group reader recurses once per nesting level and keeps a `Shape` per level on the stack, so
+/// anything that makes `Shape` (or `TextBody`/`ListStyle` inside it) bigger shows up here first.
+/// A debug build is the worst case, so import the deepest accepted tree on a stack that is small
+/// but ample for the current size: measured in a Linux debug build, this import needs about
+/// 1.3 MiB, and about 2 MiB when `ListStyle` holds its `defPPr` level inline. Fails with a stack
+/// overflow (the process aborts) when a type on the recursive path grows by value. Linux only:
+/// frame sizes differ per platform, and the Windows CI runs `deep_group_nesting_is_cut` on the
+/// default stack, where that growth first showed up.
+#[test]
+#[cfg(target_os = "linux")]
+fn deep_group_import_fits_a_small_stack() {
+    const STACK: usize = 1664 * 1024;
+    std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(|| {
+            let bytes = deep_group_deck();
+            let p = craft_pptx::import(&bytes, &Plain).unwrap();
+            assert!(p.slides[0].shapes.iter().any(|s| s.name == "Top"));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

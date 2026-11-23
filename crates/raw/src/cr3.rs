@@ -19,14 +19,13 @@
 //! Unknown camera metadata versions are ignored rather than assigned a guessed white balance.
 
 use crate::crx;
-use crate::shared::{black_from_columns, white_from_data};
+use crate::shared::{aspect_crop, black_from_columns, white_from_data};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_metadata::cr3::{Cr3ImageArea, Cr3Track, Cr3TrackKind, parse_cr3};
 use craft_tiff::{Ifd, Tiff};
 
 const SENSOR_INFO: u16 = 0x00e0;
 const COLOR_DATA: u16 = 0x4001;
-const ASPECT_INFO: u16 = 0x009a;
 
 /// Pick the first largest raw track. Equal-sized later tracks can be the Dual Pixel delta, which
 /// must never replace the main sensor image. An invalid full-size descriptor is reported, not
@@ -93,18 +92,6 @@ fn sensor_crop(maker: Option<&Ifd>, width: usize, height: usize) -> Option<Rect>
     )
 }
 
-/// The shot's aspect-ratio rectangle from `AspectInfo`, placed inside `image` (the recommended crop). `None`
-/// when the tag is absent or malformed, or its rectangle doesn't fit inside `image`.
-fn aspect_crop(maker: Option<&Ifd>, image: Rect) -> Option<Rect> {
-    let data = maker?.u64s(ASPECT_INFO)?;
-    let [width, height, left, top] = [1usize, 2, 3, 4].map(|i| data.get(i).and_then(|&v| usize::try_from(v).ok()));
-    let (width, height, left, top) = (width?, height?, left?, top?);
-    if width < 2 || height < 2 || left.checked_add(width)? > image.width || top.checked_add(height)? > image.height {
-        return None;
-    }
-    Some(Rect::new(image.x.checked_add(left)?, image.y.checked_add(top)?, width, height))
-}
-
 fn geometry(area: Option<&Cr3ImageArea>, maker: Option<&Ifd>, width: usize, height: usize) -> (Rect, Rect) {
     let area = area.filter(|a| usize::from(a.width) == width && usize::from(a.height) == height);
     let sensor = sensor_crop(maker, width, height);
@@ -131,6 +118,23 @@ struct CameraLevels {
     wb: Option<[f32; 3]>,
     black: Option<[f32; 4]>,
     white: Option<f32>,
+}
+
+/// The Kelvin scale of a body without colour matrices, from the presets in `ColorData` (see [`crate::cr2`] for the
+/// record layout): Daylight, Shade, Cloudy, Tungsten and Flash at their stated temperatures. Word positions from
+/// `exiftool -v3` run as a black-box tool on files of each version: versions 16-19 Daylight at word 136, 32 and 33 at
+/// 150, 34 and 48 at 205 (each with Flash thirty words after Daylight), 64 to 66 at 110 with Flash twenty-five
+/// after (no Auto / Measured / Kelvin records in these). Other versions give none.
+fn kelvin_presets(maker: Option<&Ifd>) -> Option<crate::kelvin::KelvinPresets> {
+    let v = maker?.u64s(COLOR_DATA)?;
+    let rows = match v.first().copied()? {
+        16..=19 => crate::cr2::preset_records(136, 166),
+        32 | 33 => crate::cr2::preset_records(150, 180),
+        34 | 48 => crate::cr2::preset_records(205, 235),
+        64..=66 => crate::cr2::preset_records(110, 135),
+        _ => return None,
+    };
+    crate::cr2::presets_at(&v, &rows)
 }
 
 /// Canon's versioned word arrays. Offsets are word indices from the published tag tables, not
@@ -182,6 +186,13 @@ fn black_at_active(levels: [f32; 4], pattern: u8, active: Rect) -> BlackLevel {
         })
         .collect();
     BlackLevel { repeat_rows: 2, repeat_cols: 2, values, delta_h: vec![], delta_v: vec![] }
+}
+
+/// Orientation metadata usable for embedded-preview fallback even when the raw track is unsupported.
+pub(crate) fn orientation(bytes: &[u8]) -> Option<u16> {
+    let container = parse_cr3(bytes)?;
+    let cmt1 = container.cmt.first().and_then(|b| *b).and_then(|b| Tiff::parse(b).ok())?;
+    Some(cmt1.ifds.first()?.u16(craft_tiff::tags::ORIENTATION).unwrap_or(1))
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
@@ -259,14 +270,16 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.and_then(|i| i.u16(craft_tiff::tags::ORIENTATION)).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: kelvin_presets(color_maker), ..Default::default() },
         wb_multipliers: levels.wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: ifd0.map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        notices: Default::default(),
         level_sources: Default::default(),
     };
     // Canon's stated white level can sit below the sensor's true saturation (EOS RP: 14558
@@ -376,7 +389,41 @@ fn extend_white(image: &mut RawImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::ASPECT_INFO;
     use craft_tiff::{IfdBuilder, Value};
+
+    /// The presets of each verified `ColorData` version read back at their stated temperatures; other versions, short
+    /// arrays and records that don't make a curve give none.
+    #[test]
+    fn color_data_presets_by_version() {
+        let records = [(2013u16, 1479u16, 5200u16), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, 6156)];
+        for (version, daylight, flash) in
+            [(16, 136, 166), (19, 136, 166), (32, 150, 180), (33, 150, 180), (34, 205, 235), (48, 205, 235), (64, 110, 135), (66, 110, 135)]
+        {
+            let mut words = vec![0u16; 300];
+            words[0] = version;
+            for (i, (r, b, k)) in records.into_iter().enumerate() {
+                let at = if i == 4 { flash } else { daylight + 5 * i };
+                words[at..at + 5].copy_from_slice(&[r, 1024, 1024, b, k]);
+            }
+            let ifd = |w: Vec<u16>| {
+                let b = IfdBuilder::new().with(COLOR_DATA, Value::Short(w));
+                let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[b]).unwrap();
+                Tiff::parse(&bytes).unwrap().ifds.remove(0)
+            };
+            let p = kelvin_presets(Some(&ifd(words.clone()))).unwrap_or_else(|| panic!("{version}"));
+            let pts = p.points();
+            assert!(
+                pts.iter().any(|&(k, m)| k == 7000.0 && (m[0] - 2300.0 / 1024.0).abs() < 1e-6 && (m[2] - 1280.0 / 1024.0).abs() < 1e-6),
+                "{version}: {pts:?}"
+            );
+            assert_eq!(pts.len(), 5, "{version}");
+            assert!(kelvin_presets(Some(&ifd(words[..flash].to_vec()))).is_none(), "{version}: short");
+            words[0] = 255;
+            assert!(kelvin_presets(Some(&ifd(words))).is_none(), "{version}: unknown");
+        }
+        assert!(kelvin_presets(None).is_none());
+    }
 
     fn maker(version: u16, wb_at: usize, black_at: usize, white_at: usize) -> Ifd {
         let mut words = vec![0u16; white_at + 1];
@@ -397,6 +444,15 @@ mod tests {
     }
 
     fn track(entry: &[u8], offset: u64, size: u32) -> Vec<u8> {
+        let mapping = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+        track_with_mapping(entry, offset, size, &mapping)
+    }
+
+    fn track_with_mapping(entry: &[u8], offset: u64, size: u32, mapping: &[u8]) -> Vec<u8> {
+        track_with_table(entry, offset, size, b"stsc", mapping)
+    }
+
+    fn track_with_table(entry: &[u8], offset: u64, size: u32, table: &[u8; 4], payload: &[u8]) -> Vec<u8> {
         let mut stsd = vec![0u8; 4];
         stsd.extend(1u32.to_be_bytes());
         stsd.extend(entry);
@@ -406,7 +462,15 @@ mod tests {
         let mut co64 = vec![0u8; 4];
         co64.extend(1u32.to_be_bytes());
         co64.extend(offset.to_be_bytes());
-        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+        let mapping = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+        let offsets = if table == b"stco" { box_bytes(b"stco", payload) } else { box_bytes(b"co64", if table == b"co64" { payload } else { &co64 }) };
+        let tables = [
+            box_bytes(b"stsd", &stsd),
+            box_bytes(b"stsc", if table == b"stsc" { payload } else { &mapping }),
+            box_bytes(b"stsz", if table == b"stsz" { payload } else { &stsz }),
+            offsets,
+        ]
+        .concat();
         box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))))
     }
 
@@ -629,6 +693,105 @@ mod tests {
         assert!(matches!(decode(&missing, Mode::Header, &Limits::default()), Err(RawError::Corrupt(_))));
     }
 
+    /// Independently framed constant-value CRX: each 4x4 tile has four 2x2
+    /// planes whose one-byte 0x1e entropy streams reconstruct sensor value8193.
+    fn flat_raw_track(tiles: u32) -> (Vec<u8>, Vec<u8>) {
+        let mut sample = Vec::new();
+        let marker = |out: &mut Vec<u8>, code: u16, size: u32, flags: u32| {
+            out.extend(code.to_be_bytes());
+            out.extend(8u16.to_be_bytes());
+            out.extend(size.to_be_bytes());
+            out.extend(flags.to_be_bytes());
+        };
+        for tile in 0..tiles {
+            marker(&mut sample, 0xff01, 4, tile << 16);
+            for plane in 0..4 {
+                marker(&mut sample, 0xff02, 1, (plane << 28) | 0x0800_0000);
+                marker(&mut sample, 0xff03, 1, 0x0020_0000);
+            }
+        }
+        let header_size = sample.len() as u32;
+        sample.extend(std::iter::repeat_n(0x1e, tiles as usize * 4));
+        let mut coding = vec![0u8; 52];
+        coding[..2].copy_from_slice(&0xff00u16.to_be_bytes());
+        coding[2..4].copy_from_slice(&48u16.to_be_bytes());
+        coding[4..6].copy_from_slice(&0x100u16.to_be_bytes());
+        for (offset, value) in [(8, tiles * 4), (12, 4), (16, 4), (20, 4), (28, header_size)] {
+            coding[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        coding[24] = 14;
+        coding[25] = 0x40;
+        let mut entry = vec![0u8; 82];
+        entry[24..26].copy_from_slice(&((tiles * 4) as u16).to_be_bytes());
+        entry[26..28].copy_from_slice(&4u16.to_be_bytes());
+        entry.extend(box_bytes(b"CMP1", &coding));
+        (box_bytes(b"CRAW", &entry), sample)
+    }
+
+    #[test]
+    fn truncated_main_sample_mapping_cannot_silently_select_a_valid_reduced_raw() {
+        let mapping = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+        let (reduced_entry, reduced_sample) = flat_raw_track(1);
+        let (main_entry, main_sample) = flat_raw_track(2);
+        let main_offset = 4096 + reduced_sample.len();
+        let file = |main_table: Option<(&[u8; 4], &[u8])>, main_first: bool| {
+            let reduced = track_with_mapping(&reduced_entry, 4096, reduced_sample.len() as u32, &mapping);
+            let tracks = if let Some((table, payload)) = main_table {
+                let main = track_with_table(&main_entry, main_offset as u64, main_sample.len() as u32, table, payload);
+                if main_first { [main, reduced].concat() } else { [reduced, main].concat() }
+            } else {
+                reduced
+            };
+            let mut bytes = box_bytes(b"ftyp", b"crx \0\0\0\x01crx isom");
+            bytes.extend(box_bytes(b"moov", &tracks));
+            assert!(bytes.len() < 4096);
+            bytes.resize(4096, 0);
+            bytes.extend_from_slice(&reduced_sample);
+            bytes.extend_from_slice(&main_sample);
+            bytes
+        };
+        let mut co64 = vec![0u8; 4];
+        co64.extend(1u32.to_be_bytes());
+        co64.extend((main_offset as u64).to_be_bytes());
+        let valid_tables = [
+            (b"stsc", mapping.clone()),
+            (b"stsz", [0u32, main_sample.len() as u32, 1].into_iter().flat_map(u32::to_be_bytes).collect()),
+            (b"co64", co64),
+            (b"stco", [0u32, 1, main_offset as u32].into_iter().flat_map(u32::to_be_bytes).collect()),
+        ];
+        for mode in [Mode::Header, Mode::Full] {
+            // The smaller source is genuinely decodable, so dropping the larger
+            // track would return success rather than merely a different failure.
+            let reduced = decode(&file(None, false), mode, &Limits::default()).unwrap();
+            assert_eq!((reduced.width, reduced.height), (4, 4));
+            if mode == Mode::Full {
+                assert_eq!(reduced.data, RawData::U16(vec![8193; 16]));
+            }
+            for main_first in [false, true] {
+                for (table, payload) in &valid_tables {
+                    let valid = decode(&file(Some((table, payload)), main_first), mode, &Limits::default()).unwrap();
+                    assert_eq!((valid.width, valid.height), (8, 4));
+                    if mode == Mode::Full {
+                        assert_eq!(valid.data, RawData::U16(vec![8193; 32]));
+                    }
+                    for truncated in [vec![], vec![0; 4], vec![0, 0, 0, 0, 0, 0, 0, 1]] {
+                        let bytes = file(Some((table, &truncated)), main_first);
+                        let container = parse_cr3(&bytes).unwrap();
+                        assert_eq!(container.tracks.len(), 2, "mapping damage cannot erase the main track");
+                        let selected = main_track(&container.tracks).unwrap();
+                        assert!(matches!(selected.kind, Cr3TrackKind::Raw { width: 8, height: 4, .. }));
+                        assert!(selected.data.is_none());
+                        assert!(selected.compression(&bytes).is_some());
+                        assert!(
+                            matches!(decode(&bytes, mode, &Limits::default()), Err(RawError::Corrupt(message)) if message.contains("sample")),
+                            "{mode:?}/{table:?}: main mapping damage cannot decode the reduced source"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn color_data_uses_versioned_as_shot_offsets() {
         for (version, wb_at, black_at, white_at) in
@@ -700,11 +863,13 @@ mod tests {
             color: ColorData::default(),
             wb_multipliers: None,
             linearized: false,
+            linearization_table: None,
             pixel_aspect: 1.0,
             opcodes: OpcodeLists::default(),
             camera: Camera::default(),
             cinema: Default::default(),
             lens_metadata: Default::default(),
+            notices: Default::default(),
             level_sources: Default::default(),
         }
     }

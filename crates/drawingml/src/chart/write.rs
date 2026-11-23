@@ -101,6 +101,38 @@ fn tx_pr(w: &mut Writer, c: &Chart) {
     w.close();
 }
 
+/// `c:legendEntry` with the entry's own text size, weight and colour.
+fn legend_entry(w: &mut Writer, e: &crate::chart::LegendEntry) {
+    w.open("c:legendEntry", &[]);
+    w.tag("c:idx").attr("val", e.idx).empty();
+    w.open("c:txPr", &[]);
+    w.empty("a:bodyPr", &[]);
+    w.empty("a:lstStyle", &[]);
+    w.open("a:p", &[]);
+    w.open("a:pPr", &[]);
+    let mut run = w.tag("a:defRPr");
+    if let Some(sz) = e.size.filter(|v| v.is_finite() && *v > 0.0) {
+        // 1 to 400 pt, as the reader takes it, so a size reads back as written.
+        run = run.attr("sz", (sz * 100.0).round().clamp(100.0, 40_000.0) as u32);
+    }
+    if let Some(b) = e.bold {
+        run = run.attr("b", u8::from(b));
+    }
+    match &e.color {
+        Some(c) => {
+            run.open();
+            dml::solid(w, c);
+            w.close();
+        }
+        None => run.empty(),
+    }
+    w.close();
+    w.tag("a:endParaRPr").attr("lang", "en-US").empty();
+    w.close();
+    w.close();
+    w.close();
+}
+
 fn rich(w: &mut Writer, text: &str, color: Option<&crate::style::ColorRef>) {
     w.open("c:tx", &[]);
     w.open("c:rich", &[]);
@@ -163,11 +195,16 @@ fn str_cache(w: &mut Writer, f: &str, vals: &[String]) {
 }
 
 fn num_cache(w: &mut Writer, f: &str, vals: &[Option<f64>]) {
+    num_cache_fmt(w, f, vals, "General");
+}
+
+/// [`num_cache`] with the cells' number format (the date format of date categories).
+fn num_cache_fmt(w: &mut Writer, f: &str, vals: &[Option<f64>], format_code: &str) {
     let vals = capped(vals);
     w.open("c:numRef", &[]);
     w.leaf("c:f", &[], f);
     w.open("c:numCache", &[]);
-    w.leaf("c:formatCode", &[], "General");
+    w.leaf("c:formatCode", &[], format_code);
     w.tag("c:ptCount").attr("val", vals.len()).empty();
     for (i, v) in vals.iter().enumerate() {
         if let Some(v) = v.filter(|v| v.is_finite()) {
@@ -336,7 +373,7 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
     if matches!(g, Group::Scatter | Group::Bubble) {
         let xs: Vec<Option<f64>> = if s.x_values.is_empty() { (1..=s.values.len()).map(|v| Some(v as f64)).collect() } else { s.x_values.clone() };
         w.open("c:xVal", &[]);
-        num_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs);
+        num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &xs, c.category_format.as_deref().unwrap_or("General"));
         w.close();
         w.open("c:yVal", &[]);
         num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
@@ -352,7 +389,22 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         }
     } else {
         w.open("c:cat", &[]);
-        str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &c.categories);
+        // Number or date categories keep their cell format; text ones are strings.
+        let nums: Option<Vec<Option<f64>>> = c.category_format.as_ref().and_then(|_| {
+            c.categories
+                .iter()
+                .map(|t| if t.trim().is_empty() { Some(None) } else { t.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map(Some) })
+                .collect()
+        });
+        match (&c.category_format, nums) {
+            (Some(code), Some(nums)) => num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &nums, code),
+            // Mixed number and text categories are strings, as Excel writes them: the numbers as
+            // their formatted labels, which a reload could not rebuild from the raw serials.
+            _ => {
+                let labels: Vec<String> = (0..c.categories.len()).map(|i| c.category_label(i)).collect();
+                str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
+            }
+        }
         w.close();
         w.open("c:val", &[]);
         num_cache(w, &or(&r.values, format!("Sheet1!${0}$2:${0}${last}", col(i + 1))), &s.values);
@@ -442,7 +494,10 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
-        w.tag("c:numFmt").attr("formatCode", "General").attr("sourceLinked", 1).empty();
+        w.tag("c:numFmt")
+            .attr("formatCode", c.category_format.as_deref().unwrap_or("General"))
+            .attr("sourceLinked", u8::from(c.category_format.is_none()))
+            .empty();
         w.tag("c:majorTickMark").attr("val", "out").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
@@ -462,7 +517,10 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
-        w.tag("c:numFmt").attr("formatCode", "General").attr("sourceLinked", 1).empty();
+        w.tag("c:numFmt")
+            .attr("formatCode", c.category_format.as_deref().unwrap_or("General"))
+            .attr("sourceLinked", u8::from(c.category_format.is_none()))
+            .empty();
         w.tag("c:majorTickMark").attr("val", "none").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
@@ -613,9 +671,9 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
                 w.close();
             }
         }
-        Group::Pie => w.tag("c:firstSliceAng").attr("val", 0).empty(),
+        Group::Pie => w.tag("c:firstSliceAng").attr("val", c.first_slice_angle % 360).empty(),
         Group::Doughnut => {
-            w.tag("c:firstSliceAng").attr("val", 0).empty();
+            w.tag("c:firstSliceAng").attr("val", c.first_slice_angle % 360).empty();
             w.tag("c:holeSize").attr("val", (c.hole_size.clamp(0.1, 0.9) * 100.0).round() as i64).empty();
         }
         _ => {}
@@ -698,9 +756,15 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     }
     let mut w = Writer::document();
     w.tag("c:chartSpace").attr("xmlns:c", NS_C).attr("xmlns:a", NS_A).attr("xmlns:r", NS_R).open();
-    w.tag("c:date1904").attr("val", 0).empty();
+    w.tag("c:date1904").attr("val", u8::from(c.date_1904)).empty();
     w.tag("c:roundedCorners").attr("val", 0).empty();
     w.tag("c:style").attr("val", c.style.clamp(1, 48)).empty();
+    if let Some(pivot) = c.pivot_source.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        w.open("c:pivotSource", &[]);
+        w.tag("c:name").text(pivot);
+        w.tag("c:fmtId").attr("val", 0).empty();
+        w.close();
+    }
     w.open("c:chart", &[]);
     match &c.title {
         Some(t) => {
@@ -770,6 +834,22 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
             axes(&mut w, c, g);
         }
     }
+    if let Some(dt) = &c.data_table {
+        w.open("c:dTable", &[]);
+        if dt.horizontal_border {
+            w.empty("c:showHorzBorder", &[]);
+        }
+        if dt.vertical_border {
+            w.empty("c:showVertBorder", &[]);
+        }
+        if dt.outline {
+            w.empty("c:showOutline", &[]);
+        }
+        if dt.show_keys {
+            w.empty("c:showKeys", &[]);
+        }
+        w.close();
+    }
     if let Some(f) = &c.plot_fill {
         sp_pr(&mut w, Some(f), None);
     }
@@ -781,6 +861,9 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         };
         w.open("c:legend", &[]);
         w.tag("c:legendPos").attr("val", p).empty();
+        for e in &c.legend_entries {
+            legend_entry(&mut w, e);
+        }
         w.tag("c:overlay").attr("val", u8::from(c.legend_overlay)).empty();
         tx_pr(&mut w, c);
         w.close();
@@ -1058,6 +1141,72 @@ mod tests {
     use crate::color::{ColorTransform, Rgba};
     use crate::style::ColorRef;
 
+    /// A legend entry's own text (`c:legendEntry/c:txPr`: size, bold, colour) is read, and a
+    /// rebuilt part writes it back, in schema order before `c:overlay` (DeckCraft #2067).
+    #[test]
+    fn legend_entry_text_is_read_and_survives_an_edit() {
+        let read = |xml: &[u8]| crate::chart::read::read_chart_xml(xml).unwrap();
+        let entry = |idx: u32, rgb: &str| {
+            format!(
+                r#"<c:legendEntry><c:idx val="{idx}"/><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="2000" b="1"><a:solidFill><a:srgbClr val="{rgb}"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr></c:legendEntry>"#
+            )
+        };
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea><c:lineChart><c:grouping val="standard"/><c:ser><c:idx val="0"/><c:val><c:numRef><c:numCache><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx><c:valAx><c:axId val="2"/><c:crossAx val="1"/></c:valAx></c:plotArea><c:legend><c:legendPos val="r"/>{}{}<c:legendEntry><c:idx val="2"/><c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr/></a:pPr></a:p></c:txPr></c:legendEntry><c:overlay val="0"/><c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1200"><a:solidFill><a:srgbClr val="7F7F7F"/></a:solidFill></a:defRPr></a:pPr></a:p></c:txPr></c:legend></c:chart></c:chartSpace>"#,
+            entry(0, "C00000"),
+            entry(1, "00B050")
+        );
+        let c = read(xml.as_bytes());
+        let want = |idx: u32, rgb: (u8, u8, u8)| crate::chart::LegendEntry {
+            idx,
+            size: Some(20.0),
+            bold: Some(true),
+            color: Some(ColorRef::rgb(Rgba::rgb(rgb.0, rgb.1, rgb.2))),
+        };
+        // The third entry sets nothing of its own and is not kept.
+        assert_eq!(c.legend_entries, vec![want(0, (0xC0, 0, 0)), want(1, (0, 0xB0, 0x50))]);
+        assert_eq!(c.text_size, Some(12.0), "the legend's own size stays the legend's");
+        let mut e = c.clone();
+        e.title = Some("Units".into());
+        e.raw = None;
+        let (out, kept) = super::chart_xml(&e);
+        assert!(!kept);
+        let s = String::from_utf8(out.clone()).unwrap();
+        let legend = &s[s.find("<c:legend>").unwrap()..];
+        let (pos, entry0, overlay) =
+            (legend.find("<c:legendPos").unwrap(), legend.find("<c:legendEntry>").unwrap(), legend.find("<c:overlay").unwrap());
+        assert!(pos < entry0 && entry0 < overlay, "{s}");
+        assert_eq!(read(&out).legend_entries, c.legend_entries);
+        // None: nothing written.
+        e.legend_entries.clear();
+        assert!(!String::from_utf8(super::chart_xml(&e).0).unwrap().contains("legendEntry"));
+        // The paragraph's own properties win over the list style's, which come first in the XML.
+        let listed = xml.replacen(
+            r#"<c:legendEntry><c:idx val="0"/><c:txPr><a:bodyPr/><a:lstStyle/>"#,
+            r#"<c:legendEntry><c:idx val="0"/><c:txPr><a:bodyPr/><a:lstStyle><a:lvl1pPr><a:defRPr sz="1200" b="0"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle>"#,
+            1,
+        );
+        assert_ne!(listed, xml, "the list style was put in");
+        let c = read(listed.as_bytes());
+        assert_eq!(c.legend_entries[0], want(0, (0xC0, 0, 0)), "the paragraph's 20 pt, bold, C00000");
+        // The list style alone still counts.
+        let only_list =
+            listed.replacen(r#"<a:defRPr sz="2000" b="1"><a:solidFill><a:srgbClr val="C00000"/></a:solidFill></a:defRPr>"#, "<a:defRPr/>", 1);
+        let entry = &read(only_list.as_bytes()).legend_entries[0];
+        assert_eq!((entry.size, entry.bold), (Some(12.0), Some(false)));
+        // A size reads back as it was written, within the reader's 1-400 pt.
+        for (size, back) in [(20.5, 20.5), (400.0, 400.0), (500.0, 400.0)] {
+            let mut e = c.clone();
+            e.raw = None;
+            e.legend_entries = vec![crate::chart::LegendEntry { idx: 0, size: Some(size), bold: Some(false), color: None }];
+            let written = super::chart_xml(&e).0;
+            let sz = format!(r#"sz="{}""#, (back * 100.0) as u32);
+            assert!(String::from_utf8_lossy(&written).contains(&sz), "{size} pt is written as {sz}");
+            let back_entry = &read(&written).legend_entries[0];
+            assert_eq!((back_entry.size, back_entry.bold), (Some(back), Some(false)), "{size} pt");
+        }
+    }
+
     #[test]
     fn export_cost_counts_the_caches_each_group_writes() {
         let s = Series { values: vec![Some(1.0); 600], ..Default::default() };
@@ -1164,5 +1313,48 @@ mod cache_cap_tests {
         let xml = String::from_utf8(super::chart_xml(&c).0).unwrap();
         assert!(xml.contains("<c:f>Data!$C$1</c:f>") && xml.contains("<c:f>Data!$A$2:$A$3</c:f>") && xml.contains("<c:f>'My sheet'!$C$2:$C$3</c:f>"));
         assert_eq!(crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap().series[0].refs, c.series[0].refs);
+    }
+    #[test]
+    fn an_edited_date_chart_keeps_its_date_system_and_category_format() {
+        let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:date1904 val="1"/><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:cat><c:numRef><c:f>Sheet1!$A$2:$A$3</c:f><c:numCache><c:formatCode>m/d/yyyy</c:formatCode><c:ptCount val="2"/><c:pt idx="0"><c:v>43830</c:v></c:pt><c:pt idx="1"><c:v>43861</c:v></c:pt></c:numCache></c:numRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:dateAx><c:axId val="1"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:dateAx><c:valAx><c:axId val="2"/><c:axPos val="l"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#;
+        let mut c = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+        // Excel shows Jan-24 and Feb-24 (1904 system).
+        assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), ("Jan-24", "Feb-24"));
+        c.title = Some("Edited".into());
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!(back.title.as_deref(), Some("Edited"));
+        assert!(back.date_1904);
+        assert_eq!((back.category_label(0).as_str(), back.category_label(1).as_str()), ("Jan-24", "Feb-24"));
+        assert_eq!(back.categories, ["43830", "43861"]);
+        // Text categories stay strings.
+        let mut t = Chart { kind: ChartType::Bar, categories: vec!["a".into(), "b".into()], ..Default::default() };
+        t.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
+        let text = String::from_utf8(super::chart_xml(&t).0).unwrap();
+        assert!(text.contains("<c:strCache>") && text.contains(r#"<c:date1904 val="0"/>"#), "{text}");
+    }
+
+    #[test]
+    fn explicit_general_category_format_survives_a_rebuild() {
+        let mut c =
+            Chart { kind: ChartType::Bar, categories: vec!["12345678901.25".into()], category_format: Some("General".into()), ..Default::default() };
+        c.series.push(Series { values: vec![Some(1.0)], ..Default::default() });
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!(back.category_format, c.category_format);
+        assert_eq!(back.category_label(0), c.category_label(0));
+        assert_eq!(back.categories, c.categories);
+    }
+
+    #[test]
+    fn mixed_date_and_text_categories_keep_their_labels_through_a_write() {
+        let mut c = Chart {
+            kind: ChartType::Bar,
+            categories: vec!["45292".into(), "TBD".into()],
+            category_format: Some("mmm-yy".into()),
+            ..Default::default()
+        };
+        c.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
+        assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), ("Jan-24", "TBD"));
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!((back.category_label(0).as_str(), back.category_label(1).as_str()), ("Jan-24", "TBD"));
     }
 }

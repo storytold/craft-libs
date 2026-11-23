@@ -2,16 +2,20 @@
 
 use crate::descriptor::UnicodeString;
 use crate::error::{PsdError, Result};
-use crate::io::{Reader, WriteExt, read_pascal, write_pascal};
+use crate::io::{Reader, WriteExt, write_pascal};
 
 /// Well-known resource ids.
 pub mod ids {
     /// Resolution info (`ResolutionInfo` structure).
     pub const RESOLUTION_INFO: u16 = 1005;
+    /// Alpha channel names as unpadded Pascal strings.
+    pub const ALPHA_NAMES: u16 = 1006;
     /// Target layer index.
     pub const LAYER_STATE: u16 = 1024;
     /// Layer group ids (one u16 per layer).
     pub const LAYER_GROUP_INFO: u16 = 1026;
+    /// Grid and guides (legacy v1).
+    pub const GUIDES: u16 = 1032;
     /// Legacy (Photoshop 4) thumbnail, BGR.
     pub const THUMBNAIL_PS4: u16 = 1033;
     /// Thumbnail (JFIF).
@@ -20,6 +24,8 @@ pub mod ids {
     pub const GLOBAL_ANGLE: u16 = 1037;
     /// ICC profile.
     pub const ICC_PROFILE: u16 = 1039;
+    /// Unicode alpha channel names.
+    pub const UNICODE_ALPHA_NAMES: u16 = 1045;
     /// Global altitude.
     pub const GLOBAL_ALTITUDE: u16 = 1049;
     /// Version info (has real merged data flag).
@@ -32,6 +38,14 @@ pub mod ids {
     pub const TIMELINE_INFO: u16 = 1075;
     /// Selected layer ids (`u16` count followed by `u32` ids).
     pub const LAYER_SELECTION_IDS: u16 = 1069;
+    /// Clipping path name and flatness.
+    pub const CLIPPING_PATH: u16 = 2999;
+}
+
+/// Encode a name for a legacy Pascal field: printable ASCII up to 255 bytes, with other
+/// characters replaced by `?`.
+pub fn encode_legacy_name(s: &str) -> Vec<u8> {
+    crate::io::encode_legacy_name(s)
 }
 
 /// One image resource block.
@@ -46,6 +60,126 @@ pub struct ImageResource {
     pub name: Vec<u8>,
     /// Resource data (without the even padding).
     pub data: Vec<u8>,
+}
+
+/// An image-resource record that borrows its name and data from the PSD/PSB input.
+///
+/// Use [`ImageResourceView::into_owned`] only when the data must outlive the input bytes. Parsing a
+/// view does not allocate proportional to the resource's declared size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageResourceView<'a> {
+    /// Signature, normally `8BIM` (also `MeSa`, `AgHg`, `PHUT`, `DCSR` seen in the wild).
+    pub signature: [u8; 4],
+    /// Resource id.
+    pub id: u16,
+    /// Pascal name bytes (usually empty).
+    pub name: &'a [u8],
+    /// Resource data (without the even padding).
+    pub data: &'a [u8],
+}
+
+impl ImageResourceView<'_> {
+    /// Copies this view into an owned resource.
+    pub fn into_owned(self) -> ImageResource {
+        ImageResource { signature: self.signature, id: self.id, name: self.name.to_vec(), data: self.data.to_vec() }
+    }
+}
+
+impl<'a> ImageResourceView<'a> {
+    pub(crate) fn read(r: &mut Reader<'a>) -> Result<Self> {
+        let signature = r.array::<4>()?;
+        if !matches!(&signature, b"8BIM" | b"MeSa" | b"AgHg" | b"PHUT" | b"DCSR") {
+            return Err(PsdError::InvalidSignature { expected: "8BIM resource", found: signature });
+        }
+        let id = r.u16()?;
+        let name_len = usize::from(r.u8()?);
+        let name = r.bytes(name_len)?;
+        let name_total = 1 + name_len;
+        let name_pad = (2 - name_total % 2) % 2;
+        r.skip(name_pad)?;
+        let len = r.u32()?;
+        let data = r.bytes_u64(u64::from(len))?;
+        // A writer that drops the pad byte after the section's last resource is common; that
+        // byte would be past the section, so don't fail the whole file over it.
+        if len % 2 == 1 && !r.is_empty() {
+            r.skip(1)?;
+        }
+        Ok(ImageResourceView { signature, id, name, data })
+    }
+}
+
+/// Lazily parses image-resource records from a borrowed resource section.
+///
+/// Records are yielded one at a time. If a record is malformed, the iterator yields its error
+/// once and then stops; records yielded before it remain usable.
+pub struct ResourceIter<'a> {
+    reader: Reader<'a>,
+    remaining_records: usize,
+    failed: bool,
+}
+
+impl<'a> ResourceIter<'a> {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
+        ResourceIter::with_limit(bytes, usize::MAX)
+    }
+
+    pub(crate) fn with_limit(bytes: &'a [u8], max_records: usize) -> Self {
+        ResourceIter { reader: Reader::new(bytes), remaining_records: max_records, failed: false }
+    }
+}
+
+impl<'a> Iterator for ResourceIter<'a> {
+    type Item = Result<ImageResourceView<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.failed || self.reader.is_empty() {
+            return None;
+        }
+        if self.remaining_records == 0 {
+            self.failed = true;
+            return Some(Err(PsdError::LimitExceeded("image resource record count")));
+        }
+        match ImageResourceView::read(&mut self.reader) {
+            Ok(resource) => {
+                self.remaining_records -= 1;
+                Some(Ok(resource))
+            }
+            Err(error) => {
+                self.failed = true;
+                Some(Err(error))
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // A valid record consumes at least 12 bytes. A truncated record or exhausted limit can
+        // produce one final error without consuming a full record.
+        let upper =
+            if self.failed || self.reader.is_empty() { 0 } else { (self.reader.remaining() / 12).min(self.remaining_records).saturating_add(1) };
+        (0, Some(upper))
+    }
+}
+
+impl std::iter::FusedIterator for ResourceIter<'_> {}
+
+#[cfg(test)]
+mod view_tests {
+    use super::ResourceIter;
+
+    #[test]
+    fn resource_size_hint_respects_the_record_limit() {
+        let data = vec![0; 12_000];
+        let iter = ResourceIter::with_limit(&data, 3);
+        assert_eq!(iter.size_hint(), (0, Some(4)));
+    }
+
+    #[test]
+    fn truncated_resource_size_hint_includes_error_item() {
+        let mut iter = ResourceIter::new(b"JUNK");
+        assert!(iter.size_hint().1.unwrap() >= 1);
+        assert!(iter.next().unwrap().is_err());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+    }
 }
 
 /// Fixed-point resolution info (resource 1005).
@@ -251,6 +385,22 @@ fn layer_selection_ids(data: &[u8]) -> Result<Vec<u32>> {
     (0..count).map(|_| r.u32()).collect()
 }
 
+/// Read the unique EXIF and XMP image resources, rejecting duplicates and invalid XMP UTF-8.
+/// EXIF bytes retain any optional container prefix; trailing XMP NULs are removed.
+pub fn unique_exif_xmp(resources: &[ImageResource]) -> Option<(Option<&[u8]>, Option<&str>)> {
+    let (mut exif, mut xmp) = (None, None);
+    for resource in resources {
+        match resource.id {
+            ids::EXIF if exif.is_some() => return None,
+            ids::EXIF => exif = Some(resource.data.as_slice()),
+            ids::XMP if xmp.is_some() => return None,
+            ids::XMP => xmp = Some(std::str::from_utf8(&resource.data).ok()?.trim_end_matches('\0')),
+            _ => {}
+        }
+    }
+    Some((exif, xmp))
+}
+
 impl ImageResource {
     /// A new `8BIM` resource with an empty name.
     pub fn new(id: u16, data: Vec<u8>) -> Self {
@@ -292,18 +442,7 @@ impl ImageResource {
     }
 
     pub(crate) fn read(r: &mut Reader<'_>) -> Result<Self> {
-        let signature = r.array::<4>()?;
-        if !matches!(&signature, b"8BIM" | b"MeSa" | b"AgHg" | b"PHUT" | b"DCSR") {
-            return Err(PsdError::InvalidSignature { expected: "8BIM resource", found: signature });
-        }
-        let id = r.u16()?;
-        let name = read_pascal(r, 2)?;
-        let len = r.u32()?;
-        let data = r.bytes_u64(u64::from(len))?.to_vec();
-        if len % 2 == 1 {
-            r.skip(1)?;
-        }
-        Ok(ImageResource { signature, id, name, data })
+        Ok(ImageResourceView::read(r)?.into_owned())
     }
 
     pub(crate) fn write(&self, out: &mut Vec<u8>) -> Result<()> {
@@ -378,6 +517,19 @@ mod tests {
     #[test]
     fn empty_section() {
         assert_eq!(roundtrip(&[]), vec![0, 0, 0, 0]);
+    }
+
+    /// The last resource of the section has odd data and no pad byte (some writers drop it):
+    /// the resource still reads instead of the whole file failing.
+    #[test]
+    fn odd_last_resource_without_pad() {
+        let mut out = Vec::new();
+        write_section(&mut out, &[ImageResource::new(1000, vec![1, 2, 3])]).unwrap();
+        out.pop();
+        let len = u32::from_be_bytes([out[0], out[1], out[2], out[3]]) - 1;
+        out[..4].copy_from_slice(&len.to_be_bytes());
+        let back = read_section(&mut Reader::new(&out)).unwrap();
+        assert_eq!(back, [ImageResource::new(1000, vec![1, 2, 3])]);
     }
 
     #[test]

@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[cfg(feature = "abc")]
+mod abc;
+#[cfg(feature = "dae")]
+mod dae;
 #[cfg(feature = "fbx")]
 mod fbx;
 #[cfg(feature = "gltf")]
@@ -14,6 +18,7 @@ mod ply;
 mod stl;
 #[cfg(feature = "threemf")]
 mod threemf;
+mod triangulate;
 
 /// Every truncation of `good` and two mutations of every byte go through `read`: it may refuse
 /// them, it must not panic, and what it accepts must be a valid scene.
@@ -79,6 +84,11 @@ fn validate_catches_what_writers_cannot_take() {
     s.validate().unwrap();
     s.meshes[0].parts[0].material = Some(0);
     assert!(s.validate().is_err());
+    let mut s = Scene::default();
+    s.texture_variants.push(TextureRef::default());
+    assert!(s.validate().is_err(), "a texture references a missing image");
+    s.images.push(Image::default());
+    s.validate().unwrap();
     let mut s = Scene::from_meshes(vec![tri_mesh()], vec![]);
     s.nodes[0].children.push(7);
     assert!(s.validate().is_err());

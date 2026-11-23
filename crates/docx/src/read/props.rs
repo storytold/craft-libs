@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use craft_wordmodel::para::cap_alt;
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, Kashida, LineSpacing, NumRef,
     ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
-    TextDirection, Underline, VAlign, VMerge, VertAlign,
+    TextDirection, ThemeFont, Underline, VAlign, VMerge, VertAlign,
 };
 use craft_wordmodel::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -277,6 +277,18 @@ impl PropCtx {
                     // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
                     // is left to inherit, like `w:cstheme`.
                     c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    // The theme slots themselves are kept for saving: Word resolves them (over the
+                    // named fonts) when it lays the text out, and dropping them changes its line
+                    // breaks in a document with an East Asian language.
+                    c.font_ea_theme = k.attr("w:eastAsiaTheme").and_then(ThemeFont::parse);
+                    c.font_cs_theme = k.attr("w:cstheme").and_then(ThemeFont::parse);
+                    // The Latin slots too, when `font` came from them: saving writes them back while
+                    // they still name `font`, so the text keeps following the theme in Word.
+                    if c.font.is_some() {
+                        let latin = |a: &str| k.attr(a).and_then(ThemeFont::parse).filter(|t| t.is_latin());
+                        c.font_ascii_theme = latin("w:asciiTheme");
+                        c.font_hansi_theme = latin("w:hAnsiTheme");
+                    }
                 }
                 "w:b" => c.bold = Some(on_off(k)),
                 "w:bCs" => c.bold_cs = Some(on_off(k)),
@@ -389,15 +401,22 @@ impl PropCtx {
                 }
                 "w:numPr" => {
                     let num = k.child_val("w:numId").and_then(u32_of);
-                    let ilvl = k.child_val("w:ilvl").and_then(u32_of);
-                    let level = ilvl.unwrap_or(0).min(8) as u8;
-                    match (num, ilvl) {
-                        (Some(num), _) => p.numbering = Some(NumRef { num, level }),
-                        // A level without a list: the list comes from the based-on style, as in
-                        // a Heading 3 that only says "level 3" of Heading 2's list. Resolved once
-                        // the styles are read (`resolve_list_levels`).
-                        (None, Some(_)) => p.numbering = Some(NumRef { num: LEVEL_ONLY, level }),
-                        (None, None) => {}
+                    let ilvl_node = k.child("w:ilvl");
+                    let ilvl =
+                        ilvl_node.and_then(|node| node.attr("w:val")).and_then(int).filter(|level| (0..=8).contains(level)).map(|level| level as u32);
+                    // A missing level means level zero. A present but malformed/out-of-range
+                    // level invalidates this numbering reference instead of silently becoming
+                    // level zero; the latter can turn hostile input into a real list.
+                    if ilvl_node.is_none() || ilvl.is_some() {
+                        let level = ilvl.unwrap_or(0) as u8;
+                        match (num, ilvl) {
+                            (Some(num), _) => p.numbering = Some(NumRef { num, level }),
+                            // A level without a list: the list comes from the based-on style, as in
+                            // a Heading 3 that only says "level 3" of Heading 2's list. Resolved once
+                            // the styles are read (`resolve_list_levels`).
+                            (None, Some(_)) => p.numbering = Some(NumRef { num: LEVEL_ONLY, level }),
+                            (None, None) => {}
+                        }
                     }
                 }
                 "w:pBdr" => p.borders = Some(self.borders(k)),
@@ -458,7 +477,14 @@ impl PropCtx {
                         _ => {}
                     }
                 }
-                "w:jc" => p.align = k.attr("w:val").map(align),
+                "w:jc" => {
+                    if let Some(v) = k.attr("w:val") {
+                        p.align = Some(align(v));
+                        if let Some(kashida) = Kashida::from_jc(v) {
+                            p.kashida = Some(kashida);
+                        }
+                    }
+                }
                 "w:outlineLvl" => p.outline_level = k.attr("w:val").and_then(u32_of).map(|v| v.min(9) as u8),
                 "w:rPr" => mark = self.rpr(k),
                 _ => {}
@@ -516,26 +542,45 @@ fn shd_fill(e: &El) -> Option<Rgb> {
 }
 
 impl PropCtx {
-    /// One border (`CT_Border`); its theme colour supersedes `w:color`, as for text.
+    /// One border (`CT_Border`); its theme colour supersedes `w:color`, as for text. One without
+    /// `w:sz` is width 0, as `w:sz="0"`: Word draws both at its thinnest line and gives them no
+    /// room, for paragraph, character and page borders (storytold/wordcraft#5065).
     pub fn border(&self, e: &El) -> Border {
+        self.border_or(e, 0.0)
+    }
+
+    /// One border, `missing` points wide when it gives no `w:sz`.
+    fn border_or(&self, e: &El, missing: f32) -> Border {
         let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
-        let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
+        let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(missing).clamp(0.0, 12.0);
         let color = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| e.attr("w:color").and_then(Rgb::parse));
         let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
         Border { style, width, color, space }
     }
 
-    /// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
+    /// `w:pBdr`, `w:pgBorders`.
     pub fn borders(&self, e: &El) -> Borders {
+        self.borders_or(e, 0.0)
+    }
+
+    /// `w:tblBorders`, `w:tcBorders`, and a table style's. A border without `w:sz` is width 0 here
+    /// too, as `w:sz="0"`: Word gives neither any room, where `w:sz="1"` takes an eighth of a
+    /// point (storytold/wordcraft#5764). Read as half a point, every row below a pandoc table's
+    /// header rule moved down half a point.
+    pub fn table_borders(&self, e: &El) -> Borders {
+        self.borders_or(e, 0.0)
+    }
+
+    fn borders_or(&self, e: &El, missing: f32) -> Borders {
         let mut b = Borders::default();
         for k in e.els() {
             match k.local() {
-                "top" => b.top = Some(self.border(k)),
-                "left" | "start" => b.left = Some(self.border(k)),
-                "bottom" => b.bottom = Some(self.border(k)),
-                "right" | "end" => b.right = Some(self.border(k)),
-                "between" | "insideH" => b.between = Some(self.border(k)),
-                "insideV" => b.inside_v = Some(self.border(k)),
+                "top" => b.top = Some(self.border_or(k, missing)),
+                "left" | "start" => b.left = Some(self.border_or(k, missing)),
+                "bottom" => b.bottom = Some(self.border_or(k, missing)),
+                "right" | "end" => b.right = Some(self.border_or(k, missing)),
+                "between" | "insideH" => b.between = Some(self.border_or(k, missing)),
+                "insideV" => b.inside_v = Some(self.border_or(k, missing)),
                 _ => {}
             }
         }
@@ -546,6 +591,17 @@ impl PropCtx {
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
 pub fn margins(e: &El) -> [f32; 4] {
     margin_sides(e).map(|side| side.unwrap_or(0.0))
+}
+
+/// Word's own cell margins (the Normal Table style): 0.08" left and right, none above or below.
+pub const WORD_CELL_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+
+/// A table's `w:tblCellMar` over the margins it would have without one (its
+/// style's, else Word's). A side the element leaves out keeps the underlying margin, as in Word:
+/// a form table that sets only `w:left` keeps its style's right margin, not none.
+pub fn margins_over(e: &El, base: [f32; 4]) -> [f32; 4] {
+    let sides = margin_sides(e);
+    std::array::from_fn(|i| sides.get(i).copied().flatten().or_else(|| base.get(i).copied()).unwrap_or(0.0))
 }
 
 fn margin_sides(e: &El) -> [Option<f32>; 4] {
@@ -574,7 +630,7 @@ impl PropCtx {
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
-                "w:tblBorders" => t.borders = Some(self.borders(k)),
+                "w:tblBorders" => t.borders = Some(self.table_borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
@@ -680,7 +736,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(pc.borders(k)),
+            "w:tcBorders" => c.borders = Some(pc.table_borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
@@ -817,20 +873,21 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                 s.footnote_columns = k.attr("w:val").and_then(u32_of).filter(|v| (1..=45).contains(v));
             }
             "w:lnNumType" => {
-                let mut l = LineNumbering::default();
-                if let Some(v) = k.attr("w:countBy").and_then(u32_of) {
-                    l.count_by = v.clamp(1, 100);
+                // Word leaves line numbering off unless `w:countBy` gives an interval above 0,
+                // whatever `w:start`, `w:distance` and `w:restart` say (#6209, observed in Word).
+                if let Some(count_by) = k.attr("w:countBy").and_then(u32_of).filter(|&v| v > 0) {
+                    let mut l = LineNumbering { count_by: count_by.clamp(1, 100), ..LineNumbering::default() };
+                    if let Some(v) = k.attr("w:start").and_then(int) {
+                        l.start = (v.clamp(0, 32_767) + 1) as u32;
+                    }
+                    l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
+                    l.restart = match k.attr("w:restart") {
+                        Some("newSection") => LineNumberRestart::Section,
+                        Some("continuous") => LineNumberRestart::Continuous,
+                        _ => LineNumberRestart::Page,
+                    };
+                    s.line_numbers = Some(l);
                 }
-                if let Some(v) = k.attr("w:start").and_then(int) {
-                    l.start = (v.clamp(0, 32_767) + 1) as u32;
-                }
-                l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
-                l.restart = match k.attr("w:restart") {
-                    Some("newSection") => LineNumberRestart::Section,
-                    Some("continuous") => LineNumberRestart::Continuous,
-                    _ => LineNumberRestart::Page,
-                };
-                s.line_numbers = Some(l);
             }
             "w:vAlign" => {
                 s.valign = match k.attr("w:val") {

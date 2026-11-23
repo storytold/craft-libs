@@ -760,6 +760,52 @@ fn extended_huffman_matches_zune_on_baseline_data() {
 }
 
 #[test]
+fn progressive_huffman_matches_zune() {
+    let bytes = include_bytes!("../tests/data/testorig-huffman-progressive.jpg");
+    let (reference, (w, h)) = zune_decode(bytes);
+    let ours = decode_default(bytes).unwrap();
+    assert_eq!((ours.width, ours.height, ours.components), (w, h, 3));
+    assert!(!ours.damaged);
+    let Samples::U8(samples) = ours.samples else { panic!("8-bit fixture decoded with another precision") };
+    let mad = samples.iter().zip(&reference).map(|(&a, &b)| f32::from(a.abs_diff(b))).sum::<f32>() / samples.len() as f32;
+    assert!(mad < 2.0, "mean absolute difference {mad}");
+}
+
+#[test]
+fn avi1_default_huffman_tables_restore_a_missing_dht() {
+    let fixture = include_bytes!("../tests/data/testorig.jpg");
+    let mut without = fixture[..2].to_vec();
+    let mut at = 2;
+    while at + 1 < fixture.len() {
+        if fixture[at] != 0xFF {
+            break;
+        }
+        let marker = fixture[at + 1];
+        if marker == 0xDA {
+            without.extend_from_slice(&fixture[at..]);
+            break;
+        }
+        if marker == 0xC4 {
+            let len = usize::from(u16::from_be_bytes([fixture[at + 2], fixture[at + 3]]));
+            at += 2 + len;
+        } else if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+            without.extend_from_slice(&fixture[at..at + 2]);
+            at += 2;
+        } else {
+            let len = usize::from(u16::from_be_bytes([fixture[at + 2], fixture[at + 3]]));
+            without.extend_from_slice(&fixture[at..at + 2 + len]);
+            at += 2 + len;
+        }
+    }
+    assert!(matches!(with_avi1_default_huffman(&without), std::borrow::Cow::Owned(_)));
+    let restored = with_avi1_default_huffman(&without);
+    let decoded = decode_default(&restored).unwrap();
+    let expected = decode_default(fixture).unwrap();
+    assert_eq!(decoded, expected);
+    assert!(matches!(with_avi1_default_huffman(fixture), std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
 fn malformed_streams_return_errors_not_panics() {
     let blocks = coefficients(6, 5, 500);
     let mut streams = vec![
@@ -831,4 +877,36 @@ fn frame_reports_the_marker_and_precision() {
     assert_eq!(frame(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), kind(0xC9, 8));
     assert_eq!(frame(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]), kind(0xC1, 12));
     assert_eq!(frame(&[0xFF, 0xD8]), None);
+}
+
+#[test]
+fn reduced_decoding_scales_dimensions_and_samples() {
+    let mut rgb = Vec::with_capacity(32 * 24 * 3);
+    for _ in 0..32 * 24 {
+        rgb.extend_from_slice(&[200, 100, 50]);
+    }
+    let mut encoded = Vec::new();
+    jpeg_encoder::Encoder::new(&mut encoded, 95).encode(&rgb, 32, 24, jpeg_encoder::ColorType::Rgb).unwrap();
+
+    let limits = Limits::default();
+    assert!(reduced_estimate(&encoded, &limits, 0).is_err());
+    assert!(reduced_estimate(&encoded, &limits, 4).is_err());
+    assert!(decode_reduced(&encoded, &limits, None, 0).is_err());
+    assert!(decode_reduced(&encoded, &limits, None, 4).is_err());
+
+    for shrink in 1..=MAX_SHRINK {
+        let (ew, eh, est_bytes) = reduced_estimate(&encoded, &limits, shrink).unwrap();
+        let dec = decode_reduced(&encoded, &limits, None, shrink).unwrap();
+        assert_eq!((dec.width, dec.height), (32u32.div_ceil(1 << shrink), 24u32.div_ceil(1 << shrink)));
+        assert_eq!((dec.width, dec.height), (ew, eh));
+        assert!(est_bytes > 0);
+        assert_eq!(dec.components, 3);
+        let Samples::U8(samples) = dec.samples else { panic!("expected U8") };
+        assert_eq!(samples.len(), (ew * eh * 3) as usize);
+        for px in samples.as_chunks::<3>().0 {
+            assert!((px[0] as i32 - 200).abs() <= 5, "r={}", px[0]);
+            assert!((px[1] as i32 - 100).abs() <= 5, "g={}", px[1]);
+            assert!((px[2] as i32 - 50).abs() <= 5, "b={}", px[2]);
+        }
+    }
 }
