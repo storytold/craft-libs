@@ -103,9 +103,9 @@ fn block_comment_tail(mut text: &str) -> Option<&str> {
 
 /// The content column of a comment opened directly or after list markers.
 /// Use the list parser's whitespace rules so an indented code item stays code.
-fn list_comment_indent(mut line: &str) -> Option<usize> {
+fn list_comment_indent(mut line: &str, starts_block: bool) -> Option<usize> {
     let mut column = 0usize;
-    for _ in 0..=MAX_NEST {
+    for depth in 0..=MAX_NEST {
         let ind = indent(line);
         if ind >= 4 {
             return None;
@@ -115,12 +115,27 @@ fn list_comment_indent(mut line: &str) -> Option<usize> {
             return Some(column);
         }
         let marker = list_marker(text)?;
+        if depth == 0 && !starts_block && !list_interrupts(marker, text) {
+            return None;
+        }
         let after = text.get(marker.len..)?;
         let (spaces, skip) = if indent(after) > 4 { (1, 1) } else { marker_space(ind, marker.len, after) };
         column = column.saturating_add(ind).saturating_add(marker.len).saturating_add(spaces);
         line = after.get(skip..)?;
     }
     None
+}
+
+/// The same dedent boundary that ends an item in `parse_list`, including lazy continuations.
+fn list_item_ends(line: &str, content_indent: usize, after_blank: bool) -> bool {
+    content_indent > 0
+        && indent(line) < content_indent
+        && !is_blank(line)
+        && (after_blank || interrupts(line) || list_marker(line.trim_start_matches([' ', '\t'])).is_some())
+}
+
+fn list_interrupts(marker: Marker, text: &str) -> bool {
+    (!marker.ordered || marker.start == 1) && !is_blank(text.get(marker.len..).unwrap_or(""))
 }
 
 /// Remove only a visible reference definition; retain the comment's closing delimiters.
@@ -148,6 +163,9 @@ fn take_comment_tail_reference(line: &mut String, refs: &mut Refs) -> bool {
 fn take_definitions(lines: &mut Vec<String>) -> Refs {
     let mut refs = Refs::new();
     let mut open: Option<(char, usize)> = None;
+    let mut fence_indent = 0usize;
+    let mut fence_after_blank = false;
+    let mut list_item: Option<(usize, bool)> = None;
     let mut in_comment = false;
     let mut comment_indent = 0usize;
     let mut comment_after_blank = false;
@@ -155,10 +173,25 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
     let mut starts_block = true;
     lines.retain_mut(|line| {
         let t = line.trim_start_matches([' ', '\t']);
+        if let Some((column, after_blank)) = list_item {
+            if list_item_ends(line, column, after_blank) {
+                list_item = None;
+                starts_block = true;
+            } else {
+                list_item = Some((column, is_blank(line)));
+            }
+        }
+        if open.is_some() && list_item_ends(line, fence_indent, fence_after_blank) {
+            open = None;
+            starts_block = true;
+        }
+        if open.is_some() {
+            fence_after_blank = is_blank(line);
+        }
         if in_comment && comment_indent > 0 {
             // A dedented block after a blank, or an interrupting block, ends the list item.
             // Its following definitions are outside the unclosed comment.
-            if indent(line) < comment_indent && !is_blank(line) && (comment_after_blank || interrupts(line) || list_marker(t).is_some()) {
+            if list_item_ends(line, comment_indent, comment_after_blank) {
                 in_comment = false;
                 starts_block = true;
             }
@@ -169,16 +202,20 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             in_comment = tail.is_none();
             // parse_blocks reprocesses visible tails as source, including opening fences.
             open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
+            fence_indent = comment_indent;
+            fence_after_blank = false;
             starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
             starts_block |= take_comment_tail_reference(line, &mut refs);
             return true;
         }
         // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
-        let marker = (indent(line) < 4).then(|| fence(t)).flatten();
+        let fence_line = if open.is_some() { strip_indent(line, fence_indent) } else { line.as_str() };
+        let fence_text = fence_line.trim_start_matches([' ', '\t']);
+        let marker = (indent(fence_line) < 4).then(|| fence(fence_text)).flatten();
         match open {
             Some((c, n)) => {
                 // A closing fence holds nothing but its own run of fence characters.
-                if marker.is_some_and(|(fc, fl)| fc == c && fl >= n) && t.trim_start_matches(c).trim().is_empty() {
+                if marker.is_some_and(|(fc, fl)| fc == c && fl >= n) && fence_text.trim_start_matches(c).trim().is_empty() {
                     open = None;
                     starts_block = true;
                 }
@@ -187,17 +224,32 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             None => {
                 if let Some(f) = marker {
                     open = Some(f);
+                    fence_indent = 0;
+                    fence_after_blank = false;
                     return true;
                 }
             }
         }
-        if let Some(column) = list_comment_indent(line) {
+        // Remember a valid surrounding item so its next marker starts a new block even when
+        // an ordered number other than one could not interrupt a plain paragraph.
+        if list_item.is_none()
+            && indent(line) < 4
+            && let Some(m) = list_marker(t)
+            && (starts_block || list_interrupts(m, t))
+        {
+            let after = t.get(m.len..).unwrap_or("");
+            let spaces = if is_blank(after) || indent(after) > 4 { 1 } else { marker_space(indent(line), m.len, after).0 };
+            list_item = Some((indent(line).saturating_add(m.len).saturating_add(spaces), false));
+        }
+        if let Some(column) = list_comment_indent(line, starts_block) {
             comment_indent = column;
             comment_after_blank = false;
             let tail = block_comment_tail(line);
             in_comment = tail.is_none();
             // parse_blocks reprocesses visible tails as source, including opening fences.
             open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
+            fence_indent = comment_indent;
+            fence_after_blank = false;
             starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
             starts_block |= take_comment_tail_reference(line, &mut refs);
             return true;
@@ -442,7 +494,7 @@ fn interrupts(l: &str) -> bool {
         || fence(t).is_some()
         || t.starts_with('>')
         || t.starts_with("<!--")
-        || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
+        || list_marker(t).is_some_and(|m| list_interrupts(m, t))
 }
 
 fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, refs: &Refs) {
@@ -621,7 +673,7 @@ fn parse_blocks(mut lines: Vec<String>, depth: usize, level: u8, refs: &Refs, bu
             }
         }
         if let Some(m) = list_marker(t)
-            && (para.is_empty() || ((!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or(""))))
+            && (para.is_empty() || list_interrupts(m, t))
         {
             flush_para(&mut para, &mut out, depth, refs);
             i = parse_list(&lines, i, depth, level, &mut out, refs, budget);

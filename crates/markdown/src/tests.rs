@@ -895,3 +895,77 @@ fn comment_tail_reference_definitions_are_extracted_without_losing_delimiters() 
         assert!(paras.iter().all(|p| !p.text().contains("[x]:")), "the definition is not visible");
     }
 }
+
+#[test]
+fn list_comment_tail_fences_close_at_their_content_indent() {
+    for (marker, pad, fence) in [("-   ", "    ", "```"), ("2.  ", "    ", "~~~"), ("- - ", "    ", "````")] {
+        let md = format!("{marker}<!-- -->{fence}\n{pad}[x]: /wrong\n{pad}{fence}\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.kind == Kind::Code && p.text().contains("[x]: /wrong"))), "{md}");
+        assert!(
+            flow.blocks.iter().any(
+                |b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.link.as_deref() == Some("/right"))))
+            ),
+            "{md}"
+        );
+    }
+    // A short fence, another character or trailing text must not close the list's code.
+    for false_closer in ["```", "~~~~", "```` trailing"] {
+        let md = format!("-   <!-- -->````\n    {false_closer}\n\n    [x]: /wrong\n    ````\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.kind == Kind::Code && p.text().contains("[x]: /wrong"))), "{md}");
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+}
+
+#[test]
+fn noninterrupting_ordered_marker_does_not_hide_reference_definitions() {
+    for md in ["text\n2. <!--\n\n   [x]: /right\n\n[x]", "text\n2) <!--\n\n   [x]: /right\n\n[x]"] {
+        let flow = parse(md);
+        assert!(
+            flow.blocks.iter().any(
+                |b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.link.as_deref() == Some("/right"))))
+            ),
+            "{md}"
+        );
+    }
+    for md in [
+        "text\n1. <!--\n\n   [x]: /wrong\n   -->\n\n[x]: /right\n\n[x]",
+        "1. text\n2. <!--\n\n   [x]: /wrong\n   -->\n\n[x]: /right\n\n[x]",
+        "2. <!--\n\n   [x]: /wrong\n   -->\n\n[x]: /right\n\n[x]",
+    ] {
+        let flow = parse(md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+}
+
+#[test]
+fn unclosed_list_comment_tail_fences_end_with_the_list_item() {
+    for md in [
+        "- <!-- -->```\n  code\n\n[x]: /right\n\n[x]",
+        "- <!-- -->~~~\n  code\n- visible\n\n[x]: /right\n\n[x]",
+        "- <!--\n  -->```\n  code\n\n[x]: /right\n\n[x]",
+    ] {
+        let flow = parse(md);
+        assert!(
+            flow.blocks.iter().any(
+                |b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.link.as_deref() == Some("/right"))))
+            ),
+            "{md}"
+        );
+    }
+}
