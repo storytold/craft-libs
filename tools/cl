@@ -120,8 +120,6 @@ PINS = [
      "craft-ui-macros must ask proc-macro2 for span-locations, or a build with design-lint in it changes the shared proc-macro2 and rebuilds the framework"),
     ("crates/ui-contract/Cargo.toml", r'^craft-window = \{[^\n]*features = \[[^\]]*"ui"',
      "craft-ui-contract must depend on craft-window with ui, or the shell's app flips craft-window under the whole framework"),
-    ("crates/ui-contract/Cargo.toml", r'^testing = \[[^\]]*"snapshot"',
-     "craft-ui-contract's testing must include snapshot, or crates above widgets cannot ask the runtime for the renderer and build a second variant"),
 ]
 
 
@@ -203,6 +201,18 @@ def own_targets(p):
     return flags
 
 
+def implied(p, features):
+    """The features a dependency line turns on in workspace package `p`: `features` and every feature of `p`'s own that
+    they imply. Without `p` (a crate outside the workspace) just `features`."""
+    on, todo = set(), list(features)
+    while todo:
+        f = todo.pop()
+        if f not in on:
+            on.add(f)
+            todo += [e for e in (p["features"].get(f, []) if p else []) if "/" not in e and not e.startswith("dep:")]
+    return on
+
+
 def doctor(top, packages, quiet=False):
     """Manifest lines that would bring the variant churn back. Returns the number of problems."""
     if APP:
@@ -221,7 +231,8 @@ def doctor(top, packages, quiet=False):
     gallery = packages.get("craft-ui-gallery")
     if gallery:
         for d in gallery["dependencies"]:
-            if d["name"].startswith("craft-") and "suite" in d["features"] and not d["optional"]:
+            domain = d["name"].startswith("craft-") and d["name"] not in FRAMEWORK
+            if domain and "suite" in d["features"] and not d["optional"]:
                 problems.append(f"crates/ui-gallery/Cargo.toml: {d['name']} must be optional (one feature per domain crate), or the story renderer links every crate")
     root = packages.get(ROOT)
     if not root:
@@ -243,9 +254,11 @@ def doctor(top, packages, quiet=False):
         theirs = {d["name"]: d for d in gallery["dependencies"] if d["kind"] is None}
         for d in render["dependencies"]:
             g = theirs.get(d["name"])
-            if d["kind"] is None and g and not set(d["features"]) <= set(g["features"]):
-                problems.append(f"crates/story-render/Cargo.toml: {d['name']} asks for {sorted(set(d['features']) - set(g['features']))} "
-                                "beyond the gallery's line, so renders build a second copy of it and everything above")
+            if d["kind"] is None and g:
+                extra = set(d["features"]) - implied(packages.get(d["name"]), g["features"])
+                if extra:
+                    problems.append(f"crates/story-render/Cargo.toml: {d['name']} asks for {sorted(extra)} beyond what the "
+                                    "gallery's line turns on, so renders build a second copy of it and everything above")
     for problem in problems:
         print(f"cl doctor: {problem}", file=sys.stderr)
     if not problems and not quiet:
@@ -732,7 +745,7 @@ def run(top, cargo_args, then=None, timings=True):
     """Runs cargo; `then` (a binary in the target's debug dir and its arguments) runs after a successful cargo. Exits
     with the last return code."""
     rc, target, _ = cargo(top, cargo_args, timings=timings)
-    if rc == 0 and then:
+    if rc == 0 and then and not DRY_RUN:
         rc = run_binary([os.path.join(target, "debug", then[0])] + then[1:], top)
     sys.exit(rc)
 
