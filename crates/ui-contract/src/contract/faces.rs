@@ -6,8 +6,11 @@ use crate::fonts::{FaceBytes, FaceState};
 use crate::primitives::FacesCx;
 
 impl<C: Component> FacesCx for Cx<'_, C> {
-    fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes> + Send + 'static) -> FaceState {
-        DocumentFaces::face(&self.core.ctx, key, load)
+    fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState
+    where
+        L: FnOnce() -> Option<FaceBytes> + Send + 'static,
+    {
+        DocumentFaces::face(&self.core.ctx, key, job)
     }
 
     fn document_face_bytes(&self, key: &str) -> Option<FaceBytes> {
@@ -16,8 +19,11 @@ impl<C: Component> FacesCx for Cx<'_, C> {
 }
 
 impl<C: Component> FacesCx for MeasureCx<'_, C> {
-    fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes> + Send + 'static) -> FaceState {
-        DocumentFaces::face(self.ui.ctx(), key, load)
+    fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState
+    where
+        L: FnOnce() -> Option<FaceBytes> + Send + 'static,
+    {
+        DocumentFaces::face(self.ui.ctx(), key, job)
     }
 
     fn document_face_bytes(&self, key: &str) -> Option<FaceBytes> {

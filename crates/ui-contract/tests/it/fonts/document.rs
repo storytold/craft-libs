@@ -1,17 +1,19 @@
 //! Document faces read from a catalog: loaded off the pass, ready from the pass after, kept across a definitions
-//! replacement and while drawn lately, and served to egui without making its fonts again.
+//! replacement and while drawn lately (a settled view's replay counts), served to egui without making its fonts again,
+//! and held within one budget.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 
 use craft_behavior::Metrics;
 use craft_host::{AppInfo, Host, ManualJobs};
-use craft_ui::contract::{Common, Component, Cx, FacesCx as _, MeasureCx, Role, Show as _};
+use craft_ui::contract::{Common, Component, Cx, FacesCx, MeasureCx, MemoView, Role, Show as _};
 use craft_ui::fonts::{self, FaceBytes, FaceState};
 use craft_ui::primitives::{DocRun, DocText};
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, document_face_budget, last_frame_memo_runs, trial};
 use egui::{Color32, Response, Vec2};
 
 const FONT: &[u8] = include_bytes!("../../fonts/NotoSans-test.ttf");
@@ -44,13 +46,27 @@ impl Tally {
     }
 }
 
-/// An owner of document faces: it asks for its keys while it is measured, and lays text out in each ready one.
+/// Asks for the face `key`, whose load counts itself in `tally`; a key starting with `panic` names a load that panics.
+fn ask(cx: &impl FacesCx, key: &str, tally: &Tally) -> FaceState {
+    cx.document_face(key, || {
+        let (loads, panics) = (Arc::clone(&tally.loads), key.starts_with("panic"));
+        move || {
+            loads.fetch_add(1, Ordering::Relaxed);
+            assert!(!panics, "a load that panics");
+            Some(FaceBytes::new(Arc::from(FONT), 0))
+        }
+    })
+}
+
+/// An owner of document faces: it asks for its keys while it is measured, and lays text out in each ready one; or,
+/// with `in_run`, asks for them in its run only.
 #[derive(Component)]
 struct Owner {
     #[common]
     common: Common,
     keys: Vec<String>,
     tally: Tally,
+    in_run: bool,
 }
 
 impl Component for Owner {
@@ -63,12 +79,11 @@ impl Component for Owner {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if self.in_run {
+            return Vec2::splat(1.0);
+        }
         for key in &self.keys {
-            let loads = Arc::clone(&self.tally.loads);
-            let state = cx.document_face(key, move || {
-                loads.fetch_add(1, Ordering::Relaxed);
-                Some(FaceBytes::new(Arc::from(FONT), 0))
-            });
+            let state = ask(cx, key, &self.tally);
             if let FaceState::Ready(font) = &state {
                 let runs = [DocRun::new("Ag", font.clone(), 14.0, DataColor::new(Color32::BLACK))];
                 let _ = cx.layout_doc(&DocText::new(&runs));
@@ -79,6 +94,12 @@ impl Component for Owner {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
+        if self.in_run {
+            for key in &self.keys {
+                let state = ask(&cx, key, &self.tally);
+                self.tally.states.lock().expect("the states").insert(key.clone(), state);
+            }
+        }
         cx.response.clone()
     }
 }
@@ -99,7 +120,7 @@ fn rig() -> (Frames, Arc<ManualJobs>, Tally) {
 /// One frame in which an owner asks for `keys`.
 fn frame(frames: &mut Frames, tally: &Tally, keys: &[String]) {
     frames.frame(vec![], |ui| {
-        Owner { common: Common::new(), keys: keys.to_vec(), tally: tally.clone() }.show(ui);
+        Owner { common: Common::new(), keys: keys.to_vec(), tally: tally.clone(), in_run: false }.show(ui);
     });
 }
 
@@ -164,4 +185,101 @@ fn faces_stay_ready_after_the_definitions_are_replaced() {
     frame(&mut frames, &tally, &wanted);
     assert!(tally.all_ready(&wanted), "egui finds the served faces again");
     assert_eq!(tally.loads(), 3, "without loading them again");
+}
+
+/// Without a host the loads run on `default_jobs`' threads: every face asked for in one pass lands, each loaded once.
+#[trial]
+fn without_a_host_every_face_asked_for_in_one_pass_lands() {
+    let mut frames = Frames::new();
+    let tally = Tally::default();
+    let wanted = keys(0..8);
+    for _ in 0..1000 {
+        frame(&mut frames, &tally, &wanted);
+        if tally.all_ready(&wanted) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(tally.all_ready(&wanted), "every face lands");
+    assert_eq!(tally.loads(), 8, "and none was cancelled and loaded again");
+}
+
+#[trial]
+fn a_load_that_panics_leaves_its_face_unavailable_and_asks_for_no_more_passes() {
+    let (mut frames, jobs, tally) = rig();
+    let wanted = vec!["panic".to_owned()];
+    frame(&mut frames, &tally, &wanted);
+    jobs.run_all();
+    frame(&mut frames, &tally, &wanted);
+    assert_eq!(tally.state("panic"), FaceState::Unavailable);
+    frame(&mut frames, &tally, &wanted);
+    assert!(!frames.repaint_requested(), "the row stops asking for passes");
+}
+
+/// The tally of the memoized view's owner: its `show` is a function, so it reaches the tally by name.
+static MEMOIZED: LazyLock<Tally> = LazyLock::new(Tally::default);
+
+fn memoized(_: &mut u32, ui: &mut egui::Ui) {
+    Owner { common: Common::new(), keys: vec!["m0".to_owned(), "m1".to_owned()], tally: MEMOIZED.clone(), in_run: true }.show(ui);
+}
+
+/// One frame of the memoized view beside an owner that asks for `keys`.
+fn memo_frame(frames: &mut Frames, tally: &Tally, keys: &[String]) {
+    frames.frame(vec![], |ui| {
+        MemoView::new("faces", 1u32, memoized).show(ui);
+        Owner { common: Common::new(), keys: keys.to_vec(), tally: tally.clone(), in_run: false }.show(ui);
+    });
+}
+
+#[trial]
+fn a_settled_view_that_replays_keeps_its_faces() {
+    let (mut frames, jobs, tally) = rig();
+    let font = FONT.len();
+    document_face_budget(&frames.ctx, 3 * font);
+    memo_frame(&mut frames, &tally, &[]);
+    jobs.run_all();
+    for _ in 0..3 {
+        memo_frame(&mut frames, &tally, &[]);
+    }
+    assert!(MEMOIZED.all_ready(&["m0".to_owned(), "m1".to_owned()]));
+    let mut replayed = 0;
+    for start in (0..8).step_by(2) {
+        let others = keys(start..start + 2);
+        memo_frame(&mut frames, &tally, &others);
+        jobs.run_all();
+        memo_frame(&mut frames, &tally, &others);
+        replayed += last_frame_memo_runs(&frames.ctx).iter().filter(|(_, _, run)| *run == MemoRun::Replayed).count();
+    }
+    assert!(replayed > 0, "the view replays while the other faces push the registry past its budget");
+    frame(&mut frames, &tally, &["m0".to_owned(), "m1".to_owned()]);
+    assert!(tally.all_ready(&["m0".to_owned(), "m1".to_owned()]), "the faces the replays showed are kept");
+    assert_eq!(MEMOIZED.loads(), 2, "and were loaded once");
+}
+
+#[trial]
+fn past_the_budget_the_faces_drawn_longest_ago_go_and_the_fonts_are_made_again_once() {
+    let (mut frames, jobs, tally) = rig();
+    let font = FONT.len();
+    document_face_budget(&frames.ctx, 6 * font);
+    // `keep` is drawn in every frame; one more face joins it each step.
+    let step = |frames: &mut Frames, key: &str| {
+        let wanted = vec!["keep".to_owned(), key.to_owned()];
+        shown(frames, &jobs, &tally, &wanted);
+        generation(frames)
+    };
+    let before = step(&mut frames, "k0");
+    let filling: Vec<u64> = ["k1", "k2", "k3", "k4"].iter().map(|key| step(&mut frames, key)).collect();
+    assert!(filling.iter().all(|g| *g == before), "within the budget nothing is taken out");
+    let after = step(&mut frames, "k5");
+    assert_ne!(after, before, "past it, egui's fonts are made again to free what went");
+    for _ in 0..3 {
+        frame(&mut frames, &tally, &["keep".to_owned(), "k5".to_owned()]);
+    }
+    assert_eq!(generation(&frames), after, "once, not every frame");
+    let all: Vec<String> = ["keep", "k0", "k1", "k2", "k3", "k4", "k5"].iter().map(|key| (*key).to_owned()).collect();
+    frame(&mut frames, &tally, &all);
+    let ready = |key: &str| matches!(tally.state(key), FaceState::Ready(_));
+    assert!(ready("keep"), "a face drawn in the last frame stays, the first loaded included");
+    assert!(["k0", "k1", "k2", "k3"].iter().all(|key| !ready(key)), "the faces drawn longest ago went");
+    assert!(ready("k4") && ready("k5"), "down to half the budget, the faces drawn last stay");
 }

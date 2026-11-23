@@ -157,7 +157,7 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
 
 /// A face's class, PANOSE and weight from its `OS/2` and `post` tables, as the catalog's scan recorded them.
 fn read_traits(face: &FaceInfo) -> Traits {
-    let weight = face.weight.round().clamp(1.0, 1000.0) as u16;
+    let weight = face.weight_class.unwrap_or(400).clamp(1, 1000);
     Traits { class: classify(&face.family, face.family_class, face.panose, face.fixed_pitch), panose: face.panose, weight }
 }
 

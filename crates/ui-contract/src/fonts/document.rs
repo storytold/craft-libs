@@ -11,26 +11,33 @@
 //! way the face reaches egui as a served family (`egui_fonts::serve_face`), which egui parses the first time text is
 //! laid out in it: a face arriving drops nothing egui has parsed or laid out.
 //!
-//! The registry keeps faces up to [`MAX_DOCUMENT_FACE_BYTES`] of font files; past it the faces drawn longest ago go,
-//! and faces drawn in the last frame always stay.
+//! The registry keeps faces up to [`MAX_DOCUMENT_FACE_BYTES`] of font files, counted with the files egui still holds
+//! for faces taken out; past it the faces drawn longest ago go, and faces drawn in the last frame always stay. A face a
+//! settled view shows by replaying its last run counts as drawn: the replay marks it (`runtime::replay::journal`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_host::queue::{JobQueue, Priority, QueueOptions};
-use craft_host::{Jobs, Wake, default_jobs};
+use craft_host::{Wake, default_jobs};
 use egui::epaint::text::{Blob, FontTweak, VariationCoords};
 use egui::{Context, FontData};
 
 use super::FontRef;
 use crate::runtime::egui::{fonts as egui_fonts, memory, pass, repaint};
 use crate::runtime::env::Env;
-use crate::runtime::frame;
+use crate::runtime::{frame, replay};
 
-/// The font file bytes the registry keeps faces of, a collection counted once. Past it the faces drawn longest ago
-/// are taken out; and once the files of faces taken out (which egui keeps parsed until its fonts are made again) pass
-/// it too, egui's fonts are made again to free them.
+/// The ceiling on the font file bytes of document faces: the files the registry keeps faces of (a collection counted
+/// once) plus the files of faces taken out, which egui keeps parsed until its fonts are made again. When the two pass
+/// it, the faces drawn longest ago are taken out until the kept files are at most `1 / LOW_MARK_DIVISOR` of it, and
+/// egui's fonts are made again once to free what was taken out. The sum passes the ceiling only by the faces drawn in
+/// the last frame, which always stay, and by the faces that land in one pass.
 pub const MAX_DOCUMENT_FACE_BYTES: usize = 512 << 20;
+
+/// Eviction takes the kept files down to the budget divided by this, so egui's fonts are made again once per half a
+/// budget of new faces, not for each face that lands past the budget.
+const LOW_MARK_DIVISOR: usize = 2;
 
 /// The bytes of a face, its index in a collection and its variation coordinates (axis tag, value).
 #[derive(Clone)]
@@ -92,15 +99,13 @@ struct Registered {
     used: u64,
 }
 
-/// The queue the catalog loads run on, with the `Jobs` it spawns lanes on and its lane count.
+/// The queue the catalog loads run on, with its lane count.
 struct Queue {
-    jobs: Arc<dyn Jobs>,
     lanes: usize,
     queue: Arc<JobQueue<String, Option<FaceBytes>>>,
 }
 
 /// The context's document faces, by family name.
-#[derive(Default)]
 struct Registry {
     faces: HashMap<String, Registered>,
     failed: HashSet<String>,
@@ -109,28 +114,47 @@ struct Registry {
     queue: Option<Queue>,
     /// The bytes of files whose faces were taken out since egui's fonts were last made again.
     withdrawn: usize,
+    /// [`MAX_DOCUMENT_FACE_BYTES`], or a trial's own (`testing::document_face_budget`).
+    budget: usize,
     frame: u64,
     hooked: bool,
 }
 
+impl Default for Registry {
+    fn default() -> Self {
+        Registry {
+            faces: HashMap::new(),
+            failed: HashSet::new(),
+            loading: HashMap::new(),
+            queue: None,
+            withdrawn: 0,
+            budget: MAX_DOCUMENT_FACE_BYTES,
+            frame: 0,
+            hooked: false,
+        }
+    }
+}
+
 impl Registry {
-    /// Past the budget, takes out the faces drawn longest ago (never one the last frame drew) and returns their
-    /// names; the bytes of files no kept face shares count as withdrawn.
-    fn evict(&mut self, now: u64) -> Vec<String> {
+    /// When the kept and withdrawn files pass the budget, takes out the faces drawn longest ago (never one the last
+    /// frame drew) down to the low mark, and returns their names and whether egui's fonts are made again to free the
+    /// withdrawn files.
+    fn evict(&mut self, now: u64) -> (Vec<String>, bool) {
         let mut files: HashMap<usize, (usize, usize)> = HashMap::new();
         for face in self.faces.values() {
             files.entry(face.face.file()).or_insert((face.face.bytes.len(), 0)).1 += 1;
         }
         let mut held: usize = files.values().map(|(bytes, _)| bytes).sum();
-        if held <= MAX_DOCUMENT_FACE_BYTES {
-            return Vec::new();
+        if held + self.withdrawn <= self.budget {
+            return (Vec::new(), false);
         }
+        let low = self.budget / LOW_MARK_DIVISOR;
         let mut stale: Vec<(u64, String)> =
             self.faces.iter().filter(|(_, face)| face.used + 1 < now).map(|(name, face)| (face.used, name.clone())).collect();
         stale.sort();
         let mut gone = Vec::new();
         for (_, name) in stale {
-            if held <= MAX_DOCUMENT_FACE_BYTES {
+            if held <= low {
                 break;
             }
             let Some(face) = self.faces.remove(&name) else { continue };
@@ -143,7 +167,7 @@ impl Registry {
             }
             gone.push(name);
         }
-        gone
+        (gone, std::mem::take(&mut self.withdrawn) > 0)
     }
 }
 
@@ -174,25 +198,23 @@ enum Known {
     New,
 }
 
-/// The queue of `ctx`'s catalog loads, made again when the host's `Jobs` changes.
+/// The queue of `ctx`'s catalog loads: made on first use on the host's `Jobs` (`default_jobs` without a host) and kept
+/// for the context's life, as `TextureLoader::in_context` keeps its own.
 fn queue_of(ctx: &Context, registry: &mut Registry) -> Arc<JobQueue<String, Option<FaceBytes>>> {
-    let jobs = Env::host_of(ctx).map_or_else(default_jobs, |host| Arc::clone(host.jobs_shared()));
-    match &registry.queue {
-        Some(queue) if Arc::ptr_eq(&queue.jobs, &jobs) => Arc::clone(&queue.queue),
-        _ => {
-            let wake_ctx = ctx.clone();
-            let wake = Wake::new(move || repaint::request(&wake_ctx));
-            let lanes = QueueOptions::default_lanes();
-            let queue = Arc::new(JobQueue::new(Arc::clone(&jobs), wake, QueueOptions { lanes, name: "craft-document-faces" }));
-            registry.loading.clear();
-            registry.queue = Some(Queue { jobs, lanes, queue: Arc::clone(&queue) });
-            queue
-        }
+    if let Some(queue) = &registry.queue {
+        return Arc::clone(&queue.queue);
     }
+    let jobs = Env::host_of(ctx).map_or_else(default_jobs, |host| Arc::clone(host.jobs_shared()));
+    let wake_ctx = ctx.clone();
+    let wake = Wake::new(move || repaint::request(&wake_ctx));
+    let lanes = QueueOptions::default_lanes();
+    let queue = Arc::new(JobQueue::new(jobs, wake, QueueOptions { lanes, name: "craft-document-faces" }));
+    registry.queue = Some(Queue { lanes, queue: Arc::clone(&queue) });
+    queue
 }
 
-/// The begin-pass step: drops the loads no frame asked for lately, serves the faces that landed and takes out the faces
-/// past the budget. Before anything of the pass is laid out, so a rebuild of egui's fonts it asks for applies at once.
+/// The begin-pass step: drops the loads no frame asked for lately, serves the faces that landed, marks unavailable the
+/// faces whose load ended without landing (a job that panicked) and takes out the faces past the budget. Before anything of the pass is laid out, so a rebuild of egui's fonts it asks for applies at once.
 fn begin_pass(ctx: &Context) {
     let now = pass::root_frame_nr(ctx);
     let inline = memory::with::<Registry, _>(ctx, |registry| {
@@ -209,10 +231,18 @@ fn begin_pass(ctx: &Context) {
             let loading = &mut registry.loading;
             loading.retain(|_, asked| *asked + 1 >= now);
             queue.reprioritize(|key, priority| loading.contains_key(key).then_some(priority));
+            // A job leaves the running ones and files its result under the queue's one lock, so a key neither queued
+            // nor running here is among the results taken after, or its job ended without one.
+            let mut lost: Vec<String> = loading.keys().filter(|key| !queue.contains(key)).cloned().collect();
             while let Some(finished) = queue.try_recv() {
+                lost.retain(|key| *key != finished.key);
                 if loading.remove(&finished.key).is_some() {
                     landed.push((finished.key, finished.result));
                 }
+            }
+            for key in lost {
+                loading.remove(&key);
+                registry.failed.insert(key);
             }
         }
         for (name, result) in &landed {
@@ -225,11 +255,7 @@ fn begin_pass(ctx: &Context) {
                 }
             }
         }
-        let gone = registry.evict(now);
-        let rebuild = registry.withdrawn > MAX_DOCUMENT_FACE_BYTES;
-        if rebuild {
-            registry.withdrawn = 0;
-        }
+        let (gone, rebuild) = registry.evict(now);
         (landed, gone, rebuild)
     });
     for (name, face) in landed {
@@ -245,6 +271,23 @@ fn begin_pass(ctx: &Context) {
     }
 }
 
+/// Marks the kept face `name` drawn in this frame: a replay's journal entry.
+fn mark_drawn(ctx: &Context, name: &str) {
+    memory::with::<Registry, _>(ctx, |registry| {
+        let now = registry.frame;
+        if let Some(face) = registry.faces.get_mut(name) {
+            face.used = now;
+        }
+    });
+}
+
+/// Sets the budget of `ctx`'s document faces to `bytes` in place of [`MAX_DOCUMENT_FACE_BYTES`], so a trial reaches
+/// it with a few faces.
+#[cfg(feature = "testing")]
+pub fn set_budget(ctx: &Context, bytes: usize) {
+    memory::with::<Registry, _>(ctx, |registry| registry.budget = bytes);
+}
+
 /// Hooks the begin-pass step on the context's fonts plugin.
 fn begin(ctx: &Context) {
     let hook = memory::with::<Registry, _>(ctx, |registry| !std::mem::replace(&mut registry.hooked, true));
@@ -258,11 +301,15 @@ fn begin(ctx: &Context) {
 pub(crate) struct DocumentFaces;
 
 impl DocumentFaces {
-    /// The face registered under `key` as a family of its own. `load` reads it from a font catalog: it runs as a job,
-    /// once per key while the face is kept, and the face is ready from the pass after the job ends. A `load` that
-    /// returns `None`, or bytes egui cannot read, marks the key unavailable for as long as the context lives. Every call
+    /// The face registered under `key` as a family of its own. The load `job()` makes reads it from a font catalog:
+    /// `job` is called only for a key the registry does not know, and its load runs as a job, once per key while the
+    /// face is kept; the face is ready from the pass after the job ends. A load that returns `None`, bytes egui cannot
+    /// read, or a job that ends without a result marks the key unavailable for as long as the context lives. Every call
     /// marks the face drawn in this frame; a load no frame asks for any more is dropped.
-    pub(crate) fn face(ctx: &Context, key: &str, load: impl FnOnce() -> Option<FaceBytes> + Send + 'static) -> FaceState {
+    pub(crate) fn face<L>(ctx: &Context, key: &str, job: impl FnOnce() -> L) -> FaceState
+    where
+        L: FnOnce() -> Option<FaceBytes> + Send + 'static,
+    {
         let name = Kind::Alone.family_name(key);
         match Self::known(ctx, &name) {
             Known::Failed => FaceState::Unavailable,
@@ -277,6 +324,7 @@ impl DocumentFaces {
                 // A measuring run starts the load too: the registry is a cache, and a face loads the same whichever
                 // run asks.
                 frame::request_repaint(ctx);
+                let load = job();
                 memory::with::<Registry, _>(ctx, |registry| {
                     let queue = queue_of(ctx, registry);
                     registry.loading.insert(name.clone(), registry.frame);
@@ -328,10 +376,11 @@ impl DocumentFaces {
         memory::with::<Registry, _>(ctx, |registry| registry.faces.get(&name).map(|face| face.face.clone()))
     }
 
-    /// What the registry knows of `name`, marking a kept face drawn and a load asked for in this frame.
+    /// What the registry knows of `name`, marking a kept face drawn and a load asked for in this frame. The mark of a
+    /// kept face is journaled, so a settled view's replay marks the faces its run drew.
     fn known(ctx: &Context, name: &str) -> Known {
         begin(ctx);
-        memory::with::<Registry, _>(ctx, |registry| {
+        let known = memory::with::<Registry, _>(ctx, |registry| {
             let now = registry.frame;
             if registry.failed.contains(name) {
                 Known::Failed
@@ -344,7 +393,11 @@ impl DocumentFaces {
             } else {
                 Known::New
             }
-        })
+        });
+        if matches!(known, Known::Ready) {
+            replay::journal_distinct(ctx, || name.to_owned(), |ctx, name: &String| mark_drawn(ctx, name));
+        }
+        known
     }
 
     /// A kept face's state: ready once egui lays text out with the served faces.

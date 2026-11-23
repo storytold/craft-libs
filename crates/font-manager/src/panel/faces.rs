@@ -49,8 +49,10 @@ pub(crate) fn shown(at: &impl FacesCx, catalog: &Arc<Catalog>, owner: Owner, fac
     if face.file_bytes.is_some_and(|bytes| bytes > MAX_FILE_BYTES) {
         return Shown::Unavailable;
     }
-    let (catalog, info) = (Arc::clone(catalog), face.clone());
-    at.document_face(&key(owner, face), move || load(&catalog, &info))
+    at.document_face(&key(owner, face), || {
+        let (catalog, info) = (Arc::clone(catalog), face.clone());
+        move || load(&catalog, &info)
+    })
 }
 
 /// The bytes of `face` once [`shown`] has it ready, for reading its tables without loading the file again.
