@@ -74,11 +74,12 @@ fn button_loading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::new("Saving").icon(IconId::new("save")).loading(true).show(ui).into()
 }
 
-/// The command the search opener stories fire: an app command, so it is enabled in a story with no focused field.
+/// The command the search opener stories fire: an app command, so it is enabled in a story with no focused field. Its
+/// set is registered in every test binary that links the stories, so its chord keeps clear of the chords trials bind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "buttonStory", story)]
 enum SearchStoryCommand {
-    #[command(label = "Search", default = "Cmd+K")]
+    #[command(label = "Search", default = "Cmd+Shift+F")]
     Open,
 }
 

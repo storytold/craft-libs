@@ -93,7 +93,7 @@ pub(crate) fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &Toolti
 /// after it; else, with no base text, the hint alone with the chord. The base is the tooltip's text, or its disabled
 /// text while disabled; else the full label when the paint cut it, or its own label when the component declares it
 /// paints no label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a
-/// hint.
+/// hint that is not shown alone (`CommandState::hint_alone`).
 ///
 /// A canvas control (`canvas_control`) never shows its label: its rect is the canvas it is shown over, not a face of
 /// its own, so the label would show wherever the pointer rests on the page ("Rulers margins" over a whole page). Its
@@ -109,7 +109,9 @@ fn text_of(core: &super::CxCore<'_>, shows_label: bool, canvas_control: bool, me
         None if canvas_control => return None,
         None => {
             let paint = core.paint.borrow();
-            let unpainted = !shows_label || paint.label_dropped || hint.is_some();
+            // A hint shown alone (`CommandState::hint_alone`) does not bring the label that shows whole with it.
+            let alone = hint.is_some() && core.command.as_deref().is_some_and(|command| command.hint_alone);
+            let unpainted = !shows_label || paint.label_dropped || (hint.is_some() && !alone);
             paint.elided.clone().or_else(|| (unpainted && !core.resolved.label.is_empty()).then(|| core.resolved.label.to_owned()))
         }
     };

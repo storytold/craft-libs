@@ -290,9 +290,9 @@ impl<'a> TaskBar<'a> {
         let rect = shown.output.response.rect;
         let pick = menu.pick;
         if shows && movable {
-            // A press on the grip with no drag drops the bar where it was: no place changes.
-            let moved = shown.output.moved.filter(|moved| moved.min != rect.min);
-            let next = settled(held, rect, area, moved, pick);
+            // Only a drag's drop reports a move (`placement_changed` keeps the Commit): a press on the grip with no drag
+            // reports none, so no place changes. The layer shows at the drop already, so the move is the bar's rect.
+            let next = settled(held, rect, area, shown.output.moved, pick);
             if next != held {
                 let word = match pick {
                     Some(MenuPick::Reset) => &words.task_bar_reset,

@@ -806,6 +806,7 @@ impl Board {
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
+            hint_alone: state.is_some_and(CommandState::is_hint_alone),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             edit: self.registry.edit_of(&command.id).is_some(),
             command: command.clone(),
@@ -1109,6 +1110,28 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     for id in shadowed {
         log::warn!("the app catalog defines {id}, which a linked command set defines: the set's definition is the command's");
     }
+}
+
+/// Tells the app of a key press `hit` that ran nothing because its command `resolved` is disabled, when the app's own
+/// state of an app-scope command (`app`) is all that disables it, so the app can say why nothing ran
+/// (`FrameOutput::declined`). A refusal by the gate, the modal rule or a declaring instance's state is not the app's to
+/// explain.
+fn decline(ctx: &Context, hit: Hit, app: bool, resolved: &ResolvedCommand, time: f64) {
+    if resolved.enabled || !app || resolved.instance.is_some() || resolved.refused {
+        return;
+    }
+    let declined = Fired {
+        command: hit.command,
+        target: None,
+        source: FireSource::Key,
+        phase: FirePhase::Press,
+        cycle: hit.cycle.len() > 1,
+        alt_variant: hit.alt_variant,
+        time,
+        pasted: None,
+        paste_at: None,
+    };
+    with(ctx, |board| board.declined.push(declined));
 }
 
 /// The chords the keymap binds to the edit commands, which the input hook removes from the raw input when the
@@ -2014,28 +2037,19 @@ pub(crate) fn begin(ctx: &Context) {
                 };
                 let typing = shortcuts.typing && !shortcut.canvas;
                 let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled))) else {
+                    // Every binding of the press is disabled where it lands, so it runs nothing. The binding it would
+                    // run with none passed over may be declined to the app (`decline`).
+                    if let Some(passed) = keys.press(&shortcuts.layout, &shortcut.input, typing, None) {
+                        let (app, instance) = with(ctx, |board| board.target_of(ctx, &passed.command, &board.here));
+                        let resolved = resolve_once(ctx, &passed.command, instance, Reach::Focus, None);
+                        decline(ctx, passed, app, &resolved, time);
+                    }
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
                 let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
                 if !resolved.enabled {
-                    // The key stays taken. When the app's own state of an app-scope command is all that disables it,
-                    // the app hears of the press so it can say why nothing ran; a refusal by the gate, the modal rule
-                    // or a declaring instance's state is not the app's to explain.
-                    if app && resolved.instance.is_none() && !resolved.refused {
-                        let declined = Fired {
-                            command: hit.command,
-                            target: None,
-                            source: FireSource::Key,
-                            phase: FirePhase::Press,
-                            cycle: hit.cycle.len() > 1,
-                            alt_variant: hit.alt_variant,
-                            time,
-                            pasted: None,
-                            paste_at: None,
-                        };
-                        with(ctx, |board| board.declined.push(declined));
-                    }
+                    decline(ctx, hit, app, &resolved, time);
                     continue;
                 }
                 // An app-scope command a modal layer's instance declares is delivered to that instance.

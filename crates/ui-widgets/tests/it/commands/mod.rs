@@ -40,8 +40,9 @@ fn tooltip_of(command: HintCommand, state: CommandState, show: impl Fn(&mut Ui) 
     added.join("\n")
 }
 
-/// L-72: a bound command's hint is the tooltip's second line, under the label and its chord, enabled or not; with no
-/// other tooltip text (the label shows whole), the hint is the tooltip, with the chord after it.
+/// A bound command's hint is the tooltip's second line, under the label and its chord, enabled or not, also when the
+/// label shows whole; with `hint_alone` (L-72, opt-in) and no other tooltip text, the hint is the tooltip, with the
+/// chord after it.
 #[trial]
 fn a_bound_commands_hint_is_the_tooltips_second_line() {
     const NEEDS: &str = "Needs an open document";
@@ -56,5 +57,11 @@ fn a_bound_commands_hint_is_the_tooltips_second_line() {
     }
     const OPENS: &str = "Opens a document from disk";
     let text = tooltip_of(HintCommand::Open, CommandState::new().hint(OPENS), |ui| Button::new("Open").command(HintCommand::Open).show(ui).rect);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "by default the label and chord, then the hint: {text:?}");
+    assert!(lines[0].starts_with("Open (") && lines[0].ends_with(')') && lines[1] == OPENS, "the label and chord first: {text:?}");
+    let text = tooltip_of(HintCommand::Open, CommandState::new().hint(OPENS).hint_alone(true), |ui| {
+        Button::new("Open").command(HintCommand::Open).show(ui).rect
+    });
     assert!(text.starts_with(&format!("{OPENS} (")) && text.ends_with(')') && !text.contains('\n'), "the hint alone, with the chord: {text:?}");
 }
