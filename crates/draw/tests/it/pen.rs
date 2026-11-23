@@ -3,7 +3,7 @@
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{CanvasView, EditEvent};
-use craft_draw::ui::pen::{EditSubpath, Knot, PenDraft, PenEnd, PenEvent, PenMode, PenTool};
+use craft_draw::ui::pen::{EditSubpath, Knot, PathOptionsSettings, PenDraft, PenEnd, PenEvent, PenMode, PenTool};
 use craft_ui::testing::{ToolFixture, trial};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, vec2};
 
@@ -417,6 +417,154 @@ fn three_curvature_clicks_give_three_anchors() {
             assert_eq!(pen.draft().knots.len(), n + 1, "{what}: {:?}", pen.kinds());
             assert!(pen.kinds().iter().filter(|kind| **kind == "update").count() > updates, "{what}: an Update");
         }
+    }
+}
+
+// ---- The Rubber Band preview of the Curvature mode (storytold/photocraft#12756) ----
+
+/// What the pass painted: `Draw::dashed` breaks a dashed line into line segments, so a dash is an
+/// [`egui::Shape::LineSegment`] and the draft line an [`egui::Shape::Path`].
+fn painted(pen: &mut Pen) -> Vec<egui::Shape> {
+    pen.fixture.fixture().frame_shapes()
+}
+
+/// The dashes among `shapes`.
+fn dashes_of(shapes: &[egui::Shape]) -> Vec<[Pos2; 2]> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::LineSegment { points, .. } => Some(*points),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The pen's Path Options with Rubber Band as `rubber_band`: `PathOptionsSettings` is `#[non_exhaustive]`, so an
+/// outside test builds it with a functional update.
+fn options_with(rubber_band: bool) -> PathOptionsSettings {
+    PathOptionsSettings { rubber_band, ..PathOptionsSettings::default() }
+}
+
+/// The screen points of the cubic from `a`'s anchor over its out handle and `b`'s in handle to `b`'s anchor.
+fn cubic(pen: &Pen, a: &Knot, b: &Knot) -> Vec<Pos2> {
+    (0..=24)
+        .map(|i| {
+            let t = f64::from(i) / 24.0;
+            let u = 1.0 - t;
+            let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            pen.at(
+                a.anchor.x * w0 + a.out_ctrl.x * w1 + b.in_ctrl.x * w2 + b.anchor.x * w3,
+                a.anchor.y * w0 + a.out_ctrl.y * w1 + b.in_ctrl.y * w2 + b.anchor.y * w3,
+            )
+        })
+        .collect()
+}
+
+/// The greatest distance from a point of `curve` to the nearest of `dashes`: small when the dashes run along the
+/// whole curve, a whole segment long when they leave a stretch of it out.
+fn gap_along(curve: &[Pos2], dashes: &[[Pos2; 2]]) -> f32 {
+    curve
+        .iter()
+        .map(|&p| {
+            dashes
+                .iter()
+                .map(|[a, b]| {
+                    let v = *b - *a;
+                    if v.length_sq() == 0.0 { p.distance(*a) } else { p.distance(*a + v * ((p - *a).dot(v) / v.length_sq()).clamp(0.0, 1.0)) }
+                })
+                .fold(f32::MAX, f32::min)
+        })
+        .fold(0.0, f32::max)
+}
+
+/// With Rubber Band on, the preview is the whole curve the next click would make: the draft with the pointer as a
+/// smooth anchor and every handle reflowed, not only the segment to the pointer.
+#[trial]
+fn the_curvature_rubber_band_previews_every_segment_the_next_click_re_solves() {
+    let mut pen = pen();
+    pen.fixture.tool_mut().mode(PenMode::Curvature).path_options(options_with(true));
+    pen.click_doc(60.0, 160.0);
+    pen.click_doc(160.0, 60.0);
+    pen.move_to(pen.at(260.0, 160.0), Modifiers::NONE);
+    let shown = dashes_of(&painted(&mut pen));
+    assert!(!shown.is_empty(), "a preview runs to the pointer");
+    // The click the preview promises, so the test measures the preview against the curve it shows.
+    pen.click_doc(260.0, 160.0);
+    let solved = pen.draft();
+    assert_eq!(solved.knots.len(), 3, "the click adds the pointer as an anchor");
+    let to_pointer = cubic(&pen, &solved.knots[1], &solved.knots[2]);
+    let first = cubic(&pen, &solved.knots[0], &solved.knots[1]);
+    assert!(gap_along(&to_pointer, &shown) < 6.0, "the segment to the pointer is previewed: {shown:?}");
+    assert!(gap_along(&first, &shown) < 6.0, "the re-solved segment before it is previewed too");
+}
+
+/// Rubber Band off, the default: no preview at all from the last anchor to the pointer. The draft line and its
+/// anchors still paint.
+#[trial]
+fn no_rubber_band_draws_no_curvature_preview() {
+    let mut pen = pen();
+    pen.fixture.tool_mut().mode(PenMode::Curvature);
+    pen.click_doc(60.0, 160.0);
+    pen.click_doc(160.0, 60.0);
+    pen.move_to(pen.at(260.0, 160.0), Modifiers::NONE);
+    let shapes = painted(&mut pen);
+    assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Path(_))), "the draft line still paints");
+    assert!(shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(_))), "the anchors still paint");
+    assert!(dashes_of(&shapes).is_empty(), "no preview while drawing: {:?}", dashes_of(&shapes));
+}
+
+/// The carried anchors of a resumed draft keep their handles, so the segments before them do not change and stay out
+/// of the preview: it starts at the last carried anchor.
+#[trial]
+fn the_preview_of_a_carried_draft_covers_only_the_segments_that_change() {
+    let mut pen = pen();
+    let carried = EditSubpath::new(vec![Knot::smooth(doc(60.0, 60.0), doc(80.0, 70.0)), Knot::smooth(doc(160.0, 60.0), doc(180.0, 40.0))], false);
+    {
+        let mut tool = pen.fixture.tool_mut();
+        tool.mode(PenMode::Curvature).path_options(options_with(true)).kept(2).draft(Some(PenDraft::Own(&carried)));
+    }
+    pen.fixture.fixture().settle();
+    pen.sync();
+    pen.move_to(pen.at(260.0, 160.0), Modifiers::NONE);
+    let shown = dashes_of(&painted(&mut pen));
+    assert!(!shown.is_empty(), "a preview runs to the pointer");
+    pen.click_doc(260.0, 160.0);
+    let solved = pen.draft();
+    assert_eq!(solved.knots.len(), 3, "the carried anchors and the new one");
+    assert!(gap_along(&cubic(&pen, &solved.knots[1], &solved.knots[2]), &shown) < 6.0, "the new segment is previewed");
+    assert!(gap_along(&cubic(&pen, &solved.knots[0], &solved.knots[1]), &shown) > 20.0, "the carried segment keeps its shape");
+}
+
+/// Not measured with only one anchor placed: today's straight line from that anchor to the pointer, which the
+/// shared setting now switches.
+#[trial]
+fn one_anchor_previews_the_line_to_the_pointer() {
+    for rubber_band in [true, false] {
+        let mut pen = pen();
+        pen.fixture.tool_mut().mode(PenMode::Curvature).path_options(options_with(rubber_band));
+        pen.click_doc(60.0, 160.0);
+        pen.move_to(pen.at(160.0, 60.0), Modifiers::NONE);
+        let shown = dashes_of(&painted(&mut pen));
+        assert_eq!(!shown.is_empty(), rubber_band, "one anchor, Rubber Band {rubber_band}");
+        if rubber_band {
+            let line = [pen.at(60.0, 160.0), pen.at(160.0, 60.0)];
+            assert!(gap_along(&line, &shown) < 6.0, "the line from the anchor to the pointer: {shown:?}");
+        }
+    }
+}
+
+/// The Pen mode keeps its own rubber band on the same option: the band from the last anchor to the pointer with
+/// Rubber Band on, nothing with it off. Guard test, unchanged by this work.
+#[trial]
+fn the_pen_rubber_band_follows_the_same_option() {
+    for rubber_band in [true, false] {
+        let mut pen = pen();
+        pen.fixture.tool_mut().path_options(options_with(rubber_band));
+        pen.click_doc(60.0, 160.0);
+        pen.click_doc(160.0, 60.0);
+        pen.move_to(pen.at(260.0, 160.0), Modifiers::NONE);
+        let shown = dashes_of(&painted(&mut pen));
+        assert_eq!(!shown.is_empty(), rubber_band, "the Pen's band, Rubber Band {rubber_band}");
     }
 }
 

@@ -42,8 +42,8 @@ pub const PATH_OPTIONS_COLOR_KEY: &str = "pathOptions.color";
 #[serde(default, rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PathOptionsSettings {
-    /// The Pen's rubber band from the last anchor to the pointer. Off by default, as Photoshop. The Curvature mode
-    /// always draws its preview curve.
+    /// The Pen's rubber band from the last anchor to the pointer, and the Curvature mode's preview of the whole curve
+    /// its next click would make. Off by default, as Photoshop: with it off, neither mode previews anything.
     pub rubber_band: bool,
     /// The path colour as sRGB bytes; `None` uses the overlay line colour. Paths with a colour of their own (a layer
     /// colour) keep it.

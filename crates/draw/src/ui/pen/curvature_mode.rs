@@ -101,8 +101,9 @@ impl PenTool {
         if let Some(pointer) = pointer
             && self.drag.is_none()
             && !draft.closed
+            && self.rubber_band()
         {
-            let line = next_segment(draft, self.kept, view, pointer);
+            let line = preview_curve(draft, self.kept, view, pointer);
             draw.dashed(&line, Dashes::new(look.dash, look.gap), StrokeWidth::Thin, look.line);
         }
         paint_anchors(draw, look, view, draft);
@@ -114,14 +115,18 @@ impl PenTool {
     }
 }
 
-/// The screen line of the segment the next click would add: the curve through the anchors and the pointer, from the
-/// last anchor to the pointer.
-fn next_segment(draft: &EditSubpath, kept: usize, view: &CanvasView, pointer: Pos2) -> Vec<Pos2> {
+/// The screen line of the curve the next click would draw: the draft with a smooth anchor at `pointer` and its
+/// handles reflowed, over every segment that click changes. The first `kept` anchors keep their handles, so the line
+/// starts at the last of them, where a resumed draft carries on from, and at the first anchor with none kept.
+fn preview_curve(draft: &EditSubpath, kept: usize, view: &CanvasView, pointer: Pos2) -> Vec<Pos2> {
     let mut next = draft.clone();
     next.knots.push(Knot { smooth: true, ..Knot::corner(view.to_doc(pointer)) });
     next.reflow_kept(kept);
+    // `kept` counts anchors of `draft`, and `next` has one more than `draft`, so the start is within range.
+    let from = kept.saturating_sub(1).min(next.knots.len() - 1);
     let mut line = Vec::new();
-    if let [.., a, b] = next.knots.as_slice() {
+    for pair in next.knots[from..].windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
         let mut segment = BezPath::new();
         segment.move_to(a.anchor);
         segment.curve_to(a.out_ctrl, b.in_ctrl, b.anchor);
