@@ -1,4 +1,4 @@
-use super::{Align, Cell, FBlock, Fmt, Para, Rgb, VAlign};
+use super::{Align, Cell, FBlock, Fmt, Para, Rgb, VAlign, model};
 
 /// Most characters kept of one list level's `\leveltext` (a length, then up to 255 characters).
 pub(super) const MAX_LEVEL_TEXT: usize = 256;
@@ -110,6 +110,12 @@ pub(super) enum Dest {
     /// Formatting before a tracked change (`\oldpprops` when true, else `\oldcprops`): read
     /// into the group's own state, which the group's end keeps as the change's old formatting.
     OldProps(bool),
+    /// A section's formatting before a tracked change (`\oldsprops`), read over a copy of the
+    /// section's formatting.
+    OldSect,
+    /// A row definition before a tracked change (`\oldtprops`): its table and row words read
+    /// over a copy of the row's, its cell definitions from none.
+    OldRow,
     /// A shape's description (`\shpinst`), and the name (`\sn`) and value (`\sv`) of one of
     /// its properties.
     ShpInst,
@@ -197,9 +203,11 @@ pub(super) struct Output {
     pub(super) cell: Vec<FBlock>,
     pub(super) defs: Vec<CellDef>,
     pub(super) def_cur: CellDef,
-    pub(super) row_header: bool,
+    pub(super) row_fmt: RowFmt,
+    pub(super) old_row: Option<Box<OldRow>>,
     pub(super) rule_pending: bool,
     pub(super) table_rights: Vec<Vec<i32>>,
+    pub(super) table_acc: TableAcc,
 }
 
 #[derive(Clone, Debug)]
@@ -285,7 +293,7 @@ impl Default for St {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct CellDef {
     pub(super) vmerge: u8,
     pub(super) hmerge: u8,
@@ -295,6 +303,118 @@ pub(super) struct CellDef {
     /// width and `\brdrcf` colour).
     pub(super) borders: craft_wordmodel::props::Borders,
     pub(super) valign: Option<VAlign>,
+    /// The preferred width (`\clwWidth`) and its unit (`\clftsWidth`).
+    pub(super) width: Option<i32>,
+    pub(super) width_fts: i32,
+}
+
+impl CellDef {
+    /// The preferred width in points, when it is given in twips.
+    pub(super) fn width_pt(&self) -> Option<f32> {
+        self.width.filter(|&w| self.width_fts == 3 && w > 0).map(|w| (w as f32 / 20.0).min(1584.0))
+    }
+
+    /// The borders it names, when any shows.
+    pub(super) fn visible_borders(&self) -> Option<craft_wordmodel::props::Borders> {
+        self.borders.any_visible().then_some(self.borders)
+    }
+
+    /// Its borders in a row whose table has borders of its own (`\trbrdr…`) when
+    /// `table_borders`: Word draws only the sides a cell names, so the others are none rather
+    /// than the table's.
+    pub(super) fn cell_borders(&self, table_borders: bool) -> Option<craft_wordmodel::props::Borders> {
+        use craft_wordmodel::props::{Border, BorderStyle, Borders};
+        if !table_borders {
+            return self.visible_borders();
+        }
+        let none = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+        let b = &self.borders;
+        let side = |s: Option<Border>| s.filter(Border::is_visible).or(none);
+        Some(Borders { top: side(b.top), left: side(b.left), bottom: side(b.bottom), right: side(b.right), between: None, inside_v: None })
+    }
+}
+
+/// The table and row words of a row definition (`\trowd` resets them): the table's alignment
+/// (`\trql`…), preferred width (`\trftsWidth`, `\trwWidth`) and borders (`\trbrdr…`), the
+/// row's height (`\trrh`), keeping together (`\trkeep`) and header flag (`\trhdr`), and who
+/// changed it when (`\trauth`, `\trdate`).
+#[derive(Clone, Debug, Default)]
+pub(super) struct RowFmt {
+    pub(super) align: Option<Align>,
+    pub(super) width_fts: i32,
+    pub(super) width: Option<i32>,
+    pub(super) borders: craft_wordmodel::props::Borders,
+    pub(super) height: i32,
+    pub(super) keep: bool,
+    pub(super) header: bool,
+    pub(super) auth: Option<i32>,
+    pub(super) date: Option<u32>,
+}
+
+impl RowFmt {
+    /// The table's preferred width: points (twips given), else percent (50ths given).
+    pub(super) fn table_width(&self) -> (Option<f32>, Option<f32>) {
+        match (self.width_fts, self.width.filter(|&w| w > 0)) {
+            (3, Some(w)) => (Some((w as f32 / 20.0).min(1584.0)), None),
+            (2, Some(w)) => (None, Some((w as f32 / 50.0).min(100.0))),
+            _ => (None, None),
+        }
+    }
+
+    /// The table's borders, when any shows.
+    pub(super) fn visible_borders(&self) -> Option<craft_wordmodel::props::Borders> {
+        self.borders.any_visible().then_some(self.borders)
+    }
+
+    /// The row's height in points and whether it is exact (`\trrh` below zero), else at least.
+    pub(super) fn row_height(&self) -> Option<(f32, bool)> {
+        let h = (self.height.unsigned_abs() as f32 / 20.0).min(1584.0);
+        (self.height != 0).then_some((h, self.height < 0))
+    }
+
+    /// The table's formatting these words give, as a tracked change keeps it.
+    pub(super) fn table_props(&self) -> craft_wordmodel::props::TableProps {
+        let (width, width_pct) = self.table_width();
+        craft_wordmodel::props::TableProps { align: self.align, width, width_pct, borders: self.visible_borders(), ..Default::default() }
+    }
+
+    /// The row's formatting these words give, as a tracked change keeps it.
+    pub(super) fn row_props(&self) -> craft_wordmodel::props::RowProps {
+        use craft_wordmodel::props::HeightRule;
+        let (height, height_rule) = match self.row_height() {
+            Some((h, true)) => (Some(h), HeightRule::Exact),
+            Some((h, false)) => (Some(h), HeightRule::AtLeast),
+            None => (None, HeightRule::Auto),
+        };
+        craft_wordmodel::props::RowProps { height, height_rule, cant_split: self.keep, header: self.header, ..Default::default() }
+    }
+}
+
+/// A row definition as it was before a tracked change (`\oldtprops`).
+#[derive(Clone, Debug, Default)]
+pub(super) struct OldRow {
+    pub(super) fmt: RowFmt,
+    pub(super) defs: Vec<CellDef>,
+}
+
+/// The row definition set aside while its `\oldtprops` group is read.
+pub(super) struct SavedRow {
+    pub(super) defs: Vec<CellDef>,
+    pub(super) def_cur: CellDef,
+    pub(super) fmt: RowFmt,
+    pub(super) cell_side: Option<char>,
+}
+
+/// What the table being read keeps beyond its cells: the table's alignment, width and borders
+/// (from its first row), each row's height and keeping together, and the tracked changes of
+/// its and its rows' formatting.
+#[derive(Clone, Debug, Default)]
+pub(super) struct TableAcc {
+    pub(super) table: Option<RowFmt>,
+    pub(super) heights: Vec<Option<(f32, bool)>>,
+    pub(super) keeps: Vec<bool>,
+    pub(super) change: Option<Box<model::FmtChange<craft_wordmodel::props::TableProps>>>,
+    pub(super) row_changes: Vec<Option<Box<model::FmtChange<craft_wordmodel::props::RowProps>>>>,
 }
 
 /// Page size and margins in twips (`\paperw`, `\margl`… and their `…sxn` section forms).
@@ -364,6 +484,10 @@ pub(super) struct SecFmt {
     pub(super) pgn_start: Option<i32>,
     pub(super) pgn_fmt: craft_wordmodel::section::NumFormat,
     pub(super) title_page: bool,
+    /// Who changed it when (`\srauth`, `\srdate`), and its formatting before (`\oldsprops`).
+    pub(super) auth: Option<i32>,
+    pub(super) date: Option<u32>,
+    pub(super) old: Option<Box<SecFmt>>,
 }
 
 impl SecFmt {

@@ -1,4 +1,4 @@
-use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, ListLevel, MAX_OLD_WORDS, RevSt, St};
+use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, ListLevel, MAX_OLD_WORDS, RevSt, RowFmt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
@@ -212,9 +212,29 @@ impl Reader {
             "trowd" => {
                 self.defs.clear();
                 self.def_cur = CellDef::default();
-                self.row_header = false;
+                self.row_fmt = RowFmt::default();
+                self.old_row = None;
+                self.cell_side = None;
             }
-            "trhdr" => self.row_header = true,
+            "trhdr" => self.row_fmt.header = true,
+            "trkeep" => self.row_fmt.keep = true,
+            "trql" => self.row_fmt.align = Some(Align::Left),
+            "trqc" => self.row_fmt.align = Some(Align::Center),
+            "trqr" => self.row_fmt.align = Some(Align::Right),
+            "trftsWidth" => self.row_fmt.width_fts = pv,
+            "trwWidth" => self.row_fmt.width = Some(pv),
+            "trrh" => self.row_fmt.height = pv,
+            "trauth" => self.row_fmt.auth = Some(pv),
+            // DTTMs are 32-bit patterns, written signed or unsigned.
+            "trdate" => self.row_fmt.date = Some(pv as u32),
+            "trbrdrt" => self.cell_side = Some('T'),
+            "trbrdrl" => self.cell_side = Some('L'),
+            "trbrdrb" => self.cell_side = Some('B'),
+            "trbrdrr" => self.cell_side = Some('R'),
+            "trbrdrh" => self.cell_side = Some('H'),
+            "trbrdrv" => self.cell_side = Some('V'),
+            "clftsWidth" => self.def_cur.width_fts = pv,
+            "clwWidth" => self.def_cur.width = Some(pv),
             "clvmgf" => self.def_cur.vmerge = 1,
             "clvmrg" => self.def_cur.vmerge = 2,
             "clmgf" => self.def_cur.hmerge = 1,
@@ -320,6 +340,19 @@ impl Reader {
             "revtbl" => Some(Dest::RevTbl),
             "oldcprops" => Some(Dest::OldProps(false)),
             "oldpprops" => Some(Dest::OldProps(true)),
+            // A section's and a row's formatting before a tracked change: read in the body only
+            // (not in a header, footer, note or another old-formatting group); skipped elsewhere.
+            "oldsprops" | "oldtprops" => Some(if self.st.dest != Dest::Body || self.overflowed() {
+                Dest::Skip
+            } else if w == "oldtprops" {
+                self.start_old_row();
+                Dest::OldRow
+            } else if self.hf.is_none() && self.sub.is_none() {
+                self.start_old_section();
+                Dest::OldSect
+            } else {
+                Dest::Skip
+            }),
             "listoverridetable" => Some(Dest::ListOverride),
             "fldinst" => Some(Dest::FldInst),
             // Transparent wrapper: read the nested pict without changing the destination.
@@ -495,6 +528,13 @@ impl Reader {
                 }
                 false
             }
+            // Only the section's formatting words count; nothing else in the group is the body's.
+            Dest::OldSect => {
+                self.section_word(word, param);
+                true
+            }
+            // Only the words of a row definition count.
+            Dest::OldRow => !(is_row_def_word(word) || (word.starts_with("brdr") && self.cell_side.is_some())),
             Dest::OldProps(true) | Dest::Body => false,
         }
     }
@@ -655,6 +695,46 @@ fn metadata_text_word(word: &str) -> bool {
             | "rdblquote"
             | "emspace"
             | "enspace"
+    )
+}
+
+/// A word of a row definition the reader reads (`\trowd`, the table's and row's words, the
+/// cells' and `\cellx`): what a row's formatting before a tracked change (`\oldtprops`) may hold.
+fn is_row_def_word(w: &str) -> bool {
+    matches!(
+        w,
+        "trowd"
+            | "trhdr"
+            | "trkeep"
+            | "trql"
+            | "trqc"
+            | "trqr"
+            | "trftsWidth"
+            | "trwWidth"
+            | "trrh"
+            | "trauth"
+            | "trdate"
+            | "trbrdrt"
+            | "trbrdrl"
+            | "trbrdrb"
+            | "trbrdrr"
+            | "trbrdrh"
+            | "trbrdrv"
+            | "clvmgf"
+            | "clvmrg"
+            | "clmgf"
+            | "clmrg"
+            | "clvertalt"
+            | "clvertalc"
+            | "clvertalb"
+            | "clcbpat"
+            | "clbrdrt"
+            | "clbrdrl"
+            | "clbrdrb"
+            | "clbrdrr"
+            | "clftsWidth"
+            | "clwWidth"
+            | "cellx"
     )
 }
 

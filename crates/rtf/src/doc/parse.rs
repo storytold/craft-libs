@@ -25,6 +25,8 @@ struct Parsed {
     default_font: Option<String>,
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
+    /// Each section's tracked change (who made it, and its properties before), in the same order.
+    section_changes: Vec<Option<(model::RevMark, craft_wordmodel::SectionProps)>>,
     notes: Vec<NoteData>,
     comments: Vec<CommentData>,
 }
@@ -80,7 +82,7 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
                         let v = std::str::from_utf8(bytes.get(d0..k).unwrap_or(b"0")).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
                         let v = if neg { -v } else { v };
                         // A date (DTTM) is a 32-bit pattern some writers put unsigned.
-                        let v = if matches!(word, "revdttm" | "revdttmdel" | "crdate" | "prdate")
+                        let v = if matches!(word, "revdttm" | "revdttmdel" | "crdate" | "prdate" | "srdate" | "trdate")
                             && v > i64::from(i32::MAX)
                             && v <= i64::from(u32::MAX)
                         {
@@ -229,8 +231,9 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
 
 fn finalize(mut r: Reader) -> Parsed {
     // A multibyte run ends here, and so does a note, comment, header or footer left open by a
-    // truncated file.
+    // truncated file. Old formatting it leaves open is dropped.
     r.finish_multibyte();
+    r.drop_open_old_groups();
     r.end_sub();
     r.end_shape_text();
     r.end_header_footer();
@@ -248,18 +251,29 @@ fn finalize(mut r: Reader) -> Parsed {
     // header or footer groups after that `\sect` (a section without text) are dropped.
     let mut last_section = r.sec.props(&r.page);
     let mut headers_footers = std::mem::take(&mut r.section_parts);
+    let mut section_changes = std::mem::take(&mut r.section_changes);
     if let Some(FBlock::Para(p)) = blocks.last_mut()
         && let Some(s) = p.section.take()
     {
         last_section = *s;
     } else {
         headers_footers.push(std::mem::take(&mut r.hf_parts));
+        section_changes.push(r.section_change());
     }
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers, notes: r.notes, comments: r.comments }
+    Parsed {
+        flow: Flow { blocks, meta: r.meta },
+        page: r.page,
+        last_section,
+        default_font,
+        headers_footers,
+        section_changes,
+        notes: r.notes,
+        comments: r.comments,
+    }
 }
 
 /// Most grid columns a table gets (the document model's own cap).
@@ -396,7 +410,7 @@ fn nearest_edge(grid: &[i32], x: i32) -> usize {
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last_section, default_font, headers_footers, notes, comments, .. } = parse_full(bytes, true)?;
+    let Parsed { flow, last_section, default_font, headers_footers, section_changes, notes, comments, .. } = parse_full(bytes, true)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
@@ -414,19 +428,26 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         }
         sets.push((headers, footers));
     }
-    let mut sets = sets.into_iter();
+    // Each section's tracked change, as a revision of the document.
+    let changes: Vec<_> = section_changes
+        .into_iter()
+        .map(|c| c.map(|(mark, old)| craft_wordmodel::props::PropChange { rev: model::format_revision(&mut doc, &mark), old }))
+        .collect();
+    let mut sets = sets.into_iter().zip(changes);
     for b in &mut doc.body {
         if let craft_wordmodel::Block::Para(p) = &**b
             && p.section.is_some()
             && let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b)
             && let Some(s) = p.section.as_deref_mut()
-            && let Some((h, f)) = sets.next()
+            && let Some(((h, f), change)) = sets.next()
         {
             (s.headers, s.footers) = (h, f);
+            s.fmt_change = change.map(Box::new);
         }
     }
-    if let Some((h, f)) = sets.next() {
+    if let Some(((h, f), change)) = sets.next() {
         (doc.last_section.headers, doc.last_section.footers) = (h, f);
+        doc.last_section.fmt_change = change.map(Box::new);
     }
     place_notes_and_comments(&mut doc, notes, comments);
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file

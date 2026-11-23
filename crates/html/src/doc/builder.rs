@@ -1375,6 +1375,7 @@ impl<'r> Builder<'r> {
                     width: if colspan == 1 { cell_width(&css, attrs) } else { None },
                     vmerge_restart: is_mso_vmerge_restart,
                     synthetic_covered: false,
+                    fmt_change: None,
                 });
                 fmt.background = None;
                 self.containers.push(Vec::new());
