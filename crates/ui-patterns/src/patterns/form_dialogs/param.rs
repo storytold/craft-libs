@@ -480,13 +480,10 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
-<<<<<<< HEAD
-    beside: bool,
-=======
     beside_next: bool,
     /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
     options_in_row: bool,
->>>>>>> origin/next
+    beside: bool,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
@@ -959,19 +956,19 @@ impl Param {
         self
     }
 
-<<<<<<< HEAD
-    /// The row stands on the same line as the row before it (production's Font, Size, Underline and Colour on one
-    /// line), wrapping to the next line when the form is too narrow. The first row of a form or group ignores it.
-    #[must_use]
-    pub fn beside_previous(mut self) -> Self {
-        self.options.get_or_insert_default().beside = true;
-=======
     /// For a [`ParamKind::Radio`] row: the options stand side by side in one row, with no caption over them; the label
     /// still names the group for assistive technology. Other kinds are unchanged.
     #[must_use]
     pub fn options_in_row(mut self) -> Self {
         self.options.get_or_insert_default().options_in_row = true;
->>>>>>> origin/next
+        self
+    }
+
+    /// The row stands on the same line as the row before it (production's Font, Size, Underline and Colour on one
+    /// line), wrapping to the next line when the form is too narrow. The first row of a form or group ignores it.
+    #[must_use]
+    pub fn beside_previous(mut self) -> Self {
+        self.options.get_or_insert_default().beside = true;
         self
     }
 

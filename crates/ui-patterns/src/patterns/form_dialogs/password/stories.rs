@@ -1,13 +1,8 @@
 //! Stories of `PasswordDialog` and `PasswordFields`.
 
-<<<<<<< HEAD
 use super::{PasswordDialog, PasswordFields, PasswordPurpose};
-use crate::contract::Bind;
-=======
-use super::{PasswordDialog, PasswordPurpose};
 use crate::buttons::Button;
-use crate::contract::{Show as _, clicked};
->>>>>>> origin/next
+use crate::contract::{Bind, Show as _, clicked};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -52,7 +47,7 @@ fn password_dialog_several(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Asks::Open => PasswordPurpose::open_several(3),
         Asks::Permissions => PasswordPurpose::permissions_several(3),
     };
-    PasswordDialog::new(purpose).note("The files share one password.").opened(Bind::bound(data.value("open", true))).show(ui).into()
+    PasswordDialog::new(purpose).note("The files share one password.").opened(data.bind("open", true)).show(ui).into()
 }
 
 #[story(PasswordFields<'static>, covers = [], drive = Drive::Never)]

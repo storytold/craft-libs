@@ -1,16 +1,18 @@
-//! One row of a page: the library's control for its kind in a `Field`, reporting the value it edited.
+//! One row of a page: the library's control for its kind, in a `Field` or on a card's line, reporting the value it
+//! edited.
 
 use super::model::{PrefValue, PreferencesModel, RowKind, RowSpec};
+use super::page::PreferencesLayout;
 use crate::buttons::Button;
 use crate::choice::{Checkbox, Segmented, Swatch};
-use crate::display::{Shade, Text};
-use crate::style::TypeRole;
 use crate::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::display::{Shade, Text};
 use crate::form::{Field, Help};
 use crate::layout_components::{Row, Stack};
 use crate::pickers::Select;
 use crate::runtime::env::{Label, UnitKind, Units};
 use crate::runtime::requests::ColorRequest;
+use crate::style::TypeRole;
 use crate::text::{HexField, NumberField, TextField};
 use craft_behavior::NumberCodec;
 use craft_theme::{Rgba, Srgba};
@@ -81,6 +83,7 @@ impl ShownRow {
 #[derive(Default)]
 pub(super) struct RowsOut {
     pub edits: Vec<(String, PrefValue)>,
+    /// A custom row's host reported that its draft changed.
     pub custom_changed: bool,
     /// The request of the swatch pressed this pass, keyed by the row.
     pub pick_color: Option<ColorRequest>,
@@ -104,18 +107,20 @@ fn counted_option(units: &Units, kind: UnitKind, option: &Entry<String>) -> Entr
     }
 }
 
-/// The most options and the most label characters of a choice shown as a segmented control; a longer choice is a
-/// drop-down.
+/// The most options and the most label characters of a choice a card shows as a segmented control by default; a
+/// longer choice is a drop-down.
 const SEGMENTS_MAX: usize = 5;
 const SEGMENTS_CHARS: usize = 48;
 
-fn as_segments(options: &[Entry<String>], unit: Option<UnitKind>, pills: Option<bool>) -> bool {
+/// Whether a choice of `options` shows as a segmented control: as the row's [`RowSpec::pills`] says, else on a card
+/// (`cards`) when it is short, and never with separators or fewer than two options.
+fn as_segments(options: &[Entry<String>], unit: Option<UnitKind>, pills: Option<bool>, cards: bool) -> bool {
     let plain = options.iter().all(|option| !option.is_separator());
     let count = options.len();
     let chars: usize = options.iter().map(|option| option.label().as_str().chars().count()).sum();
     match pills {
         Some(want) => want && plain && count >= 2,
-        None => plain && unit.is_none() && (2..=SEGMENTS_MAX).contains(&count) && chars <= SEGMENTS_CHARS,
+        None => cards && plain && unit.is_none() && (2..=SEGMENTS_MAX).contains(&count) && chars <= SEGMENTS_CHARS,
     }
 }
 
@@ -126,17 +131,28 @@ fn help_line(ui: &mut Ui, help: &Option<Label>) {
     }
 }
 
-/// Shows `row` and records what it edited in `out`.
-pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, row: &ShownRow, units: &Units, out: &mut RowsOut) {
+/// The field a row's control stands in: named by the row, with its help.
+fn field_of(row: &ShownRow) -> Field {
+    let field = Field::new(row.label.clone()).id_salt(row.key.as_str()).enabled(row.enabled);
+    match &row.help {
+        Some(help) => field.help(Help::Text(help.clone())),
+        None => field,
+    }
+}
+
+/// Shows `row` as `layout` lays rows out and records what it edited in `out`.
+pub(super) fn show_row<H: PreferencesModel + ?Sized>(
+    ui: &mut Ui,
+    host: &mut H,
+    row: &ShownRow,
+    units: &Units,
+    layout: PreferencesLayout,
+    out: &mut RowsOut,
+) {
     let key = row.key.as_str();
     let label = &row.label;
-    let field = || {
-        let field = Field::new(label.clone()).id_salt(key).enabled(row.enabled);
-        match &row.help {
-            Some(help) => field.help(Help::Text(help.clone())),
-            None => field,
-        }
-    };
+    let cards = layout == PreferencesLayout::Cards;
+    let field = || field_of(row);
     let mut record = |value: Option<PrefValue>| {
         if let Some(value) = value {
             out.edits.push((key.to_owned(), value));
@@ -160,8 +176,8 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
                 }
                 None => options,
             };
-            let segments = as_segments(options, *unit, row.pills);
-            inline(ui, row, |ui| {
+            let segments = as_segments(options, *unit, row.pills, cards);
+            control(ui, row, cards, |ui| {
                 next = if segments {
                     Segmented::new(label.clone(), Bind::given(value.clone()), options).show(ui).value().cloned()
                 } else {
@@ -172,7 +188,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         }
         Kind::Int { value, range, unit } => {
             let mut next = None;
-            inline(ui, row, |ui| {
+            control(ui, row, cards, |ui| {
                 let shown = number(units, label, *value as f64, *unit, 0).range(*range.start() as f64..=*range.end() as f64).step(1.0);
                 next = shown.show(ui).edit.events.landed().cloned().flatten();
             });
@@ -180,7 +196,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         }
         Kind::Float { value, range, decimals, step, unit } => {
             let mut next = None;
-            inline(ui, row, |ui| {
+            control(ui, row, cards, |ui| {
                 let shown = number(units, label, *value, *unit, usize::from(*decimals))
                     .range(range.clone())
                     .step(step.unwrap_or_else(|| step_for(range, *decimals)));
@@ -190,7 +206,7 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         }
         Kind::Text(value) => {
             let mut next = None;
-            inline(ui, row, |ui| {
+            control(ui, row, cards, |ui| {
                 next = TextField::new(label.clone(), Bind::given(value.clone())).show(ui).events.landed().cloned();
             });
             record(next.map(PrefValue::Text));
@@ -198,29 +214,32 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         Kind::Color(color) => {
             let mut next = None;
             let mut ask = None;
-            inline(ui, row, |ui| {
+            let mut pair = |ui: &mut Ui| {
                 let swatch = Swatch::new(label.clone(), Srgba::from(*color)).picker(key).id_salt("choose").show(ui);
                 ask = swatch.pick_color;
                 next = HexField::hex(label.clone(), Bind::given(*color)).id_salt("hex").show(ui).events.landed().cloned();
+            };
+            // A card's line holds the swatch and the hex field after the label; a field holds them in a row.
+            control(ui, row, cards, |ui| {
+                if cards {
+                    pair(ui);
+                } else {
+                    Row::new().show(ui, |ui, _| pair(ui));
+                }
             });
             record(next.map(PrefValue::Color));
             if ask.is_some() {
                 out.pick_color = ask;
             }
         }
-<<<<<<< HEAD
-        Kind::Custom if label.as_str().is_empty() => {
-            Stack::new().id_salt(key).show(ui, |ui, _| out.custom_changed |= host.custom_row(ui, key));
-=======
         Kind::CustomRows => {
             // The host draws the rows and their labels; the rule's enabled state and help apply to them as to a field.
             Stack::new().id_salt(key).enabled(row.enabled).show(ui, |ui, _| {
-                host.custom_row(ui, key);
+                out.custom_changed |= host.custom_row(ui, key);
                 if let Some(help) = &row.help {
                     Help::Text(help.clone()).text().show(ui);
                 }
             });
->>>>>>> origin/next
         }
         Kind::Custom => {
             field().show(ui, |ui, _| {
@@ -230,7 +249,21 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
     }
 }
 
-/// One row on a line, as production's cards draw them: the label, then the control, then the help under both.
+/// Shows a row's control, drawn by `body`: on one line after the row's label on a card (`cards`), else in the row's field.
+fn control(ui: &mut Ui, row: &ShownRow, cards: bool, body: impl FnOnce(&mut Ui)) {
+    if cards {
+        inline(ui, row, body);
+        return;
+    }
+    let mut body = Some(body);
+    field_of(row).show(ui, |ui, _| {
+        if let Some(body) = body.take() {
+            body(ui);
+        }
+    });
+}
+
+/// One row on a line, as a card draws it: the label, then the control, then the help under both.
 fn inline(ui: &mut Ui, row: &ShownRow, control: impl FnOnce(&mut Ui)) {
     let mut control = Some(control);
     Stack::new().id_salt(row.key.as_str()).enabled(row.enabled).show(ui, |ui, _| {

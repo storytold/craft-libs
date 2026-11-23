@@ -36,13 +36,8 @@ fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLay
     let preview = *data.value("preview", preview);
     let layout = *data.choice("layout", layout, &LAYOUTS);
     let comparing = *data.value("comparing", false);
-<<<<<<< HEAD
-    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true).layout(layout);
-    let dialog = if preview { dialog.previews(true).preview(PreviewState::Ready(picture(ui, comparing))) } else { dialog };
-=======
     let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(data.bind("open", true)).history(true).layout(layout);
-    let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)) } else { dialog };
->>>>>>> origin/next
+    let dialog = if preview { dialog.previews(true).preview(PreviewState::Ready(picture(ui, comparing))) } else { dialog };
     let shown = dialog.show(ui);
     *data.value("comparing", false) = shown.comparing;
     shown.into()
@@ -155,7 +150,7 @@ fn tabs() -> Vec<ParamTab> {
 
 /// A tabbed dialog over `tabs`, with `shared` as its own rows, open while the story's `open` value is on.
 fn tabbed(data: &mut StoryData, tabs: Vec<ParamTab>, shared: Vec<Param>) -> ParamDialog<'_> {
-    ParamDialog::new("ocr", "Recognize Text", shared).tabs(tabs).opened(Bind::bound(data.value("open", true)))
+    ParamDialog::new("ocr", "Recognize Text", shared).tabs(tabs).opened(data.bind("open", true))
 }
 
 /// Editable tabs: the strip shows the titles and the shown tab's rows; the values of both tabs answer at OK.
@@ -204,7 +199,7 @@ fn outline(cx: &ContentPainterCx, rect: Rect) {
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_preview_pending(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::new("ocr", "Recognize Text", Param::parse_list(GENERAL_SPEC))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .previews(true)
         .preview(PreviewState::Pending(Some(0.4)))
         .preview_pager(pager())
@@ -218,7 +213,7 @@ fn param_dialog_preview_pending(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 fn param_dialog_preview_tinted(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let picture = picture(ui, false);
     ParamDialog::new("ocr", "Recognize Text", Param::parse_list(GENERAL_SPEC))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .previews(true)
         .preview(PreviewState::Ready(picture))
         .preview_pager(pager())
@@ -231,5 +226,5 @@ fn param_dialog_preview_tinted(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 /// A muted note after the title.
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_title_note(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).title_note("Layer 1").show(ui).into()
+    ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(data.bind("open", true)).title_note("Layer 1").show(ui).into()
 }

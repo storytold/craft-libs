@@ -4,22 +4,14 @@
 //! request slots and the rows an edit changed, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
-<<<<<<< HEAD
-use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
-use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
-use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, HostedParamDialog, PagerStep, PanePager, Param, ParamDialog, ParamKind, ParamLayout, ParamResult, PreviewState,
-};
-use craft_ui::patterns::presets::PresetRow;
-=======
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult,
+    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, PagerStep, PanePager, Param, ParamDialog, ParamKind, ParamLayout,
+    ParamResult, PreviewState,
 };
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
->>>>>>> origin/next
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::sections::{DialogRole, FooterButton};

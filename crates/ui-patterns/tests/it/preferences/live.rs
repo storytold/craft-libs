@@ -2,7 +2,7 @@
 
 use craft_ui::contract::Bind;
 use craft_ui::patterns::preferences::{
-    PageSpec, PrefValue, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec,
+    PageSpec, PrefValue, PreferencesDraft, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec,
 };
 use craft_ui::testing::{Fixture, trial};
 use egui::Ui;
@@ -31,6 +31,12 @@ impl PreferencesModel for Model {
     fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
         false
     }
+    fn reset_page(&mut self, _: &str) {
+        self.draft = false;
+    }
+}
+
+impl PreferencesDraft for Model {
     fn differs(&self) -> bool {
         self.draft != self.saved
     }
@@ -41,9 +47,6 @@ impl PreferencesModel for Model {
     }
     fn cancel(&mut self) {
         self.draft = self.saved;
-    }
-    fn reset_page(&mut self, _: &str) {
-        self.draft = false;
     }
 }
 
@@ -89,6 +92,10 @@ impl PreferencesModel for CustomModel {
     fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
         false
     }
+    fn reset_page(&mut self, _: &str) {}
+}
+
+impl PreferencesDraft for CustomModel {
     fn differs(&self) -> bool {
         self.draft != self.saved
     }
@@ -100,7 +107,6 @@ impl PreferencesModel for CustomModel {
         Ok(())
     }
     fn cancel(&mut self) {}
-    fn reset_page(&mut self, _: &str) {}
 }
 
 #[trial]

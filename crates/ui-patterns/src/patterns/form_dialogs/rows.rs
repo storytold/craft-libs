@@ -13,12 +13,8 @@ use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-<<<<<<< HEAD
-    LabelScheme, Pad, Sizing, Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
-    SideLabel, TooltipSpec, clicked,
-=======
-    Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, Sizing, clicked,
->>>>>>> origin/next
+    Bind, BodyCx, CanvasGesture, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _, Sampler as _, Show as _,
+    ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
 };
 use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -30,20 +26,15 @@ use crate::pickers::{Select, UnitSelect};
 use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
 use crate::sections::{HeaderStrength, Section};
-<<<<<<< HEAD
-use crate::text::{NumberField, RangeAlert, SelectableText, TextField};
-use crate::display::Text;
-=======
 use crate::text::{NumberField, RangeAlert, SelectableText, TextField, UnitPlacement};
->>>>>>> origin/next
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
 use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec, decimals_for_step};
 use craft_host::PickRequest;
 
-use craft_theme::Srgba;
 use crate::style::SurfaceKind;
+use craft_theme::Srgba;
 use egui::{Id, Response, Ui};
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
@@ -336,8 +327,6 @@ struct Pass<'p> {
     shaded: bool,
     /// The heading the rows stand under (`ParamRows::heading`).
     heading: Option<String>,
-    /// The rows being shown share one line ([`Param::beside_previous`]).
-    in_line: bool,
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -346,27 +335,19 @@ struct Line<'r> {
     key: &'r str,
     name: Label,
     enabled: bool,
-<<<<<<< HEAD
     /// The row stands in a shared line: it takes its content's width, not the form's.
-    content: bool,
-=======
     compact: bool,
->>>>>>> origin/next
 }
 
 impl Line<'_> {
     /// Shows `body` in a field named by the row: its label beside the control, its tooltip over both.
     fn show(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
         let mut field = Field::new(self.name.clone()).id_salt(self.key).enabled(self.enabled);
-<<<<<<< HEAD
         // In a document dialog a custom row is a group of controls (page range options, say): its name heads it.
         if matches!(self.param.kind, ParamKind::Custom(_)) && Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline {
             field = field.layout(FieldLayout::Above);
         }
-        if self.content {
-=======
         if self.compact {
->>>>>>> origin/next
             field = field.sizing(Sizing::Content);
         }
         if let Some(tip) = self.param.tooltip_text() {
@@ -375,10 +356,11 @@ impl Line<'_> {
         field.show(ui, |ui, _| body(ui));
     }
 
-    /// A scalar field with the parameter's declared unit drawn beside the existing editable text.
-    fn scalar_field(&self, units: &Units, value: f64, decimals: u32) -> NumberField<'static> {
+    /// A scalar field with the parameter's declared unit drawn beside the existing editable text. A `fixed` field
+    /// shows every one of its decimals ([`number_field`]).
+    fn scalar_field(&self, units: &Units, value: f64, decimals: u32, fixed: bool) -> NumberField<'static> {
         let unit = self.param.unit;
-        let field = number_field(units, self.name.clone(), Some(value), decimals, unit);
+        let field = number_field(units, self.name.clone(), Some(value), decimals, unit, fixed);
         if let Some(unit) = unit { field.unit_kind(unit) } else { field }
     }
 
@@ -414,7 +396,6 @@ impl<'p> Pass<'p> {
             sliders: SliderFieldLayout::Inline,
             shaded: false,
             heading: None,
-            in_line: false,
         }
     }
 
@@ -472,88 +453,64 @@ impl<'p> Pass<'p> {
     fn rows(&mut self, ui: &mut Ui, params: &[Param]) {
         let is_section = |param: &Param| matches!(param.kind, ParamKind::Section);
         let first = params.iter().position(is_section).unwrap_or(params.len());
-<<<<<<< HEAD
-        self.run(ui, &params[..first]);
-=======
         self.section_rows(ui, &params[..first]);
->>>>>>> origin/next
         let mut rest = &params[first..];
         while let Some((head, tail)) = rest.split_first() {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
-<<<<<<< HEAD
                 let outer = self.heading.replace(plain(&head.label).as_str().to_owned());
                 if self.shaded {
                     // A document dialog's option group: a caption over its rows on a card.
                     Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
                         Stack::new().fill_width().surface(SurfaceKind::Raised).pad(Pad::Control).show(ui, |ui, _| {
-                            self.run(ui, body);
+                            self.section_rows(ui, body);
                         });
                     });
                 } else {
                     Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
-                        self.run(ui, body);
+                        self.section_rows(ui, body);
                     });
                 }
                 self.heading = outer;
-=======
-                Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
-                    self.section_rows(ui, body);
-                });
->>>>>>> origin/next
             }
             rest = after;
         }
     }
 
-<<<<<<< HEAD
-    /// Shows `params` in order: a row marked [`Param::beside_previous`] shares the line of the shown row before it.
-    fn run(&mut self, ui: &mut Ui, params: &[Param]) {
+    /// Shows `params` in order. A row marked [`Param::beside_next`] pairs with the row after it; the rows marked
+    /// [`Param::beside_previous`] after a shown row share its line. Both wrap when the form is too narrow.
+    fn section_rows(&mut self, ui: &mut Ui, params: &[Param]) {
         let mut rest = params;
         while let Some((head, tail)) = rest.split_first() {
+            if head.pairs_with_next()
+                && let Some((next, after)) = tail.split_first()
+            {
+                rest = after;
+                // A row with no visible fields must not add a gap to the form.
+                if !head.visible(&self.work) && !next.visible(&self.work) {
+                    continue;
+                }
+                Row::new().id_salt(head.key.as_str()).wrap(true).fill_width().show(ui, |ui, _| {
+                    self.row(ui, head, true);
+                    self.row(ui, next, true);
+                });
+                continue;
+            }
             let beside = tail.iter().take_while(|param| param.option().beside()).count();
             if beside == 0 || !head.visible(&self.work) {
-                self.row(ui, head);
+                self.row(ui, head, false);
                 rest = tail;
                 continue;
             }
             let (line, after) = tail.split_at(beside);
-            self.in_line = true;
             Row::new().wrap(true).show(ui, |ui, _| {
-                self.row(ui, head);
+                self.row(ui, head, true);
                 for param in line {
-                    self.row(ui, param);
+                    self.row(ui, param, true);
                 }
             });
-            self.in_line = false;
             rest = after;
-        }
-    }
-
-    fn row(&mut self, ui: &mut Ui, param: &Param) {
-        if !param.visible(&self.work) {
-            return;
-        }
-        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work), content: self.in_line };
-=======
-    fn section_rows(&mut self, ui: &mut Ui, params: &[Param]) {
-        let mut params = params.iter();
-        while let Some(param) = params.next() {
-            if param.pairs_with_next()
-                && let Some(next) = params.next()
-            {
-                // A row with no visible fields must not add a gap to the form.
-                if !param.visible(&self.work) && !next.visible(&self.work) {
-                    continue;
-                }
-                Row::new().id_salt(param.key.as_str()).wrap(true).fill_width().show(ui, |ui, _| {
-                    self.row(ui, param, true);
-                    self.row(ui, next, true);
-                });
-            } else {
-                self.row(ui, param, false);
-            }
         }
     }
 
@@ -562,7 +519,6 @@ impl<'p> Pass<'p> {
             return;
         }
         let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work), compact };
->>>>>>> origin/next
         let held = self.work.get(line.key).cloned();
         self.show_row(ui, &line);
         param.drop_dependents(held.as_ref(), &mut self.work);
@@ -673,11 +629,7 @@ impl<'p> Pass<'p> {
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(0.0);
         line.show(ui, |ui| {
-<<<<<<< HEAD
-            let mut field = unit_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit, self.shaded).step(step);
-=======
-            let mut field = line.scalar_field(self.units, value, decimals).step(step);
->>>>>>> origin/next
+            let mut field = line.scalar_field(self.units, value, decimals, self.shaded).step(step);
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
@@ -742,11 +694,7 @@ impl<'p> Pass<'p> {
         let random = line.param.option().randomize();
         line.show(ui, |ui| {
             beside(ui, |ui| {
-<<<<<<< HEAD
-                let mut field = number_field(self.units, line.name.clone(), Some(value as f64), WHOLE, line.param.unit, false).id_salt("field");
-=======
-                let mut field = line.scalar_field(self.units, value as f64, WHOLE).id_salt("field");
->>>>>>> origin/next
+                let mut field = line.scalar_field(self.units, value as f64, WHOLE, false).id_salt("field");
                 if let Some(range) = range.clone() {
                     field = field.range(range);
                 }
@@ -829,12 +777,8 @@ impl<'p> Pass<'p> {
         let first = patterns.clone().next();
         let current = patterns.find(|key| Some(key.as_str()) == stored).or(first).cloned();
         // With no pattern to offer the row is disabled and writes nothing.
-<<<<<<< HEAD
-        let line = Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some(), content: line.content };
-=======
         let line =
             Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some(), compact: line.compact };
->>>>>>> origin/next
         line.show(ui, |ui| {
             let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), source, Bind::kept()).show(ui).picked;
             if let Some(id) = picked.filter(|id| rows.iter().any(|row| matches!(row.kind, PresetKind::Item) && row.key == *id)) {
@@ -897,55 +841,21 @@ impl<'p> Pass<'p> {
     /// A radio row is its own section: the title shows the row's name once, and the group it names follows. A row with
     /// [`options_in_row`](Param::options_in_row) has no title and stands its options side by side.
     fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
-<<<<<<< HEAD
-        let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
         let inline = Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline;
-        let mut body = |ui: &mut Ui| {
-            let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
-            if let Some(tip) = line.param.tooltip_text() {
-                group = group.tooltip(tip.clone());
-            }
-            let group = group.show(ui, |ui, _| {
-                let mut options_row = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-                    for (id, label) in options {
-                        let mut radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
-                        if let Some(reason) = line.param.disabled_reason(id) {
-                            radio = radio.tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone()));
-                        }
-                        match line.param.option_description_text(id) {
-                            Some(text) => {
-                                let side = SideLabel::new().layout(FieldLayout::After).detail(text.clone());
-                                cx.labelled(ui, id.as_str(), label.clone(), side, radio);
-                            }
-                            None => {
-                                radio.label(label.clone()).show(ui);
-                            }
-                        }
-                    }
-                };
-                if inline {
-                    Row::new().wrap(true).show(ui, &mut options_row);
-                } else {
-                    Stack::new().show(ui, &mut options_row);
-                }
-            });
-            if let Some(v) = group.output.value().cloned() {
-                self.work.set(line.key, FieldValue::Text(v));
-            }
-        };
-        // A document dialog sets the caption and its options on one line, as production's do.
-        if inline {
-            Row::new().wrap(true).show(ui, |ui, _| {
-                if self.heading.as_deref() != Some(plain(&line.name).as_str()) {
-                    Text::new(line.name.clone()).show(ui);
-                }
-                body(ui);
-            });
-        } else {
-            Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| body(ui));
-=======
         if line.param.option().options_in_row() {
             self.radio_group(ui, line, options, true);
+            return;
+        }
+        // A document dialog sets the caption and its options on one line, as production's do; the caption is left out
+        // under a heading of the same name.
+        if inline {
+            let caption = self.heading.as_deref() != Some(plain(&line.name).as_str());
+            Row::new().wrap(true).show(ui, |ui, _| {
+                if caption {
+                    Text::new(line.name.clone()).show(ui);
+                }
+                self.radio_group(ui, line, options, true);
+            });
             return;
         }
         Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| {
@@ -953,28 +863,41 @@ impl<'p> Pass<'p> {
         });
     }
 
-    /// The radio group of `line`, its options in a column, or side by side when `in_row`.
+    /// The radio group of `line`, its options in a column, or side by side (wrapping when the room is short) when
+    /// `in_row`. An option shows its description beside it ([`Param::option_description`]) and, while disabled, its
+    /// reason as its tooltip ([`Param::disabled_option`]).
     fn radio_group(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)], in_row: bool) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
         let mut group = RadioGroup::new(line.name.clone(), Bind::given(value)).enabled(line.enabled);
         if let Some(tip) = line.param.tooltip_text() {
             group = group.tooltip(tip.clone());
         }
-        let radios = |ui: &mut Ui| {
+        let radios = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             for (id, label) in options {
-                Radio::new(id.clone()).label(label.clone()).enabled(line.param.option_enabled(id) && line.enabled).show(ui);
+                let mut radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
+                if let Some(reason) = line.param.disabled_reason(id) {
+                    radio = radio.tooltip(TooltipSpec::new(reason.clone()).disabled_text(reason.clone()));
+                }
+                match line.param.option_description_text(id) {
+                    Some(text) => {
+                        let side = SideLabel::new().layout(FieldLayout::After).detail(text.clone());
+                        cx.labelled(ui, id.as_str(), label.clone(), side, radio);
+                    }
+                    None => {
+                        radio.label(label.clone()).show(ui);
+                    }
+                }
             }
         };
         let group = group.show(ui, |ui, _| {
             if in_row {
-                Row::new().show(ui, |ui, _| radios(ui));
+                Row::new().wrap(true).show(ui, radios);
             } else {
-                Stack::new().show(ui, |ui, _| radios(ui));
+                Stack::new().show(ui, radios);
             }
         });
         if let Some(v) = group.output.value().cloned() {
             self.work.set(line.key, FieldValue::Text(v));
->>>>>>> origin/next
         }
     }
 
@@ -1091,7 +1014,8 @@ impl<'p> Pass<'p> {
                     _ => point,
                 };
                 for (axis, name) in names.iter().enumerate() {
-                    let field = number_field(self.units, name.clone(), Some(point[axis]), 1, Some(UnitKind::Percent), false).range(PERCENT).id_salt(axis);
+                    let field =
+                        number_field(self.units, name.clone(), Some(point[axis]), 1, Some(UnitKind::Percent), false).range(PERCENT).id_salt(axis);
                     let shown = field.show(ui);
                     self.alert(shown.out_of_range);
                     if let Some(v) = shown.edit.value().cloned().flatten() {
@@ -1174,11 +1098,7 @@ impl<'p> Pass<'p> {
                     }
                     None => {}
                 }
-<<<<<<< HEAD
-                let field = unit_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit, self.shaded).range(range.clone());
-=======
-                let field = line.scalar_field(self.units, last, decimals).range(range.clone());
->>>>>>> origin/next
+                let field = line.scalar_field(self.units, last, decimals, self.shaded).range(range.clone());
                 let field = field.id_salt("field").enabled(self.work.number(line.key).is_some());
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
@@ -1256,15 +1176,6 @@ fn beside(ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
 fn number_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>, fixed: bool) -> NumberField<'static> {
     let codec = NumberCodec::new(units.reader(unit), decimals as usize);
     NumberField::new(name, Bind::given(value)).codec(if fixed && decimals > 0 { codec.fixed() } else { codec })
-}
-
-/// A [`number_field`] that shows the symbol of its unit after the number (the parameter's `unit`).
-fn unit_field(units: &Units, name: Label, value: Option<f64>, decimals: u32, unit: Option<UnitKind>, fixed: bool) -> NumberField<'static> {
-    let field = number_field(units, name, value, decimals, unit, fixed);
-    match unit {
-        Some(kind) => field.unit_kind(kind),
-        None => field,
-    }
 }
 
 /// The range that has the bounds that are set, open on the other side; `None` when neither is.

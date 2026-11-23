@@ -3,15 +3,9 @@
 use super::DockArea;
 use crate::buttons::IconButton;
 use crate::contract::SizeLimits;
-<<<<<<< HEAD
-use crate::contract::{Bind, BodyCx, Props as _, Show as _};
+use crate::contract::{BodyCx, Props as _, Show as _, Tracked};
 use crate::display::Text;
-use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, IconicMode, PanelSpec};
-=======
-use crate::contract::{BodyCx, Show as _, Tracked};
-use crate::display::Text;
-use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
->>>>>>> origin/next
+use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, IconicMode, PanelSpec, PanelSpecs};
 use crate::menu::PanelRow;
 use crate::patterns::presets::{PresetPanelMenu, PresetView};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -123,9 +117,10 @@ fn workspace(minimized: bool) -> Arc<Workspace<usize>> {
     Arc::new(Workspace::new(Layout::new(Some(root), vec![window, collapsed])))
 }
 
+/// One spec model for every story, so its revision stays put across frames.
+static SPECS: LazyLock<Tracked<DemoSpecs>> = LazyLock::new(|| Tracked::new(DemoSpecs));
+
 fn dock(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo, minimized: bool) -> StoryOutput {
-    /// One spec model for every story, so its revision stays put across frames.
-    static SPECS: LazyLock<Tracked<DemoSpecs>> = LazyLock::new(|| Tracked::new(DemoSpecs));
     let (workspace, workspace_at) = data.value_at("workspace", workspace(minimized));
     DockArea::new("Dock", workspace_at.bind(&mut *workspace), &*SPECS, demo, DockConfig::default()).show(ui).into()
 }
@@ -153,14 +148,12 @@ fn a_minimized_floating_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never, title = "Rail with fixed controls")]
 fn rail_with_fixed_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let workspace = data.value("rail workspace", {
+    let (workspace, workspace_at) = data.value_at("rail workspace", {
         let side = Column::new(vec![Group::new(vec![LAYERS, CHANNELS, PROPERTIES, HISTORY, SWATCHES, NAVIGATOR], 0)]).with_iconic(true);
         let root = Node::split(Axis::X, SplitSize::Ratio(0.8), Node::tabs(vec![CANVAS], 0), Node::dock(DockEdge::End, vec![side]));
-        Workspace::new(Layout::new(Some(root), Vec::new()))
+        Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))
     });
     let mut demo = Demo { canvas_view: false, host_rows: false };
-    DockArea::new("Rail dock", Bind::bound(&mut *workspace), &mut demo, DockConfig::default().iconic_mode(IconicMode::Rail))
-        .rail_footer(LAYERS)
-        .show(ui)
-        .into()
+    let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+    DockArea::new("Rail dock", workspace_at.bind(&mut *workspace), &*SPECS, &mut demo, config).rail_footer(LAYERS).show(ui).into()
 }

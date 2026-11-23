@@ -1,15 +1,9 @@
 //! Stories of `PreferencesWindow`.
 
-<<<<<<< HEAD
-use super::{PreferencesMode, PreferencesState, PreferencesWindow};
+use super::{PreferencesLayout, PreferencesMode, PreferencesState, PreferencesWindow};
 use crate::buttons::Button;
 use crate::contract::{Bind, Entry, Show as _, clicked};
-use crate::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesModel, RowKind, RowSpec};
-=======
-use super::{PreferencesState, PreferencesWindow};
-use crate::contract::Entry;
-use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesDraft, PreferencesModel, RowKind, RowSpec};
->>>>>>> origin/next
+use crate::patterns::preferences::{GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesModel, RowKind, RowSpec};
 use crate::runtime::env::UnitKind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
@@ -113,11 +107,12 @@ impl PreferencesModel for Demo {
         match page {
             "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
             "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
+            "plugins" => (self.draft.load_plugins, self.draft.plugin_folder) = (defaults.load_plugins, defaults.plugin_folder),
             _ => {}
         }
     }
 
-    fn nested(&mut self, _: &Context) {}
+    fn nested(&mut self, _: &mut Ui) {}
 }
 
 impl PreferencesDraft for Demo {
@@ -136,27 +131,17 @@ impl PreferencesDraft for Demo {
     fn cancel(&mut self) {
         self.draft = self.saved.clone();
     }
-<<<<<<< HEAD
-
-    fn reset_page(&mut self, page: &str) {
-        let defaults = Values::default();
-        match page {
-            "general" => (self.draft.snap, self.draft.language, self.draft.name) = (defaults.snap, defaults.language, defaults.name),
-            "canvas" => (self.draft.size, self.draft.opacity, self.draft.tint) = (defaults.size, defaults.opacity, defaults.tint),
-            "plugins" => (self.draft.load_plugins, self.draft.plugin_folder) = (defaults.load_plugins, defaults.plugin_folder),
-            _ => {}
-        }
-    }
-
-    fn nested(&mut self, _: &mut Ui) {}
-=======
->>>>>>> origin/next
 }
 
 fn window(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo) -> StoryOutput {
+    laid_out(ui, data, state, demo, PreferencesLayout::Paged)
+}
+
+/// The window laid out as `layout` says.
+fn laid_out(ui: &mut Ui, data: &mut StoryData, state: PreferencesState, demo: Demo, layout: PreferencesLayout) -> StoryOutput {
     let mut demo = data.value("demo", demo).clone();
     let (state, state_at) = data.value_at("state", state);
-    let shown = PreferencesWindow::new(state_at.bind(state)).embedded().show(ui, &mut demo).into();
+    let shown = PreferencesWindow::new(state_at.bind(state)).layout(layout).embedded().show(ui, &mut demo).into();
     *data.value("demo", Demo::default()) = demo;
     shown
 }
@@ -186,6 +171,19 @@ fn preferences_window_with_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     window(ui, data, state, Demo { refuse: true, ..Demo::default() })
 }
 
+/// The cards layout: one scrolling column of cards, short choices as segments.
+#[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
+fn preferences_window_cards(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    laid_out(ui, data, PreferencesState::default(), Demo::default(), PreferencesLayout::Cards)
+}
+
+/// The cards layout under a search: the field shows how many settings match.
+#[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
+fn preferences_window_cards_searching(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = PreferencesState { search: "size".to_owned(), ..PreferencesState::default() };
+    laid_out(ui, data, state, Demo::default(), PreferencesLayout::Cards)
+}
+
 /// Preferences that apply each edit immediately.
 #[story(PreferencesWindow<'static>, covers = [], drive = Drive::Never)]
 fn preferences_window_live(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -197,7 +195,8 @@ fn preferences_window_live(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut result = StoryOutput::default();
     if open {
         let state = data.value("live_state", PreferencesState::default());
-        let shown = PreferencesWindow::new(Bind::bound(state)).mode(PreferencesMode::Live).embedded().show(ui, &mut demo);
+        let shown =
+            PreferencesWindow::new(Bind::bound(state)).mode(PreferencesMode::Live).layout(PreferencesLayout::Cards).embedded().show(ui, &mut demo);
         open = shown.closed.is_none();
         result = shown.into();
     }

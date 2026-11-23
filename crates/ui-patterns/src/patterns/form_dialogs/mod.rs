@@ -18,8 +18,8 @@ pub(crate) mod path_row;
 pub(crate) mod preview;
 
 pub use dialog::{
-    BelowRows, DialogLayout, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ParamTab, ResetFooter, ResetPick,
-    SharedOverlay, SharedRows, set_param_field,
+    BelowRows, DialogLayout, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ParamTab, ResetFooter,
+    ResetPick, SharedOverlay, SharedRows, set_param_field,
 };
 pub use form::{FormButtons, FormCx, FormDialog, FormDialogWords, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};
@@ -66,13 +66,8 @@ pub use new_document::{
 pub(crate) mod about;
 
 pub use about::{
-<<<<<<< HEAD
-    AboutDialog, AboutImage, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits,
-    HostedAbout, ModelCredit, NameMode,
-=======
-    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort,
-    Credits, HostedAbout, ModelCredit, NameMode,
->>>>>>> origin/next
+    AboutAppTab, AboutDialog, AboutImage, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor,
+    ContributorSort, Credits, HostedAbout, ModelCredit, NameMode,
 };
 
 mod color_choice;
