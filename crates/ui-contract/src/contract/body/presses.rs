@@ -89,10 +89,20 @@ impl BodyHooks<'_> {
     }
 
     /// Records for the container's header hooks whether the second press of a double click went down on the move
-    /// band in this pass (`BodyCx::band_double_pressed`).
+    /// band in this pass (`BodyCx::band_double_pressed`). The band senses drags only, so a press on a control over it
+    /// (a button, which takes clicks) still starts its press: the double click is the band's only where no other root
+    /// takes the click and no other root's shape lies on top (a disabled control takes no press but covers the band).
     pub(super) fn band_double(&self, core: &mut CxCore<'_>) {
         let Some(band) = core.results.get(&(MOVE_BAND, None)) else { return };
-        let double = band.press.double_pressed();
+        let ctx = core.ctx.clone();
+        let double = band.press.double_pressed() && {
+            let pass = pointer::pass_pointer(&ctx);
+            pass.frame.as_ref().and_then(|frame| frame.press).is_some_and(|press| {
+                let under = pointer::under_at(&ctx, press.origin, pass.press_targets);
+                let own = |shape: Option<(_, egui::Id)>| shape.is_none_or(|(_, owner)| owner == core.id);
+                own(under.press.click) && own(under.hover_top)
+            })
+        };
         core.memory.shown::<BandDouble>(sub(sub(core.id, "body"), "band_double")).0 = double;
     }
 }

@@ -734,6 +734,12 @@ pub(crate) fn press_winners(ctx: &Context, at: Pos2, targets: PressTargets) -> P
     found
 }
 
+/// What lies under `at` in the running pass's viewport for egui's press targets `targets`: the press winners, the shape
+/// that hovers beside them and the roots there.
+pub(crate) fn under_at(ctx: &Context, at: Pos2, targets: PressTargets) -> Under {
+    find_under(ctx, pass::current_viewport(ctx), at, targets)
+}
+
 /// The root a press at `at` belongs to, with its winning shape: the click's root (`press_winners`), else the drag's.
 /// What the focus service classifies a press by and a host asks a press about.
 pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Option<(Winner<Id>, Id)> {

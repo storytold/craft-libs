@@ -1,11 +1,12 @@
 //! A title bar in an embedded shell is a picture of a window: it reports its captions and acts on no window. An action
-//! title is a button that reports its activation.
+//! title is a button that reports its activation. A double click on a control in the bar is the control's.
 
-use craft_host::target::ShellInfo;
-use craft_ui::contract::Role;
+use craft_host::target::{Os, ShellInfo};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Props as _, Role, Show as _};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::WindowKey;
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Title, TitleBar};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::NoWindows;
 use craft_ui::testing::{Fixture, trial};
@@ -191,4 +192,64 @@ fn an_action_title_is_a_button_and_reports_its_activation() {
         "the long title {:?} is cut to fit inside the bar {bar:?}",
         title.rect
     );
+}
+
+/// The window commands a double click on each of a macOS title bar's controls sends, with each control's name: an
+/// enabled and a disabled button in its leading content, then the same in its trailing content; last, the free band.
+fn mac_double_clicks_send() -> Vec<(&'static str, Vec<ViewportCommand>)> {
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let decision = Decision { frame: Frame::Inset(MacInset::default()), overridden: None, desktop };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(Os::Mac), Arc::new(NoWindows)).frame(decision));
+    let names = ["Lead", "Lead off", "Trail", "Trail off", "the band"];
+    let rects = [(); 5].map(|()| Cell::new(Rect::NOTHING));
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            let shown = TitleBar::new().show_titled(
+                ui,
+                Title::new("Landscape.psd"),
+                |ui, _| {
+                    rects[0].set(Button::new(names[0]).show(ui).rect);
+                    rects[1].set(Button::new(names[1]).enabled(false).show(ui).rect);
+                },
+                |ui, _| {
+                    rects[2].set(Button::new(names[2]).show(ui).rect);
+                    rects[3].set(Button::new(names[3]).enabled(false).show(ui).rect);
+                },
+            );
+            // The title is no control: the band lies under it.
+            rects[4].set(Rect::from_center_size(shown.response.rect.center(), vec2(1.0, 1.0)));
+        })
+    };
+    frame(vec![]);
+    frame(vec![]);
+    let mut sent = Vec::new();
+    for (name, rect) in names.into_iter().zip(&rects) {
+        let at = rect.get().center();
+        let mut commands = Vec::new();
+        for events in [vec![moved(at)], vec![press(at)], vec![release(at)], vec![press(at)], vec![release(at)]] {
+            commands.extend(
+                frame(events)
+                    .commands
+                    .into_iter()
+                    .map(|(_, command)| command)
+                    .filter(|command| matches!(command, ViewportCommand::Maximized(_) | ViewportCommand::Minimized(_))),
+            );
+        }
+        // Enough passes that the next control's first click is no third click of this one.
+        for _ in 0..30 {
+            frame(vec![]);
+        }
+        sent.push((name, commands));
+    }
+    sent
+}
+
+/// A double click on a control in a macOS title bar, enabled or disabled, at its start or its end, is the control's:
+/// the window does not zoom. One on the free band still zooms it.
+#[trial]
+fn a_double_click_on_a_title_bar_control_leaves_the_window_alone() {
+    let mut sent = mac_double_clicks_send();
+    let band = sent.pop().expect("the band was double-clicked last");
+    assert!(sent.iter().all(|(_, commands)| commands.is_empty()), "a double click on a control sends nothing to the window: {sent:?}");
+    assert!(matches!(band.1.as_slice(), [ViewportCommand::Maximized(true)]), "a double click on the band zooms: {band:?}");
 }
