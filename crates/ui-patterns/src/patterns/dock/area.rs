@@ -1089,12 +1089,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let torn = torn.map(|(panel, pointer)| {
             float_drop(&DragUnit::Panel(panel.clone()), scene.space, pointer, Some(fitted(ui, panel)), None, scene.rtl).action
         });
-        if let Some(panel) = output.picked.and_then(|key| scene.panel(key)) {
+        let picked = output.picked.and_then(|key| scene.panel(key));
+        if let Some(panel) = picked {
             self.report.actions.push(Action::activate(panel.clone()));
             self.report.picked = Some(panel.clone());
         }
+        // A tab picked in this pass is the group's shown panel from now on, though this pass drew the one before.
         if focus_within(ui.ctx(), output.response.id) {
-            self.report.focused = Some(shown.clone());
+            self.report.focused = Some(picked.unwrap_or(shown).clone());
         }
         for panel in output.closed.into_iter().filter_map(|key| scene.panel(key)) {
             self.report.actions.push(Action::close(panel.clone()));
