@@ -1,6 +1,7 @@
 //! `FontSample`: text in a font face at the user's sample size, on one line at the reading start of its rect.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use craft_behavior::Sense;
 use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
@@ -33,7 +34,7 @@ pub(crate) struct FontSampleStyle {
 #[derive(Clone, Copy)]
 pub(crate) enum SampleFace<'a> {
     /// A face of `catalog`, which the document-face registry loads when the sample is measured or painted.
-    Face { catalog: &'a Catalog, owner: Owner, face: &'a FaceInfo },
+    Face { catalog: &'a Arc<Catalog>, owner: Owner, face: &'a FaceInfo },
     /// No face is here to draw with: the sample keeps its band and shows nothing.
     Missing,
 }

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines, is_private_family};
 use craft_i18n::matcher::{Matcher, Rank};
 use craft_i18n::{Collator, Folder};
+use craft_ui::fonts::FaceBytes;
 use skrifa::GlyphId;
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
@@ -54,12 +55,11 @@ impl Traits {
     }
 }
 
-/// The families of one catalog generation with their traits and sample texts, filled on first use. Built by
+/// The families of one catalog generation with their sample texts, filled on first use. Built by
 /// [`FamilyInfos::of`] and held by the one that lists with it: the picker keeps it in a derived value keyed by the
 /// catalog's generation, and an app that calls [`family_rows`](super::family_rows) keeps its own while the catalog is unchanged.
 pub struct FamilyInfos {
     pub(super) families: HashMap<String, Info>,
-    traits: Mutex<HashMap<String, Option<Traits>>>,
     samples: Mutex<HashMap<(String, String), String>>,
 }
 
@@ -85,40 +85,30 @@ impl FamilyInfos {
                 Some((family, Info { localized, format, styles: faces.len(), regular }))
             })
             .collect();
-        FamilyInfos { families, traits: Mutex::new(HashMap::new()), samples: Mutex::new(HashMap::new()) }
+        FamilyInfos { families, samples: Mutex::new(HashMap::new()) }
     }
 
-    /// The family's traits, read from its regular face on first use.
-    pub(super) fn traits(&self, catalog: &Catalog, family: &str) -> Option<Traits> {
-        if let Some(t) = lock(&self.traits).get(family) {
-            return t.clone();
-        }
-        let traits = self.families.get(family).and_then(|i| read_traits(catalog, &i.regular));
-        lock(&self.traits).insert(family.to_owned(), traits.clone());
-        traits
+    /// The family's traits, from its regular face's record.
+    pub(super) fn traits(&self, family: &str) -> Option<Traits> {
+        self.families.get(family).map(|i| read_traits(&i.regular))
     }
 
-    /// The class if the family's traits were read already.
-    pub(super) fn known_class(&self, family: &str) -> Option<FontClass> {
-        lock(&self.traits).get(family).and_then(|t| t.as_ref()).and_then(|t| t.class)
-    }
-
-    /// What a family's sample says, in its row and in the banner: `sample` when the family's face draws it, else its
-    /// name, else the first glyphs the face has (a symbol face, or a face without the sample's script).
-    pub(super) fn sample_text(&self, catalog: &Catalog, family: &str, sample: &str, shown: &str) -> String {
+    /// What a family's sample says, in its row and in the banner: `sample` when the family's regular face (`face`, as
+    /// the face registry loaded it) draws it, else its name, else the first glyphs the face has (a symbol face, or a
+    /// face without the sample's script).
+    pub(super) fn sample_text(&self, family: &str, sample: &str, shown: &str, face: &FaceBytes) -> String {
         let key = (family.to_owned(), sample.to_owned());
         if let Some(text) = lock(&self.samples).get(&key) {
             return text.clone();
         }
-        let text = self.families.get(family).and_then(|info| draws(catalog, &info.regular, sample, shown)).unwrap_or_default();
+        let text = draws(face, sample, shown).unwrap_or_default();
         lock(&self.samples).insert(key, text.clone());
         text
     }
 }
 
-fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, shown: &str) -> Option<String> {
-    let data = catalog.load(face).ok()?;
-    let font = FontRef::from_index(&data.bytes, face.index).ok()?;
+fn draws(face: &FaceBytes, sample: &str, shown: &str) -> Option<String> {
+    let font = FontRef::from_index(&face.bytes, face.index).ok()?;
     let map = font.charmap();
     let inked = inked(&font);
     let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some_and(&inked));
@@ -165,28 +155,16 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
     info.localized.iter().find(exact).or_else(|| info.localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
 }
 
-/// A face's class, PANOSE and weight from its `OS/2` and `post` tables.
-fn read_traits(catalog: &Catalog, face: &FaceInfo) -> Option<Traits> {
-    let data = catalog.load(face).ok()?;
-    let font = FontRef::from_index(&data.bytes, face.index).ok()?;
-    let os2 = font.os2().ok();
-    let family_class = os2.as_ref().map_or(0, |t| t.s_family_class());
-    let mut panose = [0u8; 10];
-    if let Some(bytes) = os2.as_ref().map(|t| t.panose_10()) {
-        for (slot, b) in panose.iter_mut().zip(bytes.iter()) {
-            *slot = *b;
-        }
-    }
-    let weight = os2.as_ref().map_or(400, |t| t.us_weight_class()).clamp(1, 1000);
-    let fixed_pitch = font.post().ok().is_some_and(|p| p.is_fixed_pitch() != 0);
-    Some(Traits { class: classify(&face.family, family_class, panose, fixed_pitch), panose, weight })
+/// A face's class, PANOSE and weight from its `OS/2` and `post` tables, as the catalog's scan recorded them.
+fn read_traits(face: &FaceInfo) -> Traits {
+    let weight = face.weight_class.unwrap_or(400).clamp(1, 1000);
+    Traits { class: classify(&face.family, face.family_class, face.panose, face.fixed_pitch), panose: face.panose, weight }
 }
 
-/// The class of a family from its regular face, `None` when the face can't be read.
+/// The class of a family from its regular face, `None` when the catalog lacks it.
 pub(super) fn class_of(catalog: &Catalog, family: &str) -> Option<FontClass> {
     let faces = catalog.styles(family);
-    let face = regular_face(&faces)?;
-    read_traits(catalog, face)?.class
+    read_traits(regular_face(&faces)?).class
 }
 
 /// Name fragments (lowercase) that mark a blackletter face; the tables have no class for it.
@@ -299,7 +277,7 @@ pub(super) fn list(
             let row = FamilyRow {
                 family: family.clone(),
                 starred: settings.is_some_and(|s| s.favorites.iter().any(|f| f == family)),
-                class: infos.known_class(family),
+                class: infos.traits(family).and_then(|t| t.class),
                 format: Some(info.format),
                 styles: info.styles,
                 recent: false,
@@ -327,19 +305,16 @@ pub(super) fn list(
         rows.retain(|r| r.format == Some(FontFormat::Variable));
     }
     if let Some(class) = filters.class {
-        rows.retain_mut(|r| {
-            r.class = infos.traits(catalog, &r.family).and_then(|t| t.class);
-            r.class == Some(class)
-        });
+        rows.retain(|r| r.class == Some(class));
     }
     let mut comparable = true;
     if filters.similar {
-        let reference = infos.traits(catalog, listing.current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
+        let reference = infos.traits(listing.current).filter(|t| t.class.is_some() || t.panose.iter().any(|d| *d > 1));
         if let Some(reference) = reference {
             let mut scored: Vec<(f32, FamilyRow)> = rows
                 .drain(..)
                 .filter_map(|r| {
-                    let traits = infos.traits(catalog, &r.family)?;
+                    let traits = infos.traits(&r.family)?;
                     let distance = if r.family == listing.current { -1.0 } else { reference.difference(&traits) };
                     Some((distance, r))
                 })

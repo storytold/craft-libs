@@ -1,5 +1,7 @@
-//! Drawing text in a font face itself: each face shown is a document face of craft-ui's registry, which loads
-//! them a few per pass, keeps the ones on screen and wakes the UI while one loads.
+//! Drawing text in a font face itself: each face shown is a document face of craft-ui's registry, which loads them
+//! in the background, keeps the ones drawn lately and wakes the UI when one lands.
+
+use std::sync::Arc;
 
 use craft_i18n::{Direction, base_direction};
 use craft_ui::fonts::{FaceBytes, FontRef};
@@ -37,17 +39,25 @@ fn key(owner: Owner, face: &FaceInfo) -> String {
 
 /// The bytes of `face` from `catalog`, unless its file is too large to draw with.
 fn load(catalog: &Catalog, face: &FaceInfo) -> Option<FaceBytes> {
-    let too_large = face.file_bytes.is_some_and(|bytes| bytes > MAX_FILE_BYTES);
-    if too_large {
-        return None;
-    }
     let data = catalog.load(face).ok()?;
     Some(FaceBytes::new(data.bytes, data.index).coords(face.variations.iter().map(|(tag, v)| (*tag, *v))))
 }
 
-/// The font that draws `face`, once the registry has loaded it. `at` is the context the caller draws or measures in.
-pub(crate) fn shown(at: &impl FacesCx, catalog: &Catalog, owner: Owner, face: &FaceInfo) -> Shown {
-    at.document_face(&key(owner, face), || load(catalog, face))
+/// The font that draws `face`, once the registry has loaded it in the background. `at` is the context the caller
+/// draws or measures in.
+pub(crate) fn shown(at: &impl FacesCx, catalog: &Arc<Catalog>, owner: Owner, face: &FaceInfo) -> Shown {
+    if face.file_bytes.is_some_and(|bytes| bytes > MAX_FILE_BYTES) {
+        return Shown::Unavailable;
+    }
+    at.document_face(&key(owner, face), || {
+        let (catalog, info) = (Arc::clone(catalog), face.clone());
+        move || load(&catalog, &info)
+    })
+}
+
+/// The bytes of `face` once [`shown`] has it ready, for reading its tables without loading the file again.
+pub(crate) fn bytes(at: &impl FacesCx, owner: Owner, face: &FaceInfo) -> Option<FaceBytes> {
+    at.document_face_bytes(&key(owner, face))
 }
 
 /// The layout of a sample's `runs`: one row, cut with an ellipsis where `room` does not fit it. Measure and paint both
