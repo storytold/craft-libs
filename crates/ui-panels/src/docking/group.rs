@@ -20,7 +20,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::memory::sub;
 use crate::style::{ComponentStyle, Corners, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
-use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
+use craft_behavior::{CursorIcon, CursorPriority, DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, GripMark, GripShape, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
@@ -164,11 +164,21 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
+        let phase = cx.press().phase;
         if self.movable
-            && let PressPhase::DragStart { start, .. } = cx.press().phase
+            && let PressPhase::DragStart { start, .. } = phase
         {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
             self.started = Some(start.origin);
+        }
+        // A marked grip is a handle: the grab cursor over it and grabbing while it is held or dragged, as the grips of
+        // a collapsed column declare (photocraft#16467). A drop target's cursor during the drag still wins.
+        if self.ticks && self.movable {
+            if phase.button_down() {
+                cx.cursor(CursorIcon::Grabbing, CursorPriority::Part);
+            } else if cx.hit() {
+                cx.cursor(CursorIcon::Grab, CursorPriority::Part);
+            }
         }
     }
 

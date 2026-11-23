@@ -1126,13 +1126,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
         let cells = column_cells(plan.columns, plan.rect, plan.edge, plan.flow, &scene.sizes, &spec);
-        for (column, mut cell) in plan.columns.iter().zip(cells) {
+        for (column, cell) in plan.columns.iter().zip(cells) {
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
-            // A stepped column is as tall as its bar and content, from the top of the dock; content taller than the
-            // dock gets the dock's height and scrolls inside. The rest of its slot is the dock's empty room.
-            if let Some(content) = self.stepped_height(ui, body, column, cell.width(), false) {
-                cell.max.y = (cell.top() + scene.sizes.bar + content).min(cell.bottom());
-            }
+            // A docked column takes the dock's height, a stepped one (a tool rail) too: the references' docked
+            // toolbar keeps its column's surface down to the dock's foot, with the tools at the top
+            // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
+            // tall as its content.
             self.report.placed.push((first.clone(), cell));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
             self.column(ui, body, column, at);
