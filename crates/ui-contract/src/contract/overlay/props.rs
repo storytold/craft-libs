@@ -26,6 +26,20 @@ pub enum Outside {
     Absorb,
 }
 
+/// What an untaken Escape at a popup's explicit registered opener does. This does not make the opener a member
+/// of the popup's focus scope or change its Tab order; the focus policy's `CancelRule::Ignore` still wins.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenerEscape {
+    /// Use the existing focus-policy eligibility; no additional opener rule.
+    #[default]
+    Default,
+    /// Close from the exact registered opener, without an extra focus change.
+    Close,
+    /// Close from that opener and leave its key focus, without focusing or clearing any other stop.
+    CloseAndBlur,
+}
+
 /// When a layer closes by itself. Escape goes through the focus policy's `CancelRule`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -36,6 +50,8 @@ pub struct Dismiss {
     pub enter: bool,
     /// Focus moved out of the layer's scope.
     pub focus_left: bool,
+    /// Additional Escape eligibility at the exact registered opener of a popup; unchanged by default.
+    pub opener_escape: OpenerEscape,
     /// A component inside was activated. An opener whose activation toggled its popup (a trigger, `Popup::toggle`) and
     /// a row that keeps the chain open (`Cx::keep_open`) do not count.
     pub on_activate: bool,
@@ -48,7 +64,15 @@ pub struct Dismiss {
 impl Dismiss {
     /// An outside press closes; nothing else does.
     pub const fn new() -> Self {
-        Dismiss { outside: Outside::Close, enter: false, focus_left: false, on_activate: false, anchor_gone: true, timeout: None }
+        Dismiss {
+            outside: Outside::Close,
+            enter: false,
+            focus_left: false,
+            opener_escape: OpenerEscape::Default,
+            on_activate: false,
+            anchor_gone: true,
+            timeout: None,
+        }
     }
 
     /// Sets what an outside press does.
@@ -66,6 +90,13 @@ impl Dismiss {
     /// Closes when focus leaves the scope.
     pub const fn focus_left(mut self, on: bool) -> Self {
         self.focus_left = on;
+        self
+    }
+
+    /// Chooses what an untaken Escape at a popup's explicit registered opener does, independently of traversal
+    /// and the usual restoration policy. Only that exact root stop qualifies, never another stop of its parent.
+    pub const fn opener_escape(mut self, policy: OpenerEscape) -> Self {
+        self.opener_escape = policy;
         self
     }
 
