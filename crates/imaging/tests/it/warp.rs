@@ -520,3 +520,32 @@ fn the_borders_handles_are_drawn_at_rest() {
         assert!(!found.iter().any(|c| c.distance(at(index)) < 0.01), "point {index} has no dot: {found:?}");
     }
 }
+
+/// The straight line from an anchor to each of its border handles is drawn at rest too: the handle ends' dots alone
+/// left a pulled edge's curve unexplained, where the reference application shows the arm from the corner to the point
+/// the curve is pulled from (along a straight edge it lies on the edge).
+#[trial]
+fn the_borders_arms_are_drawn_at_rest() {
+    let mut mesh = WarpMesh::identity(RECT, 1, 1);
+    mesh.points[1].y -= 30.0;
+    let mut h = harness(mesh);
+    let shapes = h.fixture.frame_shapes();
+    let mesh = h.mesh.borrow().clone();
+    let at = |index: usize| h.screen(mesh.points[index]);
+    fn segments_of(shapes: &[egui::Shape], out: &mut Vec<(Pos2, Pos2)>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Vec(inner) => segments_of(inner, out),
+                egui::Shape::LineSegment { points, .. } => out.push((points[0], points[1])),
+                egui::Shape::Path(path) if path.points.len() == 2 => out.push((path.points[0], path.points[1])),
+                _ => {}
+            }
+        }
+    }
+    let mut segments: Vec<(Pos2, Pos2)> = Vec::new();
+    segments_of(&shapes, &mut segments);
+    let arm = |a: usize, b: usize| segments.iter().any(|(p, q)| (p.distance(at(a)) < 0.01 && q.distance(at(b)) < 0.01) || (p.distance(at(b)) < 0.01 && q.distance(at(a)) < 0.01));
+    for (anchor, handle) in [(0usize, 1usize), (0, 4), (3, 2), (3, 7), (12, 8), (12, 13), (15, 11), (15, 14)] {
+        assert!(arm(anchor, handle), "arm from anchor {anchor} to its border handle {handle}: {segments:?}");
+    }
+}

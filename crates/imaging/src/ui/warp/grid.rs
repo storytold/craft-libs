@@ -496,10 +496,18 @@ impl Component for WarpGrid<'_> {
         let screen = |index: usize| view.to_screen(mesh.points[index]);
         let near = |p: Pos2| slot.hover.is_some_and(|hover| hover.distance(p) <= cx.style.reveal);
         let kept = [slot.dragging, slot.picked.filter(|_| cx.focus_visible())].map(|index| index.and_then(|index| mesh.anchor_of(index)));
+        // The border's handles and their arms are drawn at rest too, as the reference application draws them: a dot
+        // where each edge's curve is pulled from, and the straight arm from its corner, which lies along a straight
+        // edge and stands out once a pull bends the edge. The interior ones show only once revealed.
+        let (w, h) = (mesh.width(), mesh.height());
+        let on_border = |index: usize| {
+            let (i, j) = (index % w.max(1), index / w.max(1));
+            i == 0 || j == 0 || i + 1 == w || j + 1 == h
+        };
         let mut ends = Vec::new();
         for anchor in mesh.anchors() {
             for (index, _) in mesh.handles(anchor) {
-                if near(screen(index)) || near(screen(anchor)) || kept.contains(&Some(anchor)) {
+                if on_border(index) || near(screen(index)) || near(screen(anchor)) || kept.contains(&Some(anchor)) {
                     draw.stroke(&PaintShape::Path(vec![screen(anchor), screen(index)]), StrokeWidth::Hairline, style.arm);
                     ends.push(index);
                 }
@@ -514,19 +522,7 @@ impl Component for WarpGrid<'_> {
             draw.fill(&square, look(anchor, &style.anchor.fill));
             draw.stroke(&square, StrokeWidth::Thin, style.anchor.stroke);
         }
-        // The handles on the grid's border are drawn at rest too, as the reference application draws them (a dot where
-        // each edge's curve is pulled from); the interior ones only once revealed, with their arms.
-        let (w, h) = (mesh.width(), mesh.height());
-        let on_border = |index: usize| {
-            let (i, j) = (index % w.max(1), index / w.max(1));
-            i == 0 || j == 0 || i + 1 == w || j + 1 == h
-        };
-        let border: Vec<usize> = mesh
-            .anchors()
-            .flat_map(|anchor| mesh.handles(anchor).into_iter().map(|(index, _)| index))
-            .filter(|&index| on_border(index) && !ends.contains(&index))
-            .collect();
-        for index in ends.into_iter().chain(border) {
+        for index in ends {
             let circle = PaintShape::Circle(screen(index), style.end.side / 2.0);
             draw.fill(&circle, look(index, &style.end.fill));
             draw.stroke(&circle, StrokeWidth::Thin, style.end.stroke);
