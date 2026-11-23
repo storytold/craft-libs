@@ -168,3 +168,20 @@ fn the_drawer_opens_on_the_side_it_is_given() {
         assert!(away, "{opens:?}: the drawer row {row:?} lies on that side of the rail {rail:?}");
     }
 }
+
+// The Edit Toolbar button takes the app's icon (production shows a settings gear, not an ellipsis) and stays one named,
+// working button.
+#[trial]
+fn the_edit_toolbar_button_takes_the_apps_icon() {
+    use craft_ui::rails::{LastUsed, ToolRail};
+    let mut fixture = Fixture::new(move |ui| {
+        let slots = [slot(0, &[UNDO])];
+        let last = LastUsed::default();
+        let _ = ToolRail::new("Tools", &slots, &UNDO, &last)
+            .edit_toolbar("Customize")
+            .edit_icon(craft_behavior::IconId::new("settings"))
+            .show_rail(ui, |_, _| {});
+    });
+    fixture.idle(12);
+    assert!(fixture.by_label("Customize").is_some(), "the button keeps its name with another icon");
+}
