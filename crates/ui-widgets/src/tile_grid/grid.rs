@@ -158,6 +158,8 @@ pub struct TileGridStyle {
     header: ListRowStyle,
     /// The line down the middle of an insert gap under the pointer.
     insert: StyleColor,
+    /// The plus of an insert gap at rest, before the pointer reaches it: muted, so the gaps do not compete with the tiles.
+    insert_idle: StyleColor,
     /// The width of an insert gap, centred on the edge of the tile it precedes.
     insert_width: f32,
 }
@@ -626,6 +628,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             pinned: cx.color(cx.tokens.color.surface.panel),
             header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()),
             insert: cx.color(cx.tokens.color.accent.solid),
+            insert_idle: cx.color(cx.tokens.color.text.muted),
             insert_width: cx.tokens.size.icon.lg,
         }
     }
@@ -827,19 +830,21 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         }
         // The gap under the pointer shows where an insertion lands; the part's state layer shows hover and focus.
         for &(at, rect) in &self.placed_gaps {
-            if cx.hover_pos(GAP.at(at as u64)).is_some() {
+            let hovered = cx.hover_pos(GAP.at(at as u64)).is_some();
+            if hovered {
                 let line = PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]);
                 ui.draw().stroke(&line, StrokeWidth::Thick, style.insert);
             }
+            let ink = if hovered { style.insert.clone() } else { style.insert_idle.clone() };
             // The insertion target must be discoverable before the pointer is over it.
             let center = rect.center();
             let radius = (rect.width() * 0.4).min(9.0);
             let arm = radius * 0.45;
             let draw = ui.draw();
             draw.fill(&PaintShape::Circle(center, radius), style.pinned);
-            draw.stroke(&PaintShape::Circle(center, radius), StrokeWidth::Thin, style.insert);
-            draw.stroke(&PaintShape::Path(vec![center - vec2(arm, 0.0), center + vec2(arm, 0.0)]), StrokeWidth::Medium, style.insert);
-            draw.stroke(&PaintShape::Path(vec![center - vec2(0.0, arm), center + vec2(0.0, arm)]), StrokeWidth::Medium, style.insert);
+            draw.stroke(&PaintShape::Circle(center, radius), StrokeWidth::Thin, ink.clone());
+            draw.stroke(&PaintShape::Path(vec![center - vec2(arm, 0.0), center + vec2(arm, 0.0)]), StrokeWidth::Medium, ink.clone());
+            draw.stroke(&PaintShape::Path(vec![center - vec2(0.0, arm), center + vec2(0.0, arm)]), StrokeWidth::Medium, ink);
         }
     }
 

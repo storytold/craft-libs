@@ -224,3 +224,31 @@ fn insert_gaps_keep_document_positions_when_rows_are_virtualised() {
         shown.borrow().grid.iter().filter_map(|event| if let GridEvent::Insert { at, .. } = event { Some(*at) } else { None }).collect();
     assert_eq!(inserts, [first], "the gap reports the display position it inserts before, not a row index");
 }
+
+/// An insert gap at rest is drawn muted: its circle's stroke differs from the one the pointer's gap takes.
+#[craft_ui::testing::trial]
+fn an_insert_gap_at_rest_is_muted() {
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..4).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let name = |at: usize| Label::from(format!("Insert before {}", at + 1));
+        let _ = TileGrid::new("Library").insert_gaps(&name).show_items(ui, &source, &mut |key, _| Tile::new(format!("Tile {key}")));
+    });
+    fixture.room(Vec2::new(600.0, 300.0));
+    fixture.frame(vec![pointer::moved(egui::Pos2::new(590.0, 290.0))]).settle();
+    fn strokes(shapes: &[egui::Shape]) -> Vec<egui::Color32> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Circle(circle) if circle.stroke.width > 0.0 => Some(circle.stroke.color),
+                _ => None,
+            })
+            .collect()
+    }
+    let rest = strokes(&fixture.frame_shapes());
+    assert!(!rest.is_empty(), "the gaps draw their circles");
+    let gap = fixture.by_label("Insert before 1").expect("the first gap").rect;
+    fixture.frame(vec![pointer::moved(gap.center())]).settle();
+    let hovered = strokes(&fixture.frame_shapes());
+    assert!(hovered.iter().any(|color| !rest.contains(color)), "the gap under the pointer is drawn in another colour: {rest:?} / {hovered:?}");
+}
