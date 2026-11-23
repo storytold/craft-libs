@@ -165,15 +165,16 @@ struct Resolved<V> {
 
 /// The typing run over the state the adapter recorded this pass, the component's value (`None` while mixed) and
 /// whether a commit is due.
-type Resolve<V> = Box<dyn FnOnce(&mut TextState, Option<&V>, bool) -> Resolved<V>>;
+type Resolve<V> = Box<dyn FnOnce(&mut TextState, Option<&V>, bool, bool) -> Resolved<V>>;
 
 /// Turns what the adapter recorded this pass into the typing run's events: a parsed draft applies in the pass it
 /// is typed, and a commit proposes and commits in one pass. `fallback` is the value the part shows, the run's start
-/// while the component's value is mixed.
+/// while the component's value is mixed. The closure's last argument says whether the part keeps its text on Escape
+/// this pass: the option alone is not enough, since a part that went read-only or disabled mid-run takes Escape as a
+/// plain field does.
 fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: Rect, fallback: K::Value) -> Resolve<K::Value> {
     let (live, limit, clear_on_escape) = (options.live, options.limit, options.clear_on_escape);
-    let keep_on_escape = options.keep_on_escape && !clear_on_escape;
-    Box::new(move |state, value, commit_now| {
+    Box::new(move |state, value, commit_now, keep_on_escape| {
         let value = value.unwrap_or(&fallback);
         let mut typing = TypingRun::new(codec).live(live);
         if let Some(limit) = limit {
@@ -587,8 +588,8 @@ pub(crate) fn run<C: Component>(
             state.end = Some(End::Rewrite { refuses: false });
         }
     }
-    let resolved = resolve(&mut state, cx.value(), commit_now);
     let keeps_escape = part.options.keep_on_escape && !part.options.clear_on_escape && !read_only && cx.core.resolved.enabled && part.options.enabled;
+    let resolved = resolve(&mut state, cx.value(), commit_now, keeps_escape);
     if resolved.escaped && keeps_escape && !state.invalid {
         // The same Escape goes on to the enclosing scope in this pass, which still finds this focused stop; the field
         // lets focus go once the scopes have run.

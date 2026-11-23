@@ -303,3 +303,36 @@ fn text_lost_focus_reports_a_focus_loss_without_an_edit() {
     assert_eq!(lost.get(), 1, "Tab off the unedited field reports one loss");
     assert_eq!(*first.borrow(), "one", "and edits nothing");
 }
+
+/// A field that keeps its text on Escape does so only while it can be edited: one that went read-only in the middle of
+/// a typing run takes Escape as a plain field does, so the run is cancelled and the text from before it comes back,
+/// not committed.
+#[trial]
+fn a_field_that_went_read_only_mid_run_gives_back_the_text_on_escape() {
+    let text = Rc::new(RefCell::new(String::from("old")));
+    let read_only = Rc::new(Cell::new(false));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (shown, locked, log) = (text.clone(), read_only.clone(), events.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let out = TextField::new("Filter", Bind::bound(&mut *held)).keeps_on_escape().select_on_focus().read_only(locked.get()).show(ui);
+        log.borrow_mut().extend(out.events.iter().map(|event| match event {
+            craft_behavior::EditEvent::Commit { .. } => "commit",
+            craft_behavior::EditEvent::Cancel { .. } => "cancel",
+            _ => "other",
+        }));
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("new");
+    fixture.idle(2);
+    assert_eq!(*text.borrow(), "new", "the typing reached the binding");
+    read_only.set(true);
+    fixture.idle(2);
+    events.borrow_mut().clear();
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(*text.borrow(), "old", "Escape on a read-only field gives back the text from before the run");
+    assert!(!events.borrow().contains(&"commit"), "the run is not committed: {:?}", events.borrow());
+    assert!(events.borrow().contains(&"cancel"), "the run is cancelled: {:?}", events.borrow());
+}
