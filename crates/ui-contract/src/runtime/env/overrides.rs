@@ -125,6 +125,10 @@ pub struct Overrides {
     pub motion: Option<MotionMode>,
     /// Also the child `Ui`'s direction and layout.
     pub direction: Option<Direction>,
+    /// The flow direction alone (layout order, arrow keys and roving, and the child `Ui`'s layout): the paragraph
+    /// direction of text stays the inherited one. A strip mirrored to follow something physical (the macOS traffic
+    /// lights at the right end) keeps its labels reading as the interface does. Wins over `direction`'s flow.
+    pub flow: Option<Direction>,
     /// The words of the scope and everything inside it.
     pub words: Option<WordsOverride>,
     /// App values set for the scope.
@@ -166,6 +170,9 @@ impl Overrides {
         if let Some(direction) = self.direction {
             scoped.direction = direction;
             scoped.text_direction = direction;
+        }
+        if let Some(flow) = self.flow {
+            scoped.direction = flow;
         }
         match self.words {
             Some(WordsOverride::Replace(words)) => scoped.inherited_mut().words = words,

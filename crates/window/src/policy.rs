@@ -96,13 +96,24 @@ pub struct MacInset {
     pub leading: f32,
     /// Distance from the window's top to the lights' vertical centre.
     pub centre_from_top: f32,
+    /// AppKit lays the lights out from the window's right edge (`windowTitlebarLayoutDirection` is right to left: a
+    /// right-to-left system language, whatever the app's own language). `leading` is then reserved at the right end.
+    pub lights_right: bool,
+}
+
+impl MacInset {
+    /// The inset with the lights at the right end when `right`.
+    pub fn with_lights_right(mut self, right: bool) -> Self {
+        self.lights_right = right;
+        self
+    }
 }
 
 impl Default for MacInset {
     /// The standard lights' geometry, for a window that does not exist yet and a macOS version
     /// that is not known; [`crate::mac::default_inset`] knows the versions.
     fn default() -> Self {
-        Self { leading: 78.0, centre_from_top: 14.0 }
+        Self { leading: 78.0, centre_from_top: 14.0, lights_right: false }
     }
 }
 
