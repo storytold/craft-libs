@@ -1860,11 +1860,7 @@ impl Returning {
     /// the menus close (`focus::out_of_menus`); from the bar, on to the stop it took the focus from. `None` when the
     /// focus is in neither, or a menu opened with nothing focused.
     fn of(ctx: &Context, focused: Id) -> Option<Self> {
-        match focus::focused_rec(ctx).and_then(|rec| focus::out_of_menus(ctx, rec.scope)) {
-            Some(out) if out.bar => Some(Self::Bar(out.to.0)),
-            Some(out) => Some(Self::Stop(out.to)),
-            None => focus::bar_return_of(ctx, focused).map(|(held, _)| Self::Bar(held)),
-        }
+        focus::returning(ctx, focused).map(|(to, bar)| if bar { Self::Bar(to.0) } else { Self::Stop(to) })
     }
 
     /// The component whose command chain the shortcut matches in.

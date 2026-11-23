@@ -438,6 +438,12 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = core.popup(EDIT_MENU).is_open_in(core);
+    // A menu bar or a menu the keyboard goes back to the part from has the focus: their Cut and Copy act on the
+    // selection the part keeps for them.
+    let returns_here = crate::runtime::focus::focused_stop(&ctx)
+        .filter(|(focused, _)| *focused != id)
+        .and_then(|(focused, _)| crate::runtime::focus::returning(&ctx, focused))
+        .is_some_and(|((to, _), _)| to == id);
     // The bound caret is compared with the widget's before anything else this pass moves it (AccessKit, Select All,
     // the typing): last pass reported the widget's caret, so only an app write differs here. A composition keeps its
     // caret.
@@ -468,6 +474,7 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
             rtl,
             focused,
             held,
+            keeps_selection: held || returns_here,
             ink,
             intents: &mut core.intents,
             list_open,

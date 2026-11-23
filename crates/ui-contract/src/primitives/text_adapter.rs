@@ -83,9 +83,10 @@ pub(crate) struct TextState {
     pub change: Option<DraftChange>,
     /// `Cx::select_all_text` asked for the whole text to be selected at the start of the next pass.
     pub select_all: bool,
-    /// The selection, `(caret, anchor)`, the text part had when its edit menu took the focus: egui collapses the
-    /// selection of a widget without focus, and the menu's command acts on it once the focus is back, which reaches the
-    /// widget the pass after the menu closes.
+    /// The selection, `(caret, anchor)`, the text part had when its edit menu, or a menu bar or menu the keyboard goes
+    /// back to it from, took the focus (`AdapterIn::keeps_selection`): egui collapses the selection of a widget without
+    /// focus, and the menu's command acts on it once the focus is back, which reaches the widget the pass after the
+    /// menu closes.
     pub held_selection: Option<(usize, usize)>,
 }
 
@@ -99,8 +100,8 @@ pub(crate) fn text_id(id: Id, key: PartKey) -> Id {
 /// picks still reach the part and the edit menu shows them disabled. Cut, Copy and Delete then do nothing and never
 /// reach the app; an Undo or Redo with no step goes on to the app command (`commands::fall_through`), which the board
 /// resolves it to. The board reads the keys the stop registered; a selection or text change repaints, which registers
-/// them again. The selection is the one the part acts on: `held`, the one it kept while its edit menu has the focus
-/// (egui collapses the selection of a widget without focus), else its widget's. `text` is the part's current text, which
+/// them again. The selection is the one the part acts on: `held`, the one it kept while its edit menu or a menu bar has
+/// the focus (egui collapses the selection of a widget without focus), else its widget's. `text` is the part's current text, which
 /// the widget's undo steps are judged against.
 pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, text: &str, base: KeyUse, options: &TextOptions) -> KeyUse {
     // A part whose Tab inserts, rewrites or reports keeps Tab, so the focus service never moves focus on it.
@@ -151,6 +152,9 @@ pub(crate) struct AdapterIn<'a> {
     /// The text part's own edit menu is open and holds the focus: losing the focus to it ends no typing run, and
     /// getting it back is no new focus.
     pub held: bool,
+    /// The part keeps the selection it had for the surface that holds the focus: its own edit menu, or a menu bar or
+    /// menu the keyboard goes back to the part from, whose picks act on it.
+    pub keeps_selection: bool,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
     /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's, except
@@ -444,7 +448,7 @@ fn held_mods(ctx: &Context) -> Mods {
 pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut {
     let (ctx, widget) = (input.ctx, text_id(input.id, input.key));
     let focused_before = input.focused;
-    if input.held {
+    if input.keeps_selection {
         if state.held_selection.is_none() {
             state.held_selection = selection(ctx, widget);
         }

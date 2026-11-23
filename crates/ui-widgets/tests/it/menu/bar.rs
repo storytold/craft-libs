@@ -574,3 +574,30 @@ fn space_on_a_bar_focused_from_nothing_goes_to_the_document_canvas() {
         assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(canvas), "and the keyboard goes to the canvas (alt {alt})");
     }
 }
+
+/// Tc-9 (3): the selection of a focused field holds while a menu the window's menu bar opened has the keyboard, which
+/// goes back to the field: the bar's Edit menu shows Copy enabled for it. The field kept its selection only for its own
+/// edit menu, so Copy was disabled there.
+#[trial]
+fn a_fields_selection_holds_while_the_menu_bar_has_the_keyboard() {
+    use craft_ui::contract::{Bind, Props as _};
+    use craft_ui::text::TextField;
+    use std::cell::RefCell;
+    let text = RefCell::new("hello".to_owned());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&Edit", |ui| {
+            MenuItem::command(EditCommands::Copy).show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).id_salt("name").show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let field = fixture.by_label("Name").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::CTRL).settle();
+    let edit = fixture.by_label("Edit").expect("the Edit title");
+    fixture.click(&edit).settle();
+    let copy = fixture.by_label("Copy").expect("the Edit menu is open");
+    assert!(!fixture.tree().is_disabled_key(copy.node), "Copy applies to the field's selection");
+}

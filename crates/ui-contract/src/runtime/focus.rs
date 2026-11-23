@@ -618,6 +618,16 @@ pub(crate) fn bar_return_of(ctx: &Context, focused: Id) -> Option<StopKey> {
     with(ctx, |state| state.bar_return.as_ref().filter(|(bar, _)| *bar == focused).map(|(_, key)| *key))
 }
 
+/// The stop the keyboard goes back to while `focused` holds it inside open menus or on a menu bar, and whether a menu
+/// bar took it from that stop: a shortcut pressed there matches at that stop, and a text part keeps its selection for
+/// the menus' picks. `None` when the focus is in neither, or a menu opened with nothing focused.
+pub(crate) fn returning(ctx: &Context, focused: Id) -> Option<(StopKey, bool)> {
+    match focused_rec(ctx).and_then(|rec| out_of_menus(ctx, rec.scope)) {
+        Some(out) => Some((out.to, out.bar)),
+        None => bar_return_of(ctx, focused).map(|held| (held, true)),
+    }
+}
+
 /// Where focus goes once every menu around the scope `from` closes, as `out_of_menus` finds it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OutOfMenus {
