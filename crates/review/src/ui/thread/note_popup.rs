@@ -106,6 +106,9 @@ struct NoteBody<'a, 'm> {
     now: i64,
     /// The body's tint: the note's colour thinned with white to a third, as production's.
     tint_color: Color32,
+    /// The flat Reply's edge ([`NoteReplyLook::Flat`]): the note's colour thinned with white to seven tenths, as
+    /// production's panel edge.
+    edge_color: Color32,
     body: Option<String>,
     reply: Option<(u64, String)>,
 }
@@ -188,7 +191,17 @@ impl NoteBody<'_, '_> {
             Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| {
                 let reply = Button::new(words.reply.clone()).size(ControlSize::Sm);
                 let reply = if flat { reply.variant(Variant::Custom(FLAT_REPLY)) } else { reply };
-                if clicked(&reply.show(ui)) {
+                let shown = reply.show(ui);
+                // The flat face's edge at rest is the note's colour, which no token holds: the variant leaves it clear
+                // and it is drawn here. Under the pointer (and so while pressed) the variant's own edge shows.
+                let response = &shown.response;
+                if flat && !response.hovered() {
+                    let tokens = &Env::of(ui).tokens;
+                    let (radius, width) = (UiTokens::corner(tokens.shape.radius.control), tokens.stroke.thin);
+                    let edge = egui::Stroke::new(width, self.edge_color);
+                    ui.painter().rect_stroke(response.rect, radius, edge, egui::StrokeKind::Inside);
+                }
+                if clicked(&shown) {
                     self.drafts.replies.insert(id, (to, String::new()));
                 }
             });
@@ -361,8 +374,17 @@ impl<'a> NotePopup<'a> {
             Overlay::floating().modeless().movable(allowed).resize_edges(grip).body_scroll(true).size_limits(NOTE_POPUP_LIMITS).placed(shown_at);
         let layer = NoteWindow::new(label, overlay, NoteLook { title, age, fill }, words.close.clone(), allowed, anchor, selected)
             .id_salt(("note-popup", id));
-        let mut content =
-            NoteBody { id, messages, drafts, allowed, now, tint_color: Color32::from_rgb(pale(r), pale(g), pale(b)), body: None, reply: None };
+        let mut content = NoteBody {
+            id,
+            messages,
+            drafts,
+            allowed,
+            now,
+            tint_color: Color32::from_rgb(pale(r), pale(g), pale(b)),
+            edge_color: Color32::from_rgb(edge_tone(r), edge_tone(g), edge_tone(b)),
+            body: None,
+            reply: None,
+        };
         let shown = layer.show(ui, |ui, _| content.show(ui, &words, &view));
         let NoteBody { drafts, mut body, reply, .. } = content;
         let out = shown.output;
@@ -394,15 +416,16 @@ pub enum NoteReplyLook {
 /// The flat Reply face ([`NoteReplyLook::Flat`]).
 const FLAT_REPLY: CustomVariant = CustomVariant::new::<craft_ui::buttons::button::ButtonStyleKey>("craft_review.flat-reply", flat_reply_look);
 
-/// White at 60% over the note's tint, a control edge and control corners; the theme's state fills under the pointer
-/// and the press.
+/// White at 60% over the note's tint, an edge in the note's colour (drawn by the pop-up) and control corners; the
+/// theme's state fills under the pointer and the press.
 fn flat_reply_look(tokens: &Tokens) -> VariantLook {
     let c = &tokens.color;
     let face = Rgba([255, 255, 255, 153]);
     let text = States::new(c.text.normal, c.text.normal, c.text.normal, c.text.disabled);
-    let edge = c.line.control_edge;
+    // The edge at rest is the note's colour, drawn by the pop-up (`NoteBody::reply_box`); clear here.
+    let clear = Rgba([255, 255, 255, 0]);
     VariantLook::new(States::new(face, c.state.hover, c.state.pressed, face), text)
-        .edge(States::new(edge, c.text.normal, c.text.normal, c.line.divider))
+        .edge(States::new(clear, c.text.normal, c.text.normal, c.line.divider))
         .radius(RadiusStep::Control)
 }
 
@@ -428,6 +451,11 @@ fn window_rect(rect: Rect) -> Rect {
 /// by at least [`LEAST_CHANGE`].
 fn changed(from: Rect, to: Rect) -> bool {
     (to.min - from.min).length() >= LEAST_CHANGE || (to.size() - from.size()).length() >= LEAST_CHANGE
+}
+
+/// A channel of the note's colour thinned with white to seven tenths: the flat Reply's edge.
+fn edge_tone(channel: u8) -> u8 {
+    ((u16::from(channel) * 7 + 255 * 3) / 10) as u8
 }
 
 /// A channel of the note's colour thinned with white to a third.

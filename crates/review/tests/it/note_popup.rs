@@ -401,3 +401,31 @@ fn a_composer_with_fixed_rows_keeps_post_inside_its_card_near_the_bottom() {
     fixture.click(&post).settle();
     assert!(posted.borrow().as_deref().is_some_and(|text| text.starts_with("word word")), "Post posted: {:?}", posted.borrow());
 }
+
+/// Production's flat Reply takes its edge from the note's colour (thinned with white to seven tenths), not the light
+/// palette's control edge: a blue note's Reply has a blue edge.
+#[trial]
+fn a_flat_reply_edge_takes_the_notes_colour() {
+    let mut drafts = NoteDrafts::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 200.0));
+        let _ = NotePopup::new(1, "Note", rect, &NOTE, &mut drafts).color(Some([10, 20, 200])).show(ui);
+    });
+    fixture.root_value(craft_review::ui::NoteReplyLook::Flat);
+    fixture.room(vec2(1000.0, 800.0)).settle();
+    let reply = fixture.by_label("Reply").expect("the pop-up shows Reply").rect;
+    fn strokes(shape: &egui::Shape, out: &mut Vec<(Rect, egui::Color32)>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.stroke.width > 0.0 => out.push((rect.rect, rect.stroke.color)),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| strokes(shape, out)),
+            _ => {}
+        }
+    }
+    let mut seen = Vec::new();
+    for shape in fixture.frame_shapes() {
+        strokes(&shape, &mut seen);
+    }
+    let edge = egui::Color32::from_rgb(83, 90, 216);
+    let around = seen.iter().filter(|(rect, _)| (rect.center() - reply.center()).length() < 2.0).collect::<Vec<_>>();
+    assert!(around.iter().any(|(_, color)| *color == edge), "the Reply {reply:?} is edged in the note's colour {edge:?}: {around:?}");
+}
