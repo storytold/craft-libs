@@ -25,7 +25,7 @@ use craft_ui::runtime::env::Label;
 use super::banner::FontPreviewBanner;
 use super::rank::{FamilyInfos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, SAMPLE_EM, Typing,
+    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, SAMPLE_EM, Sample, Typing,
     infos_of, read, ui_language, write,
 };
 use crate::panel::faces::{self, Owner, Shown};
@@ -281,9 +281,9 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
     filters.class = usize::from(picked).checked_sub(1).and_then(|i| FontClass::ALL.get(i).copied());
 }
 
-/// The sample of a family row: its text ([`row_text`]) in the regular face of `family` at `points`, named
-/// "{shown}: {text}" as the font manager names its samples, so the row keeps the family's name to itself; no face for
-/// a family the catalog lacks.
+/// The sample of a family row: its text ([`row_text`]) in the regular face of `family` at `size.side × SAMPLE_EM`, in a
+/// band of the thumbnail side `size.side` as the banner's, named "{shown}: {text}" as the font manager names its
+/// samples, so the row keeps the family's name to itself; no face for a family the catalog lacks.
 fn sample<'a>(
     at: &impl FacesCx,
     catalog: &'a Arc<Catalog>,
@@ -291,12 +291,12 @@ fn sample<'a>(
     family: &str,
     shown: &str,
     text: &str,
-    points: f32,
+    size: Sample,
 ) -> FontSample<'a> {
     let text = row_text(at, catalog, infos, family, text, shown);
     let face =
         infos.families.get(family).map_or(SampleFace::Missing, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
-    FontSample::new(format!("{shown}: {text}"), text, face, points)
+    FontSample::new(format!("{shown}: {text}"), text, face, size.side * SAMPLE_EM).band(size.side)
 }
 
 /// What `family`'s sample says ([`FamilyInfos::sample_text`]) once its regular face is ready; `text` while it loads,
@@ -390,7 +390,6 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let current = slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family));
     let size = settings.as_ref().map_or(ThumbSize::None, |s| s.preview.thumb());
     let sample_size = cx.style.sample(size);
-    let points = sample_size.side * SAMPLE_EM;
     let mut columns = Vec::with_capacity(4);
     if !plain {
         columns.push(ColumnSpec::toggle(STAR, words.favorites.clone(), ToggleColumn::default()).icon(IconId::new("star")));
@@ -496,7 +495,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 if size == ThumbSize::None {
                                     return line;
                                 }
-                                let sample = sample(faces_at, catalog, &infos, &row.family, &row.shown, sample_text, points);
+                                let sample = sample(faces_at, catalog, &infos, &row.family, &row.shown, sample_text, sample_size);
                                 line.cell_field(SAMPLE, sample, |_| {})
                             }
                         });

@@ -8,7 +8,7 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
     Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{ContentPainterCx, PaintShape, StrokeWidth, TextureCache};
+use crate::primitives::{ContentPainterCx, PaintShape, StrokeWidth, TextureCache, textures};
 use crate::runtime::focus::FocusShape;
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
@@ -471,7 +471,7 @@ impl Face<'_> {
                         let mut mesh = Mesh::with_texture(texture);
                         for &pos in &corners {
                             let at = (pos - well.min) / well.size();
-                            mesh.vertices.push(egui::epaint::Vertex { pos, uv: uv.lerp_inside(at), color: Color32::WHITE });
+                            mesh.vertices.push(egui::epaint::Vertex { pos, uv: uv.lerp_inside(at), color: textures::UNTINTED });
                         }
                         for k in 1..corners.len() as u32 - 1 {
                             mesh.add_triangle(0, k, k + 1);
