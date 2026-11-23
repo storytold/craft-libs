@@ -1588,6 +1588,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-android-res"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-anicraft-format"
 version = "0.1.0"
 dependencies = [
@@ -1645,6 +1653,16 @@ dependencies = [
  "proptest",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-cdr"
+version = "0.1.0"
+dependencies = [
+ "craft-cdr",
+ "crc32fast",
+ "flate2",
+ "proptest",
 ]
 
 [[package]]
@@ -1799,8 +1817,11 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color",
  "craft-color-transform",
  "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
  "craft-render-parity",
  "proptest",
  "rayon",
@@ -2155,6 +2176,9 @@ dependencies = [
  "image",
  "log",
  "serde",
+ "serde_json",
+ "skrifa 0.47.0",
+ "wuff",
 ]
 
 [[package]]
@@ -2562,6 +2586,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-material-graph"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "rayon",
+]
+
+[[package]]
 name = "craft-materialx"
 version = "0.1.0"
 dependencies = [
@@ -2627,6 +2659,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-y4m",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2977,6 +3010,14 @@ version = "0.1.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-png"
+version = "0.1.0"
+dependencies = [
+ "png 0.18.1",
  "thiserror 2.0.21",
 ]
 
@@ -3434,6 +3475,7 @@ dependencies = [
 name = "craft-tga"
 version = "0.1.0"
 dependencies = [
+ "image",
  "thiserror 2.0.21",
 ]
 
@@ -3441,9 +3483,11 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 dependencies = [
+ "image",
  "proptest",
  "serde",
  "thiserror 2.0.21",
+ "tiff",
 ]
 
 [[package]]
@@ -13112,6 +13156,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 dependencies = [
  "either",
+]
+
+[[package]]
+name = "wuff"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6a992b57b3d1ee972b2e3fd9225e44793104d49818836dd812d5459187712dd"
+dependencies = [
+ "brotli-decompressor 6.3.1",
+ "bytes",
 ]
 
 [[package]]
