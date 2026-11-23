@@ -39,7 +39,7 @@ pub enum Format {
     Jxl,
     /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from).
     Cineon,
-    /// DICOM single-frame images (uncompressed): read-only.
+    /// DICOM single-frame images (uncompressed): Secondary Capture writer and reader.
     Dicom,
     /// Amiga IFF/ILBM (`FORM ... ILBM`): planar bitplanes with a palette or 24-bit RGB.
     Iff,
@@ -85,10 +85,6 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     (
         Format::Xpm,
         "XPM is a legacy Unix icon interchange format. Reading existing XPM icons is supported; writing modern image assets should use PNG instead.",
-    ),
-    (
-        Format::Dicom,
-        "DICOM single-frame images are imported for medical review; this crate has no DICOM writer, so save an imported frame as TIFF or PNG instead.",
     ),
     (
         Format::Pcx,
@@ -268,7 +264,7 @@ impl Format {
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif | Format::Iff | Format::Sgi | Format::JpegLs => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Iff | Format::Sgi | Format::JpegLs | Format::Dicom => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -337,7 +333,7 @@ pub fn caps(format: Format) -> FormatCaps {
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
         Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
-        Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        Format::Dicom => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
         Format::SunRaster => FormatCaps {
             read: cfg!(feature = "sunraster"),

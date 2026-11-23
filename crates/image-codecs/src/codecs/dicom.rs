@@ -1,14 +1,17 @@
-//! DICOM (medical imaging) reader, uncompressed transfer syntaxes only.
+//! DICOM (medical imaging) reader and Secondary Capture writer, uncompressed transfer syntaxes only.
 //!
 //! Supports what a viewer needs from a single-frame image: MONOCHROME1/2 (gray) and RGB or
 //! YBR_FULL, 8- and 16-bit samples, interleaved or planar, both byte orders and explicit or
 //! implicit VR. Undefined-length sequences outside the pixel data are skipped (clinical files
 //! contain them); compressed transfer syntaxes, encapsulated pixel data and other photometric
-//! interpretations are refused with a clear error. Read-only in this crate.
+//! interpretations are refused with a clear error. Writing produces a DICOM Part 10 Secondary
+//! Capture file (`1.2.840.10008.5.1.4.1.1.7`) in Explicit VR Little Endian (`1.2.840.10008.1.2.1`),
+//! `MONOCHROME2` or `RGB`, 8- or 16-bit unsigned samples.
 
 use std::collections::HashMap;
 
 use crate::error::CodecError;
+use crate::fidelity::Plan;
 use crate::format::Format;
 use crate::image::{ChannelLayout, Image, SampleType};
 use crate::options::Limits;
@@ -314,6 +317,114 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     Image::from_raw(cols, rows, layout, out_sample, out)
 }
 
+const SOP_CLASS_SECONDARY_CAPTURE: &str = "1.2.840.10008.5.1.4.1.1.7";
+const TRANSFER_SYNTAX_EXPLICIT_VR_LE: &str = "1.2.840.10008.1.2.1";
+
+fn write_ui(b: &mut Vec<u8>, group: u16, elem: u16, val: &str) {
+    let mut s = val.as_bytes().to_vec();
+    if s.len() % 2 == 1 {
+        s.push(0);
+    }
+    b.extend_from_slice(&group.to_le_bytes());
+    b.extend_from_slice(&elem.to_le_bytes());
+    b.extend_from_slice(b"UI");
+    b.extend_from_slice(&(s.len() as u16).to_le_bytes());
+    b.extend_from_slice(&s);
+}
+
+fn write_us(b: &mut Vec<u8>, group: u16, elem: u16, val: u16) {
+    b.extend_from_slice(&group.to_le_bytes());
+    b.extend_from_slice(&elem.to_le_bytes());
+    b.extend_from_slice(b"US");
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&val.to_le_bytes());
+}
+
+fn write_cs(b: &mut Vec<u8>, group: u16, elem: u16, val: &str) {
+    let mut s = val.as_bytes().to_vec();
+    if s.len() % 2 == 1 {
+        s.push(0);
+    }
+    b.extend_from_slice(&group.to_le_bytes());
+    b.extend_from_slice(&elem.to_le_bytes());
+    b.extend_from_slice(b"CS");
+    b.extend_from_slice(&(s.len() as u16).to_le_bytes());
+    b.extend_from_slice(&s);
+}
+
+/// Writes an uncompressed DICOM Part 10 Secondary Capture file in Explicit VR Little Endian:
+/// 8- or 16-bit `MONOCHROME2` (gray) or `RGB`.
+pub(crate) fn encode(src: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
+    let enc = |msg: String| CodecError::encode(F, msg);
+    let img = src.converted(plan.layout, plan.sample);
+    let bits: u16 = match img.sample_type() {
+        SampleType::U8 => 8,
+        SampleType::U16 => 16,
+        s => return Err(enc(format!("DICOM stores 8 or 16 bits per sample, not {s:?}"))),
+    };
+    let (samples, photometric) = match img.layout() {
+        ChannelLayout::Gray => (1u16, "MONOCHROME2"),
+        ChannelLayout::Rgb => (3u16, "RGB"),
+        l => return Err(enc(format!("no DICOM layout for {l:?}"))),
+    };
+    let (w, h) = img.dimensions();
+    let (Ok(cols), Ok(rows)) = (u16::try_from(w), u16::try_from(h)) else {
+        return Err(enc(format!("dimensions exceed 65535x65535: {w}x{h}")));
+    };
+    let data = img.data();
+    let pixel_bytes: Vec<u8> = if bits == 16 {
+        let mut le = Vec::with_capacity(data.len());
+        for chunk in data.as_chunks::<2>().0 {
+            let v = u16::from_ne_bytes(*chunk);
+            le.extend_from_slice(&v.to_le_bytes());
+        }
+        le
+    } else {
+        data.to_vec()
+    };
+    let padded_len = if pixel_bytes.len() % 2 == 1 {
+        pixel_bytes.len().checked_add(1).ok_or_else(|| enc("pixel data too large".into()))?
+    } else {
+        pixel_bytes.len()
+    };
+    let len32 = u32::try_from(padded_len).map_err(|_| enc("pixel data exceeds 4 GiB".into()))?;
+
+    let mut out = Vec::with_capacity(256 + padded_len);
+    out.resize(128, 0u8);
+    out.extend_from_slice(b"DICM");
+
+    // Group 0002 File Meta Information (Explicit VR Little Endian)
+    write_ui(&mut out, 0x0002, 0x0002, SOP_CLASS_SECONDARY_CAPTURE);
+    write_ui(&mut out, 0x0002, 0x0003, "1.2.826.0.1.3680043.10.1000.1");
+    write_ui(&mut out, 0x0002, 0x0010, TRANSFER_SYNTAX_EXPLICIT_VR_LE);
+
+    // Group 0028 Image Pixel Module
+    write_us(&mut out, 0x0028, 0x0002, samples);
+    write_cs(&mut out, 0x0028, 0x0004, photometric);
+    if samples > 1 {
+        write_us(&mut out, 0x0028, 0x0006, 0); // Planar Configuration = 0 (color-by-pixel)
+    }
+    write_us(&mut out, 0x0028, 0x0010, rows);
+    write_us(&mut out, 0x0028, 0x0011, cols);
+    write_us(&mut out, 0x0028, 0x0100, bits); // Bits Allocated
+    write_us(&mut out, 0x0028, 0x0101, bits); // Bits Stored
+    write_us(&mut out, 0x0028, 0x0102, bits - 1); // High Bit
+    write_us(&mut out, 0x0028, 0x0103, 0); // Pixel Representation = unsigned
+
+    // Pixel Data (7FE0, 0010)
+    out.extend_from_slice(&0x7FE0u16.to_le_bytes());
+    out.extend_from_slice(&0x0010u16.to_le_bytes());
+    out.extend_from_slice(if bits == 16 { b"OW" } else { b"OB" });
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&len32.to_le_bytes());
+    out.extend_from_slice(&pixel_bytes);
+    if pixel_bytes.len() % 2 == 1 {
+        out.push(0);
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +636,27 @@ mod tests {
         let at = b.windows(uncompressed.len()).position(|w| w == uncompressed).expect("transfer syntax in the fixture");
         b[at..at + compressed.len()].copy_from_slice(compressed);
         assert!(matches!(decode(&b, &Limits::default()), Err(CodecError::Unsupported { .. })));
+    }
+
+    #[test]
+    fn encode_round_trips_8_and_16_bit_gray_and_rgb() {
+        for layout in [ChannelLayout::Gray, ChannelLayout::Rgb] {
+            let ch = layout.channels();
+            let u8_samples: Vec<u8> = (0..5 * 3 * ch).map(|i| ((i * 17) % 251) as u8).collect();
+            let img8 = Image::from_u8(5, 3, layout, u8_samples).unwrap();
+            let bytes8 = encode(&img8, Plan { layout, sample: SampleType::U8 }).unwrap();
+            assert!(is_dicom(&bytes8));
+            let back8 = decode(&bytes8, &Limits::default()).unwrap();
+            assert_eq!((back8.dimensions(), back8.layout(), back8.sample_type()), ((5, 3), layout, SampleType::U8));
+            assert_eq!(back8.data(), img8.data());
+
+            let u16_samples: Vec<u16> = (0..4 * 2 * ch).map(|i| (i * 4099) as u16).collect();
+            let img16 = Image::from_u16(4, 2, layout, &u16_samples).unwrap();
+            let bytes16 = encode(&img16, Plan { layout, sample: SampleType::U16 }).unwrap();
+            assert!(is_dicom(&bytes16));
+            let back16 = decode(&bytes16, &Limits::default()).unwrap();
+            assert_eq!((back16.dimensions(), back16.layout(), back16.sample_type()), ((4, 2), layout, SampleType::U16));
+            assert_eq!(back16.data(), img16.data());
+        }
     }
 }
