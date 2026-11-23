@@ -74,6 +74,7 @@ fn drop_spot(
     layout: &dyn ItemLayout,
     outline: &dyn craft_behavior::NavOutline,
     len: &dyn Fn() -> usize,
+    section_stop: &dyn Fn(usize) -> bool,
     xf: Option<crate::runtime::egui::areas::LayerMap>,
     (rect, offset, rtl): (Rect, ScrollPos, bool),
     groups: Option<f32>,
@@ -100,6 +101,11 @@ fn drop_spot(
         let gap = reorder::tree_gap_at(outline, over, row, rtl, step, at);
         let parent = gap.parent;
         return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(to_screen) });
+    }
+    // A section row across a row-wise layout (a grid's group header) starts its group: a drop on it lands first in
+    // the group.
+    if across && section_stop(over) {
+        return Some(Spot { over, insert: over + 1, parent: None, mark: DropMark::Into(Rect::from_min_max(to_screen(row.min), to_screen(row.max))) });
     }
     // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
     // right-to-left the physical end is the earlier place in reading order.
@@ -603,7 +609,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return None;
         }
         let outline = Outline::new(self.source);
-        drop_spot(layout, &outline, &|| self.source.len(), self.xf, (rect, offset, rtl), groups, at)
+        drop_spot(layout, &outline, &|| self.source.len(), &|at| self.source.section_stop(at), self.xf, (rect, offset, rtl), groups, at)
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
