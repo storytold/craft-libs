@@ -264,9 +264,15 @@ fn synthetic_hostile_zip_headers_are_safely_flagged_and_rejected() {
     let mut archive = Archive::open(&bytes, ROOMY).unwrap();
     assert!(archive.has_traversal_component());
 
-    // Enumeration omits traversal components
+    // Enumeration and names() iterator omit traversal components
     let names = (0..archive.len()).filter_map(|i| archive.entry_name(i).unwrap()).collect::<Vec<_>>();
     assert_eq!(names, vec!["safe/file.txt"]);
+    assert_eq!(archive.names().collect::<Vec<_>>(), vec!["safe/file.txt"]);
+
+    let seekable =
+        SeekableArchive::open(std::io::Cursor::new(&bytes), SeekableLimits { max_entries: 100, max_metadata_bytes: 16_384, max_total_bytes: 1000 })
+            .unwrap();
+    assert_eq!(seekable.names().collect::<Vec<_>>(), vec!["safe/file.txt"]);
     assert_eq!(archive.entry_name(3).unwrap().as_deref(), Some("safe/file.txt"));
     assert_eq!(archive.entry_name(0).unwrap(), None);
     assert_eq!(archive.entry_name(1).unwrap(), None);
@@ -318,6 +324,7 @@ fn raw_bytes_with_traversal_and_invalid_utf8_are_flagged() {
 
     let mut archive = Archive::open(&bytes, ROOMY).unwrap();
     assert!(archive.has_traversal_component());
+    assert_eq!(archive.names().collect::<Vec<_>>(), Vec::<std::borrow::Cow<'_, str>>::new());
     assert_eq!((0..archive.len()).filter_map(|i| archive.entry_name(i).unwrap()).collect::<Vec<_>>(), Vec::<String>::new());
     assert_eq!(archive.entry_name(0).unwrap(), None);
     assert_eq!(archive.entry_sizes(0).unwrap(), None);
@@ -327,6 +334,7 @@ fn raw_bytes_with_traversal_and_invalid_utf8_are_flagged() {
         SeekableArchive::open(std::io::Cursor::new(bytes), SeekableLimits { max_entries: 100, max_metadata_bytes: 16_384, max_total_bytes: 1000 })
             .unwrap();
     assert!(seekable.has_traversal_component());
+    assert_eq!(seekable.names().collect::<Vec<_>>(), Vec::<std::borrow::Cow<'_, str>>::new());
     assert_eq!((0..seekable.len()).filter_map(|i| seekable.entry_name(i).unwrap()).collect::<Vec<_>>(), Vec::<String>::new());
     assert_eq!(seekable.entry_name(0).unwrap(), None);
     assert_eq!(seekable.entry_sizes(0).unwrap(), None);
