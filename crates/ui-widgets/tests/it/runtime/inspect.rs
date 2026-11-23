@@ -137,7 +137,6 @@ fn an_element_records_the_command_it_is_bound_to_with_accesskit_off() {
     }
 }
 
-
 /// A generic component is recorded by its type's own name (`Select`, not its last generic argument), and a text
 /// field's facts list the text AccessKit reads as its value.
 #[trial]
