@@ -20,7 +20,7 @@ use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, HeldButtons};
-use craft_ui_test_kit::windows::{AppKitWindow, Out, Windows};
+use craft_ui_test_kit::windows::{AppKitWindow, FilesOver, Out, Windows};
 use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
@@ -1346,7 +1346,8 @@ impl DockPanels<u32> for Veiled {
 }
 
 /// Files dropped on a native float's own OS window reach `DockAreaOutput::window_files` once, unless a target inside
-/// that window took them.
+/// that window took them. The main window, whose pass runs first, sees none of them, as the OS sends them only to the
+/// window under the pointer: it must not end the drag of files over the float's window.
 #[trial]
 fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     let reached = |veiled: bool| {
@@ -1356,7 +1357,7 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
         let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
         let mut frame = |hovered: Vec<HoveredFile>, dropped: Vec<String>| {
             let mut files = 0;
-            windows.frame_with_files(vec![], vec![], hovered, dropped, |ui| {
+            windows.frame_with_files(vec![], vec![], FilesOver::Child, hovered, dropped, |ui| {
                 let config = DockConfig::default();
                 let shown = if veiled {
                     DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut Veiled, config).show(ui)

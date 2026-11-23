@@ -13,7 +13,7 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::{Frames, trial};
-use craft_ui_test_kit::windows::Windows;
+use craft_ui_test_kit::windows::{FilesOver, Windows};
 use egui::{Pos2, Rect, Response, Shape, Ui, Vec2, ViewportBuilder, ViewportId, ViewportInfo};
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -371,7 +371,7 @@ fn files_over_the_window_are_targeted_at_the_desktop_pointer_while_the_frame_has
     let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system.clone()));
     windows.root_info(ViewportInfo { inner_rect: Some(Rect::from_min_size(WINDOW_AT, WINDOW.size())), ..ViewportInfo::default() });
     let frame = |events: Vec<egui::Event>, hovered: Vec<egui::HoveredFile>, dropped: Vec<String>| {
-        let _ = windows.frame_with_files(events, vec![], hovered, dropped, |ui| {
+        let _ = windows.frame_with_files(events, vec![], FilesOver::Root, hovered, dropped, |ui| {
             FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
         });
         windows.ctx.has_requested_repaint()

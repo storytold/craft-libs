@@ -422,12 +422,16 @@ pub(crate) fn begin(ctx: &Context) {
 }
 
 /// The session of files the OS drags over the window (8.4): files held over the window start one, the dropped files
-/// replace its payload in the frame of the drop, and files that leave without a drop end it.
+/// replace its payload in the frame of the drop, and files that leave without a drop end it. The OS sends the files
+/// only to the window under the pointer, so the session runs in that window: a window the files move to takes it, and
+/// only a pass of its own window, which no longer sees them, ends it.
 fn os_files(ctx: &Context) {
     let seen = files::seen(ctx);
     let frame = pass::root_frame_nr(ctx);
     let viewport = pass::current_viewport(ctx);
     let hovering = !seen.hovered.is_empty();
+    // A session whose window closed has no pass left to end it.
+    let closed = source_viewport(ctx).is_some_and(|window| !pass::live_viewports(ctx).contains(&window));
     board(ctx, |board| match &mut board.session {
         None if hovering => {
             board.session = Some(Session {
@@ -455,7 +459,10 @@ fn os_files(ctx: &Context) {
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
                 session.dropped = Some(frame);
-            } else if !hovering && session.dropped != Some(frame) {
+                session.viewport = viewport;
+            } else if hovering {
+                session.viewport = viewport;
+            } else if (session.viewport == viewport || closed) && session.dropped != Some(frame) {
                 board.session = None;
             }
         }
