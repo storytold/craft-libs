@@ -4,7 +4,7 @@
 
 use super::super::FlyoutButton;
 use super::stories::tools;
-use super::{LastUsed, ToolRail, ToolSlot};
+use super::{DropAt, LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
 use crate::contract::Props as _;
 use crate::contract::Show as _;
@@ -295,6 +295,30 @@ fn a_click_on_a_slot_selects_its_tool_once() {
     fixture.click_at(brush.center());
     fixture.settle();
     assert_eq!(seen.borrow().selected, [1], "the click selected the brush once");
+}
+
+/// While the toolbar is edited a drop off the buttons lands on the rail: on a blank toolbar as its first slot, and under
+/// the last button after the last slot.
+#[trial]
+fn an_edited_rail_takes_a_drop_off_its_buttons_beside_the_nearest_one() {
+    let dropped = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&dropped);
+    let (slots, blank, last) = (Tracked::new(slots()), Tracked::new(Vec::new()), Tracked::new(LastUsed::default()));
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().show(ui, |ui, _| {
+            for (label, slots, edit) in [("Tools", &slots, "Edit Tools"), ("Blank", &blank, "Edit Blank")] {
+                let out = ToolRail::new(label, slots, &0, &last).edit_toolbar(edit).editing().show_column(ui, |_, _| {});
+                seen.borrow_mut().extend(out.dropped.map(|drop| (label, drop.at)));
+            }
+        });
+    });
+    fixture.room(Vec2::new(200.0, 800.0)).settle();
+    let pencil = rect(&fixture, "Pencil").center();
+    fixture.drag_at(pencil, rect(&fixture, "Blank").center() - pencil).settle();
+    assert_eq!(dropped.borrow().as_slice(), [("Blank", DropAt::new_slot(0))], "a drop on a blank toolbar makes its first slot");
+    dropped.borrow_mut().clear();
+    fixture.drag_at(pencil, rect(&fixture, "Edit Tools").center() - pencil).settle();
+    assert_eq!(dropped.borrow().as_slice(), [("Tools", DropAt::new_slot(LABELS.len()))], "under the last button it goes after the last slot");
 }
 
 fn near(a: f32, b: f32) -> bool {

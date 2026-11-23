@@ -5,8 +5,8 @@ use super::flyout::{FlyoutButton, SlotEdit};
 use super::words::RailWords;
 use crate::buttons::IconButton;
 use crate::contract::{
-    Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, NoValue, Outcome, Pad, Props as _, Role, Scroll, Show as _,
-    ShowContainer as _, Sizing, WordSetCx as _,
+    Access, Common, Component, Container, ContainerProps, Cx, FooterRegion, Gap, NoValue, Outcome, Pad, Pointer as _, Props as _, Role, Scroll,
+    Show as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::contract::{BodyCx, BodyLayout, MemoProps, MemoView, Outbox, PlainData, ThemeScope, Tracked};
 use crate::display::{Elide, Shade, TargetMark, Text};
@@ -21,7 +21,9 @@ use crate::tabs::TornOff;
 use craft_behavior::overlay::Side;
 use craft_behavior::{IconId, Metrics, NavShape, Proposal, Roving, Sense, Value};
 use craft_theme::ControlSize;
-use egui::{Id, Response, Ui, Vec2};
+use egui::{Id, Rect, Response, Ui, Vec2};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 mod data;
 mod drag;
@@ -32,6 +34,7 @@ pub(crate) mod trials;
 
 use data::row_groups;
 pub use data::{LastUsed, RailTool, SlotId, ToolSlot, ToolTips, remembered, shown_tool, visible_slots};
+use drag::RailDrop;
 pub(crate) use drag::SlotDrop;
 pub use drag::{DropAt, ToolDrag, ToolDropped, drop_in_slot};
 
@@ -67,7 +70,7 @@ pub struct ToolRailOutput<T> {
     pub edit_toolbar: Option<Response>,
     /// The slot whose flyout is open.
     pub flyout: Option<SlotId>,
-    /// A tool dropped on a slot while the toolbar is edited, and where it goes.
+    /// A tool dropped on the rail while the toolbar is edited, and where it goes.
     pub dropped: Option<ToolDropped>,
     /// A group torn off the rail: `keys` and `grabbed` the slot, `pointer` where it tore off.
     pub torn_off: Option<TornOff<SlotId>>,
@@ -106,7 +109,9 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// an overlay bar in the end padding that shows only under the pointer (`Scroll::overlay`), and its
 /// buttons show the rail's glyphs. The rail is exactly as tall as its rows and footer at the width it gets
 /// ([`measure_rail`](ToolRail::measure_rail)). The buttons are one roving group: arrow keys move between them by the
-/// grid. While the toolbar is edited the buttons are dragged and take drops, and report the drop in the output.
+/// grid. While the toolbar is edited the buttons are dragged and the rail takes drops, and reports the drop in the
+/// output: on a button by where over it the drop falls ([`drop_in_slot`]), elsewhere on the rail as a slot of its own
+/// beside the nearest button, and on a rail with no buttons as the last slot.
 ///
 /// With `captions` the caption of the first slot of a row group that has one ([`ToolSlot::captioned`]) stands above
 /// the group in the caption type, cut at the rail's width; without it a caption takes no room. The grid's width
@@ -153,6 +158,8 @@ pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
+    /// The host's index and rect of each button the grid showed in this pass.
+    shown: Rc<RefCell<Vec<(usize, Rect)>>>,
 }
 
 impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
@@ -185,6 +192,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             tips: None,
             footer: None,
             columns: 1,
+            shown: Rc::default(),
         }
         .label(label)
     }
@@ -289,8 +297,8 @@ struct Draw<'a, T: PlainData> {
 
 impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
     /// Shows the grid as a memoized view; what the buttons report goes into `events` (nothing on a replay). Returns the
-    /// Edit Toolbar button's id while the rail shows it.
-    fn run(&self, ui: &mut Ui, events: &mut Vec<RailEvent<T>>) -> Option<Id> {
+    /// Edit Toolbar button's id while the rail shows it, and the host's index and rect of each slot button.
+    fn run(&self, ui: &mut Ui, events: &mut Vec<RailEvent<T>>) -> (Option<Id>, Vec<(usize, Rect)>) {
         let tips = self.tips.map(HostTips);
         let props = GridProps {
             slots: self.slots,
@@ -308,13 +316,14 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
             reveal: self.reveal,
             sent: Outbox::new(events),
         };
-        MemoView::new("slots", props, grid::<T>).show(ui).flatten()
+        MemoView::new("slots", props, grid::<T>).show(ui).unwrap_or_default()
     }
 }
 
 /// The grid of buttons in rows of `columns`, each row group under its caption while the rail shows captions. The result
-/// is the Edit Toolbar button's id, which the rail's output turns into its response.
-fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut Ui) -> Option<Id> {
+/// is the Edit Toolbar button's id, which the rail's output turns into its response, and the host's index and rect of
+/// each slot button, around which the rail takes drops.
+fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut Ui) -> (Option<Id>, Vec<(usize, Rect)>) {
     let GridProps { slots, current, last_used, hidden, editing, columns, opens, captions, tear_off, tips, mark, reveal, .. } = *props;
     let tips = tips.map(|tips| tips.0);
     let visible = visible_slots(slots, hidden_in(hidden));
@@ -328,7 +337,7 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
         let end = group.last().map_or(first, |last| (last + columns).min(cells));
         visible.get(first..end.min(visible.len()))?.iter().find_map(|(index, _)| slots[*index].caption.clone())
     };
-    let mut edit_toolbar = None;
+    let (mut edit_toolbar, mut shown_at) = (None, Vec::with_capacity(visible.len()));
     let sent = &mut props.sent;
     // The grid of buttons sits at the centre of the rail's width.
     Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
@@ -374,6 +383,7 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                             Some(tips) => button.show_with_tip(ui, |ui| tips.show(&shown.id, ui)),
                                             None => button.show(ui),
                                         };
+                                        shown_at.push((*index, out.response.rect));
                                         // The slot wears the mark; while its flyout is open the tool's row does.
                                         if marked.is_some() && !out.opened {
                                             TargetMark::new(out.response.rect).id_salt(("mark", slot.id)).show_mark(ui);
@@ -408,7 +418,7 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
             }
         });
     });
-    edit_toolbar
+    (edit_toolbar, shown_at)
 }
 
 impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
@@ -435,8 +445,12 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             remembered(draw.slots, draw.current, draw.last_used)
         });
         let last = last.as_ref().clone();
-        let (mut events, mut edit_toolbar) = (Vec::new(), None);
-        let shown = self.show(ui, |ui, _| edit_toolbar = draw.run(ui, &mut events));
+        let (mut events, mut edit_toolbar, laid) = (Vec::new(), None, Rc::clone(&self.shown));
+        let shown = self.show(ui, |ui, _| {
+            let (edit, slots) = draw.run(ui, &mut events);
+            edit_toolbar = edit;
+            *laid.borrow_mut() = slots;
+        });
         let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off, mut ran) = (None, None, None, None, None, None);
         for event in events {
             match event {
@@ -454,7 +468,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
             // A replayed grid sends nothing: its button is shown again, and its response is read back.
             edit_toolbar: ran.or_else(|| edit_toolbar.and_then(|id| crate::contract::response_of(ui, id))),
             flyout,
-            dropped,
+            dropped: dropped.or(shown.output.dropped),
             torn_off,
             last_used: last,
             ..shown.output
@@ -494,17 +508,37 @@ impl<T: Value + MemoProps + PlainData + 'static> Component for ToolRail<'_, T> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> ToolRailOutput<T> {
+    /// While the toolbar is edited the rail takes the drops its buttons do not: a blank toolbar's, and those in the room
+    /// around the buttons. It registers after them, and declines over them.
+    fn finish(self, mut cx: Cx<'_, Self>) -> ToolRailOutput<T> {
+        let dropped = self.editing.then(|| self.rail_drop(cx.rect, cx.flow.is_rtl())).and_then(|target| cx.drop_target::<ToolDrag, _>(&target));
         ToolRailOutput {
             response: cx.response.clone(),
             select: None,
             double_clicked: None,
             edit_toolbar: None,
             flyout: None,
-            dropped: None,
+            dropped,
             torn_off: None,
             last_used: None,
         }
+    }
+}
+
+impl<T: Value + MemoProps + PlainData + 'static> ToolRail<'_, T> {
+    /// The rail `rect` as the target of the drops around the buttons the grid showed in this pass.
+    fn rail_drop(&self, rect: Rect, rtl: bool) -> RailDrop {
+        let vertical = self.columns == 1;
+        let slots = self
+            .shown
+            .take()
+            .into_iter()
+            .map(|(index, rect)| {
+                let slot = &self.slots[index];
+                SlotDrop { rect, slot: slot.id, index, tools: slot.tools.len(), vertical, rtl }
+            })
+            .collect();
+        RailDrop { rect, slots, count: self.slots.len(), beside: Cell::new(None) }
     }
 }
 
