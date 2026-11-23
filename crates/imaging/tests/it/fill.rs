@@ -153,6 +153,15 @@ impl Rig {
         let through: Vec<Pos2> = (1..=steps).map(|i| self.canvas() + vec2(12.0 * i as f32, 0.0)).collect();
         self.stroke(self.canvas(), &through, NONE);
     }
+
+    fn set(&self, field: &str, value: serde_json::Value) {
+        let ctx = self.fixture.ctx().clone();
+        self.with(|workspace| workspace.set_json_field(&ctx, &Source, field, value)).expect("the workspace accepts the control field");
+    }
+
+    fn tool(&self) -> String {
+        self.with(|workspace| workspace.json_fields(&Source).unwrap()["tool"].as_str().unwrap().to_owned())
+    }
 }
 
 /// The stroke a pass committed, if one did.
@@ -312,4 +321,159 @@ fn expand_and_contract_keys_edit_the_fill_area() {
     assert!(set("expand", serde_json::json!("wide")).is_err(), "text is not an amount");
     let edits = rig.with(|workspace| workspace.session().fill_edits.clone());
     assert_eq!(edits, vec![FillAreaEdit::grow(true, 3.0), FillAreaEdit::grow(false, 2.0)]);
+}
+
+/// A real rail flyout, not a separate fifth slot: both opening gestures share the order and remember the choice.
+#[trial]
+fn the_fill_lasso_flyout_remembers_its_polygonal_tool() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+    let lasso = rig.fixture.by_label("Lasso Tool").expect("the Lasso slot shows");
+    let at = lasso.center();
+    rig.fixture.frame(vec![pointer::moved(at)]);
+    rig.fixture.frame(vec![pointer::secondary(at, true)]);
+    rig.fixture.frame(vec![pointer::secondary(at, false)]);
+    rig.fixture.idle(3);
+    let rows = rig.fixture.by_role(Role::MENU_ITEM_RADIO);
+    let names: Vec<_> = rows.iter().map(|row| rig.fixture.tree().name_of(row.node)).collect();
+    assert_eq!(names, [Some("Lasso Tool"), Some("Polygonal Lasso Tool")]);
+    rig.fixture.click(&rows[1]).idle(2);
+    assert_eq!(rig.tool(), "polygonalLasso");
+
+    let hand = rig.fixture.by_label("Hand Tool").expect("the Hand slot shows");
+    rig.fixture.click(&hand).idle(2);
+    assert_eq!(rig.tool(), "hand");
+    rig.fixture.key(egui::Key::L, NONE).idle(2);
+    assert_eq!(rig.tool(), "polygonalLasso", "L recalls the selected member of the Lasso slot");
+
+    let polygon = rig.fixture.by_label("Polygonal Lasso Tool").expect("the slot shows its last choice");
+    rig.fixture.press(&polygon).advance(0.7).idle(3);
+    let rows = rig.fixture.by_role(Role::MENU_ITEM_RADIO);
+    let names: Vec<_> = rows.iter().map(|row| rig.fixture.tree().name_of(row.node)).collect();
+    assert_eq!(names, [Some("Lasso Tool"), Some("Polygonal Lasso Tool")], "holding opens the same ordered flyout");
+    rig.fixture.frame(vec![pointer::moved(rows[0].center())]);
+    rig.fixture.release_at(rows[0].center()).idle(2);
+    assert_eq!(rig.tool(), "lasso");
+    rig.set("tool", serde_json::json!("hand"));
+    rig.fixture.idle(2);
+    let lasso = rig.fixture.by_label("Lasso Tool").expect("the slot keeps the last freehand choice");
+    rig.fixture.click(&lasso).idle(2);
+    assert_eq!(rig.tool(), "lasso");
+}
+
+/// Clicks survive their releases, close once, and reach the same operation/history path as a freehand lasso.
+#[trial]
+fn polygonal_fill_commits_each_bar_mode_as_one_edit() {
+    for (mode, label, closing) in [
+        (SelectionOperation::New, "New selection", 0),
+        (SelectionOperation::Add, "Add to selection", 1),
+        (SelectionOperation::Subtract, "Subtract from selection", 2),
+        (SelectionOperation::Intersect, "Intersect with selection", 3),
+    ] {
+        let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+        rig.set("tool", serde_json::json!("polygonalLasso"));
+        rig.fixture.idle(2);
+        assert_eq!(rig.tool(), "polygonalLasso", "the control route reports its selected tool");
+        let choice = rig.fixture.by_label(label).expect("the polygon uses the Lasso's mode buttons");
+        rig.fixture.click(&choice).idle(2);
+        let a = rig.canvas() + vec2(-40.0, -30.0);
+        let b = rig.canvas() + vec2(35.0, -30.0);
+        let c = rig.canvas() + vec2(0.0, 40.0);
+        for at in [a, b, c] {
+            rig.fixture.click_at(at);
+            assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "a release does not close the polygon");
+        }
+        assert!(!rig.events().iter().any(|event| matches!(event, FillEvent::FillArea(_))));
+        match closing {
+            0 => { rig.fixture.click_at(a); }
+            1 => { rig.fixture.click_at(c); }
+            2 => { rig.fixture.key(egui::Key::Enter, NONE); }
+            _ => {
+                let d = rig.canvas() + vec2(60.0, 30.0);
+                rig.fixture.click_at(d);
+                rig.fixture.click_at(d);
+            }
+        }
+        rig.fixture.idle(2);
+        assert!(rig.host.borrow().is_open::<Hosted>(), "Enter closes the polygon, not the workspace");
+        let edits: Vec<_> = rig.events().into_iter().filter_map(|event| match event { FillEvent::FillArea(edit) => Some(edit), _ => None }).collect();
+        assert_eq!(edits.len(), 1, "one completed polygon is one fill-area event");
+        let correct_mode = matches!(
+            (&edits[0], mode),
+            (FillAreaEdit::New { .. }, SelectionOperation::New)
+                | (FillAreaEdit::Add { .. }, SelectionOperation::Add)
+                | (FillAreaEdit::Subtract { .. }, SelectionOperation::Subtract)
+                | (FillAreaEdit::Intersect { .. }, SelectionOperation::Intersect)
+        );
+        assert!(correct_mode, "the bar's operation survives every click: {edits:?}");
+        let points = match &edits[0] {
+            FillAreaEdit::New { points, .. } | FillAreaEdit::Add { points, .. } | FillAreaEdit::Subtract { points, .. }
+                | FillAreaEdit::Intersect { points, .. } => points,
+            _ => panic!("the pointer committed a polygon"),
+        };
+        assert_eq!(points.len(), if closing == 3 { 4 } else { 3 }, "only clicked vertices enter the edit");
+        assert!((points[0][1] - points[1][1]).abs() < 1e-6, "the horizontal edge stays horizontal");
+        assert!(points[0][0] < points[2][0] && points[2][0] < points[1][0] && points[2][1] > points[0][1], "the third corner stays below that edge");
+        assert_eq!(rig.with(|workspace| workspace.session().fill_edits.clone()), edits);
+        rig.with(ContentAwareFillWorkspace::undo);
+        assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "one undo removes the whole polygon");
+        rig.with(ContentAwareFillWorkspace::redo);
+        assert_eq!(rig.with(|workspace| workspace.session().fill_edits.clone()), edits, "redo restores the same edit");
+    }
+}
+
+#[trial]
+fn polygonal_fill_retracts_and_cancels_without_committing_a_partial_edit() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    let a = rig.canvas() + vec2(-40.0, -30.0);
+    let b = rig.canvas() + vec2(35.0, -30.0);
+    let c = rig.canvas() + vec2(0.0, 40.0);
+    for retract in 0..3 {
+        for at in [a, b, c] { rig.fixture.click_at(at); }
+        match retract {
+            0 => { rig.fixture.key(egui::Key::Backspace, NONE); }
+            1 => { rig.fixture.key(egui::Key::Delete, NONE); }
+            _ => {
+                rig.fixture.frame(vec![pointer::secondary(c, true)]);
+                rig.fixture.frame(vec![pointer::secondary(c, false)]);
+                assert!(rig.fixture.by_role(Role::MENU).is_empty(), "the secondary click retracts, rather than opening a menu");
+            }
+        }
+        rig.fixture.key(egui::Key::Enter, NONE);
+        assert!(rig.host.borrow().is_open::<Hosted>());
+        assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "each retract leaves only two vertices, which cannot commit");
+    }
+
+    for at in [a, b, c] { rig.fixture.click_at(at); }
+    rig.fixture.key(egui::Key::Escape, NONE);
+    assert!(rig.host.borrow().is_open::<Hosted>(), "Escape drops the outline before it can close the workspace");
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
+    for at in [a, b, c] { rig.fixture.click_at(at); }
+    rig.fixture.key(egui::Key::H, NONE).idle(2);
+    assert_eq!(rig.tool(), "hand", "tool letters still work between polygon clicks");
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    for at in [a, b, c] { rig.fixture.click_at(at); }
+    rig.set("tool", serde_json::json!("lasso"));
+    rig.fixture.idle(2);
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "a tool switch drops the unfinished polygon");
+    let through = [b, c, a];
+    rig.stroke(a, &through, NONE);
+    assert_eq!(rig.with(|workspace| workspace.session().fill_edits.len()), 1, "freehand still closes on release");
+}
+
+#[trial]
+fn polygonal_fill_uses_the_existing_edit_limits() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 2));
+    rig.set("tool", serde_json::json!("polygonalLasso"));
+    rig.fixture.idle(2);
+    for delta in [vec2(-40.0, -30.0), vec2(35.0, -30.0), vec2(0.0, 40.0)] {
+        let at = rig.canvas() + delta;
+        rig.fixture.click_at(at);
+    }
+    rig.fixture.key(egui::Key::Enter, NONE);
+    assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
+    assert!(rig.events().iter().any(|event| matches!(event, FillEvent::Refused(FillLimit::Vertices(2)))), "the existing refusal reaches the host");
 }
