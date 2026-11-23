@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2", "vendor/hayro-cmap", "vendor/hayro-postscript", "vendor/linesweeper"]
+exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2", "vendor/hayro-cmap", "vendor/hayro-postscript", "vendor/linesweeper", "vendor/vello_common", "vendor/vello_cpu"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-android-res = { path = "crates/android-res" }
+craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
 craft-java-class = { path = "crates/java-class" }
@@ -21,6 +23,7 @@ craft-xfdf = { path = "crates/xfdf" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
+craft-sqlite = { path = "crates/sqlite" }
 craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
@@ -35,8 +38,10 @@ log = "0.4"
 craft-plist = { path = "crates/plist" }
 craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
+craft-png = { path = "crates/png" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
+craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
@@ -82,6 +87,7 @@ craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
 craft-mcmat = { path = "crates/mcmat" }
+craft-sbs = { path = "crates/sbs" }
 craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
@@ -146,6 +152,7 @@ craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
+craft-material-graph = { path = "crates/material-graph" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-sf2 = { path = "crates/sf2" }
@@ -265,6 +272,8 @@ hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 linesweeper = { path = "vendor/linesweeper" }
+vello_common = { path = "vendor/vello_common" }
+vello_cpu = { path = "vendor/vello_cpu" }
 ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }

@@ -95,9 +95,7 @@ pub(super) struct Reader {
     pub(super) def_cur: CellDef,
     pub(super) row_header: bool,
     pub(super) created: Option<(u32, u32, u32, u32, u32)>,
-    pub(super) in_creatim: bool,
     pub(super) rule_pending: bool,
-    pub(super) info_depth: Option<usize>,
     // Notes and comments (only when the caller wants them).
     pub(super) marks_on: bool,
     pub(super) sub: Option<Sub>,
@@ -370,7 +368,7 @@ impl Reader {
             Dest::FontTbl if !self.font_name.is_empty() => self.commit_font(),
             Dest::StyleSheet if !self.style_name.is_empty() => self.commit_style(),
             Dest::RevTbl if !self.rev_name.trim().is_empty() => self.commit_author(),
-            Dest::Info(k) => {
+            Dest::Info(k) if self.stack.last().is_none_or(|parent| parent.dest != closing) => {
                 let t = std::mem::take(&mut self.info_text).trim().to_string();
                 match k {
                     1 => self.meta.title = t,
@@ -380,7 +378,6 @@ impl Reader {
                     5 => self.meta.description = t,
                     _ => {}
                 }
-                self.in_creatim = false;
             }
             Dest::Atn(k) => self.commit_atn(k),
             Dest::ShpSv => self.commit_shape_prop(),

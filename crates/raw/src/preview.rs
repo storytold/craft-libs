@@ -410,7 +410,10 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>, jpeg_only: bool) -> Opt
         .or(largest)
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    let best = best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)));
+    // ORF capability must not remove the scan fallback for unsupported modes and damaged preview pointers.
+    let best = best.or_else(|| {
+        format.filter(|f| !f.is_supported() || matches!(f, crate::RawFormat::Erf | crate::RawFormat::Orf)).and_then(|_| scan_for_jpeg(bytes))
+    });
     // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
     #[cfg(feature = "hasselblad")]
     let best = best.or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::hasselblad::rgb_preview(&tiff, bytes)).flatten());
