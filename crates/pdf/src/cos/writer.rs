@@ -298,7 +298,8 @@ pub enum AppendBlocker {
     Reconstructed,
     /// Encryption was added or removed, which rewrites every object.
     EncryptionChanged,
-    /// An edit (a redaction, a new file identifier) requires that the old revision not remain.
+    /// An edit requires that the old revision not remain (a redaction, a new file identifier), or
+    /// edits an object whose cross-reference row and object header give different generations.
     FullSaveRequired,
 }
 
@@ -313,9 +314,10 @@ impl std::fmt::Display for AppendBlocker {
 }
 
 /// The condition that makes [`write_incremental`] rewrite the whole file and [`write_append_only`]
-/// refuse, or `None`. `None` does not promise that a save succeeds: both writers still refuse a
-/// document opened with a stream limit, or one whose embedded files' password is missing, and
-/// setting [`SaveOptions::mod_date`] can itself require a full save (see [`write_append_only`]).
+/// refuse, or `None`. `None` does not promise that a save succeeds: other restrictions still
+/// apply, such as a stream limit or an edit that needs an encryption key the document was opened
+/// without, and [`write_append_only`] also refuses when setting [`SaveOptions::mod_date`] makes a
+/// full save necessary.
 pub fn append_blocker(doc: &Document) -> Option<AppendBlocker> {
     if doc.reconstructed() {
         Some(AppendBlocker::Reconstructed)
@@ -341,10 +343,10 @@ pub enum AppendOnlyError {
 }
 
 /// [`write_incremental`] without its fallback: the result always starts with the document's
-/// original bytes. Where `write_incremental` would rewrite the whole file, this returns
-/// [`AppendOnlyError::Blocked`] naming the reason ([`append_blocker`]). The check runs after
-/// [`SaveOptions::mod_date`] is applied, because editing an `/Info` dictionary whose generations
-/// disagree can itself require a full save.
+/// original bytes. Where `write_incremental` would rewrite the whole file, and also where
+/// applying [`SaveOptions::mod_date`] makes that necessary, this returns
+/// [`AppendOnlyError::Blocked`] naming the reason ([`append_blocker`]). Editing an `/Info`
+/// dictionary whose generations disagree is such a case, so the check runs after the date is set.
 pub fn write_append_only(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, AppendOnlyError> {
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit.into());
