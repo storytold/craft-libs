@@ -315,6 +315,7 @@ pub struct CommentsPanel<'a, H: Value = NoHostRow> {
 
 /// The host row type of a panel whose cards' menus take no host rows: it has no value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum NoHostRow {}
 
 /// Who draws the panel's header.
@@ -683,32 +684,33 @@ impl<H: Value> CommentsPanel<'_, H> {
             let focus_editor = state.focus_editor;
             let mut editor_built = false;
             let mut openers = Vec::new();
-            let out = CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped, select_mode)
-                .revealing(revealing.map(CardKey::Thread))
-                .show_items(ui, &source, &mut |_, item| match &source.entries[item.at].1 {
-                    RowEntry::Group { title, count, open, page } => {
-                        CommentRow::heading(title.clone(), count.clone(), *open, !by_page || page.is_none())
+            let list = CommentList::new(label.clone(), Some(Bind::bound(&mut selection)), grouped, select_mode);
+            let list = match revealing {
+                Some(thread) => list.revealing(CardKey::Thread(thread)),
+                None => list,
+            };
+            let out = list.show_items(ui, &source, &mut |_, item| match &source.entries[item.at].1 {
+                RowEntry::Group { title, count, open, page } => CommentRow::heading(title.clone(), count.clone(), *open, !by_page || page.is_none()),
+                RowEntry::Card { thread, .. } => {
+                    let name = thread
+                        .messages
+                        .first()
+                        .map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
+                    let is_lead = lead == Some(thread.id);
+                    let editing = editing.filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (index, text));
+                    editor_built |= editing.is_some();
+                    if is_lead {
+                        openers.extend((0..thread.messages.len()).map(|index| (index, item.part_opener(MORE.at(index as u64)))));
                     }
-                    RowEntry::Card { thread, .. } => {
-                        let name = thread
-                            .messages
-                            .first()
-                            .map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
-                        let is_lead = lead == Some(thread.id);
-                        let editing = editing.filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (index, text));
-                        editor_built |= editing.is_some();
-                        if is_lead {
-                            openers.extend((0..thread.messages.len()).map(|index| (index, item.part_opener(MORE.at(index as u64)))));
-                        }
-                        CommentRow::card(thread, name)
-                            .state(chosen.contains(&thread.id), !read_only && !thread.locked, now)
-                            .lead(is_lead)
-                            .focus_reply(is_lead && item.row.activated_by_key)
-                            .focus_editor(focus_editor && editing.is_some())
-                            .submit_key(reply_submit)
-                            .drafts(editing, if is_lead { reply } else { "" })
-                    }
-                });
+                    CommentRow::card(thread, name)
+                        .state(chosen.contains(&thread.id), !read_only && !thread.locked, now)
+                        .lead(is_lead)
+                        .focus_reply(is_lead && item.row.activated_by_key)
+                        .focus_editor(focus_editor && editing.is_some())
+                        .submit_key(reply_submit)
+                        .drafts(editing, if is_lead { reply } else { "" })
+                }
+            });
             // The editor's card took the focus request this pass.
             if editor_built {
                 state.focus_editor = false;

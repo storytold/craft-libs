@@ -83,7 +83,9 @@ pub struct Text {
     styled: Vec<Span<'static>>,
     /// Whether every span is italic, a value set apart from the words around it.
     italic: bool,
-    /// The number the text stands for, reported to assistive technology next to the text.
+    /// Gives the text an accessible numeric value, `value`, so tests and assistive technology read a position or a count
+    /// without parsing the translated text.
+    #[prop(quantity = "an accessible numeric value: a position or a count")]
     numeric: Option<f64>,
 }
 
@@ -127,14 +129,6 @@ impl Text {
     /// catalogue word shows in its own language.
     pub fn italic(mut self) -> Self {
         self.italic = true;
-        self
-    }
-
-    /// Gives the text an accessible numeric value, `value`, so tests and assistive technology read a position or a count
-    /// without parsing the translated text.
-    #[must_use]
-    pub fn numeric(mut self, value: f64) -> Self {
-        self.numeric = Some(value);
         self
     }
 

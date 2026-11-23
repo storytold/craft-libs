@@ -107,7 +107,8 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// The kept rows are in order of how well they match the query.
     #[prop]
     ranked: bool,
-    /// The rows' labels are document text, set by `document_rows`.
+    /// The rows' labels are document text at the document's font, size and alignment; UI text keeps its tokens.
+    #[prop(name = "document_rows")]
     document: Option<DocumentRows>,
 }
 
@@ -136,13 +137,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             document: None,
         }
         .label(label)
-    }
-
-    /// The rows' labels are document text at the document's font, size and alignment; UI text keeps its tokens.
-    #[must_use]
-    pub fn document_rows(mut self, rows: DocumentRows) -> Self {
-        self.document = Some(rows);
-        self
     }
 
     /// The options list of a value picker's popup (completions, number presets, `PopupList`): one selection, a click
@@ -281,7 +275,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
-        let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves).document(self.document.clone());
+        let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves);
+        let row = match self.document.clone() {
+            Some(document) => row.document(document),
+            None => row,
+        };
         if self.row_menu { row.row_menu() } else { row }
     }
 

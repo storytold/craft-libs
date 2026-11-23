@@ -187,7 +187,7 @@ impl DropVeil {
     }
 
     /// Shows the veil over `body`, which gets the files dropped on the window in this pass, if any.
-    pub fn show<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, Option<&OsFiles>) -> R) -> Inner<DropVeilOutput, R> {
+    pub fn show_with_files<R>(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, Option<&OsFiles>) -> R) -> Inner<DropVeilOutput, R> {
         let dropped = Arc::clone(&self.dropped);
         ShowContainer::show(self, ui, move |ui, _| {
             let files = dropped.lock().unwrap_or_else(PoisonError::into_inner).clone();

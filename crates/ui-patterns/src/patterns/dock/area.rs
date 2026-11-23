@@ -144,6 +144,10 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
+    /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
+    /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
+    /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
+    #[prop]
     rail_footer: Option<P>,
     top_inset: f32,
 }
@@ -192,17 +196,9 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// windows float over. A window's place is clamped to the float bounds, so one at the top of the area sits just
     /// below the bars and moves with them as they show and close. A negative or non-finite inset is none.
     #[must_use]
+    // design: allow[props/point-size](the inset is measured content, the height of the app's bars, not a size the area chooses)
     pub fn top_inset(mut self, inset: f32) -> Self {
         self.top_inset = if inset.is_finite() { inset.max(0.0) } else { 0.0 };
-        self
-    }
-
-    /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
-    /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
-    /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
-    #[must_use]
-    pub fn rail_footer(mut self, panel: P) -> Self {
-        self.rail_footer = Some(panel);
         self
     }
 }
@@ -1004,8 +1000,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         });
         // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
         // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
-        if !sent.is_empty() {
-            let press = ui.input(|i| i.pointer.press_origin());
+        if let Some(press) = sent.last().copied() {
             drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
                 drag.source = Some(size);
                 drag.press = press;
@@ -1329,6 +1324,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         Stack::new().fill_width().gap(Gap::None).show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
                     })
                     .show_at(ui, cell, |ui, _| {
+                        // design: allow[contract/allocate](the rail lays its icons out in a rect of its own: the panel body claims their height, so the host's footer sits under them)
                         let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), egui::Sense::hover());
                         draw(ui, rect, open.clone())
                     })
@@ -1708,7 +1704,8 @@ fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, pane
     panels.borrow_mut().body(panel, ui, body);
 }
 
-/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to.
+/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to, with
+/// the point its press went down.
 #[derive(MemoProps)]
 struct RailGrip<'a, P> {
     #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
@@ -1716,7 +1713,7 @@ struct RailGrip<'a, P> {
     active: PanelKey,
     movable: bool,
     label: Label,
-    sent: Outbox<'a, ()>,
+    sent: Outbox<'a, Option<Pos2>>,
 }
 
 /// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
@@ -1729,7 +1726,7 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
         .label(props.label.clone())
         .show_at(ui, strip);
     if held.drag_started {
-        props.sent.send(());
+        props.sent.send(held.drag_press);
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);

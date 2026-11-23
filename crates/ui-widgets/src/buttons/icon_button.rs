@@ -90,6 +90,7 @@ pub enum PopupMark {
 
 /// How an icon button's pointer press affects the focused control.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PressFocus {
     /// Follow the standard focus policy.
     #[default]

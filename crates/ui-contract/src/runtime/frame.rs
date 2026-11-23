@@ -143,6 +143,8 @@ pub(crate) struct FrameState {
     root_passes_hooked: u64,
     prunes: HashMap<TypeId, fn(&Context, &[ViewportId])>,
     sweeps: HashMap<TypeId, fn(&Context)>,
+    /// What a layer above the runtime reads at the begin hook, after the pointer snapshot and before any component runs.
+    begins: HashMap<TypeId, fn(&Context)>,
     frame_layers: Option<fn(&Context)>,
 }
 
@@ -334,6 +336,14 @@ pub(crate) fn register_prune(ctx: &Context, key: TypeId, prune: fn(&Context, &[V
 pub(crate) fn register_end_sweep(ctx: &Context, key: TypeId, sweep: fn(&Context)) {
     pass_state::with::<FrameState, _>(ctx, |state| {
         state.sweeps.entry(key).or_insert(sweep);
+    });
+}
+
+/// Registers a hook the begin hook runs for each viewport's pass after the pointer snapshot, once per service type:
+/// a service of a layer above the runtime reads its state there before any component runs.
+pub(crate) fn register_begin_hook(ctx: &Context, key: TypeId, hook: fn(&Context)) {
+    pass_state::with::<FrameState, _>(ctx, |state| {
+        state.begins.entry(key).or_insert(hook);
     });
 }
 
@@ -704,6 +714,10 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     // H5: the pointer snapshot, before any component runs.
     let input = frame_input.unwrap_or_else(|| FrameInput::new(RootEnv::fallback(&ctx)));
     pointer::begin(&ctx, frame_hit(&ctx), input.latched);
+    let begins: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.begins.values().copied().collect());
+    for hook in begins {
+        hook(&ctx);
+    }
     drag::begin(&ctx);
     // H5: install the root `Env` and the theme styles' direction from `FrameInput.root`.
     let env = Env::from_root(&ctx, &input.root, input.host, scale::pixels_per_point(&ctx));

@@ -263,7 +263,9 @@ pub struct FloatingGroup<'a> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
-    /// The title row is a bare grip: no actions, no column arrow, no rule.
+    /// The title row is a bare grip (a small handle that moves the window), with no menu, float or close action, no
+    /// column arrow and no rule under it: a quick-action strip's look.
+    #[prop]
     grip: bool,
     /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
     open: Bind<'a, bool>,
@@ -373,14 +375,6 @@ impl<'a> FloatingGroup<'a> {
     #[must_use]
     pub fn actions(mut self, actions: impl IntoIterator<Item = HeaderAction>) -> Self {
         self.actions = actions.into_iter().collect();
-        self
-    }
-
-    /// The title row is a bare grip (a small handle that moves the window), with no menu, float or close action, no
-    /// column arrow and no rule under it: a quick-action strip's look.
-    #[must_use]
-    pub fn grip(mut self, on: bool) -> Self {
-        self.grip = on;
         self
     }
 

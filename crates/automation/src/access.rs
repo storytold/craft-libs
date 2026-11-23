@@ -60,6 +60,32 @@ fn able(action: Declared) -> &'static str {
     }
 }
 
+/// Queues `action` on the node `target` names in `viewport`'s kept access tree.
+fn inject_node(host: &WindowHost, viewport: ViewportId, target: &NodeTarget, action: Declared) -> Result<(), String> {
+    let tree = host.access_tree_view(viewport).ok_or_else(|| NO_TREE.to_owned())?;
+    let node = resolve(&tree, target, action)?;
+    host.inject_access(viewport, node, action);
+    Ok(())
+}
+
+/// Queues a click of the node `target` names in `viewport`, once the kept tree has it as one reported, enabled,
+/// clickable node ([`resolve`]).
+pub fn inject_click(host: &WindowHost, viewport: ViewportId, target: &NodeTarget) -> Result<(), String> {
+    inject_node(host, viewport, target, Declared::Click)
+}
+
+/// Queues the context menu of the node `target` names in `viewport`, once the kept tree has it as one reported,
+/// enabled node with a context menu ([`resolve`]).
+pub fn inject_context_menu(host: &WindowHost, viewport: ViewportId, target: &NodeTarget) -> Result<(), String> {
+    inject_node(host, viewport, target, Declared::ContextMenu)
+}
+
+/// Queues the focus request for the node `target` names in `viewport`, once the kept tree has it as one reported,
+/// enabled, focusable node ([`resolve`]).
+pub fn inject_focus(host: &WindowHost, viewport: ViewportId, target: &NodeTarget) -> Result<(), String> {
+    inject_node(host, viewport, target, Declared::Focus)
+}
+
 /// The one reported, enabled node of `tree` that declares `action` and that `target` names; an error names none,
 /// several, disabled or undeclared. An id must be a reported node; a label matches the reported, enabled nodes that
 /// declare `action` and whose label equals it, ignoring case, and exactly one must match.

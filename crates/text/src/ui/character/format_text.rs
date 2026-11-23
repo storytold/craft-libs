@@ -87,6 +87,7 @@ pub enum FormatControl {
 
 /// A kind of list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ListKind {
     /// A bulleted list.
     Bulleted,

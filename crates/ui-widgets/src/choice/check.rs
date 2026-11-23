@@ -25,16 +25,18 @@ pub struct CheckboxStyle {
 
 /// The side of a quiet check box, against the icon side.
 const QUIET_SIDE: f32 = 0.6;
+/// The corner radius of a quiet check box's well, in points: a small box keeps small corners.
+const QUIET_RADIUS: u8 = 2;
 
 /// A check box over a bool; a `Mixed` binding shows the mixed state and a click makes it checked.
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Checkbox<'a> {
     #[common]
     common: Common,
     value: Bind<'a, bool>,
-    /// A small, dark box with a plain white mark in place of the accent fill: the check of a thumbnail tile, which
-    /// sits over a picture and must not outweigh it.
+    /// A small, dark box with a plain mark, for a check that sits over a picture (a thumbnail tile's).
     #[style_key]
+    #[prop]
     quiet: bool,
 }
 
@@ -42,12 +44,6 @@ impl<'a> Checkbox<'a> {
     /// A check box of `value`.
     pub fn new(value: Bind<'a, bool>) -> Self {
         Checkbox { common: Common::new(), value, quiet: false }
-    }
-
-    /// A small, dark box with a plain mark, for a check that sits over a picture (a thumbnail tile's).
-    pub fn quiet(mut self, on: bool) -> Self {
-        self.quiet = on;
-        self
     }
 }
 
@@ -65,7 +61,7 @@ impl Component for Checkbox<'_> {
             return CheckboxStyle {
                 metrics: Metrics::new().min_size(Vec2::new(0.0, control.icon * QUIET_SIDE)),
                 focus: cx.focus_look(),
-                well: super::quiet_indicator(cx, egui::CornerRadius::same(2)),
+                well: super::quiet_indicator(cx, egui::CornerRadius::same(QUIET_RADIUS)),
                 mark: super::quiet_mark(cx),
                 side: control.icon * QUIET_SIDE,
             };

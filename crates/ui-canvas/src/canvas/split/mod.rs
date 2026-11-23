@@ -40,6 +40,7 @@ pub use craft_behavior::dock::Arrangement as SplitLayout;
 
 /// How a pointer press in an inactive pane activates it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PanePress {
     /// The first press selects the pane; its contents receive later presses.
     #[default]

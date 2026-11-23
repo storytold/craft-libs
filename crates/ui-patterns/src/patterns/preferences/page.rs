@@ -60,6 +60,8 @@ pub enum PreferencesLayout {
 #[derive(Pattern, Props)]
 pub struct PreferencesPage<'a> {
     state: Bind<'a, PreferencesState>,
+    /// Lays the pages out as `layout` says.
+    #[prop]
     layout: PreferencesLayout,
 }
 
@@ -105,13 +107,6 @@ impl<'a> PreferencesPage<'a> {
     /// A page over the host's `state`, laid out as [`PreferencesLayout::Paged`].
     pub fn new(state: Bind<'a, PreferencesState>) -> Self {
         PreferencesPage { state, layout: PreferencesLayout::default() }
-    }
-
-    /// Lays the pages out as `layout` says.
-    #[must_use]
-    pub fn layout(mut self, layout: PreferencesLayout) -> Self {
-        self.layout = layout;
-        self
     }
 
     /// Shows the page for this pass over `host`. The values the rows edit and Reset Section reach the host once, after

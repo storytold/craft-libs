@@ -34,5 +34,9 @@ fn a_number_row_shows_its_unit_after_the_number() {
     });
     fixture.room(vec2(900.0, 700.0));
     fixture.settle();
-    assert!(fixture.texts().iter().any(|run| run.text == "in"), "the unit symbol is painted: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+    assert!(
+        fixture.texts().iter().any(|run| run.text == "in"),
+        "the unit symbol is painted: {:?}",
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    );
 }

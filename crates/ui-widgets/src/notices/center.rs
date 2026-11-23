@@ -35,7 +35,7 @@ pub struct PostedNotice {
     #[prop(flag)]
     sticky: bool,
     /// How far the job has got, between 0 and 1: the card shows a progress bar and the percentage.
-    #[prop]
+    #[prop(quantity = "fraction done")]
     progress: Option<f32>,
     /// The notice's own action; activating it ends the notice as `NoticeEnd::Action`.
     #[prop(into)]

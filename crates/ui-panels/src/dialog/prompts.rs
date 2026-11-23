@@ -165,8 +165,10 @@ pub struct StandardPrompt {
     open: bool,
     /// What a programmatic OK answers; the default answer until `set_choice` names another.
     chosen: Option<PromptChoice>,
-    /// The button drawn as default and answered by Enter; kept apart from `chosen`, so automation setting the answer
-    /// does not move the default the user sees.
+    /// The answer Enter gives and the button drawn as default: Proceed unless set. A choice with no button leaves
+    /// Proceed. It is also the answer a host-side `confirm` gives until `set_choice` names another. It is kept apart
+    /// from `chosen`, so automation setting the answer does not move the default the user sees.
+    #[prop(name = "default_choice")]
     default: PromptChoice,
     /// Carries a typed tag back in the `PromptAnswer` (a document id with the layer ids); read it with
     /// `PromptAnswer::tag` or `PromptAnswer::take_tag`.
@@ -188,7 +190,11 @@ pub struct StandardPrompt {
     #[prop(into)]
     message: Option<Label>,
     paragraphs: Vec<Label>,
+    /// A muted note after the paragraphs: secondary text.
+    #[prop(into)]
     note: Option<Label>,
+    /// An icon of the catalog beside the message, in the accent tone.
+    #[prop]
     icon: Option<IconId>,
     buttons: Vec<(PromptChoice, Label)>,
     details: Option<(Label, Label)>,
@@ -287,14 +293,6 @@ impl StandardPrompt {
         Self::new(PromptKind::Custom).message(message)
     }
 
-    /// The answer Enter gives and the button drawn as default: Proceed unless set. A choice with no button leaves
-    /// Proceed. It is also the answer a host-side `confirm` gives until `set_choice` names another.
-    #[must_use]
-    pub fn default_choice(mut self, choice: PromptChoice) -> Self {
-        self.default = choice;
-        self
-    }
-
     /// What a programmatic OK answers: the choice `set_choice` named, else the default answer.
     fn chosen_answer(&self) -> PromptChoice {
         self.chosen.unwrap_or_else(|| self.default_answer())
@@ -310,20 +308,6 @@ impl StandardPrompt {
     #[must_use]
     pub fn paragraph(mut self, paragraph: impl Into<Label>) -> Self {
         self.paragraphs.push(paragraph.into());
-        self
-    }
-
-    /// A muted note after the paragraphs: secondary text.
-    #[must_use]
-    pub fn note(mut self, note: impl Into<Label>) -> Self {
-        self.note = Some(note.into());
-        self
-    }
-
-    /// An icon of the catalog beside the message, in the accent tone.
-    #[must_use]
-    pub fn icon(mut self, icon: IconId) -> Self {
-        self.icon = Some(icon);
         self
     }
 

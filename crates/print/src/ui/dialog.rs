@@ -94,6 +94,7 @@ pub enum PrintLayout {
 #[non_exhaustive]
 pub enum SheetContent {
     /// One image box holding a picture; the box can be dragged.
+    #[non_exhaustive]
     Image {
         /// The image box on the paper.
         image: egui::Rect,
@@ -363,7 +364,6 @@ pub(super) struct PrintPreviewStyle {
 
 /// What a grayscale job's pictures are multiplied by: the light grey of production's preview. The vertex colour only
 /// scales the picture's channels; the picture itself is rendered grey by the app.
-// design: allow[raw-colour/const](the tint of printed paper in grayscale, not of the interface)
 const GRAYSCALE_TINT: Color32 = Color32::from_gray(235);
 
 /// The textured quad of a page: `corners` (screen points) are the picture's top-left, top-right, bottom-right and
@@ -413,7 +413,8 @@ pub(super) struct PrintPreview<'a> {
     sheet: &'a PrintSheet,
     /// The image box's top-left corner on the paper, in paper points.
     position: Bind<'a, Pos2>,
-    /// The job prints in grayscale: the pictures are tinted grey.
+    /// The preview of a job that prints in grayscale (`on`): the pictures stand tinted grey, as production's do.
+    #[prop(vis = "pub(super)")]
     grayscale: bool,
 }
 
@@ -422,15 +423,9 @@ impl<'a> PrintPreview<'a> {
         PrintPreview { common: Common::new(), sheet, position, grayscale: false }.label(label)
     }
 
-    /// The paper fitted in `room`, centred; none while the paper has no area.
-    /// The preview of a job that prints in grayscale (`on`): the pictures stand tinted grey, as production's do.
-    pub(super) fn grayscale(mut self, on: bool) -> Self {
-        self.grayscale = on;
-        self
-    }
-
     /// The colour the pictures are multiplied by.
     fn tint(&self) -> Color32 {
+        // design: allow[raw-colour/const](a white tint leaves the page picture's own colours unchanged)
         if self.grayscale { GRAYSCALE_TINT } else { Color32::WHITE }
     }
 

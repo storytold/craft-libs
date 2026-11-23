@@ -106,7 +106,8 @@ pub struct Dialog<'a> {
     /// A muted note after the title.
     #[prop(into)]
     title_note: Option<Label>,
-    /// An icon of the catalog before the title, in the accent ink.
+    /// An icon of the catalog before the title, in the accent ink (a lock before "Password required").
+    #[prop]
     title_icon: Option<craft_behavior::IconId>,
     /// While the body reports its fields unchanged ([`Dialog::report_changed`]), a Close button stands in place of the
     /// OK and Cancel pair.
@@ -275,13 +276,6 @@ impl<'a> Dialog<'a> {
     #[must_use]
     pub(super) fn alert(mut self) -> Self {
         self.alert = true;
-        self
-    }
-
-    /// An icon of the catalog before the title, in the accent ink (a lock before "Password required").
-    #[must_use]
-    pub fn title_icon(mut self, icon: craft_behavior::IconId) -> Self {
-        self.title_icon = Some(icon);
         self
     }
 

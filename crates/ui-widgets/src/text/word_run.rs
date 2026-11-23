@@ -12,7 +12,7 @@ use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, TextLook, TypeRole, UiTokens};
 use craft_behavior::{Flow, Metrics, NavShape, PartKey, PartRef, Proposal, Roving, Sense, Value};
 use craft_theme::{Rgba, Stateful, States};
-use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
+use egui::{CornerRadius, Rect, Response, Vec2, pos2, vec2};
 use std::ops::Deref;
 
 /// A word of the run: its text on its fill.
@@ -86,11 +86,6 @@ impl<'a, K: Value + 'static> WordRun<'a, K> {
     /// A run named `label` of `words`; the picked word's key is `selected`.
     pub fn new(label: impl Into<Label>, words: &'a [RunWord<K>], selected: Bind<'a, Option<K>>) -> Self {
         WordRun { common: Common::new(), words, selected, picked: None }.label(label)
-    }
-
-    /// Shows the run in the flow of `ui`.
-    pub fn show(self, ui: &mut Ui) -> WordRunOutput<K> {
-        crate::contract::Show::show(self, ui)
     }
 
     fn part(at: usize) -> PartRef {

@@ -21,6 +21,7 @@ pub struct PopupListStyle {
 
 /// How a popup list relates its rows to its opener.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PopupListKind {
     /// A UI list with padding around its rows.
     #[default]

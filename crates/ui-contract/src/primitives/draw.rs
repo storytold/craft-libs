@@ -20,6 +20,7 @@ const NONE_DIAGONAL_INSET: f32 = 0.15;
 
 /// What a swatch well shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum WellFill {
     /// A colour.
     Color(Srgba),

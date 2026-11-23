@@ -62,7 +62,9 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     pub(super) empty: Option<C::Value>,
     /// The search form: a clear part while there is text, and Escape clears the text.
     search: bool,
-    /// Whether the search form shows its clear button (on); Escape still clears the text without it.
+    /// Whether a search field shows its clear button while there is text. Off, the field is a plain integrated one
+    /// (a find bar's): Escape still clears it.
+    #[prop]
     clear_button: bool,
     /// The adornments before the text, in reading order.
     leading: Vec<Adornment>,
@@ -125,14 +127,6 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             width_chars: None,
         }
         .label(label)
-    }
-
-    /// Whether a search field shows its clear button while there is text. Off, the field is a plain integrated one
-    /// (a find bar's): Escape still clears it.
-    #[must_use]
-    pub fn clear_button(mut self, on: bool) -> Self {
-        self.clear_button = on;
-        self
     }
 
     /// Shown while the text is empty.

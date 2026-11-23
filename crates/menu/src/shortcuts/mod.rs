@@ -512,8 +512,9 @@ impl<'a> ShortcutsDialog<'a> {
     }
 }
 
-/// The size a read-only shortcuts dialog opens at, in points.
+/// The width a read-only shortcuts dialog opens at, in points.
 const READ_ONLY_WIDTH: f32 = 560.0;
+/// The height a read-only shortcuts dialog opens at, in points.
 const READ_ONLY_HEIGHT: f32 = 480.0;
 
 /// What a footer button does.

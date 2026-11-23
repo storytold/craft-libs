@@ -3,10 +3,9 @@
 use super::draw::{Draw, DrawEnv, StrokeWidth};
 use super::record::PaintRecord;
 use super::text::{HAlign, TextLayout, aligned_rows};
-use crate::contract::WordSetCx;
 use crate::fonts::{FontRef, SEMIBOLD, stack_facts};
 use crate::runtime::egui::text_layout;
-use crate::runtime::env::{Env, Label};
+use crate::runtime::env::Env;
 use crate::style::{DataColor, Ink, StyleCx, UiTokens, ink_color};
 use craft_i18n::{Direction, Format, WordSet};
 use egui::epaint::text::{FontId, TextDirection};
@@ -113,17 +112,14 @@ impl<'a> ContentPainterCx<'a> {
     }
 }
 
-impl WordSetCx for ContentPainterCx<'_> {
-    /// A content painter has no label of its own: the empty label.
-    fn label(&self) -> Label {
-        Label::default()
-    }
-
-    fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L> {
+impl ContentPainterCx<'_> {
+    /// The word set `L` in the language of the scope the painter paints for.
+    pub fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L> {
         self.env.words()
     }
 
-    fn format(&self) -> &Format {
+    /// How the scope the painter paints for writes numbers.
+    pub fn format(&self) -> &Format {
         self.env.format()
     }
 }

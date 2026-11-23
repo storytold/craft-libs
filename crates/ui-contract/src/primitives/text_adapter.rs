@@ -554,7 +554,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         galley: None,
         baseline,
         scroll,
-        submit_key: input.options.submit_key,
+        line_break: line_break(input.options.submit_key),
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -691,11 +691,21 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             galley: Some(layout.galley.clone()),
             baseline: None,
             scroll: 0.0,
-            submit_key: SubmitKey::default(),
+            line_break: line_break(SubmitKey::default()),
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);
     if crate::runtime::egui::access::enabled(&ctx, widget) {
         crate::runtime::egui::access::fold_widget(&ctx, widget, owner);
+    }
+}
+
+/// The modifiers of the Enter chord that breaks the line under `submit_key`. egui inserts the line break itself before
+/// the adapter sees the Enter, so the chord that submits must not be the one egui breaks the line on: under `Enter` the
+/// line break is Shift+Enter and plain Enter reaches `entered` untaken.
+fn line_break(submit_key: SubmitKey) -> egui::Modifiers {
+    match submit_key {
+        SubmitKey::Enter => egui::Modifiers::SHIFT,
+        SubmitKey::CommandEnter => egui::Modifiers::NONE,
     }
 }

@@ -534,6 +534,7 @@ impl CropOverlay<'_> {
 /// Why the overlay asks to apply the crop ([`CropOverlayOutput::apply`]): a host that lets the selection go on a click
 /// away keeps it for the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CropApply {
     /// Enter, the overlay's Submit key.
     Enter,

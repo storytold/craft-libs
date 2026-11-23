@@ -121,13 +121,12 @@ fn a_document_dialog_shows_a_small_picture_with_its_pager_beside_it() {
         let rows = vec![Param::number("size", "Size", 1.0, 1.0, 0)];
         let texture = egui::load::SizedTexture::new(egui::TextureId::default(), vec2(210.0, 297.0));
         let pager = PanePager { shown: 2, count: 3, back: true, next: true, ..PanePager::default() };
-        
+
         ParamDialog::new("thumb", "Add watermark", rows)
             .layout(ParamLayout::Document)
             .previews(true)
             .preview(PreviewState::Ready(texture))
             .preview_pager(pager)
-            
             .values(Bind::bound(&mut fields))
             .show(ui);
     });
@@ -148,14 +147,28 @@ fn a_tabbed_document_dialog_aligns_its_fields_and_fills_the_width() {
         let mut fields = DialogFields::new();
         let tabs = vec![ParamTab::new(
             "Description",
-            vec![Param::new("title", "Title", ParamKind::text("")), Param::new("author", "Author", ParamKind::text("")), Param::new("keywords", "Keywords", ParamKind::text(""))],
+            vec![
+                Param::new("title", "Title", ParamKind::text("")),
+                Param::new("author", "Author", ParamKind::text("")),
+                Param::new("keywords", "Keywords", ParamKind::text("")),
+            ],
         )];
-        ParamDialog::new("props", "Document Properties", Vec::<Param>::new()).layout(ParamLayout::Document).tabs(tabs).values(Bind::bound(&mut fields)).show(ui);
+        ParamDialog::new("props", "Document Properties", Vec::<Param>::new())
+            .layout(ParamLayout::Document)
+            .tabs(tabs)
+            .values(Bind::bound(&mut fields))
+            .show(ui);
     });
     fixture.room(vec2(900.0, 700.0));
     fixture.settle();
     let (title, author, keywords) = (rect_of(&fixture, "Title"), rect_of(&fixture, "Author"), rect_of(&fixture, "Keywords"));
-    assert!((title.min.x - author.min.x).abs() < 0.5 && (author.min.x - keywords.min.x).abs() < 0.5, "the fields start at one column: {title:?} {author:?} {keywords:?}");
-    assert!((title.max.x - author.max.x).abs() < 0.5 && (author.max.x - keywords.max.x).abs() < 0.5, "the fields end at one edge: {title:?} {author:?} {keywords:?}");
+    assert!(
+        (title.min.x - author.min.x).abs() < 0.5 && (author.min.x - keywords.min.x).abs() < 0.5,
+        "the fields start at one column: {title:?} {author:?} {keywords:?}"
+    );
+    assert!(
+        (title.max.x - author.max.x).abs() < 0.5 && (author.max.x - keywords.max.x).abs() < 0.5,
+        "the fields end at one edge: {title:?} {author:?} {keywords:?}"
+    );
     assert!(title.width() > 300.0, "the fields fill the dialog: {title:?}");
 }

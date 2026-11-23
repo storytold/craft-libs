@@ -12,7 +12,7 @@ use crate::runtime::focus::FocusTarget;
 use crate::runtime::frame;
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook};
 use craft_behavior::{Arrows, Flow, Insets, Metrics, NavShape, PartKey, PartRef, Roving, Sense};
-use egui::{Context, Id, Rect, Response, Ui, Vec2};
+use egui::{Context, Id, Rect, Response, Vec2};
 
 /// The part of each icon cell, indexed by the icon's place in the row.
 const ICON: PartKey = PartKey::new("icon");
@@ -77,11 +77,6 @@ impl<'a> MenuIconRow<'a> {
     /// A row named `label` of `icons`.
     pub fn new(label: impl Into<Label>, icons: &'a [MenuIcon<'a>]) -> Self {
         MenuIconRow { common: Common::new(), icons, picked: None }.label(label)
-    }
-
-    /// Shows the row in the menu.
-    pub fn show(self, ui: &mut Ui) -> MenuIconRowOutput {
-        crate::contract::Show::show(self, ui)
     }
 
     fn part(at: usize) -> PartRef {

@@ -3,7 +3,7 @@
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Show as _, clicked};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
-use egui::{Rect, Ui, pos2, vec2};
+use egui::{Rect, Ui, Vec2, pos2, vec2};
 
 use super::pins::{Face, PinBubble};
 use super::{CommentComposer, CommentPin, CommentPins, ComposerClose, ComposerDraft, NoteDrafts, NotePopup, NotePopupMessage, ThreadPopover};
@@ -109,6 +109,11 @@ fn note_message(id: u64, author: &'static str, text: &'static str, depth: usize)
     NotePopupMessage { id, title: "Sticky Note", author, text, modified: Some(NOW - 600 * id as i64), depth, editable: depth == 0 }
 }
 
+/// Where the story's note popup first opens, from the end corner of its opener.
+const POPUP_OFFSET: Vec2 = vec2(80.0, 40.0);
+/// The size the story's note popup first opens at.
+const POPUP_SIZE: Vec2 = vec2(260.0, 200.0);
+
 /// A note pop-up over `messages`, opened from a button: the button's rect stands for the note's mark.
 /// The drafts and the window's rect live in the story's data, as a host keeps them, so a reply box, typed text, a move
 /// and a resize last across frames.
@@ -119,7 +124,7 @@ fn note_popup(ui: &mut Ui, data: &mut StoryData, messages: &[NotePopupMessage<'_
     if *open {
         let mark = opener.rect;
         let at = *data.value("rect", None::<Rect>);
-        let rect = at.unwrap_or_else(|| Rect::from_min_size(mark.right_bottom() + vec2(80.0, 40.0), vec2(260.0, 200.0)));
+        let rect = at.unwrap_or_else(|| Rect::from_min_size(mark.right_bottom() + POPUP_OFFSET, POPUP_SIZE));
         let drafts = data.value("drafts", drafts);
         let shown = NotePopup::new(1, "Note", rect, messages, drafts)
             .color(Some([224, 48, 48]))

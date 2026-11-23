@@ -216,7 +216,8 @@ pub struct Prompt<'a> {
     message: Label,
     answers: Vec<FooterButton>,
     extras: Extras<'a>,
-    /// The icon beside the message, in the accent tone.
+    /// An icon of the catalog beside the message, in the accent tone.
+    #[prop]
     icon: Option<IconId>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
@@ -262,13 +263,6 @@ impl<'a> Prompt<'a> {
     #[must_use]
     pub fn tone(mut self, tone: Tone, text: impl Into<Label>) -> Self {
         self.extras.tone = Some((tone, text.into()));
-        self
-    }
-
-    /// An icon of the catalog beside the message, in the accent tone.
-    #[must_use]
-    pub fn icon(mut self, icon: IconId) -> Self {
-        self.icon = Some(icon);
         self
     }
 

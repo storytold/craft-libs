@@ -163,12 +163,15 @@ fn chrome_only(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     StoryOutput::default()
 }
 
+/// How far the in-flight story's move has taken the annotations, in document points.
+const IN_FLIGHT_MOVE: Vec2 = Vec2::new(30.0, 20.0);
+
 /// The box and the line part way through a move: both are painted where the move takes them.
 #[story(AnnotationOverlay<'static>, covers = [], drive = Drive::Never)]
 fn in_flight(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let annotations = samples();
     let selected = [AnnotationId(1), AnnotationId(2)];
-    let edit = AnnotationEdit::Move { ids: selected.to_vec(), delta: Vec2::new(30.0, 20.0) };
+    let edit = AnnotationEdit::Move { ids: selected.to_vec(), delta: IN_FLIGHT_MOVE };
     on_canvas(ui, |ui, at| {
         AnnotationOverlay::new("Annotations", &annotations, &selected).live(&edit).show_at(ui, at);
     });

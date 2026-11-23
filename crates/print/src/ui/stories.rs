@@ -132,8 +132,17 @@ fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// Letter paper in points.
-// design: allow[literal-size/vec2](page and paper sizes are document points, story data)
 const LETTER: Vec2 = Vec2::new(612.0, 792.0);
+/// Landscape Letter paper in points.
+const LETTER_LANDSCAPE: Vec2 = Vec2::new(792.0, 612.0);
+/// A Letter page inset half an inch, in points.
+const LETTER_INSET: Vec2 = Vec2::new(540.0, 720.0);
+/// The printable area of Letter paper, a quarter inch in, in points.
+const LETTER_PRINTABLE: Vec2 = Vec2::new(576.0, 756.0);
+/// One cell of four pages per Letter sheet, in points.
+const FOUR_UP_CELL: Vec2 = Vec2::new(270.0, 360.0);
+/// One page of a booklet on landscape Letter, in points.
+const BOOKLET_PAGE: Vec2 = Vec2::new(342.0, 540.0);
 
 /// The corners of `rect` with the picture upright: top-left, top-right, bottom-right, bottom-left.
 fn upright(rect: Rect) -> [Pos2; 4] {
@@ -152,21 +161,17 @@ fn page_picture(ui: &Ui) -> TextureId {
 
 /// One Letter page with its picture, inset half an inch, and a note under the readout.
 fn document_sheet(ui: &Ui) -> PrintSheet {
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-    let page = SheetPage::new(upright(Rect::from_min_size(pos2(36.0, 36.0), Vec2::new(540.0, 720.0))), "1").picture(page_picture(ui), whole());
+    let page = SheetPage::new(upright(Rect::from_min_size(pos2(36.0, 36.0), LETTER_INSET)), "1").picture(page_picture(ui), whole());
     PrintSheet::pages(LETTER, vec![page], "Letter, 1 page".into())
-        // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-        .printable(Rect::from_min_size(pos2(18.0, 18.0), Vec2::new(576.0, 756.0)))
+        .printable(Rect::from_min_size(pos2(18.0, 18.0), LETTER_PRINTABLE))
         .notes(vec!["Pages are scaled to fit the printable area.".into()])
 }
 
 /// Four pages on a Letter sheet with borders and cut lines; the first has its picture, the others are still rendering
 /// and show stand-ins.
 fn four_up_sheet(ui: &Ui) -> PrintSheet {
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
     let cells = [pos2(18.0, 18.0), pos2(324.0, 18.0), pos2(18.0, 414.0), pos2(324.0, 414.0)];
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-    let boxes: Vec<Rect> = cells.iter().map(|at| Rect::from_min_size(*at, Vec2::new(270.0, 360.0))).collect();
+    let boxes: Vec<Rect> = cells.iter().map(|at| Rect::from_min_size(*at, FOUR_UP_CELL)).collect();
     let pages = boxes
         .iter()
         .enumerate()
@@ -175,21 +180,15 @@ fn four_up_sheet(ui: &Ui) -> PrintSheet {
             if at == 0 { page.picture(page_picture(ui), whole()) } else { page }
         })
         .collect();
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
     let cuts = vec![[pos2(306.0, 0.0), pos2(306.0, 792.0)], [pos2(0.0, 396.0), pos2(612.0, 396.0)]];
     PrintSheet::pages(LETTER, pages, "Letter, 4 pages per sheet".into()).borders(boxes).cuts(cuts)
 }
 
 /// A booklet sheet: two pages side by side on landscape Letter, the last page beside the first.
 fn booklet_sheet(ui: &Ui) -> PrintSheet {
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-    let last = SheetPage::new(upright(Rect::from_min_size(pos2(36.0, 36.0), Vec2::new(342.0, 540.0))), "4");
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-    let first = SheetPage::new(upright(Rect::from_min_size(pos2(414.0, 36.0), Vec2::new(342.0, 540.0))), "1").picture(page_picture(ui), whole());
-    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-    PrintSheet::pages(Vec2::new(792.0, 612.0), vec![last, first], "Booklet, sheet 1 of 2, front".into())
-        // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
-        .cuts(vec![[pos2(396.0, 0.0), pos2(396.0, 612.0)]])
+    let last = SheetPage::new(upright(Rect::from_min_size(pos2(36.0, 36.0), BOOKLET_PAGE)), "4");
+    let first = SheetPage::new(upright(Rect::from_min_size(pos2(414.0, 36.0), BOOKLET_PAGE)), "1").picture(page_picture(ui), whole());
+    PrintSheet::pages(LETTER_LANDSCAPE, vec![last, first], "Booklet, sheet 1 of 2, front".into()).cuts(vec![[pos2(396.0, 0.0), pos2(396.0, 612.0)]])
 }
 
 /// The page-handling section of a document print dialog.

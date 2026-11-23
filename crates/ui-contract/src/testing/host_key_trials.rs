@@ -512,7 +512,8 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
 /// and the app reads the image; a canvas that lists Paste reads it from egui, as it does text.
 #[trial]
 fn a_pasted_image_runs_the_paste_a_pasted_text_runs() {
-    let image = Event::PasteImage(Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED)));
+    // The pixels are image data the trial never reads; any grey stands for them.
+    let image = Event::PasteImage(Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::from_gray(128))));
     assert_eq!(clipboard_with_canvas(KeyUse::CANVAS, image.clone()).1, [EditCommands::Paste.id()], "the app's Paste runs");
     let typing = KeyUse::CANVAS.with_edits(EditSet::NONE.with(EditCommand::Paste));
     assert_eq!(clipboard_with_canvas(typing, image), (true, Vec::new()), "the canvas's paste stays in egui and fires nothing");

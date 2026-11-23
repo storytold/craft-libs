@@ -188,7 +188,8 @@ pub(crate) struct CommentRow<'r> {
     /// A revision card's text, which takes the row's own colours.
     note: Option<Note>,
     selected: bool,
-    /// The card is the selection's lead: it shows the reply box and the editing buttons.
+    /// Whether the card is the selection's lead, which shows the reply box and the editing buttons.
+    #[prop(vis = "pub(crate)")]
     lead: bool,
     editable: bool,
     now: i64,
@@ -200,7 +201,8 @@ pub(crate) struct CommentRow<'r> {
     /// The inline editor takes the focus this pass, when the card shows one: for an editor the panel opens.
     #[prop]
     focus_editor: bool,
-    /// The key that submits the reply box.
+    /// The key that submits the reply box; the inline editor keeps `CommandEnter`.
+    #[prop(vis = "pub(crate)")]
     submit_key: SubmitKey,
     /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
     /// first click that opens an edit is enough to type.
@@ -286,18 +288,6 @@ impl<'r> CommentRow<'r> {
     pub(crate) fn drafts(mut self, editing: Option<(usize, &'r str)>, reply: &'r str) -> Self {
         self.editing = editing;
         self.reply = reply;
-        self
-    }
-
-    /// Whether the card is the selection's lead, which shows the reply box and the editing buttons.
-    pub(crate) fn lead(mut self, on: bool) -> Self {
-        self.lead = on;
-        self
-    }
-
-    /// The key that submits the reply box; the inline editor keeps `CommandEnter`.
-    pub(crate) fn submit_key(mut self, key: SubmitKey) -> Self {
-        self.submit_key = key;
         self
     }
 }

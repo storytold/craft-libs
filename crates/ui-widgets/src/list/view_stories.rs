@@ -474,7 +474,7 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_rename_while_filtered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     const NOTES: usize = 2;
-    let id = egui::Id::unique("list_rename_while_filtered");
+    let id = crate::testing::memory::global("list_rename_while_filtered", ());
     let names = data.value("names", vec![String::from("Chapter 1"), String::from("Chapter 2"), String::from("Notes")]).clone();
     // The button sits at the start of the list's width, which is the right under right-to-left.
     let start = if Env::of(ui).view().direction().is_rtl() { egui::Align::Max } else { egui::Align::Min };

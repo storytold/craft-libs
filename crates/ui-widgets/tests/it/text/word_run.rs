@@ -1,6 +1,6 @@
 //! The word run's keys and picks.
 
-use craft_ui::contract::Bind;
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, trial};

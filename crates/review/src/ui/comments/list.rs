@@ -116,7 +116,7 @@ impl ItemOutput<Vec<CardEvent>> for RowOut {
 }
 
 /// The card collection: a tree whose headings fold their cards.
-#[derive(craft_ui::contract::Component)]
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(collection)]
 pub(crate) struct CommentList<'a> {
     #[common]
@@ -126,7 +126,8 @@ pub(crate) struct CommentList<'a> {
     items: CollectionProps,
     selection: Option<Bind<'a, Selection<CardKey>>>,
     grouped: bool,
-    /// The row this pass scrolls into view, once.
+    /// The row to scroll into view this pass; the caller sends it in one pass only.
+    #[prop(name = "revealing", vis = "pub(crate)")]
     reveal: Option<CardKey>,
 }
 
@@ -143,12 +144,6 @@ impl<'a> CommentList<'a> {
             reveal: None,
         }
         .label(label)
-    }
-
-    /// The row to scroll into view this pass; the caller sends it in one pass only.
-    pub(crate) fn revealing(mut self, key: Option<CardKey>) -> Self {
-        self.reveal = key;
-        self
     }
 }
 

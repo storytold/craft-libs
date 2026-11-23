@@ -209,7 +209,7 @@ impl ShellApp for Gallery {
         };
         let dropped = if in_theme {
             let viewer = &mut self.viewer;
-            DropVeil::new("Drop an app's sizes.json to load it").show(ui, |ui, _| shell(ui, viewer)).dropped.clone()
+            DropVeil::new("Drop an app's sizes.json to load it").show_with_files(ui, |ui, _| shell(ui, viewer)).dropped.clone()
         } else {
             shell(ui, &mut self.viewer);
             None

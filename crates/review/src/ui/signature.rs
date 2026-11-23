@@ -577,7 +577,7 @@ impl StackDialog for SignaturePadDialog {
                     DrawPad::new(words.draw_tab.clone(), Bind::bound(&mut draft.strokes)).show(ui);
                 }
                 SignatureTab::Image => {
-                    let veil = DropVeil::new(words.drop_image.clone()).show(ui, |ui, _| {
+                    let veil = DropVeil::new(words.drop_image.clone()).show_with_files(ui, |ui, _| {
                         Text::new(words.image_hint.clone()).shade(Shade::Muted).show(ui);
                         if clicked(&Button::new(words.browse.clone()).icon(craft_behavior::IconId::new("folder")).loading(decoding).show(ui)) {
                             browse = true;
@@ -595,7 +595,7 @@ impl StackDialog for SignaturePadDialog {
                 }
                 SignatureTab::Scan => {
                     if let Some(tab) = scan.as_mut() {
-                        DropVeil::new(words.drop_photo.clone()).show(ui, |ui, files| tab(ui, draft, ScanEvent::Show(first_file(files))));
+                        DropVeil::new(words.drop_photo.clone()).show_with_files(ui, |ui, files| tab(ui, draft, ScanEvent::Show(first_file(files))));
                     }
                 }
             }

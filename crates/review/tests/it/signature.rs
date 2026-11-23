@@ -178,7 +178,7 @@ fn a_file_dropped_on_the_pad_is_imported_and_the_window_gets_none() {
     let window_drops = Rc::new(Cell::new(0_usize));
     let (shown, seen) = (Rc::clone(&pad), Rc::clone(&window_drops));
     let mut frame = move |ui: &mut Ui| {
-        let window = DropVeil::new("Open files").show(ui, |_, _| {});
+        let window = DropVeil::new("Open files").show_with_files(ui, |_, _| {});
         if window.output.dropped.is_some() {
             seen.set(seen.get() + 1);
         }
@@ -215,7 +215,7 @@ fn a_drop_reaches_the_veils_body_in_the_pass_that_receives_it() {
     let log = Rc::clone(&seen);
     let mut frame = move |ui: &mut Ui| {
         let pass = ui.ctx().current_pass_index();
-        DropVeil::new("Open files").show(ui, |_, dropped| {
+        DropVeil::new("Open files").show_with_files(ui, |_, dropped| {
             if dropped.is_some() {
                 log.borrow_mut().push(pass);
             }

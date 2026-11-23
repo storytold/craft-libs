@@ -326,7 +326,9 @@ pub struct ListRow<'a> {
     /// The colour from data that inks a part of the row. It is no style key (`DataColor` has no `Eq` or `Hash`): the
     /// part's ink is resolved where the row paints it.
     pub(super) hue: Option<(DataColor, HueTarget)>,
-    /// The row's label is document text at the list's font, size and alignment, from `List::document_rows`.
+    /// The document text the label is laid out as, from the collection's `document_rows`; unset, the label stays UI
+    /// text.
+    #[prop(vis = "pub(crate)")]
     pub(super) document: Option<DocumentRows>,
     /// A progress bar under the label, `fraction` full (clamped to 0..=1), in a line of its own below the detail. The
     /// row is one caption line taller than its detail makes it, so a list with fixed row heights adds one
@@ -541,14 +543,6 @@ impl<'a> ListRow<'a> {
         self.sub_row = row.sub_row.is_some();
         self.sub_steps = row.sub_row.unwrap_or(0);
         self.divider_below = !row.continued && !row.last;
-        self
-    }
-
-    /// The document text the label is laid out as, from the collection's `document_rows`; `None` keeps the label UI
-    /// text.
-    #[must_use]
-    pub(crate) fn document(mut self, rows: Option<DocumentRows>) -> Self {
-        self.document = rows;
         self
     }
 

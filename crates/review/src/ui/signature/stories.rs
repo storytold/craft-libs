@@ -142,7 +142,7 @@ fn signature_pad_scan(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// window, imports it.
 #[story(SignaturePadDialog, covers = [], drive = Drive::Never)]
 fn signature_pad_drop(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let window = DropVeil::new("Open files").show(ui, |ui, _| {
+    let window = DropVeil::new("Open files").show_with_files(ui, |ui, _| {
         Text::new("Drag a PNG or JPEG over the window.").show(ui);
     });
     if window.output.dropped.is_some() {

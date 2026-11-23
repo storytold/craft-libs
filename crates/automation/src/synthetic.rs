@@ -28,12 +28,11 @@ use std::path::PathBuf;
 
 use craft_behavior::PointerButton;
 use craft_keymap::{Key, Mods};
-use craft_ui::runtime::egui::access::Declared;
 use craft_ui::runtime::windows::{Released, WindowHost};
 use egui::{Pos2, Vec2, ViewportId, pos2, vec2};
 use serde_json::Value;
 
-use crate::access::{NO_TREE, NodeTarget, resolve};
+use crate::access::{NodeTarget, inject_click, inject_context_menu, inject_focus};
 use crate::protocol::{BUTTONS, KEY_MODIFIERS, Params};
 
 /// Most clicks one `ui.click` may ask for (`count`).
@@ -141,6 +140,7 @@ fn key(p: &Params<'_>) -> Result<Option<Key>, String> {
 
 /// Where a `ui.click` goes.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ClickTarget {
     /// A position.
     At(At),
@@ -150,6 +150,7 @@ pub enum ClickTarget {
 
 /// A validated `ui.focus`: moves the focus to a node of the access tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Focus {
     /// The node that takes the focus.
     pub target: NodeTarget,
@@ -163,18 +164,10 @@ impl Focus {
     }
 
     /// Queues the focus request for the node in `viewport`; a node the kept tree does not have as one reported,
-    /// enabled, focusable node is refused ([`resolve`]).
+    /// enabled, focusable node is refused ([`crate::access::resolve`]).
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId) -> Result<(), String> {
-        inject_node(host, viewport, &self.target, Declared::Focus)
+        inject_focus(host, viewport, &self.target)
     }
-}
-
-/// Queues `action` on the node `target` names in `viewport`'s kept access tree.
-fn inject_node(host: &WindowHost, viewport: ViewportId, target: &NodeTarget, action: Declared) -> Result<(), String> {
-    let tree = host.access_tree_view(viewport).ok_or_else(|| NO_TREE.to_owned())?;
-    let node = resolve(&tree, target, action)?;
-    host.inject_access(viewport, node, action);
-    Ok(())
 }
 
 /// A validated `ui.click`.
@@ -235,7 +228,7 @@ impl Click {
 
     /// Queues a move to the point, then `count` presses and releases of the button, in `viewport`; for a node, its
     /// click, or its context menu for the secondary button, once the kept tree has it as one reported, enabled node
-    /// that declares the action ([`resolve`]).
+    /// that declares the action ([`crate::access::resolve`]).
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
         match &self.target {
             ClickTarget::At(at) => {
@@ -244,8 +237,11 @@ impl Click {
                 Ok(())
             }
             ClickTarget::Node(node) => {
-                let action = if matches!(self.button, PointerButton::Secondary) { Declared::ContextMenu } else { Declared::Click };
-                inject_node(host, viewport, node, action)
+                if matches!(self.button, PointerButton::Secondary) {
+                    inject_context_menu(host, viewport, node)
+                } else {
+                    inject_click(host, viewport, node)
+                }
             }
         }
     }

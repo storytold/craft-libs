@@ -405,7 +405,9 @@ pub struct Tile<'a> {
     /// (`stack_look`).
     #[prop]
     stack: Option<usize>,
-    /// How the stack shows.
+    /// How the stack of a stacked tile shows: the "×N" badge, or two sheets behind a picture that shrinks inside its
+    /// cell to make room for them. The count stays in the accessible name either way.
+    #[prop]
     stack_look: StackLook,
     /// The picture under a veil, still selectable.
     #[prop(flag)]
@@ -542,14 +544,6 @@ impl<'a> Tile<'a> {
     #[must_use]
     pub fn action_named(mut self, icon: IconId, command: impl Into<CommandRef>, name: impl Into<Label>) -> Self {
         self.actions.push((icon, command.into(), Some(name.into())));
-        self
-    }
-
-    /// How the stack of a stacked tile shows: the "×N" badge, or two sheets behind a picture that shrinks inside its
-    /// cell to make room for them. The count stays in the accessible name either way.
-    #[must_use]
-    pub fn stack_look(mut self, look: StackLook) -> Self {
-        self.stack_look = look;
         self
     }
 

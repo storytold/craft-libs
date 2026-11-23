@@ -772,7 +772,6 @@ pub(crate) fn routed_to(ctx: &Context) -> Vec<Id> {
     if menu_keys {
         routed.extend(focus::menu_bar(ctx, crate::runtime::egui::pass::current_viewport(ctx)));
     }
-    routed.extend(crate::contract::steps::scroll_owner::move_targets(ctx));
     routed
 }
 

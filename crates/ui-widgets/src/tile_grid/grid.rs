@@ -258,7 +258,13 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// Where every tile's hover actions sit.
     #[prop]
     action_place: TileActionPlace,
-    /// The names of the insert gaps, by the display position each inserts before; `None` shows no gaps.
+    /// Insert gaps between tiles, keyed by display position; `label` names the gap before a position. None show
+    /// while a drag is held. A press on one reports [`GridEvent::Insert`].
+    ///
+    /// The gap before position `at` sits on the reading-start edge of tile `at`, between tiles `at - 1` and `at`; the
+    /// gap `at` = the tile count sits on the end edge of the last tile. A gap shows while its tile is in view, so the
+    /// end gap shows only with the last tile in view.
+    #[prop]
     insert_gaps: Option<&'a dyn Fn(usize) -> Label>,
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
@@ -390,18 +396,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             GridZoom::Bound(bind, steps) => Self::bound_factor(bind, *steps),
         };
         self.zoom = zoom;
-        self
-    }
-
-    /// Insert gaps between tiles, keyed by display position; `label` names the gap before a position. None show
-    /// while a drag is held. A press on one reports [`GridEvent::Insert`].
-    ///
-    /// The gap before position `at` sits on the reading-start edge of tile `at`, between tiles `at - 1` and `at`; the
-    /// gap `at` = the tile count sits on the end edge of the last tile. A gap shows while its tile is in view, so the
-    /// end gap shows only with the last tile in view.
-    #[must_use]
-    pub fn insert_gaps(mut self, label: &'a dyn Fn(usize) -> Label) -> Self {
-        self.insert_gaps = Some(label);
         self
     }
 

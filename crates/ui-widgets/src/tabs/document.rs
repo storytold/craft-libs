@@ -343,7 +343,8 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                     // The strip fills the row less the room the control took last pass; the control follows the last tab
                     // when every tab shows, and is the row's last item when they overflow.
                     let memory = ui.scope_id().with("document-tabs-trailing-width");
-                    let held: f32 = ui.ctx().data(|data| data.get_temp(memory)).unwrap_or(0.0);
+                    let held = crate::runtime::memory::with_session(ui.ctx(), memory, |held: &mut f32| *held);
+                    // design: allow[contract/allocate](the tabs are a plain `show`, not a component: the slot keeps last pass's room for the trailing area)
                     let slot = ui.allocate_exact_size(egui::vec2(held, strip.response.response.rect.height()), egui::Sense::hover()).0;
                     let all_show = strip.tab_rects.len() == tabs.len();
                     let after = match strip.tab_rects.last() {
@@ -373,7 +374,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                     let builder = egui::UiBuilder::new().max_rect(room).layout(layout);
                     let drawn = ui.scope_builder(builder, |ui| area(ui)).response.rect.width();
                     if (drawn - held).abs() > 0.5 {
-                        ui.ctx().data_mut(|data| data.insert_temp(memory, drawn));
+                        crate::runtime::memory::with_session(ui.ctx(), memory, |held: &mut f32| *held = drawn);
                         ui.ctx().request_repaint();
                     }
                 }

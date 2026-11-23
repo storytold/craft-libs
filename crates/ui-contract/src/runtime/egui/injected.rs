@@ -169,6 +169,7 @@ struct Step {
 
 /// Files an injected step hovers over a window, and whether the step after it drops them.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct InjectedFiles {
     /// The paths of the files.
     pub paths: Vec<std::path::PathBuf>,

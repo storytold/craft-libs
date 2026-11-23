@@ -305,6 +305,7 @@ fn with_arena_in<R>(ctx: &Context, viewport: ViewportId, arena: ArenaId, pass_nr
         if !arenas.sweep_registered {
             arenas.sweep_registered = true;
             crate::runtime::frame::register_end_sweep(ctx, std::any::TypeId::of::<Arenas>(), sweep_undrawn);
+            crate::runtime::frame::register_begin_hook(ctx, std::any::TypeId::of::<Arenas>(), note_pressed_parts);
             pointer::register_press_probe(ctx, any_press_open);
         }
         if arenas.swept != pass_nr {
@@ -1078,10 +1079,13 @@ fn any_press_open(ctx: &Context) -> bool {
     PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
 }
 
-pub(crate) fn pressed_parts(ctx: &Context) -> Vec<(Id, PartRef)> {
-    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| {
+/// The begin hook's note of the parts holding a press as the pass starts, which `pointer::active_part` reads for the
+/// whole pass.
+fn note_pressed_parts(ctx: &Context) {
+    let parts = PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| {
         arenas.by_root.values().filter_map(|state| state.machine.target().and_then(|hit| hit.part.map(|part| (hit.owner, part)))).collect()
-    })
+    });
+    crate::runtime::pointer::set_pressed_parts(ctx, parts);
 }
 
 /// The arena's outcome of the running pass, idle when the root has not run yet.

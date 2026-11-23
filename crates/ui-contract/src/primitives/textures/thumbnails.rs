@@ -5,7 +5,6 @@ use super::limits::MAX_TEXTURE;
 use super::loader::{LoadFailure, LoadedPicture, LoaderOptions, Priority, TextureLoader};
 use super::store::{CachedTexture, Revision, TextureKey, TextureState, TextureStoreOptions};
 use super::words::TextureWords;
-use crate::contract::WordSetCx as _;
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Surface, TextRun, Wrap};
 use crate::runtime::egui::{memory, pass, repaint, textures};
 use crate::style::{Corners, DataColor, SurfaceKind, TypeRole, surface_style};

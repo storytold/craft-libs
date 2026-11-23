@@ -1,7 +1,7 @@
 //! Stories of `WordRun`.
 
 use super::{RunWord, WordRun, WordState};
-use crate::contract::{Bind, Validity};
+use crate::contract::{Bind, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;

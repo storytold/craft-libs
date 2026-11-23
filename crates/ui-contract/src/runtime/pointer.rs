@@ -268,12 +268,17 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     let hover_targets = PressTargets { click: hits.0, drag: hits.1 };
     let hover = hover_at.map(|at| (at, hover_targets, find_under(ctx, viewport, at, hover_targets, false)));
     let captured = press_captured(ctx);
-    let pressed_parts = crate::primitives::sensing::pressed_parts(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.hover = hover;
         shapes.captured = captured;
-        shapes.pressed_parts = pressed_parts;
+        shapes.pressed_parts.clear();
     });
+}
+
+/// The parts holding a press at the start of the running pass: the press arenas set them from the begin hook
+/// (`frame::register_begin_hook`), before an enclosing arena processes a release.
+pub(crate) fn set_pressed_parts(ctx: &Context, parts: Vec<(Id, PartRef)>) {
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |shapes| shapes.pressed_parts = parts);
 }
 
 /// The modifiers `held` with the app's `latched` ones added, field by field: `Mods` has no operator for it.

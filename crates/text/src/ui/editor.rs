@@ -59,9 +59,9 @@ const TAB: Chord = Chord::plain(Key::Tab);
 const SHIFT_TAB: Chord = Chord::new(Mods::SHIFT, Key::Tab);
 
 /// The keys that end a one-line field's session: Enter keeps the text, Tab and Shift+Tab keep it and move on.
-static FIELD_LINE_ENDS: [(Chord, EditorEnd); 3] = [(ENTER, EditorEnd::Commit), (TAB, EditorEnd::Next), (SHIFT_TAB, EditorEnd::Previous)];
+const FIELD_LINE_ENDS: [(Chord, EditorEnd); 3] = [(ENTER, EditorEnd::Commit), (TAB, EditorEnd::Next), (SHIFT_TAB, EditorEnd::Previous)];
 /// The keys that end a multi-line field's session; Enter is a line break there.
-static FIELD_LINES_ENDS: [(Chord, EditorEnd); 2] = [(TAB, EditorEnd::Next), (SHIFT_TAB, EditorEnd::Previous)];
+const FIELD_LINES_ENDS: [(Chord, EditorEnd); 2] = [(TAB, EditorEnd::Next), (SHIFT_TAB, EditorEnd::Previous)];
 
 /// The selection: `anchor` stays where it started, `caret` moves. Equal: a caret with nothing selected. Char
 /// offsets.

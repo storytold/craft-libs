@@ -1,6 +1,5 @@
 //! Building `TextEdit` and its state: the one caller of egui's text editing.
 
-use crate::primitives::SubmitKey;
 use craft_theme::TypeRole;
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
 use egui::text_edit::TextEditState;
@@ -49,8 +48,10 @@ pub(crate) struct Edit<'a> {
     /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
     /// (`text_adapter`), and a single line or a laid-out galley ignores it.
     pub scroll: f32,
-    /// The Enter chord that submits a multi-line text; the line break takes the other one.
-    pub submit_key: SubmitKey,
+    /// The modifiers of the Enter chord that breaks the line of a multi-line text. egui inserts the line break itself
+    /// before the adapter sees the Enter, so the adapter passes the chord its submit key leaves free: Shift under a plain
+    /// Enter submit, none under Cmd or Ctrl+Enter.
+    pub line_break: egui::Modifiers,
 }
 
 /// What the widget did in one pass.
@@ -97,14 +98,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         galley,
         baseline,
         scroll,
-        submit_key,
+        line_break,
     } = edit;
-    // egui inserts the line break itself before the adapter sees the Enter, so the chord that submits must not be the
-    // one egui breaks the line on: under `Enter` the line break is Shift+Enter and plain Enter reaches `entered` untaken.
-    let line_break = match submit_key {
-        SubmitKey::Enter => egui::Modifiers::SHIFT,
-        SubmitKey::CommandEnter => egui::Modifiers::NONE,
-    };
     // The same font and optical size as a label of the same role: one text path.
     let tokens = &env.tokens;
     // Behind selected text and the selected text itself: the field's roles.

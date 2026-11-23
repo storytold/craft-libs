@@ -73,6 +73,7 @@ pub enum ToolbarEdit<T> {
         at: DropAt,
     },
     /// Remove one occurrence, identified by its slot and index.
+    #[non_exhaustive]
     RemoveFrom {
         /// The source slot.
         slot: SlotId,
@@ -80,6 +81,7 @@ pub enum ToolbarEdit<T> {
         index: usize,
     },
     /// Move one occurrence, identified by its slot and index.
+    #[non_exhaustive]
     MoveFrom {
         /// The source slot.
         slot: SlotId,

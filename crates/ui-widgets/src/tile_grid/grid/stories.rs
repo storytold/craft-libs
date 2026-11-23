@@ -241,6 +241,9 @@ fn tile_grid_insert_gaps(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     StoryOutput::from(out).readout(readout)
 }
 
+/// How far below the press the pointer moves while the middle-button scroll is latched.
+const LATCHED_MOVE: Vec2 = Vec2::new(0.0, 60.0);
+
 /// A middle click in the grid latches auto-scroll, and the pointer below the latch point scrolls the grid down; Escape
 /// ends the latch, so the driven story rests.
 fn middle_scroll(fixture: &mut Fixture) {
@@ -248,7 +251,7 @@ fn middle_scroll(fixture: &mut Fixture) {
     fixture.frame(vec![pointer::moved(at)]);
     fixture.frame(vec![pointer::middle(at, true)]);
     fixture.frame(vec![pointer::middle(at, false)]);
-    fixture.frame(vec![pointer::moved(at + Vec2::new(0.0, 60.0))]).idle(4);
+    fixture.frame(vec![pointer::moved(at + LATCHED_MOVE)]).idle(4);
     fixture.key(Key::Escape, Modifiers::NONE).settle();
 }
 

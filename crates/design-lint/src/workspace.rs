@@ -71,6 +71,16 @@ const CLOSED: &[&str] = &[
     "LineBreakOptions", // built field by field in WordCraft's paragraph dialog, a record of check boxes that mirrors the format
     "AsianTypography",  // built field by field in WordCraft's paragraph dialog, a record of check boxes that mirrors the format
     "GapEdge",          // the start and the end of a column gap: two edges, fixed by meaning, matched in WordCraft's column ruler
+    "StrokePlace",      // inside, centred on or outside an edge: three places, fixed by meaning
+    "PagerStep",        // back or next: two steps, fixed by meaning, matched in craft-pages, craft-print and PdfCraft
+    "PanePager",        // built in craft-pages, craft-print and PdfCraft's print and printer-marks dialogs
+    "PageRevision",     // built in PdfCraft's ui-egui, which keys its page pictures by the document and page revision
+    "GoTo",             // built in PdfCraft's ui-egui (link and zoom navigation) and craft-pages' tests, one per target kind
+    "NotePopupMessage", // built in PdfCraft's ui-egui, one literal per message of a note's thread
+    "DialogLayout",     // built in PdfCraft's ui-egui, which sets the dialogs' layout environment value
+    "RunWord",          // built in PdfCraft's ui-egui, one literal per word of an OCR result
+    "ScanEvent",        // matched in PdfCraft's ui-egui, whose scan tab answers each event
+    "FolderListing",    // built in PdfCraft's ui-egui and craft-ui-shell's tests, one listing per pinned folder
     "ToastEnd",         // built or matched in craft-ui-widgets
     "TrackLook",        // built or matched in craft-ui-widgets
     "VariantParts",     // built or matched in craft-ui-widgets

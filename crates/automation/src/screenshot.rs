@@ -723,6 +723,7 @@ pub type PngWriter<'a> = dyn FnMut(&str, &[u8]) -> Result<(), String> + 'a;
 
 /// A validated `ui.screenshot`: where the PNG goes and which part of the window it shows.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ScreenshotParams {
     /// File to write the PNG to, or `None` to inline it.
     pub path: Option<String>,

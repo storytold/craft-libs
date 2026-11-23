@@ -162,6 +162,7 @@ impl<'a> PagePreview<'a> {
                 };
                 step.set(step.get() + by);
             }
+            // design: allow[contract/allocate](the dialog sizes from its content: the page claims a box sized from the window, as large as it leaves)
             let (rect, _) = ui.allocate_exact_size(room, egui::Sense::hover());
             PagePicture::new(source, page, words.unavailable.as_str(), paper).label(source.page_label(page)).show_at(ui, rect);
         });

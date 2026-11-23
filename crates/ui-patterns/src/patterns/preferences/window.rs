@@ -98,7 +98,11 @@ pub struct PreferencesWindow<'a> {
     /// Keeps the window's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
+    /// Selects whether changes are staged or applied while the window is open.
+    #[prop]
     mode: PreferencesMode,
+    /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
+    #[prop]
     layout: PreferencesLayout,
 }
 
@@ -155,20 +159,6 @@ impl<'a> PreferencesWindow<'a> {
     /// A window over the host's `state`.
     pub fn new(state: Bind<'a, PreferencesState>) -> Self {
         PreferencesWindow { state, title: None, embedded: false, remember: None, mode: PreferencesMode::Staged, layout: PreferencesLayout::Paged }
-    }
-
-    /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
-    #[must_use]
-    pub fn layout(mut self, layout: PreferencesLayout) -> Self {
-        self.layout = layout;
-        self
-    }
-
-    /// Selects whether changes are staged or applied while the window is open.
-    #[must_use]
-    pub fn mode(mut self, mode: PreferencesMode) -> Self {
-        self.mode = mode;
-        self
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.

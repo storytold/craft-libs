@@ -176,7 +176,9 @@ fn the_title_lock_is_drawn_in_the_accent_colour() {
         .frame_shapes()
         .iter()
         .filter_map(|shape| match shape {
-            egui::Shape::Mesh(mesh) if mesh.calc_bounds().max.x <= title.left() + 1.0 && (mesh.calc_bounds().center().y - title.center().y).abs() < 8.0 => {
+            egui::Shape::Mesh(mesh)
+                if mesh.calc_bounds().max.x <= title.left() + 1.0 && (mesh.calc_bounds().center().y - title.center().y).abs() < 8.0 =>
+            {
                 mesh.vertices.first().map(|v| v.color)
             }
             _ => None,
