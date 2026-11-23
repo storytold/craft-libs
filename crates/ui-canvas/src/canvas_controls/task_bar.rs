@@ -88,8 +88,9 @@ pub struct TaskBar<'a> {
     /// What an outside press does to the bar.
     #[prop]
     dismiss: TaskBarDismiss,
-    /// The bar is compact: its members at the small control size in a tight frame, as PdfCraft's text box bar shows
-    /// Done and Discard (production's 24-point buttons in a 2-point frame). Off by default.
+    /// The bar is compact: its members at the small control size in a tight frame with a popup's smaller corners, as
+    /// PdfCraft's text box bar shows Done and Discard (production's 24-point buttons in a 2-point frame). Off by
+    /// default.
     #[prop]
     compact: bool,
 }
@@ -291,7 +292,8 @@ impl<'a> TaskBar<'a> {
         let mut shown = layer.show(ui, |ui, _| {
             // The bar is the one surface: the grip is its first member, on the members' line inside its padding.
             let bar = Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating);
-            let bar = if compact { bar.compact() } else { bar };
+            // A compact bar takes a popup's smaller corners and lighter shadow, as production's small frame.
+            let bar = if compact { bar.compact().surface(SurfaceKind::Popup) } else { bar };
             bar.show(ui, |ui, _| {
                 if let Some(grip) = &grip {
                     let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
