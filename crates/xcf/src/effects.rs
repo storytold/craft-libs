@@ -7,6 +7,8 @@
 
 mod config;
 mod envelope;
+mod inventory;
+pub use inventory::LayerInventory;
 #[cfg(test)]
 mod tests;
 

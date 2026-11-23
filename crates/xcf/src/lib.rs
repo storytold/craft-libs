@@ -454,6 +454,8 @@ pub struct Layer {
     pub effects: usize,
     hierarchy: usize,
     mask: usize,
+    // Original pointer-list position; optional effect inventory does not rescan properties.
+    effect_source: usize,
 }
 
 impl Layer {
@@ -1026,6 +1028,7 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
     let lprops = props(&mut c)?;
     let hierarchy = c.ptr()?;
     let mask = c.ptr()?;
+    let effect_source = c.pos;
     let mut effects = 0usize;
     if image.version >= 20 {
         while c.ptr()? != 0 {
@@ -1076,6 +1079,7 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
         effects,
         hierarchy,
         mask,
+        effect_source,
     };
     // PROP_FLOAT_OPACITY wins over PROP_OPACITY whatever their order in the file.
     let mut float_opacity = None;
