@@ -62,3 +62,6 @@ pub(crate) fn attr(s: &str) -> String {
 
 /// The caller's font for Hangul text whose own font has none ([`crate::WriteOptions::hangul_font`]).
 pub(crate) type HangulFont = Option<fn(&str) -> Option<String>>;
+
+#[cfg(test)]
+mod tests;
