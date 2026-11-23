@@ -2,7 +2,7 @@
 
 use craft_behavior::geometry::{SnapOptions, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{CancelReason, CanvasView, RulerUnits, Ticks};
+use craft_behavior::{CancelReason, CanvasView, RulerUnits, TickLabels, Ticks};
 use craft_ui::canvas::{
     Canvas, CanvasTool, INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, PageFrame, Pasteboard, RulerText, Rulers, Snap, StepLadder, TickRule,
     ToolAction, ToolContext, ToolPath, ToolPointer,
@@ -104,6 +104,55 @@ fn ticks_stay_level_and_the_zero_label_sits_at_the_zero_point_in_a_turned_view()
     let turned = top_tick_extents(30.0);
     assert!(!turned.is_empty(), "the turned view's top strip has tick marks");
     assert!(turned.is_subset(&level), "tick marks keep the lengths and cross coordinates of the level view: {turned:?} against {level:?}");
+}
+
+/// The labels of the top strip, left to right, over an inch ruler written as `labels` whose zero point is the middle of
+/// a view at 4 points per document point (72 to the inch), so the step is a fraction of an inch.
+fn top_inch_labels(labels: TickLabels) -> Vec<String> {
+    let room = Vec2::new(800.0, 600.0);
+    let middle = Point::new(400.0, 300.0);
+    let view = CanvasView::new(Rect::from_min_size(Pos2::ZERO, room), middle, 4.0);
+    let text = RulerText::new(RulerUnits::new(1.0 / 72.0, Ticks::decimal(false)).with_labels(labels), UnitKind::Inches);
+    let content = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&content);
+    let mut zero = middle;
+    let mut fixture = Fixture::new(move |ui| {
+        let strips = Rulers::new("Rulers", Bind::bound(&mut zero));
+        let shown = Canvas::new("Document").view(view).with_rulers(Some(strips)).rulers(text, text).show(ui, |_, _| {});
+        if let Some(rulers) = shown.output.rulers {
+            seen.set(rulers.content_rect());
+        }
+    });
+    fixture.room(room);
+    fixture.settle();
+    let content = content.get();
+    let mut runs: Vec<(f32, String)> = fixture
+        .texts()
+        .iter()
+        .filter(|run| run.rect.max.y <= content.min.y + 0.5 && run.rect.min.x >= content.min.x - 0.5)
+        .map(|run| (run.rect.min.x, run.text.clone()))
+        .collect();
+    runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    runs.into_iter().map(|(_, text)| text).collect()
+}
+
+/// VectorCraft's signed labels write the same ticks as the default distance labels, with a minus sign left of the zero
+/// point and only the decimals each tick needs; the default keeps PhotoCraft's unsigned, padded form.
+#[trial]
+fn signed_tick_labels_carry_the_sign_and_drop_trailing_zeros() {
+    let distance = top_inch_labels(TickLabels::Distance);
+    let signed = top_inch_labels(TickLabels::Signed);
+    assert_eq!(distance.len(), signed.len(), "both styles label the same ticks: {distance:?} against {signed:?}");
+    let fractional = |labels: &[String]| labels.iter().any(|label| label.contains('.'));
+    assert!(fractional(&distance) && fractional(&signed), "the step is a fraction of an inch: {signed:?}");
+    assert!(!distance.iter().any(|label| label.starts_with('-')), "distance labels carry no sign: {distance:?}");
+    assert!(distance.iter().any(|label| label.contains('.') && label.ends_with('0')), "distance labels pad the decimals: {distance:?}");
+    assert!(signed.iter().any(|label| label.starts_with('-')), "labels left of the zero point are negative: {signed:?}");
+    assert!(!signed.iter().any(|label| label.contains('.') && label.ends_with('0')), "signed labels drop trailing zeros: {signed:?}");
+    for (padded, plain) in distance.iter().zip(&signed) {
+        let (padded, plain) = (padded.parse::<f64>(), plain.parse::<f64>().map(f64::abs));
+        assert_eq!(padded, plain, "each tick is the same distance from the zero point in both styles");
+    }
 }
 
 /// How far past the canvas the tool's fill and the marquee reach.

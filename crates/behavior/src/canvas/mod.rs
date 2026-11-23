@@ -8,7 +8,7 @@ mod view;
 pub mod zoom;
 
 pub use history::{ViewHistory, ViewPlace};
-pub use units::{RulerUnits, Ticks};
+pub use units::{RulerUnits, TickLabels, Ticks};
 pub use view::{CanvasView, resize_cursor};
 pub use zoom::{ZoomFloor, ZoomScheme};
 
