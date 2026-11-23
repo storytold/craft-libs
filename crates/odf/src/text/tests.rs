@@ -1541,3 +1541,18 @@ pub(crate) fn export_ext(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, St
         _ => return None,
     })
 }
+
+#[test]
+fn whitespace_only_metadata_uses_creator_and_date_fallbacks() {
+    let m = read_meta(
+        br#"<office:document-meta><office:meta>
+        <meta:initial-creator> 	 </meta:initial-creator>
+        <meta:creation-date>
+ </meta:creation-date>
+        <dc:creator>Fallback Author</dc:creator>
+        <dc:date>2024-03-05T13:45:00-05:00</dc:date>
+    </office:meta></office:document-meta>"#,
+    );
+    assert_eq!(m.author, "Fallback Author");
+    assert_eq!(m.created, "2024-03-05T13:45:00-05:00");
+}
