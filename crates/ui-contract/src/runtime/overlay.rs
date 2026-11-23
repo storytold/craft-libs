@@ -157,6 +157,8 @@ pub struct OpenEntry {
     pub rect: Rect,
     /// The side of the anchor it took by its size; `None` for a float and while its size is unknown.
     pub side: Option<Side>,
+    /// The side its host asked for when it took `side`: a later pass keeps `side` only while the host asks for the same.
+    pub(crate) asked: Option<Side>,
     /// It is fading out: not `top`, not counted by `any_open`, taking no input.
     pub exiting: bool,
     /// The layer's egui id and the cover under it, listed in the order.
@@ -217,6 +219,7 @@ impl OpenEntry {
             peers: Vec::new(),
             rect,
             side: None,
+            asked: None,
             exiting: false,
             layer,
             cover: None,

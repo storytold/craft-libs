@@ -63,7 +63,51 @@ struct Strip<'a> {
     bound: &'a dyn Fn(&Chord) -> bool,
 }
 
+/// How the strip reads one raw event beside its key reading: when it arrived, and what its neighbours say of it.
+#[derive(Clone, Copy)]
+struct Arrival {
+    /// The event's arrival time (`Arrived::at`).
+    at: Option<f64>,
+    /// An input method's commit follows the event: a press it follows typed through the input method.
+    ime_next: bool,
+    /// A key press follows the event: a text before it is that press's (the web sends a press's text first).
+    press_next: bool,
+}
+
+/// The key a typed `text` stands for: one character that names a key, or the US base key of a shifted character no key
+/// names (`~` is typed on Backtick).
+fn text_key(text: &str) -> Option<Key> {
+    let mut chars = text.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+    Key::from_char(c).or(match c {
+        '~' => Some(Key::Backtick),
+        _ => None,
+    })
+}
+
+/// The chord a clipboard event of `command` stands for with `mods` held: Cmd and the command's key, with the modifiers
+/// held beside Cmd (Cmd+Shift+V pastes in place).
+fn clip_chord(command: EditCommand, mods: Mods) -> (Key, KeyInput) {
+    let key = match command {
+        EditCommand::Cut => Key::X,
+        EditCommand::Paste => Key::V,
+        _ => Key::C,
+    };
+    let mut chord_mods = mods;
+    chord_mods.cmd = true;
+    (key, KeyInput::new(chord_mods).with_typed(key))
+}
+
 impl Strip<'_> {
+    /// Whether a clipboard event of `command` with `mods` held is the focused editor's edit: the platform sends it for
+    /// the edit's own chord, and for Cmd with Shift or Alt too (Cmd+Shift+X), which is another chord, the app's, unless
+    /// the editor lists that chord for the edit.
+    fn clip_is_edit(&self, command: EditCommand, mods: Mods) -> bool {
+        let (_, input) = clip_chord(command, mods);
+        !((mods.cmd || mods.ctrl) && (mods.shift || mods.alt))
+            || self.edit_chords.iter().any(|(edit, chord)| *edit == command && self.layout.matches(chord, &input, self.os))
+    }
+
     /// Whether the text the platform sends with the press `input` stands for is a shortcut's own and belongs to no
     /// field: Alt is held and the keymap binds the press to a command that is enabled, so it fires (S-L177). A platform
     /// sends its key's text with an Alt shortcut (Alt+Q on Linux). A bound Alt chord whose command is disabled does
@@ -77,9 +121,10 @@ impl Strip<'_> {
     /// Records `event` in `batch` and returns whether egui keeps it.
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
-    /// with the press, in this pass or a later one. `down` holds the keys down before the event. `at` is the event's
-    /// arrival time (`Arrived::at`).
-    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, down: &[Key], event: KeyEvent, at: Option<f64>) -> bool {
+    /// with the press, in this pass or a later one. `down` holds the keys down before the event; a press of a key
+    /// already down is a repeat, as egui reads it, whatever the platform said.
+    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, down: &[Key], event: KeyEvent, arrival: Arrival) -> bool {
+        let at = arrival.at;
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
@@ -87,10 +132,12 @@ impl Strip<'_> {
         match event {
             KeyEvent::Press { key, input, repeat } => {
                 alt.other_key = true;
+                let repeat = repeat || input.physical.or(input.typed).is_some_and(|held| down.contains(&held));
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
                 let menu_keys = batch.menu.len();
-                let shortcut_text = self.shortcut_text(&input);
+                // Text an input method commits for the press is typing, whatever the press's chord binds.
+                let shortcut_text = self.shortcut_text(&input) && !arrival.ime_next;
                 let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
                 let canvas = batch.presses.get(pushed).is_some_and(|press| press.canvas);
@@ -103,6 +150,7 @@ impl Strip<'_> {
                 // The release key is kept for withheld presses too: the held-over rule matches repeats by it.
                 if let Some(press) = batch.presses.get_mut(pushed) {
                     press.release = input.physical.or(input.typed);
+                    press.ime = arrival.ime_next;
                     press.held = down.iter().copied().filter(|key| Some(*key) != press.release).collect();
                     if kept {
                         press.in_egui = Some(batch.egui_presses);
@@ -137,7 +185,8 @@ impl Strip<'_> {
             KeyEvent::Text(text) => {
                 alt.other_key = true;
                 let mut claimed = false;
-                if let Some(last) = batch.last_press.take() {
+                let last = batch.last_press.take();
+                if let Some(last) = &last {
                     if let Some(physical) = last.input.physical.filter(|_| !alt.right) {
                         batch.learned.push((physical, last.input.mods, text.clone()));
                     }
@@ -146,12 +195,13 @@ impl Strip<'_> {
                         press.text = Some(batch.texts.len());
                     }
                 }
+                claimed |= self.text_as_key(batch, last.as_ref(), &text, alt, arrival);
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
                 batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts), place: batch.place });
                 batch.egui_texts += 1;
                 true
             }
-            KeyEvent::Clip { command, text, .. } if (self.edits)(command) => {
+            KeyEvent::Clip { command, text, mods } if (self.edits)(command) && self.clip_is_edit(command, mods) => {
                 batch.clips.push((command, batch.place));
                 if text.is_some() {
                     batch.paste = text;
@@ -162,20 +212,13 @@ impl Strip<'_> {
             KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
             KeyEvent::Clip { command, mods, .. } => {
-                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord, with the
-                // modifiers held beside Cmd (Cmd+Shift+V pastes in place). The web sends the chord's press as well.
-                let key = match command {
-                    EditCommand::Cut => Key::X,
-                    EditCommand::Paste => Key::V,
-                    _ => Key::C,
-                };
-                let mut chord_mods = mods;
-                chord_mods.cmd = true;
-                let input = KeyInput::new(chord_mods).with_typed(key);
+                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The web
+                // sends the chord's press as well.
+                let (key, input) = clip_chord(command, mods);
                 let sent = batch
                     .shortcuts
                     .iter()
-                    .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == chord_mods && shortcut.input.typed == Some(key));
+                    .any(|shortcut| shortcut.phase == FirePhase::Press && shortcut.input.mods == input.mods && shortcut.input.typed == Some(key));
                 if !sent && self.records {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false, at);
@@ -214,6 +257,40 @@ impl Strip<'_> {
             }
             _ => true,
         }
+    }
+
+    /// Reads a one-character `text` as a press of the key it stands for (`text_key`) where no press typed it. A text
+    /// with no press before it (`last`) or after it is a tap of that key with the held modifiers, which a claim takes or
+    /// the shortcut dispatcher reads (Shift+~ arrives as `~` alone). A text Alt typed with a press no claim took is its
+    /// key's for a claim (Option+8 types `[` on a Turkish Mac). Cmd and Ctrl chords type nothing, and the Alt that typed
+    /// the character is no part of its key's chord. Returns whether a claim or a mnemonic took the text.
+    fn text_as_key(&self, batch: &mut Batch, last: Option<&LastPress>, text: &str, alt: &AltTrack, arrival: Arrival) -> bool {
+        let Some(key) = text_key(text) else { return false };
+        let lone = last.is_none() && !arrival.press_next;
+        let mods = match last {
+            None if lone => alt.last.unwrap_or(Mods::NONE),
+            Some(last) if !last.claimed && last.input.mods.alt => last.input.mods,
+            _ => return false,
+        };
+        if mods.cmd || mods.ctrl {
+            return false;
+        }
+        let input = KeyInput::new(Mods { alt: false, ..mods }).with_typed(key);
+        if !lone {
+            let PressUse::Claimed(chord) = self.use_of(key, &input) else { return false };
+            batch.claimed.push(chord);
+            return true;
+        }
+        let (pushed, claims, menu_keys) = (batch.presses.len(), batch.claimed.len(), batch.menu.len());
+        self.press(batch, key, &input, false, arrival.at);
+        if let Some(press) = batch.presses.get_mut(pushed) {
+            press.text = Some(batch.texts.len());
+            // The tap has no release event: it ends where it began.
+            if !press.canvas {
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at: arrival.at, place: batch.place });
+            }
+        }
+        batch.claimed.len() > claims || batch.menu.len() > menu_keys
     }
 
     /// A lone Alt press, pressed and released with no other key, pointer press, wheel turn, touch or Shift, Ctrl or Cmd
@@ -323,6 +400,7 @@ impl Strip<'_> {
                     canvas: true,
                     place: batch.place,
                     held: Vec::new(),
+                    ime: false,
                 });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
@@ -359,6 +437,7 @@ impl Strip<'_> {
                     canvas: false,
                     place: batch.place,
                     held: Vec::new(),
+                    ime: false,
                 });
                 false
             }
@@ -389,6 +468,7 @@ impl Strip<'_> {
                     canvas: false,
                     place: batch.place,
                     held: Vec::new(),
+                    ime: false,
                 });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
@@ -469,17 +549,18 @@ pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Ve
 ///
 /// A modal or dialog layer never toggles: Tab moves focus inside it. In a window with a canvas the toggle is on when
 /// nothing is focused, the canvas is, or a press focused a component other than a text field, as clicking a panel's row
-/// and pressing Tab hides the panels in Photoshop. Tab moves focus from a text field however it got the focus (Tab
+/// and pressing Tab hides the panels in Photoshop; read-only text a press focused to select from (a stop only a press
+/// reaches, a label's selection part) is no text field. Tab moves focus from a text field however it got the focus (Tab
 /// commits a typed value and goes to the next field) and from a component the keyboard or a request focused. Elsewhere
 /// it is on only when the canvas is focused. A component that keeps Tab never reaches this function: the press is its
 /// own.
-fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>, pressed: bool) -> bool {
+fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&focus::Stop>, pressed: bool) -> bool {
     let closed = matches!(layer, overlay::LayerKeys::Blocked | overlay::LayerKeys::Class(OwnerClass::Dialog));
     if !enabled || closed {
         return false;
     }
-    let on_canvas = focused.is_some_and(|keys| keys.chrome_key);
-    let pressed_control = pressed && focused.is_some_and(|keys| keys.owner != OwnerClass::Text);
+    let on_canvas = focused.is_some_and(|stop| stop.keys.chrome_key);
+    let pressed_control = pressed && focused.is_some_and(|stop| stop.keys.owner != OwnerClass::Text || stop.press_only);
     if canvas { focused.is_none() || on_canvas || pressed_control } else { on_canvas }
 }
 
@@ -492,7 +573,7 @@ pub(super) fn tab_toggles_now(ctx: &Context) -> bool {
     let canvas = focus::canvas_keys(ctx, viewport).is_some();
     let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
     let pressed = focused.as_ref().is_some_and(|rec| focus::origin(ctx, rec) == Some(focus::FocusOrigin::Press));
-    tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys), pressed)
+    tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop), pressed)
 }
 
 /// Whether `chord` is the key of a chrome command (`ChromeCommand`), as the window's keymap binds it.
@@ -585,6 +666,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.stirred = false;
         stage.textless_paste = false;
         let mut place = 0;
+        let ime_presses = std::mem::take(&mut stage.ime_presses);
+        let press_next: Vec<bool> = (0..events.len())
+            .map(|at| matches!(events.get(at + 1).map(|arrived| &arrived.event), Some(egui::Event::Key { pressed: true, .. })))
+            .collect();
         events.retain(|arrived| {
             // Every event the IME engine left counts, as the engine counts them (`ime::take_placed`).
             batch.place = place;
@@ -606,7 +691,12 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrived.at)
+            let arrival = Arrival {
+                at: arrived.at,
+                ime_next: ime_presses.contains(&arrived.event),
+                press_next: press_next.get(batch.place).copied().unwrap_or(false),
+            };
+            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival)
         });
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);
@@ -648,6 +738,18 @@ pub(crate) fn claims_press(ctx: &Context, input: &RawInput) -> impl Fn(&egui::Ev
         KeyEvent::Press { input: pressed, .. } => claims.iter().any(|chord| layout.matches(chord, &pressed, os)),
         _ => false,
     }
+}
+
+/// Notes the key presses of `events` that an input method's commit follows, before the IME stage takes the commits out
+/// of the input: the key stage reads such a press as typing through the input method (`Press::ime`).
+pub(crate) fn note_ime_presses(ctx: &Context, viewport: ViewportId, events: &[Arrived]) {
+    let commit = |event: &egui::Event| matches!(event, egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty());
+    let presses = events
+        .windows(2)
+        .filter(|pair| matches!(pair[0].event, egui::Event::Key { pressed: true, .. }) && commit(&pair[1].event))
+        .map(|pair| pair[0].event.clone())
+        .collect();
+    with(ctx, viewport, |stage| stage.ime_presses = presses);
 }
 
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus

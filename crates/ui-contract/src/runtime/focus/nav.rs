@@ -125,6 +125,7 @@ impl State {
         self.open.clear();
         self.body_from.clear();
         self.entered = false;
+        self.asked = false;
     }
 
     /// The registrations of last pass, which Tab and the arrows move over.
@@ -712,8 +713,9 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
     // The moves below belong to the next frame's passes.
     state.frame = frame + 1;
     let mut acts = state.apply_press(focused, on_app_widget);
-    // A layer that appeared in this pass took focus already: the press that opened it does not take it back.
-    if state.entered {
+    // A layer that appeared in this pass took focus already, and a component that asked for it in this pass has it: the
+    // press of the pass does not take it back.
+    if state.entered || state.asked {
         acts.clear();
     }
     if acts.is_empty() {

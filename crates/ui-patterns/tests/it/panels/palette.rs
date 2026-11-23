@@ -502,3 +502,22 @@ fn the_active_row_marks_its_shown_control_and_a_hidden_home_goes_to_the_footer()
     rig.fixture.settle();
     assert_eq!(painted(&rig.fixture, "Toolbox"), 2, "the footer names the home of a command shown nowhere");
 }
+
+/// Enter on a query whose first match is disabled runs nothing, though an enabled match follows it: the first match is
+/// the active row, the one the footer explains. Guards against an active row that skipped the disabled first match, so
+/// Enter ran the match after it.
+#[trial]
+fn enter_on_a_disabled_first_match_runs_nothing() {
+    let entries = vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"]), HelpEntry::new(TrialCommand::Rotate, "Undo Rotation")];
+    let (mut fixture, open, picked) = palette(entries, false);
+    fixture.command_state(EditCommands::Undo, CommandState::new().enabled(false));
+    fixture.settle();
+    fixture.type_text("undo").settle();
+    let listed = rows(&fixture);
+    assert!(listed.len() == 2 && listed[0].0.starts_with("Undo") && listed[0].1 && !listed[1].1, "the disabled Undo matches first: {listed:?}");
+    let _ = take_output(fixture.ctx());
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(*picked.borrow(), None, "Enter on the disabled first match picks nothing");
+    assert!(open.get(), "the palette stays open");
+    assert!(take_output(fixture.ctx()).fired.is_empty(), "nothing ran");
+}

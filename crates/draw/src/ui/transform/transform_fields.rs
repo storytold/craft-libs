@@ -156,14 +156,15 @@ impl TransformRow {
     }
 }
 
-/// What each field's running gesture began from, so every value it reports is made from that row.
+/// What each field's running gesture began from, so every value it reports is made from that row and is read against
+/// the start box of that moment: the row and the start box.
 #[derive(Clone, Debug, Default)]
-struct Bases([Option<(GestureId, TransformRow)>; 7]);
+struct Bases([Option<(GestureId, TransformRow, Rect)>; 7]);
 
 impl Bases {
     /// The row the gesture `id` of `field` began from; `fallback` when it has no record.
     fn origin(&self, field: TransformField, id: GestureId, fallback: &TransformRow) -> TransformRow {
-        self.0[field as usize].filter(|(of, _)| *of == id).map_or(*fallback, |(_, row)| row)
+        self.0[field as usize].filter(|(of, ..)| *of == id).map_or(*fallback, |(_, row, _)| row)
     }
 }
 
@@ -526,12 +527,15 @@ impl Cells<'_> {
     fn field(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, pass: &mut Pass, field: TransformField, form: Form) {
         let (side, name) = self.side_and_name(field, form);
         let sizing = form.sizing();
-        let conversion = &pass.conversion;
+        // A running gesture of this field is shown the value it began from, read against the start box it began with:
+        // the host's write-back of the gesture's own values, or a start box it moves with them, must not look like the
+        // app changing the field under it.
+        let running = pass.bases.0[field as usize];
+        let began = running.map(|(.., rect)| Conversion { rect, ..pass.conversion.clone() });
+        let conversion = began.as_ref().unwrap_or(&pass.conversion);
         let (kind, decimals) = conversion.format(field);
         let bound = conversion.bound(field);
-        // A running gesture of this field is shown the value it began from: the host's write-back of the gesture's own
-        // values must not look like the app changing the field under it.
-        let basis = pass.bases.0[field as usize].map_or(pass.before, |(_, row)| row);
+        let basis = running.map_or(pass.before, |(_, row, _)| row);
         let current = conversion.shown(&basis.state, basis.skew_v, field);
         let codec = conversion.codec(&self.units, field);
         let unit = Label::from(self.units.symbol(kind));
@@ -806,7 +810,7 @@ fn lift(
     let slot = field as usize;
     match event {
         EditEvent::Begin { id, label, doc_key, .. } => {
-            bases.0[slot] = Some((id, *before));
+            bases.0[slot] = Some((id, *before, conversion.rect));
             Some(EditEvent::begin(id, Mixed::Same(*before), label, doc_key))
         }
         EditEvent::Update { id, value: Some(value), .. } => {

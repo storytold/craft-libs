@@ -33,7 +33,7 @@ pub use input::held;
 #[doc(hidden)]
 pub use input::keyed;
 pub use input::textless_paste;
-pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, stirred, take_menu_keys, take_nav};
+pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, note_ime_presses, queue_nav, sent, stirred, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
@@ -89,6 +89,8 @@ struct Press {
     place: usize,
     /// The keys down when it went down, itself not among them: what a nudge reads as held with its arrow.
     held: Vec<Key>,
+    /// An input method committed text right after it: the press typed that text, which a text stop takes.
+    ime: bool,
 }
 
 /// An arrow press as a nudge of content: its unit direction, its modifiers and the keys down when it went down.
@@ -294,6 +296,8 @@ pub(crate) struct Stage {
     textless_paste: bool,
     /// How many inputs of the viewport held an event sent to the focus (`count_sent`).
     sent: u64,
+    /// The key presses of this input that an input method's commit follows (`note_ime_presses`).
+    ime_presses: Vec<egui::Event>,
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,

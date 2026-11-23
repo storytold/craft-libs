@@ -383,9 +383,15 @@ fn show_rows(ui: &mut Ui, input: &RowsInput<'_>, state: &mut Session, env: &crat
         Some(Line::Entry(at)) if state.stamp == stamp => Some(at),
         _ => None,
     };
+    let fresh = state.stamp != stamp;
     state.stamp = stamp;
     let suggested = input.suggested.map(|(_, commands)| commands.as_slice());
     let listed = layout(input, &state.query, suggested, active_before);
+    // A new query's active row is its first match, enabled or not: Enter on a disabled one runs nothing, and the footer
+    // says why, rather than Enter running the next match.
+    if fresh {
+        state.selection.lead = listed.keys.iter().copied().find(|key| matches!(key, Line::Entry(_)));
+    }
     let heading = input.suggested.map(|(label, _)| env.resolve(label).as_str().to_owned()).unwrap_or_default();
     let fallback_text = input.fallback.map(|template| template.fill(&[("text", found.as_str())])).unwrap_or_default();
     let rows = row_data(input.ctx, input.entries, &listed.keys, &heading, &fallback_text, env);

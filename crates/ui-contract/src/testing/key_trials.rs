@@ -5,7 +5,7 @@ use crate::runtime::env::RootEnv;
 use crate::runtime::focus::{FocusTarget, KeyUse, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::{focus_holds, intents_of, take_shortcuts};
-use crate::testing::focus::{Stop, egui_focused, named_id, press_shape, register_stop, widget};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, press_shape, register_stop, widget};
 use crate::testing::input::{key_press, key_repeat};
 use crate::testing::pointer::click;
 use crate::testing::{Frames, trial};
@@ -51,8 +51,9 @@ fn shown(enabled: bool, show: &mut impl FnMut(&mut Ui)) -> Frames {
     frames
 }
 
+/// A press of `key` with `modifiers` and its release, in one frame: a second press with no release between is a repeat.
 fn press(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key, modifiers: Modifiers) -> Vec<(ViewportId, ChromeToggle)> {
-    frames.frame(vec![key_press(key, modifiers)], &mut *show);
+    frames.frame(vec![key_press(key, modifiers), key_release(key, modifiers)], &mut *show);
     take_output(&frames.ctx).chrome_toggles
 }
 
@@ -137,6 +138,28 @@ fn tab_moves_focus_from_a_pressed_text_field() {
     assert!(focus_holds(&frames.ctx, Chord::plain(craft_keymap::Key::Tab)), "the field's Tab moves focus");
     assert!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE).is_empty(), "a pressed text field toggles nothing");
     assert_ne!(egui_focused(&frames.ctx), Some(id("field")), "focus left the field");
+}
+
+/// Read-only text a press focused to select from (a label's selection part, a stop only a press reaches) is no text
+/// field: Tab toggles the panels from it, as from any pressed control. Guards against a toggle that read every stop of
+/// the text class as a field that keeps Tab for the next field.
+#[trial]
+fn tab_toggles_from_pressed_read_only_text() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut show = move |ui: &mut Ui| {
+        let rect = widget(ui, id("label"));
+        register_stop(ui.ctx(), Stop::new(id("label"), KeyUse::of(Input::Text)).press_only());
+        press_shape(ui, rect, Sense::CLICK | Sense::TAKE_FOCUS, id("label"));
+        seen.set(rect);
+        stop(ui, "canvas", KeyUse::CANVAS);
+    };
+    let mut frames = shown(true, &mut show);
+    click(&mut frames, at.get().center(), &mut show);
+    take_output(&frames.ctx);
+    assert_eq!(egui_focused(&frames.ctx), Some(id("label")), "the press focused the text");
+    assert_eq!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE), [(ViewportId::ROOT, ChromeToggle::Panels)], "pressed read-only text");
+    assert_eq!(egui_focused(&frames.ctx), Some(id("label")), "the toggle moved no focus");
 }
 
 #[trial]

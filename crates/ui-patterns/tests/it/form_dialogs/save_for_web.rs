@@ -400,3 +400,24 @@ fn four_up_webp_halves_the_quality_until_lossless() {
     let [half, quarter] = four_up_options(&host);
     assert_eq!((half.format, quarter.format), (WebFormat::Png8, WebFormat::Gif));
 }
+
+/// A palette answer that arrives as the child dialog that picked it closes and the room changes, so the dialog measures
+/// its body again before it runs it, still shifts the opened entry. Guards against a body that took the host's answers
+/// in whichever run of the pass came first: the measuring run used the answer up and the real run reported nothing.
+#[trial]
+fn a_palette_answer_survives_a_measuring_run_of_the_body() {
+    use craft_ui::dialog::{Alert, HostedAlert};
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(gif(8)));
+    show_palette(&host, &mut fixture);
+    let cell = fixture.by_label("1 #00ff00").expect("the Color Table lists the palette");
+    fixture.click(&cell).key(Key::Enter, Modifiers::NONE).idle(4);
+    let (id, _) = host.borrow_mut().take_color_request().expect("opening a cell asks for its colour");
+    let picker = host.borrow_mut().open_child(HostedAlert::new(Alert::new("Color Picker", "Pick a colour.")), id);
+    fixture.idle(4);
+    host.borrow_mut().close_by_id(picker);
+    host.borrow_mut().answer_color(id, PALETTE_COLOR_KEY, Srgba::rgb(1.0, 0.0, 1.0));
+    fixture.room(Vec2::new(1000.0, 700.0));
+    fixture.idle(4);
+    let shift = (ColorTableEdit::Shift([255, 0, 255]), vec![[0, 255, 0]]);
+    assert_eq!(table_events(&host), vec![shift], "the answer shifts the opened entry's colour");
+}

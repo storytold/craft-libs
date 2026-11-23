@@ -644,6 +644,12 @@ pub(crate) fn holds_input(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.holds())
 }
 
+/// The events the one-press rule (H0) or the key stage held that the frame `frame` of `viewport` gets, read in its
+/// input hook before H0 hands them on.
+pub(crate) fn held_for(ctx: &Context, viewport: ViewportId, frame: u64) -> Vec<egui::Event> {
+    PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.delivered_in(frame))
+}
+
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
 /// records keyed by `input.viewport_id`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
@@ -664,6 +670,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
     // to the focus are counted first, before the IME and key stages take theirs.
     keys::count_sent(ctx, viewport, &events);
+    keys::note_ime_presses(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {

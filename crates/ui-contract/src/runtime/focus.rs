@@ -164,6 +164,8 @@ pub(crate) struct State {
     pub(super) seen: FastMap<Id, u64>,
     /// A scope moved focus to its initial stop in the running pass.
     pub(super) entered: bool,
+    /// A component asked for the focus in the running pass (`request`), as an editor that appears under a press does.
+    pub(super) asked: bool,
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
     pub(super) menu_bar: Option<Id>,
@@ -693,13 +695,15 @@ pub(crate) fn register_doc(ctx: &Context, key: DocKey, id: Id) {
 
 /// Moves focus to `target`, leaves modality unchanged and asks the enclosing scroll owner to reveal it. Called
 /// while a pass runs, it moves focus in that pass, so the rest of the pass reads the new focus; called between
-/// passes, it moves focus at the next pass's begin hook. The one public path to programmatic focus. `false` in a measuring
+/// passes, it moves focus at the next pass's begin hook; a pointer press of the pass moves it no further at the pass's
+/// end. The one public path to programmatic focus. `false` in a measuring
 /// run, which moves nothing: a caller that keeps a pending request keeps it until a run takes it.
 pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     if !crate::runtime::measure::effect(ctx, "focus::request") {
         return false;
     }
     if crate::runtime::frame::in_pass(ctx) {
+        with(ctx, |state| state.asked = true);
         request_now(ctx, target);
         return true;
     }
