@@ -6,8 +6,8 @@ use std::sync::Arc;
 use craft_wordmodel::numbering::ListKind;
 use craft_wordmodel::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, Rgb, RowProps,
-    TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, Kashida, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, Rgb,
+    RowProps, TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use craft_wordmodel::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use craft_wordmodel::styles::{Style, StyleKind};
@@ -23,18 +23,14 @@ fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
 
-/// `doc` with the stacking order of its body's floating objects cleared: saving gives objects
-/// without one an order (`relativeHeight`), so tests about other properties compare without it.
+/// `doc` without the stacking order a save gives objects made in the app (`relativeHeight`,
+/// read back as `Float::z`), to compare them with the objects as made.
 fn unstacked(mut doc: Document) -> Document {
-    for b in &mut doc.body {
-        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
-            for o in &mut p.objects {
-                if let Some(f) = o.float_mut() {
-                    f.z = 0;
-                }
-            }
+    doc.objects_mut(&|_| true, &mut |o| {
+        if let Some(f) = o.float_mut() {
+            f.z = 0;
         }
-    }
+    });
     doc
 }
 
@@ -72,6 +68,9 @@ fn every_char_prop_round_trips() {
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
+        // Theme slots naming Georgia in the document's theme (set below).
+        font_ascii_theme: Some(craft_wordmodel::props::ThemeFont::MajorHAnsi),
+        font_hansi_theme: Some(craft_wordmodel::props::ThemeFont::MajorAscii),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),
@@ -128,6 +127,8 @@ fn every_char_prop_round_trips() {
         cs: Some(true),
         font_cs: Some("B Nazanin".into()),
         font_ea: Some("宋体".into()),
+        font_ea_theme: Some(craft_wordmodel::props::ThemeFont::MinorEastAsia),
+        font_cs_theme: Some(craft_wordmodel::props::ThemeFont::MinorBidi),
         size_cs: Some(13.0),
         bold_cs: Some(false),
         italic_cs: Some(true),
@@ -141,13 +142,15 @@ fn every_char_prop_round_trips() {
             vert_compress: Some(true),
         }),
         link: None,
+        link_tooltip: None,
         ins: None,
         del: None,
         fmt_change: None,
     };
     let auto =
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
-    let d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
+    let mut d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
+    d.settings.major_font = "Georgia".into();
     let r = rt(&d);
     let p = paras(&r)[0];
     assert_eq!(p.text, "plain everything auto");
@@ -163,6 +166,7 @@ fn every_para_prop_round_trips() {
     let pp = ParaProps {
         style: Some("Heading1".into()),
         align: Some(Align::Justify),
+        kashida: Some(Kashida::Medium),
         indent_left: Some(36.0),
         indent_right: Some(18.0),
         indent_first: Some(-18.0),
@@ -269,6 +273,7 @@ fn styles_and_lists_round_trip() {
         locked: true,
         default: false,
         table: None,
+        ..Default::default()
     });
     Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyleChar".into(),
@@ -567,6 +572,7 @@ fn table_style_formatting_round_trips() {
         borders: Some(Borders { top: Some(Border::single(1.0)), ..Default::default() }),
         fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
         cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
+        indent: Some(0.0),
         header_chr: CharProps { italic: Some(true), ..Default::default() },
         header_fill: Some(Rgb(0xFF, 0xFF, 0)),
         header_borders: Some(Borders::all(Border::single(1.5))),
@@ -955,7 +961,8 @@ fn toc_field_skips_nested_stories() {
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     let boxes: Vec<(usize, usize)> = xml.match_indices("<w:txbxContent>").map(|(a, _)| (a, a + xml[a..].find("</w:txbxContent>").unwrap())).collect();
-    assert_eq!(boxes.len(), 2, "{xml}");
+    // Each box twice: its shape and its VML fallback.
+    assert_eq!(boxes.len(), 4, "{xml}");
     let in_box = |i: usize| boxes.iter().any(|(a, b)| (*a..*b).contains(&i));
     for kind in ["begin", "separate", "end"] {
         let at: Vec<usize> = xml.match_indices(&format!(r#"fldCharType="{kind}""#)).map(|(i, _)| i).collect();
@@ -963,7 +970,7 @@ fn toc_field_skips_nested_stories() {
         assert!(!in_box(at[0]), "field {kind} written inside a text box: {xml}");
     }
     let (begin, end) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
-    assert!(begin > boxes[0].1 && end > boxes[1].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
+    assert!(begin > boxes[1].1 && end > boxes[3].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
 }
 
 #[test]
@@ -1898,8 +1905,21 @@ fn flat_opc_round_trip_equals_docx() {
     assert!(text.starts_with("<?xml") && text.contains("<?mso-application progid=\"Word.Document\"?>"));
     assert!(text.contains("pkg:name=\"/word/document.xml\"") && text.contains("<pkg:binaryData>"));
     assert_eq!(craft_docx::sniff_xml(&xml), craft_docx::XmlKind::FlatOpc);
-    let back = craft_docx::read_xml(&xml).expect("read flat");
-    assert_eq!(back, rt(&d));
+    let mut back = craft_docx::read_xml(&xml).expect("read flat");
+    // `pkg:xmlData` inlines a part without its XML declaration, so a kept XML part (the font
+    // table) comes back without one; the markup is the same.
+    let mut want = rt(&d);
+    for doc in [&mut back, &mut want] {
+        for v in doc.passthrough.values_mut() {
+            if let Some(rest) =
+                v.strip_prefix(b"<?xml").and_then(|r| r.iter().position(|&b| b == b'>').map(|e| r[e + 1..].trim_ascii_start().to_vec()))
+            {
+                *v = std::sync::Arc::new(rest);
+            }
+        }
+    }
+    assert!(back.passthrough.contains_key("word/fontTable.xml"));
+    assert_eq!(back, want);
     assert_eq!(back.media.len(), 1);
 }
 
@@ -2383,6 +2403,10 @@ fn bibliography_sources_round_trip() {
 
     assert_bibliography_parts(&bytes);
     assert_bibliography_sources_round_trip(&bytes);
+    // Saved again after reading, the store keeps one relationship, from the main part.
+    let again = craft_docx::write(&craft_docx::read(&bytes).expect("read")).expect("write again");
+    assert_bibliography_parts(&again);
+    assert_eq!(craft_docx::read(&again).expect("read again").sources.len(), d.sources.len());
 }
 
 /// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
@@ -2424,10 +2448,14 @@ fn assert_bibliography_parts(bytes: &[u8]) {
     assert!(zip.by_name("customXml/itemProps1.xml").is_ok());
     assert!(zip.by_name("customXml/_rels/item1.xml.rels").is_ok());
 
+    // Word finds the sources' data store only through the main part's relationships.
     let mut rels_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("_rels/.rels").unwrap(), &mut rels_xml).unwrap();
-    assert!(rels_xml.contains("relationships/customXml"), "{rels_xml}");
-    assert!(rels_xml.contains("Target=\"customXml/item1.xml\""), "{rels_xml}");
+    std::io::Read::read_to_string(&mut zip.by_name("word/_rels/document.xml.rels").unwrap(), &mut rels_xml).unwrap();
+    assert_eq!(rels_xml.matches("relationships/customXml\"").count(), 1, "{rels_xml}");
+    assert!(rels_xml.contains("Target=\"../customXml/item1.xml\""), "{rels_xml}");
+    let mut root_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("_rels/.rels").unwrap(), &mut root_xml).unwrap();
+    assert!(!root_xml.contains("relationships/customXml\""), "{root_xml}");
 
     let mut ct_xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut ct_xml).unwrap();
@@ -2924,4 +2952,101 @@ fn drop_cap_options_round_trip() {
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
     );
+}
+
+/// `word/settings.xml` of a saved package.
+fn settings_part(bytes: &[u8]) -> String {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/settings.xml").unwrap(), &mut xml).unwrap();
+    xml
+}
+
+/// Page Setup's "Gutter position: Top" (`w:gutterAtTop`) is a document setting: off by default
+/// (no element), written when on after `w:mirrorMargins` and before `w:attachedTemplate`, and
+/// read back; the section's own gutter width is untouched.
+#[test]
+fn gutter_at_top_round_trips_and_is_off_by_default() {
+    let plain = craft_docx::write(&Document::new()).unwrap();
+    assert!(!settings_part(&plain).contains("gutterAtTop"));
+    assert!(!craft_docx::read(&plain).unwrap().settings.gutter_at_top);
+
+    let mut d = Document::new();
+    d.settings.gutter_at_top = true;
+    d.settings.mirror_margins = true;
+    d.settings.attached_template = Some("file:///C:/Templates/Report.dotx".into());
+    d.last_section.gutter = 50.0;
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = settings_part(&bytes);
+    assert_eq!(xml.matches("<w:gutterAtTop/>").count(), 1, "{xml}");
+    let at = |tag: &str| xml.find(tag).unwrap_or_else(|| panic!("{tag} missing: {xml}"));
+    assert!(at("<w:mirrorMargins") < at("<w:gutterAtTop") && at("<w:gutterAtTop") < at("<w:attachedTemplate"), "{xml}");
+    let back = craft_docx::read(&bytes).unwrap();
+    assert!(back.settings.gutter_at_top);
+    assert_eq!(back.last_section.gutter, 50.0);
+
+    // Switched off again, the element goes.
+    let mut off = back;
+    off.settings.gutter_at_top = false;
+    assert!(!settings_part(&craft_docx::write(&off).unwrap()).contains("gutterAtTop"));
+}
+
+/// Every spelling of the on/off value a file may carry for `w:gutterAtTop`: a bare element is on,
+/// a missing element is off (not an explicit "false" that something else would have to undo).
+#[test]
+fn gutter_at_top_reads_every_value_spelling() {
+    let plain = craft_docx::write(&Document::new()).unwrap();
+    let xml = settings_part(&plain);
+    let zoom = r#"<w:zoom w:percent="100"/>"#;
+    assert!(xml.contains(zoom), "{xml}");
+    for (element, expected) in [
+        ("", false),
+        ("<w:gutterAtTop/>", true),
+        (r#"<w:gutterAtTop w:val="1"/>"#, true),
+        (r#"<w:gutterAtTop w:val="true"/>"#, true),
+        (r#"<w:gutterAtTop w:val="on"/>"#, true),
+        (r#"<w:gutterAtTop w:val="0"/>"#, false),
+        (r#"<w:gutterAtTop w:val="false"/>"#, false),
+        (r#"<w:gutterAtTop w:val="off"/>"#, false),
+        (r#"<w:gutterAtTop w:val="False"/>"#, false),
+        (r#"<w:gutterAtTop w:val="FALSE"/>"#, false),
+    ] {
+        let file = replace_part(&plain, "word/settings.xml", xml.replace(zoom, &format!("{zoom}{element}")).as_bytes());
+        assert_eq!(craft_docx::read(&file).unwrap().settings.gutter_at_top, expected, "{element:?}");
+    }
+}
+
+/// A settings part from another writer (proofing state, rsids, document variables…) is merged on
+/// save, not regenerated: `w:gutterAtTop` stays once where it was, goes when the setting is turned
+/// off, and is added at its schema position (after `w:mirrorMargins`, before `w:proofState`) when
+/// the file had none.
+#[test]
+fn gutter_at_top_is_merged_into_a_foreign_settings_part() {
+    let plain = craft_docx::write(&Document::new()).unwrap();
+    let xml = settings_part(&plain);
+    let zoom = r#"<w:zoom w:percent="100"/>"#;
+    let foreign = |element: &str| {
+        let extra =
+            format!(r#"{zoom}<w:mirrorMargins/>{element}<w:proofState w:spelling="clean"/><w:rsids><w:rsidRoot w:val="00A1B2C3"/></w:rsids>"#);
+        replace_part(&plain, "word/settings.xml", xml.replace(zoom, &extra).as_bytes())
+    };
+
+    let with = craft_docx::read(&foreign("<w:gutterAtTop/>")).unwrap();
+    assert!(with.settings.gutter_at_top && with.settings.mirror_margins);
+    let saved = settings_part(&craft_docx::write(&with).unwrap());
+    assert_eq!(saved.matches("<w:gutterAtTop/>").count(), 1, "{saved}");
+    assert!(saved.contains("<w:proofState") && saved.contains("<w:rsidRoot"), "{saved}");
+
+    let mut off = with;
+    off.settings.gutter_at_top = false;
+    let saved = settings_part(&craft_docx::write(&off).unwrap());
+    assert!(!saved.contains("gutterAtTop") && saved.contains("<w:proofState"), "{saved}");
+
+    let mut on = craft_docx::read(&foreign("")).unwrap();
+    assert!(!on.settings.gutter_at_top);
+    on.settings.gutter_at_top = true;
+    let saved = settings_part(&craft_docx::write(&on).unwrap());
+    assert_eq!(saved.matches("<w:gutterAtTop/>").count(), 1, "{saved}");
+    let at = |tag: &str| saved.find(tag).unwrap_or_else(|| panic!("{tag} missing: {saved}"));
+    assert!(at("<w:mirrorMargins") < at("<w:gutterAtTop") && at("<w:gutterAtTop") < at("<w:proofState"), "{saved}");
 }

@@ -27,6 +27,7 @@ const CROP_ORIGIN: u16 = 0x0038;
 const CROP_SIZE: u16 = 0x0039;
 const BLACK_POINT: u16 = 0x0200;
 const WB_LEVELS: u16 = 0x0201;
+const KELVIN_WB: u16 = 0x0221;
 const HUFFMAN: u16 = 0x0220;
 
 /// Parse the maker-note Huffman table.
@@ -122,6 +123,24 @@ fn dark_trimmed(d: &[u16], w: usize, h: usize, black: Option<f64>, white: f32) -
     Rect::new(left, top, width, height)
 }
 
+/// The Kelvin presets of maker note `0x0221` (tag number and layout from `exiftool -v3` run as a black-box tool on
+/// the files, then checked against the files' own bytes): a `u16`, then 8-byte entries of four `u16`, the first
+/// the temperature as `53190 - K`, then 0, then the red and blue multipliers in units of 8192 (green 1). The first
+/// entry is the daylight white (5205 K) and the rest run from 2500 K up. `None` unless they make a curve.
+fn kelvin_presets(mn: Option<&makernote::MakerNote>) -> Option<crate::kelvin::KelvinPresets> {
+    let mn = mn?;
+    let craft_tiff::Value::Undefined(b) = mn.ifd.value(KELVIN_WB)? else { return None };
+    let words: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| mn.order.u16(*c)).collect();
+    let points = words
+        .get(1..)?
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|e| e[0] != 0 && e[0] < 53190 && e[2] != 0 && e[3] != 0)
+        .map(|e| ((53190 - u32::from(e[0])) as f32, [f32::from(e[2]), 8192.0, f32::from(e[3])]));
+    crate::kelvin::KelvinPresets::from_unordered(points)
+}
+
 /// Whether every strip or tile of a one-sample-per-pixel image holds exactly the bytes that its rows need when
 /// the samples are packed MSB-first at the declared bit depth, rows starting on byte boundaries (TIFF 6.0
 /// section 7). A real PackBits stream of such an image has a different length (almost always shorter), so the
@@ -194,13 +213,19 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Some(r) => r,
         None => dark_trimmed(samples, w, hgt, black_point.as_deref().map(|v| v.iter().sum::<f64>() / 4.0), white),
     };
+    let mut assumed_cfa = false;
     let cfa = match (ifd0.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), ifd0.bytes(t::CFA_PATTERN_EP)) {
-        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
+        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
+            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+        }
         // Every body states its layout in the Exif `CFAPattern`, read from the first sample of the stored array, not
         // of the image area: the *ist D (origin 19, 11) and the 645D (80, 59) only fit unshifted. The 12-bit 10 MP
         // bodies and everything from the K-3 on say RGGB; the K-7 / K-5 / 645D generation says BGGR. Files without the
         // tag keep BGGR.
-        _ => cfa_from_exif(&tiff).unwrap_or_else(|| Cfa::bayer_static("BGGR")),
+        _ => cfa_from_exif(&tiff).unwrap_or_else(|| {
+            assumed_cfa = true;
+            Cfa::bayer_static("BGGR")
+        }),
     };
     let black = match black_point.as_deref() {
         Some(v @ [_, _, _, _]) => {
@@ -229,15 +254,17 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop: Rect::new(0, 0, active.width, active.height),
         orientation: Orientation::from_exif(ifd0.u16(t::ORIENTATION).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: kelvin_presets(mn.as_ref()), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -246,6 +273,32 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kelvin_presets_from_maker_note_0221() {
+        use craft_tiff::{IfdBuilder, TiffWriter, Value};
+        // a u16, then entries of (53190 - K, 0, red * 8192, blue * 8192): daylight first, then 2500 K upward
+        let entry = |k: u32, r: f64, b: f64| [(53190 - k) as u16, 0, (r * 8192.0) as u16, (b * 8192.0) as u16];
+        let mut words = vec![0u16];
+        for e in [entry(5205, 1.83, 1.16), entry(2500, 1.06, 2.32), entry(3330, 1.4, 1.9), entry(4550, 1.7, 1.45), entry(6500, 2.0, 1.05)] {
+            words.extend(e);
+        }
+        let note = |words: &[u16]| {
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_be_bytes()).collect();
+            let ifd = IfdBuilder::new().with(KELVIN_WB, Value::Undefined(bytes));
+            let file = TiffWriter::new(ByteOrder::Big, false).write(&[ifd]).unwrap();
+            let ifd = Tiff::parse(&file).unwrap().ifds.remove(0);
+            makernote::MakerNote { kind: makernote::MakerNoteKind::Plain, order: ByteOrder::Big, base: 0, ifd }
+        };
+        let p = kelvin_presets(Some(&note(&words))).unwrap();
+        let kelvins: Vec<f32> = p.points().iter().map(|p| p.0).collect();
+        assert_eq!(kelvins, [2500.0, 3330.0, 4550.0, 5205.0, 6500.0]);
+        let daylight = p.points()[3].1;
+        assert!((daylight[0] - 1.83).abs() < 1e-3 && (daylight[2] - 1.16).abs() < 1e-3, "{daylight:?}");
+        // no tag, or too few usable entries: none
+        assert!(kelvin_presets(None).is_none());
+        assert!(kelvin_presets(Some(&note(&words[..9]))).is_none());
+    }
 
     /// Our own prefix code for categories 0..=14: lengths 2,2,3,3,4,5,..., codes assigned canonically.
     fn test_table() -> (Vec<u8>, Vec<(u16, u8)>) {
@@ -483,6 +536,47 @@ mod tests {
         // no tag: the assumed layout stays
         let img = decode(&tiny_pef(4, 2, 1, 16, &[0; 16]), Mode::Full, &Limits::default()).unwrap();
         assert_eq!(img.cfa, Some(Cfa::bayer_static("BGGR")));
+    }
+
+    #[test]
+    fn fixed_cfa_fallback_is_noticed_but_either_usable_metadata_form_is_not_assumed() {
+        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let expected: Vec<u16> = (0..16).map(|i| 100 + i * 7).collect();
+        let valid_exif = &[2, 0, 2, 0, 1, 0, 2, 1][..];
+        let invalid_exif = &[2, 0, 2, 0, 1, 0][..];
+        for (primary, exif, assumed, pattern) in [
+            (None, None, true, "BGGR"),
+            (Some([0, 1, 1, 3]), None, true, "BGGR"),
+            (None, Some(invalid_exif), true, "BGGR"),
+            (Some([0, 1, 1, 3]), Some(invalid_exif), true, "BGGR"),
+            (Some([0, 1, 1, 3]), Some(valid_exif), false, "GRBG"),
+            (None, Some(valid_exif), false, "GRBG"),
+            (Some([0, 1, 1, 2]), None, false, "RGGB"),
+            (Some([0, 1, 1, 2]), Some(valid_exif), false, "RGGB"),
+        ] {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![4]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![4]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+            raw.set(t::COMPRESSION, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![32803]));
+            raw.set(t::MAKE, Value::Ascii("PENTAX Corporation".into()));
+            if let Some(pattern) = primary {
+                raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+                raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
+            }
+            if let Some(pattern) = exif {
+                raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(crate::EXIF_CFA_PATTERN, Value::Undefined(pattern.to_vec())));
+            }
+            raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![expected.iter().flat_map(|value| value.to_be_bytes()).collect()] });
+            let bytes = TiffWriter::new(ByteOrder::Big, false).write(&[raw]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!(image.cfa, Some(Cfa::bayer_static(pattern)));
+                assert_eq!(image.data, RawData::U16(expected.clone()));
+                assert_eq!(image.notices, crate::RawNotices { assumed_cfa: assumed, ..Default::default() });
+            }
+        }
     }
 
     /// A `w x h` big-endian 14-bit PEF of plain 16-bit words without area tags, whose maker note has only a

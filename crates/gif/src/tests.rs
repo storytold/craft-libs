@@ -55,6 +55,15 @@ fn animated(delays_cs: &[u32], repeat: Option<image::codecs::gif::Repeat>) -> Ve
 }
 
 #[test]
+fn first_frame_compressed_bytes_exclude_extensions_after_the_image_data() {
+    let mut bytes = gif(&[[1, 2, 3], [4, 5, 6]], None, None);
+    assert_eq!(first_frame_compressed_bytes(&bytes), Some(2));
+    bytes.splice(bytes.len() - 1..bytes.len() - 1, [0x21, 0xFE, 1, b'x', 0]);
+    assert_eq!(first_frame_compressed_bytes(&bytes), Some(2));
+    assert_eq!(first_frame_compressed_bytes(b"not a gif"), None);
+}
+
+#[test]
 fn the_first_frames_table_and_transparent_entry() {
     let g = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
     assert_eq!(palette(&gif(&g, None, None)), Some((g.to_vec(), None)));
@@ -64,6 +73,42 @@ fn the_first_frames_table_and_transparent_entry() {
     assert_eq!(palette(&gif(&g, Some(1), Some(&l))), Some((l.to_vec(), Some(1))));
     // A transparent index past the table is no transparent entry.
     assert_eq!(palette(&gif(&l, Some(9), None)), Some((l.to_vec(), None)));
+}
+
+#[test]
+fn graphic_control_ends_at_plain_text() {
+    let mut bytes = Vec::new();
+    let colors = [0, 0, 0, 255, 0, 0];
+    {
+        let mut encoder = gif::Encoder::new(&mut bytes, 2, 2, &colors).unwrap();
+        let frame = gif::Frame {
+            width: 2,
+            height: 2,
+            delay: 23,
+            transparent: Some(1),
+            dispose: gif::DisposalMethod::Previous,
+            buffer: std::borrow::Cow::Borrowed(&[0; 4]),
+            ..gif::Frame::default()
+        };
+        encoder.write_frame(&frame).unwrap();
+    }
+    let image_start = scan(&bytes, 1).unwrap().frames[0].offset;
+    // A comment does not consume the control that precedes it.
+    let comment = [0x21, 0xfe, 1, b'x', 0];
+    bytes.splice(image_start..image_start, comment);
+    let before = scan(&bytes, 1).unwrap();
+    let first = before.frames[0];
+    assert_eq!((first.delay_cs, first.transparent, first.disposal), (23, Some(1), 3));
+    assert_eq!(palette(&bytes).unwrap().1, Some(1));
+
+    // A 2×2 plain text grid with 1×1 cells and one character consumes it.
+    let text = [0x21, 0x01, 12, 0, 0, 0, 0, 2, 0, 2, 0, 1, 1, 1, 0, 1, b'X', 0];
+    bytes.splice(first.offset..first.offset, text);
+    let after = scan(&bytes, 1).unwrap();
+    assert!(after.complete);
+    let first = after.frames[0];
+    assert_eq!((first.delay_cs, first.transparent, first.disposal), (0, None, 0));
+    assert_eq!(palette(&bytes).unwrap(), (vec![[0, 0, 0], [255, 0, 0]], None));
 }
 
 #[test]

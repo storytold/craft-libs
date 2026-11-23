@@ -6,7 +6,7 @@ use craft_media::bitstream::BitReader;
 
 /// Maximum supported reconstructed luma area. 8K UHD fits comfortably while
 /// hostile SPS dimensions cannot allocate full pictures and decoder work state.
-const MAX_LUMA_SAMPLES: u64 = 1 << 25;
+pub(super) const MAX_LUMA_SAMPLES: u64 = 1 << 25;
 
 /// Scaling matrices after applying fall-back rules, stored in raster order (weightScale).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -527,7 +527,11 @@ impl Sps {
     }
 
     pub fn check_supported(&self) -> Result<()> {
-        if u64::from(self.width()).saturating_mul(u64::from(self.height())) > MAX_LUMA_SAMPLES {
+        self.check_supported_with_limit(MAX_LUMA_SAMPLES)
+    }
+
+    pub(super) fn check_supported_with_limit(&self, max_luma_samples: u64) -> Result<()> {
+        if u64::from(self.width()).saturating_mul(u64::from(self.height())) > max_luma_samples {
             return unsupported("picture dimensions exceed the decoder memory limit");
         }
         if !self.frame_mbs_only {
@@ -743,6 +747,31 @@ mod tests {
         assert_eq!((sps.width(), sps.height()), (176, 144));
         assert_eq!(sps.pic_order_cnt_type, 2);
         assert_eq!(sps.crop_rect(), (0, 0, 176, 144));
+    }
+
+    #[test]
+    fn caller_can_raise_single_picture_sample_limit() {
+        let mut w = BitWriter::new();
+        w.write_bits(66, 8);
+        w.write_bits(0xC0, 8);
+        w.write_bits(30, 8);
+        w.write_ue(0);
+        w.write_ue(0);
+        w.write_ue(2);
+        w.write_ue(1);
+        w.write_bit(false);
+        w.write_ue(511); // 8192 luma samples wide
+        w.write_ue(511); // 8192 luma samples high
+        w.write_bit(true);
+        w.write_bit(true);
+        w.write_bit(false);
+        w.write_bit(false);
+        w.rbsp_trailing();
+
+        let sps = Sps::parse(&w.finish()).unwrap();
+        assert_eq!((sps.width(), sps.height()), (8192, 8192));
+        assert!(sps.check_supported().is_err());
+        assert!(sps.check_supported_with_limit(1 << 26).is_ok());
     }
     /// Baseline SPS with the given `ue(v)` overrides for the fields hostile streams can max out.
     fn hostile_sps(profile: u32, bit_depth: u32, log2_frame_num: u32, w: u32, h: u32, crop: u32) -> Vec<u8> {

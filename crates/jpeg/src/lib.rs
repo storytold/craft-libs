@@ -1,17 +1,16 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! Clean-room decoder for the JPEG processes most Rust JPEG decoders don't handle, written from
-//! ITU-T T.81 (ISO/IEC 10918-1).
+//! Clean-room JPEG decoding and baseline encoding, written from ITU-T T.81 (ISO/IEC 10918-1).
 //!
 //! [`decode`] supports these frames:
 //!
 //! - sequential DCT, Huffman coded, 8 or 12-bit samples (SOF0 and SOF1; SOF0 files that declare
 //!   12 bits are read as SOF1);
 //! - extended sequential DCT, arithmetic coded, 8 or 12-bit (SOF9);
+//! - progressive DCT, Huffman coded, 8 or 12-bit (SOF2);
 //! - progressive DCT, arithmetic coded, 8 or 12-bit (SOF10).
 //!
-//! Every other frame returns [`Error::Unsupported`]: progressive Huffman (SOF2), lossless (SOF3,
-//! SOF11) and hierarchical (SOF5–SOF7, SOF13–SOF15) files, and DCT precisions other than 8 and
-//! 12 bits.
+//! Every other frame returns [`Error::Unsupported`]: lossless (SOF3, SOF11) and hierarchical
+//! (SOF5–SOF7, SOF13–SOF15) files, and DCT precisions other than 8 and 12 bits.
 //!
 //! [`Bands`] decodes the common case, a sequential Huffman-coded 8-bit frame in one scan, a band
 //! of rows at a time, into the samples [`decode`] would give for those rows, so that images too
@@ -67,6 +66,65 @@ fn err(m: impl std::fmt::Display) -> Error {
 
 fn unsupported(m: impl Into<String>) -> Error {
     Error::Unsupported(m.into())
+}
+
+/// Annex K Huffman tables used by AVI1 Motion JPEG streams that omit DHT.
+const AVI1_DEFAULT_DHT: &[u8] = &[
+    0xFF, 0xC4, 0x01, 0xA2, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
+    0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x01, 0x00, 0x03, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x10, 0x00, 0x02, 0x01, 0x03, 0x03, 0x02, 0x04, 0x03, 0x05,
+    0x05, 0x04, 0x04, 0x00, 0x00, 0x01, 0x7D, 0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22,
+    0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08, 0x23, 0x42, 0xB1, 0xC1, 0x15, 0x52, 0xD1, 0xF0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A, 0x16, 0x17,
+    0x18, 0x19, 0x1A, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A,
+    0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A,
+    0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8,
+    0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5,
+    0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9,
+    0xFA, 0x11, 0x00, 0x02, 0x01, 0x02, 0x04, 0x04, 0x03, 0x04, 0x07, 0x05, 0x04, 0x04, 0x00, 0x01, 0x02, 0x77, 0x00, 0x01, 0x02, 0x03, 0x11, 0x04,
+    0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xA1, 0xB1, 0xC1, 0x09, 0x23, 0x33,
+    0x52, 0xF0, 0x15, 0x62, 0x72, 0xD1, 0x0A, 0x16, 0x24, 0x34, 0xE1, 0x25, 0xF1, 0x17, 0x18, 0x19, 0x1A, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x35, 0x36,
+    0x37, 0x38, 0x39, 0x3A, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x63, 0x64, 0x65, 0x66,
+    0x67, 0x68, 0x69, 0x6A, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x92, 0x93, 0x94,
+    0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA,
+    0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
+    0xE8, 0xE9, 0xEA, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA,
+];
+
+/// Insert Annex K Huffman tables into an AVI1 MJPEG frame that omits DHT.
+///
+/// Frames that are not JPEG, already define DHT, or do not reach SOS are returned unchanged.
+/// The caller should use this only for an AVI1/MJPEG stream, since ordinary JPEG streams must
+/// provide their own tables.
+pub fn with_avi1_default_huffman(jpeg: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    use std::borrow::Cow;
+    if jpeg.get(..2) != Some(&[0xFF, 0xD8]) {
+        return Cow::Borrowed(jpeg);
+    }
+    let mut at = 2usize;
+    while at + 1 < jpeg.len() && jpeg[at] == 0xFF {
+        let marker = jpeg[at + 1];
+        match marker {
+            0xC4 => return Cow::Borrowed(jpeg),
+            0xDA => {
+                let mut out = Vec::with_capacity(jpeg.len().saturating_add(AVI1_DEFAULT_DHT.len()));
+                out.extend_from_slice(&jpeg[..at]);
+                out.extend_from_slice(AVI1_DEFAULT_DHT);
+                out.extend_from_slice(&jpeg[at..]);
+                return Cow::Owned(out);
+            }
+            0xD0..=0xD9 | 0x01 => at += 2,
+            0xFF => at += 1,
+            _ => {
+                let Some(len) = jpeg.get(at + 2..at + 4).map(|b| usize::from(u16::from_be_bytes([b[0], b[1]]))) else { break };
+                if len < 2 {
+                    break;
+                }
+                let Some(next) = at.checked_add(2 + len).filter(|&n| n <= jpeg.len()) else { break };
+                at = next;
+            }
+        }
+    }
+    Cow::Borrowed(jpeg)
 }
 
 /// Decompression-bomb guards, checked against the frame header before any image buffer is
@@ -138,6 +196,32 @@ pub struct FrameKind {
 /// EOI or the end of the data first. Reads only the headers, so it is cheap enough to route
 /// every JPEG an app opens.
 pub fn frame(b: &[u8]) -> Option<FrameKind> {
+    let (marker, seg) = frame_segment(b)?;
+    Some(FrameKind { marker, precision: *seg.get(2)? })
+}
+
+/// Whether `bytes` are a progressive JPEG whose frame samples some component more finely (across
+/// or down) than its first. zune-jpeg 0.5.15, the decoder behind `image`, asserts in its upsampler
+/// on such a frame (etemesi254/zune-image#236; fixed there by 36007420, unreleased as of
+/// 0.5.16-rc3), and in the browser a panic aborts the page. Until the fix ships, such a JPEG is
+/// refused from its header: the decoder refuses the larger ones itself, so nothing that decoded is
+/// lost. Baseline frames of the same shape decode and are left to it.
+/// shortcut: remove this check (and its callers' early return) once `Cargo.lock` has zune-jpeg
+/// 0.5.16 or later.
+pub fn finer_than_first(bytes: &[u8]) -> bool {
+    let Some((marker, seg)) = frame_segment(bytes) else { return false };
+    if !matches!(marker, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+        return false;
+    }
+    // Length (2), precision (1), height (2), width (2), components (1), then id, sampling and
+    // table for each component.
+    let n = usize::from(seg.get(7).copied().unwrap_or(0));
+    let sampling = |k: usize| seg.get(9 + 3 * k).map(|b| (b >> 4, b & 0x0F));
+    let Some((h0, v0)) = sampling(0) else { return false };
+    (1..n).any(|k| sampling(k).is_some_and(|(h, v)| h > h0 || v > v0))
+}
+
+fn frame_segment(b: &[u8]) -> Option<(u8, &[u8])> {
     if b.get(..2) != Some(&[0xFF, 0xD8]) {
         return None;
     }
@@ -154,7 +238,7 @@ pub fn frame(b: &[u8]) -> Option<FrameKind> {
             _ => {
                 let len = usize::from(u16::from_be_bytes([*b.get(i + 2)?, *b.get(i + 3)?]));
                 if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
-                    return Some(FrameKind { marker: m, precision: *b.get(i + 4)? });
+                    return Some((m, b.get(i + 2..)?));
                 }
                 i = i.checked_add(2 + len)?;
             }
@@ -422,7 +506,7 @@ fn parse_header(marker: u8, seg: &[u8]) -> Result<Header, Error> {
         0xC0 | 0xC1 => (false, false),
         0xC9 => (true, false),
         0xCA => (true, true),
-        0xC2 => return Err(unsupported("progressive Huffman-coded JPEG is not supported")),
+        0xC2 => (false, true),
         0xC3 | 0xCB => return Err(unsupported("lossless JPEG is not supported")),
         _ => return Err(unsupported("hierarchical JPEG is not supported")),
     };
@@ -857,6 +941,128 @@ impl ScanDecoder for HuffmanScan<'_> {
     }
 }
 
+/// Huffman-coded progressive scan state (G.1.2). EOB runs span blocks in a scan.
+struct ProgressiveHuffmanScan<'a> {
+    bits: Bits<'a>,
+    tables: Vec<(&'a Huffman, &'a Huffman)>,
+    mode: ArithMode,
+    ss: usize,
+    se: usize,
+    al: u8,
+    pred: [i32; 4],
+    eob_run: usize,
+}
+
+impl ScanDecoder for ProgressiveHuffmanScan<'_> {
+    fn restart(&mut self) {
+        self.bits.restart();
+        self.pred = [0; 4];
+        self.eob_run = 0;
+    }
+
+    fn block(&mut self, sc: usize, blk: &mut [i32; 64]) -> Result<(), Error> {
+        let &(dc, ac) = self.tables.get(sc).ok_or_else(|| err("bad scan component"))?;
+        let p1 = 1i32.checked_shl(u32::from(self.al)).ok_or_else(|| err("bad successive approximation"))?;
+        match self.mode {
+            ArithMode::DcFirst => {
+                let t = u32::from(dc.decode(&mut self.bits)?);
+                if t > 15 {
+                    return Err(err("bad DC difference category"));
+                }
+                let diff = extend(self.bits.get(t), t);
+                let pred = self.pred.get_mut(sc).ok_or_else(|| err("bad scan component"))?;
+                *pred = pred.wrapping_add(diff);
+                blk[0] = pred.wrapping_mul(p1);
+            }
+            ArithMode::DcRefine => {
+                if self.bits.get(1) != 0 {
+                    blk[0] = if blk[0] < 0 { blk[0].wrapping_sub(p1) } else { blk[0].wrapping_add(p1) };
+                }
+            }
+            ArithMode::AcFirst => {
+                if self.eob_run != 0 {
+                    self.eob_run -= 1;
+                } else {
+                    let mut k = self.ss;
+                    while k <= self.se {
+                        let rs = ac.decode(&mut self.bits)?;
+                        let (r, s) = (usize::from(rs >> 4), u32::from(rs & 15));
+                        if s == 0 {
+                            if r == 15 {
+                                k += 16;
+                                continue;
+                            }
+                            self.eob_run = (1usize << r).saturating_add(self.bits.get(r as u32) as usize).saturating_sub(1);
+                            break;
+                        }
+                        k = k.saturating_add(r);
+                        if k > self.se {
+                            return Err(err("AC coefficient past the end of the band"));
+                        }
+                        blk[k] = extend(self.bits.get(s), s).wrapping_mul(p1);
+                        k += 1;
+                    }
+                }
+            }
+            ArithMode::AcRefine => {
+                let mut k = self.ss;
+                if self.eob_run == 0 {
+                    while k <= self.se {
+                        let rs = ac.decode(&mut self.bits)?;
+                        let (mut r, s) = (usize::from(rs >> 4), rs & 15);
+                        let mut new_value = 0;
+                        if s == 0 {
+                            if r != 15 {
+                                self.eob_run = (1usize << r).saturating_add(self.bits.get(r as u32) as usize);
+                                break;
+                            }
+                            r = 16;
+                        } else {
+                            if s != 1 {
+                                return Err(err("bad AC refinement category"));
+                            }
+                            new_value = if self.bits.get(1) != 0 { p1 } else { -p1 };
+                        }
+                        while k <= self.se {
+                            if blk[k] != 0 {
+                                if self.bits.get(1) != 0 && (blk[k].unsigned_abs() & p1 as u32) == 0 {
+                                    blk[k] = if blk[k] < 0 { blk[k].wrapping_sub(p1) } else { blk[k].wrapping_add(p1) };
+                                }
+                            } else if r == 0 {
+                                break;
+                            } else {
+                                r -= 1;
+                            }
+                            k += 1;
+                        }
+                        if new_value != 0 {
+                            if k > self.se {
+                                return Err(err("AC refinement past the band"));
+                            }
+                            blk[k] = new_value;
+                        }
+                        k += 1;
+                    }
+                }
+                if self.eob_run != 0 {
+                    while k <= self.se {
+                        if blk[k] != 0 && self.bits.get(1) != 0 && (blk[k].unsigned_abs() & p1 as u32) == 0 {
+                            blk[k] = if blk[k] < 0 { blk[k].wrapping_sub(p1) } else { blk[k].wrapping_add(p1) };
+                        }
+                        k += 1;
+                    }
+                    self.eob_run -= 1;
+                }
+            }
+            ArithMode::Sequential => return Err(err("invalid progressive scan mode")),
+        }
+        if self.bits.exhausted {
+            return Err(err("entropy-coded data ends before the scan does"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ArithMode {
     Sequential,
@@ -1164,12 +1370,31 @@ fn decode_scan(frame: &mut Frame, tables: &Tables, scan: &Scan, d: &[u8], at_mar
     } else {
         let mut sel = Vec::with_capacity(scan.comps.len());
         for &(_, td, ta) in &scan.comps {
-            let dc = tables.dc.get(td).and_then(Option::as_ref).ok_or_else(|| err("scan uses an undefined Huffman table"))?;
-            let ac = tables.ac.get(ta).and_then(Option::as_ref).ok_or_else(|| err("scan uses an undefined Huffman table"))?;
+            let dc = tables.dc.get(td).and_then(Option::as_ref);
+            let ac = tables.ac.get(ta).and_then(Option::as_ref);
+            let (dc, ac) = if frame.progressive && scan.ss != 0 {
+                let ac = ac.ok_or_else(|| err("scan uses an undefined AC Huffman table"))?;
+                (dc.unwrap_or(ac), ac)
+            } else {
+                let dc = dc.ok_or_else(|| err("scan uses an undefined DC Huffman table"))?;
+                (dc, ac.unwrap_or(dc))
+            };
             sel.push((dc, ac));
         }
-        let mut dec = HuffmanScan { bits: Bits::new(d), tables: sel, pred: [0; 4] };
-        walk_scan(frame, scan, tables.restart, &mut dec, done)
+        if frame.progressive {
+            let mode = match (scan.ss, scan.ah) {
+                (0, 0) => ArithMode::DcFirst,
+                (0, _) => ArithMode::DcRefine,
+                (_, 0) => ArithMode::AcFirst,
+                (_, _) => ArithMode::AcRefine,
+            };
+            let mut dec =
+                ProgressiveHuffmanScan { bits: Bits::new(d), tables: sel, mode, ss: scan.ss, se: scan.se, al: scan.al, pred: [0; 4], eob_run: 0 };
+            walk_scan(frame, scan, tables.restart, &mut dec, done)
+        } else {
+            let mut dec = HuffmanScan { bits: Bits::new(d), tables: sel, pred: [0; 4] };
+            walk_scan(frame, scan, tables.restart, &mut dec, done)
+        }
     }
 }
 
@@ -1354,6 +1579,79 @@ fn idct_block(blk: &[i32; 64], q: &[u16; 64], idct: &Idct, max: f32, out: &mut [
     }
 }
 
+/// The largest reduction [`decode_reduced`] reads straight from a JPEG's 8×8 blocks: 1/8.
+pub const MAX_SHRINK: u8 = 3;
+
+fn idct_basis_n(n: usize) -> Vec<Vec<f32>> {
+    let mut t = vec![vec![0f32; n]; n];
+    for (x, row) in t.iter_mut().enumerate() {
+        for (u, v) in row.iter_mut().enumerate() {
+            let c = if u == 0 { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
+            *v = c / 2.0 * (((2 * x + 1) * u) as f32 * std::f32::consts::PI / (2 * n) as f32).cos();
+        }
+    }
+    t
+}
+
+/// One block's reduced `n × n` samples (`n` is 4, 2 or 1), dequantized with `q`, inverse
+/// transformed, level-shifted and clamped to `0..=max`, written to `n` rows of `n` at `out`
+/// that are `stride` apart.
+fn idct_block_scaled(blk: &[i32; 64], q: &[u16; 64], basis: &[Vec<f32>], max: f32, out: &mut [f32], stride: usize, n: usize) {
+    let shift = (max + 1.0) / 2.0;
+    if n == 1 || blk[1..].iter().all(|&c| c == 0) {
+        let t = basis[0][0];
+        let v = (t * (t * (blk[0] as f32 * f32::from(q[0]))) + shift).clamp(0.0, max);
+        for y in 0..n {
+            if let Some(row) = out.get_mut(y * stride..y * stride + n) {
+                row.fill(v);
+            }
+        }
+        return;
+    }
+    let mut f = [[0f32; 8]; 8];
+    for (k, (&c, &z)) in blk.iter().zip(&ZIGZAG).enumerate() {
+        if c != 0 {
+            let (v, u) = (z / 8, z % 8);
+            if v < n && u < n {
+                f[v][u] = c as f32 * f32::from(q[k]);
+            }
+        }
+    }
+    let mut r = vec![vec![0f32; n]; n];
+    for v in 0..n {
+        for x in 0..n {
+            let mut acc = 0.0f32;
+            for u in 0..n {
+                acc += basis[x][u] * f[v][u];
+            }
+            r[v][x] = acc;
+        }
+    }
+    for (y, basis_row) in basis.iter().enumerate().take(n) {
+        if let Some(row) = out.get_mut(y * stride..y * stride + n) {
+            for (x, o) in row.iter_mut().enumerate() {
+                let mut acc = 0.0f32;
+                for v in 0..n {
+                    acc += basis_row[v] * r[v][x];
+                }
+                *o = (acc + shift).clamp(0.0, max);
+            }
+        }
+    }
+}
+
+fn reconstruct_scaled(comp: &Component, q: &[u16; 64], basis: &[Vec<f32>], max: f32, n: usize) -> Vec<f32> {
+    let stride = comp.bw * n;
+    let mut plane = vec![0f32; stride * comp.bh * n];
+    for (idx, blk) in comp.coefs.iter().enumerate() {
+        let (bx, by) = (idx % comp.bw, idx / comp.bw);
+        if let Some(out) = plane.get_mut(by * n * stride + bx * n..) {
+            idct_block_scaled(blk, q, basis, max, out, stride, n);
+        }
+    }
+    plane
+}
+
 /// The component's samples (padded to whole blocks, row stride `bw * 8`), level-shifted and
 /// clamped to `0..=max`.
 fn reconstruct(comp: &Component, q: &[u16; 64], idct: &Idct, max: f32) -> Vec<f32> {
@@ -1483,6 +1781,120 @@ fn render(frame: Frame, tables: &Tables, adobe_transform: Option<u8>) -> Result<
     Ok((nc as u8, samples))
 }
 
+fn render_scaled(frame: Frame, tables: &Tables, adobe_transform: Option<u8>, shrink: u8) -> Result<(u32, u32, u8, Samples), Error> {
+    let n = 8usize >> shrink;
+    let max = if frame.precision > 8 { 4095.0 } else { 255.0 };
+    let basis = idct_basis_n(n);
+    let w = frame.width.div_ceil(1 << shrink);
+    let h = frame.height.div_ceil(1 << shrink);
+    let mut planes = Vec::with_capacity(frame.comps.len());
+    for comp in &frame.comps {
+        let q = comp.quant.or_else(|| tables.quant.get(comp.tq).copied().flatten());
+        let q = q.ok_or_else(|| err("component uses an undefined quantization table"))?;
+        let plane = reconstruct_scaled(comp, &q, &basis, max, n);
+        let cw = comp.cw.div_ceil(1 << shrink);
+        let ch = comp.ch.div_ceil(1 << shrink);
+        let xs = upsample_map(w, cw, comp.h, frame.hmax);
+        let ys = upsample_map(h, ch, comp.v, frame.vmax);
+        planes.push((plane, comp.bw * n, xs, ys));
+    }
+    let nc = planes.len();
+    let sixteen = frame.precision > 8;
+    let ycc = is_ycc(frame.comps.iter().map(|c| c.id), adobe_transform);
+    let (mut wide, mut narrow) = (Vec::new(), Vec::new());
+    if sixteen {
+        wide.reserve_exact(w * h * nc);
+    } else {
+        narrow.reserve_exact(w * h * nc);
+    }
+    let mut px = [0f32; 4];
+    for y in 0..h {
+        for x in 0..w {
+            for (c, (plane, stride, xs, ys)) in planes.iter().enumerate() {
+                let (Some(&(x0, x1, fx)), Some(&(y0, y1, fy))) = (xs.get(x), ys.get(y)) else {
+                    return Err(err("sample map out of range"));
+                };
+                let at = |xx: usize, yy: usize| plane.get(yy * stride + xx).copied().unwrap_or(0.0);
+                let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * fx;
+                let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * fx;
+                if let Some(p) = px.get_mut(c) {
+                    *p = top + (bottom - top) * fy;
+                }
+            }
+            to_color(&mut px, nc, ycc, max);
+            for &p in px.iter().take(nc) {
+                let p = p.clamp(0.0, max);
+                if sixteen {
+                    wide.push((p * 65535.0 / max).round() as u16);
+                } else {
+                    narrow.push(to_u8(p));
+                }
+            }
+        }
+    }
+    let samples = if sixteen { Samples::U16(wide) } else { Samples::U8(narrow) };
+    Ok((w as u32, h as u32, nc as u8, samples))
+}
+
+/// Output size `(width, height, estimated_bytes)` of a JPEG reduction without decoding pixels.
+///
+/// `shrink` must be in `1..=MAX_SHRINK` (1/2, 1/4, or 1/8). Checks `limits` against the
+/// full-size frame header.
+pub fn reduced_estimate(bytes: &[u8], limits: &Limits, shrink: u8) -> Result<(u32, u32, usize), Error> {
+    if shrink == 0 || shrink > MAX_SHRINK {
+        return Err(err("shrink must be 1..=3"));
+    }
+    if bytes.get(..2) != Some(&[0xFF, 0xD8]) {
+        return Err(err("not a JPEG stream"));
+    }
+    let mut i = 2usize;
+    while let Some(&v) = bytes.get(i) {
+        if v != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&m) = bytes.get(i + 1) else { break };
+        match m {
+            0xFF => {
+                i += 1;
+                continue;
+            }
+            0x00 | 0x01 | 0xD0..=0xD8 => {
+                i += 2;
+                continue;
+            }
+            0xD9 | 0xDA => return Err(err("no frame header before scan")),
+            _ => {}
+        }
+        let len = usize::from(be16(bytes, i + 2)?);
+        if len < 2 {
+            return Err(err("bad marker segment length"));
+        }
+        let seg = bytes.get(i + 4..i + 2 + len).ok_or_else(|| err("marker segment runs past the end of the file"))?;
+        if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+            let f = parse_frame(m, seg, limits)?;
+            let w = (f.width as u32).div_ceil(1 << shrink);
+            let h = (f.height as u32).div_ceil(1 << shrink);
+            let output_bytes = (w as usize).saturating_mul(h as usize).saturating_mul(f.comps.len().saturating_mul(4).saturating_add(4));
+            let coef_bytes = if f.progressive { f.comps.iter().map(|c| c.bw.saturating_mul(c.bh)).sum::<usize>().saturating_mul(256) } else { 0 };
+            return Ok((w, h, coef_bytes.saturating_add(output_bytes)));
+        }
+        i += 2 + len;
+    }
+    Err(err("no frame header found"))
+}
+
+/// Decode a JPEG stream at `1 / 2^shrink` of its size (each side rounded up), for `shrink` in
+/// `1..=MAX_SHRINK` (1/2, 1/4, or 1/8) using reduced-size IDCTs on the 8×8 DCT blocks.
+pub fn decode_reduced(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>, shrink: u8) -> Result<Decoded, Error> {
+    if shrink == 0 || shrink > MAX_SHRINK {
+        return Err(err("shrink must be 1..=3"));
+    }
+    let (frame, tables, damaged) = decode_coefficients(bytes, limits)?;
+    let (width, height, components, samples) = render_scaled(frame, &tables, adobe_transform, shrink)?;
+    Ok(Decoded { width, height, components, samples, damaged })
+}
+
 /// Decode a JPEG stream of one of the frame types listed in the [crate docs](crate).
 ///
 /// `adobe_transform` is the transform byte of the stream's APP14 `Adobe` segment, if the caller
@@ -1503,3 +1915,13 @@ pub use bands::{Band, Bands, Reader};
 
 #[cfg(test)]
 mod tests;
+
+/// Baseline JPEG encoder (8-bit, Huffman-coded sequential DCT).
+mod encode;
+pub use encode::{ChromaSubsampling, EncodeError, encode_baseline, encode_baseline_low_memory};
+
+mod app14;
+pub use app14::adobe_transform;
+
+mod rgba;
+pub use rgba::{UnsupportedComponents, to_rgba8};

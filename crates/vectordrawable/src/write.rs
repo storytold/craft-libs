@@ -13,6 +13,10 @@ use crate::model::{Cap, Color, Fill, GradientKind, Group, Item, ItemKind, Join, 
 /// never recurses without bound. Android Studio's own drawables nest a handful of levels.
 pub const MAX_DEPTH: usize = 256;
 
+/// Hard ceiling for [`document_with_depth_limit`]. A caller may need extra XML groups for
+/// transforms and clips around each bounded application layer, but cannot disable the guard.
+pub const MAX_CONFIGURED_DEPTH: usize = 1024;
+
 const ANDROID: &str = "http://schemas.android.com/apk/res/android";
 const AAPT: &str = "http://schemas.android.com/aapt";
 
@@ -110,18 +114,37 @@ impl Out {
 }
 
 /// Whether a path that is written (see [`MAX_DEPTH`]) has a gradient fill.
-fn uses_gradient(items: &[Item], depth: usize) -> bool {
-    items.iter().any(|it| match &it.kind {
-        ItemKind::Path(p) => matches!(p.fill, Some(Fill::Gradient(_))),
-        ItemKind::Group(g) => depth < MAX_DEPTH && uses_gradient(&g.children, depth + 1),
-    })
+fn uses_gradient(items: &[Item], max_depth: usize) -> bool {
+    let mut pending = vec![(1, items.iter())];
+    while let Some((depth, items)) = pending.last_mut() {
+        let depth = *depth;
+        match items.next().map(|it| &it.kind) {
+            Some(ItemKind::Path(p)) if matches!(p.fill, Some(Fill::Gradient(_))) => return true,
+            Some(ItemKind::Group(g)) if depth < max_depth => pending.push((depth + 1, g.children.iter())),
+            Some(_) => {}
+            None => {
+                pending.pop();
+            }
+        }
+    }
+    false
 }
 
 /// The whole file: a `width`×`height` dp drawable with a viewport of the same size.
 pub fn document(width: f64, height: f64, items: &[Item]) -> String {
+    document_with_depth_limit(width, height, items, MAX_DEPTH)
+}
+
+/// Write with a caller-selected XML group depth cap, clamped to `1..=MAX_CONFIGURED_DEPTH`.
+///
+/// A group at the cap keeps its attributes and clip but not its children. The default
+/// [`document`] cap is unchanged. Use this when one bounded source layer projects to several
+/// XML wrapper groups; the caller must include those wrappers in its depth calculation.
+pub fn document_with_depth_limit(width: f64, height: f64, items: &[Item], max_depth: usize) -> String {
+    let max_depth = max_depth.clamp(1, MAX_CONFIGURED_DEPTH);
     let mut o = Out { s: String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n") };
     let mut attrs = vec![("xmlns:android", ANDROID.to_string())];
-    if uses_gradient(items, 1) {
+    if uses_gradient(items, max_depth) {
         attrs.push(("xmlns:aapt", AAPT.to_string()));
     }
     attrs.extend([
@@ -135,21 +158,35 @@ pub fn document(width: f64, height: f64, items: &[Item]) -> String {
         // Android refuses a <vector> without a <path> ("no path defined"): one empty, unfilled path.
         o.open(1, "path", &[("android:pathData", "M0,0".to_string())], true);
     }
-    for it in items {
-        item(&mut o, 1, it);
-    }
+    write_items(&mut o, items, max_depth);
     o.close(0, "vector");
     o.s
 }
 
-fn item(o: &mut Out, depth: usize, it: &Item) {
-    match &it.kind {
-        ItemKind::Path(p) => path(o, depth, p),
-        ItemKind::Group(g) => group(o, depth, g),
+fn write_items(o: &mut Out, items: &[Item], max_depth: usize) {
+    // One iterator per open group, not one pending entry per sibling. The configured depth
+    // bounds this stack, and wide documents do not require a second list of their items.
+    let mut pending = vec![(1, items.iter())];
+    while let Some((depth, items)) = pending.last_mut() {
+        let depth = *depth;
+        match items.next().map(|it| &it.kind) {
+            Some(ItemKind::Path(p)) => path(o, depth, p),
+            Some(ItemKind::Group(g)) => {
+                if group(o, depth, g, max_depth) {
+                    pending.push((depth + 1, g.children.iter()));
+                }
+            }
+            None => {
+                pending.pop();
+                if depth > 1 {
+                    o.close(depth - 1, "group");
+                }
+            }
+        }
     }
 }
 
-fn group(o: &mut Out, depth: usize, g: &Group) {
+fn group(o: &mut Out, depth: usize, g: &Group, max_depth: usize) -> bool {
     let mut attrs = Vec::new();
     if let Some(n) = &g.name {
         attrs.push(("android:name", esc(n)));
@@ -172,19 +209,21 @@ fn group(o: &mut Out, depth: usize, g: &Group) {
             attrs.push(("android:translateY", num(x.translate.1)));
         }
     }
-    let children: &[Item] = if depth < MAX_DEPTH { &g.children } else { &[] };
+    let children: &[Item] = if depth < max_depth { &g.children } else { &[] };
     if children.is_empty() && g.clip.is_none() {
         o.open(depth, "group", &attrs, true);
-        return;
+        return false;
     }
     o.open(depth, "group", &attrs, false);
     if let Some(c) = &g.clip {
         o.open(depth + 1, "clip-path", &[("android:pathData", path_data(c))], true);
     }
-    for c in children {
-        item(o, depth + 1, c);
+    if children.is_empty() {
+        o.close(depth, "group");
+        false
+    } else {
+        true
     }
-    o.close(depth, "group");
 }
 
 fn stroke_attrs(attrs: &mut Vec<(&str, String)>, s: &Stroke) {
@@ -443,5 +482,63 @@ mod tests {
         let ItemKind::Group(outer) = deep.kind else { panic!("a group") };
         let xml = document(1.0, 1.0, &outer.children);
         assert!(xml.contains("<path") && xml.contains("xmlns:aapt"));
+    }
+}
+
+#[cfg(test)]
+mod depth_option_tests {
+    use super::*;
+    use crate::model::Gradient;
+    use kurbo::Rect;
+
+    fn nested(groups: usize) -> Item {
+        let mut item = Item {
+            bbox: Rect::ZERO,
+            kind: ItemKind::Path(Path {
+                name: Some("deep".into()),
+                data: BezPath::new(),
+                stroke: None,
+                even_odd: false,
+                fill: Some(Fill::Gradient(Gradient { kind: GradientKind::Sweep { center: (0.0, 0.0) }, stops: vec![] })),
+            }),
+        };
+        for _ in 0..groups {
+            item = Item { bbox: Rect::ZERO, kind: ItemKind::Group(Group { name: None, transform: None, clip: None, children: vec![item] }) };
+        }
+        item
+    }
+
+    #[test]
+    fn expanded_source_layers_keep_their_leaf_and_namespace() {
+        let items = [nested(514)];
+        assert!(!document(1.0, 1.0, &items).contains("aapt"));
+        let xml = document_with_depth_limit(1.0, 1.0, &items, 516);
+        assert_eq!(xml.matches("<group").count(), 514);
+        assert!(xml.contains("android:name=\"deep\"") && xml.contains("xmlns:aapt"));
+        assert!(!document_with_depth_limit(1.0, 1.0, &items, 514).contains("aapt"));
+    }
+
+    #[test]
+    fn zero_cannot_underflow_and_an_unbounded_request_keeps_the_hard_guard() {
+        let items = [nested(2)];
+        assert_eq!(document_with_depth_limit(1.0, 1.0, &items, 0).matches("<group").count(), 1);
+        let items = [nested(MAX_CONFIGURED_DEPTH + 1)];
+        let xml = document_with_depth_limit(1.0, 1.0, &items, usize::MAX);
+        assert_eq!(xml.matches("<group").count(), MAX_CONFIGURED_DEPTH);
+        assert!(!xml.contains("aapt"));
+    }
+    #[test]
+    fn configured_ceiling_fits_a_browser_sized_stack() {
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                let items = [nested(MAX_CONFIGURED_DEPTH + 1)];
+                let xml = document_with_depth_limit(1.0, 1.0, &items, usize::MAX);
+                assert_eq!(xml.matches("<group").count(), MAX_CONFIGURED_DEPTH);
+                assert!(!xml.contains("aapt"));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

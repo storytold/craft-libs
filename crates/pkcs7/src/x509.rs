@@ -106,9 +106,39 @@ impl Name {
     }
 }
 
-/// A parsed certificate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Certificate {
+// One field schema keeps the parsed representation and consuming adapter in sync.
+// Visibility belongs to Certificate; parts are explicitly unverified public data.
+macro_rules! certificate_representations {
+    ($( $(#[$attr:meta])* $vis:vis $field:ident: $ty:ty, )*) => {
+        /// A parsed certificate. Signed material remains private until consumed.
+        ///
+        /// ```compile_fail
+        /// fn replace_signed_bytes(cert: &mut craft_pkcs7::x509::Certificate) {
+        ///     cert.tbs.clear();
+        /// }
+        /// ```
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Certificate {
+            $( $(#[$attr])* $vis $field: $ty, )*
+        }
+
+        /// Owned parsed components for adapters. This is not a signature or trust verdict.
+        /// Consuming conversion moves buffers without reparsing or cloning signed material.
+        pub struct CertificateParts {
+            $( $(#[$attr])* pub $field: $ty, )*
+        }
+
+        impl Certificate {
+            /// Move parsed fields into a caller-owned representation; verification remains separate.
+            pub fn into_parts(self) -> CertificateParts {
+                let Self { $( $field, )* } = self;
+                CertificateParts { $( $field, )* }
+            }
+        }
+    };
+}
+
+certificate_representations! {
     /// The whole DER encoding.
     pub raw: Vec<u8>,
     tbs: Vec<u8>,

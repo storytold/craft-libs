@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn incremental_zlib_encoder_roundtrips_across_drains() {
+    let expected = (0usize..32_768).map(|n| (n.wrapping_mul(37) % 251) as u8).collect::<Vec<_>>();
+    let mut encoder = ZlibEncoder::new();
+    let mut encoded = Vec::new();
+    for chunk in expected.chunks(997) {
+        encoder.write_all(chunk).unwrap();
+        encoded.extend(encoder.take_output());
+    }
+    encoded.extend(encoder.finish().unwrap());
+
+    let mut decoded = Vec::new();
+    flate2::read::ZlibDecoder::new(encoded.as_slice()).read_to_end(&mut decoded).unwrap();
+    assert_eq!(decoded, expected);
+}
+
 /// The straightforward index-based versions, kept as the oracle for the
 /// register-carried rewrites in [`predict`] and [`unpredict`].
 mod reference {
@@ -754,4 +770,164 @@ fn rle_chunks_use_the_callers_pool_and_report_panics() {
         map_chunks(8, (0..64).collect(), |_| assert!(matches!(rayon::current_thread_index(), Some(0 | 1)))).unwrap();
         assert!(map_chunks(2, vec![0, 1], |_| panic!("worker")).is_err());
     });
+}
+
+#[test]
+fn padded_packbits_preserves_recovery_without_weakening_strict_decode() {
+    for (input, expected) in
+        [(&[0, 7][..], vec![7, 0, 0]), (&[3, 1, 2, 3, 4][..], vec![1, 2, 3]), (&[253, 9][..], vec![9, 9, 9]), (&[128][..], vec![0, 0, 0])]
+    {
+        let mut out = vec![42];
+        super::packbits::decode_padded_into(input, 3, 3, &mut out).unwrap();
+        assert_eq!(&out[1..], expected);
+        assert_eq!(out[0], 42);
+        assert!(super::packbits::decode(input, 3).is_err());
+    }
+    for input in [&[3, 1][..], &[255][..]] {
+        assert!(super::packbits::decode_padded_into(input, 1, 1, &mut vec![]).is_err());
+    }
+    let mut out = vec![42];
+    assert!(super::packbits::decode_padded_into(&[], 4, 3, &mut out).is_err());
+    assert_eq!(out, [42]);
+    super::packbits::decode_padded_into(&[255], 0, 0, &mut out).unwrap();
+    super::packbits::decode_padded_into(&[0, 7, 255], 1, 1, &mut out).unwrap();
+    assert_eq!(out, [42, 7]);
+}
+
+#[test]
+fn caller_scratch_prediction_matches_existing_decoder_across_planes() {
+    for depth in [1u16, 8, 16, 32] {
+        let layout = PlaneLayout { planes: 3, width: 13, height: 7, depth, version: Version::Psb };
+        let mut actual: Vec<u8> = (0..layout.decoded_len().unwrap()).map(|i| (i.wrapping_mul(31) % 251) as u8).collect();
+        let mut expected = actual.clone();
+        unpredict(&mut expected, &layout).unwrap();
+        let needed = if depth == 32 { layout.row_bytes() } else { 0 };
+        let mut scratch = vec![0xa5; needed + 11];
+        unpredict_with_scratch(&mut actual, &layout, &mut scratch).unwrap();
+        assert_eq!(actual, expected, "depth {depth}");
+        assert_eq!(&scratch[needed..], &[0xa5; 11]);
+    }
+}
+
+#[test]
+fn caller_scratch_prediction_rejects_invalid_inputs_before_mutation() {
+    let layout = PlaneLayout { planes: 1, width: 3, height: 2, depth: 32, version: Version::Psd };
+    let original = vec![0x73; 24];
+    for (len, scratch_len) in [(23, 12), (25, 12), (24, 11)] {
+        let mut bytes = vec![0x73; len];
+        let mut scratch = vec![0xa5; scratch_len];
+        assert!(unpredict_with_scratch(&mut bytes, &layout, &mut scratch).is_err());
+        assert_eq!(bytes, vec![0x73; len]);
+        assert_eq!(scratch, vec![0xa5; scratch_len]);
+    }
+    for invalid in [PlaneLayout { width: usize::MAX, ..layout }, PlaneLayout { planes: usize::MAX, ..layout }, PlaneLayout { depth: 12, ..layout }] {
+        let mut bytes = original.clone();
+        assert!(unpredict_with_scratch(&mut bytes, &invalid, &mut []).is_err());
+        assert_eq!(bytes, original);
+    }
+    for empty in [PlaneLayout { width: 0, ..layout }, PlaneLayout { height: 0, ..layout }] {
+        unpredict_with_scratch(&mut [], &empty, &mut []).unwrap();
+    }
+}
+
+#[test]
+fn packbits_slice_matches_strict_rows_and_preserves_guards() {
+    for (src, width) in [
+        (vec![1, 10, 11, 128, 254, 7], 5),
+        (vec![129, 9], 128),
+        (vec![0, 4, 255], 1), // Ignore trailing malformed packets once full.
+        (vec![], 0),
+        (vec![128], 1),
+        (vec![2, 1], 3),
+        (vec![255], 2),
+        (vec![255, 9], 1),
+        (vec![1, 1, 2], 1),
+        (vec![0, 8, 128], 2),
+    ] {
+        let mut guarded = vec![0xA5; width + 2];
+        let result = packbits::decode_to_slice(&src, &mut guarded[1..width + 1]);
+        let reference = packbits::decode(&src, width);
+        assert_eq!(result.is_ok(), reference.is_ok(), "{src:?}, width={width}");
+        if let Ok(expected) = reference {
+            assert_eq!(&guarded[1..width + 1], expected);
+        }
+        assert_eq!(guarded[0], 0xA5);
+        assert_eq!(guarded[width + 1], 0xA5);
+    }
+    let mut out = [0xA5; 3];
+    assert!(packbits::decode_to_slice(&[0, 8, 255], &mut out).is_err());
+    assert_eq!(out, [8, 0xA5, 0xA5], "failure retains only completed packets");
+}
+
+#[test]
+fn packbits_slice_roundtrips_all_packet_lengths() {
+    for len in 0..=256 {
+        for bytes in [vec![42; len], (0..len).map(|i| i as u8).collect()] {
+            let encoded = packbits::encode_vec(&bytes);
+            let mut out = vec![0; len];
+            packbits::decode_to_slice(&encoded, &mut out).unwrap();
+            assert_eq!(out, bytes);
+        }
+    }
+}
+
+#[test]
+fn rle_row_counts_parse_psd_and_psb_and_reject_short_tables() {
+    let psd = [0, 3, 0, 5, 1, 2, 3];
+    let (counts, rest) = read_rle_row_counts(&psd, 2, Version::Psd).unwrap();
+    assert_eq!(counts, vec![3, 5]);
+    assert_eq!(rest, &[1, 2, 3]);
+    assert!(matches!(read_rle_row_counts(&psd[..3], 2, Version::Psd), Err(PsdError::UnexpectedEof { .. })));
+
+    let psb = [0, 0, 0, 3, 0, 1, 0, 0, 9];
+    let (counts, rest) = read_rle_row_counts(&psb, 2, Version::Psb).unwrap();
+    assert_eq!(counts, vec![3, 0x10000]);
+    assert_eq!(rest, &[9]);
+    assert!(matches!(read_rle_row_counts(&psb[..7], 2, Version::Psb), Err(PsdError::UnexpectedEof { .. })));
+}
+
+#[test]
+fn zip_decompress_up_to_enforces_limit_and_verifies_trailer() {
+    let payload: Vec<u8> = (0..1024).map(|i| (i * 17 % 251) as u8).collect();
+    let compressed = zip_compress(&payload);
+
+    assert_eq!(zip_decompress_up_to(&compressed, payload.len()).unwrap(), payload);
+    assert_eq!(zip_decompress_up_to(&compressed, payload.len() * 2).unwrap(), payload);
+    assert!(matches!(zip_decompress_up_to(&compressed, payload.len() - 1), Err(PsdError::LimitExceeded(_))));
+
+    let mut bad_adler = compressed.clone();
+    let last = bad_adler.len() - 1;
+    bad_adler[last] ^= 0xff;
+    assert!(matches!(zip_decompress_up_to(&bad_adler, payload.len()), Err(PsdError::Decompress(_))));
+    assert!(matches!(zip_decompress_up_to(&compressed[..compressed.len() / 2], payload.len()), Err(PsdError::Decompress(_))));
+}
+
+#[test]
+fn plane_stream_stages_raw_rle_and_zip_planes() {
+    let raw_bytes = [1u8, 2, 3, 4, 5, 6];
+    let mut raw_stream = PlaneStream::open(Compression::Raw, &raw_bytes, 3, 2, Version::Psd, 0, |_| Ok(())).unwrap();
+    assert_eq!(raw_stream.next_raw_plane(2).unwrap(), &[1, 2]);
+    assert_eq!(raw_stream.next_raw_plane(2).unwrap(), &[3, 4]);
+
+    // Two RLE planes (2 rows x 2 bytes each); first row of plane 0 is short for padded recovery.
+    let mut rle_data = vec![0, 2, 0, 2, 0, 2, 0, 2];
+    rle_data.extend_from_slice(&[0, 9]); // 1 byte literal, zero-padded to 2 when padded=true
+    rle_data.extend_from_slice(&[255, 8]); // 2 copies of 8
+    rle_data.extend_from_slice(&[255, 7]);
+    rle_data.extend_from_slice(&[255, 6]);
+    let mut rle_stream = PlaneStream::open(Compression::Rle, &rle_data, 2, 2, Version::Psd, 0, |_| Ok(())).unwrap();
+    let mut plane0 = Vec::new();
+    rle_stream.next_rle_plane_into(0, 2, 2, true, &mut plane0).unwrap();
+    assert_eq!(plane0, vec![9, 0, 8, 8]);
+    let mut plane1 = Vec::new();
+    rle_stream.next_rle_plane_into(1, 2, 2, false, &mut plane1).unwrap();
+    assert_eq!(plane1, vec![7, 7, 6, 6]);
+
+    let zip_src = zip_compress(&[10, 20, 30, 40]);
+    let refused = PlaneStream::open(Compression::Zip, &zip_src, 2, 1, Version::Psd, 4, |_| Err(PsdError::LimitExceeded("budget")));
+    assert!(matches!(refused, Err(PsdError::LimitExceeded("budget"))));
+
+    let mut zip_stream = PlaneStream::open(Compression::Zip, &zip_src, 2, 1, Version::Psd, 4, |_| Ok(())).unwrap();
+    assert_eq!(zip_stream.zip_plane_mut(0, 2).unwrap(), &[10, 20]);
+    assert_eq!(zip_stream.zip_plane_mut(1, 2).unwrap(), &[30, 40]);
 }

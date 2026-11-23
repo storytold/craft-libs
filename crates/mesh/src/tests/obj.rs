@@ -1,6 +1,6 @@
 use super::hammer;
 use crate::obj::{material_names, read, read_mtl, sibling_name, write, write_mtl};
-use crate::{AlphaMode, Corner, Error, Limits, Material, Mesh, NONE, Part, Scene, no_external};
+use crate::{AlphaMode, Corner, Error, Image, Limits, Material, Mesh, NONE, Part, Scene, TextureRef, no_external};
 
 /// A unit cube with texture coordinates, normals, two materials and one face written with
 /// negative references.
@@ -340,4 +340,47 @@ fn a_library_named_again_is_read_once() {
     assert_eq!(asked, 1);
     assert_eq!((s.materials.len(), s.images.len()), (1, 1));
     assert_eq!(s.external, ["m.mtl", "red.png"]);
+}
+
+#[test]
+fn face_tokens_and_continued_lines_are_bounded_before_collection() {
+    let limits = Limits { max_face_corners: 3, max_data_bytes: 1024, ..Limits::default() };
+    let face = format!("v 0 0 0\nf {}\n", "1 ".repeat(100));
+    assert!(matches!(read(face.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+    let long_line = format!("v {}\\\n{}\n", "1 ".repeat(300), "1 ".repeat(300));
+    assert!(matches!(read(long_line.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+    let invalid = b"v 0 0 0\nf 1 1 1\n\xff";
+    assert!(matches!(read(invalid, &Limits { max_data_bytes: 4, ..Limits::default() }, &mut no_external), Err(Error::TooLarge(_))));
+}
+
+#[test]
+fn compatibility_options_keep_runs_and_skip_material_libraries() {
+    let input = b"\xef\xbb\xbf v 0 0 0\nv 1 0 0\nv 0 1 0\nmtllib missing.mtl\nusemtl Red\nf 1 2 3\nusemtl Blue\nf 1 2 3\nusemtl Red\nf 1 2 3\n";
+    let options = crate::obj::ReadOptions { strict: true, preserve_runs: true, ignore_material_libraries: true, ..Default::default() };
+    let scene = crate::obj::read_with_options(input, &Limits::default(), &mut no_external, &options).unwrap();
+    let parts = &scene.meshes[0].parts;
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].material, parts[2].material);
+    assert!(scene.warnings.is_empty());
+    assert!(crate::obj::read_with_options(b"v NaN 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n", &Limits::default(), &mut no_external, &options).is_err());
+}
+
+#[test]
+fn group_boundaries_keep_repeated_names_separate() {
+    let input = b"v 0 0 0\nv 1 0 0\nv 0 1 0\ng Same\nusemtl M\nf 1 2 3\ng Same\nf 1 3 2\n";
+    let options = crate::obj::ReadOptions { groups_as_objects: true, ..Default::default() };
+    let scene = crate::obj::read_with_options(input, &Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(scene.meshes.len(), 2);
+    assert!(scene.meshes.iter().all(|m| m.name == "Same"));
+}
+
+#[test]
+fn write_with_mtl_links_library_and_clearcoat_maps() {
+    let mut scene = cube();
+    scene.images = vec![Image { uri: Some("coat.png".into()), ..Image::default() }];
+    scene.materials[0].clearcoat_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    scene.materials[0].clearcoat_roughness_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    let (obj, mtl) = crate::obj::write_with_mtl(&scene, "cube.mtl", &Limits::default()).unwrap();
+    assert!(obj.contains("mtllib cube.mtl\n"));
+    assert!(mtl.contains("map_Pc coat.png\n") && mtl.contains("map_Pcr coat.png\n"), "{mtl}");
 }

@@ -79,3 +79,45 @@ proptest! {
         }
     }
 }
+
+/// Missing padding is opt-in; other canonical validation stays unchanged.
+#[test]
+fn optional_padding_keeps_alphabet_placement_and_tail_bit_checks() {
+    for cfg in CONFIGS {
+        for (input, expected) in [("", ""), ("Zg", "f"), ("Zg=", "f"), ("Zg==", "f"), ("Zm8", "fo"), ("Zm8=", "fo"), ("Zm9v", "foo")] {
+            assert_eq!(cfg.decode_optional_padding(input).unwrap(), expected.as_bytes());
+        }
+        for bad in ["=", "====", "Z", "Z===", "Zg===", "Zm8==", "Zm9v=", "QQ==QUJD", "Zm=v", "Zh", "Zh=", "Zh==", "Zm9", "Zm9=", "Zg\n", " Zg", "é"]
+        {
+            assert!(cfg.decode_optional_padding(bad).is_err(), "{cfg:?}: {bad:?}");
+        }
+    }
+    assert_eq!(STANDARD.decode_optional_padding("+/8").unwrap(), [251, 255]);
+    assert_eq!(URL_SAFE.decode_optional_padding("-_8=").unwrap(), [251, 255]);
+    assert!(STANDARD.decode_optional_padding("-_8=").is_err());
+    assert!(URL_SAFE.decode_optional_padding("+/8=").is_err());
+    assert!(STANDARD.decode("Zg=").is_err());
+    assert!(STANDARD_NO_PAD.decode("Zg==").is_err());
+}
+
+proptest! {
+    #[test]
+    fn optional_padding_accepts_only_a_suffix_of_required_padding(
+        data in proptest::collection::vec(any::<u8>(), 0..400),
+        junk in proptest::collection::vec(any::<u8>(), 0..128),
+    ) {
+        for cfg in [STANDARD, URL_SAFE] {
+            let encoded = cfg.encode(&data);
+            let bare = encoded.trim_end_matches('=');
+            for length in bare.len()..=encoded.len() {
+                prop_assert_eq!(cfg.decode_optional_padding(&encoded[..length]).ok(), Some(data.clone()));
+            }
+            if let Ok(decoded) = cfg.decode_optional_padding(&junk) {
+                let canonical = cfg.encode(decoded);
+                let bare = canonical.trim_end_matches('=');
+                prop_assert!(junk.len() >= bare.len() && junk.len() <= canonical.len());
+                prop_assert_eq!(canonical.as_bytes().get(..junk.len()), Some(junk.as_slice()));
+            }
+        }
+    }
+}

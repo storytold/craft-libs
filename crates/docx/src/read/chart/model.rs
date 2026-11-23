@@ -7,6 +7,33 @@ pub(super) struct DataLabel {
     pub(super) y: f32,
     pub(super) text: String,
     pub(super) inside: bool,
+    /// Where a label that is not `inside` sits relative to (`x`, `y`).
+    pub(super) pos: LabelPos,
+    /// Distance from (`x`, `y`) to the label for `pos` other than `Center`, points (half the marker).
+    pub(super) off: f32,
+}
+
+/// Where a data label sits beside its point (`c:dLblPos`: `t`, `b`, `l`, `r`, `ctr`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LabelPos {
+    Above,
+    Below,
+    Left,
+    Right,
+    Center,
+}
+
+impl LabelPos {
+    pub(super) fn parse(v: &str) -> Option<LabelPos> {
+        Some(match v.trim() {
+            "t" => LabelPos::Above,
+            "b" => LabelPos::Below,
+            "l" => LabelPos::Left,
+            "r" => LabelPos::Right,
+            "ctr" => LabelPos::Center,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,16 +79,56 @@ pub(super) enum Pos {
 
 /// One value axis (or category axis) as the file states it.
 #[derive(Default)]
-pub(super) struct Axis {
-    pub(super) deleted: bool,
-    pub(super) grid: bool,
-    pub(super) line: bool,
+pub(crate) struct Axis {
+    pub(crate) deleted: bool,
+    pub(crate) grid: bool,
+    pub(crate) line: bool,
     /// `c:crossBetween val="midCat"`: categories sit on the tick marks, not between them.
     pub(super) mid: bool,
-    pub(super) min: Option<f64>,
-    pub(super) max: Option<f64>,
+    pub(crate) min: Option<f64>,
+    pub(crate) max: Option<f64>,
     /// Number format of the tick labels, when not linked to the source data.
-    pub(super) fmt: Option<String>,
+    pub(crate) fmt: Option<String>,
+    /// The axis title, when the file gives it one.
+    pub(crate) title: Option<String>,
+    /// The title's `a:bodyPr/@rot` in degrees clockwise (`-5400000` is 90° counter-clockwise),
+    /// when the file gives one.
+    pub(crate) title_rot: Option<f32>,
+    /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
+    /// them, as Word does).
+    pub(crate) labels: bool,
+}
+
+/// The shape of a series' point markers (`ST_MarkerStyle`, ECMA-376 §21.2.3.28).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(super) enum Symbol {
+    #[default]
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+    X,
+    Plus,
+    Star,
+    Dash,
+    Dot,
+}
+
+impl Symbol {
+    /// The symbol a `c:symbol` value names; anything unknown (`auto`, `picture`) is a circle.
+    pub(super) fn parse(name: &str) -> Symbol {
+        match name {
+            "square" => Symbol::Square,
+            "diamond" => Symbol::Diamond,
+            "triangle" => Symbol::Triangle,
+            "x" => Symbol::X,
+            "plus" => Symbol::Plus,
+            "star" => Symbol::Star,
+            "dash" => Symbol::Dash,
+            "dot" => Symbol::Dot,
+            _ => Symbol::Circle,
+        }
+    }
 }
 
 pub(super) struct Series {
@@ -70,9 +137,21 @@ pub(super) struct Series {
     /// when missing or not a valid number.
     pub(super) idx: Option<usize>,
     pub(super) color: Option<Rgb>,
-    pub(super) line_w: f32,
+    /// Fixed line width in points, `None`: the chart's default.
+    pub(super) line_w: Option<f32>,
     /// Whether the series is drawn as a line (scatter series without one get markers).
     pub(super) line: bool,
+    /// The series' own fill: `Some` colour, `None` colour with `no_fill` set, else the chart's
+    /// accent for the series.
+    pub(super) no_fill: bool,
+    /// Markers on the series' points, when the file says.
+    pub(super) markers: Option<bool>,
+    /// The marker shape (`c:marker/c:symbol`; a circle when missing or unknown) and its size in
+    /// points (`c:marker/c:size`), when the file gives one.
+    pub(super) symbol: Symbol,
+    pub(super) marker_size: Option<f32>,
+    /// Draw the series' line as a smooth curve (`c:smooth`).
+    pub(super) smooth: bool,
     pub(super) values: Vec<Option<f64>>,
     /// Scatter x values (index + 1 when the file has none).
     pub(super) xs: Vec<Option<f64>>,
@@ -83,6 +162,13 @@ pub(super) struct Series {
     pub(super) x_fmt: Option<String>,
     /// Data labels on or off for this series (`c:dLbls` of its own), when it says.
     pub(super) labels: Option<bool>,
+    /// The labels' number format (`c:dLbls/c:numFmt`): `None` when not given (the chart type's
+    /// applies), `Some(None)` when linked to the source, else `Some(Some(code))`.
+    pub(super) label_fmt: Option<Option<String>>,
+    /// The data labels' `c:dLblPos`, when the file gives a known one.
+    pub(super) label_pos: Option<LabelPos>,
+    /// The marker's own fill (`c:marker/c:spPr`); without it markers take the automatic colour.
+    pub(super) marker_color: Option<Rgb>,
     /// The values as the file has them, for data labels (`values` become shares in a 100%
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,

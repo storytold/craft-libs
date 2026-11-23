@@ -3,14 +3,20 @@
 //! DXF is a sequence of (group code, value) pairs. This crate parses ASCII and binary DXF into a
 //! flat list of [`Tag`]s, splits them into sections and entities, and writes tags back. [`model`]
 //! reads the tags as a drawing (header variables, tables, blocks, entities, objects); mapping
-//! that onto an application's own document is left to the caller. Written from Autodesk's
+//! that onto an application's own document is left to the caller. [`drawing`] writes an ASCII
+//! file around a pre-built `ENTITIES` section (VectorCraft's writer). Written from Autodesk's
 //! published DXF Reference; depends on no other Craft crate. Moved from CADCraft's `cadcraft-dxf`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
 
+pub mod drawing;
+pub mod lin_pat;
 pub mod model;
+pub mod mtext;
+pub mod mtext_tokens;
+pub mod paths;
 mod version;
 pub use version::Version;
 
@@ -194,8 +200,9 @@ pub use codepage::decode_code_page;
 /// # Errors
 ///
 /// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
-/// truncated binary data, or more than [`MAX_TAGS`] group codes. For ASCII input, invalid numeric
-/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
+/// truncated binary data, or more group codes than the limit returned by [`max_tags()`], which is
+/// [`MAX_TAGS`] by default. For ASCII input, invalid numeric text becomes `0.0` for real values or
+/// `0` for integer values, and an EOF tag is not required.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }
@@ -768,7 +775,7 @@ fn ascii(tags: &[Tag], strings: Strings) -> Vec<u8> {
 /// Write tags as binary DXF (DXF Reference, "Binary DXF Files", R13+ layout): the sentinel,
 /// then per tag a 2-byte little-endian group code and the value in the binary form of the code's
 /// [`Kind`]: a zero-terminated string, an 8-byte real, a 2-, 4- or 8-byte integer, a 1-byte
-/// boolean, or a binary chunk (one length byte, then up to 255 bytes; longer data is split into
+/// boolean, or a binary chunk (one length byte, then up to 127 bytes; longer data is split into
 /// several groups of the same code). Strings are UTF-8 when `utf8` (R2007+), otherwise escaped as
 /// in [`write_ascii`]. A tag's value is converted to its code's kind, so a number written as text
 /// is stored as a number; a code outside the 16-bit range is skipped.
@@ -822,8 +829,8 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
             }
             Kind::Hex => {
                 let bytes = hex_bytes(&t.value.as_str());
-                // An empty chunk is still one group, as in ASCII.
-                let mut chunks: Vec<&[u8]> = bytes.chunks(255).collect();
+                // At most 127 bytes per group, as in ASCII; an empty chunk is still one group.
+                let mut chunks: Vec<&[u8]> = bytes.chunks(127).collect();
                 if chunks.is_empty() {
                     chunks.push(&[]);
                 }

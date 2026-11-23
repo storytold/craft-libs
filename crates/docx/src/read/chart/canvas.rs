@@ -41,8 +41,13 @@ pub(super) fn widest(items: &[String], size: f32) -> f32 {
     items.iter().map(|s| text_w(s, size)).fold(0.0, f32::max)
 }
 
+/// Text in `rect`; `angle` degrees clockwise turns it about the rect's centre (axis titles).
 pub(super) fn text(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, align: TextAlign, bold: bool) {
-    out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color: TEXT, bold, align, font: None });
+    text_angle(out, rect, s, size, align, bold, 0.0);
+}
+
+pub(super) fn text_angle(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, align: TextAlign, bold: bool, angle: f32) {
+    out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color: TEXT, bold, align, font: None, angle });
 }
 
 /// Text centred on `cx` with its top at `y`.
@@ -64,7 +69,14 @@ pub(super) fn stroke(out: &mut Vec<GraphicItem>, segs: Vec<PathSeg>, color: Rgb,
 }
 
 fn swatch(out: &mut Vec<GraphicItem>, x: f32, y: f32, color: Rgb) {
-    out.push(GraphicItem::Shape { rect: [x, y, SWATCH, SWATCH], kind: ShapeKind::Rectangle, fill: Some(color), stroke: None, stroke_width: 0.0 });
+    out.push(GraphicItem::Shape {
+        rect: [x, y, SWATCH, SWATCH],
+        kind: ShapeKind::Rectangle,
+        fill: Some(color),
+        stroke: None,
+        stroke_width: 0.0,
+        alpha: 1.0,
+    });
 }
 
 pub(super) fn seg(x0: f32, y0: f32, x1: f32, y1: f32) -> Vec<PathSeg> {

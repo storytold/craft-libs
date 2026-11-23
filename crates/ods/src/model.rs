@@ -105,6 +105,9 @@ pub struct Sheet {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
+    /// [`Options::truncate_text`](crate::Options::truncate_text) cut the text short: the cells
+    /// after the point where it passed `max_text` were left out.
+    pub text_truncated: bool,
 }
 
 fn digits(s: &str) -> Option<&str> {
