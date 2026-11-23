@@ -51,7 +51,8 @@ pub use error::VideoError;
     feature = "dnx",
     feature = "apv-decode",
     feature = "ffv1",
-    feature = "vp8-decode"
+    feature = "vp8-decode",
+    feature = "mjpeg"
 ))]
 mod track;
 #[cfg(any(
@@ -64,7 +65,8 @@ mod track;
     feature = "dnx",
     feature = "apv-decode",
     feature = "ffv1",
-    feature = "vp8-decode"
+    feature = "vp8-decode",
+    feature = "mjpeg"
 ))]
 pub use track::{TrackDecoder, TrackDecoderOptions};
 
