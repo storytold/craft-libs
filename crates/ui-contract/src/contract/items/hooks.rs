@@ -979,8 +979,10 @@ fn scroll_rows(core: &mut CxCore<'_>, rect: Rect, scrolls: bool, mut offset: f64
     // The moves are taken once, in the real run (peeked while measuring). A control in a row left a page or end move
     // untaken: the collection, its rows' scroll owner, pages the rows.
     let view = f64::from(rect.height());
-    let mut unpaged = Vec::new();
-    for (mv, mods) in crate::contract::steps::scroll_moves(&ctx, id, quiet) {
+    // A region's fallback collection (F-116) takes every move its region passed it as its own keys, page and end
+    // included (L-319); the page and end moves a control in the rows left page the rows.
+    let (scrolled, mut unpaged) = crate::contract::steps::scroll_and_fallback_moves(&ctx, id, quiet);
+    for (mv, mods) in scrolled {
         let span = ScrollSpan::new(0.0..maximum + view, offset..offset + view);
         match craft_behavior::scroll::jump(&span, mv).filter(|_| scrolls) {
             Some(range) => offset = range.start,

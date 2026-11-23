@@ -17,7 +17,7 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
             moves.push(mv);
         }
         if !moves.is_empty() {
-            pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.drain(..).map(|(mv, mods)| (collection, mv, mods))));
+            pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.drain(..).map(|(mv, mods)| (collection, mv, mods, true))));
             repaint::request(&core.ctx);
         }
     }
@@ -29,7 +29,7 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
         return;
     }
     let Some(owner) = core.env.scroll_owner() else { return };
-    pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods))));
+    pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods, false))));
     if reveal {
         pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));
     }
@@ -124,16 +124,34 @@ pub(crate) fn child_reveal(ctx: &Context, owner: Id, quiet: bool) -> Option<Id> 
 /// A page or end move a focused component left untaken, with its modifiers, addressed to the scroll owner around it
 /// (9.2 rule 5).
 #[derive(Default)]
-pub(crate) struct ScrollMoves(Vec<(Id, NavMove, MoveMods)>);
+/// Each move carries whether it came through a region's fallback collection (`ContainerProps::fallback_collection`).
+pub(crate) struct ScrollMoves(Vec<(Id, NavMove, MoveMods, bool)>);
 
 /// The scroll moves addressed to `owner`, in the order they arrived: taken, or left queued when `quiet`.
 pub(crate) fn scroll_moves(ctx: &Context, owner: Id, quiet: bool) -> Vec<(NavMove, MoveMods)> {
     pass_state::with::<ScrollMoves, _>(ctx, |moves| {
-        let mine = moves.0.iter().filter(|(id, ..)| *id == owner).map(|(_, mv, mods)| (*mv, *mods)).collect();
+        let mine = moves.0.iter().filter(|(id, ..)| *id == owner).map(|(_, mv, mods, _)| (*mv, *mods)).collect();
         if !quiet {
             moves.0.retain(|(id, ..)| *id != owner);
         }
         mine
+    })
+}
+
+/// [`scroll_moves`] apart: the page and end moves a component inside left for its scroll owner, and the moves a
+/// region's fallback collection takes as its own keys (every move, page and end included, L-319).
+pub(crate) fn scroll_and_fallback_moves(ctx: &Context, owner: Id, quiet: bool) -> (Vec<(NavMove, MoveMods)>, Vec<(NavMove, MoveMods)>) {
+    pass_state::with::<ScrollMoves, _>(ctx, |moves| {
+        let (mut scrolls, mut fallback) = (Vec::new(), Vec::new());
+        for &(id, mv, mods, through_fallback) in &moves.0 {
+            if id == owner {
+                if through_fallback { fallback.push((mv, mods)) } else { scrolls.push((mv, mods)) }
+            }
+        }
+        if !quiet {
+            moves.0.retain(|(id, ..)| *id != owner);
+        }
+        (scrolls, fallback)
     })
 }
 
