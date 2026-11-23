@@ -5,7 +5,7 @@
 
 use craft_behavior::{EditCommand, Input};
 use craft_keymap::{Chord, Key as ChordKey, Mods, Overrides};
-use craft_ui::runtime::commands::{ChromeCommand, CommandInput, CommandSet as _};
+use craft_ui::runtime::commands::{AppCatalog, Binding, ChromeCommand, CommandDef, CommandInput, CommandSet as _, EditCommands, Scope, TypingRule};
 use craft_ui::runtime::focus::{FocusTarget, KeyUse, request};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::focus::{Stop, intents_of, key_release, named_id, register_stop, widget};
@@ -129,4 +129,22 @@ fn a_cut_with_shift_held_is_the_apps_chord() {
     assert!(field.borrow().edits.is_empty(), "the field cut nothing: {:?}", field.borrow().edits);
     assert!(!ran(&mut frames, &mut show, &field, vec![Event::ModifiersChanged(Modifiers::COMMAND), Event::Cut]), "Cmd+X runs no command");
     assert_eq!(field.borrow().edits, [EditCommand::Cut], "a plain Cut is the field's");
+}
+
+/// An app's alternate key for Cut (F2) is no edit of a focused field: under a typing rule that fires nothing while
+/// typing it leaves the field alone, while the platform's Cmd+X still cuts. Guards against a key stage that gave a
+/// field every binding of an edit command, the app's function-key aliases included.
+#[trial]
+fn an_apps_alternate_edit_key_is_no_field_edit() {
+    let field = RefCell::new(Field::default());
+    let alternate = CommandDef::new(EditCommands::Cut, "Cut", Scope::app()).with_default(Binding::parse("F2").expect("the trial's chord parses"));
+    let catalog = AppCatalog::new(vec![alternate], 1).expect("the trial's catalog is valid").typing_rule(TypingRule::AllWait);
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog));
+    let mut show = window(&field);
+    settle(&mut frames, &mut show, true);
+    ran(&mut frames, &mut show, &field, vec![key_press(Key::F2, Modifiers::NONE), key_release(Key::F2, Modifiers::NONE)]);
+    assert!(field.borrow().edits.is_empty(), "F2 cut nothing in the field: {:?}", field.borrow().edits);
+    ran(&mut frames, &mut show, &field, vec![key_press(Key::X, Modifiers::COMMAND), key_release(Key::X, Modifiers::COMMAND)]);
+    assert_eq!(field.borrow().edits, [EditCommand::Cut], "the platform's Cmd+X is the field's Cut");
 }

@@ -1040,10 +1040,15 @@ fn build_keymap(
         // Delete's keys (Delete, Backspace) stay a focused text part's own deletion, which also deletes one character.
         .filter(|(edit, _)| *edit != EditCommand::Delete)
         .flat_map(|(edit, command)| {
+            // Only the platform's own text-editing chords: an app's alternate key (F4 for Paste) is a command key,
+            // which the typing rule decides on, as a text field elsewhere on the platform ignores it.
             keymap
                 .bindings(command)
                 .into_iter()
-                .filter(|binding| binding.trigger.press == PressKind::Single)
+                .filter(|binding| {
+                    binding.trigger.press == PressKind::Single
+                        && craft_keymap::text_editing_chords(platform).contains(&binding.trigger.chord.effective(platform))
+                })
                 .map(move |binding| (edit, binding.trigger.chord))
         })
         .collect();

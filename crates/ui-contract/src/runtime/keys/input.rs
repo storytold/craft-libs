@@ -27,7 +27,7 @@ struct Strip<'a> {
     press_captured: bool,
     claims: &'a [Chord],
     edits: &'a dyn Fn(EditCommand) -> bool,
-    /// The chords bound to the edit commands.
+    /// The chords bound to the edit commands that are the platform's text-editing chords.
     edit_chords: &'a [(EditCommand, Chord)],
     /// The chords bound to the window's keys (`commands::window_shortcuts`).
     window_shortcuts: &'a [(WindowShortcut, Chord)],
@@ -98,16 +98,14 @@ fn clip_chord(command: EditCommand, mods: Mods) -> (Key, KeyInput) {
     (key, KeyInput::new(chord_mods).with_typed(key))
 }
 
-impl Strip<'_> {
-    /// Whether a clipboard event of `command` with `mods` held is the focused editor's edit: the platform sends it for
-    /// the edit's own chord, and for Cmd with Shift or Alt too (Cmd+Shift+X), which is another chord, the app's, unless
-    /// the editor lists that chord for the edit.
-    fn clip_is_edit(&self, command: EditCommand, mods: Mods) -> bool {
-        let (_, input) = clip_chord(command, mods);
-        !((mods.cmd || mods.ctrl) && (mods.shift || mods.alt))
-            || self.edit_chords.iter().any(|(edit, chord)| *edit == command && self.layout.matches(chord, &input, self.os))
-    }
+/// Whether a clipboard event with `mods` held is the focused editor's edit: the platform sends it for the edit's own
+/// chord, and for Cmd with Shift or Alt too (Cmd+Shift+X), which is no text-editing chord but the app's (a binding of it
+/// to the edit still reaches the editor, through the command).
+fn clip_is_edit(mods: Mods) -> bool {
+    !((mods.cmd || mods.ctrl) && (mods.shift || mods.alt))
+}
 
+impl Strip<'_> {
     /// Whether the text the platform sends with the press `input` stands for is a shortcut's own and belongs to no
     /// field: Alt is held and the keymap binds the press to a command that is enabled, so it fires (S-L177). A platform
     /// sends its key's text with an Alt shortcut (Alt+Q on Linux). A bound Alt chord whose command is disabled does
@@ -201,7 +199,7 @@ impl Strip<'_> {
                 batch.egui_texts += 1;
                 true
             }
-            KeyEvent::Clip { command, text, mods } if (self.edits)(command) && self.clip_is_edit(command, mods) => {
+            KeyEvent::Clip { command, text, mods } if (self.edits)(command) && clip_is_edit(mods) => {
                 batch.clips.push((command, batch.place));
                 if text.is_some() {
                     batch.paste = text;
