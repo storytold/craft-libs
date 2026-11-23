@@ -109,7 +109,7 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, unit: Opt
                 let text = line.text.get(run.bytes.clone()).unwrap_or_default();
                 adapter::write_run(
                     ctx,
-                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths, links: &[] },
+                    &RunNode { id, parent: owner, rect: line.rect, text, rtl: run.rtl, positions: &run.positions, widths: &run.widths },
                 );
                 let index = u64::try_from(entries.len()).ok();
                 keys::register_node(ctx, id, owner, Some(PartRef { key: RUN, index }), false);

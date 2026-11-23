@@ -11,7 +11,7 @@ pub(crate) mod live;
 pub(crate) mod scope;
 pub(crate) mod text;
 
-use crate::runtime::egui::access::{self as adapter, NodeRole, RunLink};
+use crate::runtime::egui::access::{self as adapter, NodeRole};
 use crate::runtime::env::Label;
 use craft_behavior::PartRef;
 use craft_theme::{Flags, Srgba, variant::Tone};
@@ -551,7 +551,6 @@ pub struct SubNode {
     pub(crate) steps: bool,
     pub(crate) bounds: Option<egui::Rect>,
     pub(crate) run: Option<RunFacts>,
-    pub(crate) run_links: Vec<RunLink>,
 }
 
 impl SubNode {
@@ -583,7 +582,6 @@ impl SubNode {
             steps: false,
             bounds: None,
             run: None,
-            run_links: Vec::new(),
         }
     }
 
@@ -600,14 +598,6 @@ impl SubNode {
     /// a valid end of [`Access::text_selection`].
     pub fn text_run(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, rtl: bool) -> &mut Self {
         self.run = Some(RunFacts { text: text.into(), positions, widths, rtl });
-        self
-    }
-
-    /// Marks characters `chars` of a [text run](Self::text_run) as a link to `target`: the run node gets a `Link`
-    /// child named by those characters, bounded by their extent on the line. Indices count characters, as
-    /// `positions` and `widths` do. A link on a node that is not a run is not emitted.
-    pub fn run_link(&mut self, chars: std::ops::Range<usize>, target: impl Into<String>) -> &mut Self {
-        self.run_links.push(RunLink { chars, target: target.into() });
         self
     }
 

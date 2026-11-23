@@ -1,7 +1,7 @@
 //! `Link`: text in the accent colour, always underlined, that reports a click.
 
 use super::ButtonOutput;
-use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Pointer as _, Role, Styled as _};
+use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, PaintUi, PartsCx, Pointer as _, Role, Styled as _};
 use crate::primitives::{Span, TextLayout, TextRun, Wrap};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, FocusLook, Stateful, StyleCx, TextLook, TypeRole};
@@ -11,7 +11,8 @@ use craft_theme::variant::Tone;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::Range;
 
-/// The part a link in a sentence takes the pointer on, one per row the link's characters cover.
+/// The part a link in a sentence takes the pointer on, one per row the link's characters cover, and its `Link` node
+/// below the row's run.
 const LINK: PartKey = PartKey::new("link");
 
 /// The access node of one row of a link's sentence.
@@ -48,13 +49,13 @@ struct LaidLine {
     positions: Vec<f32>,
     widths: Vec<f32>,
     bounds: Rect,
-    /// The link's characters in this row, when it covers some.
-    link: Option<Range<usize>>,
+    /// The link's characters in this row and their rect, when it covers some.
+    link: Option<(Range<usize>, Rect)>,
 }
 
 /// A link: drawn in the accent colour in a type role (body by default) and underlined, so colour is not its only cue.
 /// A click, Enter or Space opens the URL in the same tab; a middle click, or a click with a modifier held, opens it in a new tab. The caller can also act on `clicked()`. AccessKit reports the role `Link`, with the URL when
-/// it has one.
+/// it has one; in a sentence the node is the paragraph, and the link is a `Link` node below each run it covers.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Link {
     #[common]
@@ -127,6 +128,7 @@ fn origin(content: Rect, flow: &Flow, layout: &TextLayout) -> Pos2 {
 
 impl Component for Link {
     const ROLE: Role = Role::LINK;
+    const ALT_ROLES: &'static [Role] = &[Role::PARAGRAPH];
     const PARTS: bool = true;
     const OVERLAYS: bool = false;
     type Style = LinkStyle;
@@ -176,7 +178,6 @@ impl Component for Link {
         let from = before.chars().count();
         let chars = from..from + label.chars().count();
         let origin = origin(cx.content_rect, &cx.flow, &layout).to_vec2();
-        let mut rects = Vec::new();
         let mut lines = Vec::new();
         let mut first = 0;
         for (text, row, runs) in layout.row_lines() {
@@ -186,23 +187,17 @@ impl Component for Link {
             let (start, end) = (chars.start.max(first), chars.end.min(first + count));
             let covered = positions.iter().zip(&widths).skip(start.saturating_sub(first)).take(end.saturating_sub(start));
             let (left, right) = covered.fold((f32::INFINITY, f32::NEG_INFINITY), |(left, right), (at, width)| (left.min(*at), right.max(at + width)));
-            let covers = left < right;
-            if covers {
+            let link = (left < right).then(|| {
                 let (min, max) = (Pos2::new(row.min.x + left, row.min.y), Pos2::new(row.min.x + right, row.max.y));
-                rects.push(Rect::from_min_max(min, max).translate(origin));
-            }
-            lines.push(LaidLine {
-                text,
-                positions,
-                widths,
-                bounds: row.translate(origin),
-                link: covers.then(|| start.saturating_sub(first)..end - first),
+                (start - first..end - first, Rect::from_min_max(min, max).translate(origin))
             });
+            lines.push(LaidLine { text, positions, widths, bounds: row.translate(origin), link });
             first += count;
         }
-        self.laid.rows = rects.len() as u64;
         self.laid.rtl = cx.flow.is_rtl();
         self.laid.lines = lines;
+        let rects: Vec<Rect> = self.laid.lines.iter().filter_map(|line| line.link.as_ref().map(|(_, rect)| *rect)).collect();
+        self.laid.rows = rects.len() as u64;
         // PLAN: a middle click on a part has no reader in `Cx`, so a link in a sentence opens in a new tab only with a modifier.
         for (row, rect) in rects.into_iter().enumerate() {
             let part = cx.part(LINK.at(row as u64), rect).cursor(CursorIcon::PointingHand);
@@ -229,22 +224,28 @@ impl Component for Link {
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
-        let url = self.url.as_deref();
-        if let Some(url) = url {
+        if self.sentence.is_some() {
+            // The paragraph is named by its text, so the link's name is its own `Link` node's alone.
+            access.role(Role::PARAGRAPH).name(Name::Text(self.laid.lines.iter().map(|line| line.text.as_str()).collect()));
+        } else if let Some(url) = &self.url {
             access.url(url);
         }
-        // A run node holds one line, so each row has its own, its offsets from its own left edge.
+        // A run node holds one line, so each row has its own, its offsets from its own left edge. The link's characters
+        // on it are the `Link` node of their part, which takes focus and the click.
+        let mut piece = 0;
         for (row, line) in self.laid.lines.iter().enumerate() {
-            let node = access.node(LINE.at(row as u64), Role::TEXT_RUN).text_run(
-                line.text.clone(),
-                line.positions.clone(),
-                line.widths.clone(),
-                self.laid.rtl,
-            );
-            node.bounds(line.bounds);
-            if let Some(chars) = &line.link {
-                node.run_link(chars.clone(), url.unwrap_or_default());
+            let run = LINE.at(row as u64);
+            access
+                .node(run, Role::TEXT_RUN)
+                .text_run(line.text.clone(), line.positions.clone(), line.widths.clone(), self.laid.rtl)
+                .bounds(line.bounds);
+            let Some((chars, rect)) = &line.link else { continue };
+            let node = access.node(LINK.at(piece), Role::LINK).under(run).bounds(*rect);
+            node.name = Name::Text(line.text.chars().skip(chars.start).take(chars.len()).collect());
+            if let Some(url) = &self.url {
+                node.url(url.clone());
             }
+            piece += 1;
         }
     }
 
