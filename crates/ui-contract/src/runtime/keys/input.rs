@@ -35,6 +35,8 @@ struct Strip<'a> {
     /// The registered bar takes only the Alt+letter chords it claims (`FocusedRecord::menu_bar_by_claim`): every other
     /// Alt+letter is an ordinary press.
     menu_bar_by_claim: bool,
+    /// The registered bar holds the focus (F10 or a lone Alt gave it a title) with no menu open.
+    bar_focused: bool,
     /// The focused stop holds drafts (`KeyUse::holds_drafts`): a lone Alt alerts instead of focusing the menu bar.
     holds_drafts: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
@@ -87,6 +89,7 @@ impl Strip<'_> {
                 alt.other_key = true;
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
+                let menu_keys = batch.menu.len();
                 let shortcut_text = self.shortcut_text(&input);
                 let kept = self.press(batch, key, &input, repeat, at);
                 // The canvas's Space keeps its text from every field, as a claim does.
@@ -94,7 +97,8 @@ impl Strip<'_> {
                 batch.last_press = Some(LastPress {
                     input,
                     pressed: (batch.presses.len() > pushed).then_some(pushed),
-                    claimed: batch.claimed.len() > claims || canvas || shortcut_text,
+                    // A mnemonic's text (a plain letter on the focused bar) is no field's typing.
+                    claimed: batch.claimed.len() > claims || canvas || shortcut_text || batch.menu.len() > menu_keys,
                 });
                 // The release key is kept for withheld presses too: the held-over rule matches repeats by it.
                 if let Some(press) = batch.presses.get_mut(pushed) {
@@ -247,9 +251,15 @@ impl Strip<'_> {
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
         // scope escape. Over an open press any Escape is the press's cancel: a borrowed tool's drag holds Cmd.
         let escape = key == Key::Escape && (self.press_captured || (!mods.cmd && !mods.ctrl && !(self.records && !mods.is_none())));
-        // A shortcut comes before a mnemonic: an Alt+letter the keymap binds to an enabled command runs it.
-        let mnemonic =
-            self.menu_bar && !self.menu_bar_by_claim && self.os != Os::Mac && mods == Mods::ALT && key.is_letter() && !self.shortcut_text(input);
+        // A shortcut comes before a mnemonic: an Alt+letter the keymap binds to an enabled command runs it. On the
+        // focused bar a letter without Alt, Ctrl or Cmd is a title's access key, and one no title holds goes nowhere
+        // (the bar's access mode), so it runs no shortcut either.
+        let on_bar = self.bar_focused && !mods.alt && !mods.ctrl && !mods.cmd;
+        let mnemonic = self.menu_bar
+            && !self.menu_bar_by_claim
+            && self.os != Os::Mac
+            && key.is_letter()
+            && ((mods == Mods::ALT && !self.shortcut_text(input)) || on_bar);
         let edit = self.edit_chords.iter().find(|(command, chord)| (self.edits)(*command) && self.layout.matches(chord, input, self.os));
         let canvas_edit = self.canvas.is_some_and(|canvas| {
             self.edit_chords.iter().any(|(command, chord)| canvas.edits.contains(*command) && self.layout.matches(chord, input, self.os))
@@ -557,6 +567,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             window_shortcuts: &window_shortcuts,
             menu_bar,
             menu_bar_by_claim: record.menu_bar_by_claim,
+            bar_focused: record.menu_bar.is_some() && record.focused == record.menu_bar,
             holds_drafts: keys.is_some_and(|keys| keys.holds_drafts),
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
