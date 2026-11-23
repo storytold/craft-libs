@@ -308,18 +308,18 @@ fn checkboxes_are_keyboard_reachable_and_space_changes_the_accessible_checked_st
     let mut rig = rig(700.0);
     let target = rig.fixture.by_label("Histogram").expect("Histogram checkbox");
     for _ in 0..32 {
-        if rig.fixture.tree().focused_key() == target.node {
+        if craft_ui::testing::access::focused_key(rig.fixture.tree()) == target.node {
             break;
         }
         rig.fixture.key(Key::Tab, Modifiers::NONE).settle();
     }
-    assert_eq!(rig.fixture.tree().focused_key(), target.node, "Tab reaches the standard checkbox");
+    assert_eq!(craft_ui::testing::access::focused_key(rig.fixture.tree()), target.node, "Tab reaches the standard checkbox");
     rig.fixture.key(Key::Space, Modifiers::NONE).settle();
     assert!(!checked(&rig.fixture, "Histogram"));
     rig.fixture.key(Key::Space, Modifiers::NONE).settle();
     assert!(checked(&rig.fixture, "Histogram"));
     rig.fixture.key(Key::Tab, Modifiers::NONE).settle();
-    assert_ne!(rig.fixture.tree().focused_key(), target.node, "Tab leaves the checkbox without a trap");
+    assert_ne!(craft_ui::testing::access::focused_key(rig.fixture.tree()), target.node, "Tab leaves the checkbox without a trap");
 }
 
 fn underlined(shapes: &[Shape], label: &str) -> String {
@@ -332,7 +332,9 @@ fn underlined(shapes: &[Shape], label: &str) -> String {
                     .sections
                     .iter()
                     .filter(|section| section.format.underline.width > 0.0)
-                    .map(|section| text.galley.job.text[section.byte_range.clone()].to_owned())
+                    .map(|section| {
+                        text.galley.job.text[section.byte_range.start.0..section.byte_range.end.0].to_owned()
+                    })
                     .collect::<String>(),
             ),
             _ => None,
@@ -352,7 +354,17 @@ fn alt_underlines_only_the_four_translated_measured_letters_while_held() {
     }
 }
 
-type Dialog = HostedAdjustDialog<ToneCurves, ()>;
+/// The hosted dialog resets a value through Default; keep that fixture requirement local.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct DialogCurves(ToneCurves);
+
+impl Default for DialogCurves {
+    fn default() -> Self {
+        Self(curves())
+    }
+}
+
+type Dialog = HostedAdjustDialog<DialogCurves, ()>;
 
 #[trial]
 fn a_hosted_curves_dialog_keeps_the_graph_fields_and_display_controls_inside_its_bounds() {
@@ -361,8 +373,8 @@ fn a_hosted_curves_dialog_keeps_the_graph_fields_and_display_controls_inside_its
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
     fixture.room(Vec2::new(1000.0, 1000.0));
     host.borrow_mut().open(
-        Dialog::new("curve-display-options", "Curves", curves(), |ui, value, cx| {
-            CurvesPanel::new("Curves", Bind::bound(value), ToneChannels::of(ToneSpace::Rgb, false)).context(cx.context).show(ui);
+        Dialog::new("curve-display-options", "Curves", DialogCurves::default(), |ui, value, cx| {
+            CurvesPanel::new("Curves", Bind::bound(&mut value.0), ToneChannels::of(ToneSpace::Rgb, false)).context(cx.context).show(ui);
             None
         })
         .resizable(true),
