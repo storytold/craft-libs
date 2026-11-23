@@ -3,6 +3,7 @@
 use super::DockSizes;
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
+use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
 use egui::Vec2;
@@ -167,6 +168,17 @@ pub struct PanelSpec {
     /// The grid the panel lays its content in, which makes a column with steps whole content columns wide and as
     /// tall as its content. `None` for a panel that fills the width it gets.
     pub grid: Option<DockGrid>,
+    /// The panel's toggle command: an iconic cell's face is `IconButton::command` of it, so the marker and the hint
+    /// follow the command.
+    pub command: Option<CommandRef>,
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills: it stays in view while the
+    /// body scrolls.
+    pub footer: bool,
+    /// A number after the panel's name on its tab, in faint type and in its accessible name ("Comments, 3"): what
+    /// the panel lists.
+    pub count: Option<usize>,
+    /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
+    pub caption: Option<Label>,
 }
 
 impl PanelSpec {
@@ -182,7 +194,39 @@ impl PanelSpec {
             window_kind: WindowKind::Tool,
             canvas: false,
             grid: None,
+            command: None,
+            footer: false,
+            count: None,
+            caption: None,
         }
+    }
+
+    /// Shows `n` after the panel's name on its tab.
+    #[must_use]
+    pub fn count(mut self, n: usize) -> Self {
+        self.count = Some(n);
+        self
+    }
+
+    /// Shows `text` under the header row while the panel is shown.
+    #[must_use]
+    pub fn caption(mut self, text: impl Into<Label>) -> Self {
+        self.caption = Some(text.into());
+        self
+    }
+
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills.
+    #[must_use]
+    pub fn footer(mut self) -> Self {
+        self.footer = true;
+        self
+    }
+
+    /// The panel's toggle command.
+    #[must_use]
+    pub fn command(mut self, command: impl Into<CommandRef>) -> Self {
+        self.command = Some(command.into());
+        self
     }
 
     /// The panel's icon.

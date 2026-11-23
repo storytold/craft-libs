@@ -17,7 +17,7 @@ pub use segmented::{Segmented, SegmentedStyle};
 pub use switch::{Switch, SwitchStyle};
 pub use words::ChoiceWords;
 
-pub use swatch::{Swatch, SwatchFace, SwatchMetrics, SwatchOutput, SwatchShape, SwatchStyle};
+pub use swatch::{Swatch, SwatchFace, SwatchFill, SwatchImage, SwatchMetrics, SwatchOutput, SwatchShape, SwatchStyle};
 pub use swatch_table::{SwatchArrangement, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
 
 /// The well of a check box, radio button or switch track with `radius` corners: the sunken surface, so a bevelled theme
@@ -31,6 +31,23 @@ fn indicator(cx: &crate::style::StyleCx<'_>, radius: egui::CornerRadius) -> crat
         look = look.border(edge, cx.tokens.stroke.medium);
     }
     look
+}
+
+/// The well of a quiet check box: dark in either state with a thin faint edge, so the box reads over a picture and
+/// its checked state is told by the mark alone.
+fn quiet_indicator(cx: &crate::style::StyleCx<'_>, radius: egui::CornerRadius) -> crate::style::SurfaceLook {
+    use crate::style::{SurfaceKind, SurfaceLook};
+    use craft_theme::{Stateful, States};
+    let dark = cx.color(cx.tokens.color.surface.scrim);
+    let edge = cx.color(cx.tokens.color.text.faint);
+    let fill = Stateful::new(dark).off(States::new(dark, dark, dark, dark));
+    SurfaceLook::new(fill).kind(SurfaceKind::Sunken).radius(radius).border(Stateful::new(edge), cx.tokens.stroke.thin)
+}
+
+/// The mark of a quiet check box: `text.on_strong`, white in every theme, in both states: the well under it is the
+/// scrim, dark in every theme.
+fn quiet_mark(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::StyleColor> {
+    craft_theme::Stateful::new(cx.color(cx.tokens.color.text.on_strong))
 }
 
 /// The fill of a check box, radio button or switch track while off: the sunken well, the state layer's press fill while

@@ -56,10 +56,15 @@ impl BodyHooks<'_> {
         if matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow) {
             scoped.start_layer();
             let floor = super::placement::overlay_of(props).map_or(0.0, crate::contract::overlay::anchor_floor);
-            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor(floor));
+            // The anchor floors the layer's outer width; its regions have less room after the layer's padding.
+            let horizontal_padding = self.pads(props, &scoped.tokens).x;
+            scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor((floor - 2.0 * horizontal_padding).max(0.0)));
         }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
         scoped.enabled &= core.resolved.enabled;
+        if let Some(collection) = props.fallback_collection {
+            scoped.fallback_collection = Some(collection);
+        }
         if let Some(window) = window {
             scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }

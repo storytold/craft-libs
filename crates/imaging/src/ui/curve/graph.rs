@@ -4,7 +4,7 @@ use super::model::{Curve, CurveRules, follow_corners};
 use super::ramp::ToneRamp;
 use super::words::CurveWords;
 use crate::ui::histogram::{ChannelColor, HistogramData, HistogramInks, HistogramLook, PlotFrame, paint_bins, paint_frame};
-use craft_behavior::{HitLevel, HitPriority, Input, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense};
+use craft_behavior::{HitLevel, HitPriority, Input, Metrics, NavMove, PartKey, PointerButton, PressPhase, PressState, Sense};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx,
@@ -23,6 +23,9 @@ use std::rc::Rc;
 pub(super) const PLOT: PartKey = PartKey::new("plot");
 /// A point: one accessible node each, `POINT.at(i)`.
 const POINT: PartKey = PartKey::new("point");
+/// A press within this many hit targets of a point grabs it instead of adding a new one; it is the one grab radius of
+/// every host of the graph and follows density with `size.hit.target`.
+const GRAB_TARGETS: f32 = 2.0;
 
 /// The keys a focused graph keeps from the shortcut dispatcher while it shows points. `+` also arrives as Shift with `=`.
 const PLUS: [Chord; 3] = [Chord::plain(Key::Plus), Chord::plain(Key::Equals), Chord::new(Mods::SHIFT, Key::Equals)];
@@ -224,7 +227,7 @@ pub struct CurveGraphStyle {
     /// Thickness of the tone bars and the gap between them and the plot.
     bar: f32,
     bar_gap: f32,
-    /// Radius around a point that takes a press.
+    /// Radius around a point that takes a press: `GRAB_TARGETS` hit targets.
     hit: f32,
     /// How far outside the plot a dragged interior point is removed.
     drag_off: f32,
@@ -443,6 +446,17 @@ impl<'a> CurveGraph<'a> {
     }
 }
 
+/// The press this pass: the plot's, else the one on a point part. A press on a point's area outside the plot is
+/// delivered to the point, and both go through the same code, which picks the nearest point within the radius.
+fn press_of(cx: &Cx<'_, CurveGraph<'_>>, points: usize) -> PressState {
+    let plot = cx.part(PLOT).press;
+    let active = |press: &PressState| !matches!(press.phase, PressPhase::Idle | PressPhase::Hover);
+    if active(&plot) {
+        return plot;
+    }
+    (0..points as u64).map(|i| cx.part(POINT.at(i)).press).find(active).unwrap_or(plot)
+}
+
 /// The pointer's effect on the points while a point is dragged: the curve after the pointer moved to `pos`, or `None`
 /// when nothing changed.
 fn follow(rules: &CurveRules, map: Map, reach: f32, curve: &Curve, drag: &mut Drag, pos: Pos2, selected: &mut Option<usize>) -> Option<Curve> {
@@ -504,7 +518,7 @@ impl Component for CurveGraph<'_> {
             most: (tokens.size.plot.width * MOST_IN_PLOTS).max(least),
             bar: tokens.size.icon.sm,
             bar_gap: tokens.space.gap.inline,
-            hit: tokens.size.hit.target,
+            hit: tokens.size.hit.target * GRAB_TARGETS,
             drag_off: tokens.size.icon.sm + tokens.space.gap.inline,
             handle: tokens.size.handle.md,
             point_fill: cx.color(colors.surface.sunken),
@@ -532,8 +546,11 @@ impl Component for CurveGraph<'_> {
         let shown = cx.value().cloned();
         if let (true, Some(points)) = (self.points_mode(shown.as_ref()), shown.as_ref().and_then(Curve::points)) {
             for (i, p) in points.iter().enumerate() {
-                let reach = Rect::from_center_size(frame.map.screen(*p), Vec2::splat(cx.style.hit));
-                cx.part(POINT.at(i as u64), reach).sense(Sense::empty()).priority(HitPriority::new(HitLevel::Body, 0));
+                let reach = Rect::from_center_size(frame.map.screen(*p), Vec2::splat(2.0 * cx.style.hit));
+                cx.part(POINT.at(i as u64), reach)
+                    .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+                    .priority(HitPriority::new(HitLevel::Body, 0))
+                    .pointer_only("the plot's point keys select and move the points");
             }
         }
     }
@@ -560,8 +577,9 @@ impl Component for CurveGraph<'_> {
         };
         selected = selected.filter(|&i| i < count);
         let rules = self.rules();
-        let reach = cx.style.look.pad + cx.style.drag_off;
-        let press = cx.part(PLOT).press;
+        // Never less than the grab radius: a press that grabs a point is never also dragged off.
+        let reach = (cx.style.look.pad + cx.style.drag_off).max(cx.style.hit);
+        let press = press_of(cx, count);
         let running = cx.gesture().is_some();
         let mut held = cx.memory::<Held>().clone();
         if let Some(drag) = held.drag

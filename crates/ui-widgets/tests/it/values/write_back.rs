@@ -100,3 +100,25 @@ fn a_slider_fields_drag_survives_a_float32_write_back() {
     assert_eq!(events.iter().filter(|event| matches!(event, EditEvent::Commit { .. })).count(), 1, "one commit: {events:?}");
     assert!((f64::from(*doc.borrow()) - 0.5).abs() > 0.01, "the drag moved the value");
 }
+
+#[trial]
+fn typed_slider_value_keeps_precision_independent_of_step() {
+    use craft_ui::form::SliderField;
+    use craft_ui::testing::Fixture;
+    use egui::{Key, Modifiers};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let value = Rc::new(Cell::new(20.0));
+    let held = Rc::clone(&value);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        SliderField::new("Size", Bind::bound(&mut now), 0.0..=100.0).step(1.0).typed_decimals(4).show(ui);
+        held.set(now);
+    });
+    fixture.settle();
+    let field = fixture.by_label("Size").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("36.1231");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!((value.get() - 36.1231_f64).abs() < 0.00001, "typed value: {}", value.get());
+}

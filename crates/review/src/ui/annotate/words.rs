@@ -1,5 +1,9 @@
 //! The toolbar's words and the annotation commands.
 
+use std::borrow::Cow;
+
+use craft_ui::runtime::commands::CommandState;
+
 use crate::annotate::{AnnotationGroup, AnnotationKind, AnnotationTool};
 
 /// The colours the toolbar offers, Acrobat's quick colours for comments: yellow, orange, red, pink, purple, blue,
@@ -37,6 +41,7 @@ craft_ui::words! {
         kind_callout: "annotate.kindCallout" = "Callout";
         kind_attach: "annotate.kindAttach" = "Attachment";
         kind_highlight: "annotate.kindHighlight" = "Highlight";
+        kind_freehand_highlight: "annotate.kindFreehandHighlight" = "Freehand-Highlight";
         kind_underline: "annotate.kindUnderline" = "Underline";
         kind_strike_out: "annotate.kindStrikeOut" = "Strikethrough";
         kind_squiggly: "annotate.kindSquiggly" = "Squiggly";
@@ -92,6 +97,7 @@ impl AnnotateWords {
             K::Callout => self.kind_callout.as_str(),
             K::Attach => self.kind_attach.as_str(),
             K::Highlight => self.kind_highlight.as_str(),
+            K::FreehandHighlight => self.kind_freehand_highlight.as_str(),
             K::Underline => self.kind_underline.as_str(),
             K::StrikeOut => self.kind_strike_out.as_str(),
             K::Squiggly => self.kind_squiggly.as_str(),
@@ -159,6 +165,9 @@ pub enum AnnotateCommand {
     /// Highlight page text.
     #[command(label = "Highlight", icon = "brush")]
     Highlight,
+    /// Highlight freehand.
+    #[command(label = "Freehand-Highlight", icon = "brush")]
+    FreehandHighlight,
     /// Underline page text.
     #[command(label = "Underline", icon = "text_underline")]
     Underline,
@@ -219,6 +228,7 @@ impl AnnotateCommand {
                 K::Callout => AnnotateCommand::Callout,
                 K::Attach => AnnotateCommand::Attach,
                 K::Highlight => AnnotateCommand::Highlight,
+                K::FreehandHighlight => AnnotateCommand::FreehandHighlight,
                 K::Underline => AnnotateCommand::Underline,
                 K::StrikeOut => AnnotateCommand::StrikeOut,
                 K::Squiggly => AnnotateCommand::Squiggly,
@@ -234,5 +244,47 @@ impl AnnotateCommand {
                 K::Cloud => AnnotateCommand::Cloud,
             },
         }
+    }
+
+    /// The command's state with the icon `icons` names for it: `CommandState::new()` with `icon` set when `icons` has
+    /// one. Every surface showing the command reads the icon from its resolved state, so this is the one place an
+    /// app's glyph reaches the toolbar, its flyouts, the palette and menus.
+    pub fn state(self, icons: &AnnotateIcons) -> CommandState {
+        match icons.icon(self) {
+            // PLAN: assumed CommandState::icon(self, icon: impl Into<Cow<'static, str>>) -> Self (pdf-chrome-w1)
+            Some(icon) => CommandState::new().icon(icon.to_owned()),
+            None => CommandState::new(),
+        }
+    }
+}
+
+/// The icon an app gives each annotate command, by catalogue name or by the name of a registered app set; a command
+/// the set does not name keeps its framework icon.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AnnotateIcons {
+    icons: Vec<(AnnotateCommand, Cow<'static, str>)>,
+}
+
+impl AnnotateIcons {
+    /// A set that names no icon.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The set with `icon` for `command`, in place of any icon it named for it before.
+    #[must_use]
+    pub fn with(mut self, command: AnnotateCommand, icon: impl Into<Cow<'static, str>>) -> Self {
+        let icon = icon.into();
+        match self.icons.iter_mut().find(|(held, _)| *held == command) {
+            Some(entry) => entry.1 = icon,
+            None => self.icons.push((command, icon)),
+        }
+        self
+    }
+
+    /// The icon the set names for `command`, if any.
+    pub fn icon(&self, command: AnnotateCommand) -> Option<&str> {
+        self.icons.iter().find(|(held, _)| *held == command).map(|(_, icon)| icon.as_ref())
     }
 }

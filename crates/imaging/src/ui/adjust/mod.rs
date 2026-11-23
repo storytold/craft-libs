@@ -38,7 +38,7 @@ pub use basic::{
 pub use context::{AdjustContext, ToneChannel, ToneChannelCommands, ToneChannels, ToneSpace};
 pub use curves_panel::{CurvesMode, CurvesPanel, CurvesPanelOutput, ToneCurves};
 pub use hosted::{AdjustDialogCx, EditPhase, HostedAdjustDialog};
-pub use hue_saturation::{HueRangeValue, HueSaturation, HueSaturationEditor, HueSaturationOutput};
+pub use hue_saturation::{AdjustedFn, HueRangeValue, HueSaturation, HueSaturationEditor, HueSaturationOutput};
 pub use kinds::AdjustmentKind;
 pub use labels::AdjustWords;
 pub use levels_editor::{Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsWords};

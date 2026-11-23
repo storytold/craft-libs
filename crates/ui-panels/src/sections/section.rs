@@ -163,7 +163,14 @@ impl<'a> Section<'a> {
     #[must_use]
     pub fn strength(mut self, strength: HeaderStrength) -> Self {
         self.strength = strength;
-        self.update_header(|header| header.rule_above(strength != HeaderStrength::Caption));
+        self.update_header(|header| header.rule_above(!matches!(strength, HeaderStrength::Caption | HeaderStrength::Overline)));
+        self
+    }
+
+    /// The header carries no rule above it: a page heading rather than a boundary between panel sections.
+    #[must_use]
+    pub fn quiet_header(mut self) -> Self {
+        self.update_header(|header| header.rule_above(false));
         self
     }
 
