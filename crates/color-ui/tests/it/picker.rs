@@ -124,6 +124,59 @@ fn a_dialog_reopened_keeps_only_web_colors_and_recalls_the_values_kept_on_ok() {
     assert_eq!(edited(&dialogs), Some(values), "Reset returns the typed values");
 }
 
+/// A working RGB twice as wide as sRGB: 255 is sRGB's half.
+struct WideRgb;
+
+impl ColorModel for WideRgb {
+    fn id(&self) -> &'static str {
+        RgbModel.id()
+    }
+    fn name(&self) -> &'static str {
+        RgbModel.name()
+    }
+    fn channels(&self) -> &[craft_theme::Channel] {
+        static RGB: RgbModel = RgbModel;
+        RGB.channels()
+    }
+    fn from_srgb(&self, c: Srgba) -> ModelValues {
+        ModelValues::new(self.id(), &[c.r * 510.0, c.g * 510.0, c.b * 510.0])
+    }
+    fn to_srgb(&self, v: &[f32; craft_theme::MAX_CHANNELS]) -> Srgba {
+        Srgba::rgb(v[0] / 510.0, v[1] / 510.0, v[2] / 510.0)
+    }
+    fn default_on(&self) -> craft_theme::DefaultOn {
+        RgbModel.default_on()
+    }
+}
+
+/// The dialog's RGB fields are the host's working RGB, in both layouts: the values `kept` gives in it stand, where the
+/// built-in sRGB would show its own numbers.
+#[trial]
+fn the_dialogs_rgb_fields_show_the_hosts_working_values() {
+    let wide = Srgba::rgb(0.3, 0.2, 0.1);
+    let kept = WideRgb.from_srgb(wide);
+    for layout in [ColorPickerDialogLayout::Full, ColorPickerDialogLayout::Tabbed] {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.room(vec2(900.0, 700.0));
+        let dialog = ColorPickerDialog::new("fill", "Fill", wide).layout(layout).tab(ColorPickerTab::Custom).working_rgb(WideRgb).kept(kept);
+        dialogs.borrow_mut().open(dialog);
+        fixture.idle(6);
+        if layout == ColorPickerDialogLayout::Tabbed {
+            let ctx = fixture.ctx().clone();
+            let set = dialogs.borrow_mut().set_json_field(&ctx, dialog_id(("color-picker", "fill")), "model", serde_json::json!("rgb"));
+            assert_eq!(set, Ok(()), "the compact picker shows RGB");
+            fixture.idle(4);
+        }
+        let tree = fixture.tree();
+        let red = tree.with_role(Role::SPIN_BUTTON).into_iter().find(|node| tree.name_of(*node) == Some("Red"));
+        let shown = red.and_then(|node| tree.numeric_of(node)).and_then(|numeric| numeric.value);
+        let shown = shown.unwrap_or_else(|| panic!("{layout:?}: the Red field"));
+        assert!((shown - f64::from(kept.values[0])).abs() < 0.5, "{layout:?}: Red shows the working value {kept:?}, not {shown}");
+    }
+}
+
 /// The densities and themes every layout trial runs in: compact and comfortable, a Pro and a Studio theme.
 const LOOKS: [(Size, &str); 4] =
     [(Size::Compact, "craft.pro"), (Size::Comfortable, "craft.pro"), (Size::Compact, "craft.studio"), (Size::Comfortable, "craft.studio")];

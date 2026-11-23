@@ -15,7 +15,7 @@ use craft_host::Host;
 use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::variant::Tone;
-use craft_theme::{ColorModel, Srgba, builtin_models};
+use craft_theme::{ColorModel, DefaultOn, RgbModel, Srgba, builtin_models};
 use craft_ui::choice::{SwatchArrangement, SwatchSpacing, SwatchTable};
 use craft_ui::contract::{
     Bind, CanvasGesture, CollectionEvent, Entry, FooterSlot, Gap, Sampler as _, Show as _, ShowCollection as _, ShowContainer as _,
@@ -240,6 +240,7 @@ pub struct ColorPickerDialog {
     remember: bool,
     add_to_swatches: bool,
     cmyk: Option<CmykConverter>,
+    working_rgb: Option<Box<dyn ColorModel + Send + Sync>>,
     gamut: Option<Gamut<'static>>,
     swatches: Option<PickerSwatches>,
     eyedropper: bool,
@@ -268,9 +269,16 @@ pub struct ColorPickerDialog {
 /// What the tabbed body shows besides the memory and the colour it edits.
 struct TabbedBody<'a> {
     title: &'a Label,
+    working_rgb: Option<&'a dyn ColorModel>,
     words: &'a ColorPickerDialogWords,
     standard: Option<&'a StandardColors>,
     compare: Option<Mixed<PickedColor>>,
+}
+
+/// The built-in models `on` takes, the host's working RGB in place of the built-in RGB.
+fn models_with(working_rgb: Option<&dyn ColorModel>, on: impl Fn(DefaultOn) -> bool) -> Vec<&dyn ColorModel> {
+    let models = builtin_models().into_iter().filter(|model| on(model.default_on()));
+    models.map(|model| working_rgb.filter(|_| model.id() == RgbModel.id()).unwrap_or(model)).collect()
 }
 
 /// The selection of the entry whose colour is exactly `current`.
@@ -335,10 +343,12 @@ impl TabbedBody<'_> {
 
     /// The compact picker over the colour, the compare swatch beside its area; the model switch is the memory's.
     fn custom_page(&self, ui: &mut Ui, memory: &mut ColorPickerMemory, held: &mut Mixed<PickedColor>) {
-        let models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().compact).collect();
+        let models = models_with(self.working_rgb, |on| on.compact);
         let mut model: Option<&'static str> = memory.model.as_deref().and_then(|id| models.iter().map(|known| known.id()).find(|known| *known == id));
-        let mut picker =
-            ColorPicker::new(self.title.clone(), Bind::bound_mixed(held)).layout(ColorPickerLayout::Compact).shown_model(Bind::bound(&mut model));
+        let mut picker = ColorPicker::new(self.title.clone(), Bind::bound_mixed(held))
+            .layout(ColorPickerLayout::Compact)
+            .models(models)
+            .shown_model(Bind::bound(&mut model));
         if let Some(compare) = self.compare {
             picker = picker.compare(compare);
         }
@@ -386,6 +396,7 @@ impl ColorPickerDialog {
             remember: true,
             add_to_swatches: true,
             cmyk: None,
+            working_rgb: None,
             gamut: None,
             swatches: None,
             eyedropper: true,
@@ -492,6 +503,14 @@ impl ColorPickerDialog {
     #[must_use]
     pub fn cmyk(mut self, converter: &CmykConverter) -> ColorPickerDialog {
         self.cmyk = Some(converter.clone());
+        self
+    }
+
+    /// The host's working-RGB colour model, whose channels replace the built-in RGB fields in both layouts: a wide
+    /// working space shows its own numbers, and [`kept`](Self::kept) values in it stay as given.
+    #[must_use]
+    pub fn working_rgb(mut self, model: impl ColorModel + Send + Sync + 'static) -> ColorPickerDialog {
+        self.working_rgb = Some(Box::new(model));
         self
     }
 
@@ -734,7 +753,10 @@ impl StackDialog for ColorPickerDialog {
         // The Full picker keeps a cell for the buttons; the tabbed body has none, so they stand in the side column, as in
         // Word's Colors dialog.
         let place = if full { ButtonPlace::Body } else { ButtonPlace::Side };
-        let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, layout, standard, swatches: view, .. } = self;
+        let Self {
+            current, opening, compare, memory, screen_busy, sample, pending_screen, open, layout, standard, swatches: view, working_rgb, ..
+        } = self;
+        let working_rgb = working_rgb.as_deref().map(|model| model as &dyn ColorModel);
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
         let (sampled, busy, compare_with) = (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
         let color = current.map(|current| current.color);
@@ -754,7 +776,7 @@ impl StackDialog for ColorPickerDialog {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
                 if *layout == ColorPickerDialogLayout::Tabbed {
-                    let body = TabbedBody { title: &title, words: &words, standard: standard.as_ref(), compare: compare_with };
+                    let body = TabbedBody { title: &title, working_rgb, words: &words, standard: standard.as_ref(), compare: compare_with };
                     body.show(ui, &mut *memory, &mut held);
                     return;
                 }
@@ -764,7 +786,7 @@ impl StackDialog for ColorPickerDialog {
                     show_swatches(ui, view, &mut memory.library, &mut held, &words.library);
                     return;
                 }
-                let mut models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().full).collect();
+                let mut models = models_with(working_rgb, |on| on.full);
                 models.push(&cmyk);
                 let mut warnings = Vec::new();
                 if let Some(color) = color {
