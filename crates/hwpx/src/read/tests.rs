@@ -543,3 +543,32 @@ fn unread_arcs_diagonals_and_background_pictures_are_logged() {
         assert!(warnings.iter().any(|w| w.contains(what)), "{what} not logged: {warnings:?}");
     }
 }
+
+/// One small picture tiled over the page of many sections: the tiles laid one by one stop at
+/// the document's budget, the backgrounds past it are one stretched picture each, and that is
+/// logged. Before, every section laid its own thousand tiles.
+#[test]
+fn tiled_backgrounds_stop_at_the_documents_budget() {
+    let header = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hh:refList><hh:borderFills itemCnt="1"><hh:borderFill id="1"><hc:fillBrush><hc:imgBrush mode="TILE"><hc:img binaryItemIDRef="image1"/></hc:imgBrush></hc:fillBrush></hh:borderFill></hh:borderFills></hh:refList></hh:head>"#;
+    let sec = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr><hp:pagePr width="59528" height="84188"/><hp:pageBorderFill type="BOTH" borderFillIDRef="1" fillArea="PAPER"/></hp:secPr><hp:t>가</hp:t></hp:run></hp:p></hs:sec>"#
+    );
+    // a PNG header of 30 x 30 pixels: about a thousand tiles on an A4 page
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend(30u32.to_be_bytes());
+    png.extend(30u32.to_be_bytes());
+    png.extend([8, 6, 0, 0, 0]);
+    let read = |sections: usize| {
+        let names: Vec<String> = (0..sections).map(|i| format!("Contents/section{i}.xml")).collect();
+        let mut parts: Vec<(&str, &[u8])> = vec![("Contents/header.xml", header.as_bytes()), ("BinData/image1.png", &png)];
+        parts.extend(names.iter().map(|n| (n.as_str(), sec.as_bytes())));
+        let (doc, warnings) = crate::test_log::warnings(|| read_bytes(&package(&parts)));
+        (header_floats(&doc.unwrap()).iter().filter(|o| matches!(o, InlineObject::Image { .. })).count(), warnings)
+    };
+    let (one, _) = read(1);
+    assert!(one > 1, "one section's page is tiled: {one}");
+    let (many, warnings) = read(160);
+    assert!(many > one, "the first sections are still tiled: {many}");
+    assert!(many < 160 * one / 2, "far fewer than every section's tiles: {many} of {}", 160 * one);
+    assert!(warnings.iter().any(|w| w.contains("page background tiles")), "{warnings:?}");
+}

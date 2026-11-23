@@ -24,6 +24,9 @@ use crate::xml::Element;
 
 /// The most page background tiles laid one by one; more are drawn as one picture.
 const MAX_BACKGROUND_TILES: i64 = 10_000;
+/// The most page background tiles laid in a whole document (one small picture repeated in many
+/// sections' headers); past it, each further background is one picture too.
+pub(crate) const MAX_DOCUMENT_TILES: i64 = 50_000;
 
 /// What a background box shows.
 enum BoxFill {
@@ -217,12 +220,14 @@ impl Converter<'_> {
         // tiles at the far edges are cropped to the area.
         let (tw, th) = (i64::from(pw) * 75, i64::from(ph) * 75);
         let tiles = |len: i64, tile: i64| if tile > 0 { (len.max(0) + tile - 1) / tile } else { 0 };
-        if tiles(w, tw).saturating_mul(tiles(h, th)) > MAX_BACKGROUND_TILES {
+        let count = tiles(w, tw).saturating_mul(tiles(h, th));
+        if count > MAX_BACKGROUND_TILES || count > self.tiles_left {
             // Too many tiles to lay one by one (a tiny picture over a page): the picture
             // stretched over the area instead, and said so.
             self.missing("page background tiles (one stretched picture instead)");
             return vec![self.background_box(rel, x, y, w, h, BoxFill::Picture(media, [0.0; 4]))];
         }
+        self.tiles_left -= count;
         let mut out = Vec::new();
         let mut ty = 0i64;
         let mut guard = 0;

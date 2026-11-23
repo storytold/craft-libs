@@ -149,6 +149,10 @@ pub(crate) struct Converter<'a> {
     pub unsupported: BTreeMap<String, i64>,
     char_cache: HashMap<i64, CharProps>,
     num_ids: Vec<((&'static str, i64), u32)>,
+    /// Where each list of `num_ids` is, by its key.
+    num_index: HashMap<(&'static str, i64), u32>,
+    /// Page background tiles that may still be laid one by one, for the whole document.
+    pub tiles_left: i64,
     /// The kind and part id of the note being read, and whether its number was written.
     note: Option<(NoteKind, u32)>,
     note_ref_done: bool,
@@ -206,6 +210,8 @@ pub(crate) fn read(pkg: &Package) -> Result<Document> {
         unsupported: BTreeMap::new(),
         char_cache: HashMap::new(),
         num_ids: Vec::new(),
+        num_index: HashMap::new(),
+        tiles_left: background::MAX_DOCUMENT_TILES,
         note: None,
         note_ref_done: false,
         fields: HashMap::new(),
@@ -957,17 +963,16 @@ fn superscript() -> CharProps {
 /// Hancom sizes each line by its own tallest character, so a short bigger run (a citation
 /// "[1]") lifts one line only; use the height that carries most text.
 fn main_height(runs_el: &[&Element], heights: &[i64], max_h: i64) -> i64 {
-    let mut weight: Vec<(i64, i64)> = Vec::new();
+    let mut weight: HashMap<i64, i64> = HashMap::new();
     for (r, hgt) in runs_el.iter().zip(heights.iter()) {
         let n: i64 =
             r.findall("hp:t").map(|t| (t.text.chars().count() + t.children.iter().map(|c| c.tail.chars().count()).sum::<usize>()) as i64).sum();
-        match weight.iter_mut().find(|(k, _)| k == hgt) {
-            Some(w) => w.1 += n,
-            None => weight.push((*hgt, n)),
-        }
+        *weight.entry(*hgt).or_insert(0) += n;
     }
-    if weight.iter().any(|(_, w)| *w > 0)
-        && let Some(&(main, _)) = weight.iter().max_by_key(|(k, w)| (*w, *k))
+    // the most text, the bigger height on a tie (heights are distinct, so the pick doesn't
+    // depend on the map's order)
+    if weight.values().any(|w| *w > 0)
+        && let Some(main) = weight.iter().max_by_key(|&(k, w)| (*w, *k)).map(|(k, _)| *k)
         && max_h * 5 <= main * 6
     {
         return main; // much bigger text keeps its room (exact lines clip)

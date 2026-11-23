@@ -332,11 +332,12 @@ impl Converter<'_> {
             "BULLET" if self.h.bullets.contains_key(&pp.heading_ref) => ("bul", pp.heading_ref),
             _ => return None,
         };
-        let id = match self.num_ids.iter().find(|(k, _)| *k == key) {
-            Some((_, id)) => *id,
+        let id = match self.num_index.get(&key) {
+            Some(id) => *id,
             None => {
                 let id = self.num_ids.len() as u32 + 1;
                 self.num_ids.push((key, id));
+                self.num_index.insert(key, id);
                 id
             }
         };
