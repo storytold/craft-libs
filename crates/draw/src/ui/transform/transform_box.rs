@@ -13,7 +13,7 @@ use craft_behavior::{
     PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
 use craft_keymap::Mods;
-use craft_ui::canvas::{CanvasSpace, GestureSnap, Snap, canvas_snap, canvas_space, readout};
+use craft_ui::canvas::{CanvasSpace, GestureSnap, ReadoutSide, Snap, canvas_snap, canvas_space, readout_on};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
@@ -957,7 +957,8 @@ impl<'a> TransformBox<'a> {
         grip.last = next;
         cx.propose(next);
         let rows = self.readout_rows(cx, space, grip.part, &next, &grip.start);
-        readout(&*cx, pos, &rows);
+        // Above the pointer, as the reference application places a transform's values: clear of the picture under it.
+        readout_on(&*cx, pos, &rows, ReadoutSide::Above);
         let acting = drag_mods(mods, suspend_key(snap));
         let cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, acting, true);
         cx.cursor(cursor, CursorPriority::Drag);

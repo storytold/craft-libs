@@ -4,6 +4,7 @@ use super::words::CanvasWords;
 use crate::contract::{CxCore, ghost};
 use crate::runtime::env::{Env, EnvValue, Label, Units};
 use egui::{Context, Pos2};
+pub use ghost::ReadoutSide;
 
 /// The one Show Transformation Values gate: while it holds `false` in the root env, [`readout`] and the tool host's
 /// paint of a tool's readout rows paint nothing. [`hud`] is never gated.
@@ -35,6 +36,15 @@ pub(super) fn shown(ctx: &Context) -> bool {
 pub(crate) fn angle_row(words: &CanvasWords, units: &Units, degrees: f64) -> Vec<(Label, String)> {
     let number = units.number_ungrouped(degrees, 1..=1);
     vec![(Label::from(words.crop_angle.as_str().to_owned()), format!("{number}°"))]
+}
+
+/// [`readout`] on the chosen side of the pointer (a transform's values sit above it, as the reference application
+/// places them).
+pub fn readout_on(cx: &CxCore<'_>, at: Pos2, rows: &[(Label, String)], side: ReadoutSide) {
+    if !shown(&cx.ctx) {
+        return;
+    }
+    ghost::readout_on(&cx.ctx, &cx.env, at, rows, side);
 }
 
 /// [`readout`] that the Show Transformation Values gate ([`ShowReadouts`]) never silences: brush size readouts.

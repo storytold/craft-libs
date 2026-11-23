@@ -34,6 +34,21 @@ pub fn paint(ctx: &Context) {
 /// inside the window. Labels start at the reading start and values end at the reading end, the widest label and the
 /// widest value a section gap apart. Labels are in the muted ink and values in the normal one. No rows paint nothing.
 pub fn readout(ctx: &Context, env: &EnvView<'_>, at: Pos2, rows: &[(Label, String)]) {
+    readout_on(ctx, env, at, rows, ReadoutSide::Below);
+}
+
+/// Which side of the pointer a readout sits on: below it (the default), or above it (a transform's values, as the
+/// reference application places them, top-right of the pointer and clear of the picture under it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadoutSide {
+    /// Below the pointer, towards the reading end.
+    Below,
+    /// Above the pointer, towards the reading end; below it where the window ends.
+    Above,
+}
+
+/// [`readout`] on the chosen side of the pointer.
+pub fn readout_on(ctx: &Context, env: &EnvView<'_>, at: Pos2, rows: &[(Label, String)], side: ReadoutSide) {
     if rows.is_empty() {
         return;
     }
@@ -59,7 +74,7 @@ pub fn readout(ctx: &Context, env: &EnvView<'_>, at: Pos2, rows: &[(Label, Strin
     let height = 2.0 * pad.y + heights.iter().sum::<f32>() + tokens.stroke.thin * (heights.len() - 1) as f32;
     let tip = tokens.size.pointer_tip;
     let rtl = direction.is_rtl();
-    let outer = readout_place(at, vec2(tip.x, tip.y), vec2(width, height), rtl, ctx.content_rect());
+    let outer = readout_place(at, vec2(tip.x, tip.y), vec2(width, height), rtl, ctx.content_rect(), side == ReadoutSide::Above);
     draw.surface(outer, SurfaceKind::Popup, Corners::All);
     let mut y = outer.min.y + pad.y;
     for ((label, value), row_height) in layouts.iter().zip(&heights) {
@@ -74,15 +89,19 @@ pub fn readout(ctx: &Context, env: &EnvView<'_>, at: Pos2, rows: &[(Label, Strin
     }
 }
 
-/// The readout's rect for a pointer at `at`: `offset` toward the reading end and down, on the other side of the pointer
-/// where it would leave `window` across, and shifted to stay inside `window`.
-fn readout_place(at: Pos2, offset: Vec2, size: Vec2, rtl: bool, window: Rect) -> Rect {
-    let beside = |toward_end: bool| {
+/// The readout's rect for a pointer at `at`: `offset` toward the reading end and down (or up, `above`), on the other
+/// side of the pointer where it would leave `window` across (or up and down), and shifted to stay inside `window`.
+fn readout_place(at: Pos2, offset: Vec2, size: Vec2, rtl: bool, window: Rect, above: bool) -> Rect {
+    let beside = |toward_end: bool, up: bool| {
         let left = if toward_end != rtl { at.x + offset.x } else { at.x - offset.x - size.x };
-        Rect::from_min_size(Pos2::new(left, at.y + offset.y), size)
+        let top = if up { at.y - offset.y - size.y } else { at.y + offset.y };
+        Rect::from_min_size(Pos2::new(left, top), size)
     };
-    let fits = |rect: Rect| rect.min.x >= window.min.x && rect.max.x <= window.max.x;
-    let rect = if fits(beside(true)) || !fits(beside(false)) { beside(true) } else { beside(false) };
+    let fits_x = |rect: Rect| rect.min.x >= window.min.x && rect.max.x <= window.max.x;
+    let fits_y = |rect: Rect| rect.min.y >= window.min.y && rect.max.y <= window.max.y;
+    let toward_end = fits_x(beside(true, above)) || !fits_x(beside(false, above));
+    let up = if fits_y(beside(toward_end, above)) || !fits_y(beside(toward_end, !above)) { above } else { !above };
+    let rect = beside(toward_end, up);
     let dx = (window.min.x - rect.min.x).max(0.0) - (rect.max.x - window.max.x).max(0.0);
     let dy = (window.min.y - rect.min.y).max(0.0) - (rect.max.y - window.max.y).max(0.0);
     rect.translate(vec2(dx, dy))
@@ -243,5 +262,25 @@ fn paint_mark(painter: &egui::Painter, tokens: &UiTokens, mark: DropMark) {
     }
     for &segment in &segments {
         painter.rect_filled(band(segment, width / 2.0), CornerRadius::ZERO, look.color);
+    }
+}
+
+#[cfg(test)]
+mod readout_place_tests {
+    use super::*;
+
+    #[test]
+    fn a_readout_sits_below_or_above_the_pointer_and_flips_where_the_window_ends() {
+        let window = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0));
+        let (at, off, size) = (Pos2::new(400.0, 300.0), vec2(12.0, 16.0), vec2(80.0, 30.0));
+        let below = readout_place(at, off, size, false, window, false);
+        assert_eq!((below.min.x, below.min.y), (412.0, 316.0));
+        let above = readout_place(at, off, size, false, window, true);
+        assert_eq!((above.min.x, above.min.y), (412.0, 254.0));
+        // Near the window's top an "above" readout goes below instead; near its right edge, to the pointer's left.
+        let flipped = readout_place(Pos2::new(400.0, 20.0), off, size, false, window, true);
+        assert_eq!(flipped.min.y, 36.0);
+        let left = readout_place(Pos2::new(980.0, 300.0), off, size, false, window, true);
+        assert_eq!(left.max.x, 968.0);
     }
 }
