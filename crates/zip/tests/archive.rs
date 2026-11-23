@@ -1,7 +1,7 @@
 //! Reading archives within limits, duplicate names, and the writer.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use craft_zip::{Archive, Compression, Error, Limits, Writer, check_entry_count, zip64_entry_count_sample};
+use craft_zip::{Archive, Compression, Error, Limits, Writer, check_entry_count, has_traversal_component, sanitize_path, zip64_entry_count_sample};
 
 const ROOMY: Limits = Limits { max_entries: 1000, max_total_bytes: 1 << 20 };
 
@@ -204,4 +204,102 @@ fn owned_archive_applies_directory_guards() {
     bytes[central + 46] = b'a';
     assert!(Archive::open_owned(bytes, ROOMY).unwrap().has_duplicate_names());
     assert!(Archive::open_owned(b"invalid".to_vec(), ROOMY).is_err());
+}
+
+#[test]
+fn path_traversal_detection_flags_hostile_vectors() {
+    // Parent directory traversal
+    assert!(has_traversal_component("../../etc/passwd"));
+    assert!(has_traversal_component(r"..\..\windows\system32"));
+    assert!(has_traversal_component("foo/../bar"));
+    assert!(has_traversal_component(r"foo\..\bar"));
+    assert!(has_traversal_component(".."));
+
+    // Absolute and drive-letter prefixes
+    assert!(has_traversal_component("C:/test.txt"));
+    assert!(has_traversal_component(r"C:\test.txt"));
+    assert!(has_traversal_component("c:/test.txt"));
+    assert!(has_traversal_component(r"c:\windows\system32"));
+    assert!(has_traversal_component("/etc/passwd"));
+    assert!(has_traversal_component(r"\windows\system32"));
+
+    // Null bytes
+    assert!(has_traversal_component("foo\0bar"));
+
+    // Sanitization flags them safely
+    assert_eq!(sanitize_path("../../etc/passwd"), None);
+    assert_eq!(sanitize_path(r"..\..\windows\system32"), None);
+    assert_eq!(sanitize_path("C:/test.txt"), None);
+    assert_eq!(sanitize_path("/etc/passwd"), None);
+    assert_eq!(sanitize_path("foo\0bar"), None);
+
+    // Safe relative paths are allowed
+    assert!(!has_traversal_component("safe/path.txt"));
+    assert!(!has_traversal_component("mimetype"));
+    assert_eq!(sanitize_path("safe/path.txt"), Some("safe/path.txt"));
+    assert_eq!(sanitize_path("mimetype"), Some("mimetype"));
+}
+
+#[test]
+fn synthetic_hostile_zip_headers_are_safely_flagged_and_rejected() {
+    use std::io::Write as _;
+
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("../../etc/passwd", opts).unwrap();
+    zip.write_all(b"root:x:0:0").unwrap();
+    zip.start_file(r"..\..\windows\system32", opts).unwrap();
+    zip.write_all(b"system32").unwrap();
+    zip.start_file("C:/test.txt", opts).unwrap();
+    zip.write_all(b"drive").unwrap();
+    zip.start_file("safe/file.txt", opts).unwrap();
+    zip.write_all(b"safe").unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+
+    // Archive level checks
+    let mut archive = Archive::open(&bytes, ROOMY).unwrap();
+    assert!(archive.has_traversal_component());
+
+    // Enumeration omits traversal components
+    let names = archive.names().collect::<Vec<_>>();
+    assert_eq!(names, vec!["safe/file.txt"]);
+    assert_eq!(archive.entry_name(3).unwrap().as_deref(), Some("safe/file.txt"));
+    assert_eq!(archive.entry_name(0).unwrap(), None);
+    assert_eq!(archive.entry_name(1).unwrap(), None);
+    assert_eq!(archive.entry_name(2).unwrap(), None);
+
+    // Raw entry name is still available for inspection
+    assert_eq!(archive.raw_entry_name(0).unwrap().as_deref(), Some("../../etc/passwd"));
+    assert_eq!(archive.raw_entry_name(1).unwrap().as_deref(), Some(r"..\..\windows\system32"));
+    assert_eq!(archive.raw_entry_name(2).unwrap().as_deref(), Some("C:/test.txt"));
+
+    // Virtual lookups reject traversal components
+    assert!(!archive.contains("../../etc/passwd"));
+    assert!(!archive.contains(r"..\..\windows\system32"));
+    assert!(!archive.contains("C:/test.txt"));
+    assert!(archive.contains("safe/file.txt"));
+    assert_eq!(archive.declared_size("../../etc/passwd"), None);
+    assert_eq!(archive.compressed_size(r"..\..\windows\system32"), None);
+    assert_eq!(archive.is_stored("C:/test.txt"), None);
+    assert_eq!(archive.declared_size("safe/file.txt"), Some(4));
+
+    // Extractions reject traversal components
+    assert_eq!(archive.read("../../etc/passwd", 100).unwrap(), None);
+    assert_eq!(archive.read(r"..\..\windows\system32", 100).unwrap(), None);
+    assert_eq!(archive.read("C:/test.txt", 100).unwrap(), None);
+    assert_eq!(archive.read_head("../../etc/passwd", 10).unwrap(), None);
+    assert_eq!(archive.read_index(0, 100).unwrap(), None);
+    assert_eq!(archive.read_index(1, 100).unwrap(), None);
+    assert_eq!(archive.read_index(2, 100).unwrap(), None);
+    assert_eq!(archive.read("safe/file.txt", 100).unwrap().as_deref(), Some(&b"safe"[..]));
+    assert_eq!(archive.read_index(3, 100).unwrap().as_deref(), Some(&b"safe"[..]));
+}
+
+#[test]
+fn writer_rejects_path_traversal_components() {
+    let mut writer = Writer::new();
+    assert!(matches!(writer.add("../../etc/passwd", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
+    assert!(matches!(writer.add(r"..\..\windows\system32", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
+    assert!(matches!(writer.add("C:/test.txt", b"bad", Compression::Stored), Err(Error::Write(msg)) if msg.contains("path traversal")));
+    assert!(matches!(writer.add_directory("../../etc/"), Err(Error::Write(msg)) if msg.contains("path traversal")));
 }

@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
+use crate::entry::has_traversal_component;
 use crate::preflight::{ReadError, read_entry};
 use crate::{Budget, Error, check_entry_count};
 
@@ -89,8 +90,22 @@ impl<'a> Archive<'a> {
     }
 
     /// The name at `index`, copied on demand so callers can process hostile directories without
-    /// retaining a second copy of every potentially large name.
+    /// retaining a second copy of every potentially large name. Names containing path-traversal
+    /// components (`..`, absolute paths, Windows drive prefixes, null bytes) return `None`.
     pub fn entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        let name = file.name().map_err(|error| Error::NotZip(error.to_string()))?;
+        if has_traversal_component(&name) {
+            return Ok(None);
+        }
+        Ok(Some(name.into_owned()))
+    }
+
+    /// The name at `index`, copied on demand without path validation.
+    pub fn raw_entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
         if index >= self.zip.len() {
             return Ok(None);
         }
@@ -105,6 +120,11 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        if let Ok(name) = file.name()
+            && has_traversal_component(&name)
+        {
+            return Ok(None);
+        }
         Ok(Some(file.is_dir()))
     }
 
@@ -114,6 +134,11 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        if let Ok(name) = file.name()
+            && has_traversal_component(&name)
+        {
+            return Ok(None);
+        }
         Ok(Some(file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000)))
     }
 
@@ -123,6 +148,11 @@ impl<'a> Archive<'a> {
             return Ok(None);
         }
         let file = self.zip.by_index_raw(index).map_err(|e| Error::NotZip(e.to_string()))?;
+        if let Ok(name) = file.name()
+            && has_traversal_component(&name)
+        {
+            return Ok(None);
+        }
         Ok(Some((file.size(), file.compressed_size())))
     }
 
@@ -132,25 +162,38 @@ impl<'a> Archive<'a> {
         self.duplicates
     }
 
+    /// Whether any entry in the archive contains path-traversal components (`..`, absolute paths,
+    /// Windows drive prefixes, null bytes).
+    pub fn has_traversal_component(&self) -> bool {
+        self.zip.file_names().any(|r| r.is_ok_and(|name| has_traversal_component(&name)))
+    }
+
     /// Do two entries' compressed data ranges overlap? A format that stores many files in one
     /// archive can refuse aliases so one payload cannot be expanded and retained repeatedly.
     pub fn has_overlapping_files(&mut self) -> Result<bool, Error> {
         self.zip.has_overlapping_files().map_err(|e| Error::NotZip(e.to_string()))
     }
 
-    /// The entry names in the archive's order, folders included. A name that is not text is
-    /// left out.
+    /// The entry names in the archive's order, folders included. Names that are not text or
+    /// that contain path-traversal components are left out.
     pub fn names(&self) -> impl Iterator<Item = Cow<'_, str>> {
-        self.zip.file_names().filter_map(Result::ok)
+        self.zip.file_names().filter_map(Result::ok).filter(|name| !has_traversal_component(name))
     }
 
-    /// Is there an entry `name` (exactly as stored)?
+    /// Is there an entry `name` (exactly as stored)? Paths containing traversal components
+    /// return `false`.
     pub fn contains(&self, name: &str) -> bool {
+        if has_traversal_component(name) {
+            return false;
+        }
         self.zip.index_for_name(name).is_some()
     }
 
     /// The size entry `name` declares. It is a claim, not a measurement.
     pub fn declared_size(&mut self, name: &str) -> Option<u64> {
+        if has_traversal_component(name) {
+            return None;
+        }
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.size())
     }
@@ -158,6 +201,9 @@ impl<'a> Archive<'a> {
     /// The size entry `name` takes in the archive, compressed. With [`Archive::declared_size`] it
     /// gives the compression ratio the entry claims.
     pub fn compressed_size(&mut self, name: &str) -> Option<u64> {
+        if has_traversal_component(name) {
+            return None;
+        }
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.compressed_size())
     }
@@ -165,6 +211,9 @@ impl<'a> Archive<'a> {
     /// Is `name` stored without compression? The answer lets a format with in-memory source bytes
     /// apply an output-size cap to compressed entries while bounding stored reads by source size.
     pub fn is_stored(&mut self, name: &str) -> Option<bool> {
+        if has_traversal_component(name) {
+            return None;
+        }
         let index = self.zip.index_for_name(name)?;
         self.zip.by_index_raw(index).ok().map(|f| f.compression() == zip::CompressionMethod::Stored)
     }
@@ -175,6 +224,9 @@ impl<'a> Archive<'a> {
     ///
     /// The entry's checksum is not checked: it covers the whole entry.
     pub fn read_head(&mut self, name: &str, n: usize) -> Result<Option<Vec<u8>>, Error> {
+        if has_traversal_component(name) {
+            return Ok(None);
+        }
         let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
         let entry = |msg: String| Error::Entry { name: name.to_string(), msg };
         let f = self.zip.by_index(index).map_err(|e| entry(e.to_string()))?;
@@ -195,21 +247,30 @@ impl<'a> Archive<'a> {
     /// [`Limits::max_total_bytes`]. An entry that expands past the size it declares is refused.
     /// Only the bytes of a read that succeeds are charged to the total.
     pub fn read(&mut self, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
+        if has_traversal_component(name) {
+            return Ok(None);
+        }
         let Some(index) = self.zip.index_for_name(name) else { return Ok(None) };
         self.read_index_named(index, name, max)
     }
 
     /// Read the entry at `index` under the same size, checksum and aggregate budget
-    /// rules as [`Self::read`], without repeating a decoded-name lookup.
+    /// rules as [`Self::read`], without repeating a decoded-name lookup. Entries containing
+    /// path-traversal components return `None`.
     pub fn read_index(&mut self, index: usize, max: u64) -> Result<Option<Vec<u8>>, Error> {
         if index >= self.zip.len() {
             return Ok(None);
         }
-        let name = self.entry_name(index)?.unwrap_or_default();
+        let Some(name) = self.entry_name(index)? else {
+            return Ok(None);
+        };
         self.read_index_named(index, &name, max)
     }
 
     fn read_index_named(&mut self, index: usize, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
+        if has_traversal_component(name) {
+            return Ok(None);
+        }
         let entry = |msg: String| Error::Entry { name: name.to_string(), msg };
         let f = self.zip.by_index(index).map_err(|e| entry(e.to_string()))?;
         let declared = f.size();
