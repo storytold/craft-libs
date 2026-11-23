@@ -912,6 +912,8 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let document = drawn_frame.document(&drawn);
     let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
     let bars = CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(shown), DocRect::from_origin_size(Point::ZERO, document));
+    // Pages that fit the view's width can't scroll sideways, so there is no horizontal bar.
+    let bars = if xs.0 >= xs.1 { bars.vertical_only() } else { bars };
     // The tip names the page at the top of the view the thumb moved to: the bars ask for it once they know the move.
     let format = env.format();
     let tip = |moved: &CanvasView| {

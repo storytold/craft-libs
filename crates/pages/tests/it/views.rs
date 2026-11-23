@@ -49,6 +49,24 @@ fn layout_rig(count: usize, start: PageViewState) -> LayoutRig {
     (fixture, state, rects)
 }
 
+/// Whether the view shows a horizontal scroll bar at `zoom` in a window 900 wide.
+fn has_horizontal_bar(zoom: f64) -> bool {
+    let (fixture, _, _) = layout_rig(
+        3,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = zoom;
+        }),
+    );
+    fixture.by_role(Role::SCROLL_BAR).iter().any(|bar| bar.rect.width() > bar.rect.height())
+}
+
+#[trial]
+fn the_horizontal_bar_shows_only_when_the_pages_are_wider_than_the_view() {
+    assert!(!has_horizontal_bar(0.5), "pages that fit the width need no horizontal bar");
+    assert!(has_horizontal_bar(3.0), "pages wider than the view scroll sideways");
+}
+
 #[trial]
 fn a_changed_zoom_keeps_the_page_at_the_top_in_place() {
     let (mut fixture, state, rects) = layout_rig(
