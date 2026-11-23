@@ -305,6 +305,17 @@ impl Frames {
             self.told = self.modifiers;
             events.insert(0, fixture::modifiers_changed(self.modifiers));
         }
+        // A real pointer button event carries the modifiers held as it happens, and a new press reads its event's
+        // modifiers (F-144): a generated press or release that names none (`pointer::press`) carries the held ones.
+        if self.modifiers != egui::Modifiers::NONE {
+            for event in &mut events {
+                if let Event::PointerButton { modifiers, .. } = event
+                    && *modifiers == egui::Modifiers::NONE
+                {
+                    *modifiers = self.modifiers;
+                }
+            }
+        }
         let files = fixture::OsFiles {
             hovered: self.files.hovered.clone(),
             dropped: std::mem::take(&mut self.files.dropped),

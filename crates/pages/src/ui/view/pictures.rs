@@ -92,18 +92,14 @@ impl Component for PageMetrics {
     fn style(cx: &StyleCx<'_>, _: PageMetricsStyleKey) -> PageMetricsStyle {
         let tokens = cx.tokens;
         match cx.set() {
-            // The creative set's spacing is the theme's page insets.
-            ComponentSet::Creative => {
-                let inset = tokens.space.inset;
-                PageMetricsStyle {
-                    metrics: Metrics::new(),
-                    gap: inset.page_gap,
-                    margin: inset.page_margin,
-                    side: inset.page_side,
-                    white_space_pad: tokens.space.gap.inline,
-                    seam: tokens.stroke.thin,
-                }
-            }
+            ComponentSet::Creative => PageMetricsStyle {
+                metrics: Metrics::new(),
+                gap: tokens.space.gap.section,
+                margin: tokens.space.pad.roomy,
+                side: tokens.size.rail.width,
+                white_space_pad: tokens.space.gap.inline,
+                seam: tokens.stroke.thin,
+            },
             ComponentSet::Productivity => {
                 let gap = tokens.space.gap.section * PRODUCTIVITY_GAP_RATIO;
                 PageMetricsStyle {
