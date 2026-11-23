@@ -90,6 +90,8 @@ enum RailEvent<T> {
     Flyout(SlotId),
     Dropped(ToolDropped),
     TornOff(TornOff<SlotId>),
+    /// The Edit Toolbar button's response in the run.
+    EditToolbar(Response),
 }
 
 type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
@@ -396,6 +398,7 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                         let label = props.edit_label.clone().unwrap_or(Label::Empty);
                                         let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
                                         edit_toolbar = Some(more.response.id);
+                                        sent.send(RailEvent::EditToolbar(more.response));
                                     }
                                 }
                             }
@@ -434,7 +437,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
         let last = last.as_ref().clone();
         let (mut events, mut edit_toolbar) = (Vec::new(), None);
         let shown = self.show(ui, |ui, _| edit_toolbar = draw.run(ui, &mut events));
-        let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off) = (None, None, None, None, None);
+        let (mut select, mut double_clicked, mut flyout, mut dropped, mut torn_off, mut ran) = (None, None, None, None, None, None);
         for event in events {
             match event {
                 RailEvent::Select(tool) => select = Some(tool),
@@ -442,12 +445,14 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
                 RailEvent::Flyout(slot) => flyout = Some(slot),
                 RailEvent::Dropped(drop) => dropped = Some(drop),
                 RailEvent::TornOff(torn) => torn_off = Some(torn),
+                RailEvent::EditToolbar(response) => ran = Some(response),
             }
         }
         ToolRailOutput {
             select,
             double_clicked,
-            edit_toolbar: edit_toolbar.and_then(|id| ui.ctx().read_response(id)),
+            // A replayed grid sends nothing: its button is shown again, and its response is read back.
+            edit_toolbar: ran.or_else(|| edit_toolbar.and_then(|id| crate::contract::response_of(ui, id))),
             flyout,
             dropped,
             torn_off,

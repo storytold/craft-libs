@@ -7,7 +7,7 @@ use crate::runtime::memory::{MemoryStage, Savable, SaveKey, StageAccess};
 use crate::runtime::reads::{self, BindKey};
 use craft_behavior::{Applied, CanvasView, EditEvent, EditEvents, EditPolicy, Mixed, Value};
 use egui::Id;
-use egui::Response;
+use egui::{Response, Ui};
 use std::any::TypeId;
 use std::cell::Cell;
 use std::sync::Arc;
@@ -62,6 +62,14 @@ impl Outcome for Response {
 /// Whether `response` reports a click, by pointer or by keyboard activation.
 pub fn clicked(response: &Response) -> bool {
     crate::runtime::egui::response::clicked(response)
+}
+
+/// The `Response` of the component `id` in the running pass: its root's egui widget, or the response its arena gives a
+/// member of one (a component in a collection's rows or in an arena body, which registers no egui widget). A
+/// memoized view's replay shows its components again, so a host reads the response of a component a replayed view
+/// showed. `None` for an id no component showed in this pass or the last.
+pub fn response_of(ui: &Ui, id: Id) -> Option<Response> {
+    ui.ctx().read_response(id).or_else(|| crate::primitives::sensing::member_response(ui, id))
 }
 
 /// Whether a pointer press went down on `response`'s component and is still held.

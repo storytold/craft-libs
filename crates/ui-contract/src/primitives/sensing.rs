@@ -168,6 +168,7 @@ pub(crate) struct MemberDecl {
     pub rect: Rect,
     pub sense: Sense,
     pub parts: SmallVec<[PartDecl; 4]>,
+    pub enabled: bool,
     /// The shapes lie in the body layer's space; `join` sets it.
     pub local: bool,
     /// The stack position of the member's `over` parts: just above the member until its body has run, then above
@@ -177,8 +178,8 @@ pub(crate) struct MemberDecl {
 
 impl MemberDecl {
     /// A member `id` over `rect` sensing `sense`, with `parts`.
-    pub(crate) fn new(id: Id, rect: Rect, sense: Sense, parts: &[PartDecl]) -> Self {
-        MemberDecl { id, rect, sense, parts: parts.iter().cloned().collect(), local: false, over_at: 0 }
+    pub(crate) fn new(id: Id, rect: Rect, sense: Sense, parts: &[PartDecl], enabled: bool) -> Self {
+        MemberDecl { id, rect, sense, parts: parts.iter().cloned().collect(), enabled, local: false, over_at: 0 }
     }
 }
 
@@ -878,7 +879,7 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
         rotate(state, pass_nr);
         for spec in specs {
-            let decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
+            let decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts, spec.enabled);
             if recording {
                 recorded.push(decl.clone());
             }
@@ -904,6 +905,25 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
             }
         })
         .collect()
+}
+
+/// The `Response` of the arena member `id` in the running pass, as `sense_members` gives it: from its arena's latest
+/// registration of it, a replay's included, and the arena's outcome of the pass. `None` when no arena of the viewport
+/// holds `id`.
+pub(crate) fn member_response(ui: &Ui, id: Id) -> Option<Response> {
+    let ctx = ui.ctx();
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let pointer_pos = pointer::with_frame(ctx, |_, hover| hover);
+    let (decl, outcome) = PerViewport::<Arenas>::with(ctx, viewport, |arenas| {
+        arenas.by_root.values().find_map(|state| {
+            let find = |members: &[MemberDecl]| members.iter().find(|member| member.id == id).cloned();
+            // Until the arena's root runs in this pass, `members` holds last pass's registrations.
+            let decl = find(&state.members).or_else(|| (state.pass == pass_nr).then(|| find(&state.previous)).flatten())?;
+            Some((decl, state.outcome.filter(|outcome| outcome.pass == pass_nr).unwrap_or_default()))
+        })
+    })?;
+    Some(response::member(ui, id, decl.rect, decl.enabled, member_view(&outcome, id, decl.local, pointer_pos)))
 }
 
 fn member_view(outcome: &Outcome, id: Id, local: bool, pointer_pos: Option<Pos2>) -> MemberView {

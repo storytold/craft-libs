@@ -109,7 +109,7 @@ pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, Patter
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed, response_of};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
