@@ -317,7 +317,10 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
                     table.global_strings = p.declared;
                     global = p;
                 }
-                Err(e) => table.warnings.push(format!("global string pool: {e}")),
+                Err(e) => {
+                    table.truncated = true;
+                    table.warnings.push(format!("global string pool: {e}"));
+                }
             },
             RES_PACKAGE => {
                 if table.packages.len() >= MAX_PACKAGES {
@@ -368,6 +371,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
             return StringPool::default();
         }
         let Some(start) = pos.checked_add(offset).filter(|&start| offset >= hsize && start < end) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: {label} string pool is outside its payload"));
             return StringPool::default();
         };
@@ -384,6 +388,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 pool
             }
             Err(error) => {
+                table.truncated = true;
                 table.warnings.push(format!("package {name}: {label} string pool: {error}"));
                 StringPool::default()
             }
@@ -598,6 +603,9 @@ fn parse_type(
                     entry.value = Some(v.format(global));
                     entry.value_type = Some(v.type_name());
                     entry.raw = Some(v);
+                } else {
+                    table.truncated = true;
+                    table.warnings.push(format!("{tname} ({cfg}): incomplete value"));
                 }
             }
         }
@@ -669,11 +677,13 @@ mod tests {
             ("entry table past its chunk", corrupt(fr + 12, 1000)),
             ("invalid entry data start", corrupt(fr + 16, 0xffff)),
             ("an entry past its chunk", corrupt(fr + 84, 0x1000)),
+            // The second entry's header fits, but its value runs past the chunk.
+            ("a value past its chunk", corrupt(fr + 88, 24)),
         ] {
-            let french = t.entries.iter().filter(|e| e.locale == "fr").count();
-            assert!(french < 2, "{what}: the corruption should drop a French entry");
-            assert!(t.truncated, "{what}: dropped entries must mark the table partial");
-            assert!(!t.warnings.is_empty(), "{what}: dropped entries must be reported");
+            let french = t.entries.iter().filter(|e| e.locale == "fr" && e.value.is_some()).count();
+            assert!(french < 2, "{what}: the corruption should lose a French value");
+            assert!(t.truncated, "{what}: lost content must mark the table partial");
+            assert!(!t.warnings.is_empty(), "{what}: lost content must be reported");
         }
     }
 
