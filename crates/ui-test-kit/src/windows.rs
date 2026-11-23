@@ -264,6 +264,7 @@ pub struct Windows {
     /// The installed context.
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
+    root: RefCell<RootEnv>,
 }
 
 impl Default for Windows {
@@ -292,7 +293,7 @@ impl Windows {
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
-        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()) }
+        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()), root: RefCell::new(RootEnv::default()) }
     }
 
     /// The window facts child passes report from now on.
@@ -309,6 +310,11 @@ impl Windows {
     /// The window facts the root viewport reports from now on.
     pub fn root_info(&self, info: ViewportInfo) {
         *self.root_info.borrow_mut() = info;
+    }
+
+    /// The app's root values every frame gives from now on, the defaults until then.
+    pub fn root_env(&self, root: RootEnv) {
+        *self.root.borrow_mut() = root;
     }
 
     /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
@@ -337,7 +343,7 @@ impl Windows {
             root_dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
         CHILD_FILES.with(|files| *files.borrow_mut() = child_files);
         TREES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(RootEnv::default()));
+        set_input(&self.ctx, FrameInput::new(self.root.borrow().clone()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,

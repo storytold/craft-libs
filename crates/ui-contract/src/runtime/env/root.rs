@@ -40,6 +40,9 @@ pub struct RootEnv {
     /// Whether Escape in a focused text field also takes the focus from it, with or without typing to revert, so the
     /// next keys go to the window. A clearing field (a search box) still clears its text first.
     pub escape_leaves_fields: bool,
+    /// Whether a held key's repeats run the command its chord binds again (`FirePhase::Repeat`), as a held Cmd+= keeps
+    /// zooming in. A key with a hold binding, and a key held down while a modal layer opened or closed, repeat nothing.
+    pub shortcuts_repeat: bool,
     /// Which Tab stops a dialog's Tab order visits.
     pub dialog_tab: TabReach,
     /// Whether the canvas surround shows the theme's pattern.
@@ -80,6 +83,7 @@ impl Default for RootEnv {
             tab_all_controls: true,
             tab_toggles_chrome: false,
             escape_leaves_fields: false,
+            shortcuts_repeat: false,
             dialog_tab: TabReach::Root,
             canvas_pattern: true,
             cursor_follows_zoom: true,

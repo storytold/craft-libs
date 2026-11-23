@@ -239,7 +239,7 @@ pub enum FireSource {
 pub enum FirePhase {
     /// The press.
     Press,
-    /// A repeat of a held key.
+    /// A repeat of a held key, with `RootEnv::shortcuts_repeat` on.
     Repeat,
     /// The release of a momentary command's or a tool's key: a momentary command ends here, and a spring-loaded tool
     /// gives back the previous one.

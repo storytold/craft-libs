@@ -2,6 +2,7 @@
 //! docking the whole window by dragging its title row. A context menu opened in a palette places its popup window as
 //! it places the menu in the main window.
 
+use craft_behavior::Intent;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
@@ -14,12 +15,15 @@ use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
-use craft_ui::runtime::drag;
+use craft_ui::runtime::env::RootEnv;
+use craft_ui::runtime::{drag, keys};
 use craft_ui::testing::access::AccessTree;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, HeldButtons};
+use craft_ui::text::NumberField;
 use craft_ui_test_kit::windows::{AppKitWindow, FilesOver, Out, Windows};
 use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
@@ -1380,6 +1384,78 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     };
     assert_eq!(reached(false), 1, "a file no target took arrives once");
     assert_eq!(reached(true), 0, "a file a target in the window took does not");
+}
+
+/// A palette whose panel holds an Opacity field, then reads the keys its OS window's pass left, as an app passes a
+/// panel window's leftover Enter and Escape on to its main window: how many of each it read.
+#[derive(Default)]
+struct FieldPalette {
+    opacity: Option<f64>,
+    submits: usize,
+    cancels: usize,
+}
+
+impl DockPanels<u32> for FieldPalette {
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        NumberField::new("Opacity", Bind::bound(&mut self.opacity)).show(ui);
+        if ui.ctx().viewport_id() != ViewportId::ROOT {
+            self.submits += usize::from(keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Submit)));
+            self.cancels += usize::from(keys::with_window_intents(ui.ctx(), false, |window| window.take(Intent::Cancel)));
+        }
+    }
+}
+
+/// Enter and Escape in a field of a native palette are the field's, with `RootEnv::escape_leaves_fields` off or on:
+/// neither reaches the palette window's leftover keys. A press on the field once it has the focus, which egui gives the
+/// field's text widget, is no press on the group's empty body, which would hand the focus to the panel's tab. Once
+/// Escape has taken the focus from the field, Enter is the window's.
+#[trial]
+fn enter_and_escape_in_a_native_palettes_field_stay_the_fields() {
+    for leaves in [false, true] {
+        let windows = Windows::new();
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let mut root = RootEnv::new();
+        root.escape_leaves_fields = leaves;
+        windows.root_env(root);
+        let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+        let mut palette = FieldPalette { opacity: Some(50.0), ..FieldPalette::default() };
+        let mut frame = |palette: &mut FieldPalette, child: Vec<Event>| {
+            windows.frame(vec![], child, |ui| {
+                let _ =
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut *palette, DockConfig::default())
+                        .show(ui);
+            })
+        };
+        let mut out = frame(&mut palette, vec![]);
+        for _ in 0..3 {
+            out = frame(&mut palette, vec![]);
+        }
+        let child = out.trees.iter().find(|(viewport, _)| *viewport != ViewportId::ROOT).expect("the palette has an OS window");
+        let tree = &child.1;
+        let field = tree
+            .keys()
+            .into_iter()
+            .find(|key| tree.name_of(*key) == Some("Opacity") && tree.role_of(*key) != Some(Role::LABEL))
+            .and_then(|key| tree.bounds_of(key))
+            .expect("the palette shows the field")
+            .center();
+        for key in [Key::Enter, Key::Escape] {
+            for events in [vec![moved(field), press(field)], vec![release(field)], vec![], vec![]] {
+                frame(&mut palette, events);
+            }
+            for events in [vec![key_press(key, Modifiers::NONE)], vec![key_release(key, Modifiers::NONE)], vec![], vec![]] {
+                frame(&mut palette, events);
+            }
+            assert_eq!((palette.submits, palette.cancels), (0, 0), "leaves {leaves}: {key:?} in the field is the field's");
+        }
+        if leaves {
+            for events in [vec![key_press(Key::Enter, Modifiers::NONE)], vec![key_release(Key::Enter, Modifiers::NONE)], vec![]] {
+                frame(&mut palette, events);
+            }
+            assert_eq!(palette.submits, 1, "an Enter after Escape left the field is the window's");
+        }
+    }
 }
 
 /// A palette float made in the app window.

@@ -261,6 +261,8 @@ pub struct Inherited {
     pub(crate) tab_toggles_chrome: bool,
     /// `RootEnv::escape_leaves_fields`.
     pub(crate) escape_leaves_fields: bool,
+    /// `RootEnv::shortcuts_repeat`: the key stage reads only it, so no view's key covers it.
+    pub(crate) shortcuts_repeat: bool,
     /// `RootEnv::cursor_follows_zoom`: painted cursor images follow the interface zoom.
     pub(crate) cursor_follows_zoom: bool,
     /// `RootEnv::tooltips`: tooltips show.
@@ -658,6 +660,7 @@ impl Env {
                     today: root.today,
                     tab_toggles_chrome: root.tab_toggles_chrome,
                     escape_leaves_fields: root.escape_leaves_fields,
+                    shortcuts_repeat: root.shortcuts_repeat,
                     cursor_follows_zoom: root.cursor_follows_zoom,
                     tooltips: root.tooltips,
                     canvas_pattern: root.canvas_pattern,

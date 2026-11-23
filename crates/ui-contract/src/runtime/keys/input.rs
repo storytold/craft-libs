@@ -61,6 +61,8 @@ struct Strip<'a> {
     alt_code_ended: bool,
     /// Whether the window's keymap binds a chord to a command that is enabled now (`commands::runs_now`).
     bound: &'a dyn Fn(&Chord) -> bool,
+    /// A held key's repeats are shortcuts too (`RootEnv::shortcuts_repeat`).
+    repeats: bool,
 }
 
 /// How the strip reads one raw event beside its key reading: when it arrived, and what its neighbours say of it.
@@ -470,10 +472,10 @@ impl Strip<'_> {
                     held: Vec::new(),
                     ime: false,
                 });
-                if !repeat {
+                if !repeat || self.repeats {
                     batch.shortcuts.push(Shortcut {
                         input: *input,
-                        phase: FirePhase::Press,
+                        phase: if repeat { FirePhase::Repeat } else { FirePhase::Press },
                         press: Some(batch.presses.len() - 1),
                         canvas: false,
                         at,
@@ -631,6 +633,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
     let bound = |chord: &Chord| commands::runs_now(ctx, viewport, chord);
     let press_captured = crate::runtime::pointer::press_captured_in(ctx, viewport) || crate::runtime::drag::running(ctx);
+    let repeats = Env::root_for(ctx, viewport).is_some_and(|env| env.shortcuts_repeat);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
@@ -658,6 +661,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             alt_claimed: !stage.alt_claims.is_empty(),
             alt_code_ended,
             bound: &bound,
+            repeats,
         };
         let mut batch = Batch::default();
         let mut visible = None;
