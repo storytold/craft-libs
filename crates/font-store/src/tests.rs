@@ -210,9 +210,14 @@ fn postscript_lookups_match_exactly() {
 fn many_files_sharing_a_postscript_name_index_in_linear_time() {
     let mut v = fixture().index;
     let bytes = font("Many", "Regular", 400);
+    let template = file_entry("ofl/many0/Many-0.ttf", &bytes, "normal", 400, json!([]), &["Many-Regular", "Many-Regular"]);
     for f in 0..40 {
         let files: Vec<serde_json::Value> = (0..2500)
-            .map(|i| file_entry(&format!("ofl/many{f}/Many-{i}.ttf"), &bytes, "normal", 400, json!([]), &["Many-Regular", "Many-Regular"]))
+            .map(|i| {
+                let mut file = template.clone();
+                file["path"] = json!(format!("ofl/many{f}/Many-{i}.ttf"));
+                file
+            })
             .collect();
         let family = json!({"family": format!("Many {f}"), "license": "OFL", "license_path": null, "files": files});
         v["families"].as_array_mut().unwrap().push(family);
