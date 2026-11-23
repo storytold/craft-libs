@@ -4131,13 +4131,8 @@ mod tests {
         assert_eq!(pick(&x86_only, portable(), Arch::X64, Arch::X64).as_deref(), Ok("photocraft-0.24.0-windows-x86-portable.zip"));
         assert_eq!(pick(&x64_only, portable(), Arch::Arm64, Arch::Arm64).as_deref(), Ok("photocraft-0.24.0-windows-x64-portable.zip"));
         // Only Windows has MSI copies to keep apart: elsewhere the machine's platform decides.
-        let linux = pick_update(
-            app,
-            &msi(),
-            &release_with(&["photocraft-0.24.0-linux-x86_64.AppImage"]),
-            Platform { os: Os::Linux, arch: Arch::X64 },
-            Some(Arch::Arm64),
-        );
+        let linux_release = release_with(&["photocraft-0.24.0-linux-x86_64.AppImage"]);
+        let linux = pick_update(app, &msi(), &linux_release, Platform { os: Os::Linux, arch: Arch::X64 }, Some(Arch::Arm64));
         assert!(linux.as_ref().is_err_and(|e| e.ends_with("for Linux x64")), "{linux:?}");
     }
 
