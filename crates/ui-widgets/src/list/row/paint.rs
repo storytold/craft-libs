@@ -186,7 +186,6 @@ impl ListRow<'_> {
         if !self.renaming && !self.label_has_field() {
             let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
             let look = if muted { &style.cell_muted } else { &style.text };
-<<<<<<< HEAD
             let ink = hue.unwrap_or_else(|| cx.resolve(&look.color));
             let width = (label.width() - beside).max(0.0);
             match (self.document_run(cx.resolved.label, ink.egui()), document, &self.document) {
@@ -198,16 +197,10 @@ impl ListRow<'_> {
                     draw.doc(Rect::from_min_size(Pos2::new(label.left(), top + (sizes.label_line - height) / 2.0), Vec2::new(width, height)), &text);
                 }
                 _ => {
-                    let mut span = Span::new(cx.resolved.label);
-                    span.italic = self.italic;
-                    let run = TextRun::spans(vec![span]).role(look.role).color(ink).elide();
+                    let run = self.label_run(cx.resolved.label).role(look.role).color(ink).elide();
                     draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(width, sizes.label_line)), &run);
                 }
             }
-=======
-            let run = self.label_run(cx.resolved.label).role(look.role).color(cx.resolve(&look.color)).elide();
-            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line)), &run);
->>>>>>> origin/next
         }
         top += sizes.label_line;
         if let Some(detail) = self.detail.as_ref().filter(|_| !self.heading) {

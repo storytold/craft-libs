@@ -4,20 +4,12 @@ mod adorn;
 pub(crate) mod alt_text;
 pub(crate) mod chips;
 mod completions;
-<<<<<<< HEAD
-mod hex;
-mod linked;
-mod number;
-mod selectable_text;
-mod text_field;
-mod word_run;
-=======
 pub(crate) mod hex;
 pub(crate) mod linked;
 pub(crate) mod number;
 pub(crate) mod selectable_text;
 pub(crate) mod text_field;
->>>>>>> origin/next
+mod word_run;
 mod words;
 pub(crate) mod zoom_field;
 

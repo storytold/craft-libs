@@ -3,22 +3,13 @@
 use super::swatch::hexagon;
 use super::{Swatch, SwatchMetrics, SwatchShape};
 use crate::contract::{
-<<<<<<< HEAD
     ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, LeadOnOpen, NoValue, Outcome,
-    Props, Role, SelectMode, ShowCollection as _, Sizing,
-=======
-    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, NoValue, Outcome, Props,
-    Remember as _, Role, SelectMode, ShowCollection as _, Sizing,
->>>>>>> origin/next
+    Props, Remember as _, Role, SelectMode, ShowCollection as _, Sizing,
 };
 use crate::list::RowTest;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-<<<<<<< HEAD
-use craft_behavior::{DisplayOrder, IconId, ItemSource, Metrics, Selection, TileLayout};
-=======
-use craft_behavior::{DisplayOrder, ItemLayout, ItemSource, Metrics, NavShape, Preview, ScrollPos, Selection, TileLayout};
->>>>>>> origin/next
+use craft_behavior::{DisplayOrder, IconId, ItemLayout, ItemSource, Metrics, NavShape, Preview, ScrollPos, Selection, TileLayout};
 use craft_theme::Srgba;
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
@@ -381,15 +372,12 @@ pub struct SwatchTable<'a> {
     /// Whether the cells are wells at the control height, as a palette's swatches are, instead of small touching cells.
     #[prop]
     wells: bool,
-<<<<<<< HEAD
-    /// The icon cell after the entries: its name and glyph.
-    trailing: Option<(Label, IconId)>,
-=======
     /// How the cells lie: a square grid, or touching hexagons. A honeycomb ignores `per_row`, `span` and `wells`: its
     /// rows follow the count of entries and its cells are `size.icon.md` wide.
     #[prop]
     arrangement: SwatchArrangement,
->>>>>>> origin/next
+    /// The icon cell after the entries: its name and glyph.
+    trailing: Option<(Label, IconId)>,
 }
 
 impl<'a> SwatchTable<'a> {
@@ -417,11 +405,8 @@ impl<'a> SwatchTable<'a> {
             marked: None,
             tips: false,
             wells: false,
-<<<<<<< HEAD
-            trailing: None,
-=======
             arrangement: SwatchArrangement::default(),
->>>>>>> origin/next
+            trailing: None,
         }
         .label(label)
     }
@@ -451,7 +436,6 @@ impl<'a> SwatchTable<'a> {
         let (swatches, tips, wells) = (self.swatches, self.tips, self.wells);
         let shape = if self.arrangement == SwatchArrangement::Honeycomb { SwatchShape::Hexagon } else { SwatchShape::Square };
         let marked = self.marked.take();
-<<<<<<< HEAD
         // A clone, not a take: `ideal_width` reads the trailing cell while the table shows.
         let trailing = self.trailing.clone();
         let rows = match &trailing {
@@ -465,12 +449,7 @@ impl<'a> SwatchTable<'a> {
                 // The rows name no key past the trailing cell; a mixed well keeps the closure total without a panic.
                 (None, None) => (Label::Empty, Swatch::new(Label::Empty, craft_behavior::Mixed::<Srgba>::Mixed)),
             };
-            let cell = cell.cell();
-=======
-        self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
-            let (name, color) = &swatches[*key];
-            let cell = Swatch::new(name.clone(), *color).cell().shape(shape);
->>>>>>> origin/next
+            let cell = cell.cell().shape(shape);
             let cell = if wells { cell.well() } else { cell };
             let cell = if marked.as_ref().is_some_and(|test| test.passes(key)) { cell.marked() } else { cell };
             if tips { cell.tooltip(name) } else { cell }
@@ -529,17 +508,12 @@ impl Collection for SwatchTable<'_> {
 
     /// Where the table takes its width from its content it asks for every cell in one row, or its count per row: the
     /// room it is offered then wraps the cells, as it does where it is given the width.
-<<<<<<< HEAD
-    fn ideal_width(&self, _item: Option<Vec2>, cx: &StyleCx<'_>) -> f32 {
-        let cells = self.cells();
-        let columns = self.per_row.map_or(cells, |columns| columns.max(1).min(cells));
-=======
     fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, cx: &StyleCx<'_>) -> f32 {
+        let cells = self.cells();
         if self.arrangement == SwatchArrangement::Honeycomb {
-            return HoneycombLayout::new(self.swatches.len(), self.cell(cx)).columns() as f32 * self.cell(cx) + 0.5;
+            return HoneycombLayout::new(cells, self.cell(cx)).columns() as f32 * self.cell(cx) + 0.5;
         }
-        let columns = self.per_row.map_or(self.swatches.len(), |columns| columns.max(1).min(self.swatches.len()));
->>>>>>> origin/next
+        let columns = self.per_row.map_or(cells, |columns| columns.max(1).min(cells));
         // Half a point over, so the division that counts the columns back never rounds below `columns`.
         columns as f32 * self.cell(cx) + 0.5
     }

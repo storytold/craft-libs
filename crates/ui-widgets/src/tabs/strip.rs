@@ -204,7 +204,7 @@ pub struct StripLayout {
     width: f32,
     height: f32,
     /// Space between document tabs; included in the fit budget but not in their hit rectangles.
-    gap: f32,
+    tab_gap: f32,
     measured_height: bool,
     fitting: Fitting,
     shown: Vec<bool>,
@@ -216,19 +216,15 @@ pub struct StripLayout {
 }
 
 impl StripLayout {
-<<<<<<< HEAD
-    fn new(count: usize, size: Vec2, gap: f32, selected: usize, mode: FitMode, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
+    fn new(count: usize, size: Vec2, tab_gap: f32, fitting: Fitting, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
         let (width, height) = (size.x, size.y);
-=======
-    fn new(count: usize, width: f32, height: f32, fitting: Fitting, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
->>>>>>> origin/next
         let each = if count == 0 { 0.0 } else { width / count as f32 };
         let mut layout = StripLayout {
             ideal: vec![each; count],
             min: vec![0.0; count],
             width,
             height,
-            gap,
+            tab_gap,
             measured_height: false,
             fitting,
             shown: Vec::new(),
@@ -249,7 +245,9 @@ impl StripLayout {
         if ends.is_empty() {
             return (0.0, Vec::new());
         }
-        let natural = self.ideal.iter().sum::<f32>() + ghosts.iter().map(|ghost| ghost.width).sum::<f32>();
+        let places = self.ideal.len() + ghosts.len();
+        let natural =
+            self.ideal.iter().sum::<f32>() + ghosts.iter().map(|ghost| ghost.width).sum::<f32>() + self.tab_gap * places.saturating_sub(1) as f32;
         let fit = fit_items(ends, self.width - natural - gap, *gap, *gap, 0.0);
         let sized: Vec<(usize, f32, bool)> = fit
             .shown
@@ -279,30 +277,9 @@ impl StripLayout {
     /// of its width, so the row holds still until its exit ends.
     fn refit(&mut self) {
         let count = self.ideal.len();
-<<<<<<< HEAD
-        let minimum = self.min.iter().copied().fold(0.0, f32::max);
-        // Give every fitted tab a trailing gap, then return the last gap to the available width.
-        // This keeps the spaces in the shrink and overflow budget without adding one after the last tab.
-        let padded: Vec<f32> = self.ideal.iter().map(|width| width + self.gap).collect();
-        let fit = self.mode.fit(&padded, self.selected, self.width + self.gap, minimum + self.gap, self.height);
-        self.shown = vec![false; count];
-        self.left = vec![self.width; count];
-        self.wide = vec![0.0; count];
-        let mut at = 0.0;
-        let mut placed = Vec::with_capacity(fit.shown.len());
-        for &(index, padded_width) in &fit.shown {
-            let width = (padded_width - self.gap).max(0.0);
-            self.shown[index] = true;
-            self.left[index] = at;
-            self.wide[index] = width;
-            placed.push((index, at, width));
-            at += width + self.gap;
-        }
-        if !placed.is_empty() {
-            at -= self.gap;
-=======
         let (ends_room, ends) = self.fit_ends();
-        let StripLayout { ideal, min, width, height, fitting, shown, left, wide, report, ctx, .. } = self;
+        let StripLayout { ideal, min, width, height, tab_gap, fitting, shown, left, wide, report, ctx, .. } = self;
+        let tab_gap = *tab_gap;
         let Fitting { selected, mode, kept, ghosts, departed, .. } = &*fitting;
         let mut lane = Vec::with_capacity(count + ghosts.len());
         for at in 0..=count {
@@ -311,12 +288,15 @@ impl StripLayout {
                 lane.push(Lane::Tab(at));
             }
         }
-        let natural: Vec<f32> = lane
+        // Every place in the lane takes a trailing gap, and the last gap goes back to the available width: the spaces
+        // are in the shrink and overflow budget without one after the last tab.
+        let padded: Vec<f32> = lane
             .iter()
             .map(|place| match *place {
                 Lane::Tab(at) => ideal.get(at).copied().unwrap_or(0.0),
                 Lane::Ghost(k) => ghosts.get(k).map_or(0.0, |ghost| ghost.width),
             })
+            .map(|width| width + tab_gap)
             .collect();
         let held: Vec<bool> = lane
             .iter()
@@ -327,14 +307,15 @@ impl StripLayout {
             .collect();
         let selected = lane.iter().position(|place| matches!(*place, Lane::Tab(at) if at == *selected)).unwrap_or(usize::MAX);
         let minimum = min.iter().copied().fold(0.0, f32::max);
-        let fit = mode.fit(&natural, selected, &held, (*width - ends_room).max(0.0), minimum, *height);
+        let fit = mode.fit(&padded, selected, &held, (*width - ends_room).max(0.0) + tab_gap, minimum + tab_gap, *height);
         *shown = vec![false; count];
         *left = vec![*width; count];
         *wide = vec![0.0; count];
         let mut at = 0.0;
         let mut placed = Vec::with_capacity(fit.shown.len());
         let mut slots: Vec<Option<(f32, f32)>> = vec![None; *departed];
-        for &(position, extent) in &fit.shown {
+        for &(position, padded_extent) in &fit.shown {
+            let extent = (padded_extent - tab_gap).max(0.0);
             match lane.get(position) {
                 Some(&Lane::Tab(index)) => {
                     shown[index] = true;
@@ -349,8 +330,10 @@ impl StripLayout {
                 }
                 None => {}
             }
-            at += extent;
->>>>>>> origin/next
+            at += extent + tab_gap;
+        }
+        if !fit.shown.is_empty() {
+            at -= tab_gap;
         }
         let hidden: Vec<usize> = fit
             .overflow
@@ -398,7 +381,7 @@ impl ItemLayout for StripLayout {
                     return false;
                 }
                 let rect = self.rect(at, offset);
-                point.y >= rect.top() && point.y <= rect.bottom() && point.x >= rect.left() - self.gap && point.x < rect.left()
+                point.y >= rect.top() && point.y <= rect.bottom() && point.x >= rect.left() - self.tab_gap && point.x < rect.left()
             })
         })
     }
@@ -537,16 +520,13 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
-<<<<<<< HEAD
     /// Which tabs a middle click closes, where the kind closes on one (`TabKind::middle_click_closes`): every tab
     /// when unset. A host with tabs that cannot close (`Tab::closable(false)`) names the ones that can.
     #[prop(func = "Fn(&K) -> bool")]
     can_close: Option<RowTest<'a, K>>,
-=======
     /// The role of each tab, an input of the fit: contextual tabs are kept ahead of plain tabs.
     #[prop(func = "Fn(&K) -> TabRole")]
     roles: Option<TabRoles<'a, K>>,
->>>>>>> origin/next
     /// What the strip takes from drags that did not start in it, in order.
     drops: Vec<DropKind<'a, K>>,
     /// Where the strip's own drag may land: the test gets the drag, the tab under the pointer and the position before which the
@@ -601,11 +581,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             tear_off: false,
             wheel_selects: false,
             can_drag: None,
-<<<<<<< HEAD
             can_close: None,
-=======
             roles: None,
->>>>>>> origin/next
             drops: Vec::new(),
             accepts: None,
             trailing: &[],
@@ -1017,18 +994,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         let count = source.len();
         *self.texts.borrow_mut() = (0..count).map(|at| (source.key(at), source.text(at).map(|text| text.into_owned()).unwrap_or_default())).collect();
         let selected = self.shown.as_ref().and_then(|key| source.index_of(key)).unwrap_or(usize::MAX);
-<<<<<<< HEAD
-        let gap = if self.kind == TabKind::Document { cx.tokens.space.gap.inline } else { 0.0 };
-        StripLayout::new(
-            count,
-            Vec2::new(width, cx.tokens.size.bar.tab),
-            gap,
-            selected,
-            self.kind.fit_mode(),
-            self.report.clone(),
-            cx.frame_ctx().clone(),
-        )
-=======
         let keys: Vec<K> = (0..count).map(|at| source.key(at)).collect();
         // The roles are inputs of the fit: it runs here, before any tab is built.
         let kept = match &self.roles {
@@ -1039,8 +1004,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         // Each end item is measured in this pass, with its label and icon only.
         let ends = self.trailing.iter().map(|end| end.fit_item(cx)).collect();
         let fitting = Fitting { selected, mode: self.kind.fit_mode(), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
-        StripLayout::new(count, width, cx.tokens.size.bar.tab, fitting, self.report.clone(), cx.frame_ctx().clone())
->>>>>>> origin/next
+        // Document tabs stand apart by the inline gap; the other kinds touch.
+        let tab_gap = if self.kind == TabKind::Document { cx.tokens.space.gap.inline } else { 0.0 };
+        StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 
     /// Every tab takes the strip's kind and size.

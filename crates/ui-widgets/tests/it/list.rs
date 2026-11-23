@@ -1267,7 +1267,6 @@ fn a_row_dragged_to_the_edge_scrolls_the_list_and_rests_without_frames() {
     fixture.release_at(Pos2::new(grab.x, list.center().y));
 }
 
-<<<<<<< HEAD
 /// A right click on a row's button asks for the row's menu, as a right click elsewhere on the row does, and does not
 /// press the button: an attachment's Save button opens the attachment's menu.
 #[trial]
@@ -1610,7 +1609,8 @@ fn a_revealed_part_is_exposed_only_while_its_row_shows_it() {
     fixture.frame(vec![pointer::moved(over)]).settle();
     assert!(fixture.by_label(MOVES[1]).is_some(), "the hovered row's part is exposed");
     assert!(fixture.by_label(MOVES[0]).is_none() && fixture.by_label(MOVES[2]).is_none(), "the other rows' parts stay hidden");
-=======
+}
+
 /// Auto rows place by their measure in the first frame. In a column sized from its content along the height, where
 /// each pass runs the list's measuring run and its real run, the first frame runs once, measures each row once, builds each row at most
 /// twice, and places the rows and the list where the settled list has them. A click that selects a row and a rename
@@ -1697,5 +1697,4 @@ fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
     assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), segment.node, "the first row's segment took the focus");
     fixture.key(Key::PageDown, Modifiers::NONE).settle();
     assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
->>>>>>> origin/next
 }

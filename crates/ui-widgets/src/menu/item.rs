@@ -83,11 +83,12 @@ impl RowInput {
         RowInput { moving, hovered, focused, keyboard, gained, started }
     }
 
-    /// Makes the row `id` the level's active row when it `runs` and the pointer moved over it or the keyboard landed
-    /// on it. The focused row of a menu the pointer opened is not active until then.
+    /// Makes the row `id` the level's active row when it `runs` and the keyboard landed on it. The pointer's row is
+    /// made active by its `Menu` before the rows run (`MenuLevel::follow_pointer`); the focused row of a menu the
+    /// pointer opened is not active until the keyboard lands on it.
     pub(crate) fn activate(&self, ctx: &Context, id: Id, level: &MenuLevel, runs: bool) {
         let landed = self.focused && self.keyboard && (self.gained || self.started);
-        if runs && ((self.hovered && self.moving) || landed) && level.activate_row(id) {
+        if runs && landed && level.activate_row(id) {
             frame::request_repaint(ctx);
         }
     }
@@ -598,21 +599,12 @@ impl Component for MenuItem<'_> {
         let heading = level.aimed(cx.id);
         let rested = {
             let rest = cx.memory::<Rest>();
-<<<<<<< HEAD
-            if hovered && !moving {
-                now - *rest.since.get_or_insert(now)
-=======
-            let gained = focused && !rest.focused;
-            rest.focused = focused;
-            let started = keyboard && !rest.keyboard;
-            rest.keyboard = keyboard;
             // The rest starts at the pointer's last move over the row.
             if hovered && moving {
                 rest.since = Some(now);
-                (0.0, gained, started)
+                0.0
             } else if hovered {
-                (now - *rest.since.get_or_insert(now), gained, started)
->>>>>>> origin/next
+                now - *rest.since.get_or_insert(now)
             } else {
                 rest.since = None;
                 0.0
@@ -621,13 +613,7 @@ impl Component for MenuItem<'_> {
         let takes_over = hovered && (!heading || rested >= AIM_REST);
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
-<<<<<<< HEAD
         input.activate(&ctx, cx.id, &level, enabled);
-=======
-        if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
-            frame::request_repaint(&ctx);
-        }
->>>>>>> origin/next
         // A disabled row is never active.
         self.active = enabled && level.is_active(cx.id);
         // A crossed row waits for the rest to end: one pass when it does.

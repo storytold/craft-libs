@@ -64,7 +64,7 @@ fn document_tabs_leave_space_between_neighbours() {
 
 #[trial]
 fn document_tabs_shrink_before_overflow() {
-    let fit = TabKind::Document.fit_mode().fit(&[100.0, 100.0, 100.0], 0, 240.0, 50.0, 20.0);
+    let fit = TabKind::Document.fit_mode().fit(&[100.0, 100.0, 100.0], 0, &[], 240.0, 50.0, 20.0);
     assert!(fit.overflow.is_empty(), "tabs that can shrink into the strip remain visible");
     assert!(fit.shown.iter().all(|(_, width)| *width < 100.0));
 }
@@ -584,7 +584,6 @@ fn the_strip_reports_the_tab_under_the_pointer_while_another_root_holds_the_pres
     assert_eq!(*seen.borrow(), None, "the empty room has no tab");
 }
 
-<<<<<<< HEAD
 /// A secondary click on a document tab asks for the tab's menu without showing the tab.
 #[trial]
 fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
@@ -595,7 +594,88 @@ fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
         let keys = [0_usize, 1, 2];
         let source = keyed(&keys, |key: &usize| *key);
         let out = TabStrip::new("Documents").shown(now.get()).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
-=======
+        for event in &out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(key) = keys.last()
+            {
+                now.set(*key);
+            }
+        }
+        if out.menu.is_some() {
+            asked.set(asked.get() + 1);
+        }
+    });
+    fixture.settle();
+    let two = tab_rect(fixture.tree(), "Two").center();
+    fixture.frame(vec![moved(two)]);
+    fixture.frame(vec![secondary(two, true)]);
+    fixture.frame(vec![secondary(two, false)]);
+    fixture.settle();
+    assert!(menus.get() > 0, "the secondary click asks for the tab's menu");
+    assert_eq!(shown.get(), 0, "the secondary click does not show the tab");
+}
+
+/// A modified document tab marks itself with the suite's dot, not an asterisk after its name: no `*` is painted and the
+/// tab is as wide as an unmodified one plus the dot's room.
+#[trial]
+fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let tab = |modified: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let tabs = [DocumentTab::new(0, "Report.pdf").modified(modified)];
+            let _ = DocumentTabs::new("Docs", &tabs).selected(0).show(ui);
+        });
+        fixture.room(egui::vec2(600.0, 100.0)).settle();
+        let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
+        let width = fixture.by_role(Role::TAB).first().map_or(0.0, |tab| tab.rect.width());
+        (stars, width)
+    };
+    let (plain, modified) = (tab(false), tab(true));
+    assert_eq!(modified.0, 0, "no asterisk is painted");
+    assert!(modified.1 > plain.1, "the dot takes room beside the name: {} vs {}", modified.1, plain.1);
+}
+
+/// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
+/// name is painted once.
+#[trial]
+fn a_dragged_document_tab_shows_no_badge() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let tabs = [DocumentTab::new(0_usize, "Quarterly"), DocumentTab::new(1, "Other")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let one = tab_rect(&tree, "Quarterly");
+    let to = Pos2::new(one.center().x, one.center().y + 60.0);
+    frames.frame(vec![moved(one.center())], &mut show);
+    frames.frame(vec![press(one.center())], &mut show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(one.center().lerp(to, step as f32 / 4.0))], &mut show);
+    }
+    frames.idle(2, &mut show);
+    let shown = frames.texts().iter().filter(|text| text.text == "Quarterly").count();
+    assert_eq!(shown, 1, "the name is painted once, by the held tab, with no badge beside the pointer");
+}
+
+/// A very long document name does not stretch its tab across the strip: the tab stays near 22 characters wide and the
+/// next tab keeps its room.
+#[trial]
+fn a_very_long_document_name_is_cut_to_a_compact_tab() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let long = "a-very-long-synthetic-document-file-name-for-truncation-test-1234567890.pdf";
+    let tabs = [DocumentTab::new(0_usize, long), DocumentTab::new(1, "Short")];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+    });
+    fixture.idle(6);
+    let tab = fixture.by_label(long).expect("the long tab").rect;
+    let short = fixture.by_label("Short").expect("the next tab").rect;
+    assert!(tab.width() < 320.0, "the long name is cut short, got {}", tab.width());
+    assert!(short.left() >= tab.right(), "the next tab follows it");
+}
+
 const PANELS: [&str; 6] = ["Layers", "Channels", "Properties", "Adjustments", "History", "Navigator"];
 
 /// The widths of the panel tabs a strip shows in a room `room` wide, by title, with the second panel shown.
@@ -723,7 +803,6 @@ fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
         let source = keyed(&keys, |key: &usize| *key);
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).wheel_selects().shown(now.get());
         let out = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]));
->>>>>>> origin/next
         for event in &out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                 && let Some(key) = keys.last()
@@ -731,81 +810,6 @@ fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
                 now.set(*key);
             }
         }
-<<<<<<< HEAD
-        if out.menu.is_some() {
-            asked.set(asked.get() + 1);
-        }
-    });
-    fixture.settle();
-    let two = tab_rect(fixture.tree(), "Two").center();
-    fixture.frame(vec![moved(two)]);
-    fixture.frame(vec![secondary(two, true)]);
-    fixture.frame(vec![secondary(two, false)]);
-    fixture.settle();
-    assert!(menus.get() > 0, "the secondary click asks for the tab's menu");
-    assert_eq!(shown.get(), 0, "the secondary click does not show the tab");
-}
-
-/// A modified document tab marks itself with the suite's dot, not an asterisk after its name: no `*` is painted and the
-/// tab is as wide as an unmodified one plus the dot's room.
-#[trial]
-fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
-    use craft_ui::tabs::{DocumentTab, DocumentTabs};
-    let tab = |modified: bool| {
-        let mut fixture = Fixture::new(move |ui| {
-            let tabs = [DocumentTab::new(0, "Report.pdf").modified(modified)];
-            let _ = DocumentTabs::new("Docs", &tabs).selected(0).show(ui);
-        });
-        fixture.room(egui::vec2(600.0, 100.0)).settle();
-        let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
-        let width = fixture.by_role(Role::TAB).first().map_or(0.0, |tab| tab.rect.width());
-        (stars, width)
-    };
-    let (plain, modified) = (tab(false), tab(true));
-    assert_eq!(modified.0, 0, "no asterisk is painted");
-    assert!(modified.1 > plain.1, "the dot takes room beside the name: {} vs {}", modified.1, plain.1);
-}
-
-/// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
-/// name is painted once.
-#[trial]
-fn a_dragged_document_tab_shows_no_badge() {
-    use craft_ui::tabs::{DocumentTab, DocumentTabs};
-    let tabs = [DocumentTab::new(0_usize, "Quarterly"), DocumentTab::new(1, "Other")];
-    let mut frames = Frames::new();
-    let mut show = |ui: &mut Ui| {
-        let _ = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
-    };
-    frames.idle(2, &mut show);
-    let tree = frames.tree();
-    let one = tab_rect(&tree, "Quarterly");
-    let to = Pos2::new(one.center().x, one.center().y + 60.0);
-    frames.frame(vec![moved(one.center())], &mut show);
-    frames.frame(vec![press(one.center())], &mut show);
-    for step in 1..=4 {
-        frames.frame(vec![moved(one.center().lerp(to, step as f32 / 4.0))], &mut show);
-    }
-    frames.idle(2, &mut show);
-    let shown = frames.texts().iter().filter(|text| text.text == "Quarterly").count();
-    assert_eq!(shown, 1, "the name is painted once, by the held tab, with no badge beside the pointer");
-}
-
-/// A very long document name does not stretch its tab across the strip: the tab stays near 22 characters wide and the
-/// next tab keeps its room.
-#[trial]
-fn a_very_long_document_name_is_cut_to_a_compact_tab() {
-    use craft_ui::tabs::{DocumentTab, DocumentTabs};
-    let long = "a-very-long-synthetic-document-file-name-for-truncation-test-1234567890.pdf";
-    let tabs = [DocumentTab::new(0_usize, long), DocumentTab::new(1, "Short")];
-    let mut fixture = Fixture::new(move |ui| {
-        let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
-    });
-    fixture.idle(6);
-    let tab = fixture.by_label(long).expect("the long tab").rect;
-    let short = fixture.by_label("Short").expect("the next tab").rect;
-    assert!(tab.width() < 320.0, "the long name is cut short, got {}", tab.width());
-    assert!(short.left() >= tab.right(), "the next tab follows it");
-=======
     });
     fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
     let (first, third) = (tab_rect(fixture.tree(), RIBBON[0]), tab_rect(fixture.tree(), RIBBON[2]));
@@ -1044,5 +1048,4 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     let back = fixture.by_label(RIBBON[TABLE]).expect("a contextual tab that enters has a node once listed");
     fixture.click(&back);
     assert_eq!(shown.get(), TABLE, "a click on the entering tab shows it");
->>>>>>> origin/next
 }

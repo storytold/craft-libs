@@ -323,15 +323,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
-<<<<<<< HEAD
     /// Whether the field counts percent: it shows one decimal and its sign right after the number.
     fn is_percent(&self) -> bool {
         self.codec.is_none() && self.unit_kind == Some(UnitKind::Percent)
-=======
+    }
+
     /// Whether the field uses the dash for a missing or invalid value.
     fn shows_blank(&self, shown: Option<&V>) -> bool {
         shown.is_none() || non_finite(shown) || (self.status_zoom && shown.and_then(NumberValue::number).is_none())
->>>>>>> origin/next
     }
 
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
@@ -574,13 +573,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
-<<<<<<< HEAD
             if self.mixed_word && shown.is_none() {
                 self.options.placeholder = Some(cx.words::<TextWords>().mixed.clone());
-            } else if shown.is_none() || non_finite(shown) {
-=======
-            if self.shows_blank(shown) {
->>>>>>> origin/next
+            } else if self.shows_blank(shown) {
                 self.options.placeholder = Some(BLANK.into());
             } else if self.automatic {
                 self.options.placeholder = Some(cx.words::<TextWords>().automatic.clone());

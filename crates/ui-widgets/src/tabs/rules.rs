@@ -68,19 +68,11 @@ pub enum OverflowMenu {
 }
 
 impl TabKind {
-<<<<<<< HEAD
-    /// How tab widths are fitted: whole titles for text tabs, shrinking for document and panel tabs.
+    /// How tab widths are fitted: whole titles for text and ribbon tabs, shrinking for document and panel tabs.
     pub fn fit_mode(self) -> FitMode {
         match self {
-            Self::Text => FitMode::Whole,
-            Self::Document | Self::Panel => FitMode::Shrink,
-=======
-    /// How tab widths are fitted: whole titles for document, text and ribbon tabs, shrinking for panel tabs.
-    pub fn fit_mode(self) -> FitMode {
-        match self {
-            Self::Document | Self::Text | Self::Ribbon => FitMode::Whole,
-            Self::Panel => FitMode::Shrink { keep_selected: self.keeps_active_width() },
->>>>>>> origin/next
+            Self::Text | Self::Ribbon => FitMode::Whole,
+            Self::Document | Self::Panel => FitMode::Shrink { keep_selected: self.keeps_active_width() },
         }
     }
 

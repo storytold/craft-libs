@@ -2,15 +2,10 @@
 
 use super::{CellStatus, HueTarget, ListRow, RowInk, TrailingFace, TrailingPart};
 use crate::contract::Show as _;
-<<<<<<< HEAD
-use crate::primitives::IconSpec;
+use crate::primitives::{IconSpec, Span};
 use crate::runtime::env::Env;
 use crate::style::DataColor;
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, show_as_only_item_across, story};
-=======
-use crate::primitives::{IconSpec, Span};
-use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
->>>>>>> origin/next
 use craft_behavior::{ColumnKey, IconId};
 use craft_theme::variant::Tone;
 use egui::{Pos2, Rangef, Rect, Ui};

@@ -180,11 +180,7 @@ impl Component for ListRow<'_> {
         if cx.proposal == Proposal::Min {
             return Vec2::new(probe_min, height);
         }
-<<<<<<< HEAD
-        let label = document.map_or_else(|| cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().x, |size| size.x);
-=======
-        let label = cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x;
->>>>>>> origin/next
+        let label = document.map_or_else(|| cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x, |size| size.x);
         // The label band holds the detail line under the label, so it is as wide as the wider of the two.
         let label = match self.detail.as_ref().filter(|_| self.detail_line()) {
             Some(detail) => label.max(cx.layout(&TextRun::new(detail.as_str()).role(cx.style.detail.role)).size().x),

@@ -146,7 +146,6 @@ fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
     assert_eq!(picked.get(), 2, "Enter picks the focused radio");
 }
 
-<<<<<<< HEAD
 /// A quiet check box (a thumbnail tile's) is a smaller box than the standard one.
 #[trial]
 fn a_quiet_check_box_is_smaller_than_the_standard_one() {
@@ -161,7 +160,8 @@ fn a_quiet_check_box_is_smaller_than_the_standard_one() {
         shown.get().height()
     };
     assert!(side(true) < side(false), "quiet {} against standard {}", side(true), side(false));
-=======
+}
+
 /// A click on a field's label focuses its one control when the control sits in an unlabelled row beside text that
 /// takes no focus (a unit after a number field). The row makes its node by its type's role but reports none, so the
 /// label scope must still see the number field. Before that, the scope saw no control and the click did nothing.
@@ -197,5 +197,4 @@ fn a_click_on_a_label_focuses_its_control_inside_an_unlabelled_row() {
     let label = label.and_then(|key| fixture.target(key)).expect("the field's label node");
     fixture.access(AccessActionKind::Click, &label).settle();
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(field.get()), "the click on the label focuses the number field");
->>>>>>> origin/next
 }

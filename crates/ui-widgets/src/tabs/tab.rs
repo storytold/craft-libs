@@ -19,13 +19,8 @@ use crate::contract::{
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun, Wrap};
 use crate::runtime::env::Label;
-<<<<<<< HEAD
-use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook};
-use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Proposal, Sense};
-=======
 use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
-use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
->>>>>>> origin/next
+use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Proposal, Sense};
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
@@ -79,15 +74,8 @@ const TEXT: PartKey = PartKey::new("text");
 const CLOSE: PartKey = PartKey::new("close");
 const PROGRESS: PartKey = PartKey::new("progress");
 
-<<<<<<< HEAD
-=======
 /// How many of a title's first letters a shrunk tab still shows.
 const MIN_LETTERS: usize = 3;
-
-/// The modified mark.
-const MARK: &str = "*";
-
->>>>>>> origin/next
 const CLOSE_REASON: &str = "The Close command closes the focused tab";
 
 /// The padding on each side of a ribbon tab's label: the strip insets its sliding underline by it, so the underline
@@ -158,18 +146,12 @@ struct Placed {
     icon: Option<Rect>,
     label: Rect,
     detail: Option<Rect>,
-<<<<<<< HEAD
     /// The marker dot, after the last text: a modified tab's too.
     marker: Option<Rect>,
-    progress: Option<Rect>,
-=======
-    /// The modified mark, right after the last text.
-    mark: Option<Rect>,
-    /// The band the label, detail and mark share.
+    /// The band the label, detail and marker share.
     band: Rect,
     /// Whether the band cuts the label or the detail.
     cut: bool,
->>>>>>> origin/next
 }
 
 /// One tab of a strip.
@@ -195,7 +177,7 @@ pub struct Tab<'a> {
     /// An icon before the label.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
-    /// Unsaved changes: a `*` after the detail, or after the label without one.
+    /// Unsaved changes: the marker dot after the detail, or after the label without one.
     #[prop(flag)]
     modified: bool,
     /// Whether the tab can be closed; by default whether the kind shows a close button.
@@ -283,10 +265,11 @@ impl<'a> Tab<'a> {
         let band = flow.rect();
         let label_natural = natural(&self.label_run(style, label));
         let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(style.detail.role)));
-        let mark_width = if self.modified { natural(&self.mark_run(style)) } else { 0.0 };
+        // The marker keeps its room; the label is cut first, then the detail.
+        let marker_width = if self.dotted() { sizes.gap + style.marker } else { 0.0 };
         let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
-        let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
-        let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
+        let label_width = label_natural.min((band.width() - marker_width - detail_gap - detail_natural).max(0.0));
+        let detail_width = detail_natural.min((band.width() - marker_width - label_width - detail_gap).max(0.0));
         let line = |rect: Rect, height: f32| {
             let top = if sizes.text_only && !sizes.middle { content.top() } else { content.center().y - height / 2.0 };
             Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
@@ -298,10 +281,13 @@ impl<'a> Tab<'a> {
         } else {
             (None, rest)
         };
-        let mark = self.modified.then(|| line(after.take_start(mark_width).0, sizes.label_line));
         let label = line(label, sizes.label_line);
+        let marker = self.dotted().then(|| {
+            let slot = after.take_start(sizes.gap).1.take_start(style.marker).0;
+            Rect::from_center_size(Pos2::new(slot.center().x, label.center().y), Vec2::splat(style.marker))
+        });
         let cut = label_width < label_natural || detail_width < detail_natural;
-        Placed { close, icon, label, detail, mark, band, cut }
+        Placed { close, icon, label, detail, marker, band, cut }
     }
 
     fn name(&self, label: &str, words: &TabWords) -> String {
@@ -410,15 +396,13 @@ impl Component for Tab<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let sizes = &cx.style.sizes;
-<<<<<<< HEAD
-        if cx.proposal == Proposal::Min && self.kind != TabKind::Document {
-            return Vec2::new(sizes.min_content, sizes.label_line);
-=======
-        if cx.proposal == Proposal::Min {
+        // The first letters of the title: the least a shrunk tab shows.
+        let letters = || {
             let first: String = cx.resolved.label.chars().take(MIN_LETTERS).collect();
-            let letters = cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x;
-            return Vec2::new(letters, sizes.label_line);
->>>>>>> origin/next
+            cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x
+        };
+        if cx.proposal == Proposal::Min && self.kind != TabKind::Document {
+            return Vec2::new(letters(), sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
         let label_width = width(&self.label_run(cx.style, cx.resolved.label));
@@ -446,7 +430,7 @@ impl Component for Tab<'_> {
             let end = cx.resolved.label.char_indices().nth(12).map_or(cx.resolved.label.len(), |(index, _)| index);
             let prefix = cx.resolved.label.get(..end).unwrap_or(cx.resolved.label);
             let readable = natural - capped + width(&self.label_run(cx.style, prefix));
-            readable.max(sizes.min_content).min(natural)
+            readable.max(letters()).min(natural)
         } else {
             natural
         };
@@ -458,72 +442,19 @@ impl Component for Tab<'_> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-<<<<<<< HEAD
-        let sizes = cx.style.sizes;
-        let rtl = cx.flow.is_rtl();
-        let content = cx.content_rect;
-        let mut flow = Flow::new(content, rtl);
-        let mut close = None;
-        if self.shows_close() {
-            let at_start = cx.style.close_side == if rtl { CloseSide::Right } else { CloseSide::Left };
-            let (slot, rest) = if at_start { flow.take_start(sizes.close_box) } else { flow.take_end(sizes.close_box) };
-            close = Some(slot);
-            flow = if at_start { rest.take_start(sizes.gap).1 } else { rest.take_end(sizes.gap).1 };
-        }
-        flow = flow.take_end(sizes.tail).1;
-        let mut icon = None;
-        if self.icon.is_some() {
-            let (slot, rest) = flow.take_start(sizes.icon);
-            icon = Some(Rect::from_center_size(slot.center(), Vec2::splat(sizes.icon)));
-            flow = rest.take_start(sizes.gap).1;
-        }
-        let band = flow.rect();
-        let natural = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
-        let label_natural = natural(&self.label_run(cx.style, cx.resolved.label));
-        let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(cx.style.detail.role)));
-        let marker_width = if self.dotted() { sizes.gap + cx.style.marker } else { 0.0 };
-        // The marker keeps its room; the label is cut first, then the detail.
-        let kept = marker_width;
-        let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
-        let label_width = label_natural.min((band.width() - kept - detail_gap - detail_natural).max(0.0));
-        let detail_width = detail_natural.min((band.width() - kept - label_width - detail_gap).max(0.0));
-        let line = |rect: Rect, height: f32| {
-            let top = if sizes.text_only { content.top() } else { content.center().y - height / 2.0 };
-            Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
-        };
-        let (label, rest) = flow.take_start(label_width);
-        let (detail, after) = if detail_width > 0.0 {
-            let (detail, after) = rest.take_start(detail_gap).1.take_start(detail_width);
-            (Some(line(detail, sizes.detail_line)), after)
-        } else {
-            (None, rest)
-        };
-        let label = line(label, sizes.label_line);
-        let marker = self.dotted().then(|| {
-            let slot = after.take_start(sizes.gap).1.take_start(cx.style.marker).0;
-            Rect::from_center_size(Pos2::new(slot.center().x, label.center().y), Vec2::splat(cx.style.marker))
-        });
-        let cut = label_width < label_natural || detail_width < detail_natural;
-        if cut {
-=======
         let placed = self.place(cx.style, cx.content_rect, cx.flow.is_rtl(), cx.resolved.label, |run| cx.layout_at(run, f32::INFINITY).size().x);
         if placed.cut {
->>>>>>> origin/next
             let full = match self.detail_text() {
                 Some(detail) => format!("{}, {detail}", cx.resolved.label),
                 None => cx.resolved.label.to_owned(),
             };
-<<<<<<< HEAD
             // The text part's tooltip covers the tab's own over the text, so the tab's tooltip follows the full label
             // there; an uncut tab shows the tab's own tooltip alone.
             let full = match cx.resolved.tooltip_text(&cx.env) {
                 Some(tip) if !tip.is_empty() => format!("{full}\n{tip}"),
                 _ => full,
             };
-            let _ = cx.part(TEXT, band).tooltip(full);
-=======
             let _ = cx.part(TEXT, placed.band).tooltip(full);
->>>>>>> origin/next
         }
         if let Some(slot) = placed.close {
             let name = self.close_label.clone();
@@ -543,10 +474,6 @@ impl Component for Tab<'_> {
         if let Some(bar) = progress {
             let _ = cx.part(PROGRESS, bar);
         }
-<<<<<<< HEAD
-        self.placed = Some(Placed { close, icon, label, detail, marker, progress });
-=======
->>>>>>> origin/next
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

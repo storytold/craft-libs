@@ -1,16 +1,11 @@
 //! Stories of `DatePicker` and `Calendar`.
 
-<<<<<<< HEAD
 use super::{Calendar, CalendarPopover, CalendarView, DatePicker, DatePrecision, PickedDate};
 use crate::buttons::Button;
 use crate::contract::overlay::Anchor;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity, clicked};
 use crate::display::Text;
 use crate::layout_components::Stack;
-=======
-use super::{Calendar, CalendarView, DatePicker, DatePrecision, PickedDate};
-use crate::contract::{Props as _, Show as _, Validity};
->>>>>>> origin/next
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::Mixed;

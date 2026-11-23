@@ -133,7 +133,6 @@ fn a_control_that_paints_no_label_shows_its_own_label_as_tooltip() {
     assert_eq!(glyph_label(Some("Leading (1/1000 em)")), ["Leading (1/1000 em)"], "a glyph label's tooltip replaces its name");
 }
 
-<<<<<<< HEAD
 const SPOT: craft_behavior::PartKey = craft_behavior::PartKey::new("spot");
 
 /// A layer of pointer-only spots over content it does not paint (comments over a page): it takes no room of its own,
@@ -183,7 +182,8 @@ fn a_part_tip_shows_on_a_rest_on_the_part() {
         });
         assert!(added.iter().any(|text| text.contains("Alpha")), "the spot's tip shows ({at:?}): {added:?}");
     }
-=======
+}
+
 /// The command the hint trials bind: an app command with a chord.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
 #[command(prefix = "tooltipHintTrial")]
@@ -288,5 +288,4 @@ fn a_tooltip_shown_from_inside_a_body_keeps_its_rect_frame_to_frame() {
     }
     let first = frames[0].1;
     assert!(first.is_some() && frames.iter().all(|(passes, rect)| *passes == 1 && *rect == first), "one pass a frame and one rect: {frames:?}");
->>>>>>> origin/next
 }
