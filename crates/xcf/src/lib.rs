@@ -265,6 +265,10 @@ struct Prop<'a> {
 /// Reads a property list, measuring known payloads whose length words GIMP writes incorrectly.
 /// Ends at PROP_END (type 0).
 fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
+    props_version(c, None)
+}
+
+fn props_version<'a>(c: &mut Cursor<'a>, version: Option<u32>) -> Result<Vec<Prop<'a>>> {
     let mut out = Vec::new();
     loop {
         let kind = c.u32()?;
@@ -280,7 +284,7 @@ fn props<'a>(c: &mut Cursor<'a>) -> Result<Vec<Prop<'a>>> {
                 let n = c.at(c.pos).u32()? as usize;
                 4usize.checked_add(n.checked_mul(3).ok_or_else(|| invalid("colormap overflow"))?).ok_or_else(|| invalid("colormap overflow"))?
             }
-            24 => user_unit_len(c)?,
+            24 => user_unit_len(c, version)?,
             48 => link_layer_len(c)?,
             _ => len,
         };
@@ -305,18 +309,27 @@ fn link_layer_len(c: &Cursor<'_>) -> Result<usize> {
     Ok(p.pos - c.pos)
 }
 
-/// The real size of a PROP_USER_UNIT payload: a float, a count and three (XCF 21+) or five
-/// strings. Measured without consuming.
-fn user_unit_len(c: &Cursor<'_>) -> Result<usize> {
+/// PROP_USER_UNIT has five strings before XCF21 and three from XCF21 onward.
+/// Its historically incorrect declared length is not a framing boundary.
+/// See <https://developer.gimp.org/core/standards/xcf/#image-properties>.
+fn user_unit_len(c: &Cursor<'_>, version: Option<u32>) -> Result<usize> {
     let mut p = c.at(c.pos);
     p.skip(8)?;
     for _ in 0..3 {
         p.string_bytes()?;
     }
-    // The two name forms of older files, when present: another string pair before the next
-    // property. Decide by whether a plausible property header follows.
+    if let Some(version) = version {
+        if version < 21 {
+            p.string_bytes()?;
+            p.string_bytes()?;
+        }
+        return Ok(p.pos - c.pos);
+    }
+    // Retain the versionless raw-property API's fallback only for callers that
+    // have no image header. Short grammatical names can resemble a property
+    // header, so file readers must supply their known version instead.
     let three = p.pos - c.pos;
-    if p.at(p.pos).u32().map(|k| k <= 64).unwrap_or(false) {
+    if p.at(p.pos).u32().map(|kind| kind <= 64).unwrap_or(false) {
         return Ok(three);
     }
     p.string_bytes()?;
@@ -678,7 +691,7 @@ impl<'a> Xcf<'a> {
         keep_going: &dyn Fn() -> bool,
     ) -> Result<records::Scan<records::Property<'a>>> {
         let start = MAGIC.len() + 5 + 12 + if self.image.version >= 4 { 4 } else { 0 };
-        records::properties(self.c.b, start, limits, budget, keep_going)
+        records::properties_with_version(self.c.b, start, self.image.version, limits, budget, keep_going)
     }
 
     /// Read the optional version-18+ standalone path pointer table.
@@ -861,7 +874,7 @@ fn tile_offsets(level: &mut Cursor<'_>, level_start: usize, count: usize, keep_g
 }
 
 fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {
-    for p in &props(c)? {
+    for p in &props_version(c, Some(image.version))? {
         match p.kind {
             1 => {
                 let n = be_u32(p.data).unwrap_or(0) as usize;

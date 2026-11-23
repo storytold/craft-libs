@@ -180,10 +180,36 @@ pub(super) fn layer_properties<'a>(
 ///
 /// Known incorrect length words use the same measured framing as the legacy
 /// reader. Truncated optional data returns a disclosed prefix; cancellation is
-/// always an error, including for empty lists and exhausted budgets.
+/// always an error, including for empty lists and exhausted budgets. Use
+/// [`properties_with_version`] when the file version is available; this legacy
+/// versionless entry point retains its historical unit-framing fallback.
 pub fn properties<'a>(
     bytes: &'a [u8],
     offset: usize,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<Property<'a>>> {
+    properties_version(bytes, offset, None, limits, budget, keep_going)
+}
+
+/// Like [`properties`], using the known file version for version-dependent
+/// payload framing (notably historical five-string `PROP_USER_UNIT` records).
+pub fn properties_with_version<'a>(
+    bytes: &'a [u8],
+    offset: usize,
+    version: u32,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<Property<'a>>> {
+    properties_version(bytes, offset, Some(version), limits, budget, keep_going)
+}
+
+fn properties_version<'a>(
+    bytes: &'a [u8],
+    offset: usize,
+    version: Option<u32>,
     limits: Limits,
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
@@ -210,7 +236,7 @@ pub fn properties<'a>(
                     let n = cursor.at(cursor.pos).u32().map_err(|_| StopReason::Malformed)? as usize;
                     n.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or(StopReason::Malformed)?
                 }
-                24 => crate::user_unit_len(&cursor).map_err(|_| StopReason::Malformed)?,
+                24 => crate::user_unit_len(&cursor, version).map_err(|_| StopReason::Malformed)?,
                 48 => crate::link_layer_len(&cursor).map_err(|_| StopReason::Malformed)?,
                 _ => usize::try_from(declared_length).map_err(|_| StopReason::Malformed)?,
             };

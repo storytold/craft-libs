@@ -1125,11 +1125,12 @@ fn duplicate_parasites_keep_order_and_last_value() {
 #[test]
 fn a_user_unit_property_is_measured_not_trusted() {
     // PROP_USER_UNIT's length word is wrong in every release: three strings (XCF 21+) or five.
-    // Which it is, is decided by whether a property header follows the third: a fourth string
-    // shorter than 64 bytes would look like one, so the five-string case here has a long one.
+    // The file version determines the layout; following properties do not identify
+    // how many strings belong to a unit.
     let long = "s".repeat(70);
     for strings in [3, 5] {
         let mut img = TestImage::rgb8(2, 2);
+        img.version = if strings == 3 { 21 } else { 20 };
         let mut unit = W { out: Vec::new(), wide: true };
         unit.out.extend_from_slice(&25.4f32.to_be_bytes());
         unit.u32(2);

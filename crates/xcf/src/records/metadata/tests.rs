@@ -210,3 +210,61 @@ fn cancellation_precedes_empty_spent_and_mid_record_metadata_reads() {
     };
     assert!(matches!(image(&raw, Limits::default(), &mut Budget::default(), &keep_going), Err(Error::Cancelled)));
 }
+
+#[test]
+fn versioned_xcf_user_units_do_not_confuse_short_historical_names_with_property_headers() {
+    // The public XCF format removes the two grammatical names in version21.
+    // These are original files made by our fixture writer, including deliberately
+    // wrong PROP_USER_UNIT length words (a documented writer compatibility case).
+    use crate::tests::TestImage;
+    for version in [0, 10, 11, 20, 21, 26] {
+        let count = if version < 21 { 5 } else { 3 };
+        let mut unit = [2.54f32.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for value in [b"cm\0".as_slice(), b"cm\0", b"cm\0", b"c\0", b"cs\0"].into_iter().take(count) {
+            unit.extend((value.len() as u32).to_be_bytes());
+            unit.extend(value);
+        }
+        let mut fixture = TestImage::rgb8(1, 1);
+        fixture.version = version;
+        fixture.image_props = vec![(24, unit.clone()), (19, pair(123., 234.))];
+        let mut bytes = fixture.write();
+        // Compression's one-byte property is the writer's first property.
+        let unit_header = 9 + 5 + 12 + usize::from(version >= 4) * 4 + 9;
+        bytes[unit_header + 4..unit_header + 8].copy_from_slice(&1u32.to_be_bytes());
+        let parsed = crate::Xcf::parse(&bytes).unwrap_or_else(|error| panic!("version {version}: {error}"));
+        assert_eq!(parsed.image().resolution, Some((123., 234.)), "version {version}");
+        let raw = parsed.image_properties(RecordLimits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(raw.stopped.is_none(), "version {version}: {:?}", raw.stopped);
+        let property = raw.records.iter().find(|property| property.kind == 24).unwrap();
+        assert_eq!(property.payload, unit, "version {version}");
+        assert_eq!(property.declared_length, 1);
+        let typed = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(typed.complete());
+        assert_eq!(typed.user_unit.unwrap().value.strings.iter().flatten().count(), count);
+        assert_eq!(typed.resolution.unwrap().value, Resolution { horizontal: 123., vertical: 234. });
+        let start = 9 + 5 + 12 + usize::from(version >= 4) * 4;
+        let direct =
+            super::super::properties_with_version(&bytes, start, version, RecordLimits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(direct.stopped.is_none());
+        assert_eq!(direct.records.iter().find(|property| property.kind == 24).unwrap().payload, unit);
+    }
+}
+
+#[test]
+fn truncated_versioned_units_disclose_a_stopped_raw_scan_and_still_prioritize_cancellation() {
+    let mut unit = [1f32.to_be_bytes(), 2u32.to_be_bytes()].concat();
+    for _ in 0..3 {
+        unit.extend(2u32.to_be_bytes());
+        unit.extend(b"u\0");
+    }
+    unit.extend(64u32.to_be_bytes());
+    unit.push(b'x');
+    let bytes = property(24, &unit);
+    let raw = super::super::properties_with_version(&bytes, 0, 20, RecordLimits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(raw.records.is_empty());
+    assert_eq!(raw.stopped.unwrap().reason, StopReason::Malformed);
+    assert!(matches!(
+        super::super::properties_with_version(&bytes, 0, 20, RecordLimits::default(), &mut Budget::new(0, 0), &|| false),
+        Err(Error::Cancelled)
+    ));
+}
