@@ -82,8 +82,9 @@ fn drop_spot(
 ) -> Option<Spot> {
     let to_screen = |point: Pos2| xf.map_or(point, |map| map.to_screen(point));
     let nav = layout.nav();
-    let hit = layout.hit(logical_point(layout, rect, rtl, at), offset);
-    let across = !matches!(nav, NavShape::Flat | NavShape::Tree);
+    let hit = layout.drop_hit(logical_point(layout, rect, rtl, at), offset);
+    let across =
+        !matches!(nav, NavShape::Flat | NavShape::Tree | NavShape::WrappedGrid { columns: 1, .. } | NavShape::BoundedGrid { columns: 1, .. });
     // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
     // row-wise layout that is beyond the last item's end edge on its row, or below its row.
     let past = hit.is_none() && {
@@ -592,39 +593,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if at.y < rect.min.y || self.source.is_empty() {
             return None;
         }
-<<<<<<< HEAD
-        let nav = layout.nav();
-        let hit = layout.drop_hit(Self::logical(layout, rect, rtl, at), offset);
-        let across =
-            !matches!(nav, NavShape::Flat | NavShape::Tree | NavShape::WrappedGrid { columns: 1, .. } | NavShape::BoundedGrid { columns: 1, .. });
-        // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
-        // row-wise layout that is beyond the last item's end edge on its row, or below its row.
-        let past = hit.is_none() && {
-            let last = self.screen(layout, rect, self.source.len() - 1, offset, rtl);
-            let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
-            !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
-        };
-        let over = hit.or_else(|| past.then(|| self.source.len() - 1))?;
-        let row = self.screen(layout, rect, over, offset, rtl);
-        if matches!(nav, NavShape::Spatial) {
-            let (low, high) = (self.on_screen(row.min), self.on_screen(row.max));
-            return Some(Spot { over, insert: over, parent: None, mark: DropMark::Into(Rect::from_min_max(low, high)) });
-        }
-        if let Some(step) = groups {
-            let gap = reorder::tree_gap_at(&Outline::new(&*self.source), over, row, rtl, step, at);
-            let parent = gap.parent;
-            return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(|point| self.on_screen(point)) });
-        }
-        // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
-        // right-to-left the physical end is the earlier place in reading order.
-        let at = if past && across { Pos2::new(if rtl { row.min.x } else { row.max.x }, row.center().y) } else { at };
-        let gap = reorder::gap_at(&[row], if across { Axis::X } else { Axis::Y }, at)?;
-        let after = (gap.insert == 1) != (across && rtl);
-        Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(|point| self.on_screen(point)) })
-=======
-        let outline = Outline::new(self.source);
+        let outline = Outline::new(&*self.source);
         drop_spot(layout, &outline, &|| self.source.len(), self.xf, (rect, offset, rtl), groups, at)
->>>>>>> origin/next
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.

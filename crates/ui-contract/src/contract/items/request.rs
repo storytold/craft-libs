@@ -26,13 +26,8 @@ pub fn request_rename<K: Clone + Send + Sync + 'static>(ctx: &Context, collectio
         requests.0.retain(|(id, _)| *id != collection);
         requests.0.push((collection, key.clone()));
     });
-<<<<<<< HEAD
-    // The collection may sit in a settled region, which a plain repaint replays without running its steps.
-    crate::runtime::frame::request_repaint(ctx);
-=======
     inputs::bump(ctx, Input::Requests);
     crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
->>>>>>> origin/next
 }
 
 /// The rename request addressed to `collection`, once.

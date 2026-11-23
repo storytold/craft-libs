@@ -1,12 +1,8 @@
 pub(crate) mod backdrop;
 
-<<<<<<< HEAD
-mod draw_place;
+pub(crate) mod draw_place;
 
-mod painters;
-=======
 pub(crate) mod painters;
->>>>>>> origin/next
 
 pub(crate) mod surround;
 

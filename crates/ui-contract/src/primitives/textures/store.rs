@@ -752,21 +752,12 @@ impl<K: TextureKey> Inner<K> {
             shared.seen = frame;
         }
         let same = entry.revision == revision;
-<<<<<<< HEAD
-        match &entry.picture {
-            Picture::Texture { handle, source, factor } if same => TextureState::Ready(cached(handle, *source, *factor)),
-            Picture::Texture { handle, source, factor } => TextureState::Loading { stand_in: Some(cached(handle, *source, *factor)), waited: None },
-            Picture::Empty if same => TextureState::Empty,
-            Picture::Failed(failure) if same => TextureState::Failed { failure: failure.clone() },
-            Picture::Empty | Picture::Failed(_) => TextureState::Missing,
-=======
         match (&entry.picture, shown(&self.pages, &entry.picture)) {
             (_, Some(texture)) if same => TextureState::Ready(texture),
-            (_, Some(texture)) => TextureState::Loading { stand_in: Some(texture) },
+            (_, Some(texture)) => TextureState::Loading { stand_in: Some(texture), waited: None },
             (Picture::Empty, _) if same => TextureState::Empty,
             (Picture::Failed(failure), _) if same => TextureState::Failed { failure: failure.clone() },
             _ => TextureState::Missing,
->>>>>>> origin/next
         }
     }
 

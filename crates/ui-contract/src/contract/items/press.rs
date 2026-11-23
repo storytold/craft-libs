@@ -102,13 +102,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     // A command on the row, reported when the press ends as a click; the selection stays.
                     self.drags.command = Some(self.source.key(at));
                     self.move_lead(at, LeadSource::Pointer);
-<<<<<<< HEAD
                 } else if !secondary_on_toggle && (primary || !props.primary_picks) {
-                    let mods = crate::runtime::pointer::frame(&ctx).mods;
-=======
-                } else if !secondary_on_toggle {
                     let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
->>>>>>> origin/next
                     let key = self.source.key(at);
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag

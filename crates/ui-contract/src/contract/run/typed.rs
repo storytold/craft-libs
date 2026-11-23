@@ -188,27 +188,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.pass_extent(self.comp.get(), at, style, self.shown.clone())
     }
 
-<<<<<<< HEAD
-    #[expect(clippy::expect_used, reason = "`Erased::style` produced the style this pipeline now hands back, so its type is `C::Style`")]
-    fn with_cx<'a>(&mut self, core: CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool) {
-        let style = style.as_any().downcast_ref::<C::Style>().expect("the pipeline holds the style `Erased::style` gave");
-        let events = std::mem::take(&mut self.cancelled);
-        // A cancel step 4 raised over a document that moved is reported, not applied: the app's value stays. One that
-        // carries the value the gesture began with restores it at step 11.
-        let applied = if events.iter().any(|event| matches!(event, EditEvent::Cancel { before: Some(_), .. })) { 0 } else { events.len() };
-        let mut cx = Cx::<C> { core, style, shown: self.shown.take(), mixed: self.mixed, events, applied, validity: Validity::Ok };
-        let mut comp = self.comp.take();
-        let real = rest(&mut TypedPass { comp: &mut comp, hooks: &mut *self.hooks, cx: &mut cx, parts_value: None });
-        let id = cx.core.id;
-        let output = comp.finish(cx);
-        debug_assert!(!real || crate::contract::Outcome::response(&output).id == id, "an output's Response is the component's own");
-        self.output = Some(output);
-=======
     fn with_cx<'a>(&mut self, core: &'a mut CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool) {
         let mut cx = self.cx(core, style);
-        let real = rest(&mut TypedPass { comp: self.comp.get(), hooks: &mut *self.hooks, cx: &mut cx });
+        let real = rest(&mut TypedPass { comp: self.comp.get(), hooks: &mut *self.hooks, cx: &mut cx, parts_value: None });
         self.finish(cx, real);
->>>>>>> origin/next
     }
 
     fn shape(&self) -> ShapeKind {
@@ -637,23 +620,18 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     Some(output)
 }
 
-<<<<<<< HEAD
-pub(crate) fn show_items<'r, C: Collection>(comp: C, ui: &mut Ui, source: &dyn ItemSource<C::Key>, item: &mut ItemFn<'r, C>) -> C::Output {
-    run(comp, ui, ShowAt::Flow, None, &mut crate::contract::items::ItemsHooks::<C>::new(source, item))
-=======
+/// The item step reads the collection's view of `source` (`Collection::filtered`) itself, so the view keeps the row
+/// whose rename runs.
 pub(crate) fn show_items<'r, C: Collection>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     source: &dyn ItemSource<C::Key>,
     item: &mut ItemFn<'r, C>,
 ) -> C::Output {
-    let view = held(slot).filtered(source, &Env::of(ui));
-    let source = view.as_deref().unwrap_or(source);
     let mut hooks = crate::contract::items::ItemsHooks::<C>::new(source, item);
     let mut typed = Typed::owned(slot, &mut hooks);
     super::run(&mut typed, ui, ShowAt::Flow, None);
     typed.output()
->>>>>>> origin/next
 }
 
 /// Measures `comp` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would use next. It

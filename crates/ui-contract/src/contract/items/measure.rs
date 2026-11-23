@@ -405,14 +405,11 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     }
 }
 
-<<<<<<< HEAD
 /// Where the measure of the largest row of the collection `id` records the length of its rows side by side.
 fn run_id(id: Id) -> Id {
     sub(id, "run")
 }
 
-/// A row to build and measure (`measure_row`): its position, rect and column cells, and the proposal it is measured at.
-=======
 /// What the state of a row known before the pass senses input comes from (`ItemsHooks::known_row`).
 pub(super) struct Known<K> {
     pub(super) placed: craft_behavior::PlacedSelection,
@@ -423,7 +420,6 @@ pub(super) struct Known<K> {
 
 /// A row to build and measure (`measure_row`): its position, rect and column cells, its state and flags, and whether
 /// the collection is a tree.
->>>>>>> origin/next
 pub(super) struct RowMeasure {
     pub(super) at: usize,
     pub(super) rect: Rect,

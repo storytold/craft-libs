@@ -19,15 +19,10 @@ pub(crate) mod paint;
 
 pub(crate) mod runtime;
 
-<<<<<<< HEAD
-mod style;
-mod text;
-mod textures;
-=======
 pub(crate) mod story_command_subsets;
 pub(crate) mod style;
 pub(crate) mod text;
->>>>>>> origin/next
+pub(crate) mod textures;
 
 craft_ui::registry!();
 

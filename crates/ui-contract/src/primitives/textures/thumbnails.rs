@@ -3,15 +3,10 @@
 
 use super::limits::MAX_TEXTURE;
 use super::loader::{LoadFailure, LoadedPicture, LoaderOptions, Priority, TextureLoader};
-<<<<<<< HEAD
-use super::store::{Revision, TextureKey, TextureState, TextureStoreOptions};
+use super::store::{CachedTexture, Revision, TextureKey, TextureState, TextureStoreOptions};
 use super::words::TextureWords;
 use crate::contract::WordSetCx as _;
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Surface, TextRun, Wrap};
-=======
-use super::store::{CachedTexture, Revision, TextureKey, TextureState, TextureStoreOptions};
-use crate::primitives::{ContentPainterCx, IconSpec, Surface};
->>>>>>> origin/next
 use crate::runtime::egui::{memory, pass, repaint, textures};
 use crate::style::{Corners, DataColor, SurfaceKind, TypeRole, surface_style};
 use craft_behavior::{IconId, PixelSize};
@@ -405,13 +400,8 @@ impl<K: TextureKey> Thumbnails<K> {
         let rect = rect.round_to_pixels(cx.pixels_per_point());
         match state {
             TextureState::Empty => false,
-<<<<<<< HEAD
             TextureState::Ready(texture) | TextureState::Loading { stand_in: Some(texture), .. } => {
-                paint_picture(cx, rect, texture.id, texture.size_vec2(), paint);
-=======
-            TextureState::Ready(texture) | TextureState::Loading { stand_in: Some(texture) } => {
                 paint_picture(cx, rect, texture, paint);
->>>>>>> origin/next
                 true
             }
             TextureState::Missing | TextureState::Loading { stand_in: None, .. } => {

@@ -29,14 +29,9 @@ impl BodyHooks<'_> {
                 keys::capture(&ctx, id, chord);
             }
             while keys::take_claimed(&ctx, id, chord) {
-<<<<<<< HEAD
                 // A section's order is a vertical stack, moved by the stacking keys whatever scheme its rows use.
                 if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods, ReorderKeys::Stacking, Axis::Y) {
-                    cx.core.intents.push(intent);
-=======
-                if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods) {
                     core.intents.push(intent);
->>>>>>> origin/next
                 }
             }
         }

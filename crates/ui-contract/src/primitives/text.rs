@@ -492,10 +492,9 @@ impl TextRun<'_> {
         let full = self.wrap.cuts().then(|| self.full_text_cow());
         // Every cut goes through the one cut that `least` measures, so a run shown at its least keeps its
         // readable characters.
-<<<<<<< HEAD
-        let galley = match self.wrap {
-            Wrap::Elide | Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath => self.layout_cut(ctx, env, &full, max_width),
-            _ => {
+        let galley = match &full {
+            Some(full) => self.layout_cut(ctx, env, full, max_width),
+            None => {
                 let job = self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width);
                 let galley = text_layout::layout(ctx, job.clone());
                 if matches!(self.wrap, Wrap::Wrap | Wrap::Clamp(_)) && galley.size().x > max_width {
@@ -507,11 +506,6 @@ impl TextRun<'_> {
                     galley
                 }
             }
-=======
-        let galley = match &full {
-            Some(full) => self.layout_cut(ctx, env, full, max_width),
-            None => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
->>>>>>> origin/next
         };
         let changed = full.as_ref().is_some_and(|full| galley.job.text != *full);
         let elided = galley.elided || changed;
@@ -613,13 +607,11 @@ impl TextRun<'_> {
             if span.underline {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
             }
-<<<<<<< HEAD
             if span.strikethrough {
                 format.strikethrough = egui::Stroke::new(env.tokens.stroke.thin, color);
-=======
+            }
             if let Some(tone) = span.flag {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, to_color(tone.ink(env.tokens)));
->>>>>>> origin/next
             }
             job.append(text_part, 0.0, format);
         }

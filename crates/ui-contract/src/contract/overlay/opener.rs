@@ -140,12 +140,8 @@ pub(super) fn secondary_release_in(response: &Response) -> bool {
         pass.frame.as_ref().is_some_and(|frame| {
             frame.release == Some(PointerButton::Secondary)
                 && frame.pos.is_some_and(|pos| {
-<<<<<<< HEAD
                     areas::layer_at(&response.ctx, pos) == Some(response.layer_id)
-                        && response.rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
-=======
-                    response.interact_rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
->>>>>>> origin/next
+                        && response.interact_rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
                 })
         })
     })

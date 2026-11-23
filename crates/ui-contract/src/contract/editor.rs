@@ -95,18 +95,6 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
     cx.core.editor_inputs = inputs;
 }
 
-<<<<<<< HEAD
-impl<C: Component> Cx<'_, C> {
-    /// Whether a press moved focus away from the editor and asks it to commit its session in this pass.
-    pub fn editor_commit_requested(&self) -> bool {
-        self.core.editor.as_ref().is_some_and(|editor| editor.commit_now)
-    }
-
-    /// The editor part's inputs of this pass in the order they arrived; call it in `update`. The editor applies them
-    /// to its own document.
-    pub fn editor_input(&mut self) -> impl Iterator<Item = EditorInput> + '_ {
-        std::mem::take(&mut self.core.editor_inputs).into_iter()
-=======
 /// The editor part's widget, rect, purpose, focus and read-only state of this pass, which a body that runs inside a
 /// component reports through for the component's editor part.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,7 +110,6 @@ impl EditorHandle {
     /// The handle of the editor part step 8b set up.
     fn of(info: &EditorInfo) -> EditorHandle {
         EditorHandle { widget: info.widget, rect: info.rect, purpose: info.purpose, focused: info.focused, read_only: info.read_only }
->>>>>>> origin/next
     }
 
     /// Reports the caret and composition to the input-method engine and puts the text facts in the running pass's
@@ -194,6 +181,11 @@ impl<C: Component> Cx<'_, C> {
     /// The editor part of this pass, `None` when the component registered none.
     pub fn editor_handle(&self) -> Option<EditorHandle> {
         self.core.editor.as_ref().map(EditorHandle::of)
+    }
+
+    /// Whether a press moved focus away from the editor and asks it to commit its session in this pass.
+    pub fn editor_commit_requested(&self) -> bool {
+        self.core.editor.as_ref().is_some_and(|editor| editor.commit_now)
     }
 
     /// Notes the input-method receipt between the stamps `before` and `after` on the egui fork's tracker for this

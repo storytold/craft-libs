@@ -66,22 +66,16 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     let ctx = input.ctx;
     debug_assert!(input.parts.rovings.len() <= 1, "a component declares one roving group; a second would be dropped");
     let row_parts = if input.item { input.row } else { None };
-<<<<<<< HEAD
-    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| sub(input.id, "roving"));
-    // A part group that joined the body's roving group: its parts are members of the body group, or it is one member
-    // of it when it moves on the crossing axis.
-    // PLAN: the body group registers after its body ran (`run.rs`, after `update`), so on a menu's first frame this
-    // reads no group and the part group joins flat for that frame; the lead decides where the body group registers.
-    let joined = group.and_then(|parts| focus::registration::part_group(ctx, parts));
+    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| roving_group(input.id));
+    // A part group whose component joined the body's roving group in this pass: its parts are members of the body
+    // group, or it is one member of it when it moves on the crossing axis.
+    let joined = group.and(input.group);
     let nested = match (joined, input.parts.rovings.first()) {
         (Some(body), Some(roving)) => {
             focus::with(ctx, |state| state.current_group(body)).is_some_and(|body| crosses(roving.arrows, body.roving.arrows))
         }
         _ => false,
     };
-=======
-    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| roving_group(input.id));
->>>>>>> origin/next
     if let (Some(group), Some(roving)) = (group, input.parts.rovings.first()) {
         let arrival = input.parts.decls.iter().rev().find(|(_, extras)| extras.selected && extras.focusable);
         let group = Group::new(group, *roving).rtl(input.rtl);
@@ -119,14 +113,9 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
             let stop = own().part(PartRef { key: decl.key, index: decl.index });
             let stop = if extras.nudges { stop.role(input.role.nudge(true)) } else { stop };
             let stop = if extras.default_stop { stop.default_stop() } else { stop };
-<<<<<<< HEAD
-            let flat = joined.filter(|_| !nested);
-            let stop = if let Some(group) = row_parts.or(flat).or(group).or(input.row) { stop.in_group(group) } else { stop };
-=======
-            // A part group that joined the body's roving group has its parts registered there.
-            let joined = group.map(|_| parts_group(input.id, input.group));
+            // A part group that joined the body's roving group has its parts registered there, unless it nests in it.
+            let joined = group.map(|_| parts_group(input.id, input.group.filter(|_| !nested)));
             let stop = if let Some(group) = row_parts.or(joined).or(input.row) { stop.in_group(group) } else { stop };
->>>>>>> origin/next
             if extras.after_header {
                 after_header.push(stop);
             } else {
@@ -140,7 +129,6 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     after_header
 }
 
-<<<<<<< HEAD
 /// Whether a part group moving with `inner` arrows nests in a body group moving with `outer` ones: they take
 /// crossing axes (a row of icons in a vertical menu), so the body steps over the parts as one member and the parts
 /// rove among themselves. Parts on the body's own axis (a toolbar's command strip) are a run of the body's members.
@@ -148,13 +136,9 @@ fn crosses(inner: Arrows, outer: Arrows) -> bool {
     matches!((inner, outer), (Arrows::Horizontal, Arrows::Vertical) | (Arrows::Vertical, Arrows::Horizontal))
 }
 
-/// Whether the component is a focus stop: an enabled one, or a disabled one whose tooltip has a `disabled_text`, which
-/// shows its reason on keyboard focus (testing 22.4). Step 9 still drops its activations and edits.
-=======
 /// Whether the component is a focus stop: an enabled one, or a disabled one with a reason to show on keyboard focus
 /// (testing 22.4): its tooltip's `disabled_text`, or its bound command's hint, which its tooltip shows. Step 9 still
 /// drops its activations and edits.
->>>>>>> origin/next
 pub(crate) fn takes_focus(resolved: &Resolved<'_>) -> bool {
     resolved.enabled
         || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())

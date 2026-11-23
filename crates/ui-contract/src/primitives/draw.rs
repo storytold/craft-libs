@@ -31,6 +31,13 @@ pub enum WellFill {
     Empty,
 }
 
+impl From<Option<Srgba>> for WellFill {
+    /// A colour, or the mixed mark for no colour of its own.
+    fn from(color: Option<Srgba>) -> WellFill {
+        color.map_or(WellFill::Mixed, WellFill::Color)
+    }
+}
+
 /// A shape `Draw::fill` and `Draw::stroke` paint.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -641,25 +648,11 @@ impl<'a> Draw<'a> {
         data_picture(self.painter, self.env.tokens, self.data, texture, rect, uv, CornerRadius::ZERO);
     }
 
-<<<<<<< HEAD
-    /// Paints the part `uv` of `texture` onto the quad `corners`, untinted, as [`texture`](Self::texture) paints into a
-    /// rect: `corners` are where the top left, top right, bottom right and bottom left of `uv` land, so a picture turned
-    /// by a quarter turn (or any affine map) paints from the one cached texture. For an inactive part the quad is
-    /// filled with the theme's disabled fill.
+    /// Paints `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), untinted, as data: a
+    /// disabled component paints it at `Opacity::DISABLED`, and for an inactive part the quad is filled with the
+    /// theme's disabled fill. A quad has square corners.
     pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect) {
-        let tint = self.data.color(self.env.tokens, super::textures::UNTINTED);
-        if self.data == DataMode::Inactive {
-            self.paint(&PaintShape::Polygon(corners.to_vec()), Some(tint), None);
-            return;
-        }
-        let mut mesh = egui::Mesh::with_texture(texture);
-        let uvs = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
-        for (pos, uv) in corners.into_iter().zip(uvs) {
-            mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: tint });
-        }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        self.painter.add(Shape::mesh(mesh));
+        data_quad(self.painter, self.env.tokens, self.data, texture, corners, uv);
     }
 
     /// The texture for `key` from the `TextureCache` of the context this painter paints in, for [`texture`](Self::texture):
@@ -667,13 +660,6 @@ impl<'a> Draw<'a> {
     /// of its own, such as a canvas tool's paint call, loads its pictures through here.
     pub fn cached_texture<K: std::hash::Hash + 'static>(&self, key: K, image: impl FnOnce() -> egui::ColorImage) -> TextureId {
         super::TextureCache::texture(self.painter.ctx(), key, image)
-=======
-    /// Paints `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), untinted, as data: a
-    /// disabled component paints it at `Opacity::DISABLED`, and for an inactive part the quad is filled with the
-    /// theme's disabled fill. A quad has square corners.
-    pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect) {
-        data_quad(self.painter, self.env.tokens, self.data, texture, corners, uv);
->>>>>>> origin/next
     }
 
     /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
@@ -684,57 +670,43 @@ impl<'a> Draw<'a> {
     }
 
     /// Paints the well of a colour swatch over `well` with corners `radius`: the colour, over a checkerboard where it is
-<<<<<<< HEAD
     /// translucent; else the empty well in `surface.sunken`, with a `text.muted` dash for `Mixed`, a `status.bad`
-    /// diagonal from the bottom start to the top end for `None`, and nothing for `Empty`. `Swatch`, swatch icons and
-    /// the paint chip paint their wells with it and add their own edges.
-    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: WellFill) {
-        let shape = PaintShape::Rect(well, radius);
-        let colors = &self.env.tokens.color;
-        let sunken = Some(crate::style::rgba_color(colors.surface.sunken));
-        match fill {
-            WellFill::Color(color) => {
-=======
-    /// translucent, or for `None` (no colour of its own, or a mixed one) the empty well, `surface.sunken` with a
-    /// `text.muted` dash. `Swatch` and swatch icons paint their wells with it and add their own edges.
-    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, color: Option<Srgba>) {
-        self.well_of(&PaintShape::Rect(well, radius), well, color, |draw| draw.checker(&super::Checker::new(), well, radius));
+    /// diagonal from the bottom start to the top end for `None`, and nothing for `Empty`. An `Option<Srgba>` is a
+    /// colour or, for `None` (no colour of its own, or a mixed one), the dash. `Swatch`, swatch icons and the paint
+    /// chip paint their wells with it and add their own edges.
+    pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: impl Into<WellFill>) {
+        self.well_of(&PaintShape::Rect(well, radius), well, fill.into(), |draw| draw.checker(&super::Checker::new(), well, radius));
     }
 
     /// [`Self::swatch_well`] over the convex polygon `corners` (a honeycomb cell): the same parts, the checkerboard and
-    /// the dash cut to the polygon.
-    pub fn swatch_polygon_well(&self, corners: &[Pos2], color: Option<Srgba>) {
+    /// the marks cut to the polygon.
+    pub fn swatch_polygon_well(&self, corners: &[Pos2], fill: impl Into<WellFill>) {
         let bounds = Rect::from_points(corners);
-        self.well_of(&PaintShape::Polygon(corners.to_vec()), bounds, color, |draw| {
+        self.well_of(&PaintShape::Polygon(corners.to_vec()), bounds, fill.into(), |draw| {
             data_polygon_checker(draw.painter, draw.env.tokens, draw.data, &super::Checker::new(), corners, bounds.min);
         });
     }
 
     /// The parts of a swatch well in `shape` within `bounds`: the colour over the checkerboard `checker` paints where it
-    /// is translucent, or the empty well with its dash.
-    fn well_of(&self, shape: &PaintShape, bounds: Rect, color: Option<Srgba>, checker: impl FnOnce(&Self)) {
-        match color {
-            None => {
-                let colors = &self.env.tokens.color;
-                self.paint(shape, Some(crate::style::rgba_color(colors.surface.sunken)), None);
-                let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
-                self.paint(&super::glyph::dash(bounds), None, Some(dash));
-            }
-            Some(color) => {
->>>>>>> origin/next
+    /// is translucent, or the empty well with its mark.
+    fn well_of(&self, shape: &PaintShape, bounds: Rect, fill: WellFill, checker: impl FnOnce(&Self)) {
+        let colors = &self.env.tokens.color;
+        let sunken = Some(crate::style::rgba_color(colors.surface.sunken));
+        match fill {
+            WellFill::Color(color) => {
                 if color.a < 1.0 {
                     checker(self);
                 }
                 self.data_fill(shape, DataColor::new(Color32::from(color)));
             }
             WellFill::Mixed => {
-                self.paint(&shape, sunken, None);
+                self.paint(shape, sunken, None);
                 let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
-                self.paint(&super::glyph::dash(well), None, Some(dash));
+                self.paint(&super::glyph::dash(bounds), None, Some(dash));
             }
             WellFill::None => {
-                self.paint(&shape, sunken, None);
-                let inner = well.shrink(well.height() * NONE_DIAGONAL_INSET);
+                self.paint(shape, sunken, None);
+                let inner = bounds.shrink(bounds.height() * NONE_DIAGONAL_INSET);
                 let (from, to) = if self.env.direction == Direction::Rtl {
                     (inner.right_bottom(), inner.left_top())
                 } else {
@@ -743,7 +715,7 @@ impl<'a> Draw<'a> {
                 let mark = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.status.bad.solid));
                 self.paint(&PaintShape::Path(vec![from, to]), None, Some(mark));
             }
-            WellFill::Empty => self.paint(&shape, sunken, None),
+            WellFill::Empty => self.paint(shape, sunken, None),
         }
     }
 
