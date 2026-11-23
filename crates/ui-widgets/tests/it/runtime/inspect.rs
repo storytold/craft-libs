@@ -137,7 +137,6 @@ fn an_element_records_the_command_it_is_bound_to_with_accesskit_off() {
     }
 }
 
-
 /// Pointer-only parts have no access node or Tab stop, but consumers still need their original
 /// geometry, not the larger minimum-size hit box, to relate a value to its drawn position.
 #[trial]
@@ -153,10 +152,11 @@ fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
     let (shown_value, shown_record) = (Rc::clone(&value), Rc::clone(&recorded));
     let mut show = move |ui: &mut egui::Ui| {
         let (_, record) = inspect::record(ui, Id::NULL.with("thumb-bounds"), |ui| {
-            Slider::new(Bind::bound(&mut *shown_value.borrow_mut()), 0.0..=100.0)
-                .step(1.0).label("Position").show_at(ui, FIELD);
+            Slider::new(Bind::bound(&mut *shown_value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
         });
-        if let Some(record) = record { *shown_record.borrow_mut() = Some(record); }
+        if let Some(record) = record {
+            *shown_record.borrow_mut() = Some(record);
+        }
     };
     let mut frames = Frames::new();
     // Built-in mouse targets are 8 pt, smaller than the 12 pt knob. Use a genuine host
@@ -169,10 +169,12 @@ fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
     let thumb = || {
         let record = recorded.borrow();
         let record = record.as_ref().expect("the region ran");
-        let thumb = record.hits.iter().find(|hit| hit.part.is_some_and(|part| part.key == Slider::THUMB))
-            .expect("a pointer-only thumb is recorded").clone();
-        assert!(record.elements.iter().all(|element| element.id != thumb.owner || element.part != thumb.part),
-            "the pointer-only thumb does not need a fabricated access node or Tab stop");
+        let thumb =
+            record.hits.iter().find(|hit| hit.part.is_some_and(|part| part.key == Slider::THUMB)).expect("a pointer-only thumb is recorded").clone();
+        assert!(
+            record.elements.iter().all(|element| element.id != thumb.owner || element.part != thumb.part),
+            "the pointer-only thumb does not need a fabricated access node or Tab stop"
+        );
         thumb
     };
     let start = thumb();
@@ -185,17 +187,26 @@ fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
     // smaller square knob at the same centre. The raw sensing width is exactly the painted
     // knob width, which determines value travel. Do not mistake the sensing height or the
     // larger shadow/expanded hit box for that width.
-    assert!(shapes.iter().any(|shape| match shape {
-        egui::Shape::Rect(rect) => rect.rect.x_range() == start.bounds.x_range()
-            && rect.rect.center().y == start.bounds.center().y
-            && rect.rect.height() == rect.rect.width()
-            && rect.rect.height() < start.bounds.height(),
-        _ => false,
-    }), "the raw thumb width and centre identify the actual painted knob: raw={:?}, hit={:?}, shapes={:?}",
-        start.bounds, start.rect, shapes.iter().map(|shape| match shape {
-            egui::Shape::Rect(rect) => format!("Rect box={:?} stroke={:?} kind={:?}", rect.rect, rect.stroke, rect.stroke_kind),
-            other => format!("{:?} bounds={:?}", std::mem::discriminant(other), other.visual_bounding_rect()),
-        }).collect::<Vec<_>>());
+    assert!(
+        shapes.iter().any(|shape| match shape {
+            egui::Shape::Rect(rect) =>
+                rect.rect.x_range() == start.bounds.x_range()
+                    && rect.rect.center().y == start.bounds.center().y
+                    && rect.rect.height() == rect.rect.width()
+                    && rect.rect.height() < start.bounds.height(),
+            _ => false,
+        }),
+        "the raw thumb width and centre identify the actual painted knob: raw={:?}, hit={:?}, shapes={:?}",
+        start.bounds,
+        start.rect,
+        shapes
+            .iter()
+            .map(|shape| match shape {
+                egui::Shape::Rect(rect) => format!("Rect box={:?} stroke={:?} kind={:?}", rect.rect, rect.stroke, rect.stroke_kind),
+                other => format!("{:?} bounds={:?}", std::mem::discriminant(other), other.visual_bounding_rect()),
+            })
+            .collect::<Vec<_>>()
+    );
 
     *value.borrow_mut() = 100.0;
     frames.idle(3, &mut show);
@@ -207,8 +218,7 @@ fn pointer_only_thumb_bounds_match_paint_and_value_travel() {
         let at = start.bounds.center() + Vec2::new(travel * fraction, 0.0);
         pointer::click(&mut frames, at, &mut show);
         frames.idle(3, &mut show);
-        assert!((*value.borrow() - f64::from(fraction) * 100.0).abs() < 1e-4,
-            "the raw thumb centres delimit the real value travel at {fraction}");
+        assert!((*value.borrow() - f64::from(fraction) * 100.0).abs() < 1e-4, "the raw thumb centres delimit the real value travel at {fraction}");
         assert!((thumb().bounds.center().x - at.x).abs() < 0.01, "the clicked value is drawn at the same position");
     }
 }
