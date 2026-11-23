@@ -330,8 +330,8 @@ impl<'a> Draw<'a> {
 
     /// Paints `run` in its document face with the start of its first baseline at `start`, and returns its layout, whose
     /// top lies at `start.y - layout.first_baseline` ([`FaceRun`] says how the face, its fallback and the size are
-    /// chosen). `load` gives the face's bytes and index the first time `run.key` is drawn, and again only after the
-    /// fonts were replaced; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
+    /// chosen). `load` gives the face's bytes and index, which the caller holds, the first time `run.key` is drawn while
+    /// the face is kept; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
     /// component's run paints at `Opacity::DISABLED`, as `doc` does.
     pub fn face_run(&self, start: Pos2, run: &FaceRun<'_>, load: impl FnOnce() -> Option<FaceBytes>) -> TextLayout {
         let ctx = self.painter.ctx();
@@ -552,6 +552,21 @@ impl<'a> Draw<'a> {
     pub fn data_fill(&self, shape: &PaintShape, color: DataColor) {
         let fill = self.data_color(color);
         self.paint(shape, Some(fill), None);
+    }
+
+    /// Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour
+    /// from data as `data_fill` paints it. Feathered pieces would each fade out along the edges they share, so a
+    /// translucent fill would show a seam of what lies beneath along every shared edge; unfeathered triangles meet
+    /// with no gap and no overlap.
+    pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor) {
+        let fill = self.data_color(color);
+        let mut mesh = egui::Mesh::default();
+        for piece in pieces {
+            mesh.append(super::kit::fill_polygon(piece, fill, 0.0));
+        }
+        if !mesh.is_empty() {
+            self.painter.add(Shape::mesh(mesh));
+        }
     }
 
     /// Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture

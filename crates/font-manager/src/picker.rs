@@ -74,7 +74,6 @@ craft_ui::words! {
         decorative: "fontPicker.classDecorative" = "Decorative";
         show_styles: "fontPicker.showStyles" = "Show styles";
         hide_styles: "fontPicker.hideStyles" = "Hide styles";
-        sample_arabic: "fontPicker.sampleArabic" = "أبجد";
         format_open_type: "fontPicker.formatOpenType" = "OpenType";
         format_true_type: "fontPicker.formatTrueType" = "TrueType";
         format_variable: "fontPicker.formatVariable" = "Variable";
@@ -277,7 +276,7 @@ pub struct FamilyRow {
     pub shown: String,
     /// The family is a favourite.
     pub starred: bool,
-    /// The family's class once it has been read: by a class filter, or by the list drawing the row.
+    /// The family's class; `None` for a served row and a family no class fits.
     pub class: Option<FontClass>,
     /// The family's format; `None` only for a served row.
     pub format: Option<FontFormat>,
@@ -450,6 +449,8 @@ struct Typing {
     lead: Option<String>,
     /// The lead's family was proposed by the pointer, so it ends when the pointer leaves the rows.
     lead_by_pointer: bool,
+    /// The pointer was over the open list's rows in the last pass.
+    over_rows: bool,
     hide_classes: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
@@ -493,7 +494,8 @@ fn read<T: Value>(bind: &mut Option<Bind<'_, T>>, cx: &mut impl StageAccess) -> 
 
 /// The font family field. Typing filters the list to the families whose name (in any language) matches, the best
 /// match first, and opens it; a click on the name while the list is closed, the chevron and Alt+Down open it on every family (the click selects the name), Alt+Up closes it. Rows: a star, the
-/// family name in the interface face, a sample in the family's own face at the preview size and the class mark.
+/// family name in the interface face, the sample text (the preview text, else "Sample") in the family's own face at the
+/// preview size and the class mark.
 /// Recent families form a group at the top. Up, Down and Page keys move the keyboard row, which previews, Enter or a
 /// click on a row picks it, Enter on a typed name that is a family picks that family, Escape closes the list and
 /// restores the field, and Tab picks the keyboard row and moves on. While an input method composes, Enter, Escape
@@ -517,7 +519,7 @@ pub struct FontPicker<'a> {
     picked_style: Option<String>,
     rested: Option<String>,
     preview: Preview<String>,
-    /// The preview banner's text.
+    /// The preview banner's text and every row's sample (the sample word when not given).
     #[prop]
     preview_text: Option<&'a str>,
     /// Families the host can fetch but that are not installed, listed with the served mark.
@@ -735,8 +737,13 @@ impl Component for FontPicker<'_> {
         let draft = cx.text(&text_key()).and_then(|outcome| outcome.draft.clone());
         let before = std::mem::replace(&mut cx.memory::<Typing>().draft, draft.clone());
         if before != draft {
+            // A press on a row can take the focus from the text, which ends the draft: the list stays, filtered by
+            // the draft, until the release picks the row.
+            let pressing_rows =
+                cx.memory::<Typing>().over_rows && cx.response.ctx.input(|input| input.pointer.any_down() || input.pointer.any_released());
             match &draft {
                 Some(_) => list.open(cx),
+                None if pressing_rows && list.is_open(cx) => cx.memory::<Typing>().draft = before,
                 None => list.close(cx),
             }
         }

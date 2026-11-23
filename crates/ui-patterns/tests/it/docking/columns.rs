@@ -4,7 +4,7 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, Show as _, SizeLimits, Tracked};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, PanelSpec, PanelSpecs, group_heights};
+use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, DockSizes, GroupSize, PanelSpec, PanelSpecs, group_heights};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
@@ -184,16 +184,21 @@ impl DockPanels<u32> for Tools {
     }
 }
 
-/// A docked stepped column is only as tall as its content, not the dock's height; the double arrow of a column that
-/// does not collapse switches it between one and two steps, and is named for the steps it switches to.
+/// A docked stepped column takes the dock's height, as the references' docked toolbar keeps its surface down to the
+/// dock's foot (photocraft#16461), and the dock's divider beside it is the tight gap, as thin as the references'; the
+/// double arrow of a column that does not collapse switches it between one and two steps, and is named for the steps
+/// it switches to.
 #[trial]
-fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_and_two_steps() {
+fn a_docked_stepped_column_takes_the_docks_height_and_its_double_arrow_switches_one_and_two_steps() {
     let dock = Node::dock(DockEdge::Start, vec![Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(1)]);
     let root = Node::split(Axis::X, SplitSize::FixedFirst(120.0), dock, Node::tabs(vec![1], 0));
     let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
     let placed: Rc<RefCell<Vec<(u32, Rect)>>> = Rc::default();
-    let (held, seen, specs) = (Rc::clone(&workspace), Rc::clone(&placed), Tracked::new(Tools));
+    let gaps: Rc<RefCell<Option<(f32, f32)>>> = Rc::default();
+    let (held, seen, specs, gaps_seen) = (Rc::clone(&workspace), Rc::clone(&placed), Tracked::new(Tools), Rc::clone(&gaps));
     let mut fixture = Fixture::new(move |ui| {
+        let tight = craft_ui::runtime::env::Env::of(ui).tokens.space.gap.tight;
+        *gaps_seen.borrow_mut() = Some((DockSizes::of_scope(ui).gap, tight));
         let mut workspace = held.borrow().clone();
         let out = DockArea::new("Stepped dock", Bind::bound(&mut workspace), &specs, &mut Tools, DockConfig::default()).show(ui);
         *held.borrow_mut() = workspace;
@@ -203,7 +208,12 @@ fn a_docked_stepped_column_fits_its_content_and_its_double_arrow_switches_one_an
     let tools = placed.borrow().iter().find(|(panel, _)| *panel == TOOLS).map(|(_, rect)| *rect).expect("the stepped column shows");
     let canvas =
         fixture.by_role(Role::TAB_PANEL).into_iter().map(|group| group.rect).find(|rect| !tools.contains_rect(*rect)).expect("the canvas shows");
-    assert!(tools.bottom() < canvas.bottom() - 10.0, "the column ends below its content, above the dock's foot: {tools:?}, canvas {canvas:?}");
+    assert!(
+        (tools.bottom() - canvas.bottom()).abs() <= 1.0,
+        "the column reaches the dock's foot, as the canvas beside it: {tools:?}, canvas {canvas:?}"
+    );
+    let (gap, tight) = gaps.borrow().expect("the dock showed");
+    assert_eq!(gap, tight, "the dock's dividers are the tight gap");
 
     let steps = |workspace: &Workspace<u32>| match &workspace.layout().root {
         Some(Node::Split { first, .. }) => match first.as_ref() {

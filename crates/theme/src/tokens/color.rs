@@ -115,6 +115,9 @@ pub struct LineColors {
     /// Marks that carry meaning and sit on control surfaces: slider marks and ticks, the ring
     /// around a badge dot. Holds the non-text minimum on them.
     pub mark: Rgba,
+    /// The marks of a grip a dock part is dragged by (the toolbar's, a panel group's): a little apart from
+    /// `surface.panel`, lighter in dark mode and darker in light mode, and quieter than icons and text.
+    pub grip: Rgba,
     /// Keyboard focus ring.
     pub focus: Rgba,
 }
@@ -318,7 +321,7 @@ impl ColorTokens {
                 shadow: c,
             },
             text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c },
-            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, focus: c },
+            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
             accent: AccentColors {
                 solid: c,
                 hover: c,
@@ -463,6 +466,8 @@ color_tokens! {
     LineFrame = "line.frame" => line.frame;
     /// `line.mark`
     LineMark = "line.mark" => line.mark;
+    /// `line.grip`
+    LineGrip = "line.grip" => line.grip;
     /// `line.focus`
     LineFocus = "line.focus" => line.focus;
     /// `accent.solid`

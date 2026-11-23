@@ -322,7 +322,7 @@ fn a_finished_update_is_announced_once_by_the_version_it_installed() {
 #[trial]
 fn a_check_answering_during_an_update_reports_the_update() {
     let ctx = egui::Context::default();
-    for answer in [Ok(None), Err("offline".to_owned()), Ok(Some((newer(), false)))] {
+    for answer in [Ok(None), Err("offline".into()), Ok(Some((newer(), false)))] {
         let mut u = updater(Ok(None));
         offer_now(&mut u);
         u.check_now();

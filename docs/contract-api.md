@@ -1971,7 +1971,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::BodyLayout`: `pub enum BodyLayout { Stack, Row { wrap: bool, align: RowAlign }, Grid { columns: Cow<'static, [ColumnWidth]>, fit: GridFit, cells: CellAlign } }`. How a body lays out its children, in reading order: mirrored under a right-to-left direction.
   - `pub const fn stack() -> Self`. Children one under another.
   - `pub const fn row() -> Self`. Children side by side from the start edge, with no wrap.
-  - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass.
+  - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass. The cells are the body's
   - `pub fn fit(self, fit: GridFit) -> Self`. A `Grid` with `fit`; any other layout is unchanged.
   - `pub fn cells(self, cells: CellAlign) -> Self`. A `Grid` with `cells`; any other layout is unchanged.
   - `pub fn wrap(self, on: bool) -> Self`. A `Row` that wraps; any other layout is unchanged.
@@ -2038,7 +2038,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn new(key: ColumnKey, descending: bool) -> Self`. Rows sorted by `key`, descending when `descending`.
   - `pub const fn ascending(key: ColumnKey) -> Self`. Rows sorted by `key`, ascending.
   - `pub const fn descending(key: ColumnKey) -> Self`. Rows sorted by `key`, descending.
-- `craft_ui::contract::ColumnSpec`: `pub struct ColumnSpec { pub key: ColumnKey, pub header: Label, pub width: ColumnWidth, pub resizable: bool, pub sortable: bool, pub movable: bool, pub frozen: bool, pub kind: ColumnKind, pub align: ColumnAlign, pub tabular: bool, pub first_descending: bool, pub icon: Option<craft_behavior::IconId>, pub tip: Option<Label>, pub max_share: Option<f32>, pub hideable: bool, pub remove: Option<ColumnRemove> }`. One column of a collection.
+- `craft_ui::contract::ColumnSpec`: `pub struct ColumnSpec { pub key: ColumnKey, pub header: Label, pub width: ColumnWidth, pub resizable: bool, pub sortable: bool, pub movable: bool, pub frozen: bool, pub kind: ColumnKind, pub align: ColumnAlign, pub tabular: bool, pub first_descending: bool, pub icon: Option<craft_behavior::IconId>, pub tip: Option<Label>, pub max_share: Option<f32>, pub min_width: f32, pub hideable: bool, pub remove: Option<ColumnRemove> }`. One column of a collection.
   - `pub fn removable(mut self, name: impl Into<Label>, enabled: bool) -> Self`. The column gets a remove control named `name` at its header's end, disabled unless `enabled`.
   - `pub fn new(key: ColumnKey, header: impl Into<Label>, width: ColumnWidth) -> Self`. A content column with a header and a width; the other settings off.
   - `pub fn toggle(key: ColumnKey, header: impl Into<Label>, toggle: ToggleColumn) -> Self`. A toggle column as wide as a toggle cell, with a header; the other settings off.
@@ -2051,6 +2051,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn numeric(mut self) -> Self`. A column of numbers: content at the end edge, tabular figures.
   - `pub fn hideable(mut self) -> Self`. The user can hide the column from the header menu.
   - `pub fn at_most(mut self, share: f32) -> Self`. A `Content` column takes at most `share` of the collection's width.
+  - `pub fn at_least(mut self, width: f32) -> Self`. A `Content` column is at least `width` wide.
   - `pub fn tip(mut self, tip: impl Into<Label>) -> Self`. The header's tooltip.
   - `pub fn icon(mut self, icon: craft_behavior::IconId) -> Self`. The icon the column's cells show. A cell of a column with no header text is named after it.
   - `pub fn first_descending(mut self) -> Self`. The first press on the header sorts descending.
@@ -2184,7 +2185,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn is_heading(&self) -> bool`. Whether the entry is a heading.
   - `pub fn is_item(&self) -> bool`. Whether the entry is an item, which reports a value: neither a heading nor a separator.
 - `craft_ui::contract::FacesCx`: `pub trait FacesCx`. Where a document face is asked for: a component's context, its measure or a content painter.
-  - `fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState`. The face registered under `key` as a family of its own. `load` runs only for a new key within the frame's
+  - `fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState where L: FnOnce() -> Option<FaceBytes> + Send + 'static`. The face registered under `key` as a family of its own, read from a font catalog. `job` is called only for a
+  - `fn document_face_bytes(&self, key: &str) -> Option<FaceBytes>`. The bytes of the face `document_face` registered under `key`, once it is ready: for reading its tables without
 - `craft_ui::contract::FieldLabel`: `pub struct FieldLabel { pub id: Id, pub rect: Rect, pub press: PressState, pub hovered: bool, pub text: String, pub role: FieldLabelRole, pub detail: Option<String>, pub activated: bool, pub status: bool }`. The label a container shows beside its body.
   - `pub fn new(id: Id, rect: Rect, text: impl Into<String>) -> Self`. A label of `text` at `rect`, the node `id`.
   - `pub fn role(mut self, role: FieldLabelRole) -> Self`. Whether the label names or describes the controls.
@@ -2389,6 +2391,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn moves_window(mut self, on: bool) -> Overlay`. Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
   - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
+  - `pub fn list(mut self, list: Id) -> Overlay`. The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
   - `pub fn opened_by(mut self, anchor: &Response, trigger: Trigger) -> Overlay`. Records an opener. An anchored layer hangs from the rect of the opener that opened it, on the side and
@@ -2702,6 +2705,7 @@ Chapter 15: the `Overlay` data, its presets, popup handles, `OverlayUi` and the 
   - `pub fn moves_window(mut self, on: bool) -> Overlay`. Sets whether the move band moves the OS window the layer is shown in, in place of the layer.
   - `pub fn moved_by_app(mut self) -> Overlay`. The app moves the OS window from the move band ([`Overlay::moved_by_app`]).
   - `pub fn focus(mut self, focus: FocusPolicy) -> Overlay`. Sets the focus scope.
+  - `pub fn list(mut self, list: Id) -> Overlay`. The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
   - `pub fn dismiss(mut self, dismiss: Dismiss) -> Overlay`. Sets the dismissal rules.
   - `pub fn motion(mut self, motion: MotionSpec) -> Overlay`. Sets the open and close motion.
   - `pub fn opened_by(mut self, anchor: &Response, trigger: Trigger) -> Overlay`. Records an opener. An anchored layer hangs from the rect of the opener that opened it, on the side and
@@ -2805,7 +2809,7 @@ The layout services: `LabelColumn`, `ColumnGroup`, the `Grid` cursor, `measure_s
 - `craft_ui::layout::BodyLayout`: `pub enum BodyLayout { Stack, Row { wrap: bool, align: RowAlign }, Grid { columns: Cow<'static, [ColumnWidth]>, fit: GridFit, cells: CellAlign } }`. How a body lays out its children, in reading order: mirrored under a right-to-left direction.
   - `pub const fn stack() -> Self`. Children one under another.
   - `pub const fn row() -> Self`. Children side by side from the start edge, with no wrap.
-  - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass.
+  - `pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self`. Children row-major over `columns`: a `'static` slice, or columns built in the pass. The cells are the body's
   - `pub fn fit(self, fit: GridFit) -> Self`. A `Grid` with `fit`; any other layout is unchanged.
   - `pub fn cells(self, cells: CellAlign) -> Self`. A `Grid` with `cells`; any other layout is unchanged.
   - `pub fn wrap(self, on: bool) -> Self`. A `Row` that wraps; any other layout is unchanged.
@@ -2920,6 +2924,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn fill(&self, shape: &PaintShape, color: StyleColor)`. Fills `shape`.
   - `pub fn stroke(&self, shape: &PaintShape, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>)`. Strokes `shape` at a theme width or a width from the document, in a theme colour or a colour from data (a
   - `pub fn data_fill(&self, shape: &PaintShape, color: DataColor)`. Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar). A component that paints its
+  - `pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor)`. Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour
   - `pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect)`. Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture
   - `pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect)`. Paints `uv` of `texture` onto the clockwise quad `corners` (from `uv`'s top left), untinted, as data: a
   - `pub fn checker(&self, checker: &super::Checker, rect: Rect, radius: CornerRadius)`. Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,
@@ -2944,7 +2949,8 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn largest_size(ctx: &Context) -> f32`. The largest size, in points, a face run is drawn at on `ctx`'s display: a glyph stays within a quarter of the
   - `pub fn drawn_size(&self, ctx: &Context) -> f32`. The size the run is drawn at on `ctx`'s display: its own, within 1 point and [`largest_size`](Self::largest_size).
 - `craft_ui::primitives::FacesCx`: `pub trait FacesCx`. Where a document face is asked for: a component's context, its measure or a content painter.
-  - `fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState`. The face registered under `key` as a family of its own. `load` runs only for a new key within the frame's
+  - `fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState where L: FnOnce() -> Option<FaceBytes> + Send + 'static`. The face registered under `key` as a family of its own, read from a font catalog. `job` is called only for a
+  - `fn document_face_bytes(&self, key: &str) -> Option<FaceBytes>`. The bytes of the face `document_face` registered under `key`, once it is ready: for reading its tables without
 - `craft_ui::primitives::FakeThumbSource`: `pub struct FakeThumbSource<K>`. A [`ThumbSource`] for stories and tests in every crate: pictures made from the key and a revision the test sets,
   - `pub fn new() -> Self`. Synchronous square pictures at revision 0.
   - `pub fn later(mut self, later: bool) -> Self`. Renders as `Later` jobs.
@@ -3754,7 +3760,7 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn effective_tone(&self, warn: bool) -> Tone`. The tone the message shows in: its own, else `Warn` when it belongs to a `Validity::Warn` (`warn`), else `Bad`.
 - `craft_ui::runtime::env::MotionPolicy`: `pub struct MotionPolicy { pub mode: MotionMode, pub tokens: MotionTokens }`. The motion mode in effect, carried in `Env.motion`.
   - `pub const fn new(mode: MotionMode, tokens: MotionTokens) -> Self`. The policy that runs animations at `mode` with `tokens`.
-- `craft_ui::runtime::env::Overrides`: `pub struct Overrides { pub size: Option<ControlSize>, pub enabled: Option<bool>, pub read_only: Option<bool>, pub wheel: Option<WheelScope>, pub motion: Option<MotionMode>, pub direction: Option<Direction>, pub words: Option<WordsOverride>, pub values: AppValues }`. Changes to the inherited values for a stretch of code.
+- `craft_ui::runtime::env::Overrides`: `pub struct Overrides { pub size: Option<ControlSize>, pub enabled: Option<bool>, pub read_only: Option<bool>, pub wheel: Option<WheelScope>, pub motion: Option<MotionMode>, pub direction: Option<Direction>, pub words: Option<WordsOverride>, pub values: AppValues, pub id_salt: Option<egui::Id> }`. Changes to the inherited values for a stretch of code.
 - `craft_ui::runtime::env::PageBandRoom`: `pub struct PageBandRoom { pub rect: Rect, pub start: f32, pub end: f32 }`. The room of the page band while a full-window page shows: the title-bar-high strip at the window's top and the room
   - `pub const fn new(rect: Rect, start: f32, end: f32) -> Self`. The band at `rect`, the window's start end taking `start` of it and its end end `end`.
 - `craft_ui::runtime::env::PaneEdge`: `pub enum PaneEdge { Center, Start, End, Top, Bottom }`. Where a shell pane sits.
@@ -3889,7 +3895,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
   - `pub const fn contains(self, command: EditCommand) -> bool`. Whether the set has `command`.
 - `craft_ui::runtime::focus::EndKey`: `pub enum EndKey { LastItem, EndMode }`. What a bare End means for a focused component.
 - `craft_ui::runtime::focus::EnterRule`: `pub enum EnterRule { Pass, Submit }`. What Enter does in a scope after the focused component declined it.
-- `craft_ui::runtime::focus::FocusPolicy`: `pub struct FocusPolicy { pub kind: ScopeKind, pub trap: bool, pub restore: bool, pub initial: Initial, pub enter: EnterRule, pub cancel: CancelRule, pub pages: bool, pub list_enter: bool }`. A focus scope's rules.
+- `craft_ui::runtime::focus::FocusPolicy`: `pub struct FocusPolicy { pub kind: ScopeKind, pub trap: bool, pub restore: bool, pub initial: Initial, pub enter: EnterRule, pub cancel: CancelRule, pub pages: bool, pub list_enter: bool, pub list: Option<Id> }`. A focus scope's rules.
   - `pub const NONE: FocusPolicy`. A scope that changes nothing.
   - `pub const PANE: FocusPolicy`. A pane: an F6 stop.
   - `pub const DIALOG: FocusPolicy`. A dialog: Tab stays inside, Enter submits, Escape closes.
@@ -3901,6 +3907,7 @@ The focus service: stops, scopes and roving groups registered per pass, the focu
   - `pub const fn initial(mut self, initial: Initial) -> Self`. Where focus goes first.
   - `pub const fn cancel(mut self, cancel: CancelRule) -> Self`. What Escape does.
   - `pub const fn list_enter(mut self, on: bool) -> Self`. Whether Enter on a text opener activates the layer's list.
+  - `pub const fn list(mut self, list: Id) -> Self`. The collection in the layer that takes the opener's list keys.
   - `pub const fn pages(mut self, on: bool) -> Self`. Whether Ctrl+Tab cycles pages.
 - `craft_ui::runtime::focus::FocusTarget`: `pub enum FocusTarget { Id(Id), Part(Id, PartRef), Doc(DocKey) }`. What `runtime::focus::request` focuses.
 - `craft_ui::runtime::focus::Initial`: `pub enum Initial { Keep, First, FirstField, Default, Key(&'static str), KeepAnchor }`. Where focus goes the first time a scope is pushed.
@@ -4008,8 +4015,9 @@ Decision records and findings. Inspected regions ([`record`]) collect pipeline s
 `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 - `craft_ui::runtime::install::InstallError`: `pub enum InstallError { AlreadyInstalled, DuplicateStyle(DuplicateStyle), Commands(commands::CommandDefError), DuringPass }`. Why `install` refused a spec.
-- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader, pub wheel: WheelModifiers, pub app_id: String, pub pen: Option<PenSource>, pub stories: bool, pub clipboard: Option<craft_platform::clipboard::Clipboard> }`. What `install` takes.
+- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader, pub wheel: WheelModifiers, pub app_id: String, pub pen: Option<PenSource>, pub stories: bool, pub clipboard: Option<craft_platform::clipboard::Clipboard>, pub jobs: Option<Arc<dyn Jobs>> }`. What `install` takes.
   - `pub fn new(shell_info: ShellInfo, window_system: Arc<dyn WindowSystem>) -> Self`. A spec for `shell_info` and `window_system`, with no ghost-layer painter.
+  - `pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self`. Runs the context's background work on `jobs` while no host is installed.
   - `pub fn clipboard(mut self, clipboard: craft_platform::clipboard::Clipboard) -> Self`. Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
   - `pub fn stories(mut self) -> Self`. Loads the stories' command sets too, for an install that shows stories.
   - `pub fn placement(mut self, store: Arc<Mutex<Store>>) -> Self`. Sets the store viewport mounts save their window placement in.
@@ -4505,6 +4513,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::Room`: re-export of `craft_ui::testing::fixture::Room`.
 - `craft_ui::testing::Target`: re-export of `craft_ui::testing::fixture::Target`.
 - `craft_ui::testing::audit_replays`: `pub fn set(ctx: &Context, on: bool)`. Turns the audit on or off in `ctx`, in place of `CRAFT_UI_AUDIT_REPLAY`.
+- `craft_ui::testing::document_face_budget`: `pub fn set_budget(ctx: &Context, bytes: usize)`. Sets the budget of `ctx`'s document faces to `bytes` in place of [`MAX_DOCUMENT_FACE_BYTES`], so a trial reaches
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
 - `craft_ui::testing::in_audit_run`: `pub fn in_run(ctx: &Context) -> bool`. Whether the code running in `ctx` is a run of the audit: a test that counts its own runs of a view counts none in
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.

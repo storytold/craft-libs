@@ -129,7 +129,7 @@ fn press_label(fixture: &mut Fixture, label: &str) {
 
 #[trial]
 fn select_mask_preview_is_asked_for_only_when_it_changes() {
-    let (mut fixture, _, jobs) = open();
+    let (mut fixture, app, jobs) = open();
     let first = jobs.load(Ordering::SeqCst);
     assert_eq!(first, 1, "one preview for the opening state");
     fixture.frame(vec![pointer::moved(canvas_point(&fixture, Vec2::ZERO))]);
@@ -137,6 +137,11 @@ fn select_mask_preview_is_asked_for_only_when_it_changes() {
     assert_eq!(jobs.load(Ordering::SeqCst), first, "hovering changes nothing");
     press_label(&mut fixture, "Invert");
     assert_eq!(jobs.load(Ordering::SeqCst), first + 1, "an edit asks for a new preview");
+    let size = PixelSize::new(DOCUMENT[0], DOCUMENT[1]);
+    let edited: Arc<dyn SelectMaskSource> = Arc::new(Source { image: Solid { size }, jobs: Arc::clone(&jobs) });
+    app.borrow_mut().host.get_mut::<HostedWorkspace<SelectMaskWorkspace>>().expect("the workspace is open").set_source(edited);
+    fixture.settle();
+    assert_eq!(jobs.load(Ordering::SeqCst), first + 2, "a document edit asks for a new preview of the same request");
 }
 
 // The view keys work from inside the workspace with no help from the app: K picks Black & White, X held hides the

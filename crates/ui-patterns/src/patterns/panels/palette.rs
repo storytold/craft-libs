@@ -252,7 +252,7 @@ impl<'a> CommandPalette<'a> {
                 let session = inner.memory::<Session>();
                 let field =
                     TextField::search(label.clone(), Bind::bound(&mut session.query)).placeholder(face_hint.clone()).id(field_id).show(ui).response;
-                let popup = PopupList::new(label.clone(), open.reborrowed()).opened_by(&field).show(ui, |ui, popup| {
+                let popup = PopupList::new(label.clone(), open.reborrowed()).opened_by(&field).list(list_id).show(ui, |ui, popup| {
                     let recent = recent_of(&mut recents, popup);
                     let input = RowsInput {
                         ctx: &ctx,

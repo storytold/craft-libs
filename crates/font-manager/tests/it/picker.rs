@@ -1,7 +1,7 @@
 //! The font picker's flows: style rows under an expanded family, served families and the rested report, and similar
 //! fonts.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -9,7 +9,8 @@ use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
+    FamilyInfos, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize, MissingAdvice,
+    SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::buttons::ControlPlace;
@@ -196,6 +197,75 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
         fx.settle();
         assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some(family), "the typed name is picked");
     }
+}
+
+/// A picker as the character controls host it: a given value, the filters (so the class column shows beside the
+/// families) and a preview text. The field's list keys go to the family list: Enter on a typed part of a name picks the
+/// best match, and Down moves the family row, which previews, before Enter picks it. While no family row shows, Enter is
+/// the field's: it commits a typed family name and leaves the class column as it was.
+#[trial]
+fn with_the_class_column_shown_the_field_keys_move_and_pick_in_the_family_list() {
+    #[derive(Default)]
+    struct Reported {
+        picks: Vec<String>,
+        previews: Vec<String>,
+    }
+    let reported = Rc::new(RefCell::new(Reported::default()));
+    let seen = Rc::clone(&reported);
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR, epaint_default_fonts::UBUNTU_LIGHT]);
+    let mut settings = FontPickerSettings::default();
+    let filters = Rc::new(RefCell::new(FontFilters::default()));
+    let held = Rc::clone(&filters);
+    let mut fx = Fixture::new(move |ui| {
+        let mut filters = held.borrow_mut();
+        let out = FontPicker::new("Font family", Bind::given("Ubuntu".to_owned()), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .filters(Bind::bound(&mut *filters))
+            .preview_text("Sample")
+            .show(ui);
+        let mut seen = seen.borrow_mut();
+        if let Preview::Shows(family) = out.preview {
+            seen.previews.push(family);
+        }
+        seen.picks.extend(out.picked);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let words = FontPickerWords::default();
+    let type_in = |fx: &mut Fixture, text: &str| {
+        let field = fx.by_label("Font family").expect("the family field");
+        fx.click(&field);
+        fx.settle();
+        fx.type_text(text);
+        fx.settle();
+    };
+
+    type_in(&mut fx, "Ha");
+    assert!(present(&fx, words.all_classes.as_str()), "the class column shows");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks, ["Hack"], "Enter on a partial name picks the best match");
+
+    // "n" matches Inter and Ubuntu.
+    type_in(&mut fx, "n");
+    reported.borrow_mut().previews.clear();
+    fx.key(Key::ArrowDown, Modifiers::NONE);
+    fx.settle();
+    let keyed = reported.borrow().previews.last().cloned().expect("Down moves the family row, which previews its family");
+    assert!(["Inter", "Ubuntu"].contains(&keyed.as_str()), "the row is a family that matches: {keyed}");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks.last(), Some(&keyed), "Enter picks the family row the keys reached");
+
+    // The host's filters list monospaced families only, Hack alone, so the exact name "Inter" matches no row.
+    filters.borrow_mut().class = Some(FontClass::Monospace);
+    type_in(&mut fx, "Inter");
+    assert!(present(&fx, words.all_classes.as_str()), "the class column shows");
+    assert!(fx.by_label("Favorite Inter").is_none() && fx.by_label("Favorite Hack").is_none(), "no family row shows");
+    fx.key(Key::Enter, Modifiers::NONE);
+    fx.settle();
+    assert_eq!(reported.borrow().picks.last().map(String::as_str), Some("Inter"), "the field commits the typed name");
+    assert_eq!(filters.borrow().class, Some(FontClass::Monospace), "the class column is unchanged");
 }
 
 /// A `Plain` picker over `family` with `recent` families, `actions` rows and the face `shown_as`.
@@ -501,6 +571,136 @@ fn library_rig() -> (Fixture, Rc<RefCell<Library>>) {
     (fx, state)
 }
 
+/// "أبجد هوز", which neither Inter nor Hack draws.
+const ARABIC_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
+
+/// An open library list over Inter and Hack, with Gotham served, `family` current and `text` as the preview text.
+fn sample_rig(family: &'static str, text: &'static str) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]);
+    let served = vec!["Gotham".to_owned()];
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound(&mut family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .served(&served)
+            .preview_text(text)
+            .show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// Each row has one sample, the picker's sample text, in its own face; a face that lacks the text's letters shows its
+/// name instead, in its row and in the banner; and a family without a face shows no sample at all, not the text in the interface face.
+#[trial]
+fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
+    let fx = sample_rig("Inter", "Hello");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: Hello")).is_some(), "{family}'s sample is the preview text");
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family} has no sample word");
+    }
+
+    let fx = sample_rig("Gotham", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Gotham").is_some(), "the banner shows the served family");
+    for family in ["Inter", "Hack"] {
+        assert!(fx.by_label(&format!("{family}: {family}")).is_some(), "{family} lacks Arabic: its sample is its name");
+    }
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "no face draws the text: neither the rows nor the banner of a family without a face paint it"
+    );
+
+    let fx = sample_rig("Inter", ARABIC_TEXT);
+    assert!(fx.by_label("Font preview: Inter").is_some(), "the banner shows Inter");
+    assert!(
+        fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
+        "the banner of a face without the text's letters shows what its row shows, not the text"
+    );
+}
+
+/// The repository's Noto Sans CJK SC subset (CFF): its line (hhea 1160/-288) is taller than Inter's.
+const CJK_SUBSET: &[u8] = include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf");
+
+/// "中文", which the subset draws and Inter lacks.
+const CJK_TEXT: &str = "\u{4E2D}\u{6587}";
+
+/// An open library list at Large over Inter and the CJK subset, with `family` current and the preview text `text`
+/// holds at each pass.
+fn cjk_rig(family: &'static str, text: Rc<Cell<Option<&'static str>>>) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, CJK_SUBSET]);
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    settings.preview = FontPreviewSize::Large;
+    let mut fx = Fixture::new(move |ui| {
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).settings(Bind::bound(&mut settings));
+        if let Some(text) = text.get() {
+            picker = picker.preview_text(text);
+        }
+        picker.show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// The host's text can arrive while the list is open (a selection made after the menu opened): every row follows it,
+/// in a CJK face too, and no row keeps the sample word.
+#[trial]
+fn rows_sample_the_host_text_that_arrives_after_the_list_opened() {
+    let text = Rc::new(Cell::new(None));
+    let mut fx = cjk_rig("Inter", Rc::clone(&text));
+    assert!(fx.by_label("Inter: Sample").is_some(), "without a host text the rows show the sample word");
+    text.set(Some(CJK_TEXT));
+    fx.settle();
+    assert!(fx.by_label(&format!("Noto Sans CJK SC: {CJK_TEXT}")).is_some(), "the CJK face's row shows the host's text");
+    assert!(fx.by_label("Inter: Inter").is_some(), "Inter lacks the text's letters: its row shows its name");
+    for family in ["Inter", "Noto Sans CJK SC"] {
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family}'s row no longer shows the sample word");
+    }
+}
+
+/// The baseline of a painted text, on screen.
+fn baseline_of(text: &egui::epaint::TextShape) -> f32 {
+    let row = text.galley.rows.first().expect("a row");
+    text.pos.y + row.pos.y + row.row.glyphs.first().map_or(row.row.size.y, |glyph| glyph.pos.y)
+}
+
+/// Faces whose lines differ (Inter's and the CJK subset's, which is taller) sit on one baseline in their rows, and each
+/// sample's ink, the rows' and the banner's, stays inside its band: none is clipped.
+#[trial]
+fn every_sample_sits_on_one_baseline_inside_its_band() {
+    let mut fx = cjk_rig("Noto Sans CJK SC", Rc::new(Cell::new(Some(CJK_TEXT))));
+    let shapes = fx.frame_clipped_shapes();
+    let painted = |text: &str, band: egui::Rect| {
+        shapes
+            .iter()
+            .filter_map(|(_, shape)| match shape {
+                egui::Shape::Text(painted) if painted.galley.job.text == text => Some(painted),
+                _ => None,
+            })
+            .find(|painted| band.contains(painted.visual_bounding_rect().center()))
+            .unwrap_or_else(|| panic!("{text} painted in {band:?}"))
+    };
+    let mut offsets = Vec::new();
+    for (family, text) in [("Inter", "Inter"), ("Noto Sans CJK SC", CJK_TEXT)] {
+        let band = fx.by_label(&format!("{family}: {text}")).unwrap_or_else(|| panic!("{family}'s sample")).rect;
+        let sample = painted(text, band);
+        let ink = sample.visual_bounding_rect();
+        assert!(band.expand(0.01).contains_rect(ink), "{family}'s ink {ink:?} stays inside its band {band:?}");
+        offsets.push(baseline_of(sample) - band.top());
+    }
+    assert!((offsets[0] - offsets[1]).abs() < 0.5, "both samples sit on one baseline in their bands: {offsets:?}");
+    let banner = fx.by_label("Font preview: Noto Sans CJK SC").expect("the banner").rect;
+    let ink = painted(CJK_TEXT, banner).visual_bounding_rect();
+    assert!(banner.contains_rect(ink), "the banner's ink {ink:?} stays inside the banner {banner:?}");
+    let name = fx.texts().iter().find(|text| text.text == "Noto Sans CJK SC" && banner.contains_rect(text.rect)).expect("the banner's name").rect;
+    assert!(ink.top() >= name.bottom(), "the banner's sample stays below its name: {ink:?} {name:?}");
+}
+
 /// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
 /// to open (a recent row included), the sample after the name; and a rule, not blank room, ends the recent group.
 #[trial]
@@ -557,4 +757,40 @@ fn a_class_narrows_the_list_and_all_classes_restores_it() {
     fx.click(&all);
     fx.settle();
     assert!(fx.by_label("Favorite Inter").is_some(), "every family is back");
+}
+
+#[trial]
+fn a_click_on_a_rows_sample_picks_its_family() {
+    let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR]), vec![]);
+    open(&mut fx);
+    let inter = fx.by_label("Inter").expect("the Inter row");
+    let sample = fx
+        .texts()
+        .iter()
+        .find(|painted| painted.text == "Sample" && inter.rect.contains(painted.rect.center()))
+        .map(|painted| painted.rect.center())
+        .expect("Inter's row shows its sample");
+    fx.click_at(sample);
+    fx.settle();
+    assert_eq!(seen.borrow().picks, [("Inter".to_owned(), None)], "the click picks the row");
+}
+
+/// The open list loads its rows' faces through the host's jobs, never in a pass, and a list opened again over the
+/// same rows loads none of them again.
+#[trial]
+fn the_list_loads_its_sample_faces_off_the_pass_and_once() {
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    let (mut fx, _) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
+    fx.host(Arc::new(host));
+    open(&mut fx);
+    assert!(present(&fx, "Inter"), "the rows show while their faces load");
+    assert!(jobs.waiting() > 0, "the rows' faces wait for the host's jobs");
+    jobs.run_all();
+    fx.settle();
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(jobs.waiting(), 0, "the list opened again loads no face");
 }
