@@ -76,6 +76,10 @@ jobs:
       cache-workspace-crates: true
       cold-build: ${{ github.event.schedule == '17 0 * * *' }}
       lint-cache: false
+      # The vendored crates are on the workspace `exclude` list, so unreached-rs has no module tree for them.
+      unreached-rs-allow: |
+        **/fixtures/**
+        vendor/**
       timeout-minutes: &timeout 120
       # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: &tools cargo-nextest@0.9.150
