@@ -83,6 +83,9 @@ pub(crate) struct TextState {
     pub change: Option<DraftChange>,
     /// `Cx::select_all_text` asked for the whole text to be selected at the start of the next pass.
     pub select_all: bool,
+    /// Focus arrived on a `select_on_focus` part with a pointer press that is still down: the press keeps the caret or
+    /// range the pointer makes, and its release as a plain click selects the whole text, as an address bar does.
+    pub select_on_click: bool,
     /// The selection, `(caret, anchor)`, the text part had when its edit menu took the focus: egui collapses the
     /// selection of a widget without focus, and the menu's command acts on it once the focus is back, which reaches the
     /// widget the pass after the menu closes.

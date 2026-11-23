@@ -1,5 +1,6 @@
 //! A text field's typing run across focus changes: switching to another app carries the run on; focus that arrives
-//! between passes selects a select-on-focus field's text before the next pass's typing.
+//! between passes selects a select-on-focus field's text before the next pass's typing; a pointer that brings focus
+//! keeps the caret or range it made.
 
 use craft_behavior::{CancelReason, EditEvent};
 use craft_ui::contract::{Bind, Show as _};
@@ -138,5 +139,29 @@ fn text_typed_in_the_pass_focus_arrives_replaces_a_select_on_focus_text() {
     rig.escape();
     assert_eq!(rig.text(), "Craft Library", "Escape gives back the text from before the run");
     assert_eq!(rig.ended(), [Ended::Cancel(CancelReason::Escape)]);
+}
+
+/// A plain click into a select-on-focus field selects its whole text, as a browser's address bar does.
+#[trial]
+fn a_click_into_a_select_on_focus_field_selects_its_text() {
+    let mut rig = rig("Lisbon", true);
+    rig.click();
+    rig.type_text("Kyoto");
+    assert_eq!(rig.text(), "Kyoto");
+}
+
+/// A drag into a select-on-focus field selects what the drag covers: the focus the press brought does not replace the
+/// pointer's range with the whole text.
+#[trial]
+fn a_drag_into_a_select_on_focus_field_selects_what_it_covers() {
+    let mut rig = rig("Lisbon Portugal Europe Atlantic Ocean", true);
+    let field = rig.fixture.by_label("City").expect("the field").rect;
+    let (from, to) = (field.center(), egui::pos2(field.right() + 40.0, field.center().y));
+    rig.fixture.drag_at(from, to - from);
+    rig.fixture.settle();
+    assert!(rig.focused(), "the press focused the field");
+    rig.type_text("X");
+    let text = rig.text();
+    assert!(text.starts_with("Lisbon") && text.ends_with('X') && text != "X", "the drag's range was replaced: {text:?}");
 }
 

@@ -458,8 +458,11 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     // pass) places the caret before this pass's input is applied, so the first text typed replaces a selection. Focus
     // back from the edit menu is no arrival.
     let arrived_before = focused && !was_focused && !held && !menu_held && core.active_part().is_none();
+    // Focus that arrives while a button is down over the field came with a press on it.
+    let frame = crate::runtime::pointer::frame_raw(&ctx);
+    let by_pointer = !frame.buttons.is_empty() && frame.pos.is_some_and(|at| core.visible.contains(at));
     if arrived_before {
-        arrive(&ctx, widget, decl);
+        arrive(&ctx, widget, decl, state, by_pointer);
     }
     let out = adapter::run(
         state,
@@ -498,20 +501,35 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
     let back_from_menu = menu_held && state.held_selection.is_none();
     if out.focused && !left_for_part && !was_focused && !back_from_menu && !arrived_before {
-        arrive(&ctx, widget, decl);
+        arrive(&ctx, widget, decl, state, by_pointer);
+    }
+    if state.select_on_click {
+        if out.clicked && out.focused {
+            adapter::select(&ctx, widget, 0, decl.shown.chars().count());
+            state.select_on_click = false;
+        } else if !out.focused || frame.buttons.is_empty() {
+            // A drag, or a press that ended elsewhere: the pointer's caret or range stays.
+            state.select_on_click = false;
+        }
     }
     PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused }
 }
 
 /// Places the caret of the text part's widget `widget` as focus arrives on the part: where the codec puts it, or over
-/// the whole text for `select_on_focus`.
-fn arrive(ctx: &egui::Context, widget: egui::Id, decl: &TextPart) {
+/// the whole text for `select_on_focus`. `select_on_focus` is for focus by key or request: focus a pointer press
+/// brings (`by_pointer`) keeps the caret or range the pointer makes, and a plain click selects the whole text once it
+/// is released (`TextState::select_on_click`).
+fn arrive(ctx: &egui::Context, widget: egui::Id, decl: &TextPart, state: &mut TextState, by_pointer: bool) {
     let len = decl.shown.chars().count();
     // A dialog that opens on this field selects its whole text whatever the codec's caret, so typing replaces it
     // (photocraft#15540).
     let opened = crate::runtime::focus::focused_rec(ctx)
         .and_then(|rec| crate::runtime::focus::origin(ctx, &rec))
         .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
+    if by_pointer && decl.options.select_on_focus && !opened {
+        state.select_on_click = true;
+        return;
+    }
     match if opened { Caret::All } else { decl.caret } {
         Caret::All => adapter::select(ctx, widget, 0, len),
         // A bound caret is where the app put it: focus arriving keeps it.
