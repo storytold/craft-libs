@@ -166,7 +166,9 @@ impl egui::DroppedFile for DroppedPath {
 fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     patch_window(viewport.ids, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
-    let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+    let mut events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+    // This egui takes the held modifiers as an event, not a RawInput field.
+    events.insert(0, egui::Event::ModifiersChanged(CHILD_MODIFIERS.with(Cell::get)));
     let (hovered_files, dropped) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     let dropped_files = dropped.into_iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
     let mut info = with_facts(viewport.ids.this, |info| info.clone());
@@ -174,7 +176,6 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     let mut input = RawInput {
         viewport_id: viewport.ids.this,
         events,
-        modifiers: CHILD_MODIFIERS.with(Cell::get),
         hovered_files,
         dropped_files,
         // The pass lays out in the window as large as its facts say, as the OS gives it.
