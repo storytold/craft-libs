@@ -1285,6 +1285,10 @@ pub(crate) mod guard {
         ),
         ("runtime::derived::Store", "derived values: a pure function of their key, so a value a measuring run builds is the one a real run builds"),
         ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
+        (
+            "contract::items::request::RenameRequests",
+            "rename requests: peeked by the items read so the renamed row stays in the view; taken in real runs only",
+        ),
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),

@@ -477,6 +477,11 @@ impl Catalog {
         }
     }
 
+    /// A catalog of exactly `files`, built on the existing scan with no font folders and no store.
+    pub fn of_files(files: Vec<PathBuf>) -> Catalog {
+        Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false).with_lister(Arc::new(move || files.clone()))
+    }
+
     /// The process's catalog, for [`FontEnv::from_process`].
     pub fn global() -> &'static Arc<Catalog> {
         static GLOBAL: OnceLock<Arc<Catalog>> = OnceLock::new();

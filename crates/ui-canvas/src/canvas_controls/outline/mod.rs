@@ -55,6 +55,8 @@ pub enum SelectionOutlineLook {
     Solid,
     /// A medium line in dashes: a CAD app's selection effect.
     Dashed,
+    /// A thin line at the grid colour, with no halo: every editable object's outline in an edit mode.
+    Faint,
 }
 
 /// The style of the hover and selection outlines.
@@ -72,6 +74,8 @@ pub struct OutlineStyle {
     /// The length of a dash and of the gap after it.
     dash: f32,
     gap: f32,
+    /// The line colour of a faint outline.
+    faint: StyleColor,
 }
 
 fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
@@ -83,6 +87,7 @@ fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
         thin: stroke.thin,
         dash: stroke.dash,
         gap: stroke.dash_gap,
+        faint: cx.color(cx.tokens.color.overlay.grid),
     }
 }
 
@@ -149,12 +154,13 @@ fn segment_hull(from: kurbo::Point, segment: PathEl) -> Vec<kurbo::Point> {
     }
 }
 
-/// Strokes one run: the kit's halo-and-line outline in the overlay colours, or a line of the host's `color` alone.
-fn stroke_run(painter: &ContentPainterCx<'_>, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) {
+/// Strokes one run: the kit's halo-and-line outline in the overlay colours, or a bare line of `color` (the host's
+/// colour, or a faint outline's).
+fn stroke_run(painter: &ContentPainterCx<'_>, run: Vec<Pos2>, closed: bool, color: Option<Color32>, width: f32) {
     match color {
         None => painter.outline(&if closed { PaintShape::Polygon(run) } else { PaintShape::Path(run) }),
         Some(color) => {
-            let stroke = Stroke::new(width, color.0);
+            let stroke = Stroke::new(width, color);
             painter.painter.add(if closed { Shape::closed_line(run, stroke) } else { Shape::line(run, stroke) });
         }
     }
@@ -243,11 +249,11 @@ impl Component for HoverOutline {
                 let (half_y, half_x) = (view.doc_len(style.medium / 2.0), f64::from(style.medium / 2.0) / view.zoom_x());
                 let rect = rect.abs();
                 let grown = Rect::new(rect.x0 - half_x, rect.y0 - half_y, rect.x1 + half_x, rect.y1 + half_y);
-                stroke_run(&painter, view.quad(grown).to_vec(), true, self.color, style.medium);
+                stroke_run(&painter, view.quad(grown).to_vec(), true, self.color.map(|color| color.0), style.medium);
             }
             HoverShape::Path(path) => {
                 for (points, closed) in path_runs(&view, path) {
-                    stroke_run(&painter, points, closed, self.color, style.medium);
+                    stroke_run(&painter, points, closed, self.color.map(|color| color.0), style.medium);
                 }
             }
             HoverShape::Mask(mask) => paint_mask(&painter, cx.id, &view, mask, self.color.map_or(style.line.egui(), |color| color.0)),
@@ -284,6 +290,12 @@ impl<'a> SelectionOutline<'a> {
         SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None }.label(label)
     }
 
+    /// A thin outline of `paths` (document units) with no halo, for every editable object in an edit mode, named
+    /// `label`.
+    pub fn faint(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Faint, color: None }.label(label)
+    }
+
     /// A dashed outline of `paths` (document units), named `label`.
     pub fn dashed(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
         SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None }.label(label)
@@ -315,7 +327,11 @@ impl Component for SelectionOutline<'_> {
         for path in self.paths {
             for (mut points, closed) in path_runs(&space.view, path) {
                 match self.look {
-                    SelectionOutlineLook::Solid => stroke_run(&painter, points, closed, self.color, style.thin),
+                    SelectionOutlineLook::Solid => stroke_run(&painter, points, closed, self.color.map(|color| color.0), style.thin),
+                    SelectionOutlineLook::Faint => {
+                        let color = self.color.map_or(style.faint.egui(), |color| color.0);
+                        stroke_run(&painter, points, closed, Some(color), style.thin);
+                    }
                     SelectionOutlineLook::Dashed => {
                         if closed {
                             points.extend(points.first().copied());

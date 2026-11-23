@@ -12,7 +12,7 @@ use skrifa::GlyphId;
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
 
-use super::{FamilyRow, FontClass, FontFilters, FontFormat, FontPickerSettings, SIMILAR_COUNT};
+use super::{FamilyRow, FontClass, FontFilters, FontFormat, FontPickerSettings, HostFontGroup, HostFontKind, SIMILAR_COUNT};
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -340,4 +340,20 @@ pub(super) fn list(
         rows.splice(0..0, recent);
     }
     (rows, comparable)
+}
+
+/// The host rows the list shows for `query`, as (group, row) in group order: every row for an empty query, else the
+/// face and action rows whose name matches as a family name would. A notice speaks of its group as a whole, so it
+/// shows only in the unfiltered list.
+pub(super) fn host_rows(groups: &[HostFontGroup<'_>], query: &str, folder: &Folder) -> Vec<(usize, usize)> {
+    let matcher = Matcher::new(folder, query);
+    let listed =
+        |row: &super::HostFontRow| matcher.is_empty() || (!matches!(row.kind, HostFontKind::Notice) && matcher.score(row.name.as_str()).is_some());
+    groups
+        .iter()
+        .enumerate()
+        .flat_map(|(group, rows)| rows.rows.iter().enumerate().map(move |(at, row)| (group, at, row)))
+        .filter(|(_, _, row)| listed(row))
+        .map(|(group, at, _)| (group, at))
+        .collect()
 }

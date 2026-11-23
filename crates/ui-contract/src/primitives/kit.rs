@@ -932,6 +932,16 @@ pub fn ellipse(center: Pos2, axes: [Vec2; 2]) -> Vec<Pos2> {
         .collect()
 }
 
+/// A line `width` points wide along `points`, with round dots at every point, in the theme's text-selection fill
+/// (translucent, so the content under it shows): the swath a rubbing tool leaves.
+pub fn swath(tokens: &UiTokens, points: &[Pos2], width: f32) -> Vec<Shape> {
+    let color = rgba_color(tokens.color.state.text_selection);
+    let mut shapes = vec![Shape::line(points.to_vec(), Stroke::new(width, color))];
+    // A line has butt ends and no joins: a dot at each point keeps the swath's width at the ends and corners.
+    shapes.extend(points.iter().map(|&p| Shape::circle_filled(p, width / 2.0, color)));
+    shapes
+}
+
 fn stroked(shape: &PaintShape, stroke: Stroke) -> Vec<Shape> {
     match shape {
         PaintShape::Rect(rect, radius) => vec![Shape::rect_stroke(*rect, *radius, stroke, egui::StrokeKind::Middle)],
@@ -1045,6 +1055,11 @@ impl ContentPainterCx<'_> {
     /// The device pixels per point of the surface being painted.
     pub fn pixels_per_point(&self) -> f32 {
         self.ppp()
+    }
+
+    /// Paints a swath `width` points wide along `points` in the text-selection fill; see [`swath`].
+    pub fn swath(&self, points: &[Pos2], width: f32) {
+        self.painter.extend(swath(self.tokens, points, width));
     }
 
     /// Paints the insertion mark of a drop.

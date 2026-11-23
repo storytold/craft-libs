@@ -48,6 +48,19 @@ fn swatch_states(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     StoryOutput::default().readout(format!("Clicked {clicks} times"))
 }
 
+/// Optional swatches: one of no colour (the sunken well with the diagonal, read as "None"), one with a colour, one
+/// mixed.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_none(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let clicks = data.note("clicks", 0u32);
+    Row::new().show(ui, |ui, _| {
+        *clicks += u32::from(Swatch::optional("No colour", Mixed::<Option<Srgba>>::Same(None)).show(ui).clicked);
+        *clicks += u32::from(Swatch::optional("Colour", Mixed::Same(Some(BLUE))).show(ui).clicked);
+        *clicks += u32::from(Swatch::optional("Mixed", Mixed::<Option<Srgba>>::Mixed).show(ui).clicked);
+    });
+    StoryOutput::default().readout(format!("Clicked {clicks} times"))
+}
+
 /// Twelve swatches in a `RadioGroup`: one Tab stop, arrows move, Space picks.
 #[story(Swatch<u8>, covers = [], drive = Drive::Never)]
 fn swatch_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

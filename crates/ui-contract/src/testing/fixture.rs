@@ -193,11 +193,14 @@ impl Fixture {
         let mut fixture = Fixture::new(move |ui| {
             let number = shared_pass.get() + 1;
             shared_pass.set(number);
-            let output = if shared_probed.get() {
+            // What fired before the story's code ran (a shortcut the input hook took) is not the story's.
+            crate::runtime::commands::observe_fired(ui.ctx());
+            let mut output = if shared_probed.get() {
                 probed_pass(ui, number, scope, show, &shared_data, &shared_delivers, &shared_impure)
             } else {
                 shown(ui, scope, show, &shared_data)
             };
+            output.fired = crate::runtime::commands::observe_fired(ui.ctx());
             shared_root.set(output.id);
             shared_outputs.borrow_mut().push(output);
         });
@@ -466,6 +469,11 @@ impl Fixture {
         self.frames.repaint_delay()
     }
 
+    /// The system cursor the latest frame's output asked for.
+    pub fn cursor_icon(&self) -> egui::CursorIcon {
+        self.frames.cursor_icon()
+    }
+
     /// The IME output of the latest frame.
     pub fn ime(&self) -> Option<&fixture::ImeSeen> {
         self.frames.ime()
@@ -495,6 +503,16 @@ impl Fixture {
         });
         self.tree = self.frames.tree();
         self
+    }
+
+    /// One frame whose pointer button events carry the modifiers held by the fixture.
+    pub fn frame_held(&mut self, mut events: Vec<Event>) -> &mut Self {
+        for event in &mut events {
+            if let Event::PointerButton { modifiers, .. } = event {
+                *modifiers = self.frames.held();
+            }
+        }
+        self.frame(events)
     }
 
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
@@ -657,7 +675,7 @@ impl Fixture {
 
     /// Hover, press and release at `pos`, in separate frames, then one idle frame.
     pub fn click_at(&mut self, pos: Pos2) -> &mut Self {
-        self.play(injected::click_frames(pos, egui::PointerButton::Primary, 1, Modifiers::NONE));
+        self.play(injected::click_frames(pos, egui::PointerButton::Primary, 1, self.frames.held()));
         self.frame(Vec::new())
     }
 
@@ -680,12 +698,12 @@ impl Fixture {
     pub fn press(&mut self, target: &Target) -> &mut Self {
         let at = target.center();
         self.frame(vec![super::pointer::moved(at)]);
-        self.frame(vec![super::pointer::press(at)])
+        self.frame(vec![injected::button(at, egui::PointerButton::Primary, true, self.frames.held())])
     }
 
     /// Release at the middle of `target`.
     pub fn release(&mut self, target: &Target) -> &mut Self {
-        self.frame(vec![super::pointer::release(target.center())])
+        self.frame(vec![injected::button(target.center(), egui::PointerButton::Primary, false, self.frames.held())])
     }
 
     /// Press on `target`, move by `by` in four steps, release.
@@ -696,11 +714,11 @@ impl Fixture {
     /// A drag from the point `from` by `by`: the same frames as [`Fixture::drag`], for a point that is no target.
     pub fn drag_at(&mut self, from: Pos2, by: Vec2) -> &mut Self {
         self.frame(vec![super::pointer::moved(from)]);
-        self.frame(vec![super::pointer::press(from)]);
+        self.frame(vec![injected::button(from, egui::PointerButton::Primary, true, self.frames.held())]);
         for step in 1..=4 {
             self.frame(vec![super::pointer::moved(from + by * (step as f32 / 4.0))]);
         }
-        self.frame(vec![super::pointer::release(from + by)]);
+        self.frame(vec![injected::button(from + by, egui::PointerButton::Primary, false, self.frames.held())]);
         self.frame(Vec::new())
     }
 
@@ -709,7 +727,7 @@ impl Fixture {
     /// it with [`Fixture::release_at`].
     pub fn drag_hold_at(&mut self, from: Pos2, by: Vec2) -> &mut Self {
         self.frame(vec![super::pointer::moved(from)]);
-        self.frame(vec![super::pointer::press(from)]);
+        self.frame(vec![injected::button(from, egui::PointerButton::Primary, true, self.frames.held())]);
         for step in 1..=4 {
             self.frame(vec![super::pointer::moved(from + by * (step as f32 / 4.0))]);
         }
@@ -718,7 +736,7 @@ impl Fixture {
 
     /// Releases the button at `at`, then a frame with no input.
     pub fn release_at(&mut self, at: Pos2) -> &mut Self {
-        self.frame(vec![super::pointer::release(at)]);
+        self.frame(vec![injected::button(at, egui::PointerButton::Primary, false, self.frames.held())]);
         self.frame(Vec::new())
     }
 

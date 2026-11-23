@@ -401,6 +401,14 @@ impl<'a> ToolContext<'a> {
         painter.marching_ants(points, closed, march_shift(turn, march.dash));
     }
 
+    /// Paints a swath `width` points wide along `points` in the theme's text-selection fill in a paint call; it paints
+    /// nothing in any other.
+    pub fn swath(&self, points: &[Pos2], width: f32) {
+        if let Some(painter) = self.painter {
+            painter.swath(points, width);
+        }
+    }
+
     /// `point`, a document point under the pointer, moved to what the canvas snaps it to (View > Snap To) with the
     /// modifiers held now; the point itself when the canvas has no snapping or the Control key suspends it
     /// ([`Snap::apply`] decides). The tool builds no snapping of its own.
