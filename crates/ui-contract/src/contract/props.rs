@@ -271,7 +271,7 @@ impl Resolved<'_> {
     /// The text of the component's own tooltip as the tooltip shows it: its disabled text while the component is
     /// disabled. `None` when the component has no tooltip.
     pub fn tooltip_text(&self, env: &crate::runtime::env::EnvView<'_>) -> Option<String> {
-        self.tooltip.map(|tooltip| super::tooltip::spec_text(env, tooltip.spec(), self.enabled))
+        self.tooltip.map(|tooltip| super::tooltip::resolve_spec(env, tooltip.spec(), self.enabled))
     }
 }
 

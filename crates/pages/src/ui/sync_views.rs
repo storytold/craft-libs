@@ -4,8 +4,8 @@
 //! and scroll before it is drawn, in the same pass. The halves and the divider are craft-ui's [`SplitViews`] with
 //! [`SplitLayout::TwoUpVertical`]: pane 0 is the left half, pane 1 the right half and main view.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::view::{PageViewOutput, PageViewState};
 use craft_behavior::Proposal;

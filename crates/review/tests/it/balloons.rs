@@ -119,7 +119,7 @@ fn selecting_a_card_and_posting_a_reply_report_the_matching_edits() {
         "a click on a card reports its selection: {:?}",
         shown.edits.borrow()
     );
-    assert_eq!(shown.state.borrow().selected, Some(ThreadId(1)));
+    assert_eq!(shown.state.borrow().selected.lead, Some(ThreadId(1)));
     let reply = shown.fixture.by_label(words.reply.as_str()).expect("the selected card's reply field");
     shown.fixture.click(&reply).settle();
     shown.fixture.type_text("Thanks").settle();
@@ -145,12 +145,12 @@ fn reselecting_a_card_keeps_its_edit_draft() {
     // A click on the card's heading, above the open edit's field.
     let card = shown.card(1);
     shown.fixture.click_at(card.left_top() + vec2(30.0, 8.0)).settle();
-    assert_eq!(shown.state.borrow().selected, Some(ThreadId(1)), "the click selects the card");
+    assert_eq!(shown.state.borrow().selected.lead, Some(ThreadId(1)), "the click selects the card");
     assert_eq!(shown.state.borrow().editing, Some((ThreadId(1), 0, "Edited".into())), "the card's own draft survives its selection");
 
     let other = shown.card(2);
     shown.fixture.click_at(other.center()).settle();
-    assert_eq!(shown.state.borrow().selected, Some(ThreadId(2)));
+    assert_eq!(shown.state.borrow().selected.lead, Some(ThreadId(2)));
     assert_eq!(shown.state.borrow().editing, None, "selecting another card drops the draft, as before");
 }
 

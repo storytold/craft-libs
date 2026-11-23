@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use craft_host::{FileError, Files, PickId, PickKind, PickRequest, Picked, Wake};
+use craft_host::{FileError, Files, PickId, PickKind, PickRequest, Picked, Wake, WriteIntent};
 use js_sys::{Array, Function, Object, Promise, Reflect};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
@@ -300,7 +300,7 @@ impl Files for BrowserFiles {
         Err(FileError::Unsupported)
     }
 
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
     }
 

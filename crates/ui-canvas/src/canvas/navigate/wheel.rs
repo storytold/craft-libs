@@ -84,7 +84,7 @@ impl WheelInput {
 ///   Shift + wheel scrolls sideways; there is no ladder step.
 /// - A trackpad pinch zooms about the pointer (Zoom with Trackpad Pinch).
 ///
-/// That is [`WheelScheme::Photoshop`]. Under [`WheelScheme::Document`], a document editor's scheme:
+/// That is [`WheelScheme::Scroll`]. Under [`WheelScheme::Document`], a document editor's scheme:
 ///
 /// - The wheel scrolls up and down; Shift + wheel scrolls sideways.
 /// - Ctrl or Cmd + wheel (without Alt) steps the zoom ladder one rung a notch about the pointer.

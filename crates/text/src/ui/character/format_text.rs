@@ -466,5 +466,5 @@ fn line_label(spacing: LineSpacing, dialog: &ParagraphDialogWords, units: &Units
     }
 }
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

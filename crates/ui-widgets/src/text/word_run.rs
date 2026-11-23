@@ -1,7 +1,7 @@
 //! `WordRun`: a wrapping run of pickable words in one Tab stop.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,

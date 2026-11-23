@@ -1,5 +1,6 @@
 //! Stories of `CommentBalloons`: cards beside a page.
 
+use craft_behavior::Selection;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_pages::ui::PlacedPage;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
@@ -48,7 +49,7 @@ fn beside_page(
     place: BalloonPlace,
     read_only: bool,
 ) -> StoryOutput {
-    let state = data.value("state", CommentsPanelState { selected: selected.map(ThreadId), ..CommentsPanelState::default() });
+    let state = data.value("state", CommentsPanelState { selected: selected.map_or_else(Selection::default, |id| Selection::single(ThreadId(id))), ..CommentsPanelState::default() });
     // design: allow[raw-colour/const](the demo page is white paper, document data and not a theme colour)
     let (fill, line) = (Color32::WHITE, accent(ui, 1.0));
     let shapes = [StoryShape::filled(&DocRect::new(0.0, 0.0, PAGE.0, PAGE.1), fill).outlined(OUTLINE, line)];
