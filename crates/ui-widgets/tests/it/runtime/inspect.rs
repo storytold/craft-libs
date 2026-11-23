@@ -136,3 +136,35 @@ fn an_element_records_the_command_it_is_bound_to_with_accesskit_off() {
         assert!(rect.is_positive() && element.rect.expand(0.5).contains_rect(rect), "{:?} lies on its control {:?}", rect, element.rect);
     }
 }
+
+
+/// A generic component is recorded by its type's own name (`Select`, not its last generic argument), and a text
+/// field's facts list the text AccessKit reads as its value.
+#[trial]
+fn a_region_names_generic_components_and_lists_text_values() {
+    use craft_ui::contract::Entry;
+    use craft_ui::pickers::Select;
+    use craft_ui::text::TextField;
+    let key = Id::NULL.with("trial.inspect.generic");
+    let seen = Rc::new(RefCell::new(None));
+    let out = Rc::clone(&seen);
+    let (mut choice, mut text) = (1u8, String::from("abc"));
+    let mut fixture = Fixture::new(move |ui| {
+        let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two")];
+        let (_, recorded) = inspect::record(ui, key, |ui| {
+            Select::new("Pick", Bind::bound(&mut choice), &entries).show(ui);
+            TextField::new("Name", Bind::bound(&mut text)).show(ui);
+        });
+        if recorded.is_some() {
+            *out.borrow_mut() = recorded;
+        }
+    });
+    fixture.settle();
+    let seen = seen.borrow();
+    let recorded = seen.as_deref().expect("the region ran");
+    let names: Vec<&str> = recorded.elements.iter().map(|element| element.component).collect();
+    assert!(names.contains(&"Select"), "the Select is recorded by its type's name: {names:?}");
+    let field = recorded.elements.iter().find(|element| element.component == "TextField").expect("the field is recorded");
+    let value = field.facts.as_ref().and_then(|facts| facts.value.as_deref());
+    assert_eq!(value, Some("abc"), "the field's facts list its text as the value");
+}
