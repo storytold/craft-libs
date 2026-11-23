@@ -87,12 +87,18 @@ pub struct Tags {
 /// Reads the lyrics and markers in `bytes`: ID3v2 tags at the start, then FLAC metadata blocks if
 /// a FLAC stream follows. Anything else yields an empty [`Tags`].
 pub fn read(bytes: &[u8]) -> Tags {
-    let mut out = Tags::default();
-    let mut budget = MAX_TEXT_TOTAL_BYTES;
+    let mut r = Reader { out: Tags::default(), budget: MAX_TEXT_TOTAL_BYTES, lines: 0 };
     let mut at = 0usize;
-    for _ in 0..MAX_ID3_TAGS {
-        let Some(rest) = bytes.get(at..) else { break };
-        match id3(rest, &mut out, &mut budget) {
+    let mut tags = 0usize;
+    while let Some(rest) = bytes.get(at..)
+        && rest.starts_with(b"ID3")
+    {
+        if tags >= MAX_ID3_TAGS {
+            r.out.limited = true;
+            break;
+        }
+        tags += 1;
+        match id3(rest, &mut r) {
             Some(len) if len > 0 => at = at.saturating_add(len),
             _ => break,
         }
@@ -100,9 +106,31 @@ pub fn read(bytes: &[u8]) -> Tags {
     if let Some(rest) = bytes.get(at..)
         && rest.starts_with(b"fLaC")
     {
-        flac(rest, &mut out, &mut budget);
+        flac(rest, &mut r);
     }
-    out
+    r.out
+}
+
+/// What is found so far, and what the caps still allow.
+struct Reader {
+    out: Tags,
+    /// Text bytes still allowed in the whole file.
+    budget: usize,
+    /// Synchronised lines kept so far.
+    lines: usize,
+}
+
+impl Reader {
+    /// Takes `len` bytes of text from the budget; false (and `limited`) when it is spent or the
+    /// text is too long.
+    fn spend(&mut self, len: usize) -> bool {
+        if len > MAX_TEXT_BYTES || len > self.budget {
+            self.out.limited = true;
+            return false;
+        }
+        self.budget -= len;
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -141,7 +169,7 @@ fn unsync(b: &[u8]) -> Vec<u8> {
 
 /// Reads one ID3v2 tag at the start of `b`; the number of bytes it takes (header, body and any
 /// footer), or `None` when `b` does not start with one.
-fn id3(b: &[u8], out: &mut Tags, budget: &mut usize) -> Option<usize> {
+fn id3(b: &[u8], r: &mut Reader) -> Option<usize> {
     if b.get(..3)? != b"ID3" {
         return None;
     }
@@ -166,8 +194,12 @@ fn id3(b: &[u8], out: &mut Tags, budget: &mut usize) -> Option<usize> {
     }
     let all_unsync = major == 4 && flags & 0x80 != 0;
     let frames = body.get(frames_at..).unwrap_or_default();
-    for (id, data) in Frames::new(frames, major, all_unsync) {
-        frame(&id, &data, major, out, budget);
+    let mut frames = Frames::new(frames, major, all_unsync);
+    for (id, data) in frames.by_ref() {
+        frame(&id, &data, major, r);
+    }
+    if frames.capped {
+        r.out.limited = true;
     }
     Some(total)
 }
@@ -180,11 +212,13 @@ struct Frames<'a> {
     major: u8,
     all_unsync: bool,
     seen: usize,
+    /// More frames followed when [`MAX_FRAMES`] stopped the reading.
+    capped: bool,
 }
 
 impl<'a> Frames<'a> {
     fn new(b: &'a [u8], major: u8, all_unsync: bool) -> Self {
-        Self { b, at: 0, major, all_unsync, seen: 0 }
+        Self { b, at: 0, major, all_unsync, seen: 0, capped: false }
     }
 }
 
@@ -195,6 +229,8 @@ impl<'a> Iterator for Frames<'a> {
         let (id_len, header) = if self.major == 2 { (3, 6) } else { (4, 10) };
         loop {
             if self.seen >= MAX_FRAMES {
+                // Padding or the end is not a cut; another frame id is.
+                self.capped = self.b.get(self.at).is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
                 return None;
             }
             self.seen += 1;
@@ -256,58 +292,62 @@ fn skip(b: Cow<'_, [u8]>, n: usize) -> Cow<'_, [u8]> {
     }
 }
 
-fn frame(id: &[u8; 4], d: &[u8], major: u8, out: &mut Tags, budget: &mut usize) {
+fn frame(id: &[u8; 4], d: &[u8], major: u8, r: &mut Reader) {
     match (major, id) {
-        (2, b"ULT\0") | (3 | 4, b"USLT") => uslt(d, out, budget),
-        (2, b"SLT\0") | (3 | 4, b"SYLT") => sylt(d, out, budget),
-        (3 | 4, b"CHAP") => chap(d, major, out),
+        (2, b"ULT\0") | (3 | 4, b"USLT") => uslt(d, r),
+        (2, b"SLT\0") | (3 | 4, b"SYLT") => sylt(d, r),
+        (3 | 4, b"CHAP") => chap(d, major, &mut r.out),
         _ => {}
     }
 }
 
-/// Takes up to `len` bytes of text from the budget; false (and `limited`) when it is spent or the
-/// text is too long.
-fn spend(len: usize, budget: &mut usize, out: &mut Tags) -> bool {
-    if len > MAX_TEXT_BYTES || len > *budget {
-        out.limited = true;
-        return false;
-    }
-    *budget -= len;
-    true
-}
-
-fn uslt(d: &[u8], out: &mut Tags, budget: &mut usize) {
+fn uslt(d: &[u8], r: &mut Reader) {
     let (Some(&enc), Some(lang), Some(rest)) = (d.first(), d.get(1..4), d.get(4..)) else { return };
     let (desc, text) = split(enc, rest);
-    if !spend(text.len().saturating_add(desc.len()), budget, out) {
+    // An empty frame carries nothing worth keeping.
+    if text.is_empty() || !r.spend(text.len().saturating_add(desc.len())) {
         return;
     }
-    out.lyrics.push(Lyrics { language: latin1(lang), description: decode(enc, desc), text: decode(enc, text) });
+    r.out.lyrics.push(Lyrics { language: latin1(lang), description: decode(enc, desc), text: decode(enc, text) });
 }
 
-fn sylt(d: &[u8], out: &mut Tags, budget: &mut usize) {
+fn sylt(d: &[u8], r: &mut Reader) {
     let (Some(&enc), Some(lang), Some(&stamp), Some(rest)) = (d.first(), d.get(1..4), d.get(4), d.get(6..)) else { return };
     // 2: milliseconds; 1 (MPEG frames) would need the stream's frame length.
     if stamp != 2 {
         return;
     }
     let (desc, mut rest) = split(enc, rest);
+    if !r.spend(desc.len()) {
+        return;
+    }
     let mut lyrics = SyncedLyrics { language: latin1(lang), description: decode(enc, desc), lines: Vec::new() };
-    let total: usize = out.synced.iter().map(|s| s.lines.len()).sum();
     while !rest.is_empty() {
-        if total.saturating_add(lyrics.lines.len()) >= MAX_SYNCED_LINES {
-            out.limited = true;
+        if r.lines >= MAX_SYNCED_LINES {
+            r.out.limited = true;
             break;
         }
         let (text, after) = split(enc, rest);
         let Some(ms) = be_u32(after) else { break };
         rest = after.get(4..).unwrap_or_default();
-        if !spend(text.len(), budget, out) {
+        if !r.spend(text.len()) {
             break;
         }
         lyrics.lines.push(SyncedLine { ms, text: decode(enc, text) });
+        r.lines += 1;
     }
-    out.synced.push(lyrics);
+    // A frame without lines carries nothing worth keeping.
+    if !lyrics.lines.is_empty() {
+        r.out.synced.push(lyrics);
+    }
+}
+
+/// At most [`MAX_TEXT_BYTES`] of `b` (and `limited` when that cuts it).
+fn capped<'a>(b: &'a [u8], out: &mut Tags) -> &'a [u8] {
+    if b.len() > MAX_TEXT_BYTES {
+        out.limited = true;
+    }
+    b.get(..b.len().min(MAX_TEXT_BYTES)).unwrap_or_default()
 }
 
 fn chap(d: &[u8], major: u8, out: &mut Tags) {
@@ -318,16 +358,23 @@ fn chap(d: &[u8], major: u8, out: &mut Tags) {
     let (element, rest) = split(0, d);
     let (Some(start), Some(end), Some(subframes)) = (be_u32(rest), rest.get(4..).and_then(be_u32), rest.get(16..)) else { return };
     let mut name = None;
-    for (id, data) in Frames::new(subframes, major, false) {
+    let mut frames = Frames::new(subframes, major, false);
+    for (id, data) in frames.by_ref() {
         if &id == b"TIT2"
             && let Some((&enc, text)) = data.split_first()
         {
-            let text = text.get(..text.len().min(MAX_TEXT_BYTES)).unwrap_or_default();
+            let text = capped(text, out);
             name = Some(decode(enc, split(enc, text).0));
             break;
         }
     }
-    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| latin1(element));
+    if frames.capped {
+        out.limited = true;
+    }
+    let name = match name.filter(|n| !n.trim().is_empty()) {
+        Some(n) => n,
+        None => latin1(capped(element, out)),
+    };
     out.markers.push(Marker { start: f64::from(start), duration: f64::from(end.saturating_sub(start)), rate: 1000.0, name });
 }
 
@@ -378,12 +425,17 @@ fn be_u64(b: &[u8], at: usize) -> Option<u64> {
 }
 
 /// Reads the metadata blocks of a FLAC stream that starts with `fLaC`.
-fn flac(b: &[u8], out: &mut Tags, budget: &mut usize) {
+fn flac(b: &[u8], r: &mut Reader) {
     let mut at = 4usize;
     let mut rate = 0u32;
     let mut cues = Vec::new();
-    for _ in 0..MAX_FLAC_BLOCKS {
-        let Some(header) = b.get(at..at.saturating_add(4)) else { break };
+    let mut blocks = 0usize;
+    while let Some(header) = b.get(at..at.saturating_add(4)) {
+        if blocks >= MAX_FLAC_BLOCKS {
+            r.out.limited = true;
+            break;
+        }
+        blocks += 1;
         let Some(len) = be(header.get(1..).unwrap_or_default(), 3) else { break };
         let kind = header.first().map_or(127, |h| h & 0x7F);
         let last = header.first().is_some_and(|h| h & 0x80 != 0);
@@ -392,7 +444,7 @@ fn flac(b: &[u8], out: &mut Tags, budget: &mut usize) {
         let Some(data) = b.get(start..end) else { break };
         match kind {
             0 => rate = streaminfo_rate(data).unwrap_or(0),
-            4 => vorbis_comments(data, out, budget),
+            4 => vorbis_comments(data, r),
             5 => cues.extend(cuesheet(data)),
             127 => break,
             _ => {}
@@ -403,12 +455,12 @@ fn flac(b: &[u8], out: &mut Tags, budget: &mut usize) {
         }
     }
     for (samples, track) in cues {
-        if out.markers.len() >= MAX_MARKERS {
-            out.limited = true;
+        if r.out.markers.len() >= MAX_MARKERS {
+            r.out.limited = true;
             break;
         }
         // Sample offsets are exact up to 2^53 samples (thousands of years at any rate).
-        out.markers.push(Marker { start: samples as f64, duration: 0.0, rate: f64::from(rate), name: track.to_string() });
+        r.out.markers.push(Marker { start: samples as f64, duration: 0.0, rate: f64::from(rate), name: track.to_string() });
     }
 }
 
@@ -417,11 +469,14 @@ fn streaminfo_rate(d: &[u8]) -> Option<u32> {
     Some((u32::from(s[0]) << 12) | (u32::from(s[1]) << 4) | (u32::from(s[2]) >> 4))
 }
 
-fn vorbis_comments(d: &[u8], out: &mut Tags, budget: &mut usize) {
+fn vorbis_comments(d: &[u8], r: &mut Reader) {
     let Some(vendor) = le_u32(d, 0) else { return };
     let Some(mut at) = vendor.checked_add(4) else { return };
     let Some(count) = le_u32(d, at) else { return };
     at += 4;
+    if count > MAX_COMMENTS {
+        r.out.limited = true;
+    }
     for _ in 0..count.min(MAX_COMMENTS) {
         let Some(len) = le_u32(d, at) else { return };
         let Some(start) = at.checked_add(4) else { return };
@@ -431,10 +486,10 @@ fn vorbis_comments(d: &[u8], out: &mut Tags, budget: &mut usize) {
         let Some(eq) = field.iter().position(|&c| c == b'=') else { continue };
         let (key, value) = (field.get(..eq).unwrap_or_default(), field.get(eq + 1..).unwrap_or_default());
         if key.eq_ignore_ascii_case(b"LYRICS") || key.eq_ignore_ascii_case(b"UNSYNCEDLYRICS") {
-            if !spend(value.len(), budget, out) {
+            if value.is_empty() || !r.spend(value.len()) {
                 continue;
             }
-            out.lyrics.push(Lyrics { language: String::new(), description: String::new(), text: String::from_utf8_lossy(value).into_owned() });
+            r.out.lyrics.push(Lyrics { language: String::new(), description: String::new(), text: String::from_utf8_lossy(value).into_owned() });
         }
     }
 }
@@ -679,6 +734,44 @@ mod tests {
         // A huge declared size with a tiny body.
         let _ = read(b"ID3\x04\x00\x00\x7f\x7f\x7f\x7fUSLT\x7f\x7f\x7f\x7f\x00\x00");
         let _ = read(b"fLaC\x04\xff\xff\xff\xff\xff\xff\xff");
+    }
+
+    #[test]
+    fn frame_cap_descriptors_and_names_set_limited() {
+        // Lyrics after more frames than are read: reported as left out.
+        let filler = frame23(b"TXXX", b"\0");
+        let mut uslt = vec![0];
+        uslt.extend(b"eng\0late");
+        let mut body = Vec::with_capacity((MAX_FRAMES + 1) * filler.len());
+        for _ in 0..MAX_FRAMES {
+            body.extend(&filler);
+        }
+        body.extend(frame23(b"USLT", &uslt));
+        let t = read(&tag(3, 0, &body));
+        assert!(t.lyrics.is_empty() && t.limited);
+        // Padding after the frames is not a cut.
+        let t = read(&tag(3, 0, &[frame23(b"USLT", &uslt), vec![0; 64]].concat()));
+        assert!(!t.limited);
+        // A synchronised-lyrics descriptor over the text cap: the frame is dropped.
+        let mut sylt = vec![0];
+        sylt.extend(b"eng");
+        sylt.extend([2, 1]);
+        sylt.extend(vec![b'd'; MAX_TEXT_BYTES + 1]);
+        sylt.extend([0, b'x', 0, 0, 0, 0, 1]);
+        let t = read(&tag(3, 0, &frame23(b"SYLT", &sylt)));
+        assert!(t.synced.is_empty() && t.limited);
+        // Empty synchronised-lyrics frames keep nothing.
+        let mut empty = vec![0];
+        empty.extend(b"eng");
+        empty.extend([2, 1, 0]);
+        let t = read(&tag(3, 0, &frame23(b"SYLT", &empty).repeat(1_000)));
+        assert!(t.synced.is_empty() && !t.limited);
+        // An untitled chapter's element id over the text cap is cut.
+        let mut chap = vec![b'c'; MAX_TEXT_BYTES + 10];
+        chap.push(0);
+        chap.extend([0u8; 16]);
+        let t = read(&tag(3, 0, &frame23(b"CHAP", &chap)));
+        assert!(t.markers.first().is_some_and(|m| m.name.len() <= MAX_TEXT_BYTES) && t.limited);
     }
 
     #[test]
