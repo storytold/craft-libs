@@ -9,6 +9,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let [_, input, output] = args.as_slice() else {
         return Err("usage: binkdec in.bik out.yuv".into());
     };
+    // creating the output truncates it: refuse when it is the input under another name
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(input), std::fs::canonicalize(output))
+        && a == b
+    {
+        return Err("the output would overwrite the input".into());
+    }
     let file = std::fs::File::open(input)?;
     let bink = craft_media::bink::open(&file)?;
     let mut dec = craft_video::bink::Decoder::from_params(&bink.video_params())?;

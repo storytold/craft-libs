@@ -331,7 +331,12 @@ impl BinkFile {
         if f.offset.checked_add(u64::from(f.size)).is_none_or(|e| e > src.len()) {
             return invalid(format!("frame {i} past the end of the file"));
         }
-        let mut data = vec![0u8; f.size as usize];
+        // A frame can be up to 4 GiB. Reserving it can fail, and on a 32-bit target a size past
+        // `isize::MAX` cannot be asked for at all: that is an error, not a panic.
+        let mut data = Vec::new();
+        let reserved = usize::try_from(f.size).ok().and_then(|size| data.try_reserve_exact(size).ok().map(|()| size));
+        let Some(size) = reserved else { return invalid(format!("frame {i} of {} bytes is too large to read", f.size)) };
+        data.resize(size, 0);
         src.read_at(f.offset, &mut data)?;
         Ok(data)
     }
