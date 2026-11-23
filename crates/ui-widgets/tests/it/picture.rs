@@ -139,15 +139,17 @@ fn a_fill_painter_picture_takes_the_room_it_is_given_at_its_aspect() {
     }
 }
 
-/// How many shapes a rendered picture of a transparent image paints, with or without its transparency grid.
-fn shapes_of_rendered(checker: bool) -> usize {
+/// How many shapes a rendered picture of a transparent image paints: as built, or opted out of its transparency grid.
+fn shapes_of_rendered(opt_out: bool) -> usize {
     use craft_ui::list::ThumbSize;
     use craft_ui::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
     let mut fixture = Fixture::new(move |ui| {
         let options = ThumbnailOptions::new().jobs(std::sync::Arc::new(craft_host::InlineJobs));
         let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "picture_checker_test", options);
         let source = FakeThumbSource::<u64>::new();
-        Picture::rendered("Mask", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large)).checker(checker).show(ui);
+        let picture = Picture::rendered("Mask", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large));
+        // The default case sets nothing, so a default that turned the grid off fails here.
+        if opt_out { picture.checker(false) } else { picture }.show(ui);
     });
     fixture.settle();
     fixture.frame_shapes().len()
@@ -155,7 +157,7 @@ fn shapes_of_rendered(checker: bool) -> usize {
 
 #[trial]
 fn a_rendered_picture_paints_a_checker_unless_it_opts_out() {
-    let with = shapes_of_rendered(true);
-    let without = shapes_of_rendered(false);
+    let with = shapes_of_rendered(false);
+    let without = shapes_of_rendered(true);
     assert!(with > without, "the default paints {with} shapes, the opt-out {without}: the grid is the difference");
 }
