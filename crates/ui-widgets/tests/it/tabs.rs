@@ -115,6 +115,29 @@ fn document_tabs_reserve_space_for_the_trailing_control() {
     }
 }
 
+/// Production's Open button follows the last tab; it does not wait at the far end of the row. With tabs that overflow
+/// it is still the strip's last item (the reserve trials above).
+#[trial]
+fn the_trailing_control_follows_the_last_tab_when_they_fit() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..2).map(|i| DocumentTab::new(i, format!("Doc {i}.pdf")).closable(true)).collect();
+        DocumentTabs::new("Documents", &tabs)
+            .selected(1)
+            .trailing(|ui| {
+                Button::new("Open").show(ui);
+            })
+            .show(ui);
+    });
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let open = fixture.by_label("Open").expect("trailing button").rect;
+    let last = fixture.by_label("Doc 1.pdf").expect("last tab").rect;
+    assert!(open.left() >= last.right() - 0.5, "the button is not over the tab: {open:?}, {last:?}");
+    assert!(open.left() - last.right() < 80.0, "the button sits by the last tab, not at the row's end: {open:?}, {last:?}");
+}
+
 #[trial]
 fn nested_document_tabs_reserve_space_for_the_trailing_control() {
     use craft_ui::buttons::Button;

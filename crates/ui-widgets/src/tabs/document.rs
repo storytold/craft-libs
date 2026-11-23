@@ -336,10 +336,32 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 if let Some(area) = leading.as_mut() {
                     area(ui);
                 }
-                shown = Some(show_strip(ui, make_strip()));
+                let strip = show_strip(ui, make_strip());
                 if let Some(area) = trailing.as_mut() {
-                    area(ui);
+                    // The strip fills the row less the room the control took last pass; the control follows the last tab
+                    // when every tab shows, and is the row's last item when they overflow.
+                    let memory = ui.id().with("document-tabs-trailing-width");
+                    let held: f32 = ui.ctx().data(|data| data.get_temp(memory)).unwrap_or(0.0);
+                    let slot = ui.allocate_exact_size(egui::vec2(held, strip.response.response.rect.height()), egui::Sense::hover()).0;
+                    let all_show = strip.tab_rects.len() == tabs.len();
+                    let after = match strip.tab_rects.last() {
+                        Some((_, rect)) if all_show => Some(rect.right() + ui.spacing().item_spacing.x),
+                        None => Some(strip.response.response.rect.left()),
+                        _ => None,
+                    };
+                    let left = match after {
+                        Some(at) if !ui.layout().prefer_right_to_left() => at.min(slot.left()),
+                        _ => slot.left(),
+                    };
+                    let room = egui::Rect::from_min_max(egui::pos2(left, slot.top()), egui::pos2(slot.right().max(left + 400.0), slot.bottom()));
+                    let builder = egui::UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(egui::Align::Center));
+                    let drawn = ui.scope_builder(builder, |ui| area(ui)).response.rect.width();
+                    if (drawn - held).abs() > 0.5 {
+                        ui.ctx().data_mut(|data| data.insert_temp(memory, drawn));
+                        ui.ctx().request_repaint();
+                    }
                 }
+                shown = Some(strip);
             });
             shown.ok_or(row.output)
         };
