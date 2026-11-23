@@ -72,3 +72,30 @@ for part in status.cluster().parts() {
 ```
 
 `cluster().parts()` leaves out what does not apply: no participant count without a session, no sync word while `synced`, no version before a commit. `cluster().error` is the reason a save was refused, for as long as the document shows as unsaved.
+
+## One authority per document
+
+Three of the inputs above already have an owner elsewhere, and the status is only a view of
+whichever one applies. The rule is the document's origin, one input per document:
+
+- **A document opened from a cloud entry** is settled by the cloud contract
+  (storytold/craft-libs#160). `craft_ui::cloud::Event::Saved` answers the save job with the entry
+  it produced or the `craft_ui::cloud::Fault` that refused it, and a stale etag is
+  `Fault::Conflict`. The app tracks the revision each save in flight encoded, so a save that lands
+  marks exactly that revision saved. It does not apply the host page's `saved`/`failed` to this
+  document: the cloud contract wins, and an app hosted in a page and signed in to a provider shows
+  the conflict the cloud pages hold rather than the page's success.
+- **A document the page handed in** has no cloud entry, so its save state is the host page's
+  `saved`/`failed`, which is what the inputs above derive.
+
+Read-only follows the same split: `craft_cloud::Entry::writable` for a cloud entry,
+`StatusInput::ReadOnly` for a session whose role is `viewer` (or a host-controlled read-only
+session, storytold/craft-libs#609). The bar takes one of them per document, by the same rule.
+
+`cluster().participants` is the count of people in the hosted page's session, as the app posted it
+in `session-state`/`presence`. It is not RFC-0020 item 2's presence count: that contract, when its
+own PR lands beside `craft-cloud`, owns presence fan-out, session state and the sync word.
+
+`craft-web-host` is the contract between an app's web build and the page that hosts it;
+`craft-worker-host` (storytold/craft-libs#662) is the protocol between a tab and its
+`SharedWorker`. Different concerns, names one word apart.
