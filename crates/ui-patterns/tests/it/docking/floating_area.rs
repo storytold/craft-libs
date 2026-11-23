@@ -143,8 +143,10 @@ fn a_fixed_floating_window_ignores_edge_drags_and_still_moves_by_its_title() {
     }
 
     let by = Vec2::new(-35.0, 20.0);
-    press_and_move(&mut bed.fixture, window_title(), by);
+    let from = window_title();
+    press_and_move(&mut bed.fixture, from, by);
     assert!(dragging(&bed));
+    bed.fixture.frame(vec![release(from + by)]).settle();
     let rect = bed.workspace.borrow().layout().floating[0].rect;
     assert_ne!(rect.min, WINDOW_AT.min, "title drag moves the fixed window");
     assert_eq!(rect.size(), WINDOW_AT.size(), "title drag keeps the fixed window's size");
