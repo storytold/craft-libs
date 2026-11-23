@@ -1,6 +1,6 @@
 //! Startup update prompt dialog for egui frontends.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::{Align, Align2, Color32, Layout, RichText, Vec2};
 
@@ -55,7 +55,9 @@ pub struct StartupPrompt {
 
 /// Opens `url` in `browser` (an absolute path to its executable, a `.app` bundle on macOS), or in
 /// the default browser through egui when `browser` is `None`. Only a safe web link is opened.
-/// If the browser can't be started, the default browser gets the link instead.
+/// If the browser can't be started, or exits unsuccessfully within a second of starting, the
+/// default browser gets the link instead. A browser that fails later isn't detected. The browser
+/// is watched on a helper thread, so the interface doesn't wait.
 pub fn open_url(ctx: &egui::Context, url: &str, browser: Option<PathBuf>) {
     // `Release`'s fields are public: an app may build one from its own feed or cache, so the
     // link is checked here, not only when parsed from GitHub.
@@ -63,13 +65,50 @@ pub fn open_url(ctx: &egui::Context, url: &str, browser: Option<PathBuf>) {
         log::warn!("not opening {url:?}: it is not a safe web link");
         return;
     }
-    if let Some(path) = browser {
-        match crate::process::open_url_in_browser(&path, url) {
-            Ok(()) => return,
-            Err(error) => log::warn!("couldn't open {url} in {}: {error}; using the default browser", path.display()),
+    let Some(path) = browser else {
+        ctx.open_url(egui::OpenUrl::new_tab(url));
+        return;
+    };
+    let (ctx, url) = (ctx.clone(), url.to_string());
+    let task = {
+        let (ctx, url) = (ctx.clone(), url.clone());
+        move || {
+            launch_or_fall_back(&ctx, &url, &path, crate::process::open_url_in_browser);
+        }
+    };
+    if std::thread::Builder::new().name("open-browser".into()).spawn(task).is_err() {
+        log::warn!("couldn't start a thread to open {url}; using the default browser");
+        ctx.open_url(egui::OpenUrl::new_tab(&url));
+    }
+}
+
+/// What [`launch_or_fall_back`] did with a link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BrowserOutcome<E> {
+    /// The chosen browser started and hadn't failed when it was last checked.
+    Opened,
+    /// The chosen browser failed with `error`, as the launch returned it; egui was asked to open
+    /// the default browser.
+    FellBack { error: E },
+}
+
+/// Starts the chosen browser with `launch` (which may wait) and, when that fails, asks egui to
+/// open `url` in the default browser. `url` must already be a safe web link.
+fn launch_or_fall_back<E: std::fmt::Display>(
+    ctx: &egui::Context,
+    url: &str,
+    browser: &Path,
+    launch: impl FnOnce(&Path, &str) -> Result<(), E>,
+) -> BrowserOutcome<E> {
+    match launch(browser, url) {
+        Ok(()) => BrowserOutcome::Opened,
+        Err(error) => {
+            log::warn!("couldn't open {url} in {}: {error}; using the default browser", browser.display());
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+            ctx.request_repaint();
+            BrowserOutcome::FellBack { error }
         }
     }
-    ctx.open_url(egui::OpenUrl::new_tab(url));
 }
 
 impl StartupPrompt {
@@ -918,38 +957,45 @@ pub(crate) mod tests {
         assert!((link.y - button.y).abs() <= 1.0, "link centred at {} but the button at {}", link.y, button.y);
     }
 
-    /// Clicks "What's new" on a prompt for `url` using `browser`; the URL egui was asked to open.
-    fn click_whats_new(url: &str, browser: Option<PathBuf>) -> Option<String> {
-        let ctx = dark_context();
-        let mut prompt = prompt_for(false).with_browser(browser);
-        prompt.release.html_url = url.to_string();
-        frame(&ctx, &mut prompt, Vec::new());
-        let (_, output) = frame(&ctx, &mut prompt, Vec::new());
-        let at = text_pos(&output, "What's new").expect("the link is painted");
-        let button = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-        frame(&ctx, &mut prompt, vec![Event::PointerMoved(at)]);
-        frame(&ctx, &mut prompt, vec![button(true)]);
-        let (_, output) = frame(&ctx, &mut prompt, vec![button(false)]);
-        output.platform_output.commands.iter().find_map(|c| match c {
-            egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
-            _ => None,
-        })
+    /// Runs [`launch_or_fall_back`] with `launch`: its outcome and the URLs egui was asked to open.
+    fn opened<E: std::fmt::Display>(launch: impl FnOnce(&Path, &str) -> Result<(), E>) -> (BrowserOutcome<E>, Vec<String>) {
+        let page = "https://github.com/storytold/photocraft/releases/tag/v0.2.0";
+        let ctx = Context::default();
+        let outcome = launch_or_fall_back(&ctx, page, &std::env::temp_dir().join("craft-update-browser"), launch);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear(); // Headless test: no renderer consumes the font atlas.
+        let urls = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+                _ => None,
+            })
+            .collect();
+        (outcome, urls)
     }
 
     #[test]
-    fn whats_new_uses_the_chosen_browser_and_falls_back_to_the_default() {
-        let page = "https://github.com/storytold/photocraft/releases/tag/v0.2.0";
-        let missing = std::env::temp_dir().join("craft-update-no-such-browser").join("browser");
-        assert!(missing.is_absolute());
-        assert_eq!(click_whats_new(page, Some(missing.clone())).as_deref(), Some(page), "an unusable browser falls back");
-        let harmless = if cfg!(windows) {
-            PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("System32").join("where.exe")
-        } else {
-            PathBuf::from("/usr/bin/true")
-        };
-        assert_eq!(click_whats_new(page, Some(harmless.clone())), None, "the chosen browser opens it, not egui");
-        assert_eq!(click_whats_new("file:///etc/passwd", Some(harmless)), None, "an unsafe link opens nothing");
-        assert_eq!(click_whats_new("file:///etc/passwd", Some(missing)), None, "nor through the fallback");
+    fn a_browser_that_fails_to_open_the_link_falls_back_to_the_default() {
+        let (outcome, urls) = opened(|_, _| Ok::<(), String>(()));
+        assert_eq!((outcome, urls.len()), (BrowserOutcome::Opened, 0), "the chosen browser opens it, not egui");
+        let (outcome, urls) = opened(|_, _| Err("couldn't start it".into()));
+        assert_eq!(outcome, BrowserOutcome::FellBack { error: "couldn't start it".to_string() });
+        assert_eq!(urls.len(), 1, "egui is asked to open the link");
+    }
+
+    /// A wrapper (`flatpak-spawn`) that starts but then reports a launch failure.
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_that_starts_but_fails_falls_back_to_the_default_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = crate::process::browser_tests::fake_wrapper(dir.path(), "exit 1");
+        let launch =
+            |path: &Path, url: &str| crate::process::browser_tests::open_with_wrapper(path, url, &wrapper, std::time::Duration::from_secs(30));
+        let (outcome, urls) = opened(launch);
+        assert!(matches!(outcome, BrowserOutcome::FellBack { .. }), "{outcome:?}");
+        assert_eq!(urls.len(), 1);
     }
 
     /// #391: the "What's new" link opens the release page only when it is a safe web link; an app

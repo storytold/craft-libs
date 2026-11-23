@@ -309,15 +309,16 @@ fn which_on_path(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
 }
 
-/// Starts an app binary from its own folder.
-pub fn launch_binary(exe: &Path, args: &[&str]) -> Result<(), String> {
-    let mut cmd = if in_sandbox() {
+/// The command that starts `exe` from its own folder: directly, or through `wrapper`
+/// (`flatpak-spawn`) when the host must run it.
+fn host_command(exe: &Path, args: &[&str], wrapper: Option<&OsStr>) -> Command {
+    let mut cmd = if let Some(wrapper) = wrapper {
         // The folder is on the host, which the sandbox mostly can't see: have `flatpak-spawn`
         // change to it on the host side instead of setting it for the sandbox-side process.
         // With a directory the host resolves a relative `exe` against it (`bin/app` would become
         // `bin/bin/app`), so both the directory and the command are made absolute first.
         let exe = std::path::absolute(exe).unwrap_or_else(|_| exe.to_path_buf());
-        let mut c = command("flatpak-spawn");
+        let mut c = command(wrapper);
         c.arg("--host");
         if let Some(dir) = exe.parent() {
             let mut option = std::ffi::OsString::from("--directory=");
@@ -334,22 +335,96 @@ pub fn launch_binary(exe: &Path, args: &[&str]) -> Result<(), String> {
         c
     };
     cmd.args(args);
-    spawn_detached(cmd)
+    cmd
 }
 
-/// Opens `url` in the browser at `browser`, an absolute path to its executable (a `.app` bundle on
-/// macOS). A relative path is refused: it would resolve against the working directory or `PATH`.
-/// The URL is one argument, never passed through a shell.
-pub fn open_url_in_browser(browser: &Path, url: &str) -> Result<(), String> {
-    if !browser.is_absolute() {
-        return Err(format!("the browser path {} is not absolute", browser.display()));
+/// Starts an app binary from its own folder.
+pub fn launch_binary(exe: &Path, args: &[&str]) -> Result<(), String> {
+    spawn_detached(host_command(exe, args, in_sandbox().then(|| OsStr::new("flatpak-spawn"))))
+}
+
+/// Why [`open_url_in_browser`] didn't open the link.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum BrowserError {
+    /// The browser path isn't absolute, so it would resolve against the working directory or `PATH`.
+    NotAbsolute(PathBuf),
+    /// The browser, or the wrapper (`flatpak-spawn`, `open`) that starts it, couldn't be started.
+    Spawn(std::io::Error),
+    /// The process started and then exited unsuccessfully within the watch window.
+    Exited(ExitStatus),
+    /// The process started but its state couldn't be read.
+    Wait(std::io::Error),
+}
+
+impl std::fmt::Display for BrowserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAbsolute(path) => write!(f, "the browser path {} is not absolute", path.display()),
+            Self::Spawn(e) => write!(f, "couldn't start it ({e})"),
+            Self::Exited(status) => write!(f, "it exited unsuccessfully ({status})"),
+            Self::Wait(e) => write!(f, "couldn't check that it started ({e})"),
+        }
     }
-    if cfg!(target_os = "macos") && browser.is_dir() && browser.extension().is_some_and(|e| e == "app") {
+}
+
+impl std::error::Error for BrowserError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Spawn(e) | Self::Wait(e) => Some(e),
+            Self::NotAbsolute(_) | Self::Exited(_) => None,
+        }
+    }
+}
+
+/// How long [`open_url_in_browser`] watches a browser launch for an early failure.
+const BROWSER_START_WINDOW: Duration = Duration::from_secs(1);
+
+/// Opens `url` in the browser at `browser`, an absolute path to its executable (a `.app` bundle on
+/// macOS). Takes up to one second to run (see below), so don't call this on the UI thread.
+/// A relative path is refused: it would resolve against the working directory or `PATH`.
+/// The URL is one argument, never passed through a shell.
+///
+/// Returns an error when the browser (or `flatpak-spawn` / `open -a` on the wrapper paths) can't
+/// be started or exits unsuccessfully within one second. A process still running after that
+/// counts as opened, so a failure later than that isn't reported.
+pub fn open_url_in_browser(browser: &Path, url: &str) -> Result<(), BrowserError> {
+    open_url_in_browser_with(browser, url, in_sandbox().then(|| OsStr::new("flatpak-spawn")), BROWSER_START_WINDOW)
+}
+
+pub(crate) fn open_url_in_browser_with(browser: &Path, url: &str, wrapper: Option<&OsStr>, window: Duration) -> Result<(), BrowserError> {
+    if !browser.is_absolute() {
+        return Err(BrowserError::NotAbsolute(browser.to_path_buf()));
+    }
+    let cmd = if cfg!(target_os = "macos") && browser.is_dir() && browser.extension().is_some_and(|e| e == "app") {
         let mut cmd = command("open");
         cmd.arg("-a").arg(browser).arg(url);
-        return spawn_detached(cmd);
+        cmd
+    } else {
+        host_command(browser, &[url], wrapper)
+    };
+    spawn_and_watch(cmd, window)
+}
+
+/// Starts `cmd` and waits up to `window` for it to exit: an unsuccessful exit in that time is an
+/// error. A process still running when the window ends is left running (and reaped on exit).
+fn spawn_and_watch(mut cmd: Command, window: Duration) -> Result<(), BrowserError> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = cmd.spawn().map_err(BrowserError::Spawn)?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(BrowserError::Exited(status)),
+            Ok(None) if started.elapsed() < window => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => break,
+            Err(e) => return Err(BrowserError::Wait(e)),
+        }
     }
-    launch_binary(browser, &[url])
+    let _ = std::thread::Builder::new().name("reap-child".into()).spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Opens a file, folder or URL with the system's default handler.
@@ -1010,11 +1085,74 @@ mod update_cancel_tests {
 }
 
 #[cfg(test)]
-mod browser_tests {
+pub(crate) mod browser_tests {
     use super::*;
 
     #[test]
     fn a_relative_browser_path_is_refused() {
-        assert!(open_url_in_browser(Path::new("browser.exe"), "https://example.com/").is_err());
+        let result = open_url_in_browser(Path::new("browser.exe"), "https://example.com/");
+        assert!(matches!(result, Err(BrowserError::NotAbsolute(_))), "{result:?}");
+    }
+
+    /// A fake `flatpak-spawn` that runs `body`; the browser path it is asked to open is `exe`.
+    #[cfg(unix)]
+    pub(crate) fn fake_wrapper(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-flatpak-spawn");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// [`open_url_in_browser_with`] through a [`fake_wrapper`]. A parallel test's `fork` can briefly
+    /// hold a copy of the descriptor the script was written through, and until that child execs
+    /// the kernel refuses to run the script (`ETXTBSY`); that says nothing about the code under
+    /// test, so it is retried.
+    #[cfg(unix)]
+    pub(crate) fn open_with_wrapper(browser: &Path, url: &str, wrapper: &Path, window: Duration) -> Result<(), BrowserError> {
+        let mut busy_retries = 0;
+        loop {
+            match open_url_in_browser_with(browser, url, Some(wrapper.as_os_str()), window) {
+                Err(BrowserError::Spawn(e)) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && busy_retries < 100 => {
+                    busy_retries += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_that_starts_but_fails_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = fake_wrapper(dir.path(), "exit 1");
+        let browser = dir.path().join("browser");
+        let result = open_with_wrapper(&browser, "https://example.com/", &wrapper, Duration::from_secs(30));
+        assert!(matches!(result, Err(BrowserError::Exited(_))), "a wrapper that reports failure must not count as opened: {result:?}");
+    }
+
+    #[test]
+    fn a_browser_that_cannot_start_is_a_spawn_error() {
+        let missing = std::env::temp_dir().join("craft-update-no-such-browser").join("browser");
+        let result = open_url_in_browser_with(&missing, "https://example.com/", None, Duration::from_secs(30));
+        assert!(matches!(result, Err(BrowserError::Spawn(_))), "{result:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_that_succeeds_or_keeps_running_is_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let browser = dir.path().join("browser");
+        let url = "https://example.com/";
+        let done = fake_wrapper(dir.path(), "exit 0");
+        let result = open_with_wrapper(&browser, url, &done, Duration::from_secs(30));
+        assert!(result.is_ok(), "{result:?}");
+        let running = dir.path().join("running");
+        std::fs::create_dir(&running).unwrap();
+        let running = fake_wrapper(&running, "sleep 3");
+        let started = Instant::now();
+        assert!(open_with_wrapper(&browser, url, &running, Duration::from_millis(100)).is_ok());
+        assert!(started.elapsed() < Duration::from_secs(3), "it stops watching when the window ends");
     }
 }
