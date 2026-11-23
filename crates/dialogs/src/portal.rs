@@ -470,6 +470,9 @@ pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
 /// The id of an Open dialog's check box among the portal's `choices`.
 const CHECK_BOX: &str = "craft_check_box";
 
+/// One of the portal's `choices`: id, label, options (none for a check box) and initial state.
+pub(crate) type Choice<'a> = (&'a str, &'a str, Vec<(&'a str, &'a str)>, &'a str);
+
 /// An Open dialog with a check box to show.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenRequest {
@@ -531,7 +534,7 @@ fn open_options<'a>(req: &'a OpenRequest, token: &'a str) -> HashMap<&'static st
     }
     // A choice is (id, label, options, initial); one without options is a check box, whose
     // initial state is "false".
-    let choices: Vec<(&str, &str, Vec<(&str, &str)>, &str)> = vec![(CHECK_BOX, req.check_box.as_str(), Vec::new(), "false")];
+    let choices: Vec<Choice<'_>> = vec![(CHECK_BOX, req.check_box.as_str(), Vec::new(), "false")];
     o.insert("choices", Value::from(choices));
     o
 }

@@ -65,7 +65,9 @@ fn an_open_check_box_is_a_portal_choice_and_its_answer_is_read() {
     assert_eq!(OpenRequest::new(&FileDialog::open(), String::new()), None, "no box asked for");
     assert_eq!(OpenRequest::new(&FileDialog::save().check_box("Image Sequence"), String::new()), None, "a Save takes no box");
     let options = open_options(&req, "t");
-    let choices: Vec<(String, String, Vec<(String, String)>, String)> =
+    /// A portal choice as it reads back.
+    type OwnedChoice = (String, String, Vec<(String, String)>, String);
+    let choices: Vec<OwnedChoice> =
         options.get("choices").expect("the box is a choice").try_to_owned().expect("owned").try_into().expect("a(ssa(ss)s)");
     assert_eq!(choices, [(CHECK_BOX.to_owned(), "Image Sequence".to_owned(), Vec::new(), "false".to_owned())]);
     assert!(bool::try_from(options.get("multiple").expect("multiple").try_to_owned().expect("owned")).expect("a bool"));
