@@ -829,7 +829,10 @@ fn rewrite(before: &str, after: &str, chars: &[Ch], key: &Key) -> Vec<Ch> {
 /// Where each group of a paragraph's text (`segments`: their character ranges in `before`) ends up
 /// in `after`, or `None` when an edit runs across the place between two groups (an object). Text
 /// typed at such a place goes with the group before it.
-fn segment_spans(before: &str, after: &str, segments: &[((usize, usize), (usize, usize))]) -> Option<Vec<(usize, usize)>> {
+/// A group of text runs: its (start, end) in the XML and its characters' range.
+type Segment = ((usize, usize), (usize, usize));
+
+fn segment_spans(before: &str, after: &str, segments: &[Segment]) -> Option<Vec<(usize, usize)>> {
     let a: Vec<char> = before.chars().collect();
     let b: Vec<char> = after.chars().collect();
     let ops = opcodes(&a, &b);
@@ -865,6 +868,11 @@ fn segment_spans(before: &str, after: &str, segments: &[((usize, usize), (usize,
 
 /// (start, end, new text) in a section's raw XML.
 pub(crate) type Edit = (usize, usize, String);
+
+/// A table to write: the original table's mark and the tables inside it around that mark's
+/// paragraph (none: a new table), what comes before a new one, the new paragraphs between, the
+/// table.
+type TableWork<'d> = (Option<(Mark, usize)>, Option<(Mark, bool)>, usize, &'d craft_wordmodel::table::Table);
 
 struct Job<'d> {
     sections: Vec<Section>,
@@ -1125,7 +1133,7 @@ impl Job<'_> {
     fn tables(&mut self) {
         let Some(st) = self.style.as_mut() else { return };
         let doc = st.after_doc;
-        let mut work: Vec<(Option<(Mark, usize)>, Option<(Mark, bool)>, usize, &craft_wordmodel::table::Table)> = Vec::new();
+        let mut work: Vec<TableWork> = Vec::new();
         for t in &st.after.tables {
             match t.mark {
                 Some(m) => {
@@ -1663,8 +1671,6 @@ pub(crate) fn write_back(original: &[u8], doc: &Document, hangul_font: HangulFon
 pub(crate) struct Plan {
     pub(crate) sections: Vec<Option<String>>,
     pub(crate) header: Option<String>,
-    /// The shapes added to the header: (element, new id, the shape it copies).
-    pub(crate) sources: Vec<(&'static str, i64, Option<String>)>,
     /// Image files to add to the package.
     pub(crate) media: Vec<NewMedia>,
     pub(crate) report: SaveReport,
@@ -1741,16 +1747,14 @@ pub(crate) fn plan(
 
     let sections: Vec<Section> = texts.into_iter().map(Section::new).collect();
     let n = sections.len();
-    let style = match header.filter(|_| restyle) {
-        Some(head) => Some(Restyle {
-            before: crate::write::restyle::collect(docs.before, docs.before_marks),
-            after: crate::write::restyle::collect(docs.after, docs.after_marks),
-            after_doc: docs.after,
-            header: crate::write::restyle::HeaderEdit::new(head),
-            hangul_font: docs.hangul_font,
-        }),
-        None => None,
-    };
+    let style = header.filter(|_| restyle).map(|head| Restyle {
+        before: crate::write::restyle::collect(docs.before, docs.before_marks),
+        after: crate::write::restyle::collect(docs.after, docs.after_marks),
+        after_doc: docs.after,
+        header: crate::write::restyle::HeaderEdit::new(head),
+        hangul_font: docs.hangul_font,
+    });
+
     let new_pics = style.as_ref().map(|st| st.after.new_pics.clone().into()).unwrap_or_default();
     let mut job = Job {
         sections,
@@ -1865,12 +1869,11 @@ pub(crate) fn plan(
     }
     let sections = finish_sections(&job.sections, &job.edits, &mut job.report);
     let header = job.style.as_ref().and_then(|st| st.header.finish());
-    let sources = job.style.map(|st| st.header.sources).unwrap_or_default();
     let mut report = job.report;
     if restyle {
         comment_changes(docs.before, docs.after, &mut report);
     }
-    Ok(Plan { sections, header, sources, media: job.media, report })
+    Ok(Plan { sections, header, media: job.media, report })
 }
 
 /// The source paragraphs of parts (the body, a header, a footer) whose every source paragraph
@@ -2035,7 +2038,7 @@ pub(crate) mod tests_api {
 
     /// Where the groups of `before` (their character ranges) end up in `after`.
     pub fn segment_spans(before: &str, after: &str, ranges: &[(usize, usize)]) -> Option<Vec<(usize, usize)>> {
-        let segs: Vec<((usize, usize), (usize, usize))> = ranges.iter().map(|&r| ((0, 0), r)).collect();
+        let segs: Vec<super::Segment> = ranges.iter().map(|&r| ((0, 0), r)).collect();
         super::segment_spans(before, after, &segs)
     }
 

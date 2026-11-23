@@ -10,7 +10,9 @@
 //! - the blocks between two of those are paired with the ones read between the same two, as many
 //!   as can be, the most alike first ([`similarity`]): an edited paragraph is the one it was
 //!   edited from, the rest are new or deleted;
-//! - an unchanged block that is out of order (moved) is still the one it was.
+//! - an unchanged block that is out of order (moved) is still the one it was;
+//! - a paragraph read that is gone while its text starts or ends the paragraph its neighbour
+//!   became was merged into it: that paragraph is both.
 //!
 //! A paragraph is known by its address while the documents are borrowed ([`Marks`]); nothing is
 //! written into either document.
@@ -150,8 +152,47 @@ fn similarity(b: &Item, a: &Item) -> u64 {
     ((head + tail) * 1000 / longest) as u64
 }
 
-/// For each edited block, the block read it is ([`Item`] indexes).
-fn line_up(before: &[Item], after: &[Item]) -> Vec<Option<usize>> {
+/// For each edited block, the blocks read it is ([`Item`] indexes, in the order read): one, or
+/// several merged.
+fn line_up(before: &[Item], after: &[Item]) -> Vec<Vec<usize>> {
+    let paired = pair_up(before, after);
+    let mut out: Vec<Vec<usize>> = paired.iter().map(|i| i.iter().copied().collect()).collect();
+    // where each block read went
+    let mut went: HashMap<usize, usize> = paired.iter().enumerate().filter_map(|(k, i)| Some(((*i)?, k))).collect();
+    // gone paragraphs merged into a neighbour's: its text starts with theirs (they came before)
+    // or ends with it (after); a run of them merged one by one
+    loop {
+        let mut more = false;
+        for (i, b) in before.iter().enumerate() {
+            if went.contains_key(&i) || b.table() || b.text.is_empty() {
+                continue;
+            }
+            let into = |j: usize, at_end: bool| {
+                let k = *went.get(&j)?;
+                let n = before.get(j)?;
+                let a = after.get(k)?;
+                let fits = n.kind() == b.kind() && if at_end { a.text.ends_with(&b.text) } else { a.text.starts_with(&b.text) };
+                fits.then_some(k)
+            };
+            let k = i.checked_sub(1).and_then(|j| into(j, true)).or_else(|| into(i + 1, false));
+            if let Some(k) = k
+                && let Some(list) = out.get_mut(k)
+            {
+                list.push(i);
+                list.sort_unstable();
+                went.insert(i, k);
+                more = true;
+            }
+        }
+        if !more {
+            break;
+        }
+    }
+    out
+}
+
+/// For each edited block, the block read it is (see [`line_up`]).
+fn pair_up(before: &[Item], after: &[Item]) -> Vec<Option<usize>> {
     let mut out = vec![None; after.len()];
     split(before, after, (0, before.len()), (0, after.len()), &mut out, 0);
     // unchanged blocks out of order: moved
@@ -196,18 +237,20 @@ fn split(before: &[Item], after: &[Item], b: (usize, usize), a: (usize, usize), 
         return;
     }
     // blocks found once on each side: their order in both is the longest run that agrees
-    let mut seen: HashMap<(u64, bool, bool), (usize, usize, usize, usize)> = HashMap::new();
+    // by fingerprint and kind: how often read, where last; how often edited, where last
+    let mut seen: HashMap<(u64, (bool, bool)), [usize; 4]> = HashMap::new();
     for (i, x) in before.iter().enumerate().take(bh).skip(bl) {
-        let e = seen.entry((x.fp, x.table(), x.nested)).or_insert((0, i, 0, 0));
-        e.0 += 1;
+        let e = seen.entry((x.fp, x.kind())).or_insert([0, i, 0, 0]);
+        e[0] += 1;
+        e[1] = i;
     }
     for (k, y) in after.iter().enumerate().take(ah).skip(al) {
-        if let Some(e) = seen.get_mut(&(y.fp, y.table(), y.nested)) {
-            e.2 += 1;
-            e.3 = k;
+        if let Some(e) = seen.get_mut(&(y.fp, y.kind())) {
+            e[2] += 1;
+            e[3] = k;
         }
     }
-    let mut once: Vec<(usize, usize)> = seen.values().filter(|e| e.0 == 1 && e.2 == 1).map(|e| (e.1, e.3)).collect();
+    let mut once: Vec<(usize, usize)> = seen.values().filter(|e| e[0] == 1 && e[2] == 1).map(|e| (e[1], e[3])).collect();
     once.sort_by_key(|&(_, k)| k);
     let anchors = increasing(&once);
     if anchors.is_empty() || depth >= MAX_SPLITS {
@@ -346,9 +389,10 @@ pub(crate) fn mark(before: &Document, origins: &Origins, after: &Document) -> (M
         let Some(edited) = after_stories.get(&key) else { continue };
         let mut ai = Vec::new();
         items(edited, false, 0, &mut ai);
-        for (k, i) in line_up(&bi, &ai).into_iter().enumerate() {
-            if let (Some(it), Some(m)) = (ai.get(k), i.and_then(|i| marks.get(i))) {
-                put(&mut ma, it.block, m);
+        for (k, read) in line_up(&bi, &ai).into_iter().enumerate() {
+            let m: Vec<Mark> = read.iter().filter_map(|&i| marks.get(i)).flatten().copied().collect();
+            if let Some(it) = ai.get(k) {
+                put(&mut ma, it.block, &m);
             }
         }
     }

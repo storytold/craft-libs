@@ -67,4 +67,6 @@ pub(crate) fn attr(s: &str) -> String {
 pub(crate) type HangulFont = Option<fn(&str) -> Option<String>>;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+#[cfg(test)]
+mod tests_back;

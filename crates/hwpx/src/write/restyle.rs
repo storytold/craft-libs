@@ -319,9 +319,6 @@ pub(crate) struct HeaderEdit {
     cache: HashMap<String, String>,
     /// The changes each cached paragraph variant could not write.
     para_unwritten: HashMap<String, Vec<&'static str>>,
-    /// Each added shape: (element, new id, the id of the shape it copies; none for a generated
-    /// one). Writing to HWP copies the source's record.
-    pub(crate) sources: Vec<(&'static str, i64, Option<String>)>,
 }
 
 /// (element, its list element)
@@ -371,7 +368,6 @@ impl HeaderEdit {
             fonts_added: Default::default(),
             cache: HashMap::new(),
             para_unwritten: HashMap::new(),
-            sources: Vec::new(),
         }
     }
 
@@ -400,9 +396,7 @@ impl HeaderEdit {
 
     /// [`Self::take_id`] for a generated shape.
     fn take_generated(&mut self, el: &'static str) -> i64 {
-        let id = self.take_id(el);
-        self.sources.push((el, id, None));
-        id
+        self.take_id(el)
     }
 
     fn add(&mut self, el: &'static str, xml: String) {
@@ -462,7 +456,6 @@ impl HeaderEdit {
         let nodes = parse_spans(&raw);
         let root = nodes.first()?;
         let new_id = self.take_id("charPr");
-        self.sources.push(("charPr", new_id, Some(id.to_string())));
         let mut tag = raw.get(root.start..root.tag_end)?.to_string();
         tag = set_attr(&tag, "id", &new_id.to_string());
         if before.size != after.size {
@@ -580,7 +573,6 @@ impl HeaderEdit {
         let nodes = parse_spans(&raw);
         let root = nodes.first()?;
         let new_id = self.take_id("paraPr");
-        self.sources.push(("paraPr", new_id, Some(id.to_string())));
         let mut edits: Vec<Edit> = vec![(root.start, root.tag_end, set_attr(raw.get(root.start..root.tag_end)?, "id", &new_id.to_string()))];
         // values in an hp:default branch are doubled (HwpUnitChar, see xml.rs)
         let in_default = |mut i: usize| {

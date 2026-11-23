@@ -1113,4 +1113,4 @@ pub(crate) fn paragraph(p: P) -> Paragraph {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
