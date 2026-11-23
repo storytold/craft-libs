@@ -36,15 +36,21 @@ pub fn read(bytes: &[u8]) -> Result<craft_wordmodel::Document, HwpxError> {
     Ok(doc)
 }
 
-/// Write `doc` as a new HWPX package. What the format or this writer can't hold is left out
-/// and logged (`log::warn!`).
+/// Write `doc` as HWPX. A document [`read`] from an HWPX (its file kept in `Document::passthrough`
+/// under [`PACKAGE_KEY`]) is written back into a copy of that file: the paragraphs, tables and
+/// pictures that changed are written, everything else stays as it was in the file. Any other
+/// document becomes a new package. What the format or this writer can't hold is left out and
+/// logged (`log::warn!`).
 pub fn write(doc: &craft_wordmodel::Document) -> Result<Vec<u8>, HwpxError> {
     write_with(doc, &WriteOptions::default())
 }
 
 /// [`write`] with options.
 pub fn write_with(doc: &craft_wordmodel::Document, opts: &WriteOptions) -> Result<Vec<u8>, HwpxError> {
-    let (bytes, report) = write::new::from_document(doc, opts.hangul_font)?;
+    let (bytes, report) = match doc.passthrough.get(PACKAGE_KEY) {
+        Some(original) => write::back::write_back(original, doc, opts.hangul_font)?,
+        None => write::new::from_document(doc, opts.hangul_font)?,
+    };
     report.log();
     Ok(bytes)
 }

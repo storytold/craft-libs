@@ -190,10 +190,38 @@ pub(crate) struct Converter<'a> {
     pub sec_index: usize,
     /// Made paragraphs by `rev`: the source paragraph each was made of.
     pub origins: HashMap<u64, Arc<str>>,
+    /// Source paragraphs shown only as a table (`section:ordinal:t`), by the `rev` of the
+    /// table's first paragraph.
+    pub table_origins: HashMap<u64, Arc<str>>,
+}
+
+/// Where the paragraphs of a document read came from: [`Converter::origins`] and
+/// [`Converter::table_origins`], for a write back into the file.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Origins {
+    pub paras: HashMap<u64, Arc<str>>,
+    pub tables: HashMap<u64, Arc<str>>,
+}
+
+/// The `rev` of a table's first paragraph (in its first cell, or a table there).
+pub(crate) fn first_para_rev(t: &Table, depth: usize) -> Option<u64> {
+    if depth > MAX_NESTING {
+        return None;
+    }
+    let block = t.rows.first()?.cells.first()?.blocks.first()?;
+    match &**block {
+        Block::Para(p) => Some(p.rev),
+        Block::Table(inner) => first_para_rev(inner, depth + 1),
+    }
 }
 
 /// Read an opened package.
 pub(crate) fn read(pkg: &Package) -> Result<Document> {
+    read_with_origins(pkg).map(|(doc, _)| doc)
+}
+
+/// [`read`], with where each paragraph came from.
+pub(crate) fn read_with_origins(pkg: &Package) -> Result<(Document, Origins)> {
     let head = match &pkg.header_name {
         Some(n) => Some(pkg.xml(n)?),
         None => None,
@@ -232,11 +260,13 @@ pub(crate) fn read(pkg: &Package) -> Result<Document> {
         media_keys: HashMap::new(),
         sec_index: 0,
         origins: HashMap::new(),
+        table_origins: HashMap::new(),
     };
     c.doc.body.clear();
     c.convert()?;
+    let origins = Origins { paras: c.origins.clone(), tables: std::mem::take(&mut c.table_origins) };
     c.keep_origins();
-    Ok(c.doc)
+    Ok((c.doc, origins))
 }
 
 impl Converter<'_> {
@@ -485,6 +515,15 @@ impl Converter<'_> {
                         piece += 1;
                     }
                 }
+            }
+            // shown only as a table: the table notes it, by its first paragraph
+            if piece == 0
+                && let Some(rev) = blocks.iter().find_map(|b| match b {
+                    Blk::Table(t) => first_para_rev(t, 0),
+                    Blk::P(_) => None,
+                })
+            {
+                self.table_origins.insert(rev, Arc::from(format!("{}:{ord}:t", self.sec_index)));
             }
         }
         let mut out = acc.cap_above;
