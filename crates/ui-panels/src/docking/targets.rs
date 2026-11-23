@@ -40,7 +40,8 @@ pub struct DockSizes {
     pub cascade_inset: f32,
     /// The size a command floats a panel at when the panel gives none (the float window size).
     pub float_size: Vec2,
-    /// The divider between two docked groups or between a dock and its neighbour (the inline gap).
+    /// The divider between two docked groups or between a dock and its neighbour (the tight gap: the references'
+    /// dock dividers are 3 px at 100%).
     pub gap: f32,
     /// How far a band (edge, seam, column edge, new dock) reaches into a tab strip from its drop line (the least hit
     /// size): the rest of the strip joins the group.
@@ -111,7 +112,7 @@ impl DockSizes {
             new_dock_band: size.control.md,
             cascade_inset: size.window.cascade,
             float_size: Vec2::new(size.float.width, size.float.height),
-            gap: cx.tokens.space.gap.inline,
+            gap: cx.tokens.space.gap.tight,
             strip_reach: size.hit.target,
             least_pane: size.pane.least,
             strip: size.panel_header,
