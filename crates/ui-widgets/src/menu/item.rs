@@ -216,6 +216,10 @@ pub struct MenuItem<'a> {
     /// The row shows no icon, not even the one its command names: a text-only menu's row, which is also a line shorter.
     #[prop]
     no_icon: bool,
+    /// The row is its label's line plus the menu's padding, not a control's height: a dense classic menu.
+    #[style_key]
+    #[prop]
+    compact: bool,
     /// A check mark, shown while the value is true; the row reserves the mark column either way.
     #[prop]
     check: Option<bool>,
@@ -258,6 +262,7 @@ impl<'a> MenuItem<'a> {
             heading: false,
             icon: None,
             no_icon: false,
+            compact: false,
             check: None,
             radio_mark: None,
             mnemonic: None,
@@ -408,6 +413,10 @@ impl Component for MenuItem<'_> {
         // A row's content sits `space.pad.regular` in from the popup's own padding, so a label starts clear of the edge.
         let mut metrics = control.metrics();
         metrics.padding = Insets::new(tokens.space.pad.regular, tokens.space.pad.regular, metrics.padding.top, metrics.padding.bottom);
+        if key.compact {
+            // The text line sets the height, as in a classic menu: no control height floor.
+            metrics.min_size.y = 0.0;
+        }
         MenuItemStyle {
             surface,
             metrics,

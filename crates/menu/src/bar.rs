@@ -76,12 +76,13 @@ pub struct MenuBarUi<'a> {
     keyboard: Option<bool>,
     help_search: bool,
     icons: bool,
+    compact: bool,
 }
 
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on [`Target::current`].
     pub fn new(bar: &'a MenuBar) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: Target::current(), english: None, preferred: &[], keyboard: None, help_search: false, icons: true }
+        MenuBarUi { bar, target: Target::current(), english: None, preferred: &[], keyboard: None, help_search: false, icons: true, compact: false }
     }
 
     /// The platform the bar is on, for the shortcut column ([`craft_keymap::Chord::display`]): ⌘ glyphs on
@@ -130,12 +131,18 @@ impl<'a> MenuBarUi<'a> {
         self
     }
 
+    /// Whether the rows are a line of text tall instead of a control's height (off by default): a dense classic menu.
+    pub fn compact(mut self, on: bool) -> MenuBarUi<'a> {
+        self.compact = on;
+        self
+    }
+
     /// Draws the bar and its open menu. Disabled rows never run. A chosen item is a fired command in the frame's
     /// output; [`Builtin::Quit`](crate::Builtin::Quit) and [`Builtin::Minimize`](crate::Builtin::Minimize) act on
     /// the root window instead.
     pub fn show(self, ui: &mut Ui) -> MenuBarOutput {
         let env = Env::of(ui);
-        let rows = Rows::new(self.target).english(self.english).preferred(self.preferred).icons(self.icons);
+        let rows = Rows::new(self.target).english(self.english).preferred(self.preferred).icons(self.icons).compact(self.compact);
         let labels =
             rows.labels(&self.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
         let shared = &rows;

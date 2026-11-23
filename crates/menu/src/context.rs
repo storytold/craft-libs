@@ -37,15 +37,22 @@ pub(crate) struct Rows<'a> {
     preferred: &'a [(&'a str, char)],
     /// Whether rows show their command's icon.
     icons: bool,
+    /// Whether rows are a text line tall.
+    compact: bool,
 }
 
 impl<'a> Rows<'a> {
     pub(crate) fn new(target: Target) -> Self {
-        Rows { target, english: None, preferred: &[], icons: true }
+        Rows { target, english: None, preferred: &[], icons: true, compact: false }
     }
 
     pub(crate) fn icons(mut self, on: bool) -> Self {
         self.icons = on;
+        self
+    }
+
+    pub(crate) fn compact(mut self, on: bool) -> Self {
+        self.compact = on;
         self
     }
 
@@ -163,7 +170,7 @@ impl<'a> Rows<'a> {
                 }
             }
             _ => {
-                command_row(ui, item, label, shortcut).no_icon(!self.icons).show(ui);
+                command_row(ui, item, label, shortcut).no_icon(!self.icons).compact(self.compact).show(ui);
             }
         }
     }

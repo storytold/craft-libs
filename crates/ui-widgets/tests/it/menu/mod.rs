@@ -76,3 +76,23 @@ fn a_row_with_no_icon_takes_no_icon_column() {
     };
     assert_eq!(redo_left(true), redo_left(false), "the iconless row reserves no icon column");
 }
+
+/// A compact row is its label's line tall, not a control's height: the rows of a dense classic menu stand closer.
+#[trial]
+fn a_compact_row_is_shorter_than_a_control_row() {
+    let pitch = |compact: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            Stack::new().show(ui, |ui, _| {
+                Menu::inline("Edit").show(ui, |ui, _| {
+                    MenuItem::new("Undo").compact(compact).show(ui);
+                    MenuItem::new("Redo").compact(compact).show(ui);
+                });
+            });
+        });
+        fixture.settle();
+        let top = |name: &str| fixture.texts().iter().find(|text| text.text == name).map(|text| text.rect.top());
+        top("Redo").zip(top("Undo")).map(|(redo, undo)| redo - undo)
+    };
+    let (control, compact) = (pitch(false), pitch(true));
+    assert!(compact < control, "compact rows stand closer: {compact:?} against {control:?}");
+}
