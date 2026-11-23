@@ -1187,6 +1187,7 @@ Item geometry: where each item of a collection sits for a scroll offset and view
   - `fn auto_widths(&self) -> bool`. Whether the items are as wide as they measure themselves. A layout that asks for widths places the items
   - `fn set_width(&mut self, _at: usize, _ideal: f32, _min: f32)`. An auto-width item measured `ideal` and `min` width. The values of the previous pass arrive before
   - `fn set_view(&mut self, _viewport: Vec2, _offset: ScrollPos)`. The viewport and scroll offset the grid view describes. Layouts without a grid ignore it.
+  - `fn set_fit(&mut self, _at: usize, _width: Option<f32>)`. Item `at` is as wide as it measured, `width` from the start edge, in a layout that gives every item one width;
 - `craft_behavior::item_layout::LineIndex`: `pub struct LineIndex`. Lines (rows or columns) with a default size, the lines whose size differs and their prefix sums, so the start
   - `pub fn uniform(size: f32, count: u32) -> Self`. `count` lines of `size` each (negative or NaN sizes count as `0.0`).
   - `pub fn set(&mut self, line: u32, size: f32)`. Gives `line` the size `size`; the lines after it move. A line at or past `count` is ignored.
@@ -2193,6 +2194,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn ime_receipt(&self, ctx: &egui::Context, before: ImeStamp, after: ImeStamp) -> bool`. Notes the input-method receipt between the stamps `before` and `after` for this editor part; true when the
   - `pub fn ime_application_change(&self, ctx: &egui::Context)`. Notes an application change of this editor part's committed text.
   - `pub fn ime_interrupt(&self, ctx: &egui::Context)`. Asks for the OS composition to be interrupted this pass, because this editor part refused an input method's
+- `craft_ui::contract::EditorStep`: `pub enum EditorStep<S> { Input(EditorInput), Command(S, Fired) }`. One step of an editor's pass, in the order of the events it came from ([`Cx::editor_steps`]).
 - `craft_ui::contract::EndRegion`: `pub struct EndRegion { pub full_height: bool, pub gap: Gap, pub rule: bool }`. An end region, filled by `Container::end`: content in reading order at the line's end edge, beside the body and
   - `pub const fn new() -> Self`. An end region as high as the line, `space.gap.tight` from the body, with no rule.
   - `pub const fn rule(mut self, on: bool) -> Self`. Whether a rule separates the end region from the body.
@@ -3481,7 +3483,6 @@ Per-pass and per-frame services and the one egui adapter.
 - `craft_ui::runtime::access::SubNode`: `pub struct SubNode { pub name: Name, pub description: Option<String>, pub numeric: Option<Numeric>, pub expanded: Option<bool>, pub position: Option<SetPosition>, pub grid: GridPlace, pub level: Option<usize>, pub flags: Flags }`. A node below a component's node, for a part, a cell or a line of a content painter.
   - `pub fn bounds(&mut self, rect: egui::Rect) -> &mut Self`. The node's rectangle on screen, for a node that has no part of its own to take it from (a block of text a
   - `pub fn text_run(&mut self, text: impl Into<String>, positions: Vec<f32>, widths: Vec<f32>, rtl: bool) -> &mut Self`. Makes the node a run of text: `text` laid out on one line, each character's start offset from the node's left
-  - `pub fn run_link(&mut self, chars: std::ops::Range<usize>, target: impl Into<String>) -> &mut Self`. Marks characters `chars` of a [text run](Self::text_run) as a link to `target`: the run node gets a `Link`
   - `pub fn level(&mut self, level: usize) -> &mut Self`. The heading level or tree depth.
   - `pub fn value(&mut self, text: impl Into<String>) -> &mut Self`. A plain text value, for a sub-node that shows text as its value and has no number.
   - `pub fn column(&mut self, key: craft_behavior::ColumnKey) -> &mut Self`. The column of a cell of an item row; the item step reads the cell's column index from the collection's
@@ -3558,7 +3559,7 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<Arc<ResolvedCommand>>`. `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above
 - `craft_ui::runtime::commands::FirePhase`: `pub enum FirePhase { Press, Repeat, Release }`. The phase of the key press that fired a command.
 - `craft_ui::runtime::commands::FireSource`: `pub enum FireSource { Key, Menu, Palette, Pointer, Automation, Access, Keytip }`. Where a fired command came from.
-- `craft_ui::runtime::commands::Fired`: `pub struct Fired { pub command: CommandRef, pub target: Option<Id>, pub source: FireSource, pub phase: FirePhase, pub cycle: bool, pub alt_variant: bool, pub time: f64, pub mods: craft_keymap::Mods }`. A command a surface or a key fired, as the instance or the app takes it.
+- `craft_ui::runtime::commands::Fired`: `pub struct Fired { pub command: CommandRef, pub target: Option<Id>, pub source: FireSource, pub phase: FirePhase, pub cycle: bool, pub alt_variant: bool, pub time: f64, pub mods: craft_keymap::Mods, pub place: Option<usize> }`. A command a surface or a key fired, as the instance or the app takes it.
   - `pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired`. `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
   - `pub fn mods(self, mods: craft_keymap::Mods) -> Fired`. The command with `mods` as the modifiers its firing input carried.
 - `craft_ui::runtime::commands::ResolvedCommand`: `pub struct ResolvedCommand { pub label: Arc<str>, pub icon: Option<Cow<'static, str>>, pub chord: Option<Chord>, pub chord_text: Option<Arc<str>>, pub enabled: bool, pub checked: Option<bool>, pub marked: bool, pub hint: Option<Arc<str>>, pub kind: CommandKind, pub edit: bool, pub instance: Option<Id> }`. A command as a surface shows and fires it.
@@ -4064,7 +4065,7 @@ The frame plugin: the per-pass and per-frame steps, with the inputs the app sets
   - `pub fn commands(mut self, commands: CommandInput) -> Self`. Sets the command input.
   - `pub fn latched(mut self, mods: Mods) -> Self`. Sets the modifiers latched beyond the window's input.
   - `pub fn host(mut self, host: Arc<Host>) -> Self`. Sets the host: the same `Arc<Host>` every frame, a new one to switch (see [`FrameInput::host`](Self::host)).
-- `craft_ui::runtime::frame::FrameOutput`: `pub struct FrameOutput { pub fired: Vec<Fired>, pub delivered: Vec<Fired>, pub announcements: Vec<String>, pub chrome_toggles: Vec<(ViewportId, ChromeToggle)>, pub removed_gestures: Vec<GestureId>, pub outer_edits: Vec<OuterEdit>, pub refused: bool, pub ended_previews: Vec<egui::Id> }`. What the runtime accumulated since the last `take_output`, across passes and discarded passes.
+- `craft_ui::runtime::frame::FrameOutput`: `pub struct FrameOutput { pub fired: Vec<Fired>, pub delivered: Vec<Fired>, pub dimmed: Vec<Fired>, pub announcements: Vec<String>, pub chrome_toggles: Vec<(ViewportId, ChromeToggle)>, pub removed_gestures: Vec<GestureId>, pub outer_edits: Vec<OuterEdit>, pub refused: bool, pub ended_previews: Vec<egui::Id> }`. What the runtime accumulated since the last `take_output`, across passes and discarded passes.
 - `craft_ui::runtime::frame::OuterEdit`: `pub enum OuterEdit { Begin { id: GestureId, label: Arc<str>, doc_key: Option<DocKey> }, Commit { id: GestureId }, Cancel { id: GestureId } }`. A step of the outer gesture of a container whose `ContainerProps::outer_edit` is on: one undo step over the edits of
 - `craft_ui::runtime::frame::clock`: `pub fn clock(ctx: &Context) -> f64`. The running pass's time in seconds, the same on every pass of a frame: for app code that times a wait. Content
 - `craft_ui::runtime::frame::discard_pass`: `pub fn discard_pass(ctx: &Context, reason: &'static str)`. Discards the running pass, so nothing of it paints, and runs it again, when [`discardable`]: for a host that learns
