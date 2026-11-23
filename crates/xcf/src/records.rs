@@ -84,6 +84,7 @@ impl Budget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopReason {
     Malformed,
+    Unsupported,
     RecordLimit,
     StringLimit,
     PayloadLimit,

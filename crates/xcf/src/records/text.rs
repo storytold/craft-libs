@@ -6,6 +6,8 @@ use std::borrow::Cow;
 use super::{Budget, Scan, StopReason};
 use crate::{Error, Result};
 
+pub mod markup;
+
 /// Limits for one optional configuration. Recursion has an absolute ceiling of
 /// 64 even when a caller supplies a larger depth, so hostile data cannot exhaust
 /// the process stack. Cumulative work and allocations use the shared Budget.
