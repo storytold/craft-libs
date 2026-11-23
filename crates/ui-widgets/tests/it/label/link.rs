@@ -67,3 +67,15 @@ fn a_link_label_reports_its_click_to_the_host_and_still_scrubs() {
     fixture.drag_at(link.label_at(), Vec2::new(DRAG, 0.0));
     assert!(link.value.get() > START, "a drag on a link label scrubs: {}", link.value.get());
 }
+
+/// `Fixture::by_label` gives the control a link label names, not the link that carries the same name.
+#[trial]
+fn by_label_gives_the_control_a_link_label_names() {
+    let row = Row::new();
+    let shown = row.clone();
+    let mut fixture = Fixture::new(move |ui| shown.show(ui, "link", SideLabel::new().link(), ROW_A));
+    fixture.settle();
+    let dial = row.seen.borrow().id.expect("the dial ran");
+    let control = fixture.node_of(dial).expect("the dial is in the access tree").node;
+    assert_eq!(fixture.by_label("Opacity").map(|found| found.node), Some(control), "the label's name finds its control");
+}

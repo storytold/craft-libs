@@ -1,11 +1,11 @@
 //! Stories of the buttons.
 
-use super::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
-use crate::contract::{BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
+use super::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, Link, PopupMark, SplitButton, SplitMenu, ToggleButton};
+use crate::contract::{BodyCx, Entry, LeastWidth, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger, Validity};
 use crate::display::{Picture, Shade, Text};
 use crate::layout_components::{Grid, Row, Stack};
 use crate::list::ThumbAspect;
-use crate::menu::MenuItem;
+use crate::menu::{Menu, MenuItem};
 use crate::primitives::{AppIcons, HAlign, IconMark, IconSpec, register_app_icons};
 use crate::runtime::commands::EditCommands;
 use crate::runtime::env::{Message, with_env};
@@ -77,6 +77,28 @@ fn button_loading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(IconButton<'static>, covers = [Default])]
 fn icon_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     IconButton::new(IconId::new("settings")).label("Settings").show(ui).into()
+}
+
+/// A menu button that picks one of its menu's rows, as an Align To button does: it reads as a combo box named by its
+/// label, with the picked row as its value, and the picked row carries the check mark.
+#[story(IconButton<'static>, covers = [], title = "Choice")]
+fn icon_button_choice(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const CHOICES: [&str; 3] = ["Align to Selection", "Align to Key Object", "Align to Artboard"];
+    let picked = *data.value("picked", 0_usize);
+    let button = IconButton::new(IconId::new("align_edge_left"))
+        .label("Align To")
+        .popup(PopupKind::Menu)
+        .popup_mark(PopupMark::Menu)
+        .choice(CHOICES[picked])
+        .show(ui);
+    Menu::new("Align To").opened_by(&button.response, Trigger::Press).show(ui, |ui, _| {
+        for (at, choice) in CHOICES.into_iter().enumerate() {
+            if MenuItem::new(choice).check(at == picked).id_salt(at).show(ui).ran {
+                *data.value("picked", 0_usize) = at;
+            }
+        }
+    });
+    button.into()
 }
 
 /// A tool strip: the first tool selected, as the gallery card shows it.

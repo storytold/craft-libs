@@ -23,9 +23,8 @@ use egui::Pos2;
 /// The rotation step of the Rotate View commands, in degrees.
 const ROTATE_STEP_DEG: f64 = 15.0;
 
-/// The room Fit Artboard on Screen leaves around the board, in points: at the sides, and above and below (the board's
-/// name sits above it).
-const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 40.0);
+/// The room Fit Artboard on Screen leaves around the board on each side, in points.
+const ARTBOARD_MARGIN: Vec2 = Vec2::new(30.0, 30.0);
 
 /// The room Fit Layers on Screen leaves around the layers' bounds, in points.
 const LAYERS_MARGIN: Vec2 = Vec2::new(20.0, 20.0);

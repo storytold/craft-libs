@@ -130,7 +130,7 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// The panel whose frame shows alone.
     #[prop]
     maximized: Option<P>,
-    /// Auto-Collapse Iconic Panels: a flyout closes when the focus leaves it.
+    /// Auto-Collapse Iconic Panels: a flyout closes on a press outside it and when the focus leaves it.
     #[prop(flag)]
     auto_collapse: bool,
     /// The workspace is locked: nothing moves, floats or closes.

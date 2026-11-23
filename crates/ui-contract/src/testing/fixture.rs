@@ -587,16 +587,21 @@ impl Fixture {
     }
 
     /// The node named `label`: the interactive node whose name resolves to it (its own, or the node that labels it
-    /// through `labelled_by`), else the first node that carries the text.
+    /// through `labelled_by`) and that labels no other node, so a field's control comes before its caption link;
+    /// else the first node that carries the text.
     pub fn by_label(&self, label: &str) -> Option<Target> {
         let tree = &self.tree;
         let reported: HashSet<NodeKey> = tree.keys().into_iter().collect();
+        let labels: HashSet<NodeKey> = reported.iter().flat_map(|key| tree.labelled_by_key(*key)).collect();
         let ordered = self.in_tree_order(&reported);
         let node = ordered
             .iter()
             .copied()
             .find(|key| {
-                super::access::name(tree, *key) == Some(label) && tree.role_of(*key) != Some(Role::LABEL) && super::access::is_interactive(tree, *key)
+                super::access::name(tree, *key) == Some(label)
+                    && tree.role_of(*key) != Some(Role::LABEL)
+                    && !labels.contains(key)
+                    && super::access::is_interactive(tree, *key)
             })
             .or_else(|| ordered.iter().copied().find(|key| tree.name_of(*key) == Some(label)))?;
         self.target(node)
