@@ -567,7 +567,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let env = crate::runtime::env::Env::of(input.ui);
     let multiline = input.options.multiline();
     let scroll = if multiline { scroll_before(ctx, widget) } else { 0.0 };
-    let filter = egui_focus::event_filter(input.keys.keep, false);
+    // A multiline field that inserts Tab still gets the arrows: `KeepKeys::Tab` otherwise sets
+    // `horizontal_arrows: false, vertical_arrows: false` and egui drops them before the widget.
+    let filter = if multiline {
+        egui::EventFilter { tab: input.keys.keep == KeepKeys::Tab, horizontal_arrows: true, vertical_arrows: true, escape: false }
+    } else {
+        egui_focus::event_filter(input.keys.keep, false)
+    };
     // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
     // the body text's.
     let baseline = (!input.options.multiline()).then(|| {
