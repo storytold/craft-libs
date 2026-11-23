@@ -63,6 +63,26 @@ struct Strip<'a> {
     bound: &'a dyn Fn(&Chord) -> bool,
 }
 
+/// How the strip reads one raw event beside its key reading: when it arrived, and what its neighbours say of it.
+#[derive(Clone, Copy)]
+struct Arrival {
+    /// The event's arrival time (`Arrived::at`).
+    at: Option<f64>,
+    /// A key press follows the event: a text before it is that press's (the web sends a press's text first).
+    press_next: bool,
+}
+
+/// The key a typed `text` stands for: one character that names a key, or the US base key of a shifted character no key
+/// names (`~` is typed on Backtick).
+fn text_key(text: &str) -> Option<Key> {
+    let mut chars = text.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+    Key::from_char(c).or(match c {
+        '~' => Some(Key::Backtick),
+        _ => None,
+    })
+}
+
 /// The chord a clipboard event of `command` stands for with `mods` held: Cmd and the command's key, with the modifiers
 /// held beside Cmd (Cmd+Shift+V pastes in place).
 fn clip_chord(command: EditCommand, mods: Mods) -> (Key, KeyInput) {
@@ -100,9 +120,9 @@ impl Strip<'_> {
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
     /// with the press, in this pass or a later one. `down` holds the keys down before the event; a press of a key
-    /// already down is a repeat, as egui reads it, whatever the platform said. `at` is the event's arrival time
-    /// (`Arrived::at`).
-    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, down: &[Key], event: KeyEvent, at: Option<f64>) -> bool {
+    /// already down is a repeat, as egui reads it, whatever the platform said.
+    fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, down: &[Key], event: KeyEvent, arrival: Arrival) -> bool {
+        let at = arrival.at;
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
             batch.last_press = None;
@@ -161,7 +181,8 @@ impl Strip<'_> {
             KeyEvent::Text(text) => {
                 alt.other_key = true;
                 let mut claimed = false;
-                if let Some(last) = batch.last_press.take() {
+                let last = batch.last_press.take();
+                if let Some(last) = &last {
                     if let Some(physical) = last.input.physical.filter(|_| !alt.right) {
                         batch.learned.push((physical, last.input.mods, text.clone()));
                     }
@@ -170,6 +191,7 @@ impl Strip<'_> {
                         press.text = Some(batch.texts.len());
                     }
                 }
+                claimed |= self.text_as_key(batch, last.as_ref(), &text, alt, arrival);
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
                 batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts), place: batch.place });
                 batch.egui_texts += 1;
@@ -231,6 +253,40 @@ impl Strip<'_> {
             }
             _ => true,
         }
+    }
+
+    /// Reads a one-character `text` as a press of the key it stands for (`text_key`) where no press typed it. A text
+    /// with no press before it (`last`) or after it is a tap of that key with the held modifiers, which a claim takes or
+    /// the shortcut dispatcher reads (Shift+~ arrives as `~` alone). A text Alt typed with a press no claim took is its
+    /// key's for a claim (Option+8 types `[` on a Turkish Mac). Cmd and Ctrl chords type nothing, and the Alt that typed
+    /// the character is no part of its key's chord. Returns whether a claim or a mnemonic took the text.
+    fn text_as_key(&self, batch: &mut Batch, last: Option<&LastPress>, text: &str, alt: &AltTrack, arrival: Arrival) -> bool {
+        let Some(key) = text_key(text) else { return false };
+        let lone = last.is_none() && !arrival.press_next;
+        let mods = match last {
+            None if lone => alt.last.unwrap_or(Mods::NONE),
+            Some(last) if !last.claimed && last.input.mods.alt => last.input.mods,
+            _ => return false,
+        };
+        if mods.cmd || mods.ctrl {
+            return false;
+        }
+        let input = KeyInput::new(Mods { alt: false, ..mods }).with_typed(key);
+        if !lone {
+            let PressUse::Claimed(chord) = self.use_of(key, &input) else { return false };
+            batch.claimed.push(chord);
+            return true;
+        }
+        let (pushed, claims, menu_keys) = (batch.presses.len(), batch.claimed.len(), batch.menu.len());
+        self.press(batch, key, &input, false, arrival.at);
+        if let Some(press) = batch.presses.get_mut(pushed) {
+            press.text = Some(batch.texts.len());
+            // The tap has no release event: it ends where it began.
+            if !press.canvas {
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at: arrival.at, place: batch.place });
+            }
+        }
+        batch.claimed.len() > claims || batch.menu.len() > menu_keys
     }
 
     /// A lone Alt press, pressed and released with no other key, pointer press, wheel turn, touch or Shift, Ctrl or Cmd
@@ -602,6 +658,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         stage.stirred = false;
         stage.textless_paste = false;
         let mut place = 0;
+        let press_next: Vec<bool> = (0..events.len())
+            .map(|at| matches!(events.get(at + 1).map(|arrived| &arrived.event), Some(egui::Event::Key { pressed: true, .. })))
+            .collect();
         events.retain(|arrived| {
             // Every event the IME engine left counts, as the engine counts them (`ime::take_placed`).
             batch.place = place;
@@ -623,7 +682,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             };
             let down = stage.down.clone();
             note_down(&mut stage.down, &read);
-            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrived.at)
+            let arrival = Arrival { at: arrived.at, press_next: press_next.get(batch.place).copied().unwrap_or(false) };
+            strip.event(&mut batch, &mut stage.alt, &mut stage.consumed, &down, read, arrival)
         });
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);

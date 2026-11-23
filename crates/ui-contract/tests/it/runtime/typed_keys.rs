@@ -70,6 +70,22 @@ fn settle(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), focus_field: bool
     take_output(&frames.ctx);
 }
 
+/// A text with no key press (Shift+~ arrives as `~` alone) runs the shortcut of the key it stands for with the held
+/// modifiers, and a focused field types it instead. Guards against a key stage that read such a text as typing only,
+/// so no shortcut and no claim ever saw it.
+#[trial]
+fn a_text_with_no_press_is_a_press_of_its_key() {
+    let field = RefCell::new(Field::default());
+    let mut frames = frames_for(Chord::new(Mods::SHIFT, ChordKey::Backtick));
+    let mut show = window(&field);
+    settle(&mut frames, &mut show, false);
+    assert!(ran(&mut frames, &mut show, &field, vec![Event::ModifiersChanged(Modifiers::SHIFT), text("~")]), "`~` alone ran Shift+`");
+    let mut frames = frames_for(Chord::new(Mods::SHIFT, ChordKey::Backtick));
+    settle(&mut frames, &mut show, true);
+    assert!(!ran(&mut frames, &mut show, &field, vec![Event::ModifiersChanged(Modifiers::SHIFT), text("~")]), "the field's typing");
+    assert_eq!(field.borrow().typed, ["~"], "the focused field types it");
+}
+
 /// A press of a key that is down already is a repeat, whatever the platform says: it runs no shortcut again. Guards
 /// against a key stage that read the repeat flag from the raw event only.
 #[trial]
