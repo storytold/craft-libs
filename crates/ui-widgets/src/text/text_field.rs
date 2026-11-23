@@ -310,13 +310,13 @@ impl<C: Codec + Clone + 'static> TextField<'_, C> {
     }
 
     /// The adornments after the text, in reading order: the clear button when `clear` names it, then the arrow.
-    fn trailing(&self, clear: Option<Label>) -> SmallVec<[Adornment; 2]> {
+    fn trailing(&self, clear: Option<Label>, arrow: crate::controls::disclosure::DropdownArrow) -> SmallVec<[Adornment; 2]> {
         let mut trailing = SmallVec::new();
         if let Some(name) = clear {
             trailing.push(Adornment::button(CLEAR, IconSpec::svg(IconId::new("close")), name));
         }
         if self.arrow {
-            trailing.push(Adornment::glyph(crate::controls::disclosure::DisclosureGlyph::dropdown()));
+            trailing.push(Adornment::glyph(crate::controls::disclosure::DisclosureGlyph::dropdown_of(arrow)));
         }
         trailing
     }
@@ -377,7 +377,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         }
         let clear = (self.search && self.clear_button).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
-        size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear));
+        size.x += adorn::reserve(cx.style, &self.leading, &self.trailing(clear, cx.env.get()));
         // Short text keeps a field at `size.length.short`, so a column of fields ends at one edge; a content-sized field
         // takes its text and adornments only, as a content-sized number field does.
         if cx.proposal != Proposal::Min && cx.resolved.sizing() != Some(Sizing::Content) {
@@ -402,7 +402,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let value = cx.value();
         let clear = self.clear_shown(value).then(|| Self::clear_name(&cx.words::<words::TextWords>()));
-        let trailing = self.trailing(clear);
+        let trailing = self.trailing(clear, cx.env.get());
         self.leading = std::mem::take(&mut self.leading).into_iter().map(|adornment| adornment.measured(cx)).collect();
         let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.flow.is_rtl());
         for (adornment, rect) in trailing.iter().zip(&placed.trailing) {
@@ -441,7 +441,7 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let clear = cx.part_if_declared(CLEAR).is_some().then(|| Self::clear_name(&cx.words::<words::TextWords>()));
-        let trailing = self.trailing(clear);
+        let trailing = self.trailing(clear, cx.env.get());
         let placed = adorn::place(cx.content_rect, cx.style, &self.leading, &trailing, cx.env.direction().is_rtl());
         let color = cx.resolve(&cx.style.glyph.color);
         for (adornment, rect) in self.leading.iter().chain(&trailing).zip(placed.leading.iter().chain(&placed.trailing)) {

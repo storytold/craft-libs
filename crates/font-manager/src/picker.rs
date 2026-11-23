@@ -21,7 +21,7 @@ use craft_ui::contract::{
     Access, Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::controls::disclosure::DisclosureGlyph;
+use craft_ui::controls::disclosure::{DisclosureGlyph, DropdownArrow};
 use craft_ui::fonts::FontRef;
 use craft_ui::list::{ListRow, ThumbSize};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
@@ -650,12 +650,12 @@ impl<'a> FontPicker<'a> {
 
     /// The adornments at the end of the field: the missing mark when `missing`, then the chevron. The mark is a glyph
     /// whose part carries the note.
-    fn trailing(name: Label, missing: bool) -> Vec<Adornment> {
+    fn trailing(name: Label, missing: bool, arrow: DropdownArrow) -> Vec<Adornment> {
         let mut all = Vec::with_capacity(2);
         if missing {
             all.push(Adornment::glyph(IconSpec::svg(IconId::new(WARNING_ICON))));
         }
-        all.push(Adornment::button(CHEVRON, DisclosureGlyph::dropdown(), name));
+        all.push(Adornment::button(CHEVRON, DisclosureGlyph::dropdown_of(arrow), name));
         all
     }
 
@@ -796,14 +796,14 @@ impl Component for FontPicker<'_> {
         let widest = if ribbon { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
         let name = cx.words::<FontPickerWords>().list.clone();
         let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
-        Vec2::new(widest.x + reserve(&cx.style.field, &[], &Self::trailing(name, note.is_some())), widest.y)
+        Vec2::new(widest.x + reserve(&cx.style.field, &[], &Self::trailing(name, note.is_some(), cx.env.get())), widest.y)
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let name = cx.words::<FontPickerWords>().list.clone();
         let family = cx.value().cloned().unwrap_or_default();
         let note = self.missing_note(&family, &cx.words::<MissingFontsWords>());
-        let trailing = Self::trailing(name, note.is_some());
+        let trailing = Self::trailing(name, note.is_some(), cx.env.get());
         let placed = place(cx.content_rect, &cx.style.field, &[], &trailing, cx.flow.is_rtl());
         if let (Some(note), Some(at)) = (note, placed.trailing.first()) {
             cx.part(WARNING, *at).tooltip(note);
@@ -917,13 +917,13 @@ impl Component for FontPicker<'_> {
         let name = cx.words::<FontPickerWords>().list.clone();
         let family = cx.value().cloned().unwrap_or_default();
         let missing = self.missing_note(&family, &cx.words::<MissingFontsWords>()).is_some();
-        let trailing = Self::trailing(name.clone(), missing);
+        let trailing = Self::trailing(name.clone(), missing, cx.env.get());
         let placed = place(cx.content_rect, &cx.style.field, &[], &trailing, cx.env.direction().is_rtl());
         if let (true, Some(at)) = (missing, placed.trailing.first()) {
             let color = cx.resolve(&cx.style.warning);
             ui.draw().icon(*at, &IconSpec::svg(IconId::new(WARNING_ICON)).color(color));
         }
-        ui.face(CHEVRON, IconButton::new(DisclosureGlyph::dropdown()).label(name));
+        ui.face(CHEVRON, IconButton::new(DisclosureGlyph::dropdown_of(cx.env.get())).label(name));
     }
 
     fn finish(self, mut cx: Cx<'_, Self>) -> FontPickerOutput {
