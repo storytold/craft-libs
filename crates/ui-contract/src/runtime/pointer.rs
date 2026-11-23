@@ -104,8 +104,11 @@ pub struct PassPointer {
 
 #[derive(Default)]
 pub(crate) struct Memory {
-    /// The latest press of any button: where, when, its place in the click run and the modifiers held with it.
+    /// The latest press of any button, until it moves past slop: where, when, its place in the click run and the
+    /// modifiers held with it.
     last_press: Option<(Pos2, f64, u32, Mods)>,
+    /// A button is down since `last_press`.
+    held: bool,
     press_targets: PressTargets,
     /// A cancel a service requested for the running pass.
     requested: Option<(u64, PressCancel)>,
@@ -267,12 +270,22 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         // Every button's press runs on the click run, as a click of any button did in the old apps: a middle-button pan
         // click between two clicks makes the second a triple click. Only a primary press carries its count.
         for event in &mut events {
-            if let PointerEvent::Pressed { button, pos, time, clicks, .. } = event {
-                let counted = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
-                memory.last_press = Some((*pos, *time, counted, mods));
-                if *button == PointerButton::Primary {
-                    *clicks = counted;
+            match event {
+                PointerEvent::Pressed { button, pos, time, clicks, .. } => {
+                    let counted = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
+                    memory.last_press = Some((*pos, *time, counted, mods));
+                    memory.held = true;
+                    if *button == PointerButton::Primary {
+                        *clicks = counted;
+                    }
                 }
+                // A press moved past slop is a drag, not a click: the next press starts a new run, as only clicks
+                // counted toward a double click in the old apps.
+                PointerEvent::Moved { at, .. } if memory.held && memory.last_press.is_some_and(|(from, ..)| from.distance(*at) > hit.slop) => {
+                    memory.last_press = None;
+                }
+                PointerEvent::Released { .. } => memory.held = false,
+                _ => {}
             }
         }
         if read.primary_pressed || other_pressed {

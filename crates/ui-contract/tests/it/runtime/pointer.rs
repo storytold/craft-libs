@@ -600,3 +600,28 @@ fn a_middle_click_between_primary_clicks_counts_in_the_click_run() {
     let counts = counts.borrow();
     assert!(counts.len() == 2 && counts[1] == counts[0] + 2, "the middle press counts in the run: {counts:?}");
 }
+
+/// A press that became a drag leaves the click run: a press at the same place right after the drag's release is a
+/// single press, as only clicks counted toward a double click in the old apps.
+#[trial]
+fn a_press_after_a_drag_starts_a_new_click_run() {
+    let at = Pos2::new(50.0, 50.0);
+    let counts: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let sink = counts.clone();
+    let mut show = move |ui: &mut Ui| {
+        if let Some(press) = craft_ui::runtime::pointer::frame(ui.ctx()).press {
+            sink.borrow_mut().push(press.clicks);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    frames.frame(vec![pointer::moved(at + Vec2::new(60.0, 0.0))], &mut show);
+    frames.frame(vec![pointer::moved(at), pointer::release(at)], &mut show);
+    for _ in 0..2 {
+        frames.frame(vec![pointer::press(at)], &mut show);
+        frames.frame(vec![pointer::release(at)], &mut show);
+    }
+    let counts = counts.borrow();
+    assert!(counts.len() == 3 && counts[1] == 1 && counts[2] == 2, "the drag's press is out of the run, the clicks after it count: {counts:?}");
+}
