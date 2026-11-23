@@ -391,3 +391,25 @@ fn columns_wider_than_the_table_keep_their_least_width_scroll_sideways_with_the_
     assert!(moved_cell > 1.0, "the wheel scrolls the columns sideways: {moved_cell}");
     assert!((moved_cell - moved_text).abs() < 0.5, "the header scrolls with the rows: header {moved_cell}, row {moved_text}");
 }
+
+/// Production's header menu lists Reset Columns and no column commands: a table can ask for that menu.
+#[trial]
+fn a_plain_header_menu_lists_no_column_commands() {
+    let mut fixture = Fixture::new(|ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(6.0)).movable(),
+            ColumnSpec::new(DATE, "Date", ColumnWidth::Controls(4.0)).movable(),
+        ];
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns)
+            .plain_header_menu(true)
+            .show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let name = fixture.by_label("Name").expect("the header cell").center();
+    secondary_click(&mut fixture, name);
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").is_some(), "the menu opens with Reset Columns");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_none(), "no column commands");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Resize Column…").is_none(), "no Resize Column");
+}
