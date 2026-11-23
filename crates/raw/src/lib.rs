@@ -560,12 +560,13 @@ pub(crate) struct ThumbnailShell {
 ///   its old Exif size has no such block).
 ///
 /// A multi-page TIFF is not caught (its pages are the IFD chain, not `SubIFDs`), nor a pyramid whose
-/// IFD0 is the full image.
+/// IFD0 is the full image, nor a file that says its bigger image is an ordinary picture
+/// ([`primary_rgb_sub_ifd`]).
 fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
     use craft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, PIXEL_X_DIMENSION, PIXEL_Y_DIMENSION};
     let ifd0 = t.ifds.first()?;
     let (w0, h0) = (ifd0.u32(IMAGE_WIDTH)?, ifd0.u32(IMAGE_LENGTH)?);
-    if w0 == 0 || h0 == 0 {
+    if w0 == 0 || h0 == 0 || primary_rgb_sub_ifd(ifd0) {
         return None;
     }
     let much_bigger = |(w, h): (u32, u32)| u64::from(w) >= 4 * u64::from(w0) && u64::from(h) >= 4 * u64::from(h0);
@@ -601,6 +602,22 @@ fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
     let spare = (len as u64).saturating_sub(covered);
     (spare.saturating_mul(8) >= u64::from(full.0) * u64::from(full.1)).then_some(())?;
     shell(full)
+}
+
+/// IFD0 says it is a reduced-resolution copy (`NewSubfileType` bit 0) and one of its `SubIFDs` says it
+/// is the primary image (`NewSubfileType` 0) and holds ordinary RGB: three samples of 8 or 16 bits
+/// (TIFF 6.0; the TIFF/EP layout of a thumbnail in IFD0). Film scanners write this (Nikon Scan's NEF,
+/// storytold/craft-libs#3134): a rendered picture any TIFF reader opens, not a raw image in a private
+/// block. The tags are what a raw shell lacks: its private block is no SubIFD, or a grey mosaic.
+fn primary_rgb_sub_ifd(ifd0: &craft_tiff::Ifd) -> bool {
+    use craft_tiff::tags::{BITS_PER_SAMPLE, NEW_SUBFILE_TYPE, PHOTOMETRIC, SAMPLES_PER_PIXEL, photometric};
+    ifd0.u32(NEW_SUBFILE_TYPE).is_some_and(|k| k & 1 != 0)
+        && ifd0.sub_ifds.iter().any(|s| {
+            s.u32(NEW_SUBFILE_TYPE) == Some(0)
+                && s.u16(PHOTOMETRIC) == Some(photometric::RGB)
+                && s.u16(SAMPLES_PER_PIXEL) == Some(3)
+                && s.u64s(BITS_PER_SAMPLE).is_some_and(|b| b.len() == 3 && b.iter().all(|&v| v == b[0] && matches!(v, 8 | 16)))
+        })
 }
 
 /// Why [`decode`] gives up on a file [`probe`] called [`RawFormat::OtherTiff`].

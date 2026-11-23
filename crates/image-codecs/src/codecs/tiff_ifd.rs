@@ -417,11 +417,28 @@ pub struct TiffInfo {
 
 impl TiffInfo {
     /// The page opened by default, like Photoshop: the first full-resolution directory of the
-    /// main chain (reduced-resolution copies and masks are skipped), else the first directory.
+    /// main chain (reduced-resolution copies and masks are skipped); else, when IFD0 is a
+    /// reduced-resolution copy, its largest full-resolution SubIFD (the TIFF/EP layout of a
+    /// thumbnail in IFD0 and the primary image in a SubIFD, which Nikon Scan writes for film
+    /// scans); else the first directory.
     pub fn default_page(&self) -> Option<usize> {
+        let full = |p: &TiffPage| p.kind == TiffPageKind::Page && p.width > 0 && p.height > 0;
         self.pages
             .iter()
-            .position(|p| p.parent.is_none() && p.kind == TiffPageKind::Page && p.width > 0 && p.height > 0)
+            .position(|p| p.parent.is_none() && full(p))
+            .or_else(|| {
+                // the first of the largest, so equal sizes keep file order
+                (self.pages.first()?.kind == TiffPageKind::ReducedResolution)
+                    .then(|| {
+                        self.pages
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, p)| p.parent == Some(0) && full(p))
+                            .max_by_key(|(i, p)| (u64::from(p.width) * u64::from(p.height), std::cmp::Reverse(*i)))
+                            .map(|(i, _)| i)
+                    })
+                    .flatten()
+            })
             .or_else(|| (!self.pages.is_empty()).then_some(0))
     }
 
