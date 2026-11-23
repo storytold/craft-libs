@@ -14,6 +14,11 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
 - `composite`: an sRGB preview of chosen plates.
 - `output`: the chosen plates as they print, in an output profile (a printer's RGB, gray or CMYK).
 - `cms`: process color conversion into a CMYK printing condition through craft-cms.
+- `pdfx`: the PDF/X level a file claims. `pdfx_claim` reads it from the XMP `GTS_PDFXVersion`
+  (PDF/X-4 on) and the information dictionary (earlier parts, with the 2001 X-1a split), and
+  says whether the two agree and whether the level is a registered one; `pdfx_output_intents`
+  lists the `GTS_PDFX` output intents' condition identifiers. It reads the claim only and checks
+  no conformance.
 - `marks`: printer's marks for a page with a slug. `Marks::new(trim, bleed, &MarkOptions)` lays
   out crop marks, bleed marks (when the bleed passes the trim), a registration target on each
   side and process color bars along the top, and returns the sheet (the media box that holds
