@@ -13,6 +13,9 @@ Prepress for the Craft apps: separations, ink limits and the ink manager.
   and the pixels and regions over a TAC limit.
 - `composite`: an sRGB preview of chosen plates.
 - `output`: the chosen plates as they print, in an output profile (a printer's RGB, gray or CMYK).
+- `blending`: whether a page blends in ink, read from the file without rendering it: its page
+  group's blending colour space is subtractive, or, when it names none and the caller allows it,
+  the output intent's profile is CMYK. `PageBlending::from` says which supplied the answer.
 - `cms`: process color conversion into a CMYK printing condition through craft-cms.
 - `marks`: printer's marks for a page with a slug. `Marks::new(trim, bleed, &MarkOptions)` lays
   out crop marks, bleed marks (when the bleed passes the trim), a registration target on each
