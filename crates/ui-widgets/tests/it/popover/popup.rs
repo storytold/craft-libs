@@ -154,8 +154,10 @@ fn page(open: Rc<Cell<bool>>, activated: Rc<RefCell<Vec<usize>>>) -> Fixture {
                 Button::new(format!("Page {at}")).show(ui);
             }
             let mut shown = open.get();
-            PopupList::new("Rows", Bind::bound(&mut shown)).opened_by(&opener).show(ui, |ui, _| {
-                let out = List::<usize>::options("Rows").show_items(ui, &Rows, &mut |at, _| ListRow::new(row(*at)).option());
+            // The popup names its list, which takes the opener's list keys (`PopupList::list`).
+            let list = opener.id.with("rows");
+            PopupList::new("Rows", Bind::bound(&mut shown)).opened_by(&opener).list(list).show(ui, |ui, _| {
+                let out = List::<usize>::options("Rows").id(list).show_items(ui, &Rows, &mut |at, _| ListRow::new(row(*at)).option());
                 activated.borrow_mut().extend(out.events.iter().filter_map(|event| match event {
                     CollectionEvent::Activate(at) => Some(*at),
                     _ => None,
