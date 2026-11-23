@@ -3,6 +3,7 @@
 pub(crate) mod adjust_editors;
 pub(crate) mod adjust_tone;
 pub(crate) mod blur_pins;
+pub(crate) mod channel_mixer_monochrome;
 pub(crate) mod channels_delete;
 pub(crate) mod channels_memo;
 pub(crate) mod color_range;
