@@ -39,7 +39,7 @@ impl Writer<'_> {
         // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
         // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
         let fx = fx.clamped();
-        if fx.is_identity() {
+        if !fx.changes_pixels() && fx.transparency == 0 {
             w.empty("a:blip", &[("r:embed", &rid)]);
         } else {
             w.open("a:blip", &[("r:embed", &rid)]);
@@ -64,6 +64,11 @@ impl Writer<'_> {
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
+        if let Some(radius) = fx.soft_edge_emu {
+            w.open("a:effectLst", &[]);
+            w.empty("a:softEdge", &[("rad", &n(i64::from(radius)))]);
+            w.close("a:effectLst");
+        }
         w.close("pic:spPr");
         w.close("pic:pic");
     }
@@ -328,9 +333,9 @@ impl Writer<'_> {
             }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        // Word's effect extent also covers a rotated object's overhang (its rotated bounds), unless
+        // Word's effect extent also covers a rotated object's overhang (`Float::effect_spin_pad`), unless
         // the file it came from kept none.
-        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(iw, ih) };
+        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.effect_spin_pad(iw, ih) };
         let [el, et, er, eb] = float.effect_extent();
         let [el, et, er, eb] = [el + px, et + py, er + px, eb + py].map(emu);
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);

@@ -191,3 +191,60 @@ fn what_a_covered_cell_holds_stays_out_of_the_document() {
     let Block::Table(t) = &*d.body[0] else { panic!() };
     assert_eq!(t.rows[0].cells[0].props.span, 2);
 }
+
+/// The cells of `d`'s first table, to change before saving.
+fn edit_cells(d: &mut Document, f: impl Fn(&mut [Vec<craft_wordmodel::table::Cell>])) {
+    for b in d.body.iter_mut() {
+        if let Block::Table(t) = std::sync::Arc::make_mut(b) {
+            let mut rows: Vec<Vec<_>> = t.rows.iter().map(|r| r.cells.clone()).collect();
+            f(&mut rows);
+            for (r, cells) in t.rows.iter_mut().zip(rows) {
+                r.cells = cells;
+            }
+        }
+    }
+}
+
+fn set_side(c: &mut craft_wordmodel::table::Cell, set: impl Fn(&mut Borders)) {
+    let mut b = c.props.borders.unwrap_or_default();
+    set(&mut b);
+    c.props.borders = Some(b);
+}
+
+const HAIR: Border = Border { style: BorderStyle::Single, width: 0.0, color: Some(Rgb(0, 0, 0)), space: 0.0 };
+const NO_LINE: Border = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+
+/// storytold/wordcraft#5764: a DOCX cell border of width 0 (`w:sz="0"`, or no `w:sz`) is a line
+/// Word draws without giving it room. ODF has no such border, so it is saved at the thinnest line
+/// rather than as `none`.
+#[test]
+fn a_width_0_cell_border_is_saved_as_the_thinnest_line() {
+    let mut d = table_doc(LO_TABLE, ["A1", "B1", "A2", "B2"]);
+    edit_cells(&mut d, |rows| {
+        set_side(&mut rows[0][0], |b| b.bottom = Some(HAIR));
+        set_side(&mut rows[1][0], |b| b.top = Some(NO_LINE));
+    });
+    let out = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
+    let want = format!(r#"fo:border-bottom="{} solid #000000""#, crate::text::writer::pt(Border::THINNEST));
+    assert!(out.contains(&want), "{want} in {out}");
+}
+
+/// An edge two cells share is written once; a line with a width wins over a width-0 one, whichever
+/// cell states it, so the neighbour's line isn't lost.
+#[test]
+fn a_shared_edge_keeps_the_line_with_a_width_over_a_width_0_one() {
+    let red = Border { style: BorderStyle::Single, width: 2.0, color: Some(Rgb(255, 0, 0)), space: 0.0 };
+    let green = Border { style: BorderStyle::Single, width: 1.5, color: Some(Rgb(0, 255, 0)), space: 0.0 };
+    let mut d = table_doc(LO_TABLE, ["A1", "B1", "A2", "B2"]);
+    edit_cells(&mut d, |rows| {
+        set_side(&mut rows[0][0], |b| {
+            b.right = Some(red);
+            b.bottom = Some(HAIR);
+        });
+        set_side(&mut rows[0][1], |b| b.left = Some(HAIR));
+        set_side(&mut rows[1][0], |b| b.top = Some(green));
+    });
+    let out = crate::text::tests::content_of(&crate::text::tests::export_model(&d).unwrap());
+    assert!(out.contains(r#"fo:border-left="2pt solid #ff0000""#), "the left cell's right line: {out}");
+    assert!(out.contains(r#"fo:border-bottom="1.5pt solid #00ff00""#), "the lower cell's top line: {out}");
+}

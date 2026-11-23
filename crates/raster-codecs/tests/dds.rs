@@ -502,6 +502,29 @@ fn mip_import_rejects_truncation_and_bounds_declared_count() {
 }
 
 #[test]
+fn sixteen_bit_mip_chains_keep_16_bits_and_r16g16_is_red_and_green() {
+    // R16G16_UNORM, 2×2 then 1×1: red and green, blue 0, at 16 bits like the top level `decode` opens.
+    let mut b = dx10(2, 2, 35, 3, 0, 1);
+    b[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes());
+    b[28..32].copy_from_slice(&2u32.to_le_bytes());
+    let samples: [u16; 10] = [300, 40000, 1, 2, 3, 4, 5, 65535, 1000, 1002];
+    b.extend(samples.iter().flat_map(|v| v.to_le_bytes()));
+    assert!(!dds::info(&b).unwrap().alpha);
+    let levels = dds::decode_levels(&b, &Limits::default(), &|| false).unwrap();
+    let u16s = |img: &Image| -> Vec<u16> { img.data().as_chunks::<2>().0.iter().map(|c| u16::from_ne_bytes(*c)).collect() };
+    for img in &levels {
+        assert_eq!((img.layout(), img.sample_type()), (ChannelLayout::Rgb, SampleType::U16));
+    }
+    assert_eq!(u16s(&levels[0]), [300, 40000, 0, 1, 2, 0, 3, 4, 0, 5, 65535, 0]);
+    assert_eq!(u16s(&levels[1]), [1000, 1002, 0]);
+    assert_eq!(decode(&b).unwrap().data(), levels[0].data());
+    // The budget counts two bytes a sample: 24 + 6 bytes.
+    let budget = |max_alloc| dds::decode_levels(&b, &Limits { max_alloc, ..Default::default() }, &|| false);
+    assert!(matches!(budget(29), Err(CodecError::LimitExceeded(_))));
+    assert_eq!(budget(30).unwrap().len(), 2);
+}
+
+#[test]
 fn lower_mips_do_not_inherit_top_level_pitch() {
     let mut b = header(2, 2, DDPF_LUMINANCE, &[0; 4], 8, [0xff, 0, 0, 0]);
     set_pitch(&mut b, 4);
