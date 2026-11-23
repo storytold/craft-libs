@@ -40,6 +40,9 @@ const FAR: f32 = 10.0;
 const SECTORS: u32 = 24;
 const PATCH_RINGS: u32 = 5;
 const SECTOR_DEGREES: f32 = 15.0;
+/// How far from where a drag put its marker, in radii, the host's colour may lie and still be the drag's: what an
+/// 8-bit or another model's round trip moves a colour by, two of the hundredths a drag reports its radial in.
+const ECHO_REACH: f32 = 0.02;
 
 craft_ui::words! {
     /// The words of colour discs.
@@ -393,16 +396,18 @@ impl Component for ColorDisc<'_> {
         let grabbed = cx.memory::<Grab>().marker;
         self.grabbed = grabbed;
         let running = cx.gesture().is_some();
-        // A colour of the host's that changed and is not what the drag reported makes of the colour before is an
-        // outside change. The channel the radius does not show comes from the colour before, as the host's own
-        // change keeps it: read back from an 8-bit colour, saturation drifts.
+        // A colour of the host's that changed and does not lie where the drag put the marker is an outside change. Only
+        // the hue and the radial count: the host keeps the channel the radius does not show as it likes (from the
+        // colour before, or from the press against the drift of 8-bit colours) and stores the colour in its own
+        // model. A colour whose 8 bits lose its hue (black on a saturation disc) is the drag's when it is the 8-bit
+        // colour the drag made of the colour before.
         if running && let Some(marker) = grabbed.filter(|marker| *marker < self.markers.len()) {
             let last = cx.memory::<Grab>().last.replace(self.markers[marker]);
             if let Some(moved) = cx.value().filter(|moved| moved.marker == marker)
                 && let Some(last) = last.filter(|last| *last != self.markers[marker])
             {
                 let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &self.values_on(last, moved)).values);
-                if !echo.same_rgb8(self.markers[marker]) {
+                if !lies_at(self.resting(marker), moved) && !echo.same_rgb8(self.markers[marker]) {
                     cx.cancel(CancelReason::HostChanged);
                 }
             }
@@ -562,6 +567,12 @@ fn moved_to(base: DiscMove, center: Pos2, radius: f32, pos: Pos2) -> DiscMove {
         }
     }
     out
+}
+
+/// Whether `at` lies within `ECHO_REACH` of `moved` on the disc.
+fn lies_at(at: DiscMove, moved: &DiscMove) -> bool {
+    let point = |m: &DiscMove| Vec2::angled(m.hue.to_radians()) * m.radial;
+    (point(&at) - point(moved)).length() <= ECHO_REACH
 }
 
 /// Hue, saturation and brightness (0 to 1) of `color`.
