@@ -6,6 +6,7 @@
 
 use crate::{Cursor, Error, MAX_METADATA_BYTES, MAX_PAYLOAD, MAX_STRING, Result};
 
+pub mod metadata;
 pub mod paths;
 pub mod text;
 
