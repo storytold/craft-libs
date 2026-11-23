@@ -3,7 +3,7 @@
 
 use super::kit::{Count, Dismissed, List, ROW_H, RowOut, Words};
 use craft_behavior::{
-    CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, ItemSource, PartKey, ScrollPos, Selection, SelectionModel as _, Sense,
+    CancelReason, CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, ItemSource, PartKey, ScrollPos, Selection, SelectionModel as _, Sense,
     SheetLayout, SpanLayout, keyed,
 };
 use craft_ui::contract::{
@@ -544,4 +544,42 @@ fn enter_on_an_untyped_rename_commits_only_a_proposed_draft() {
     };
     assert_eq!(renamed("proposed"), ["proposed"], "Enter accepts the proposed draft");
     assert!(renamed("b").is_empty(), "a draft equal to the row's text reports no commit");
+}
+
+/// A rename whose item leaves the source (here, the source shrinks past it) ends once with a removed cancel and writes
+/// nothing: the draft is not committed, and the rename does not open again with the old draft.
+#[trial]
+fn a_rename_whose_item_leaves_the_source_ends_with_a_removed_cancel() {
+    let (log, enter, shrunk) = (Log::new(), Cell::new(false), Cell::new(false));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let words = if shrunk.get() { Words::flat(&["a"]) } else { Words::flat(&["a", "b", "c"]) };
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).id_salt("list").renaming("proposed", &enter);
+            log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
+        });
+    };
+    frames.idle(3, &mut show);
+    request_rename(&frames.ctx, log.id(), &1_usize);
+    frames.idle(3, &mut show);
+    let ends = |log: &Log| -> Vec<&'static str> {
+        log.events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Rename(EditEvent::Begin { .. }) => Some("begin"),
+                CollectionEvent::Rename(EditEvent::Commit { .. }) => Some("commit"),
+                CollectionEvent::Rename(EditEvent::Cancel { reason: CancelReason::Removed, .. }) => Some("removed"),
+                CollectionEvent::Rename(EditEvent::Cancel { .. }) => Some("cancel"),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(ends(log), ["begin"], "the rename is open");
+    shrunk.set(true);
+    frames.idle(3, &mut show);
+    assert_eq!(ends(log), ["begin", "removed"], "the rename ended once, with a removed cancel and no commit");
+    enter.set(true);
+    frames.idle(3, &mut show);
+    assert_eq!(ends(log), ["begin", "removed"], "nothing more is written after the item left");
 }
