@@ -13,7 +13,7 @@ use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    LabelScheme, Pad, Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
+    LabelScheme, Pad, Sizing, Bind, BodyCx, CanvasGesture, Entry, FieldLayout, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _,
     SideLabel, TooltipSpec, clicked,
 };
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -327,6 +327,8 @@ struct Pass<'p> {
     shaded: bool,
     /// The heading the rows stand under (`ParamRows::heading`).
     heading: Option<String>,
+    /// The rows being shown share one line ([`Param::beside_previous`]).
+    in_line: bool,
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -335,6 +337,8 @@ struct Line<'r> {
     key: &'r str,
     name: Label,
     enabled: bool,
+    /// The row stands in a shared line: it takes its content's width, not the form's.
+    content: bool,
 }
 
 impl Line<'_> {
@@ -344,6 +348,9 @@ impl Line<'_> {
         // In a document dialog a custom row is a group of controls (page range options, say): its name heads it.
         if matches!(self.param.kind, ParamKind::Custom(_)) && Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline {
             field = field.layout(FieldLayout::Above);
+        }
+        if self.content {
+            field = field.sizing(Sizing::Content);
         }
         if let Some(tip) = self.param.tooltip_text() {
             field = field.tooltip(tip.clone());
@@ -383,6 +390,7 @@ impl<'p> Pass<'p> {
             sliders: SliderFieldLayout::Inline,
             shaded: false,
             heading: None,
+            in_line: false,
         }
     }
 
@@ -440,9 +448,7 @@ impl<'p> Pass<'p> {
     fn rows(&mut self, ui: &mut Ui, params: &[Param]) {
         let is_section = |param: &Param| matches!(param.kind, ParamKind::Section);
         let first = params.iter().position(is_section).unwrap_or(params.len());
-        for param in &params[..first] {
-            self.row(ui, param);
-        }
+        self.run(ui, &params[..first]);
         let mut rest = &params[first..];
         while let Some((head, tail)) = rest.split_first() {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
@@ -453,16 +459,12 @@ impl<'p> Pass<'p> {
                     // A document dialog's option group: a caption over its rows on a card.
                     Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
                         Stack::new().fill_width().surface(SurfaceKind::Raised).pad(Pad::Control).show(ui, |ui, _| {
-                            for param in body {
-                                self.row(ui, param);
-                            }
+                            self.run(ui, body);
                         });
                     });
                 } else {
                     Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
-                        for param in body {
-                            self.row(ui, param);
-                        }
+                        self.run(ui, body);
                     });
                 }
                 self.heading = outer;
@@ -471,11 +473,34 @@ impl<'p> Pass<'p> {
         }
     }
 
+    /// Shows `params` in order: a row marked [`Param::beside_previous`] shares the line of the shown row before it.
+    fn run(&mut self, ui: &mut Ui, params: &[Param]) {
+        let mut rest = params;
+        while let Some((head, tail)) = rest.split_first() {
+            let beside = tail.iter().take_while(|param| param.option().beside()).count();
+            if beside == 0 || !head.visible(&self.work) {
+                self.row(ui, head);
+                rest = tail;
+                continue;
+            }
+            let (line, after) = tail.split_at(beside);
+            self.in_line = true;
+            Row::new().wrap(true).show(ui, |ui, _| {
+                self.row(ui, head);
+                for param in line {
+                    self.row(ui, param);
+                }
+            });
+            self.in_line = false;
+            rest = after;
+        }
+    }
+
     fn row(&mut self, ui: &mut Ui, param: &Param) {
         if !param.visible(&self.work) {
             return;
         }
-        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work) };
+        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work), content: self.in_line };
         let held = self.work.get(line.key).cloned();
         self.show_row(ui, &line);
         param.drop_dependents(held.as_ref(), &mut self.work);
@@ -700,7 +725,7 @@ impl<'p> Pass<'p> {
             .or_else(|| rows.iter().find(is_pattern))
             .map(|row| row.key.clone());
         // With no pattern to offer the row is disabled and writes nothing.
-        let line = Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some() };
+        let line = Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some(), content: line.content };
         line.show(ui, |ui| {
             let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), rows, Bind::kept()).show(ui).picked;
             if let Some(id) = picked.filter(|id| rows.iter().filter(is_pattern).any(|row| row.key == *id)) {

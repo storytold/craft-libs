@@ -479,6 +479,7 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    beside: bool,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
@@ -914,6 +915,14 @@ impl Param {
         self
     }
 
+    /// The row stands on the same line as the row before it (production's Font, Size, Underline and Colour on one
+    /// line), wrapping to the next line when the form is too narrow. The first row of a form or group ignores it.
+    #[must_use]
+    pub fn beside_previous(mut self) -> Self {
+        self.options.get_or_insert_default().beside = true;
+        self
+    }
+
     /// A [`ParamKind::Text`] row without a Browse button edits multi-line text in a field `lines` lines tall: Enter
     /// inserts a line break and the dialog's default button leaves it to the field. `lines` below 2 keeps a
     /// single-line field, whose Enter answers the default button. Other kinds are unchanged.
@@ -1064,6 +1073,11 @@ impl RowOptions {
     /// Whether the eyedropper toggle opens armed.
     pub(crate) fn armed(&self) -> bool {
         self.eyedropper_armed
+    }
+
+    /// Whether the row shares the line of the row before it.
+    pub(crate) fn beside(&self) -> bool {
+        self.beside
     }
 
     /// Whether a custom row spans the width of the form.

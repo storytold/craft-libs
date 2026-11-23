@@ -1,7 +1,7 @@
 //! The parameter model: the spec-string parser, kinds, defaults and fit rules, and the rows' predicates, read-only
 //! text and tooltips.
 
-use craft_ui::contract::{Bind, Role};
+use craft_ui::contract::{Bind, LabelScheme, Role};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
 use craft_ui::patterns::presets::PresetRow;
@@ -364,4 +364,24 @@ fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
     assert_eq!(values.borrow().number("quality"), None, "the box off leaves no value");
     toggle(&mut fixture);
     assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
+}
+
+/// A row marked `beside_previous` stands on the line of the row before it, where an unmarked one stands below.
+#[trial]
+fn a_row_beside_the_previous_one_shares_its_line() {
+    let top = |beside: bool| {
+        let second = Param::number("second", "Second", 1.0, 1.0, 0);
+        let params = vec![Param::number("first", "First", 1.0, 1.0, 0), if beside { second.beside_previous() } else { second }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+        });
+        fixture.settle();
+        let at = |name: &str| fixture.texts().iter().find(|text| text.text.contains(name)).map(|text| text.rect.center().y);
+        at("First").zip(at("Second")).map(|(first, second)| second - first)
+    };
+    let (stacked, beside) = (top(false), top(true));
+    assert!(stacked.is_some_and(|gap| gap > 10.0), "unmarked rows stack: {stacked:?}");
+    assert!(beside.is_some_and(|gap| gap.abs() < 3.0), "a beside row shares the line: {beside:?}");
 }
