@@ -189,6 +189,8 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> K
         Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None },
         Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None },
         Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()) },
+        // egui-winit sends this for the paste chord when the clipboard holds an image and no text.
+        Event::PasteImage(_) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: None },
         Event::PointerButton { pressed: true, .. } => KeyEvent::PointerPress,
         Event::AccessKitActionRequest(request) => KeyEvent::Access(Action(request.clone())),
         _ => KeyEvent::Other,
@@ -547,6 +549,7 @@ pub(crate) fn drop_under_modal(events: &mut Vec<Arrived>, keep: Option<&crate::r
                 | Event::Copy
                 | Event::Cut
                 | Event::Paste(_)
+                | Event::PasteImage(_)
                 | Event::Touch { .. }
         );
         press |= matches!(event, Event::PointerButton { pressed: true, .. });

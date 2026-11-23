@@ -477,6 +477,16 @@ fn a_host_canvas_reads_the_clipboard_of_its_edit_set_with_nothing_focused() {
     assert!(!clipboard_with_canvas(KeyUse::CANVAS, chord).1.is_empty(), "a canvas without the command: the chord fires the app's Paste");
 }
 
+/// With an image and no text on the clipboard, the platform sends an image paste for the chord: it is the paste too.
+#[trial]
+fn an_image_paste_is_the_paste_chord() {
+    let image = Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::WHITE)));
+    let (kept, fired) = clipboard_with_canvas(KeyUse::CANVAS, image.clone());
+    assert!(!kept && !fired.is_empty(), "a canvas without the command: the image paste fires the app's Paste");
+    let typing = KeyUse::CANVAS.with_edits(EditSet::NONE.with(EditCommand::Paste));
+    assert_eq!(clipboard_with_canvas(typing, image), (true, Vec::new()), "the canvas's own paste stays in egui");
+}
+
 /// What an F6 press did under `overrides`: whether it reached egui, and the ids of the commands it fired.
 fn f6_under(overrides: Option<craft_keymap::Overrides>) -> (bool, Vec<String>) {
     let (host, mut show) = host_window();
