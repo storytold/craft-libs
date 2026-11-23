@@ -38,3 +38,15 @@ fn the_well_corner_follows_the_theme_well_shape() {
     assert_eq!(clicks("craft.adwaita"), [Some(Well::Primary), None], "round wells");
     assert_eq!(clicks("craft.pro"), [Some(Well::Primary), Some(Well::Primary)], "square wells");
 }
+
+/// Each well is named by its own label, not the pair's: a screen reader, and a test, tells the two apart.
+#[trial]
+fn each_well_is_named_by_its_own_label() {
+    let mut fixture = Fixture::new(|ui| {
+        let wells = [PairWell::new("Fill", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Stroke", Srgba::rgb(1.0, 1.0, 1.0))];
+        SwatchPair::new("Fill and Stroke", wells, Bind::given(Well::Primary)).popover(false).show(ui);
+    });
+    fixture.room(vec2(200.0, 200.0)).settle();
+    assert!(fixture.by_label("Fill").is_some(), "the primary well is named Fill");
+    assert!(fixture.by_label("Stroke").is_some(), "the secondary well is named Stroke");
+}

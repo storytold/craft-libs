@@ -5,7 +5,7 @@ use craft_theme::{Srgba, WellShape};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{ChoiceWords, Swatch, SwatchMetrics, SwatchStyle};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Outcome, Overlay, OverlayUi,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Name, Outcome, Overlay, OverlayUi,
     Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
@@ -463,8 +463,11 @@ impl Component for SwatchPair<'_> {
                 Some(color) => color.to_hex(),
                 None => cx.words::<ChoiceWords>().swatch_mixed.as_str().to_owned(),
             };
-            // The two wells are a choice of the active colour: radios, the front one checked, with the colour as value.
-            access.node(WELL.at(i as u64), Role::RADIO_BUTTON).value(value);
+            // The two wells are a choice of the active colour: radios, the front one checked, with the colour as value,
+            // each named by its own label ("Fill", "Stroke"), not the pair's.
+            let node = access.node(WELL.at(i as u64), Role::RADIO_BUTTON);
+            node.name = Name::Text(cx.env.resolve(&well.label).as_str().to_owned());
+            node.value(value);
         }
     }
 
