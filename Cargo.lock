@@ -2586,6 +2586,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-material-graph"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "rayon",
+]
+
+[[package]]
 name = "craft-materialx"
 version = "0.1.0"
 dependencies = [
