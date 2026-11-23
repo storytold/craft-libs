@@ -295,9 +295,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.fixed_height = self.fixed_height(props, at);
         self.passes = self.passes_width(props, &env, at);
         self.held = self.held(props, &env);
-        self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(_)));
+        self.across = self.held && matches!(env.column, Some(ColumnSweep::Column(..)));
         self.in_column = label::in_column(ui);
-        self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
+        self.egui_cell = env.egui_cell;
+        self.given.1 |= self.given_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
         let room = self.room.x - 2.0 * self.pads(props, scx.tokens).x;
@@ -320,7 +321,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let plan = self.measure_plan(at, cx.core.id, scrolled_share);
         let (vertical, pad) = (plan.vertical, plan.pad);
         let took = match plan.reused {
-            Some(reused) => self.take_reused(at, plan, reused),
+            Some(reused) => self.take_reused(plan, reused),
             // A share of a scrolling view is laid out as given while the content fits it, so the children that fill
             // share it; taller, the body takes its content height (the children that fill at their least) and the view
             // scrolls.
@@ -329,6 +330,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             // is laid out as given the room, at the footer and header this run measured, so the children that fill share
             // it; its record of the content height lets later runs of the pass and kept transcripts lay it out the same.
             None if self.capped(&self.props, at.env, at.at) => self.measure_capped(comp, at, cx, plan),
+            None if self.footed_layer() => self.measure_footed_layer(comp, at, cx, plan),
             None => self.measure_run(comp, at, cx, plan.key, None),
         };
         self.measured_took(took, pad, vertical)
@@ -416,10 +418,15 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         layout_memory::measured(ctx, sub(id, "first")).map(|found| found.took.y)
     }
 
-    /// A container with no header whose body is an unwrapped row reports that row's line as its first line.
+    /// A container with no header whose body is an unwrapped row reports that row's line as its first line, and one
+    /// labelled above its body the line of its body's first control: it sits on a row's line by that control, as a
+    /// control labelled above does.
     fn first_is_row_line(&self, comp: &C) -> bool {
         let props = comp.props(Internal::new());
-        props.header.is_none() && super::size::unwrapped_row(props)
+        let above = props.label.as_ref().is_some_and(|side| {
+            matches!(side.layout, label::FieldLayout::Above | label::FieldLayout::Caption(_)) && side.kind != label::LabelKind::Hidden
+        });
+        props.header.is_none() && (above || super::size::unwrapped_row(props))
     }
 
     fn member(&self, comp: &C) -> bool {
@@ -977,7 +984,7 @@ struct BodyRun<'r> {
     room_x: f32,
     scroll: Option<Scroll>,
     layout: &'r layout::BodyLayout,
-    line: Option<f32>,
+    line: layout::BodyLine,
     columns: LabelColumns,
     env: &'r Env,
     /// While the body opens or closes, it shows only the part of its last height that the presence reaches.
@@ -1283,6 +1290,7 @@ impl BodyHooks<'_> {
                     plan.regions.body.width()
                 },
                 content_row: false,
+                egui_cell: self.egui_cell,
                 text: resolved.label_value,
                 side,
                 help: props.help.as_ref(),
@@ -1348,7 +1356,7 @@ impl BodyHooks<'_> {
             room_x: plan.room.x,
             scroll: plan.scroll,
             layout: &props.layout,
-            line: plan.line,
+            line: layout::BodyLine { shared: plan.line, least: props.least_height.unwrap_or(0.0) },
             columns: LabelColumns::of(props, !self.wide() && !self.held(props, env)),
             env: body_env,
             reveal_clip,
@@ -1782,10 +1790,10 @@ impl BodyHooks<'_> {
     fn measure_room<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Result<bool, Vec2> {
         let props = &self.props;
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
-        // measured itself. A pane as tall as its content takes its height in the flow.
+        // measured itself. A pane as large as its content takes its extent in the flow.
         let flows = match &props.mount {
             Mount::Inline => true,
-            Mount::Pane(pane) => pane.content_height,
+            Mount::Pane(pane) => pane.content_extent,
             _ => false,
         };
         if !flows && at.ui.is_sizing_pass() {
@@ -1824,15 +1832,17 @@ impl BodyHooks<'_> {
             None => self.mount_room(&props, at.ui, id, at.at, at.scx.tokens),
         };
         self.given = self.given_axes(&props, at.env, at.at);
+        self.given.1 |= self.given_room(&props, at.env, at.at, at.ui.ctx(), id);
         self.fixed_height = self.fixed_height(&props, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
         self.held = self.held(&props, at.env);
-        self.across = self.held && matches!(at.env.column, Some(ColumnSweep::Column(_)));
+        self.across = self.held && matches!(at.env.column, Some(ColumnSweep::Column(..)));
         // A held container across its column measures at the column's width.
-        if let Some(ColumnSweep::Column(width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
+        if let Some(ColumnSweep::Column(_, width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
             self.room.x = width;
         }
         self.in_column = label::in_column(at.ui);
+        self.egui_cell = at.env.egui_cell;
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
@@ -1887,14 +1897,9 @@ impl BodyHooks<'_> {
     }
 
     /// A record that serves: it stands for the run, and a kept one is noted under this run's inputs too.
-    fn take_reused(&mut self, at: &Measuring<'_, '_>, plan: MeasurePlan, (took, found): (Vec2, bool)) -> Vec2 {
-        let (ctx, id) = (&plan.ctx, plan.id);
+    fn take_reused(&mut self, plan: MeasurePlan, (took, found): (Vec2, bool)) -> Vec2 {
         if found {
-            layout_memory::kept_also_under(ctx, id, plan.key);
-        }
-        // A capped body whose content outgrew its room was laid out as given it: the record of its content says so.
-        if self.over_room(&self.props, at.env, at.at, ctx, id) {
-            self.given.1 = true;
+            layout_memory::kept_also_under(&plan.ctx, plan.id, plan.key);
         }
         took
     }
@@ -1909,6 +1914,8 @@ impl BodyHooks<'_> {
     }
 
     /// The measuring run of a capped body: its content height while that fits the room, else laid out as given the room.
+    /// A body already given its room (`given_room`: on its row's settled line, which holds the content the row measured)
+    /// fits it as laid out.
     fn measure_capped<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>, plan: MeasurePlan) -> Vec2 {
         let fits = self.room.y + plan.tolerance;
         let (content, kept) = crate::contract::draft(&plan.ctx, || self.measure_run(comp, at, cx, plan.key.clone(), None), |took| took.y <= fits);
@@ -1919,6 +1926,26 @@ impl BodyHooks<'_> {
             self.measured_footer = self.footer_size.unwrap_or(Vec2::ZERO);
             self.measure_run(comp, at, cx, plan.key, Some(content))
         }
+    }
+
+    /// Whether the container is a layer with a footer: its body is laid out before the footer runs, so a body that
+    /// fills the layer's room takes the footer's height too, unless the run knows the footer from an earlier one.
+    fn footed_layer(&self) -> bool {
+        overlay_of(&self.props).is_some() && self.props.footer.is_some() && self.room.y.is_finite()
+    }
+
+    /// The measuring run of a layer with a footer (photocraft#16326): while what the regions took fits the room it
+    /// stands; taller (a body that fills, such as a scrolling list, took the room the footer needs), the run is taken
+    /// back and the body is laid out again beside the footer this run measured, so the layer keeps to its room with
+    /// the footer as its last row.
+    fn measure_footed_layer<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>, plan: MeasurePlan) -> Vec2 {
+        let fits = self.room.y + plan.tolerance;
+        let (took, kept) = crate::contract::draft(&plan.ctx, || self.measure_run(comp, at, cx, plan.key.clone(), None), |took| took.y <= fits);
+        if kept {
+            return took;
+        }
+        self.measured_footer = self.footer_size.unwrap_or(Vec2::ZERO);
+        self.measure_run(comp, at, cx, plan.key, None)
     }
 
     /// The extent a measuring run reports from what its regions `took`.

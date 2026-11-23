@@ -4,7 +4,7 @@
 //! the rename lifecycle shows.
 
 use super::predicate::{DropTest, RowTest, RowText};
-use super::{ListRow, RowEvent};
+use super::{ListRow, RowEvent, TreeLeaves};
 use crate::contract::{
     Access, ActivateOn, Bind, BindMut, Collection, CollectionProps, CollectionResponse, ColumnLayout, Common, Component, ContainerProps, Cx,
     DropKind, EdgePress, EditResponse, HoverLead, LeadOnOpen, ListDrag, Props as _, Role, RowState, SelectMode, Sizing,
@@ -53,6 +53,9 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     /// A tree: rows are indented by depth and groups open and close.
     #[prop]
     tree: bool,
+    /// How the tree lines up its leaves with its groups: `Compact` unless set.
+    #[prop]
+    tree_leaves: TreeLeaves,
     /// Which rows may be renamed; a rename request on another row does nothing.
     #[prop(func = "Fn(&K) -> bool")]
     can_rename: Option<RowTest<'a, K>>,
@@ -96,6 +99,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> List<'a, K> {
             column_layout: None,
             reveal: None,
             tree: false,
+            tree_leaves: TreeLeaves::Compact,
             can_rename: None,
             rename_draft: None,
             can_drag: None,
@@ -234,7 +238,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
-        let row = row.rows(self.items.row_height).sub_row(state);
+        let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves);
         if self.row_menu { row.row_menu() } else { row }
     }
 

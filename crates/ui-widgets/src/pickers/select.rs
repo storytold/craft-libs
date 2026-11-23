@@ -16,6 +16,7 @@ use crate::contract::{
     MeasureCx, Numeric, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupHandle, PopupKind, Props as _, Role, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _, step_stop, step_stops,
 };
+use crate::layout_components::Row;
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::menu::Menu;
 use crate::primitives::ContentPainterCx;
@@ -302,7 +303,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         access.numeric(numeric.step(1.0));
     }
 
-    /// The listbox: one option row per entry, a spacer for a separator, the picked entry's row selected. Each row the
+    /// The listbox: one option row per entry, a separator row for a separator, the picked entry's row selected. Each row the
     /// keys move the lead to is proposed, and with a preview each row the pointer moves it to; a pick comes back from
     /// the list as Enter or a click on a row and commits.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
@@ -314,11 +315,11 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         let held = self.position(cx.value());
         let (searchable, dress, picture) = (self.searchable, self.decorate.as_ref(), self.picture.as_ref());
         let mut header_menu = self.header_menu.as_mut();
-        let events = ui.show(popup, Overlay::dropdown(), |ui, body| {
-            let list = ui.scope_id().with("options");
+        let list = cx.id.with("options");
+        let events = ui.show(popup, Overlay::dropdown().list(list), |ui, body| {
             let mut query = String::new();
             if searchable || header_menu.is_some() {
-                ui.horizontal(|ui| {
+                let _ = Row::new().show(ui, |ui, _| {
                     if searchable {
                         query = search::show(ui, body, popup, cx, &name, list);
                     }

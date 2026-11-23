@@ -386,3 +386,23 @@ fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
     assert_eq!((faces[0].index, faces[0].family.as_str()), (1, "Example"));
     assert!(crate::sfnt::read_faces_bytes(b"invalid").is_empty());
 }
+
+#[test]
+fn a_background_scan_that_panics_lets_the_next_call_scan_again() {
+    let root = temp("panic");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let lister: Lister = Arc::new(move || {
+        assert!(counted.fetch_add(1, Ordering::Relaxed) > 0, "the first scan fails");
+        Vec::new()
+    });
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
+    // Each call starts a scan only when none is running; the second starts once the failed one has ended.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !cat.is_ready() && std::time::Instant::now() < deadline {
+        cat.scan_in_background();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(cat.is_ready(), "a failed scan must not leave the catalog waiting on it");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}

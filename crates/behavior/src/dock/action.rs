@@ -93,6 +93,11 @@ pub struct Location<P> {
     /// restoring creates a new group, column, dock or window for the panel.
     #[serde(default)]
     pub group: Option<GroupLocation>,
+    /// The panels of its group that closed in the same batch of actions, itself included, in group order; empty
+    /// when it closed alone. Reopening any of them brings back the others that are still hidden and were closed with
+    /// it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub closed_with: Vec<P>,
 }
 
 /// Groups, columns and floating windows are named by a panel they contain.
@@ -340,7 +345,7 @@ pub enum Action<P> {
 impl<P> Location<P> {
     /// A location relative to `anchor` by `placement`, with no recorded sizes or siblings.
     pub fn new(anchor: Option<P>, placement: DockPlacement<P>) -> Self {
-        Self { floating: None, anchor, placement, size: None, stack: None, sibling: Vec::new(), group: None }
+        Self { floating: None, anchor, placement, size: None, stack: None, sibling: Vec::new(), group: None, closed_with: Vec::new() }
     }
 }
 

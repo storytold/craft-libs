@@ -76,9 +76,7 @@ pub(super) fn show_body<T: LayerTree>(
         .columns(columns)
         .selection(Bind::bound(&mut selection))
         .can_rename(|key| matches!(key, LayerRowKey::Layer(id) if tree.info(id).renamable))
-        .accepts(|drag: &ListDrag<LayerRowKey<T::Id>>, _over, insert| {
-            accepts_drop(tree, drag, order, insert, craft_ui::runtime::pointer::frame(&ctx).mods)
-        })
+        .accepts(|drag: &ListDrag<LayerRowKey<T::Id>>, _over, insert| accepts_drop(tree, drag, order, insert, craft_ui::runtime::pointer::mods(&ctx)))
         .drag_payload({
             let document = cx.document;
             move |drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag, document))

@@ -4,6 +4,7 @@ use super::divider::{self, Divider, Drag};
 use super::dock_column::{
     BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
 };
+use super::group::GripMarks;
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
@@ -13,15 +14,15 @@ use crate::contract::{
     WordSetCx as _,
 };
 use crate::menu::GroupItem;
-use crate::primitives::{IconSpec, PaintShape, TextRun};
+use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
-use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind, UiTokens};
+use crate::style::{ComponentStyle, Corners, GlyphRole, StyleColor, StyleCx, SurfaceKind};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
 use craft_theme::ControlSize;
-use egui::{CornerRadius, Id, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -54,12 +55,6 @@ pub struct IconicSizes {
 /// The column width, in rail widths, from which the cells show their panels' names: 96 points at the Compact size.
 const LABELS_IN_RAIL_WIDTHS: f32 = 2.4;
 
-/// The length of a group's grip bar, in icon cell heights: half a cell, 15 points at the Compact size (18 at
-/// Comfortable). That is several times the bar's thickness, so it reads as a handle and not as a dot, and in a
-/// rail-wide column (40 points at Compact) it leaves more than a quarter of the width free on each side, so it does
-/// not read as a rule between the groups.
-const GRIP_BAR_IN_CELLS: f32 = 0.5;
-
 impl IconicSizes {
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
@@ -67,7 +62,7 @@ impl IconicSizes {
         IconicSizes {
             column: DockSizes::style(cx),
             cell: size.rail.button,
-            grip: size.hit.target,
+            grip: super::group::grip_strip(cx.tokens),
             separator: cx.tokens.space.gap.tight,
             labels: size.rail.width * LABELS_IN_RAIL_WIDTHS,
         }
@@ -149,22 +144,15 @@ pub struct IconicColumnStyle {
     name_open: StyleColor,
     /// The room between an icon and its name.
     name_gap: f32,
-    /// The ink of a group's grip bar.
-    grip: StyleColor,
-    /// The ink of a group's grip bar while the pointer is over it or drags it.
-    grip_active: StyleColor,
-    /// The grip bar's length across the group and its thickness.
-    grip_length: f32,
-    grip_thickness: f32,
-    /// The grip bar's corners: the theme's pill rounding.
-    grip_radius: CornerRadius,
+    /// The marks of a group's grip.
+    grip: GripMarks,
 }
 
 /// A column collapsed to icons: the column bar over icon groups, one cell per panel. A panel without an icon shows the
 /// first letter of its name in a box. A column widened past `IconicSizes::labels` shows each panel's name beside its
 /// icon, cut with an ellipsis to the cell; a click or drag on the name acts as one on the icon. A click or Enter on an icon
 /// opens the flyout of its panel beside the column, switches it to that panel or closes it; one flyout is open at a
-/// time. A drag of an icon starts a move of its panel, a drag of the grip bar on top of a group a move of the group, a
+/// time. A drag of an icon starts a move of its panel, a drag of the grip on top of a group a move of the group, a
 /// drag of the bar beside its button a move of the column; each starts through the drag session, and a press outside
 /// the flyout closes it. Escape and a press
 /// outside close the flyout; with `auto_collapse` the focus leaving it does too.
@@ -423,11 +411,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             name: cx.color(colors.text.normal),
             name_open: cx.color(colors.accent.text),
             name_gap: cx.tokens.space.gap.item,
-            grip: cx.color(colors.text.muted),
-            grip_active: cx.color(colors.text.normal),
-            grip_length: cx.tokens.size.rail.button * GRIP_BAR_IN_CELLS,
-            grip_thickness: cx.tokens.stroke.thick,
-            grip_radius: UiTokens::corner(cx.tokens.shape.radius.pill),
+            // The references' grip: a row of upright ticks, in the theme's grip ink.
+            grip: GripMarks::style(cx),
         }
     }
 
@@ -577,11 +562,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             ui.face(CELL.at(at as u64), cell);
         }
         let style = &cx.style;
-        for (group, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
-            let part = cx.part(GRIP.at(*group as u64));
-            let ink = if part.hovered || part.pressed() { style.grip_active } else { style.grip };
-            let bar = Rect::from_center_size(strip.center(), Vec2::new(style.grip_length.min(strip.width()), style.grip_thickness));
-            ui.draw().fill(&PaintShape::Rect(bar, style.grip_radius), ink);
+        for (_, strip) in self.laid.as_ref().map_or(&[][..], |plan| &plan.grips[..]) {
+            style.grip.paint_in(ui, *strip);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
         // edges are the window's.

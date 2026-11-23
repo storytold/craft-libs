@@ -188,6 +188,42 @@ fn opening_a_closed_floating_panel_restores_its_window_place() {
     assert_eq!(group_members(workspace.layout(), 11), [11, 12, 50]);
 }
 
+/// The active tab of the dock or floating group holding `panel`.
+fn front(layout: &Layout<u32>, panel: u32) -> u32 {
+    *layout.group(&layout.place(&panel).unwrap()).unwrap().active_panel().unwrap()
+}
+
+/// Tabs closed in one batch (one at a time, as a preset does, or by Close Tab Group) come back together with whichever
+/// of them reopens, in their order and with that one in front, after a save and a load; a tab closed in a batch of its
+/// own stays closed.
+#[test]
+fn tabs_closed_together_reopen_together_and_a_tab_closed_alone_stays_closed() {
+    let batches = [vec![Action::close(2), Action::close(3)], vec![Action::close(3), Action::close(2)], vec![Action::close_group(2)]];
+    for batch in batches {
+        for open in [2, 3] {
+            let mut workspace = Workspace::new(docked());
+            workspace.apply_all(batch.clone(), false, allow).unwrap();
+            let saved = serde_json::to_string(&workspace).unwrap();
+            let mut workspace: Workspace<u32> = serde_json::from_str(&saved).unwrap();
+            workspace.apply(Action::open(open, None), false, allow).unwrap();
+            let layout = workspace.layout();
+            assert_eq!(group_members(layout, open), [2, 3], "{batch:?}, then {open} opens");
+            assert_eq!(front(layout, open), open, "{batch:?}: the reopened tab is in front");
+            assert_eq!(end_dock(layout)[0].groups[0].panels, [2, 3], "{batch:?}: back above 4 in its column");
+            assert!(workspace.hidden().is_empty());
+        }
+    }
+
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::close(3), false, allow).unwrap();
+    workspace.apply(Action::close(2), false, allow).unwrap();
+    workspace.apply(Action::open(2, None), false, allow).unwrap();
+    assert_eq!(group_members(workspace.layout(), 2), [2]);
+    assert!(workspace.layout().place(&3).is_none(), "3 closed on its own stays closed");
+    workspace.apply(Action::open(3, None), false, allow).unwrap();
+    assert_eq!(group_members(workspace.layout(), 2), [2, 3], "it reopens beside 2");
+}
+
 /// A panel that floats keeps its docked place until it docks or closes; floating again from the float keeps the first.
 #[test]
 fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {

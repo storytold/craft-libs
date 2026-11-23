@@ -53,6 +53,9 @@ pub struct FocusPolicy {
     /// In a `KeepAnchor` layer, Enter on a text opener activates the layer's list; off, the opener keeps Enter and
     /// Tab alone takes the list's lead (a completion list that leaves Enter to the field's own commit).
     pub list_enter: bool,
+    /// In a `KeepAnchor` layer, the collection the opener hands its list keys to (Up, Down, Page keys, Home and End,
+    /// Enter and Tab as the layer's rules say). Without one the opener keeps its keys.
+    pub list: Option<Id>,
 }
 
 impl FocusPolicy {
@@ -66,6 +69,7 @@ impl FocusPolicy {
         cancel: CancelRule::Ignore,
         pages: false,
         list_enter: true,
+        list: None,
     };
     /// A pane: an F6 stop.
     pub const PANE: FocusPolicy = FocusPolicy { kind: ScopeKind::Pane, ..FocusPolicy::NONE };
@@ -79,6 +83,7 @@ impl FocusPolicy {
         cancel: CancelRule::Close,
         pages: false,
         list_enter: true,
+        list: None,
     };
     /// A popup: focus moves in, Escape closes and focus returns to the opener.
     pub const POPUP: FocusPolicy = FocusPolicy {
@@ -90,6 +95,7 @@ impl FocusPolicy {
         cancel: CancelRule::Close,
         pages: false,
         list_enter: true,
+        list: None,
     };
     /// A menu: like a popup.
     pub const MENU: FocusPolicy = FocusPolicy { kind: ScopeKind::Menu, ..FocusPolicy::POPUP };
@@ -124,6 +130,12 @@ impl FocusPolicy {
     /// Whether Enter on a text opener activates the layer's list.
     pub const fn list_enter(mut self, on: bool) -> Self {
         self.list_enter = on;
+        self
+    }
+
+    /// The collection in the layer that takes the opener's list keys.
+    pub const fn list(mut self, list: Id) -> Self {
+        self.list = Some(list);
         self
     }
 

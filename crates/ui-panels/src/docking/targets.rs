@@ -80,6 +80,10 @@ pub struct DockSizes {
     pub rail_first: f32,
     /// The width each further column of a tool rail adds: a rail button and the tight gap before it.
     pub rail_step: f32,
+    /// The height of a grip strip, the band with the dock's grip marks: above each icon group of a collapsed column,
+    /// and under the column bar of a tool rail (a group whose panel has a [`DockGrid`](super::DockGrid)) that the host
+    /// shows itself: the least hit size, or the theme's grip marks with `space.gap.tight` above and below them.
+    pub grip: f32,
 }
 
 impl DockSizes {
@@ -124,6 +128,7 @@ impl DockSizes {
             column: size.dock.column,
             rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
             rail_step: size.rail.button + cx.tokens.space.gap.tight,
+            grip: super::group::grip_strip(cx.tokens),
         }
     }
 
@@ -596,6 +601,10 @@ pub struct GroupDrag<P> {
     pub strip: Option<Vec2>,
     /// The panel the unit shows, for the drag's preview.
     pub active: PanelKey,
+    /// Where the press that started the drag was, for a drag that moves a floating window it is the whole of (a
+    /// floating tool rail by its grip): the window moves by the pointer's travel from here, so the point grabbed stays
+    /// under the pointer. `None` elsewhere.
+    pub press: Option<egui::Pos2>,
     /// The arrangement the drag started on, when it started in a dock area.
     pub(crate) started: Option<super::drop::Arrangement>,
 }

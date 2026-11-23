@@ -60,6 +60,33 @@ pub(crate) fn layer_at(ctx: &Context, point: Pos2) -> Option<LayerId> {
     crate::runtime::sampler::layer_at(ctx, point).or_else(|| ctx.layer_id_at(point))
 }
 
+/// Whether some point of a screen segment belongs to this layer. A layer can begin or end only
+/// at an area edge, so testing one point between consecutive edges also finds subpixel gaps.
+pub(crate) fn layer_between(ctx: &Context, layer: LayerId, from: Pos2, to: Pos2) -> bool {
+    let visible = |point| layer_at(ctx, point) == Some(layer);
+    if visible(from) || visible(to) {
+        return true;
+    }
+    if from == to {
+        return false;
+    }
+    let mut cuts = vec![0.0, 1.0];
+    let delta = to - from;
+    let path = Rect::from_two_pos(from, to);
+    let hole = crate::runtime::sampler::hole_of_pass(ctx);
+    let bounds = interactive_layers(ctx, None).into_iter().map(|(_, rect)| rect).chain(hole.iter().flat_map(|hole| hole.bounds()));
+    for bounds in bounds.filter(|rect| rect.intersects(path)) {
+        let edges =
+            [(bounds.min.x, from.x, delta.x), (bounds.max.x, from.x, delta.x), (bounds.min.y, from.y, delta.y), (bounds.max.y, from.y, delta.y)];
+        cuts.extend(
+            edges.into_iter().filter(|(_, _, step)| *step != 0.0).map(|(edge, start, step)| (edge - start) / step).filter(|t| 0.0 < *t && *t < 1.0),
+        );
+    }
+    cuts.sort_unstable_by(f32::total_cmp);
+    cuts.dedup();
+    cuts.iter().copied().any(|t| visible(from.lerp(to, t))) || cuts.windows(2).any(|ends| visible(from.lerp(to, f32::midpoint(ends[0], ends[1]))))
+}
+
 /// The topmost layer under a screen position, as if `skipped` were not shown: the layer below a window that moves
 /// with the pointer. A modal layer still holds the input, as in `layer_at`.
 pub(crate) fn layer_at_without(ctx: &Context, point: Pos2, skipped: LayerId) -> Option<LayerId> {

@@ -3,10 +3,10 @@
 
 use crate::layout::{flow_region, take_cell, take_in_flow};
 use crate::runtime::egui::alloc;
-use crate::runtime::env::Env;
+use crate::runtime::env::{Env, Shrink};
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
-use crate::runtime::lazy::{self, Decision, Key, Place};
+use crate::runtime::lazy::{self, Call, Decision, Key, Place};
 #[cfg(feature = "testing")]
 use crate::runtime::measure::{MemoRun, count_memo_run};
 use crate::runtime::memory::sub;
@@ -71,14 +71,25 @@ impl Lazy {
     /// replays the kept run of a memoized view keyed `key`, or takes the extent of a child out of view.
     pub(super) fn run_keyed<R>(self, ui: &mut Ui, name: &'static str, key: Key, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Shown<R> {
         let ctx = ui.ctx().clone();
-        let view = Env::of(ui).view().lazy_view();
+        let env = Env::of(ui);
+        let view = env.view().lazy_view();
         let id = match view {
             Some(view) => sub(view.owner, ("lazy", self.key)),
             None => sub(ui.scope_id(), ("lazy", self.key)),
         };
-        let available = flow_region(ui);
-        let available = if matches!(key, Key::Memo(_)) { on_row_line(ui, id, available) } else { available };
         let rtl = ui.layout().prefer_right_to_left();
+        let memo = matches!(key, Key::Memo(_));
+        // A memoized view is one unit of the shrinking row around it. A row that narrows it gives it at most the width
+        // its measuring run settled on, the room its place then holds, so a new width runs it. A view the row does not
+        // narrow shows as in no room, in the row's flow region: its room does not follow its own content's width, so a
+        // new content runs it once and the discard pass its new size asks for replays that run.
+        let shrink = env.shrink.filter(|_| memo);
+        let cap = match shrink {
+            Some(Shrink::Apply(row)) => crate::layout::shrink_cap(&ctx, row, id).filter(|cap| cap.narrowed),
+            _ => None,
+        };
+        let available = cap.map_or_else(|| flow_region(ui), |cap| at_most(flow_region(ui), rtl, cap.width));
+        let available = if memo { on_row_line(ui, id, available) } else { available };
         let sizing = ui.is_sizing_pass();
         // The child is not part of its body's transcript: in a real run it counts there by its extent, whether it
         // runs or not, so what scrolls into reach does not change the body's content.
@@ -115,13 +126,14 @@ impl Lazy {
             pixels_per_point: ctx.pixels_per_point(),
             atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
             opacity: ui.opacity(),
-            env: Env::of(ui).key,
+            env: env.key,
+            flow: env.flow(),
         };
-        let memo = matches!(key, Key::Memo(_));
         if real && memo {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
-        let settled = if memo { lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key) } else { None };
+        let call = if real { Call::Real(place) } else { Call::Measuring { room: sizing.then_some(available), flow: place.flow } };
+        let settled = if memo { lazy::settled(&ctx, owner, id, call, view, key) } else { None };
         // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
         let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
         if let Some((size, ran_at, shift)) = settled
@@ -138,8 +150,11 @@ impl Lazy {
                 }
                 kept
             } else {
+                // The kept real run's output, laid out in that run's room and flow: a caller that measures sizes from
+                // the extent this call takes, never from rects in it.
                 lazy::kept_output(&ctx, id)
             };
+            report_unit(&ctx, shrink, id, rect.size());
             #[cfg(feature = "testing")]
             count_memo_run(&ctx, name, id, MemoRun::Replayed, real);
             return Shown::Replayed(kept, shift);
@@ -157,8 +172,10 @@ impl Lazy {
             open_record(&ctx, audited.is_some());
         }
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(available).layout(layout).scope_id(id));
-        // Its extent in the body around it comes from its content's measure, so a change inside reaches that body.
-        let out = layout_memory::boundary(&ctx, false, || add(&mut child, &mut run));
+        // Its extent in the body around it comes from its content's measure, so a change inside reaches that body. The
+        // content runs in the env of `ui`, as the direct children of the body around it: a plain `Lazy` keeps their
+        // line, cells and shrink step, and a memoized view starts its own room on top of it.
+        let out = layout_memory::boundary(&ctx, false, || Env::run_in(&mut child, env, |child| add(child, &mut run)));
         let rect = child.min_rect();
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
@@ -177,13 +194,14 @@ impl Lazy {
         }
         if memo {
             place_view(ui, rect);
+            report_unit(&ctx, shrink, id, rect.size());
         } else {
             crate::layout::close_flow_start_in(ui);
             alloc::advance_past(ui, rect);
         }
         if view.is_some() || memo {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
-            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available }, registered);
+            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available, flow: place.flow }, registered);
         }
         if let Some(view) = view
             && real
@@ -264,6 +282,23 @@ fn open_record(ctx: &egui::Context, audited: bool) {
 /// Where content of `size` starts in `region`: at its start edge, the right one in a right-to-left layout.
 fn at_start(region: Rect, rtl: bool, size: Vec2) -> Pos2 {
     Pos2::new(if rtl { region.max.x - size.x } else { region.min.x }, region.min.y)
+}
+
+/// `region` cut to `width` at most, from its start edge.
+fn at_most(region: Rect, rtl: bool, width: f32) -> Rect {
+    let size = Vec2::new(width.min(region.width()), region.height());
+    Rect::from_min_size(at_start(region, rtl, size), size)
+}
+
+/// Reports the extent `size` of the memoized view `id` to the shrinking row around it: what it takes, in the row's
+/// counting sweep, and its least, in the sweep that asks the row's body units for theirs. Like a body unit, it narrows
+/// from what it takes in no room down to what it takes with every leaf at its least.
+fn report_unit(ctx: &egui::Context, shrink: Option<Shrink>, id: egui::Id, size: Vec2) {
+    match shrink {
+        Some(Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
+        Some(Shrink::Least(row)) => crate::layout::report_least(ctx, row, id, size.x),
+        _ => {}
+    }
 }
 
 /// Places a memoized view's extent `rect` in flow in `ui`, as its run and its replay both do, and returns `rect`: in the

@@ -441,8 +441,11 @@ impl Component for PreviewPane<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let width = cx.picture_width(cx.tokens.size.plot.width, f32::INFINITY);
-        Vec2::new(width, self.aspect.filter(|aspect| *aspect > 0.0).map_or(0.0, |aspect| width / aspect))
+        let least = cx.tokens.size.plot.width;
+        match self.aspect.filter(|aspect| *aspect > 0.0) {
+            Some(aspect) => cx.picture_size(least, f32::INFINITY, |width| width / aspect),
+            None => Vec2::new(cx.picture_width(least, f32::INFINITY), 0.0),
+        }
     }
 
     fn sense(&self) -> Sense {

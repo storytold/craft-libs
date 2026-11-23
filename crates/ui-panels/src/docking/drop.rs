@@ -54,6 +54,11 @@ pub trait DockDrag<P> {
     fn strip(&self) -> Option<Vec2> {
         None
     }
+    /// Where the press that started the drag was, when a drop that moves a floating window keeps the grabbed point
+    /// under the pointer; `None` puts the window's title row under it.
+    fn press(&self) -> Option<Pos2> {
+        None
+    }
 }
 
 impl<P: Clone + Eq + Hash> DockDrag<P> for PanelDrag {
@@ -77,6 +82,10 @@ impl<P: Clone> DockDrag<P> for GroupDrag<P> {
 
     fn strip(&self) -> Option<Vec2> {
         self.strip
+    }
+
+    fn press(&self) -> Option<Pos2> {
+        self.press
     }
 }
 
@@ -243,10 +252,7 @@ pub fn float_drop<P: Clone + PartialEq>(
     rtl: bool,
 ) -> DockDropped<P> {
     let size = space.size_of(unit, source).min(space.area.size());
-    let under = |size: Vec2| {
-        let min = (at - Vec2::new(size.x * 0.5, space.chrome * 0.5)).min(space.area.max - size).max(space.area.min);
-        Rect::from_min_size(min, size)
-    };
+    let under = |size: Vec2| under_pointer(space, at, size);
     let (rect, edge, mark) = match strip.filter(|_| !matches!(unit, DragUnit::Window(_))) {
         Some(strip) => {
             let shown = under((strip + Vec2::new(0.0, space.chrome)).min(space.area.size()));
@@ -263,6 +269,12 @@ pub fn float_drop<P: Clone + PartialEq>(
         _ => to_target(unit, Target::float_with_edge(rect, edge)),
     };
     DockDropped { action, mark: DropMark::region(mark) }
+}
+
+/// A floating window of `size` under the pointer at `at`: its title row's middle at the pointer, inside the float area.
+fn under_pointer<P>(space: &FloatSpace<P>, at: Pos2, size: Vec2) -> Rect {
+    let min = (at - Vec2::new(size.x * 0.5, space.chrome * 0.5)).min(space.area.max - size).max(space.area.min);
+    Rect::from_min_size(min, size)
 }
 
 /// The action a release of `drag` at `at` makes in the dock `dock`, by the spots of the previous pass; `None` where
@@ -326,8 +338,8 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         }
         let unit = drag.unit(self.layout)?;
         let window = matches!(unit, DragUnit::Window(_));
-        if pointer::frame(self.ctx).mods.cmd {
-            return if window { None } else { self.float(&unit, at, drag.source(), drag.strip()) };
+        if pointer::mods(self.ctx).cmd {
+            return if window { None } else { self.float(&unit, at, drag.source(), drag.strip(), drag.press()) };
         }
         if window && !self.title_bar_docks {
             return None;
@@ -350,7 +362,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         if window || !self.float_on_empty {
             return None;
         }
-        self.float(&unit, at, drag.source(), drag.strip())
+        self.float(&unit, at, drag.source(), drag.strip(), drag.press())
     }
 
     /// The rect the panels of `unit` take in `after`, the layout once dropped on `spot`; `None` without `placing` or
@@ -367,8 +379,28 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
 
     /// The unit floated under `at`, when it may float and the model takes it; `source` is its size where the drag
     /// started, `strip` the size of the icons it started on ([`float_drop`]).
-    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>, strip: Option<Vec2>) -> Option<DockDropped<P>> {
-        let floated = float_drop(unit, self.space?, at, source, strip, self.rtl);
+    ///
+    /// A unit that is the whole of a floating window already (a floating tool rail dragged by its grip,
+    /// photocraft#16426) moves that window under `at`: it is floating, so floating it again would be refused.
+    fn float(&self, unit: &DragUnit<P>, at: Pos2, source: Option<Vec2>, strip: Option<Vec2>, press: Option<Pos2>) -> Option<DockDropped<P>> {
+        let space = self.space?;
+        if let Some(window) = self.layout.floating.iter().find(|window| window.contains(unit.lead()))
+            && window.panels().all(|panel| moving_panels(self.layout, unit).contains(panel))
+        {
+            // The point grabbed stays under the pointer, inside the float area; without the press, the title row.
+            let rect = match press {
+                Some(press) => {
+                    let moved = window.rect.translate(at - press);
+                    Rect::from_min_size(moved.min.min(space.area.max - moved.size()).max(space.area.min), moved.size())
+                }
+                None => under_pointer(space, at, space.size_of(unit, source).min(space.area.size())),
+            };
+            let moved = Action::move_floating(unit.lead().clone(), rect);
+            // A move keeps the arrangement (`takes` asks for a change of it): the model need only take the action.
+            let taken = self.layout.clone().apply_with_permissions(moved.clone(), self.permissions).is_ok();
+            return ((self.permissions)(unit.lead()).movable && taken).then_some(DockDropped { action: moved, mark: DropMark::region(rect) });
+        }
+        let floated = float_drop(unit, space, at, source, strip, self.rtl);
         ((self.permissions)(unit.lead()).floatable && takes(self.layout, &floated.action, self.permissions)).then_some(floated)
     }
 }
@@ -448,7 +480,7 @@ where
 {
     let preview = name.map_or(DragPreview::None, DragPreview::Named);
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source, strip: None, started }, preview);
+    cx.start_drag(GroupDrag { unit, active, source, strip: None, press: None, started }, preview);
 }
 
 /// Starts the drag of `unit` out of a collapsed column, from its icons of size `strip`, whose shown panel is
@@ -460,7 +492,7 @@ where
     C: Component,
 {
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::Named(label));
+    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), press: None, started }, DragPreview::Named(label));
 }
 
 /// Ends a running tab or group drag that started on `shown`'s dock under another generation: another arrangement

@@ -260,7 +260,7 @@ impl CropTool {
         // Straighten surface is there for a press on the pass after the key came down; a line in progress keeps the
         // state it started with, so letting go of the key mid-line does not turn it into a frame drag.
         if !self.dragging {
-            self.session.straighten_mut().set_held(pointer::frame(ui.ctx()).mods.cmd);
+            self.session.straighten_mut().set_held(pointer::mods(ui.ctx()).cmd);
         }
         let (ratio, default, straighten, dismissed) =
             (settings.ratio_value(document, &units), self.session.is_default(), self.session.straighten().on(), self.session.dismissed());

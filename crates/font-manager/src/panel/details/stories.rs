@@ -62,7 +62,7 @@ fn list(ui: &mut Ui, count: usize) -> StoryOutput {
             let line = &lines[*key];
             let face = match &line.face {
                 Some((owner, face)) => SampleFace::Face { catalog: &catalog, owner: *owner, face },
-                None => SampleFace::Interface,
+                None => SampleFace::Missing,
             };
             StyleRow::new(line, "Hack", PANGRAM, POINTS, face, &words)
         })
@@ -88,5 +88,5 @@ fn style_list_many(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn style_row_installing(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let line = StyleLine { label: "Bold".to_owned(), face: None, action: Action::Running(Some(0.4)) };
     let words = Env::of(ui).words::<DetailsWords>();
-    show_as_only_item(ui, StyleRow::new(&line, "Hack", PANGRAM, POINTS, SampleFace::Interface, &words)).into()
+    show_as_only_item(ui, StyleRow::new(&line, "Hack", PANGRAM, POINTS, SampleFace::Missing, &words)).into()
 }

@@ -26,7 +26,7 @@ const AGES: [(&str, Duration); 4] = [
 fn answers() -> [FooterButton; 3] {
     [
         FooterButton::new("Save", DialogRole::Accept).letter('S'),
-        FooterButton::new("Don't Save", DialogRole::Other).letter('D'),
+        FooterButton::new("Don't Save", DialogRole::Alternate).letter('D'),
         FooterButton::new("Cancel", DialogRole::Cancel).letter('C'),
     ]
 }

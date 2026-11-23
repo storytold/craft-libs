@@ -168,7 +168,8 @@ pub(crate) fn anchor_floor(overlay: &Overlay) -> f32 {
 }
 
 /// The least width of the layer the content runs in ([`anchor_floor`]), which a layer's container gives its regions:
-/// a content-sized collection in the layer is at least this wide, so its rows fill the layer. 0 outside a layer.
+/// a content-sized collection in the layer is at least this wide, so its rows fill the layer. 0 outside a layer, and
+/// inside a row or grid, whose children share the layer's width.
 #[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 pub(crate) struct LayerFloor(pub(crate) f32);
 

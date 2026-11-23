@@ -429,3 +429,131 @@ fn icon_groups_take_the_drops_of_an_expanded_columns_groups() {
     assert_eq!(found[3], Some(DockSpot::group(3, DockSide::Center)), "a one-icon group keeps its middle for the join");
     assert_eq!(found[4], Some(DockSpot::group(3, DockSide::Bottom)), "the foot under the icons stacks below the last group");
 }
+
+/// The ticks of a grip strip in `shapes`: the quads of the one mesh that lies inside `strip`, and their colour.
+pub(crate) fn grip_ticks(shapes: &[egui::Shape], strip: Rect) -> Option<(Vec<Rect>, egui::Color32)> {
+    shapes.iter().find_map(|shape| {
+        let egui::Shape::Mesh(mesh) = shape else { return None };
+        let quads: Vec<Rect> = mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
+        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(0.01).contains_rect(*quad));
+        inside.then(|| (quads, mesh.vertices.first().map_or(egui::Color32::TRANSPARENT, |v| v.color)))
+    })
+}
+
+/// Checks the marks of a grip strip: the theme's `shape.grip` (photocraft#16426), so many marks of its width and height
+/// (a tick's length, a dot's side) its gap apart, centred on the strip and in the theme's `grip` ink, which stands
+/// apart from the panel `panel` (photocraft#16406).
+pub(crate) fn assert_grip_ticks(
+    ticks: &[Rect],
+    ink: egui::Color32,
+    strip: Rect,
+    panel: craft_theme::Rgba,
+    grip: craft_theme::Rgba,
+    shape: craft_theme::GripShape,
+    what: &str,
+) {
+    let height = if shape.mark == craft_theme::GripMark::Ticks { shape.length } else { shape.width };
+    assert_eq!(ticks.len(), usize::from(shape.count), "{what}: {} marks: {ticks:?}", shape.count);
+    for tick in ticks {
+        assert!(
+            (tick.width() - shape.width).abs() < 0.01 && (tick.height() - height).abs() < 0.01,
+            "{what}: a mark is {} x {height} points: {tick:?}",
+            shape.width
+        );
+    }
+    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < 0.01), "{what}: {} points apart: {ticks:?}", shape.gap);
+    let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+    assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
+    assert!(
+        (run.center().y - (strip.center().y + 1.0)).abs() <= 0.5,
+        "{what}: a point below the strip's middle, keeping 2 points more above: {run:?} in {strip:?}"
+    );
+    let [r, g, b, a] = grip.0;
+    assert_eq!(ink, egui::Color32::from_rgba_unmultiplied(r, g, b, a), "{what}: the ticks are in the theme's line.grip {grip:?}");
+    assert_ne!(grip.0[..3], panel.0[..3], "{what}: the grip ink {grip:?} stands apart from the panel {panel:?}");
+}
+
+/// The grip above each icon group is the references' row of upright ticks, not a line: ten separate marks in the
+/// theme's grip ink, the same under the pointer.
+#[trial]
+fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
+    let mut fixture =
+        Fixture::hosted(|ui| {
+            let mut column = Column::new(vec![Group::new(vec![1, 2], 0), Group::new(vec![3], 0)]);
+            column.iconic = true;
+            let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+            let output = IconicColumn::new("Panels", global("iconic column", "ticks"), &column, Bind::kept(), &named)
+                .within(screen())
+                .show_flyouts_at(ui, place, |_, _, _, _| None);
+            Some(output.into())
+        });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let (panel, grip, shape, tight) = StyleCx::with_root(fixture.ctx(), |cx| {
+        (cx.tokens.color.surface.panel, cx.tokens.color.line.grip, cx.tokens.shape.grip, cx.tokens.space.gap.tight)
+    });
+    assert_eq!(shape, craft_theme::GripShape::DEFAULT, "the fixture's theme sets no grip shape");
+    for group in [0, 1] {
+        let strip = fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip");
+        let shapes = fixture.frame_shapes();
+        let (ticks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its ticks");
+        assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
+        let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
+        assert!(
+            run.top() - strip.top() >= tight + 2.0 - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
+            "group {group}: the marks keep space.gap.tight ({tight}) and 2 points more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
+        );
+        fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
+        let hovered = fixture.frame_shapes();
+        let (_, hover_ink) = grip_ticks(&hovered, strip).expect("the grip paints its ticks under the pointer");
+        assert_eq!(hover_ink, ink, "group {group}: the ticks keep their ink under the pointer");
+    }
+}
+
+/// A theme's `shape.grip` reaches the grips (photocraft#16426): six dots, two points on a side and three apart, in the
+/// theme's grip ink.
+#[trial]
+fn a_themes_grip_shape_reaches_the_grips() {
+    let shape = craft_theme::GripShape { mark: craft_theme::GripMark::Dots, count: 6, length: 5.0, width: 2.0, gap: 3.0 };
+    let mut def = craft_theme::builtins().first().expect("a built-in theme").clone();
+    let mut seed = def.shape.unwrap_or(craft_theme::ShapeSeed {
+        radius: None,
+        radius_offset: None,
+        button_radius: None,
+        edge: None,
+        knob: None,
+        wells: None,
+        grip: None,
+    });
+    seed.grip = Some(craft_theme::GripSeed {
+        mark: Some(shape.mark),
+        count: Some(shape.count),
+        length: None,
+        width: Some(shape.width),
+        gap: Some(shape.gap),
+    });
+    def.shape = Some(seed);
+    let def = std::sync::Arc::new(def);
+    let mut fixture = Fixture::hosted(move |ui| {
+        let mut out = None;
+        crate::layout_components::Stack::new().theme(crate::runtime::env::ThemeScope::new().theme(std::sync::Arc::clone(&def))).show(ui, |ui, _| {
+            let mut column = Column::new(vec![Group::new(vec![1, 2], 0)]);
+            column.iconic = true;
+            let place = Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y));
+            let output = IconicColumn::new("Panels", global("iconic column", "themed grip"), &column, Bind::kept(), &named)
+                .within(screen())
+                .show_flyouts_at(ui, place, |_, _, _, _| None);
+            out = Some(output.into());
+        });
+        out
+    });
+    fixture.room(SCREEN).settle();
+    let id = fixture.root_id().expect("the column shows");
+    let strip = fixture.part_rect(id, GRIP.at(0)).expect("the group has its grip");
+    let shapes = fixture.frame_shapes();
+    let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
+    assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
+    assert!(marks.iter().all(|m| (m.width() - 2.0).abs() < 0.01 && (m.height() - 2.0).abs() < 0.01), "two-point dots: {marks:?}");
+    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 3.0).abs() < 0.01), "three points apart: {marks:?}");
+    assert_ne!(ink, egui::Color32::TRANSPARENT);
+}

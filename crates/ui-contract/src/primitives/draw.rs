@@ -495,6 +495,29 @@ impl<'a> Draw<'a> {
         self.painter.extend(super::rule::Rule::shapes(look, from, to, self.painter.pixels_per_point()));
     }
 
+    /// Paints the line `look` from `from` to `to` as dots `gap` points apart (`Rule::dotted`): a dotted line.
+    pub fn dotted_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32) {
+        self.painter.extend(super::rule::Rule::dotted(look, from, to, gap, self.painter.pixels_per_point()));
+    }
+
+    /// Paints the line `look` from `from` to `to` as ticks `across` points long, `gap` points apart (`Rule::ticks`):
+    /// a grip's row of marks.
+    pub fn ticked_rule_with(&self, look: &crate::style::RuleLook, from: Pos2, to: Pos2, gap: f32, across: f32) {
+        self.painter.extend(super::rule::Rule::ticks(look, from, to, gap, across, self.painter.pixels_per_point()));
+    }
+
+    /// Paints `count` upright ticks of `look` centred on `centre`, side by side on a level line, `gap` points apart and
+    /// `across` points tall (`Rule::ticks`): a grip's row of marks, `count` of them at every display scale.
+    pub fn grip_ticks(&self, look: &crate::style::RuleLook, centre: Pos2, count: u16, gap: f32, across: f32) {
+        let ppp = self.painter.pixels_per_point().max(f32::EPSILON);
+        let (side, gap_px) = (look.width.pixels(ppp), (gap * ppp).round().max(1.0));
+        // The run `Rule::ticks` fits exactly `count` marks into: their sides, the gaps between them and the one free
+        // pixel it keeps.
+        let length = f32::from(count) * side + f32::from(count.saturating_sub(1)) * gap_px + 1.0;
+        let half = egui::vec2(length / ppp / 2.0, 0.0);
+        self.ticked_rule_with(look, centre - half, centre + half, gap, across);
+    }
+
     /// Paints a surface of `kind` (tracks, plot wells).
     pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners) {
         let style = surface_style(self.env.tokens, kind);
@@ -529,6 +552,21 @@ impl<'a> Draw<'a> {
     pub fn data_fill(&self, shape: &PaintShape, color: DataColor) {
         let fill = self.data_color(color);
         self.paint(shape, Some(fill), None);
+    }
+
+    /// Fills the polygons `pieces`, which tile one area edge to edge, as one mesh with no feathered edges, in a colour
+    /// from data as `data_fill` paints it. Feathered pieces would each fade out along the edges they share, so a
+    /// translucent fill would show a seam of what lies beneath along every shared edge; unfeathered triangles meet
+    /// with no gap and no overlap.
+    pub fn data_fill_tiled(&self, pieces: &[Vec<Pos2>], color: DataColor) {
+        let fill = self.data_color(color);
+        let mut mesh = egui::Mesh::default();
+        for piece in pieces {
+            mesh.append(super::kit::fill_polygon(piece, fill, 0.0));
+        }
+        if !mesh.is_empty() {
+            self.painter.add(Shape::mesh(mesh));
+        }
     }
 
     /// Paints the part `uv` of `texture` (from `TextureCache` or a `TextureStore`) into `rect`, untinted. The picture

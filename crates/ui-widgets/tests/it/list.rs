@@ -260,6 +260,60 @@ fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
     assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
 }
 
+/// A leaf that measures far taller than any row, to show the height a row gives its hosted fields.
+#[derive(craft_ui::contract::Component)]
+struct Tall {
+    #[common]
+    common: craft_ui::contract::Common,
+}
+
+impl craft_ui::contract::Component for Tall {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::IMAGE;
+    const SHOWS_LABEL: bool = false;
+    type Style = super::label::kit::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: TallStyleKey) -> super::label::kit::PlainStyle {
+        super::label::kit::PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(40.0, 1000.0)
+    }
+
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::empty()
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// A hosted field, required or optional, takes its own height up to its row's, as a cell field does: in a row taller
+/// than the base row (a large thumbnail) it gets the whole row, centred, not one base row.
+#[trial]
+fn hosted_fields_take_their_own_height_up_to_the_row() {
+    use craft_ui::list::ThumbSize;
+    let tall = |key: usize| {
+        ListRow::new(NAMES[key])
+            .thumb(ThumbSize::Large, |_, _| {})
+            .trailing_field(Tall { common: craft_ui::contract::Common::new() }.label(format!("Field {key}")), |_| {})
+            .optional_field(Tall { common: craft_ui::contract::Common::new() }.label(format!("Optional {key}")), |_| {})
+    };
+    let (fixture, _) = rows_rig(Vec2::new(800.0, 600.0), tall);
+    let (plain, _) = rows_rig(Vec2::new(800.0, 600.0), |key| ListRow::new(NAMES[key]));
+    let base = plain.by_label(NAMES[0]).expect("the plain row").rect.height();
+    let row = fixture.by_label(NAMES[0]).expect("the tall row").rect;
+    assert!(row.height() > base, "the thumbnail row is taller than the base row: {row:?}, base {base}");
+    for name in ["Field 0", "Optional 0"] {
+        let field = fixture.by_label(name).unwrap_or_else(|| panic!("{name} shows")).rect;
+        assert!((field.height() - row.height()).abs() < 0.5, "{name} takes the row's height: {field:?} in {row:?}");
+        assert!(field.top() >= row.top() - 0.5 && field.bottom() <= row.bottom() + 0.5, "{name} stays in its row");
+        assert!((field.center().y - row.center().y).abs() < 0.5, "{name} is centred on its row");
+    }
+}
+
 /// A list sized to its content makes room for each row's optional item and shows its label whole, whether the label
 /// is shorter or longer than its least width.
 #[trial]
@@ -1201,4 +1255,38 @@ fn auto_rows_are_measured_once_per_pass_and_a_restated_row_takes_its_new_size_in
     assert!(renamed.1 > below, "the renaming row takes its taller size in the frame the rename starts");
     fixture.idle(2);
     assert_eq!(renamed, (list(&fixture), row(&fixture, 1).top()), "the frame the rename starts shows the list and the rows settled");
+}
+
+/// PageDown on a segmented control in a row of a capped list, whose own roving group leaves the key untaken, pages the
+/// list's rows: the list is the scroll owner of its rows, and the move comes to it.
+#[trial]
+fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
+    use craft_ui::choice::Segmented;
+    use craft_ui::contract::{Bind, Entry, Sizing};
+    use craft_ui::testing::focus::AccessActionKind;
+    use egui::{Key, Modifiers};
+    const ROWS: usize = 40;
+    let list_id = Id::NULL.with("paged-rows");
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..ROWS).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let sizes: Vec<Vec<Entry<u8>>> =
+            keys.iter().map(|key| vec![Entry::new(1, format!("Small {key}")), Entry::new(2, format!("Large {key}"))]).collect();
+        let list = List::new("Layers").id(list_id).sizing(Sizing::Content).max_rows(6);
+        list.show_items(ui, &source, &mut |key, _| {
+            let size = Segmented::new(format!("Size {key}"), Bind::given(1_u8), &sizes[*key]);
+            ListRow::new(format!("Layer {key}")).trailing_field(size, |_| {})
+        });
+    });
+    fixture.room(Vec2::new(400.0, 400.0)).settle();
+    let in_view = |fixture: &Fixture, name: &str| {
+        let list = fixture.node_of(list_id).expect("the list's node").rect;
+        fixture.by_label(name).is_some_and(|row| list.expand(0.5).contains_rect(row.rect))
+    };
+    assert!(in_view(&fixture, "Layer 0") && !in_view(&fixture, "Layer 8"), "the list starts at its first rows");
+    let segment = fixture.by_label("Small 0").expect("the first row's segment");
+    fixture.access(AccessActionKind::Focus, &segment).settle();
+    assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), segment.node, "the first row's segment took the focus");
+    fixture.key(Key::PageDown, Modifiers::NONE).settle();
+    assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
 }

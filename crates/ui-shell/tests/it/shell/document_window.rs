@@ -183,3 +183,28 @@ fn a_document_window_body_fills_the_windows_room_and_does_not_scroll() {
         assert!(height < MAX_EXTENT / 2.0, "{mount}: the body's height is the window's room, got {height}");
     }
 }
+
+/// A document window at the palette level stands above the app's main window while the app is active (photocraft
+/// floating documents, as the references keep them); without a level it is an ordinary window.
+#[trial]
+fn a_document_window_at_the_palette_level_stands_above_the_main_window() {
+    let level = |palette: bool| {
+        let windows = Windows::new();
+        windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+        let mut seen = None;
+        for _ in 0..3 {
+            let out = windows.frame(vec![], vec![], |ui| {
+                windows.child_info(ViewportInfo { focused: Some(false), ..ViewportInfo::default() });
+                let window = DocumentWindow::new("Landscape.psd");
+                let window = if palette { window.level(craft_ui::runtime::windows::WindowLevel::Palette) } else { window };
+                window.show(ui, |_, _| {});
+            });
+            if let Some((_, builder)) = out.builders.iter().find(|(_, builder)| builder.title.as_deref() == Some("Landscape.psd")) {
+                seen = builder.window_level.or(seen);
+            }
+        }
+        seen
+    };
+    assert_eq!(level(true), Some(egui::WindowLevel::AlwaysOnTop), "a palette-level document window stands above the main window");
+    assert_ne!(level(false), Some(egui::WindowLevel::AlwaysOnTop), "an ordinary document window does not");
+}

@@ -5,6 +5,7 @@ use crate::{SelectionChange, SuiteClient};
 use craft_theme::{ThemeId, builtins};
 use craft_ui::choice::RadioGroup;
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
+use craft_ui::form::FieldGroup;
 use craft_ui::layout_components::Row;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -18,13 +19,18 @@ fn favorites() -> Vec<ThemeId> {
 fn appearance_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let client = SuiteClient::memory().view();
     let favorites = favorites();
-    AppearancePage::new(&client, data.bind("draft", SelectionChange::default())).favorites(&favorites).show(ui).into()
+    let mut draft = data.bind("draft", SelectionChange::default());
+    FieldGroup::new("Appearance").show(ui, |ui, _| AppearancePage::new(&client, draft.reborrowed()).favorites(&favorites).show(ui)).output.into()
 }
 
 #[story(AppearancePage<'static>, covers = [], drive = Drive::Never)]
 fn appearance_page_without_text_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let client = SuiteClient::memory().view();
-    AppearancePage::new(&client, data.bind("plain", SelectionChange::default())).text_size(false).system_dark(true).show(ui).into()
+    let mut draft = data.bind("plain", SelectionChange::default());
+    FieldGroup::new("Appearance")
+        .show(ui, |ui, _| AppearancePage::new(&client, draft.reborrowed()).text_size(false).system_dark(true).show(ui))
+        .output
+        .into()
 }
 
 /// One theme's chips in a group: plain, chosen, favourite, and both. A click on a star toggles the chip's favourite.

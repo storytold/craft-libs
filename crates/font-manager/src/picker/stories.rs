@@ -1,10 +1,13 @@
 //! Stories of `FontPicker`: the closed field, the list open with recents and a typed query, and the list open with
-//! the class column and a filter on. They draw from the two faces egui ships in an in-memory catalog.
+//! the class column and a filter on. They draw from the two faces egui ships in an in-memory catalog, with Inter where a
+//! story needs a family of two styles and Noto Sans Arabic, from the craft fonts set when the build has
+//! `CRAFT_FONTS_DIR`, for the Arabic sample.
 
 use std::sync::{Arc, OnceLock};
 
 use craft_behavior::Mixed;
 use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::fonts::EmbeddedFace;
 use craft_ui::runtime::env::{Label, Message};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -35,19 +38,32 @@ fn demo(family: &str, settings: FontPickerSettings, filters: FontFilters) -> Dem
     Demo { family: family.to_owned(), settings, filters }
 }
 
-/// The story catalog with Inter Regular and SemiBold, a family of two styles.
+/// The craft fonts set's Noto Sans Arabic; empty when the build has no `CRAFT_FONTS_DIR`.
+static STORY_FONTS: &[EmbeddedFace] = include!(concat!(env!("OUT_DIR"), "/story_fonts.rs"));
+
+/// A new story catalog with Inter Regular and SemiBold, a family of two styles, and the faces `more`.
+fn with_inter(more: &[&'static [u8]]) -> Arc<Catalog> {
+    let catalog = story_catalog();
+    let inter = [
+        include_bytes!("../../../ui-contract/fonts/inter/Inter-Regular.ttf").as_slice(),
+        include_bytes!("../../../ui-contract/fonts/inter/Inter-SemiBold.ttf").as_slice(),
+    ];
+    for bytes in inter.iter().chain(more) {
+        let _ = catalog.add_bytes(bytes.to_vec(), Source::Bundled, &Limits::default());
+    }
+    catalog
+}
+
+/// The story catalog with Inter Regular and SemiBold.
 fn styled_catalog() -> Arc<Catalog> {
     static CATALOG: OnceLock<Arc<Catalog>> = OnceLock::new();
-    Arc::clone(CATALOG.get_or_init(|| {
-        let catalog = story_catalog();
-        for bytes in [
-            include_bytes!("../../../ui-contract/fonts/inter/Inter-Regular.ttf").as_slice(),
-            include_bytes!("../../../ui-contract/fonts/inter/Inter-SemiBold.ttf").as_slice(),
-        ] {
-            let _ = catalog.add_bytes(bytes.to_vec(), Source::Bundled, &Limits::default());
-        }
-        catalog
-    }))
+    Arc::clone(CATALOG.get_or_init(|| with_inter(&[])))
+}
+
+/// The styled catalog with Noto Sans Arabic, when the build has the craft fonts set.
+fn arabic_catalog() -> Arc<Catalog> {
+    static CATALOG: OnceLock<Arc<Catalog>> = OnceLock::new();
+    Arc::clone(CATALOG.get_or_init(|| with_inter(&STORY_FONTS.iter().map(|face| face.bytes).collect::<Vec<_>>())))
 }
 
 /// What a story adds to the picker besides its state.
@@ -123,10 +139,12 @@ fn open_list(fixture: &mut Fixture) {
     fixture.settle();
 }
 
+/// The library list: Hack starred and recent, so the recent group and its rule head the list; Inter has two styles
+/// to open and its name lines up with the one-style families'.
 #[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_open_with_filters(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = FontPickerSettings { favorites: vec!["Hack".to_owned()], ..FontPickerSettings::default() };
-    show_picker(ui, data, demo("Hack", settings, FontFilters { favorites: true, ..FontFilters::default() }))
+    let settings = FontPickerSettings { favorites: vec!["Hack".to_owned()], recent: vec!["Hack".to_owned()], ..FontPickerSettings::default() };
+    show_with(ui, data, demo("Inter", settings, FontFilters::default()), &styled_catalog(), &Extras::default())
 }
 
 /// Opens the list and expands Inter through its row's expand request: focus stays in the field, whose caret keeps
@@ -164,12 +182,17 @@ fn font_picker_banner_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
 }
 
-/// Large samples: a face with Arabic letters gets the second sample after the Latin one.
+/// An Arabic sample text, at Large: every row's sample shows it in the family's face, Noto Sans Arabic (when the build
+/// has the craft fonts set) draws it, and a face without Arabic letters shows its name.
 #[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
-fn font_picker_arabic_sample(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+fn font_picker_arabic_sample_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = FontPickerSettings { preview: crate::picker::FontPreviewSize::Large, ..FontPickerSettings::default() };
-    show_with(ui, data, demo("Inter", settings, FontFilters::default()), &styled_catalog(), &Extras::default())
+    let extras = Extras { banner: Some(ARABIC_SAMPLE_TEXT), ..Extras::default() };
+    show_with(ui, data, demo("Inter", settings, FontFilters::default()), &arabic_catalog(), &extras)
 }
+
+/// "أبجد هوز", the first words of the abjad order.
+const ARABIC_SAMPLE_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
 
 /// Settings whose recents are the families `recent`.
 fn recents(recent: &[&str]) -> FontPickerSettings {
