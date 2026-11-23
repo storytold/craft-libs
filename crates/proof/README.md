@@ -76,23 +76,34 @@ data folder runs neither set.
 
 ## Language packs
 
-**API (fixed by `plan/pack-contract.md`, plus the additions marked ＋):**
+**API (disk packs plus runtime memory-pack support; additions marked ＋):**
 
 ```rust
 // craft_proof::packs
-pub fn set_packs_dir(dir: Option<PathBuf>);            // <font-store folder>/language-packs; bumps dictionary_generation()
+pub fn set_packs_dir(dir: Option<PathBuf>);            // disk packs folder; None disables disk packs, not registered memory packs
 pub fn reload();                                       // ＋ same folder, after a pack is installed or removed
 pub fn packs_dir() -> Option<PathBuf>;                 // ＋
-pub fn installed() -> Vec<InstalledPack>;              // InstalledPack { locale, name, licence, path }, by locale
-pub fn licence_texts() -> Vec<(String, String)>;       // (title, text): embedded English notices, then each pack's LICENCES/*
+pub fn installed() -> Vec<InstalledPack>;              // InstalledPack { locale, name, licence, path: Option<PathBuf> }, by locale
+pub fn licence_texts() -> Vec<(String, String)>;       // (title, text): embedded English notices, then each installed pack's licence texts
 pub fn load_errors() -> Vec<(String, String)>;         // ＋ (locale or folder, reason): packs skipped, pattern files that failed
-pub fn embedded_locales() -> &'static [&'static str];  // ＋ locales with embedded upstream data, not our supplements ("en-us", "en-gb", "en-ca", "en-au", "pl", "pt", "it", "de" by default; the four English ones with CRAFT_PROOF_EMBED=en)
+pub fn embedded_locales() -> &'static [&'static str];  // embedded data locales, including explicit CRAFT_PROOF_EMBED_PACKS selections
+
+pub struct PackFiles {
+    pub pack_toml: Vec<u8>,
+    pub spelling_aff: Option<Vec<u8>>,
+    pub spelling_dic: Option<Vec<u8>>,
+    pub hyphenation: Option<Vec<u8>>,
+    pub hyphenation_nonstandard: Option<Vec<u8>>,
+    pub licences: Vec<(String, Vec<u8>)>,
+}
+pub fn add_from_memory(files: PackFiles) -> Result<InstalledPack, String>;
+pub fn remove_from_memory(locale: &str) -> bool;
 
 // craft_proof (crate root)
 pub enum ProofLang { …, Pack(PackLocale), Other }      // ＋ Pack: a language without a dedicated built-in variant (nl, fr, sr-Latn…)
 pub struct PackLocale;                                 // ＋ Copy; PackLocale::new(tag) -> Option<Self>, .as_str() "nl-nl", .primary() "nl", Display
 impl ProofLang { pub fn pack_locale(self) -> Option<PackLocale>; } // ＋
-pub fn pack_dictionary_file(lang: ProofLang) -> Option<PathBuf>;  // ＋ the .dic a Pack language reads now; None = unchecked
+pub fn pack_dictionary_file(lang: ProofLang) -> Option<PathBuf>;  // actual file; None also covers an available memory dictionary
 ```
 
 `ProofLang::from_tag` now gives `Pack(locale)` for every valid language tag without a dedicated built-in variant
@@ -127,6 +138,72 @@ craft_proof::packs::reload();                       // after a pack is installed
 Both `set_packs_dir` and `reload` reload every dictionary without a restart and bump
 `dictionary_generation()`, so cached checks are dropped.
 
+### Prepared files in memory
+
+`add_from_memory` accepts the already prepared file bytes, including on WASM; archive verification,
+download and unpacking remain the caller's responsibility. The manifest uses the same lowercase
+locale, licence and safe relative-path rules as a disk pack. Spelling requires both `.aff` and
+`.dic` or neither. The existing encoding decoder, language spelling parsers and pattern parsers
+validate the supplied files before a registration becomes visible. `hyphenation` holds the standard
+UTF-8 patterns; optional `hyphenation_nonstandard` holds UTF-8 Libhyphen/Huhyphn replacement records
+(the prepared `hyphenation.nonstandard` file). Runtime registration accepts valid nonstandard
+records without a standard file; when supplied, standard patterns are an optional fallback.
+Display-letter insertions use the existing `hyphen_opportunities_in` / `hyphenate_word_in` APIs;
+point-only clients omit a break that needs an insertion rather than loading a separate standard file.
+
+```rust
+use craft_proof::packs::{PackFiles, add_from_memory, remove_from_memory};
+
+// Tiny original example, not a downloaded language dictionary.
+let pack = PackFiles {
+    pack_toml: b"locale = \"qaa\"\nlicence = \"MIT\"\n".to_vec(),
+    spelling_aff: Some(b"SET UTF-8\n".to_vec()),
+    spelling_dic: Some(b"1\nxepnuq\n".to_vec()),
+    hyphenation: Some(b".xep1nuq.".to_vec()),
+    hyphenation_nonstandard: None,
+    licences: vec![("COPYING".into(), b"Original example data.".to_vec())],
+};
+let installed = add_from_memory(pack).expect("valid prepared files");
+assert!(installed.path.is_none());
+assert!(remove_from_memory("qaa"));
+```
+
+A registration atomically replaces the memory entry for its locale. A memory entry overrides the
+same-locale disk pack **as a whole**: spelling or patterns missing from it are not borrowed from that
+disk pack. Other locale/script fallback rules stay the same. For each candidate locale, the
+spelling order is dictionaries folder, installed pack, then system dictionaries. English's own
+user-folder candidates precede its embedded SCOWL dictionary; a memory pack does not bypass SCOWL.
+Without SCOWL, Australian English tries every en-AU candidate, including system dictionaries,
+before trying en-GB as a fallback. A British memory pack therefore does not outrank an Australian
+system dictionary. Memory and disk packs share the installed tier for the same candidate locale.
+
+`remove_from_memory` removes only the registered entry and reveals any same-locale disk pack.
+Unknown removal returns `false`. `reload` and `set_packs_dir`, including `set_packs_dir(None)`, retain
+registered memory bytes while reloading the lookup caches. Successful add, replacement and removal
+change `dictionary_generation()`; a failed registration/replacement or unknown removal does not.
+Failure leaves the previous pack and its proofing behavior intact and returns its reason in `Err`.
+
+Memory and disk packs both appear in `installed()` and `licence_texts()`. `InstalledPack::path` is now
+`Option<PathBuf>`: `Some(real_folder)` for disk, `None` for memory. Callers using the old `PathBuf`
+field or complete struct literals must handle that option. Complete `PackFiles` literals must
+also supply `hyphenation_nonstandard` (`None` for existing standard-only packs); callers using
+`..PackFiles::default()` retain the absent-file default. Path-returning dictionary status APIs
+return `None` for memory and embedded packs even when `has_dictionary` is true. English callers matching `EnglishSource`
+must also handle `MemoryPack(String)`, whose string is the validated locale, rather than a synthetic
+filesystem path.
+
+Registered memory inputs share a hard **256 MiB raw-input budget**. It counts the manifest,
+`.aff`, `.dic`, both standard and nonstandard patterns, licence payload bytes and licence filename
+bytes across all entries;
+replacement and removal release the old entry's accounting. Retained vectors and names do not keep
+spare input capacity outside that accounting. Existing per-file limits still apply: manifest 1 MiB,
+licence 4 MiB per file, and dictionary/pattern 64 MiB per file, with at most 64 licence files per pack.
+The disk scan and memory registrations have independent limits of 1,024 packs each, not a combined
+1,024-pack cap. Registering a memory pack does not evict unrelated disk packs. The same-locale
+whole-pack override described above still applies. The 256 MiB raw-input cap covers memory entries,
+separately from the existing estimated compiled-dictionary and pattern-cache budgets, their
+eviction/pinning rules and in-flight values. It is not a total process-memory/RSS bound.
+
 Layout of `<packs folder>/<locale>/` (the archive root), the folder named by the lowercase BCP 47
 locale (`nl`, `pt-br`, `sr-latn`):
 
@@ -135,6 +212,7 @@ locale (`nl`, `pt-br`, `sr-latn`):
 | `pack.toml` | required: `locale` (= the folder name) and `licence` (SPDX) strings; `name` (endonym), `class`, `sources` optional; other keys are ignored |
 | `spelling.aff`, `spelling.dic` | Hunspell pair, any encoding the reader supports (optional) |
 | `hyphenation.pat` | UTF-8 TeX or plain Liang patterns (optional) |
+| `hyphenation.nonstandard` | optional UTF-8 Libhyphen/Huhyphn replacement records; runtime use does not require a standard file |
 | `LICENCES/<file>` | upstream licence texts, shown by `licence_texts()` |
 
 **Lookup order.** Spelling: the dictionaries folder, then an installed pack, then the system's
@@ -159,8 +237,7 @@ English spelling uses the first of these that is there; `english_source(lang)` s
 1. **Dictionaries folder:** the English's own `.aff`/`.dic` pair (`en_US`, `en_GB` or `en_CA`)
    that the user put in the folder set with `set_dictionaries_folder`, in `WORDCRAFT_DICTIONARIES`
    or in WordCraft's own `dictionaries` folder. The user's choice comes first.
-2. **Installed English pack:** reserved for Language packs (craft-libs#485, CP4.2).
-3. **Embedded SCOWL:** the English's own SCOWL `rel-2026.02.25` Hunspell dictionary from
+2. **Embedded SCOWL:** the English's own SCOWL `rel-2026.02.25` Hunspell dictionary from
    `CRAFT_I18N_DIR` (`language-data/en-us`, `en-gb` (British `-ise`), `en-au` or `en-ca`,
    `spelling.aff` + `spelling.dic`), read by the affix engine. Australian English reads en-AU
    (Australian words such as `billabong`, with en-GB's spelling policy); en-NZ, en-IE and the
@@ -176,15 +253,17 @@ English spelling uses the first of these that is there; `english_source(lang)` s
    between two lower-case words of three letters or more, after every one-word candidate, and no
    name or abbreviation (`Col`) for a lower-case word. With SCOWL embedded the system locations aren't
    searched.
-4. **System Hunspell:** the English's own pair in the system locations. Never another English's:
-   an `en_US` dictionary would mark British spellings, so en-GB and en-CA without their own use
-   the built-in list, which has both spellings. Each name is looked for in every folder before the
-   next name; a file that can't be read is skipped for the next name or folder, up to the first eight
-   candidates (the rest aren't tried); one file is read once for every English that uses it. `COMPOUNDRULE`, `ONLYINCOMPOUND` and `COMPOUNDMIN`
-   (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`…) is ignored for
-   English rather than refused; `OCONV` writes suggestions as the dictionary says (`don’t`), as for
-   every language. None on the web.
-5. **Built-in list:** `data/en-words.dic`, the whole Moby word list (about 165,000 words, 344 KB
+3. **Without embedded SCOWL:** each candidate locale is searched in dictionaries-folder,
+   installed-pack (same-locale memory before disk), then system order. Australian English first
+   tries all en-AU candidates, including its system dictionaries, and only then tries en-GB as a
+   fallback. Thus an Australian system dictionary can precede a British memory pack. American,
+   British and Canadian English do not borrow another English's dictionary: without their own
+   they use the built-in list, which has both spellings. Files that cannot be read are skipped,
+   up to the first eight candidates; a shared file is read only once. `COMPOUNDRULE`, `ONLYINCOMPOUND`
+   and `COMPOUNDMIN` (ordinals such as `21st`) are read; flag-based compounding (`COMPOUNDFLAG`.) is
+   ignored for English rather than refused, and `OCONV` writes suggestions as the dictionary says
+   (`don't`), as for every language. System locations are not searched on the web.
+4. **Built-in list:** `data/en-words.dic`, the whole Moby word list (about 165,000 words, 344 KB
    compressed, words only) built into the crate, with `data/en-extra.txt` (WordCraft's supplement
    of modern words, a copy of craft-i18n's) and the inflection rules. A word it doesn't know is
    misspelled. Suggestions are the words one edit away (swap, missing, added or changed letter),
@@ -226,6 +305,26 @@ cargo check -p craft-proof --target wasm32-unknown-unknown
 ```
 
 CI: `.github/workflows/proof.yml`.
+
+The focused regression `memory_packs_tests::memory_pack_hungarian_replacements_survive_removal`
+uses one original whole-word replacement record. Its four tiny embedding inputs are committed under `tests/data/memory-packs/hu`. It checks a standard-only memory pack, then
+nonstandard-only and both-files registrations producing `asszony` → `asz-szony`. Its embedded fallback
+check needs a build that actually embeds the original tiny Hungarian fixture:
+
+```sh
+CRAFT_PROOF_PACKS_DIR="$(pwd)/crates/proof/tests/data/memory-packs" CRAFT_PROOF_EMBED_PACKS=hu cargo test --locked -p craft-proof --lib --jobs 2 memory_packs_tests::memory_pack_hungarian_replacements_survive_removal -- --test-threads=1 --exact --show-output
+```
+
+The embedding build requires both pattern files: the pack root contains `hu/pack.toml` with
+`class = "Embeddable"`, `hyphenation.pat`, `hyphenation.nonstandard` and `LICENCES/COPYING`.
+This build-only pairing restriction does not apply to runtime registration. Without embedded `hu`, the case still checks
+memory registration and replacement, and reports that the embedded fallback was not checked.
+No-data or English-only results therefore do not establish the Hungarian embedded path.
+The dedicated Hungarian run must show both `memory_pack_hu: memory_verified` and
+`memory_pack_hu: embedded_fallback_verified`; `memory_pack_hu: embedded_fallback_absent`
+does not qualify that run.
+Nonstandard record decoding and selected-pack embedding retain the provider contract from
+[craft-libs#598](https://github.com/storytold/craft-libs/pull/598).
 
 ## Credits
 

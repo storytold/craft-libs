@@ -32,6 +32,40 @@ use crate::patterns::Patterns;
 pub(crate) const SPELLING: &str = "spelling";
 /// A pack's hyphenation patterns.
 const HYPHENATION: &str = "hyphenation.pat";
+const NONSTANDARD: &str = "hyphenation.nonstandard";
+
+/// Data supplied by explicitly selected Language packs at build time (also on WASM).
+pub(crate) struct EmbeddedPack {
+    pub locale: &'static str,
+    pub aff: &'static [u8],
+    pub dic: &'static [u8],
+    pub patterns: &'static str,
+    pub nonstandard: &'static str,
+}
+/// Look up an embedded resource for the requested locale and its fallback.
+pub(crate) fn embedded(names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'static EmbeddedPack> {
+    embedded_in(crate::data::PACKS, names, accepts)
+}
+/// Find an embedded resource in a supplied pack table using locale fallback.
+pub(crate) fn embedded_in<'a>(packs: &'a [EmbeddedPack], names: &[String], accepts: impl Fn(&EmbeddedPack) -> bool) -> Vec<&'a EmbeddedPack> {
+    names.iter().filter_map(|n| packs.iter().find(|p| p.locale == n.replace('_', "-").to_ascii_lowercase() && accepts(p))).collect()
+}
+
+/// Embedded spelling dictionaries follow installed packs' aliases, then same-language/script regions.
+pub(crate) fn embedded_spelling_in<'a>(table: &'a [EmbeddedPack], names: &[&str]) -> Vec<&'a EmbeddedPack> {
+    let locales = locales_for(names);
+    let mut out = embedded_in(table, &locales, |pack| !pack.dic.is_empty());
+    for pack in table.iter().filter(|pack| !pack.dic.is_empty()) {
+        let primary = pack.locale.split('-').next().unwrap_or_default();
+        if locales.iter().any(|locale| locale.split('-').next() == Some(primary) && same_script(locale, pack.locale))
+            && !out.iter().any(|selected| selected.locale == pack.locale)
+        {
+            out.push(pack);
+        }
+    }
+    out
+}
+
 /// Most languages whose pack patterns are remembered (a document may tag thousands).
 const MAX_HYPHENATION_LOOKUPS: usize = 256;
 /// The memory budget of the remembered pack patterns, in estimated bytes ([`pattern_bytes`]):
@@ -65,14 +99,98 @@ pub struct InstalledPack {
     pub name: String,
     /// SPDX licence expression of the pack's data.
     pub licence: String,
-    /// The pack's folder.
-    pub path: PathBuf,
+    /// The pack's folder, or `None` for a pack registered from memory.
+    pub path: Option<PathBuf>,
+}
+
+/// Files supplied by the caller instead of read from a pack folder.
+/// Both spelling files must be present together. Paths named by the manifest and licence
+/// names must stay inside the pack, just as for a pack on disk.
+#[derive(Debug, Default)]
+pub struct PackFiles {
+    /// UTF-8 pack metadata, with the same manifest validation as a disk pack.
+    pub pack_toml: Vec<u8>,
+    /// Hunspell affix bytes, decoded using their SET and FLAG directives.
+    pub spelling_aff: Option<Vec<u8>>,
+    /// Hunspell word-list bytes, supplied together with the affix bytes.
+    pub spelling_dic: Option<Vec<u8>>,
+    /// UTF-8 TeX/Liang hyphenation patterns.
+    pub hyphenation: Option<Vec<u8>>,
+    /// UTF-8 Libhyphen/Huhyphn replacement patterns; standard patterns are an optional fallback.
+    pub hyphenation_nonstandard: Option<Vec<u8>>,
+    /// Licence file names (single relative names) and their original text bytes.
+    pub licences: Vec<(String, Vec<u8>)>,
+}
+
+/// Raw bytes retained by registrations, independently of the estimated compiled caches.
+const MAX_MEMORY_BYTES: usize = 256 << 20;
+
+#[derive(Debug)]
+pub(crate) struct MemoryPack {
+    pub(crate) info: InstalledPack,
+    pub(crate) files: PackFiles,
+    pub(crate) revision: u64,
+    bytes: usize,
+}
+
+/// A snapshot of one pack's origin; never a fabricated filesystem path.
+#[derive(Clone)]
+enum PackSource {
+    Disk(PathBuf),
+    Memory(Arc<MemoryPack>),
+}
+
+impl PartialEq for PackSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Disk(a), Self::Disk(b)) => a == b,
+            (Self::Memory(a), Self::Memory(b)) => a.revision == b.revision && a.info.locale == b.info.locale,
+            _ => false,
+        }
+    }
+}
+
+impl PackSource {
+    fn spelling(self) -> Option<crate::hunspell::DictionarySource> {
+        match self {
+            Self::Disk(dir) => {
+                let aff = dir.join(format!("{SPELLING}.aff"));
+                let dic = dir.join(format!("{SPELLING}.dic"));
+                (is_regular_file(&aff) && is_regular_file(&dic)).then_some(crate::hunspell::DictionarySource::Files { aff, dic })
+            }
+            Self::Memory(pack) => Some(crate::hunspell::DictionarySource::Memory(pack)),
+        }
+    }
+
+    fn locale(&self) -> String {
+        match self {
+            Self::Disk(dir) => dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            Self::Memory(pack) => pack.info.locale.clone(),
+        }
+    }
+
+    fn patterns(&self, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+        match self {
+            Self::Disk(dir) => patterns_from_directory(dir, errors),
+            Self::Memory(pack) => {
+                for (name, bytes) in [(NONSTANDARD, &pack.files.hyphenation_nonstandard), (HYPHENATION, &pack.files.hyphenation)] {
+                    let Some(bytes) = bytes else { continue };
+                    match patterns_from_bytes(bytes, name, name == NONSTANDARD) {
+                        Ok(p) => return Some(p),
+                        Err(error) => errors.push((self.locale(), error)),
+                    }
+                }
+                None
+            }
+        }
+    }
 }
 
 /// What a scan of the packs folder found, with what each pack holds.
 #[derive(Default)]
 struct Scan {
     packs: Vec<(InstalledPack, Holds)>,
+    memory: BTreeMap<String, Arc<MemoryPack>>,
     /// (locale or folder name, reason) of each pack that was skipped.
     errors: Vec<(String, String)>,
 }
@@ -85,6 +203,8 @@ struct Holds {
 
 struct State {
     dir: Option<PathBuf>,
+    memory: BTreeMap<String, Arc<MemoryPack>>,
+    memory_bytes: usize,
     scan: Option<Arc<Scan>>,
     /// Each language's pack patterns once looked up (`None`: no pack has them), at most
     /// [`MAX_HYPHENATION_LOOKUPS`] languages and [`MAX_HYPHENATION_BYTES`] (cleared when full).
@@ -97,8 +217,16 @@ struct State {
     changes: u64,
 }
 
-static STATE: RwLock<State> =
-    RwLock::new(State { dir: None, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 });
+static STATE: RwLock<State> = RwLock::new(State {
+    dir: None,
+    memory: BTreeMap::new(),
+    memory_bytes: 0,
+    scan: None,
+    hyphenation: BTreeMap::new(),
+    hyphenation_bytes: 0,
+    hyphenation_errors: Vec::new(),
+    changes: 0,
+});
 
 fn read() -> RwLockReadGuard<'static, State> {
     STATE.read().unwrap_or_else(PoisonError::into_inner)
@@ -109,7 +237,7 @@ fn write() -> RwLockWriteGuard<'static, State> {
 }
 
 /// Use `dir` as the installed-packs folder (`<font-store folder>/language-packs`); `None`: no
-/// packs. Every dictionary loads again and text is checked again
+/// disk packs. Explicit memory registrations are retained. Every dictionary loads again and text is checked again
 /// ([`crate::dictionary_generation`] changes), so call it again after a pack is installed or
 /// removed (or call [`reload`]).
 pub fn set_packs_dir(dir: Option<PathBuf>) {
@@ -119,6 +247,132 @@ pub fn set_packs_dir(dir: Option<PathBuf>) {
         forget(&mut s);
     }
     crate::reload_dictionaries();
+}
+
+/// Register a pack's prepared files without a filesystem. A memory pack replaces the whole
+/// same-locale disk pack in the installed-pack tier, but never the dictionaries-folder tier.
+/// Replacing a memory registration is atomic: invalid input leaves the old pack and caches alone.
+/// At most 1024 memory packs and 256 MiB of raw input are retained. Reloading or changing the disk
+/// folder keeps these registrations; use [`remove_from_memory`] to reveal a disk pack again.
+pub fn add_from_memory(files: PackFiles) -> Result<InstalledPack, String> {
+    add_memory(files, MAX_MEMORY_BYTES)
+}
+
+/// Remove only a memory registration. Unknown locales do not invalidate dictionaries.
+pub fn remove_from_memory(locale: &str) -> bool {
+    {
+        let mut s = write();
+        let Some(old) = s.memory.remove(locale) else { return false };
+        s.memory_bytes -= old.bytes;
+        forget(&mut s);
+    }
+    crate::reload_dictionaries();
+    true
+}
+
+#[cfg(test)]
+pub(crate) fn add_from_memory_with_limit_for_test(files: PackFiles, limit: usize) -> Result<InstalledPack, String> {
+    add_memory(files, limit.min(MAX_MEMORY_BYTES))
+}
+
+fn add_memory(files: PackFiles, limit: usize) -> Result<InstalledPack, String> {
+    let (info, bytes) = validate_memory(&files)?;
+    // Discard spare caller allocation capacity before retaining the bounded raw inputs.
+    let files = compact_files(files);
+    {
+        let mut s = write();
+        if !s.memory.contains_key(&info.locale) && s.memory.len() >= MAX_PACKS {
+            return Err(format!("more than {MAX_PACKS} memory packs"));
+        }
+        let old_bytes = s.memory.get(&info.locale).map_or(0, |p| p.bytes);
+        let next = s
+            .memory_bytes
+            .checked_sub(old_bytes)
+            .and_then(|n| n.checked_add(bytes))
+            .filter(|&n| n <= limit)
+            .ok_or_else(|| format!("memory packs exceed {limit} raw bytes"))?;
+        let pack = MemoryPack { info: info.clone(), files, revision: s.changes.wrapping_add(1), bytes };
+        s.memory.insert(info.locale.clone(), Arc::new(pack));
+        s.memory_bytes = next;
+        forget(&mut s);
+    }
+    crate::reload_dictionaries();
+    Ok(info)
+}
+
+fn compact_files(files: PackFiles) -> PackFiles {
+    let tight = |v: Vec<u8>| v.into_boxed_slice().into_vec();
+    let licences: Vec<_> = files.licences.into_iter().map(|(n, b)| (n.into_boxed_str().into_string(), tight(b))).collect();
+    PackFiles {
+        pack_toml: tight(files.pack_toml),
+        spelling_aff: files.spelling_aff.map(tight),
+        spelling_dic: files.spelling_dic.map(tight),
+        hyphenation: files.hyphenation.map(tight),
+        hyphenation_nonstandard: files.hyphenation_nonstandard.map(tight),
+        licences: licences.into_boxed_slice().into_vec(),
+    }
+}
+
+fn validate_memory(files: &PackFiles) -> Result<(InstalledPack, usize), String> {
+    let mut bytes = 0usize;
+    let mut count = |name: &str, data: &[u8], cap: u64| -> Result<(), String> {
+        if data.len() as u64 > cap {
+            return Err(format!("{name}: too large"));
+        }
+        bytes = bytes
+            .checked_add(data.len())
+            .filter(|&n| n <= MAX_MEMORY_BYTES)
+            .ok_or_else(|| format!("memory pack exceeds {MAX_MEMORY_BYTES} raw bytes"))?;
+        Ok(())
+    };
+    count(PACK_TOML, &files.pack_toml, MAX_PACK_TOML)?;
+    let text = std::str::from_utf8(&files.pack_toml).map_err(|_| "pack.toml: not UTF-8".to_string())?;
+    let info = parse_pack_toml(text)?;
+    match (&files.spelling_aff, &files.spelling_dic) {
+        (Some(aff), Some(dic)) => {
+            count("spelling.aff", aff, crate::hunspell::MAX_FILE)?;
+            count("spelling.dic", dic, crate::hunspell::MAX_FILE)?;
+        }
+        (None, None) => {}
+        _ => return Err("spelling.aff and spelling.dic must be supplied together".into()),
+    }
+    if let Some(pat) = &files.hyphenation {
+        count(HYPHENATION, pat, crate::hunspell::MAX_FILE)?;
+    }
+    if let Some(pat) = &files.hyphenation_nonstandard {
+        count(NONSTANDARD, pat, crate::hunspell::MAX_FILE)?;
+    }
+    if files.licences.len() > MAX_LICENCE_FILES {
+        return Err(format!("more than {MAX_LICENCE_FILES} licence files"));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for (name, text) in &files.licences {
+        if !safe_relative(name) || name.contains('/') || !names.insert(name.as_str()) {
+            return Err(format!("invalid or duplicate licence file name {name:?}"));
+        }
+        count("licence file name", name.as_bytes(), MAX_LICENCE)?;
+        count(name, text, MAX_LICENCE)?;
+    }
+    // Validate before publishing, then discard compiled data: only raw files live in the registry.
+    if let (Some(aff), Some(dic)) = (&files.spelling_aff, &files.spelling_dic) {
+        let (a, d) = crate::hunspell::decode(aff, dic)?;
+        if info.locale.split('-').next() == Some("en") {
+            let dict = crate::affix::AffixDict::from_hunspell_english(&a, &d, &[])?;
+            if dict.is_empty() {
+                return Err(format!("{}: no words", info.locale));
+            }
+        } else {
+            crate::affix::AffixDict::from_hunspell(&a, &d, &[])?;
+        }
+    }
+    if let Some(pat) = &files.hyphenation {
+        patterns_from_bytes(pat, HYPHENATION, false)?;
+    }
+    if let Some(pat) = &files.hyphenation_nonstandard {
+        patterns_from_bytes(pat, NONSTANDARD, true)?;
+    }
+    let name = info.name.unwrap_or_else(|| info.locale.clone());
+    Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: None }, bytes))
 }
 
 /// Read the packs folder again (a pack was installed or removed), as [`set_packs_dir`] with the
@@ -170,8 +424,13 @@ pub fn licence_texts() -> Vec<(String, String)> {
     out.extend(crate::data::EMBEDDED_LICENCES.iter().map(|(t, x)| ((*t).to_string(), (*x).to_string())));
     // Each file is checked against what is left before it is read, so no more is ever read.
     let mut left: u64 = MAX_LICENCE_TOTAL;
-    for (p, _) in &scan().packs {
-        for (file, text) in licence_files(&p.path, &mut left) {
+    let scan = scan();
+    for (p, _) in &scan.packs {
+        let files = match &p.path {
+            Some(path) => licence_files(path, &mut left),
+            None => scan.memory.get(&p.locale).map_or_else(Vec::new, |pack| memory_licences(pack, &mut left)),
+        };
+        for (file, text) in files {
             out.push((format!("{} ({}): {}", p.name, p.locale, plain_text(&file)), text));
         }
         if left == 0 {
@@ -201,6 +460,20 @@ const BUILT_IN_MOBY_NOTICE: &str = "The English word list built into craft-proof
 const EXTRA_EN_NOTICE: &str = "The English word supplement (en-extra.txt), common words the Moby list lacks, is written by \
 WordCraft contributors and licensed MIT OR Apache-2.0.";
 
+fn memory_licences(pack: &MemoryPack, left: &mut u64) -> Vec<(String, String)> {
+    let mut files: Vec<_> = pack.files.licences.iter().collect();
+    files.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let mut out = Vec::new();
+    for (name, bytes) in files {
+        if bytes.len() as u64 > *left {
+            continue;
+        }
+        *left -= bytes.len() as u64;
+        out.push((name.clone(), String::from_utf8_lossy(bytes).into_owned()));
+    }
+    out
+}
+
 /// The locales whose upstream Language data is embedded in this build: `en-us`, and by default `de`,
 /// `pl`, `pt`, `it` (until Language packs ship, CP4.4; our own `ru-extra.txt` is embedded but not
 /// listed); a build with `CRAFT_PROOF_EMBED`
@@ -211,14 +484,27 @@ pub fn embedded_locales() -> &'static [&'static str] {
 
 /// The scan of the packs folder, made on first use after each change.
 fn scan() -> Arc<Scan> {
-    let (dir, changes) = {
+    let (dir, memory, changes) = {
         let s = read();
         if let Some(scan) = &s.scan {
             return scan.clone();
         }
-        (s.dir.clone(), s.changes)
+        (s.dir.clone(), s.memory.clone(), s.changes)
     };
-    let found = Arc::new(dir.as_deref().map(scan_dir).unwrap_or_default());
+    let mut found = dir.as_deref().map(scan_dir).unwrap_or_default();
+    // Explicit memory registration replaces a whole disk pack, never mixes its individual files.
+    // Disk scanning and memory registration have independent count caps.
+    found.packs.retain(|(p, _)| !memory.contains_key(&p.locale));
+    for pack in memory.values() {
+        let holds = Holds {
+            spelling: pack.files.spelling_aff.is_some(),
+            hyphenation: pack.files.hyphenation.is_some() || pack.files.hyphenation_nonstandard.is_some(),
+        };
+        found.packs.push((pack.info.clone(), holds));
+    }
+    found.packs.sort_by(|(a, _), (b, _)| a.locale.cmp(&b.locale));
+    found.memory = memory;
+    let found = Arc::new(found);
     let mut s = write();
     if s.changes != changes {
         // The folder changed meanwhile: this scan serves this call only.
@@ -274,10 +560,10 @@ fn read_pack(path: &Path, folder: &str) -> Result<(InstalledPack, Holds), String
     }
     let holds = Holds {
         spelling: is_regular_file(&path.join(format!("{SPELLING}.aff"))) && is_regular_file(&path.join(format!("{SPELLING}.dic"))),
-        hyphenation: is_regular_file(&path.join(HYPHENATION)),
+        hyphenation: is_regular_file(&path.join(HYPHENATION)) || is_regular_file(&path.join(NONSTANDARD)),
     };
     let name = info.name.unwrap_or_else(|| info.locale.clone());
-    Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: path.to_path_buf() }, holds))
+    Ok((InstalledPack { locale: info.locale, name, licence: info.licence, path: Some(path.to_path_buf()) }, holds))
 }
 
 /// What `pack.toml` says.
@@ -461,21 +747,33 @@ fn same_script(a: &str, b: &str) -> bool {
 
 /// The installed packs to read for `locales`, in that order, then any other pack of their
 /// primary languages (`pt` → `pt-br`, `pt-pt`), keeping those that `has` the data.
-fn packs_for(locales: &[String], has: impl Fn(&Holds) -> bool) -> Vec<PathBuf> {
+fn origin(scan: &Scan, p: &InstalledPack) -> Option<PackSource> {
+    match &p.path {
+        Some(path) => Some(PackSource::Disk(path.clone())),
+        None => scan.memory.get(&p.locale).cloned().map(PackSource::Memory),
+    }
+}
+
+fn packs_for(locales: &[String], has: impl Fn(&Holds) -> bool) -> Vec<PackSource> {
     let scan = scan();
     let usable = || scan.packs.iter().filter(|(_, h)| has(h));
-    let mut out: Vec<PathBuf> = Vec::new();
+    let mut out = Vec::new();
     for l in locales {
-        if let Some((p, _)) = usable().find(|(p, _)| pack_region(&p.locale) == l) {
-            out.push(p.path.clone());
+        if let Some((p, _)) = usable().find(|(p, _)| pack_region(&p.locale) == l)
+            && let Some(source) = origin(&scan, p)
+        {
+            out.push(source);
         }
     }
-    // Then another region's pack of the same language (`pt` → `pt-br`), never another script's.
+    // Another region may follow, never another script's pack.
     for (p, _) in usable() {
         let primary = p.locale.split('-').next().unwrap_or_default();
         let fits = locales.iter().any(|l| l.split('-').next() == Some(primary) && same_script(l, &p.locale));
-        if fits && !out.contains(&p.path) {
-            out.push(p.path.clone());
+        if fits
+            && let Some(source) = origin(&scan, p)
+            && !out.contains(&source)
+        {
+            out.push(source);
         }
     }
     out
@@ -488,30 +786,34 @@ fn packs_for(locales: &[String], has: impl Fn(&Holds) -> bool) -> Vec<PathBuf> {
 /// The system's exact-region dictionaries are searched between the two, so another region's pack
 /// never beats them.
 pub(crate) fn spelling_dirs(names: &[&str]) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    if read().dir.is_none() {
-        return (Vec::new(), Vec::new());
-    }
-    let all = packs_for(&locales_for(names), |h| h.spelling);
-    let region = region_locales(names);
-    let scan = scan();
-    let in_region = |path: &PathBuf| scan.packs.iter().any(|(p, _)| &p.path == path && region.iter().any(|r| r == pack_region(&p.locale)));
-    all.into_iter().partition(in_region)
+    let (region, other) = spelling_sources(names);
+    let paths =
+        |v: Vec<crate::hunspell::DictionarySource>| v.into_iter().filter_map(|s| s.file().and_then(|p| p.parent().map(Path::to_path_buf))).collect();
+    (paths(region), paths(other))
 }
 
-/// The folders of the installed packs with a spelling dictionary whose locale is exactly one of
-/// `names` (`en_GB` → `en-gb`), in that order: no other region, no language alone.
+pub(crate) fn spelling_sources(names: &[&str]) -> (Vec<crate::hunspell::DictionarySource>, Vec<crate::hunspell::DictionarySource>) {
+    let region = region_locales(names);
+    let (own, other): (Vec<_>, Vec<_>) =
+        packs_for(&locales_for(names), |h| h.spelling).into_iter().partition(|s| region.iter().any(|r| r == pack_region(&s.locale())));
+    (own.into_iter().filter_map(PackSource::spelling).collect(), other.into_iter().filter_map(PackSource::spelling).collect())
+}
+
+/// Disk folders only, for the existing public filesystem Hunspell search.
 pub(crate) fn exact_spelling_dirs(names: &[&str]) -> Vec<PathBuf> {
-    if read().dir.is_none() {
-        return Vec::new();
-    }
+    exact_spelling_sources(names).into_iter().filter_map(|s| s.file().and_then(|p| p.parent().map(Path::to_path_buf))).collect()
+}
+
+pub(crate) fn exact_spelling_sources(names: &[&str]) -> Vec<crate::hunspell::DictionarySource> {
     let scan = scan();
-    let mut out: Vec<PathBuf> = Vec::new();
+    let mut out = Vec::new();
     for n in names {
         let l = n.to_ascii_lowercase().replace('_', "-");
         if let Some((p, _)) = scan.packs.iter().find(|(p, h)| h.spelling && pack_region(&p.locale) == l)
-            && !out.contains(&p.path)
+            && let Some(source) = origin(&scan, p).and_then(PackSource::spelling)
+            && !out.contains(&source)
         {
-            out.push(p.path.clone());
+            out.push(source);
         }
     }
     out
@@ -562,7 +864,12 @@ fn hyphenation_locales(lang: ProofLang) -> Vec<String> {
 pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     let changes = {
         let s = read();
-        s.dir.as_ref()?;
+        if s.dir.is_none()
+            && s.memory.is_empty()
+            && embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()).is_empty()
+        {
+            return None;
+        }
         if let Some(p) = s.hyphenation.get(&lang) {
             return p.clone();
         }
@@ -570,18 +877,15 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     };
     let mut errors = Vec::new();
     let mut found = None;
-    for dir in packs_for(&hyphenation_locales(lang), |h| h.hyphenation) {
-        match load_patterns(&dir.join(HYPHENATION)) {
-            Ok(p) => {
-                found = Some(Arc::new(p));
-                break;
-            }
-            Err(e) => {
-                let locale = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                log::warn!("Language pack {locale}: {e}");
-                errors.push((locale, e));
-            }
+    for source in packs_for(&hyphenation_locales(lang), |h| h.hyphenation) {
+        if let Some(p) = source.patterns(&mut errors) {
+            found = Some(Arc::new(p));
+            break;
         }
+    }
+    if found.is_none() {
+        found = patterns_from_embedded(&embedded(&hyphenation_locales(lang), |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()), &mut errors)
+            .map(Arc::new);
     }
     let mut s = write();
     if s.changes == changes && !s.hyphenation.contains_key(&lang) {
@@ -597,9 +901,49 @@ pub(crate) fn hyphenation(lang: ProofLang) -> Option<Arc<Patterns>> {
     found
 }
 
+/// Read installed optional replacement patterns, retaining standard fallback and diagnostics.
+fn patterns_from_directory(dir: &Path, errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+    for name in [NONSTANDARD, HYPHENATION] {
+        let path = dir.join(name);
+        if !is_regular_file(&path) {
+            continue;
+        }
+        match load_patterns(&path) {
+            Ok(p) => return Some(p),
+            Err(error) => {
+                let locale = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                log::warn!("Language pack {locale}: {error}");
+                errors.push((locale, error));
+            }
+        }
+    }
+    None
+}
+
+/// Read embedded replacement patterns with the same fallback as installed packs.
+fn patterns_from_embedded(packs: &[&EmbeddedPack], errors: &mut Vec<(String, String)>) -> Option<Patterns> {
+    for pack in packs {
+        for (name, text) in [(NONSTANDARD, pack.nonstandard), (HYPHENATION, pack.patterns)] {
+            if text.is_empty() {
+                continue;
+            }
+            let read = if name == NONSTANDARD { Patterns::from_huhyphn(text) } else { Patterns::parse_checked(text) };
+            match read.and_then(|p| if p.is_empty() { Err("no patterns".into()) } else { Ok(p) }) {
+                Ok(patterns) => return Some(patterns),
+                Err(error) => {
+                    let error = format!("{name}: {error}");
+                    log::warn!("embedded Language pack {}: {error}", pack.locale);
+                    errors.push((pack.locale.to_string(), error));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Estimated memory of `p`.
 fn pattern_bytes(p: &Patterns) -> u64 {
-    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN)
+    (p.len() as u64).saturating_add(p.exception_count() as u64).saturating_mul(BYTES_PER_PATTERN).saturating_add(p.extra_memory())
 }
 
 /// Remember `lang`'s pack patterns (`bytes` of them): over [`MAX_HYPHENATION_LOOKUPS`] languages
@@ -623,10 +967,14 @@ pub(crate) fn hyphenation_lookups() -> usize {
 /// A pack's `hyphenation.pat` (UTF-8 TeX or plain Liang patterns, at most the dictionary cap).
 fn load_patterns(path: &Path) -> Result<Patterns, String> {
     let bytes = read_capped(path, crate::hunspell::MAX_FILE)?;
-    let text = String::from_utf8(bytes).map_err(|_| format!("{}: not UTF-8", path.display()))?;
-    let p = Patterns::parse(&text);
+    patterns_from_bytes(&bytes, &path.display().to_string(), path.file_name().is_some_and(|n| n == NONSTANDARD))
+}
+
+fn patterns_from_bytes(bytes: &[u8], label: &str, nonstandard: bool) -> Result<Patterns, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| format!("{label}: not UTF-8"))?;
+    let p = if nonstandard { Patterns::from_huhyphn(text) } else { Patterns::parse_checked(text) }.map_err(|e| format!("{label}: {e}"))?;
     if p.is_empty() {
-        return Err(format!("{}: no patterns", path.display()));
+        return Err(format!("{label}: no patterns"));
     }
     Ok(p)
 }
@@ -635,11 +983,117 @@ fn load_patterns(path: &Path) -> Result<Patterns, String> {
 mod tests {
     use super::*;
 
+    /// Regression: malformed embedded regional patterns fall back to generic.
+    #[test]
+    fn malformed_embedded_regional_patterns_fall_back_to_generic() {
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "", nonstandard: "UTF-8\nas5szony/sz=,0,1" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "", nonstandard: "UTF-8\nas5szon2y/sz=,2,1" },
+        ];
+        let names = vec!["hu-hu".to_string(), "hu".to_string()];
+        let mut errors = Vec::new();
+        let p = patterns_from_embedded(&embedded_in(&packs, &names, |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()), &mut errors).unwrap();
+        assert_eq!(p.opportunities(&"asszony".chars().collect::<Vec<_>>()).unwrap()[0].suffix.as_ref(), "z");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+    }
+    /// Invalid optional records, including unsupported two-level input, retain the same-pack standard fallback.
+    #[test]
+    fn embedded_nonstandard_failure_keeps_standard_patterns() {
+        for invalid in ["UTF-8\nas5szony/sz=,0,1", "UTF-8\na1b\nNEXTLEVEL\nc1d"] {
+            let packs = [EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: invalid }];
+            let mut errors = Vec::new();
+            let p = patterns_from_embedded(&[&packs[0]], &mut errors).unwrap();
+            assert_eq!(p.points(&['a', 'b']).unwrap(), vec![1]);
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].1.starts_with("hyphenation.nonstandard:"));
+        }
+    }
+    /// Installed NEXTLEVEL files without replacements report the error and retain their standard fallback.
+    #[test]
+    fn installed_two_level_patterns_keep_standard_fallback() {
+        let dir = std::env::temp_dir().join(format!("craft-proof-nextlevel-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NONSTANDARD), "UTF-8\na1b\nNEXTLEVEL\nc1d\n").unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        let mut errors = Vec::new();
+        let patterns = patterns_from_directory(&dir, &mut errors).unwrap();
+        assert_eq!(patterns.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("NEXTLEVEL"), "{:?}", errors);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    /// Regression: embedded fallback skips locales without the requested resource.
+    #[test]
+    fn embedded_fallback_skips_locales_without_the_requested_resource() {
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"aff", dic: b"dic", patterns: "", nonstandard: "" },
+            EmbeddedPack { locale: "hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: "" },
+        ];
+        let names = vec!["hu_HU".to_string(), "hu".to_string()];
+        assert_eq!(embedded_in(&packs, &names, |p| !p.patterns.is_empty() || !p.nonstandard.is_empty()).first().unwrap().locale, "hu");
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu-hu");
+        let packs = [
+            EmbeddedPack { locale: "hu-hu", aff: b"", dic: b"", patterns: "a1b", nonstandard: "" },
+            EmbeddedPack { locale: "hu", aff: b"aff", dic: b"dic", patterns: "", nonstandard: "" },
+        ];
+        assert_eq!(embedded_in(&packs, &names, |p| !p.aff.is_empty() && !p.dic.is_empty()).first().unwrap().locale, "hu");
+    }
+    /// Regression: embedded packs do not have the no data contract.
+    #[test]
+    fn embedded_packs_do_not_have_the_no_data_contract() {
+        #[cfg(craft_proof_no_data)]
+        assert!(crate::data::PACKS.is_empty(), "embedded packs are Language data");
+    }
+    /// Regression: broken nonstandard file retains regular patterns and the error.
+    #[test]
+    fn broken_nonstandard_file_retains_regular_patterns_and_the_error() {
+        let dir = std::env::temp_dir().join(format!("craft-proof-pattern-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(NONSTANDARD), "UTF-8\nas5szony/sz=,0,1\n").unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        let mut errors = Vec::new();
+        let p = patterns_from_directory(&dir, &mut errors).unwrap();
+        assert_eq!(p.points(&"banana".chars().collect::<Vec<_>>()).unwrap(), vec![2]);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+        std::fs::remove_file(dir.join(HYPHENATION)).unwrap();
+        errors.clear();
+        assert!(patterns_from_directory(&dir, &mut errors).is_none());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].1.contains("line 2"));
+        assert!(!errors[0].1.contains("not a regular file"));
+        std::fs::remove_file(dir.join(NONSTANDARD)).unwrap();
+        std::fs::write(dir.join(HYPHENATION), "ba1na").unwrap();
+        errors.clear();
+        assert!(patterns_from_directory(&dir, &mut errors).is_some());
+        assert!(errors.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    /// Regression: malformed pack patterns keep their line number.
+    #[test]
+    fn malformed_pack_patterns_keep_their_line_number() {
+        let path = std::env::temp_dir().join(format!("craft-proof-pattern-error-{}.pat", std::process::id()));
+        std::fs::write(&path, "UTF-8\nas5szony/sz=,0,1\n").unwrap();
+        let error = load_patterns(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert!(error.contains("line 2"), "{error}");
+        assert!(error.contains("invalid start"), "{error}");
+    }
     /// Review follow-up (craft-libs#485): the remembered pack patterns have a memory budget, not
     /// only a count, so 256 languages of large patterns can't each stay in memory.
     #[test]
     fn remembered_patterns_keep_to_a_memory_budget() {
-        let mut s = State { dir: None, scan: None, hyphenation: BTreeMap::new(), hyphenation_bytes: 0, hyphenation_errors: Vec::new(), changes: 0 };
+        let mut s = State {
+            dir: None,
+            memory: BTreeMap::new(),
+            memory_bytes: 0,
+            scan: None,
+            hyphenation: BTreeMap::new(),
+            hyphenation_bytes: 0,
+            hyphenation_errors: Vec::new(),
+            changes: 0,
+        };
         let p = Arc::new(Patterns::parse("hy3ph he2n hena4 hen5at 1na n2at 1tio 2io o2n"));
         let bytes = pattern_bytes(&p);
         assert_eq!(bytes, 9 * BYTES_PER_PATTERN);
@@ -737,7 +1191,13 @@ mod tests {
         let embed = option_env!("CRAFT_PROOF_EMBED").unwrap_or_default().trim().to_ascii_lowercase();
         let named: Vec<&str> = if embed.is_empty() { vec!["de", "pl", "pt", "it", "ru"] } else { embed.split(',').map(str::trim).collect() };
         for l in embedded_locales() {
-            assert!(l.starts_with("en-") || *l == "ru" || named.iter().any(|e| e == l || *e == "all"), "{l} is embedded");
+            assert!(
+                l.starts_with("en-")
+                    || *l == "ru"
+                    || named.iter().any(|e| e == l || *e == "all")
+                    || crate::data::PACKS.iter().any(|p| p.locale == *l),
+                "{l} is embedded"
+            );
         }
         if cfg!(craft_proof_data) && embed.is_empty() {
             for l in ["de", "pl", "pt", "it"] {

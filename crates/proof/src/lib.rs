@@ -349,14 +349,16 @@ pub(crate) fn reload_dictionaries() {
 }
 
 /// The `.dic` file a [`ProofLang::Pack`] language's (or German's or Bulgarian's) spelling is read from now (the dictionaries
-/// folder, an installed Language pack or the system's); `None` when it has none (unchecked) or
-/// `lang` isn't a pack language. Reads the dictionary once (it is cached afterwards).
+/// folder, a disk Language pack or the system's). `None` can also mean a memory-backed dictionary;
+/// use [`missing_dictionary`] to check availability. It is also `None` when `lang` isn't a pack
+/// language. Reads the dictionary once (it is cached afterwards).
 pub fn pack_dictionary_file(lang: ProofLang) -> Option<std::path::PathBuf> {
     pack_lang::dictionary_file(lang.spelling_locale()?)
 }
 
-/// Each language that reads an installed Hunspell dictionary, with the `.dic` file found for it
-/// now (`None`: not installed, so the language has no spelling marks).
+/// Each language that reads an installed Hunspell dictionary, with its current `.dic` file.
+/// A memory-backed dictionary has no file and reports `None`, as does an absent dictionary;
+/// use [`missing_dictionary`] to distinguish availability.
 pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> {
     LANGUAGES.iter().map(|l| (l.lang, l.slot.installed_path())).collect()
 }
@@ -372,20 +374,23 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
     if let Some(l) = lang.spelling_locale() {
         return pack_lang::load_error(l);
     }
-    hunspell::load_error(language(lang)?.slot.name()).map(|(_, reason)| reason)
+    hunspell::source_load_error(language(lang)?.slot.name())
 }
 
-/// Where the spelling of an English `lang` comes from now (`None` for other languages), in this
-/// order: a Hunspell dictionary of its own (`en_US`, `en_GB`, `en_CA`) in the dictionaries
-/// folder, the SCOWL dictionary embedded at build time, one of its own on the system, else the
-/// Moby word list built into the crate. Another English's dictionary is never used. Reads the
-/// Hunspell dictionary once (it is cached afterwards).
+/// Where the spelling of an English `lang` comes from now (`None` for other languages).
+/// Its own dictionaries-folder sources precede its embedded SCOWL dictionary. Without SCOWL,
+/// each candidate locale is tried in dictionaries-folder, installed-pack (memory before disk)
+/// and system order, before the built-in Moby list. Australian English exhausts its en-AU
+/// candidates, including system dictionaries, before trying en-GB as a fallback; an Australian
+/// system dictionary can therefore precede a British memory pack. The other Englishes do not
+/// borrow another dialect's dictionary. Reads the dictionary once (it is cached afterwards).
 pub fn english_source(lang: ProofLang) -> Option<EnglishSource> {
     lang.is_english().then(|| english::source(lang))
 }
 
 /// A number that changes whenever a word is added to or removed from the user dictionary, the
-/// dictionaries folder changes, or the Language packs do ([`packs::set_packs_dir`]).
+/// dictionaries folder changes, or disk or memory Language packs change ([`packs::set_packs_dir`],
+/// [`packs::add_from_memory`], [`packs::remove_from_memory`]).
 pub fn dictionary_generation() -> u64 {
     DICTIONARY_GENERATION.load(Ordering::Relaxed)
 }
@@ -620,7 +625,8 @@ pub fn missing_dictionary(lang: Option<&str>) -> Option<&'static str> {
 /// The Hunspell name, `.dic` file and reason of a dictionary that is installed for this language
 /// but couldn't be read (unsupported `SET` encoding, too large, a parse error). `None` when it
 /// loaded, or when no file exists (then [`missing_dictionary`] names it). Reads the dictionary
-/// once (it is cached afterwards).
+/// once (it is cached afterwards). Invalid memory-pack bytes are reported directly by
+/// [`packs::add_from_memory`] before registration; this getter reports filesystem candidates only.
 pub fn unreadable_dictionary(lang: Option<&str>) -> Option<(&'static str, std::path::PathBuf, String)> {
     let lang = ProofLang::from_tag(lang);
     let name = dictionary_needed(lang, dictionary_loaded(lang)?)?;
@@ -1195,6 +1201,9 @@ pub(crate) fn hold_dictionary_tests() {
 mod no_data;
 
 #[cfg(test)]
+mod memory_packs_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn missing_dictionary_is_named_only_for_hunspell_languages_without_one() {
@@ -1598,7 +1607,7 @@ mod tests {
         assert_eq!(installed.len(), 1);
         assert_eq!(
             installed[0],
-            packs::InstalledPack { locale: "hr".into(), name: "Hrvatski (test)".into(), licence: "MIT".into(), path: pack.clone() }
+            packs::InstalledPack { locale: "hr".into(), name: "Hrvatski (test)".into(), licence: "MIT".into(), path: Some(pack.clone()) }
         );
         assert!(packs::load_errors().is_empty(), "{:?}", packs::load_errors());
         assert!(is_correct_in("zzpaket", ProofLang::Hr) && is_correct_in("kuća", ProofLang::Hr), "the pack's dictionary");
@@ -1659,6 +1668,10 @@ mod tests {
         let text = "Het huis en de fietz.";
         let english_before = check_text(text, &[]);
         let unchecked = |lang: ProofLang| check_text(text, &[(0..text.len(), lang)]).iter().all(|i| i.kind == IssueKind::Grammar);
+        // System dictionaries are valid sources too; the Dutch pack must leave French unchanged.
+        let french = ProofLang::from_tag(Some("fr-FR"));
+        let french_state = || (has_dictionary(Some("fr-FR")), pack_dictionary_file(french), check_text(text, &[(0..text.len(), french)]));
+        let french_before = french_state();
         let before = (is_correct_in("fietz", nl), hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), pack_dictionary_file(nl));
         let pack = write_pack(
             &root,
@@ -1670,7 +1683,8 @@ mod tests {
             ],
         );
         packs::set_packs_dir(Some(root.clone()));
-        assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")) && !has_dictionary(Some("fr-FR")));
+        assert!(nl.is_proofed() && has_dictionary(Some("nl-BE")));
+        assert_eq!(french_state(), french_before, "the Dutch pack does not change French availability, source or proofing");
         assert_eq!(pack_dictionary_file(nl), Some(pack.join("spelling.dic")));
         assert_eq!(pack_dictionary_file(ProofLang::from_tag(Some("nl"))), Some(pack.join("spelling.dic")), "a region falls back to the pack");
         for w in ["huis", "Huis", "huizen", "huisen", "fietsen", "HUIS"] {
@@ -1686,7 +1700,11 @@ mod tests {
         assert!(suggest_in("fietz", 5, nl).contains(&"fiets".to_string()), "{:?}", suggest_in("fietz", 5, nl));
         assert!(check_grammar_in("de de huis", nl).is_empty(), "no grammar rules");
         assert_eq!(hyphen::hyphenate_word_in("xxnaxx", &hyphen::Limits::default(), nl), "xx-naxx");
-        assert!(unchecked(ProofLang::from_tag(Some("fr-FR"))), "a language with no pack stays unchecked");
+        assert_eq!(
+            unchecked(french),
+            french_before.2.iter().all(|i| i.kind == IssueKind::Grammar),
+            "an unrelated language remains unchecked when it had no dictionary, or keeps its existing proofing",
+        );
         assert_eq!(check_text(text, &[]), english_before, "English is unaffected");
         // A broken dictionary is reported, never a panic.
         std::fs::write(pack.join("spelling.aff"), "SET SHIFT_JIS\n").unwrap();
@@ -2655,6 +2673,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn english_reads_scowl() {
+        crate::hold_dictionary_tests();
         for l in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
             let d = scowl::dict(l).unwrap_or_else(|| panic!("{l:?}: {:?}", scowl::load_error(l)));
             assert!(d.len() > 40_000, "{l:?}: {} stems", d.len());
@@ -2693,6 +2712,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn english_suggestions_skip_junk_splits_and_names() {
+        crate::hold_dictionary_tests();
         for (w, l) in [
             ("colour", ProofLang::En),
             ("theatr", ProofLang::En),
@@ -2720,6 +2740,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn dialect_policy_widens_scowl() {
+        crate::hold_dictionary_tests();
         let gb = scowl::dict(ProofLang::EnGb).unwrap();
         let us = scowl::dict(ProofLang::En).unwrap();
         assert!(!gb.check("organize") && gb.check("organise") && !us.check("judgement"), "SCOWL alone is stricter");
@@ -2735,6 +2756,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn scowl_dialects_dont_cross() {
+        crate::hold_dictionary_tests();
         let langs = [
             (ProofLang::En, crate::data::EN_US_SPELLING),
             (ProofLang::EnGb, crate::data::EN_GB_SPELLING),
@@ -2780,6 +2802,7 @@ mod tests {
     #[cfg_attr(not(craft_proof_data), ignore = "needs the Language data (CRAFT_I18N_DIR)")]
     #[test]
     fn british_ize_needs_a_real_ize_word() {
+        crate::hold_dictionary_tests();
         let wrong = [
             "wize", "rize", "noize", "dizease", "advize", "rizing", "praize", "raize", "poize", "wizer", "surprize", "arize", "revize", "devize",
             "mizer", "concize", "precize", "exercize", "chaize",

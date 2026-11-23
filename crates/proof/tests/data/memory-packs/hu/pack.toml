@@ -1,0 +1,4 @@
+locale = "hu"
+name = "Original Hungarian replacement fixture"
+class = "Embeddable"
+licence = "MIT OR Apache-2.0"

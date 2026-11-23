@@ -19,6 +19,127 @@ use crate::affix::AffixDict;
 /// Largest `.aff` or `.dic` file read (real ones are a few MB).
 pub(crate) const MAX_FILE: u64 = 64 << 20;
 
+/// An installed dictionary's actual origin. Memory equality compares its registration identity,
+/// never the potentially large raw byte buffers.
+#[derive(Clone, Debug)]
+pub(crate) enum DictionarySource {
+    Files { aff: PathBuf, dic: PathBuf },
+    Memory(std::sync::Arc<crate::packs::MemoryPack>),
+    Embedded { locale: &'static str, aff: &'static [u8], dic: &'static [u8] },
+}
+
+impl PartialEq for DictionarySource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Files { dic: a, .. }, Self::Files { dic: b, .. }) => a == b,
+            (Self::Memory(a), Self::Memory(b)) => a.revision == b.revision && a.info.locale == b.info.locale,
+            (Self::Embedded { locale: a, .. }, Self::Embedded { locale: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl DictionarySource {
+    pub(crate) fn embedded(pack: &crate::packs::EmbeddedPack) -> Self {
+        Self::Embedded { locale: pack.locale, aff: pack.aff, dic: pack.dic }
+    }
+
+    pub(crate) fn file(&self) -> Option<PathBuf> {
+        match self {
+            Self::Files { dic, .. } => Some(dic.clone()),
+            Self::Memory(_) | Self::Embedded { .. } => None,
+        }
+    }
+
+    pub(crate) fn description(&self) -> String {
+        match self {
+            Self::Files { dic, .. } => dic.display().to_string(),
+            Self::Memory(p) => format!("memory language pack {}", p.info.locale),
+            Self::Embedded { locale, .. } => format!("embedded language pack {locale}"),
+        }
+    }
+
+    pub(crate) fn decoded(&self) -> Result<(String, String), String> {
+        match self {
+            Self::Files { aff, dic } => decode(&read_capped(aff)?, &read_capped(dic)?),
+            Self::Memory(p) => decode(p.files.spelling_aff.as_deref().unwrap_or_default(), p.files.spelling_dic.as_deref().unwrap_or_default()),
+            Self::Embedded { aff, dic, .. } => decode(aff, dic),
+        }
+    }
+
+    pub(crate) fn load(&self) -> Result<AffixDict, String> {
+        match self {
+            Self::Files { aff, dic } => load(aff, dic),
+            Self::Memory(_) | Self::Embedded { .. } => {
+                let (aff, dic) = self.decoded()?;
+                AffixDict::from_hunspell(&aff, &dic, &[self.description().as_str()])
+            }
+        }
+    }
+
+    pub(crate) fn load_english(&self) -> Result<AffixDict, String> {
+        match self {
+            Self::Files { aff, dic } => load_english(aff, dic),
+            Self::Memory(_) | Self::Embedded { .. } => {
+                let (aff, dic) = self.decoded()?;
+                AffixDict::from_hunspell_english(&aff, &dic, &[self.description().as_str()])
+            }
+        }
+    }
+
+    pub(crate) fn raw_spelling_bytes(&self) -> u64 {
+        match self {
+            Self::Files { aff, dic } => {
+                let len = |p: &Path| std::fs::metadata(p).map_or(0, |m| m.len());
+                len(aff).saturating_add(len(dic))
+            }
+            Self::Memory(p) => p.files.spelling_aff.as_ref().map_or(0, Vec::len) as u64 + p.files.spelling_dic.as_ref().map_or(0, Vec::len) as u64,
+            Self::Embedded { aff, dic, .. } => (aff.len() as u64).saturating_add(dic.len() as u64),
+        }
+    }
+
+    pub(crate) fn note_load<T>(&self, key: &str, result: Result<T, String>) -> Result<T, String> {
+        match self {
+            Self::Files { dic, .. } => note_load(key, dic, result),
+            Self::Memory(_) | Self::Embedded { .. } => {
+                clear_load_error(key);
+                if let Err(error) = &result {
+                    MEMORY_LOAD_ERRORS
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push((key.to_string(), format!("{}: {error}", self.description())));
+                }
+                result
+            }
+        }
+    }
+}
+
+/// A load's diagnostic is published only after its cache accepts that load.
+pub(crate) type LoadDiagnostic = Option<(DictionarySource, Result<(), String>)>;
+
+pub(crate) fn publish_load_diagnostic(key: &str, diagnostic: LoadDiagnostic) {
+    match diagnostic {
+        Some((source, result)) => {
+            let _ = source.note_load(key, result);
+        }
+        None => clear_load_error(key),
+    }
+}
+
+/// Source-aware errors are strings; the existing public file-error API never invents a path.
+static MEMORY_LOAD_ERRORS: RwLock<Vec<(String, String)>> = RwLock::new(Vec::new());
+
+pub(crate) fn source_load_error(key: &str) -> Option<String> {
+    MEMORY_LOAD_ERRORS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, e)| e.clone())
+        .or_else(|| load_error(key).map(|(_, e)| e))
+}
+
 /// An extra directory searched first (a setting), set by the front end.
 static EXTRA_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
 
@@ -29,6 +150,7 @@ static LOAD_ERRORS: RwLock<Vec<(String, PathBuf, String)>> = RwLock::new(Vec::ne
 /// Remember (or, for `Ok`, forget) why the dictionary `key` found at `dic` failed to load, and
 /// hand the result back unchanged.
 pub fn note_load<T>(key: &str, dic: &Path, result: Result<T, String>) -> Result<T, String> {
+    MEMORY_LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(k, _)| k != key);
     let mut errors = LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     errors.retain(|(k, _, _)| k != key);
     if let Err(e) = &result {
@@ -39,6 +161,7 @@ pub fn note_load<T>(key: &str, dic: &Path, result: Result<T, String>) -> Result<
 
 /// Forget the load error of the dictionary `key` (none found, or it is about to be searched for again).
 pub fn clear_load_error(key: &str) {
+    MEMORY_LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(k, _)| k != key);
     LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(k, _, _)| k != key);
 }
 
@@ -52,6 +175,22 @@ pub fn load_error(key: &str) -> Option<(PathBuf, String)> {
 pub fn set_dictionary_dir(dir: Option<PathBuf>) {
     *EXTRA_DIR.write().unwrap_or_else(std::sync::PoisonError::into_inner) = dir;
     LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear(); // they belong to the old search path
+    MEMORY_LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+}
+
+#[cfg(test)]
+pub(crate) fn dictionary_dir_for_test() -> Option<PathBuf> {
+    EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+}
+
+#[cfg(test)]
+static ISOLATED_SEARCH_FOR_TEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Restrict a fixture to the explicitly selected dictionary folder. Callers hold
+/// `crate::hold_dictionary_tests` and restore the returned setting before reloading.
+#[cfg(test)]
+pub(crate) fn set_isolated_search_for_test(isolated: bool) -> bool {
+    ISOLATED_SEARCH_FOR_TEST.swap(isolated, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
@@ -82,6 +221,10 @@ fn search_tiers(lo_exts: Option<&[String]>) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let mut system: Vec<PathBuf> = Vec::new();
     if let Some(d) = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
         dirs.push(d);
+    }
+    #[cfg(test)]
+    if ISOLATED_SEARCH_FOR_TEST.load(std::sync::atomic::Ordering::Relaxed) {
+        return (dirs, system);
     }
     if cfg!(target_arch = "wasm32") {
         return (dirs, system);
@@ -182,6 +325,39 @@ pub fn candidates(names: &[&str]) -> Vec<(PathBuf, PathBuf)> {
     let (dirs, system) = search_tiers(lo.as_deref());
     let (region_packs, other_packs) = crate::packs::spelling_dirs(names);
     ordered(names, &dirs, &region_packs, &system, &other_packs)
+}
+
+/// The same search tiers as the filesystem API, with runtime packs represented by their bytes.
+pub(crate) fn source_candidates(names: &[&str]) -> Vec<DictionarySource> {
+    let lo = names.first().copied().map(lo_ext_dirs);
+    let (dirs, system) = search_tiers(lo.as_deref());
+    let (region_packs, other_packs) = crate::packs::spelling_sources(names);
+    let norm = |n: &str| n.to_ascii_lowercase().replace('_', "-");
+    let first = names.first().map(|n| norm(n));
+    let (region, rest): (Vec<_>, Vec<_>) = names.iter().copied().partition(|n| Some(norm(n)) == first);
+    let files = |names: &[&str], dirs: &[PathBuf]| {
+        ordered(names, dirs, &[], &[], &[]).into_iter().map(|(aff, dic)| DictionarySource::Files { aff, dic }).collect::<Vec<_>>()
+    };
+    let mut out = files(names, &dirs);
+    for source in region_packs.into_iter().chain(files(&region, &system)).chain(other_packs).chain(files(&rest, &system)) {
+        if !out.contains(&source) {
+            out.push(source);
+        }
+    }
+    out
+}
+
+pub(crate) fn source_candidates_exact(names: &[&str]) -> Vec<DictionarySource> {
+    let lo = names.first().copied().map(lo_ext_dirs);
+    let (dirs, system) = search_tiers(lo.as_deref());
+    let mut out: Vec<_> = ordered(names, &dirs, &[], &[], &[]).into_iter().map(|(aff, dic)| DictionarySource::Files { aff, dic }).collect();
+    let system = ordered(names, &system, &[], &[], &[]).into_iter().map(|(aff, dic)| DictionarySource::Files { aff, dic });
+    for source in crate::packs::exact_spelling_sources(names).into_iter().chain(system) {
+        if !out.contains(&source) {
+            out.push(source);
+        }
+    }
+    out
 }
 
 /// [`candidates`] over the given folders.
