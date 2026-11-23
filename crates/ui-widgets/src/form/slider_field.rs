@@ -4,14 +4,15 @@
 pub(crate) mod stories;
 
 use crate::contract::{
-    Bind, BindCheck, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel,
+    Bind, BindCheck, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, Focus as _, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel,
     Sizing, Validity, WordSetCx as _,
 };
 use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::keys::{ScalarKeyPolicy, ScalarRow, register_scalar};
 use crate::style::{ComponentStyle, StyleCx};
 use crate::text::{NumberField, RangeAlert};
 use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace};
-use craft_behavior::{Flow, Metrics, Mixed, Proposal, Sense, decimals_for_step};
+use craft_behavior::{Flow, Metrics, Mixed, NumberCodec, Proposal, Sense, decimals_for_step};
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
 
@@ -53,8 +54,8 @@ pub struct SliderFieldStyle {
 /// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it unless
 /// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
 /// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
-/// then the slider are Tab stops. A log or power scale curves the
-/// slider's track only: the field, typing and steps stay linear.
+/// then the slider are Tab stops. A log, power or custom scale curves the slider's track only: the field and typing
+/// stay in model units, as do explicitly set steps.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
     #[common]
@@ -68,6 +69,10 @@ pub struct SliderField<'a> {
     /// How positions along the slider's track map to values.
     #[prop]
     scale: SliderScale,
+    /// The number field's codec. Without one it reads and writes using the environment's locale and unit kind.
+    /// Range limits, typed-value snapping and model-unit steps still belong to this slider field.
+    #[prop]
+    number_codec: Option<NumberCodec>,
     /// The change of one arrow press, wheel notch or label scrub point, and by default the grid typed values snap to.
     #[prop(quantity = "step")]
     step: Option<f64>,
@@ -77,6 +82,17 @@ pub struct SliderField<'a> {
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// Optional independent vertical-key and accessibility nudges for the full clipped row, including its caption.
+    /// Its focused numeric child keeps the normal editor precedence and its original typing/wheel properties.
+    #[prop]
+    key_policy: Option<ScalarKeyPolicy>,
+    /// Pointer sensitivity bindings forwarded to the real slider and numeric/label scrub; not key/wheel policy.
+    #[prop]
+    pointer_modifiers: craft_behavior::DragModifiers,
+    /// Optional zero-origin model grid for this field's real slider pointer values, not its numeric/label editor.
+    /// None preserves original pointer snapping. Keys, wheel and accessibility keep their independent policies.
+    #[prop]
+    pointer_model_step: Option<f64>,
     /// What the number counts: the field shows its unit and reads its spellings.
     #[prop]
     unit_kind: Option<UnitKind>,
@@ -146,9 +162,13 @@ impl<'a> SliderField<'a> {
             range,
             layout: SliderFieldLayout::Stacked,
             scale: SliderScale::Linear,
+            number_codec: None,
             step: None,
             typed_decimals: None,
             wheel_step: None,
+            key_policy: None,
+            pointer_modifiers: craft_behavior::DragModifiers::default(),
+            pointer_model_step: None,
             unit_kind: None,
             unit: None,
             fill: true,
@@ -167,9 +187,13 @@ impl<'a> SliderField<'a> {
         Look {
             range: self.range.clone(),
             scale: self.scale,
+            number_codec: self.number_codec.clone(),
             step: self.step,
             typed_decimals: self.typed_decimals,
             wheel_step: self.wheel_step,
+            key_policy: self.key_policy,
+            pointer_modifiers: self.pointer_modifiers,
+            pointer_model_step: self.pointer_model_step,
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
             fill: self.fill,
@@ -185,9 +209,13 @@ impl<'a> SliderField<'a> {
 struct Look {
     range: RangeInclusive<f64>,
     scale: SliderScale,
+    number_codec: Option<NumberCodec>,
     step: Option<f64>,
     typed_decimals: Option<usize>,
     wheel_step: Option<f64>,
+    key_policy: Option<ScalarKeyPolicy>,
+    pointer_modifiers: craft_behavior::DragModifiers,
+    pointer_model_step: Option<f64>,
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
     fill: bool,
@@ -221,13 +249,27 @@ impl Look {
         if let Some(check) = check {
             bind = bind.check_with(check, BindCheck::validity);
         }
-        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).short(self.short).label(name.clone());
+        let slider = Slider::new(bind, self.range.clone())
+            .scale(self.scale)
+            .fill(self.fill)
+            .thumb(self.thumb)
+            .short(self.short)
+            .label(name.clone())
+            .pointer_modifiers(self.pointer_modifiers);
+        let slider = match self.pointer_model_step {
+            Some(step) => slider.pointer_model_step(step),
+            None => slider,
+        };
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,
         };
         let slider = match self.set_step() {
             Some(step) => slider.step(step),
+            None => slider,
+        };
+        let slider = match self.key_policy.filter(|policy| policy.is_valid()) {
+            Some(policy) => slider.delegated_scalar(policy),
             None => slider,
         };
         match self.wheel_step {
@@ -256,7 +298,13 @@ impl Look {
             .step(step)
             .snap_typed(typed_decimals.is_none() && self.set_step().is_some())
             .commit_decimals(typed_decimals.unwrap_or_else(|| decimals_for_step(step)))
-            .scrub_by_label();
+            .scrub_by_label()
+            .pointer_modifiers(self.pointer_modifiers)
+            .scalar_access_step(self.key_policy.and_then(ScalarKeyPolicy::amount));
+        let field = match &self.number_codec {
+            Some(codec) => field.codec(codec.clone()),
+            None => field,
+        };
         let field = match typed_decimals {
             Some(decimals) => field.max_decimals(decimals),
             None => field,
@@ -311,7 +359,8 @@ impl Component for SliderField<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::empty()
+        // Hover-only geometry belongs to this real row, not a new focus stop or input proxy.
+        if self.key_policy.is_some_and(ScalarKeyPolicy::is_valid) { Sense::HOVER } else { Sense::empty() }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -336,6 +385,22 @@ impl Component for SliderField<'_> {
     /// A host that keeps the value in `f32` writes the proposal back rounded to it: that is the gesture's own value.
     fn same_value(&self, proposed: &f64, host: &f64) -> bool {
         craft_behavior::same_in_f32(*proposed, *host)
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let Some(policy) = self.key_policy.filter(|policy| policy.is_valid()) else { return };
+        let helper = self.look().slider(&cx.label(), shown_of(cx.value()), None, None);
+        while let Some((movement, modifiers)) = cx.intents().take_scalar_move() {
+            if !cx.resolved.enabled || cx.resolved.read_only || (cx.gesture().is_some() && !cx.in_wheel_run()) {
+                continue;
+            }
+            if let Some(next) = helper.scalar_nudged(policy, cx.value().copied(), movement, modifiers) {
+                if cx.in_wheel_run() {
+                    cx.commit();
+                }
+                cx.set(next);
+            }
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -376,6 +441,15 @@ impl Component for SliderField<'_> {
             }
         });
         cx.adopt(&dragged, &start, |value, mine| *mine = *value);
+        if cx.resolved.enabled
+            && !cx.resolved.read_only
+            && let Some(policy) = self.key_policy.filter(|policy| policy.is_valid())
+        {
+            register_scalar(
+                &cx.core.ctx,
+                ScalarRow::new(cx.id, dragged.response.id, policy, cx.visible, cx.response.layer_id).editor(typed.response.id),
+            );
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SliderFieldOutput {

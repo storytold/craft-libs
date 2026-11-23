@@ -11,6 +11,7 @@ use crate::contract::{
 };
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
+use crate::runtime::keys::{MoveMods, NavMove, ScalarKeyPolicy, ScalarRow, register_scalar};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
 use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense, WheelPhase};
 use craft_theme::Stateful;
@@ -59,6 +60,16 @@ struct Held {
     press: Option<Press>,
 }
 
+/// Canonical zero-origin model grid, selected explicitly by one input policy and clamped after rounding.
+fn model_grid_landing(value: f64, step: f64, bounds: (f64, f64)) -> f64 {
+    let ticks = value / step;
+    // A quantum below the value's representable resolution need not produce an infinite intermediate.
+    let landed = if ticks.is_finite() { ticks.round() * step } else { value };
+    let landed = if landed.is_finite() { landed } else { value };
+    // Overflow reaches the finite bound; NaN has the same deterministic minimum landing as the key policy.
+    if landed.is_nan() { bounds.0 } else { landed.clamp(bounds.0, bounds.1) }
+}
+
 /// A slider over `range`.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Slider<'a> {
@@ -85,6 +96,18 @@ pub struct Slider<'a> {
     /// moves along the track and ignores it.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// Optional independent vertical-key and accessibility nudges. None keeps the existing key behavior.
+    #[prop]
+    key_policy: Option<ScalarKeyPolicy>,
+    /// A SliderField declares the full real row; its child must not register a competing track-only row.
+    scalar_delegate: bool,
+    /// Continuous pointer fine/coarse bindings. Keyboard, wheel and accessibility steps are independent.
+    #[prop]
+    pointer_modifiers: craft_behavior::DragModifiers,
+    /// Optional zero-origin model grid for thumb/track pointer values only. None keeps original track snapping.
+    /// A non-positive or non-finite quantum is ignored. Keys, wheel, accessibility and editors are independent.
+    #[prop]
+    pointer_model_step: Option<f64>,
     /// The value as the caller words it ("50 %"), in place of the slider's own value text: the number in the step's
     /// decimals, or in one decimal without a step. Assistive technology reads it, and so does a viewer that
     /// shows the value beside the slider.
@@ -131,11 +154,32 @@ impl<'a> Slider<'a> {
             thumb: SliderThumb::Round,
             marks: Marks::default(),
             wheel_step: None,
+            key_policy: None,
+            scalar_delegate: false,
+            pointer_modifiers: craft_behavior::DragModifiers::default(),
+            pointer_model_step: None,
             value_text: None,
             track_face: None,
             trim: None,
             short: false,
         }
+    }
+
+    /// The composite owns interest and consumes scalar moves; this child still paints its own real slider/AX node.
+    pub(crate) fn delegated_scalar(mut self, policy: ScalarKeyPolicy) -> Self {
+        self.key_policy = Some(policy);
+        self.scalar_delegate = true;
+        self
+    }
+
+    /// Adds in model units, then uses the explicitly selected model grid or the unchanged original track grid.
+    pub(crate) fn scalar_nudged(&self, policy: ScalarKeyPolicy, value: Option<f64>, movement: NavMove, modifiers: MoveMods) -> Option<f64> {
+        let scale = self.track_scale();
+        let offset = policy.offset(movement, modifiers)?;
+        if let Some(step) = policy.model_quantum() {
+            return Some(model_grid_landing(value.unwrap_or_else(|| scale.middle()) + offset, step, (scale.min, scale.max)));
+        }
+        Some(scale.snap(value.unwrap_or_else(|| scale.middle()) + offset))
     }
 
     /// Values the thumb snaps to when a drag or a press brings it near, drawn as marks under the track. A mark outside
@@ -256,7 +300,13 @@ impl Component for Slider<'_> {
         let travel = Travel { track: along.travel().min..along.travel().max, units: 0.0..=1.0, rtl };
         let pick = along.pick(false);
         let marks = &self.marks;
-        let at = |position: f64| marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)));
+        let at = |position: f64| {
+            if let Some(step) = self.pointer_model_step.filter(|step| step.is_finite() && *step > 0.0) {
+                let value = marks.snapped(&scale, length, position).unwrap_or_else(|| scale.at_position(position));
+                return model_grid_landing(value, step, bounds);
+            }
+            marks.snapped(&scale, length, position).unwrap_or_else(|| scale.snap(scale.at_position(position)))
+        };
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or_else(|| scale.middle());
         let press_at = |cx: &Cx<'_, Self>, x: f32| pick.press(&[along.x(scale.position(current(cx)))], x);
         for key in [Self::THUMB, TRACK] {
@@ -269,14 +319,18 @@ impl Component for Slider<'_> {
                 }
                 PressPhase::Drag { .. } => {
                     let held = cx.memory::<Held>().clone();
-                    if let Some(next) = held.press.and_then(|press_of| travel.value(press_of, held.from, &press, true)) {
+                    if let Some(next) =
+                        held.press.and_then(|press_of| travel.value_with_modifiers(press_of, held.from, &press, true, self.pointer_modifiers))
+                    {
                         cx.propose(at(next));
                     }
                 }
                 PressPhase::Release { start, click, .. } => {
                     if cx.gesture().is_some() {
                         let held = cx.memory::<Held>().clone();
-                        if let Some(next) = held.press.and_then(|press_of| travel.value(press_of, held.from, &press, true)) {
+                        if let Some(next) =
+                            held.press.and_then(|press_of| travel.value_with_modifiers(press_of, held.from, &press, true, self.pointer_modifiers))
+                        {
                             cx.propose(at(next));
                         }
                         cx.commit();
@@ -311,6 +365,19 @@ impl Component for Slider<'_> {
                 cx.set(next);
             }
         }
+        while let Some((movement, modifiers)) = cx.intents().take_scalar_move() {
+            if pressing || !cx.resolved.enabled || cx.resolved.read_only {
+                continue;
+            }
+            if let Some(policy) = self.key_policy.filter(|policy| policy.is_valid())
+                && let Some(next) = self.scalar_nudged(policy, cx.value().copied(), movement, modifiers)
+            {
+                if cx.in_wheel_run() {
+                    cx.commit();
+                }
+                cx.set(next);
+            }
+        }
         if let Some(next) = set_value {
             if cx.in_wheel_run() {
                 cx.commit();
@@ -331,7 +398,8 @@ impl Component for Slider<'_> {
             Some(value) => Numeric::new(*value, range),
             None => Numeric::empty(range),
         };
-        access.numeric(numeric.step(scale.small()));
+        let step = self.key_policy.and_then(ScalarKeyPolicy::amount).unwrap_or_else(|| scale.small());
+        access.numeric(numeric.step(step));
     }
 
     /// The app's words for the shown value when it gives them, else the value as the slider words it.
@@ -348,6 +416,13 @@ impl Component for Slider<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if !self.scalar_delegate
+            && cx.resolved.enabled
+            && !cx.resolved.read_only
+            && let Some(policy) = self.key_policy.filter(|policy| policy.is_valid())
+        {
+            register_scalar(&cx.core.ctx, ScalarRow::new(cx.id, cx.id, policy, cx.visible, cx.response.layer_id));
+        }
         let style = cx.style;
         let flow = cx.flow;
         let scale = self.track_scale();
