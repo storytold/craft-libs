@@ -8,9 +8,10 @@ use craft_theme::ControlSize;
 use craft_theme::Variant;
 use craft_ui::buttons::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, Hover, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::Picture;
 use craft_ui::list::ThumbAspect;
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::ComboBox;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandState, Scope};
@@ -815,4 +816,28 @@ fn an_icon_only_toggle_in_a_field_without_label_text_keeps_its_name() {
     fixture.settle();
     let toggle = fixture.by_label("Convert Cyan to process").expect("the toggle keeps its name");
     assert!(fixture.by_role(Role::BUTTON).iter().any(|button| button.node == toggle.node), "the named node is the toggle button");
+}
+
+/// A menu button given the row its menu picked reads as a combo box named by its label, with that row as its value; a
+/// menu button without one stays a button with no value.
+#[trial]
+fn a_menu_button_with_a_choice_reads_as_a_combo_box_valued_by_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let align = IconButton::new(IconId::new("align_edge_left")).label("Align To").popup(PopupKind::Menu).choice("Align to Artboard").show(ui);
+        Menu::new("Align To").opened_by(&align.response, Trigger::Press).show(ui, |ui, _| {
+            MenuItem::new("Align to Artboard").check(true).show(ui);
+        });
+        IconButton::new(IconId::new("more")).label("More").popup(PopupKind::Menu).show(ui);
+    });
+    fixture.settle();
+    let align = fixture.by_label("Align To").expect("the choice button is in the access tree");
+    let more = fixture.by_label("More").expect("the plain menu button is in the access tree");
+    let tree = fixture.tree();
+    assert_eq!(tree.role_of(align.node), Some(Role::COMBO_BOX), "a button with a choice is a combo box");
+    assert_eq!(tree.value_of(align.node), Some("Align to Artboard"), "its value is the choice");
+    assert_eq!(tree.expanded_of(align.node), Some(false), "its menu is closed");
+    assert_eq!(tree.role_of(more.node), Some(Role::BUTTON), "a menu button without a choice stays a button");
+    assert_eq!(tree.value_of(more.node), None, "and has no value");
+    fixture.click_at(align.center()).settle();
+    assert_eq!(fixture.tree().expanded_of(align.node), Some(true), "it reports its menu open");
 }

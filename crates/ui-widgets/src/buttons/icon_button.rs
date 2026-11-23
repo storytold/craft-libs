@@ -6,6 +6,7 @@ use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PopupKi
 use crate::controls::disclosure::DisclosureGlyph;
 use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
 use crate::runtime::commands::CommandRef;
+use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
 use craft_i18n::Direction;
@@ -65,7 +66,9 @@ pub enum PopupMark {
 
 /// A square button showing only an icon. Its label is its accessible name; a tooltip is the caller's. A selected
 /// button (`selected(true)`) shows the on look: the host owns the state and a click is reported in the response.
-/// [`ButtonOutput::held`] reports the press from its start to its end.
+/// [`ButtonOutput::held`] reports the press from its start to its end. A button whose menu picks one of its rows (an
+/// Align To button) gives the picked row as its [`choice`](Self::choice): it then reads as a combo box named by its
+/// label, with the choice as its value.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct IconButton<'a> {
     #[common]
@@ -82,15 +85,27 @@ pub struct IconButton<'a> {
     /// that opens a menu have one.
     #[prop]
     popup_mark: PopupMark,
-    /// Whether the popup the button opens is open, as the host knows it.
+    /// Whether the popup the button opens is open, as the host knows it. A button with a [`choice`](Self::choice)
+    /// reports, without it, whether the container hung from it is open.
     #[prop(into)]
     expanded: Option<bool>,
+    /// The row the menu it opens has picked, for a button that picks one of its menu's rows.
+    #[prop(into)]
+    choice: Option<Label>,
 }
 
 impl<'a> IconButton<'a> {
     /// An icon button showing `icon`; `label` it with the accessible name.
     pub fn new(icon: impl Into<IconSpec<'a>>) -> Self {
-        IconButton { common: Common::new(), icon: icon.into(), focusable: true, popup: None, popup_mark: PopupMark::None, expanded: None }
+        IconButton {
+            common: Common::new(),
+            icon: icon.into(),
+            focusable: true,
+            popup: None,
+            popup_mark: PopupMark::None,
+            expanded: None,
+            choice: None,
+        }
     }
 
     /// An icon button bound to `command`: its label, enabled state and activation follow the command.
@@ -101,6 +116,7 @@ impl<'a> IconButton<'a> {
 
 impl Component for IconButton<'_> {
     const ROLE: Role = Role::BUTTON;
+    const ALT_ROLES: &'static [Role] = &[Role::COMBO_BOX];
     const PARTS: bool = false;
     const SHOWS_LABEL: bool = false;
     const OVERLAYS: bool = false;
@@ -176,13 +192,21 @@ impl Component for IconButton<'_> {
         }
     }
 
-    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         if let Some(kind) = self.popup {
             access.has_popup(kind);
         }
-        if let Some(open) = self.expanded {
+        if self.choice.is_some() {
+            access.role(Role::COMBO_BOX);
+        }
+        let shown = || self.choice.is_some().then(|| crate::contract::overlay::opened_from(&cx.ctx, cx.response.id));
+        if let Some(open) = self.expanded.or_else(shown) {
             access.expanded(open);
         }
+    }
+
+    fn value_text(&self, cx: &Cx<'_, Self>) -> Option<String> {
+        self.choice.as_ref().map(|choice| cx.env.resolve(choice).as_str().to_owned())
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> ButtonOutput {
