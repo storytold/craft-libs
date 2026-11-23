@@ -679,8 +679,11 @@ fn limits_count_shared_accessors_expansions_and_extras() {
         assert!(with(&glb, &|l| l.max_extras = 4).is_ok(), "{key}");
         assert!(too(with(&glb, &|l| l.max_extras = 3)), "{key}");
     }
-    let image_and_keys = with(&r, &|l| l.max_data_bytes = split_glb(&r).unwrap().1.unwrap().len());
-    assert!(image_and_keys.is_ok());
+    // The skin's 32 matrix values and the channel's 8 keys are charged on top of the buffer
+    // they are read from.
+    let bin = split_glb(&r).unwrap().1.unwrap().len();
+    assert!(with(&r, &|l| l.max_data_bytes = bin + 40).is_ok());
+    assert!(too(with(&r, &|l| l.max_data_bytes = bin + 39)));
 }
 
 #[test]
@@ -1087,10 +1090,12 @@ fn morph_target_limits() {
     let targets: Vec<Value> = (0..200).map(|_| json!({ "POSITION": d })).collect();
     let many = one_mesh(&b, json!({ "attributes": { "POSITION": p }, "targets": targets }));
     assert!(b.bin.len() < 19_200);
+    // The buffer's own bytes come out of the same limit.
+    let bin = |glb: &[u8]| split_glb(glb).unwrap().1.unwrap().len();
     let structs = 200 * size_of::<MorphTarget>();
-    let s = with(&many, &|l| l.max_data_bytes = 19_200 + structs).unwrap();
+    let s = with(&many, &|l| l.max_data_bytes = bin(&many) + 19_200 + structs).unwrap();
     assert_eq!((s.meshes[0].morph_targets.len(), s.meshes[0].morph_targets[199].positions[3]), (200, [0.25; 3]));
-    assert!(too(with(&many, &|l| l.max_data_bytes = 19_200 + structs - 1)));
+    assert!(too(with(&many, &|l| l.max_data_bytes = bin(&many) + 19_200 + structs - 1)));
     // The zero offsets of vertices a target does not move count too: 200 targets that move
     // only the second primitive's 3 vertices also hold zeros for the first one's 4, so
     // 200 x 7 x 3 values of 8 bytes.
@@ -1099,15 +1104,25 @@ fn morph_target_limits() {
     let unmoved = json!({ "attributes": { "POSITION": p }, "targets": vec![json!({}); 200] });
     let moved = json!({ "attributes": { "POSITION": three }, "targets": vec![json!({ "POSITION": d3 }); 200] });
     let padded = b.glb(json!({ "meshes": [{ "primitives": [unmoved, moved] }] }));
-    let s = with(&padded, &|l| l.max_data_bytes = 33_600 + structs).unwrap();
+    let s = with(&padded, &|l| l.max_data_bytes = bin(&padded) + 33_600 + structs).unwrap();
     assert_eq!(s.meshes[0].morph_targets[0].positions.len(), 7);
-    assert!(too(with(&padded, &|l| l.max_data_bytes = 33_600 + structs - 1)));
+    assert!(too(with(&padded, &|l| l.max_data_bytes = bin(&padded) + 33_600 + structs - 1)));
     // So do the targets themselves, offsets or not: many meshes of empty targets cannot
     // allocate without bound.
     let empty = json!({ "primitives": [{ "attributes": { "POSITION": p }, "targets": vec![json!({}); 200] }] });
     let meshes = b.glb(json!({ "meshes": vec![empty; 50] }));
-    assert!(with(&meshes, &|l| l.max_data_bytes = 50 * structs).is_ok());
-    assert!(too(with(&meshes, &|l| l.max_data_bytes = 50 * structs - 1)));
+    assert!(with(&meshes, &|l| l.max_data_bytes = bin(&meshes) + 50 * structs).is_ok());
+    assert!(too(with(&meshes, &|l| l.max_data_bytes = bin(&meshes) + 50 * structs - 1)));
+    // One triangle: its positions and offsets take 72 bytes of buffer, and its target holds
+    // 9 offsets of 8 bytes, so it needs one target's size plus 144 bytes.
+    let mut t = B::default();
+    let p3 = t.f32s(&QUAD[..9], "VEC3", 3);
+    let d3 = t.f32s(&[0.25; 9], "VEC3", 3);
+    let triangle = one_mesh(&t, json!({ "attributes": { "POSITION": p3 }, "targets": [{ "POSITION": d3 }] }));
+    assert_eq!(bin(&triangle), 72);
+    let one = size_of::<MorphTarget>();
+    assert!(with(&triangle, &|l| l.max_data_bytes = one + 144).is_ok());
+    assert!(too(with(&triangle, &|l| l.max_data_bytes = one + 143)));
     // A primitive that is left out (points) does not count towards the mesh's targets.
     let three: Vec<Value> = (0..3).map(|_| json!({ "POSITION": d })).collect();
     let points = json!({ "attributes": { "POSITION": p }, "mode": 0, "targets": three });

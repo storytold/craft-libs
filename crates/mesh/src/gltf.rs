@@ -20,7 +20,8 @@
 //! [`Node::morph_weights`]. A mesh with more targets than [`Limits::max_morph_targets`] is read
 //! in its base shape, and its targets are named in a warning. The offsets count against
 //! [`Limits::max_data_bytes`] at 8 bytes per value, the zero offsets of vertices a target does
-//! not move included, and so does each [`MorphTarget`] itself.
+//! not move included, and so does each [`MorphTarget`] itself. The buffers count against the
+//! same limit, and the offsets, images, skins and animations get what the buffers leave of it.
 //!
 //! The `extensions` and `extras` of the file, its nodes, meshes and materials are kept as
 //! written ([`Scene::extensions`], [`Node::extensions`], …), for a caller that reads an
@@ -987,14 +988,17 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     let (extensions, extras) = extension_data(&j);
     let mut scene = Scene { extensions, extras, ..Scene::default() };
     check_extensions(&j, &mut scene)?;
+    let buffers = buffers(&j, bin, limits, &mut scene, resolve)?;
+    // What is read out of the buffers shares one limit with the buffers themselves.
+    let data_left = limits.max_data_bytes.saturating_sub(buffers.iter().map(Vec::len).sum());
     let d = Doc {
         j: &j,
-        buffers: buffers(&j, bin, limits, &mut scene, resolve)?,
+        buffers,
         vertices_left: Cell::new(limits.max_vertices),
         triangles_left: Cell::new(limits.max_triangles),
         parts_left: Cell::new(limits.max_parts),
         zero_left: Cell::new(MAX_ZERO_COMPONENTS),
-        data_left: Cell::new(limits.max_data_bytes),
+        data_left: Cell::new(data_left),
     };
     images(&d, limits, &mut scene)?;
     materials(&j, limits, &mut scene)?;
