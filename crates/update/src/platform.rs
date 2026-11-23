@@ -314,9 +314,25 @@ fn parse_tauri_asset_name(base: &str, kind: PackageKind, stems: &[&str]) -> Opti
 /// The best asset of `release` for `platform`, trying `kinds` in order and, within a kind, the
 /// platform's tokens in order (native before emulated).
 pub fn pick_asset<'a>(release: &'a Release, stems: &[&str], platform: Platform, kinds: &[PackageKind]) -> Option<(&'a Asset, PackageKind)> {
+    pick_with_tokens(release, stems, platform.tokens(), kinds)
+}
+
+/// Like [`pick_asset`], but only `platform`'s first choice, with no fallback to an emulated
+/// build: an asset built for exactly this platform's architecture.
+pub(crate) fn pick_exact_asset<'a>(
+    release: &'a Release,
+    stems: &[&str],
+    platform: Platform,
+    kinds: &[PackageKind],
+) -> Option<(&'a Asset, PackageKind)> {
+    pick_with_tokens(release, stems, platform.tokens().get(..1).unwrap_or_default(), kinds)
+}
+
+/// The best asset of `release` among `kinds` and `tokens`, both tried in order.
+fn pick_with_tokens<'a>(release: &'a Release, stems: &[&str], tokens: &[&str], kinds: &[PackageKind]) -> Option<(&'a Asset, PackageKind)> {
     let parsed: Vec<(&Asset, AssetName)> = release.assets.iter().filter_map(|a| parse_asset_name(&a.name, stems).map(|n| (a, n))).collect();
     for kind in kinds {
-        for token in platform.tokens() {
+        for token in tokens {
             if let Some((asset, _)) = parsed.iter().find(|(_, n)| n.kind == *kind && n.token == *token) {
                 return Some((asset, *kind));
             }
