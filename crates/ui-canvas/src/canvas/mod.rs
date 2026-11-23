@@ -475,19 +475,10 @@ impl<'a> Canvas<'a> {
             zoom_anchor = read.zoom_anchor.or(zoom_anchor);
             halt |= read.zoomed;
         }
-        // The eased wheel zoom pays this pass's part of what its notches owe (`NavigationOptions::eased_wheel_zoom`).
-        if let Some((factor, at)) = motion.wheel_zoom.step(now) {
-            let action = WheelAction::Zoom(factor);
-            let (anchor, zoom) = (WheelNavigation::zoom_anchor(&view, action, at, size), view.zoom);
-            jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
-            if view.zoom != zoom {
-                zoom_anchor = anchor.or(zoom_anchor);
-            }
-            halt = true;
-        }
-        if motion.wheel_zoom.owes() {
-            frame::request_repaint(&ctx);
-        }
+        let paid = pay_wheel_zoom(&ctx, &mut motion, &mut view, size, pixels_per_point, now);
+        jumped |= paid.jumped;
+        zoom_anchor = paid.zoom_anchor.or(zoom_anchor);
+        halt |= paid.zoomed;
         // Every pass feeds the ease, the line pan or nothing, so owed motion keeps paying; the service takes the time
         // from its own clock, so a later pass of the same frame pays nothing.
         if self.navigation.eased_wheel && !halt {
@@ -595,9 +586,7 @@ impl<'a> Canvas<'a> {
             motion.glide.stop();
             cx.stop_wheel_ease();
         }
-        if stop_zoom_ease {
-            motion.wheel_zoom.stop();
-        }
+        motion.wheel_zoom.stop_if(stop_zoom_ease);
         // A view that moves during a wheel gesture marks it moved, so a body that turns pages at the edge does not turn
         // one after a pan or a go-to.
         if target != at_start {
@@ -1119,6 +1108,22 @@ fn clamped(mut view: CanvasView, document: Option<Size>, navigation: &Navigation
         CanvasScrollbars::clamp(&mut view, DocRect::from_origin_size(Point::ZERO, document));
     }
     view
+}
+
+/// Pays this pass's part of what the eased wheel zoom's notches owe (`NavigationOptions::eased_wheel_zoom`) on `view`,
+/// and asks for the next pass while more is owed: whether it zoomed, whether the view moved and the point the zoom kept
+/// still.
+fn pay_wheel_zoom(ctx: &Context, motion: &mut ViewMotion, view: &mut CanvasView, size: Size, pixels_per_point: f32, now: f64) -> WheelRead {
+    let paid = motion.wheel_zoom.step(now).map(|(factor, at)| {
+        let action = WheelAction::Zoom(factor);
+        let (anchor, zoom) = (WheelNavigation::zoom_anchor(view, action, at, size), view.zoom);
+        let jumped = WheelNavigation::apply(view, action, at, size, pixels_per_point);
+        WheelRead { jumped, zoom_anchor: anchor.filter(|_| view.zoom != zoom), zoomed: true, ..WheelRead::default() }
+    });
+    if motion.wheel_zoom.owes() {
+        frame::request_repaint(ctx);
+    }
+    paid.unwrap_or_default()
 }
 
 /// Whether the eased wheel zoom takes `wheel`'s zoom: a wheel notch under the zoom modifier (Cmd or Ctrl), whose

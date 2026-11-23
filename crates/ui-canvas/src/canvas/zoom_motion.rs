@@ -197,9 +197,11 @@ impl WheelZoomEase {
         self.owed != 0.0
     }
 
-    /// Drops what is owed.
-    pub(crate) fn stop(&mut self) {
-        self.owed = 0.0;
+    /// Drops what is owed when `stop`.
+    pub(crate) fn stop_if(&mut self, stop: bool) {
+        if stop {
+            self.owed = 0.0;
+        }
     }
 }
 
