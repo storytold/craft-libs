@@ -37,6 +37,8 @@
 //! name), `FilmCraft Frame Size` and `FilmCraft Audio Sample Rate` (on the composition).
 
 mod ids;
+pub mod linked_audio;
+pub mod properties;
 mod read;
 pub(crate) mod store;
 mod write;

@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 // The docs link items of every feature; built with fewer features, those links have no target.
 // CI and docs.rs build the docs with all features, where every link must resolve.
-#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks")), allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks", feature = "dsd")), allow(rustdoc::broken_intra_doc_links))]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.
@@ -13,6 +13,7 @@
 //!   demuxers and [`TrackDecoder`]; everything else (FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
 //!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
 //!   same without symphonia.
+//! - [`vorbis::decoder`] (feature `vorbis-decode`): the pure-Rust Vorbis I decoder, packets and Ogg files.
 //! - [`encode_ogg_vorbis`] and [`vorbis::encoder`] (feature `vorbis-encode`): Ogg Vorbis files
 //!   and Vorbis packets from a pure-Rust encoder, 1 to 8 channels, quality -1 to 10, with tags.
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
@@ -30,7 +31,8 @@
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
-//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files),
+//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files), [`adpcm`]
+//!   (`adpcm`: IMA WAV, Microsoft, Yamaha and Flash ADPCM), [`dsd`] (`dsd`: DSF and DSDIFF files to PCM),
 //!   [`gsm`] (`gsm-decode`, `gsm-encode`: GSM 06.10 full-rate speech), [`vmd`] (`vmd-decode`:
 //!   Sierra VMD sound).
 //!
@@ -40,11 +42,19 @@
 pub mod aac;
 #[cfg(any(feature = "ac3-decode", feature = "ac3-encode", feature = "eac3-encode"))]
 pub mod ac3;
+#[cfg(feature = "adpcm")]
+pub mod adpcm;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
+#[cfg(feature = "dsd")]
+pub mod dsd;
+#[cfg(any(feature = "flac-decode", feature = "symphonia"))]
+mod flac_layout;
 #[cfg(feature = "g722")]
 pub mod g722;
+#[cfg(feature = "g726")]
+pub mod g726;
 #[cfg(any(feature = "gsm-decode", feature = "gsm-encode"))]
 pub mod gsm;
 mod layout;
@@ -54,7 +64,14 @@ pub mod mp3;
 pub mod mpa;
 #[cfg(any(feature = "opus-decode", feature = "opus-encode"))]
 pub mod opus;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
@@ -64,11 +81,18 @@ pub mod qoa;
 mod read;
 #[cfg(feature = "sbc")]
 pub mod sbc;
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 mod track;
 #[cfg(feature = "vmd-decode")]
 pub mod vmd;
-#[cfg(feature = "vorbis-encode")]
+#[cfg(any(feature = "vorbis-decode", feature = "vorbis-encode"))]
 pub mod vorbis;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
@@ -142,7 +166,14 @@ pub use read::{
 };
 #[cfg(feature = "decode-native")]
 pub use read::{RawPcm, aiff_pcm, wav_pcm};
-#[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
+#[cfg(any(
+    feature = "aac-decode",
+    feature = "alac-decode",
+    feature = "opus-decode",
+    feature = "ac3-decode",
+    feature = "mpa-decode",
+    feature = "flac-decode"
+))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
 #[cfg(any(
     feature = "pcm-encode",
