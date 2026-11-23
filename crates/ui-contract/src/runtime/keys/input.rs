@@ -629,7 +629,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let latin = &input.latin_layout_chars;
     // S-L177: an Alt chord's text is withheld only when the press can run its command; a bound command that is
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
-    let bound = |chord: &Chord| commands::runs_now(ctx, chord);
+    let bound = |chord: &Chord| commands::runs_now(ctx, viewport, chord);
     let press_captured = crate::runtime::pointer::press_captured_in(ctx, viewport) || crate::runtime::drag::running(ctx);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, stage);
@@ -856,7 +856,7 @@ pub(crate) fn take_nav(ctx: &Context) -> NavKeys {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let gate = tab_toggles_now(ctx);
     let layout = layout_of(ctx);
-    let fires = |input: &KeyInput| layout.candidates(input).iter().any(|chord| commands::runs_now(ctx, chord));
+    let fires = |input: &KeyInput| layout.candidates(input).iter().any(|chord| commands::runs_now(ctx, viewport, chord));
     for press in tabs {
         match gate.then(|| chrome_toggle_of(ctx, &press.input)).flatten() {
             Some(toggle) if !press.repeat => request_chrome_toggle(ctx, viewport, toggle),

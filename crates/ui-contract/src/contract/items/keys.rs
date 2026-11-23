@@ -150,7 +150,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // A disabled lead does not run, as a press on it does not.
         if activated
             && !header_held
-            && let Some(row) = lead_at.filter(|&row| self.source.enabled(row))
+            && let Some(row) = lead_at.filter(|&row| !self.source.enabled(row))
+        {
+            self.events.push(CollectionEvent::Refused(self.source.key(row)));
+        } else if activated
+            && !header_held
+            && let Some(row) = lead_at
         {
             // Where the arrows leave the selection, Enter picks the lead it activates.
             if !props.arrows_select && !self.holds(row) {

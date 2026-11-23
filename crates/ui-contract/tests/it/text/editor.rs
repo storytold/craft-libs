@@ -957,3 +957,49 @@ fn a_command_a_chord_fires_reaches_its_editor_between_the_typing_around_it() {
         "the command sits between the texts its chord came between: {steps:?}"
     );
 }
+
+/// A type editor's typing scope with a chord that types a character on some layouts: a dash command on Alt+Shift+-,
+/// where Option+Shift+- types an em dash on the Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "dashTrial", scope = "trial.dashes", typing)]
+#[non_exhaustive]
+enum DashCommand {
+    #[command(label = "Dash", default = "Alt+Shift+-")]
+    Dash,
+}
+
+/// The text of an Alt chord bound only in a scope that is not around the focus (the typing scope of a type editor shown
+/// beside the focused field) is typed in the field: the press runs nothing there. Guards a key stage that withheld the
+/// text for any enabled binding of the chord, whatever its scope, so the character went nowhere.
+#[trial]
+fn an_alt_chord_bound_only_out_of_scope_leaves_its_text_typed() {
+    use craft_behavior::Input;
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use craft_ui::runtime::frame::take_output;
+    use craft_ui::testing::focus::{Stop, intents_of, named_id, register_stop, widget};
+
+    let field = named_id("dash field");
+    let (typed, focus, steps) = (RefCell::new(String::new()), Cell::new(true), RefCell::new(Vec::new()));
+    let mut show = |ui: &mut egui::Ui| {
+        let _ = Typer { common: Common::new(), steps: &steps }.label("Type").command_scope(<DashCommand as CommandSet>::SCOPE).show_at(ui, AT);
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+        if focus.take() {
+            request(ui.ctx(), FocusTarget::Id(field));
+        }
+        let mut intents = intents_of(ui.ctx(), Some(field), false);
+        while let Some(text) = intents.take_text() {
+            typed.borrow_mut().push_str(&text);
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    take_output(&frames.ctx);
+    let alt_shift = Modifiers { alt: true, shift: true, ..Modifiers::NONE };
+    frames.frame(vec![key_press(Key::Minus, alt_shift), Event::Text("\u{2014}".into())], &mut show);
+    frames.frame(vec![key_release(Key::Minus, alt_shift)], &mut show);
+    frames.idle(1, &mut show);
+    assert_eq!(typed.take(), "\u{2014}", "the field types the chord's text");
+    let fired: Vec<String> = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    assert!(fired.is_empty(), "nothing ran: {fired:?}");
+}

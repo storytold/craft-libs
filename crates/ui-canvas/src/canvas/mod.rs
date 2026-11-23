@@ -223,6 +223,11 @@ pub struct Canvas<'a> {
     /// and Redo fall through to the app command's state. Ignored without [`editor`](Self::editor).
     #[prop]
     inactive_edits: EditSet,
+    /// While the editor part has the keys, chords with the platform's command modifier and function keys still run the
+    /// app's commands, whatever its typing rule ([`KeyUse::command_keys`]): a type tool whose app runs its commands
+    /// while typing. The editor keeps its text editing chords. Ignored without [`editor`](Self::editor).
+    #[prop]
+    editor_command_keys: bool,
     /// The editor part's inputs of this pass, taken once in `update`: `tool_pass` is built from a shared `Cx`.
     editor_input: Arc<[EditorInput]>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
@@ -315,6 +320,7 @@ impl<'a> Canvas<'a> {
             keys_to_body: false,
             editor: None,
             inactive_edits: EditSet::NONE,
+            editor_command_keys: false,
             editor_input: Arc::from([]),
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
@@ -838,7 +844,10 @@ impl Component for Canvas<'_> {
     /// nudges. It still marks its window as showing a document.
     fn keys(&self) -> KeyUse {
         match self.editor {
-            Some(_) => KeyUse::of(Input::Editor).with_chrome_key(true).with_moves().with_inactive(self.inactive_edits),
+            Some(_) => {
+                let keys = KeyUse::of(Input::Editor).with_chrome_key(true).with_moves().with_inactive(self.inactive_edits);
+                if self.editor_command_keys { keys.with_command_keys() } else { keys }
+            }
             None => Self::KEYS,
         }
     }

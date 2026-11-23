@@ -439,8 +439,11 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = core.popup(EDIT_MENU).is_open_in(core);
     // A menu bar or a menu the keyboard goes back to the part from has the focus: their Cut and Copy act on the
-    // selection the part keeps for them.
-    let returns_here = crate::runtime::focus::focused_stop(&ctx)
+    // selection the part keeps for them. Only a part that had the focus last pass, or keeps a selection already, can be
+    // gone back to: asking reads the focus, which a part that never held it has not read, so its replay stays true.
+    let returns_here = (state.focused || state.held_selection.is_some())
+        .then(|| crate::runtime::focus::focused_stop(&ctx))
+        .flatten()
         .filter(|(focused, _)| *focused != id)
         .and_then(|(focused, _)| crate::runtime::focus::returning(&ctx, focused))
         .is_some_and(|((to, _), _)| to == id);

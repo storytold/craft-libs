@@ -38,6 +38,8 @@ struct Rig {
     open: Rc<Cell<bool>>,
     /// The last command picked.
     picked: Rc<RefCell<Option<CommandRef>>>,
+    /// The last disabled command Enter was refused on.
+    refused: Rc<RefCell<Option<CommandRef>>>,
     /// The bound `recents`, newest first; empty and unused when the rig keeps them in the palette.
     recents: Rc<RefCell<Vec<CommandRef>>>,
 }
@@ -47,9 +49,10 @@ struct Rig {
 fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: bool, beneath: impl Fn(&mut Ui) + 'static) -> Rig {
     let open = Rc::new(Cell::new(true));
     let picked = Rc::new(RefCell::new(None::<CommandRef>));
+    let refused = Rc::new(RefCell::new(None::<CommandRef>));
     let bound = recents.is_some();
     let held = Rc::new(RefCell::new(recents.unwrap_or_default()));
-    let (shown_open, shown_picked, shown_held) = (open.clone(), picked.clone(), held.clone());
+    let (shown_open, shown_picked, shown_refused, shown_held) = (open.clone(), picked.clone(), refused.clone(), held.clone());
     let fixture = Fixture::new(move |ui| {
         beneath(ui);
         let show = |ui: &mut Ui| {
@@ -70,6 +73,9 @@ fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: boo
             if let Some(command) = output.picked {
                 *shown_picked.borrow_mut() = Some(command);
             }
+            if let Some(command) = output.refused {
+                *shown_refused.borrow_mut() = Some(command);
+            }
         };
         if in_dialog {
             Popover::new("Levels", Bind::given(true)).overlay(|_| Overlay::modal()).show(ui, |ui, _| show(ui));
@@ -77,7 +83,7 @@ fn rig(entries: Vec<HelpEntry>, recents: Option<Vec<CommandRef>>, in_dialog: boo
             show(ui);
         }
     });
-    Rig { fixture, open, picked, recents: held }
+    Rig { fixture, open, picked, refused, recents: held }
 }
 
 /// A palette open over `entries`, inside a modal dialog when `in_dialog`; `picked` holds the last pick.
@@ -504,12 +510,12 @@ fn the_active_row_marks_its_shown_control_and_a_hidden_home_goes_to_the_footer()
 }
 
 /// Enter on a query whose first match is disabled runs nothing, though an enabled match follows it: the first match is
-/// the active row, the one the footer explains. Guards against an active row that skipped the disabled first match, so
-/// Enter ran the match after it.
+/// the active row, the one the footer explains, and the output names it as refused so an app can close and say why.
+/// Guards against an active row that skipped the disabled first match, so Enter ran the match after it.
 #[trial]
 fn enter_on_a_disabled_first_match_runs_nothing() {
     let entries = vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"]), HelpEntry::new(TrialCommand::Rotate, "Undo Rotation")];
-    let (mut fixture, open, picked) = palette(entries, false);
+    let Rig { mut fixture, open, picked, refused, .. } = rig(entries, None, false, |_| ());
     fixture.command_state(EditCommands::Undo, CommandState::new().enabled(false));
     fixture.settle();
     fixture.type_text("undo").settle();
@@ -518,6 +524,7 @@ fn enter_on_a_disabled_first_match_runs_nothing() {
     let _ = take_output(fixture.ctx());
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     assert_eq!(*picked.borrow(), None, "Enter on the disabled first match picks nothing");
+    assert_eq!(*refused.borrow(), Some(CommandRef::from(EditCommands::Undo)), "the output names the refused command");
     assert!(open.get(), "the palette stays open");
     assert!(take_output(fixture.ctx()).fired.is_empty(), "nothing ran");
 }

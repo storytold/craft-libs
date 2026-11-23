@@ -133,6 +133,8 @@ pub(crate) struct Shortcuts {
     pub(crate) keys: Vec<Shortcut>,
     /// A text field owns the keys: plain keys wait for it.
     pub(crate) typing: bool,
+    /// The text component that owns the keys leaves command chords and function keys to the app (`KeyUse::command_keys`).
+    pub(crate) command_keys: bool,
     /// A dialog owns the keys: commands that do not fire in dialogs wait.
     pub(crate) dialog: bool,
     /// The layout that reads the presses.

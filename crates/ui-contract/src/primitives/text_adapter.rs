@@ -481,19 +481,20 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
     // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
-    let dialog_escape = focused_before
-        && state.draft.is_some()
+    let closes_dialog = focused_before
         && state.preedit.is_none()
         && !input.options.clear_on_escape
         && input.intents.untaken(&Intent::Cancel)
         && crate::runtime::focus::escape_closes_dialog(ctx);
+    let dialog_escape = closes_dialog && state.draft.is_some();
     if dialog_escape {
         // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
         state.end = Some(End::Escape);
     }
     let draft_takes = state.draft.is_some() && !dialog_escape;
-    // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus.
-    let leaves = !input.options.clear_on_escape && !dialog_escape && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
+    // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus;
+    // in a dialog that Escape closes, the Escape stays the dialog's.
+    let leaves = !input.options.clear_on_escape && !closes_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
     let takes_escape =
         if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
     let list_first = input.list_open && !input.options.clear_on_escape;
