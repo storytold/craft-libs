@@ -2,6 +2,13 @@
 
 mod cancellation;
 mod contracts;
+#[path = "cos/main.rs"]
+mod cos;
+#[path = "crypt/main.rs"]
+mod crypt;
+#[path = "filters/main.rs"]
+mod filters;
+mod font_tables;
 mod interpretation;
 mod knockout;
 mod knockout_backdrop;

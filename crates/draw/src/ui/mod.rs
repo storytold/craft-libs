@@ -86,7 +86,8 @@ pub use measure::{
     MIN_LINE, RulerBar, RulerBarOutput, RulerLine, RulerOverlay, RulerPass, RulerTool, RulerWords, box_distances, ruler_line_form, show_ruler,
 };
 pub use paint_bar::{
-    EraserMode, MIXER_COMBINATIONS, MIXER_GROUP_STARTS, MixerValues, PaintBar, PaintBarOutput, PaintBarWords, PaintTool, PaintValues, Smoothing,
+    EraserMode, MIXER_COMBINATIONS, MIXER_GROUP_STARTS, MixerLoad, MixerValues, PaintBar, PaintBarOutput, PaintBarWords, PaintTool, PaintValues,
+    Smoothing,
 };
 pub use paths::{PathKind, PathRow, PathsCommands, PathsEvent, PathsFooterButton, PathsOutput, PathsPanel, PathsWords};
 pub use pattern::{PatternColors, PatternFillDialog, PatternFillEditor, PatternFillOptions, PatternFillOutput, PatternSwatch, PatternWords};

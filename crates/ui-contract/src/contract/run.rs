@@ -424,6 +424,7 @@ fn blank_core<'a>(
         node: false,
         fade: None,
         focus_shapes: Vec::new(),
+        focus_shape: None,
         surface_slot: None,
         editor: None,
         editor_inputs: Vec::new(),

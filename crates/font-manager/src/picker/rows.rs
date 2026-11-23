@@ -5,6 +5,7 @@
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Preview, Selection, SizeHint};
 use craft_font_catalog::Catalog;
@@ -19,7 +20,7 @@ use craft_ui::contract::{
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, RowEvent, ThumbSize, ToggleCell, ToggleFace, ToggleState, TrailingFace, TreeLeaves};
-use craft_ui::primitives::IconSpec;
+use craft_ui::primitives::{FacesCx, IconSpec};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
 
@@ -29,7 +30,7 @@ use super::{
     FamilyRow, FamilySet, FilterLayout, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords,
     FontPreviewSize, FontScript, POPUP, SAMPLE_EM, SIMILAR, Typing, infos_of, read, ui_language, write,
 };
-use crate::panel::faces::Owner;
+use crate::panel::faces::{self, Owner, Shown};
 use crate::panel::specimen::{FontSample, SampleFace};
 
 /// The sample column is this many times as wide as the sample band is high.
@@ -386,13 +387,34 @@ fn filter_chips(
     });
 }
 
-/// The sample of a family row: `text` in the regular face of `family` at `points`, named "{shown}: {text}" as the font
-/// manager names its samples, so the row keeps the family's name to itself; no face for a family the catalog
-/// lacks. `on_white` sets it in black on a white paper, in every theme.
-fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, points: f32, on_white: bool) -> FontSample<'a> {
+/// The sample of a family row: its text ([`row_text`]) in the regular face of `family` at `points`, named
+/// "{shown}: {text}" as the font manager names its samples, so the row keeps the family's name to itself; no face for
+/// a family the catalog lacks.
+fn sample<'a>(
+    at: &impl FacesCx,
+    catalog: &'a Arc<Catalog>,
+    infos: &'a FamilyInfos,
+    family: &str,
+    shown: &str,
+    text: &str,
+    points: f32,
+) -> FontSample<'a> {
+    let text = row_text(at, catalog, infos, family, text, shown);
     let face =
         infos.families.get(family).map_or(SampleFace::Missing, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
-    FontSample::new(format!("{shown}: {text}"), text, face, points).on_white(on_white)
+    FontSample::new(format!("{shown}: {text}"), text, face, points)
+}
+
+/// What `family`'s sample says ([`FamilyInfos::sample_text`]) once its regular face is ready; `text` while it loads,
+/// when the sample shows nothing yet.
+fn row_text(at: &impl FacesCx, catalog: &Arc<Catalog>, infos: &FamilyInfos, family: &str, text: &str, shown: &str) -> String {
+    let Some(info) = infos.families.get(family) else { return text.to_owned() };
+    match faces::shown(at, catalog, Owner::Installed, &info.regular) {
+        Shown::Ready(_) => {
+            faces::bytes(at, Owner::Installed, &info.regular).map_or_else(|| text.to_owned(), |face| infos.sample_text(family, text, shown, &face))
+        }
+        _ => text.to_owned(),
+    }
 }
 
 /// The name the banner shows for `family`: its row's shown name when the list holds one, else its name in the
@@ -500,6 +522,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     // The field's list keys go to the family list, not to the class column beside it.
     let families = cx.id.with("families");
     let overlay = Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)).list(families);
+    let faces_at = &*cx;
     let events = ui.show(popup, overlay, |ui, _| {
         let mut events = Vec::new();
         Stack::new().show(ui, |ui, _| {
@@ -512,7 +535,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                 });
                 let label = words.preview_of.fill(&[("family", shown_name.as_str())]);
                 // What the family's row shows: the text, or its name or first glyphs when the face can't draw it.
-                let shown_text = infos.sample_text(catalog, &banner_family, text, &shown_name);
+                let shown_text = row_text(faces_at, catalog, &infos, &banner_family, text, &shown_name);
                 FontPreviewBanner::new(label, &shown_name, &shown_text, face).on_white(on_white).show(ui);
             }
             if let Some(filters) = filters.as_mut() {
@@ -590,8 +613,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 if size == ThumbSize::None {
                                     return line;
                                 }
-                                let text = infos.sample_text(catalog, &row.family, sample_text, &row.shown);
-                                line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, text, points, on_white), |_| {})
+                                let sample = sample(faces_at, catalog, &infos, &row.family, &row.shown, sample_text, points).on_white(on_white);
+                                line.cell_field(SAMPLE, sample, |_| {})
                             }
                         });
                     over_rows = rows.response.contains_pointer();

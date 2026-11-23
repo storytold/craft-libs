@@ -406,7 +406,7 @@ pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
 /// A fresh context with no plugin and AccessKit on.
 pub(crate) fn bare_context() -> Context {
     let ctx = Context::default();
-    ctx.set_fonts(test_fonts());
+    super::fonts::set_definitions(&ctx, test_fonts());
     ctx.enable_accesskit();
     ctx
 }

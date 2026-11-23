@@ -99,8 +99,10 @@ pub struct GroupGripOutput {
     pub response: Response,
     /// The second press of a double click went down on the grip this pass.
     pub double_pressed: bool,
-    /// A drag of the whole group started on the grip this pass: where its press went down.
-    pub drag_started: Option<Pos2>,
+    /// A drag of the whole group started on the grip this pass.
+    pub drag_started: bool,
+    /// Where the press that started that drag went down, in the grip's layer space; `None` without a drag start.
+    pub drag_origin: Option<Pos2>,
 }
 
 impl Outcome for GroupGripOutput {
@@ -189,7 +191,12 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> GroupGripOutput {
-        GroupGripOutput { response: cx.response.clone(), double_pressed: self.double, drag_started: self.started }
+        GroupGripOutput {
+            response: cx.response.clone(),
+            double_pressed: self.double,
+            drag_started: self.started.is_some(),
+            drag_origin: self.started,
+        }
     }
 }
 

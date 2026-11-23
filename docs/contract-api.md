@@ -2225,7 +2225,8 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn is_heading(&self) -> bool`. Whether the entry is a heading.
   - `pub fn is_item(&self) -> bool`. Whether the entry is an item, which reports a value: neither a heading nor a separator.
 - `craft_ui::contract::FacesCx`: `pub trait FacesCx`. Where a document face is asked for: a component's context, its measure or a content painter.
-  - `fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState`. The face registered under `key` as a family of its own. `load` runs only for a new key within the frame's
+  - `fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState where L: FnOnce() -> Option<FaceBytes> + Send + 'static`. The face registered under `key` as a family of its own, read from a font catalog. `job` is called only for a
+  - `fn document_face_bytes(&self, key: &str) -> Option<FaceBytes>`. The bytes of the face `document_face` registered under `key`, once it is ready: for reading its tables without
 - `craft_ui::contract::FieldLabel`: `pub struct FieldLabel { pub id: Id, pub rect: Rect, pub press: PressState, pub hovered: bool, pub text: String, pub role: FieldLabelRole, pub detail: Option<String>, pub activated: bool, pub link: bool, pub status: bool, pub shown: bool }`. The label a container shows beside its body.
   - `pub fn new(id: Id, rect: Rect, text: impl Into<String>) -> Self`. A label of `text` at `rect`, the node `id`.
   - `pub fn shown(mut self, shown: bool) -> Self`. Whether the label shows as a node of its own.
@@ -3011,7 +3012,8 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn largest_size(ctx: &Context) -> f32`. The largest size, in points, a face run is drawn at on `ctx`'s display: a glyph stays within a quarter of the
   - `pub fn drawn_size(&self, ctx: &Context) -> f32`. The size the run is drawn at on `ctx`'s display: its own, within 1 point and [`largest_size`](Self::largest_size).
 - `craft_ui::primitives::FacesCx`: `pub trait FacesCx`. Where a document face is asked for: a component's context, its measure or a content painter.
-  - `fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState`. The face registered under `key` as a family of its own. `load` runs only for a new key within the frame's
+  - `fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState where L: FnOnce() -> Option<FaceBytes> + Send + 'static`. The face registered under `key` as a family of its own, read from a font catalog. `job` is called only for a
+  - `fn document_face_bytes(&self, key: &str) -> Option<FaceBytes>`. The bytes of the face `document_face` registered under `key`, once it is ready: for reading its tables without
 - `craft_ui::primitives::FakeThumbSource`: `pub struct FakeThumbSource<K>`. A [`ThumbSource`] for stories and tests in every crate: pictures made from the key and a revision the test sets,
   - `pub fn new() -> Self`. Synchronous square pictures at revision 0.
   - `pub fn later(mut self, later: bool) -> Self`. Renders as `Later` jobs.
@@ -4109,8 +4111,9 @@ Decision records and findings. Inspected regions ([`record`]) collect pipeline s
 `runtime::install`: adds the runtime plugin once and sets the egui options the runtime owns.
 
 - `craft_ui::runtime::install::InstallError`: `pub enum InstallError { AlreadyInstalled, DuplicateStyle(DuplicateStyle), Commands(commands::CommandDefError), DuringPass }`. Why `install` refused a spec.
-- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader, pub wheel: WheelModifiers, pub app_id: String, pub pen: Option<PenSource>, pub stories: bool, pub clipboard: Option<craft_platform::clipboard::Clipboard> }`. What `install` takes.
+- `craft_ui::runtime::install::InstallSpec`: `pub struct InstallSpec { pub shell_info: ShellInfo, pub window_system: Arc<dyn WindowSystem>, pub placement: Option<Arc<Mutex<Store>>>, pub frame_layers: Option<fn(&Context)>, pub looks: StyleReplacements, pub frame: Option<Decision>, pub system: SystemReader, pub wheel: WheelModifiers, pub app_id: String, pub pen: Option<PenSource>, pub stories: bool, pub clipboard: Option<craft_platform::clipboard::Clipboard>, pub jobs: Option<Arc<dyn Jobs>> }`. What `install` takes.
   - `pub fn new(shell_info: ShellInfo, window_system: Arc<dyn WindowSystem>) -> Self`. A spec for `shell_info` and `window_system`, with no ghost-layer painter.
+  - `pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self`. Runs the context's background work on `jobs` while no host is installed.
   - `pub fn clipboard(mut self, clipboard: craft_platform::clipboard::Clipboard) -> Self`. Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
   - `pub fn stories(mut self) -> Self`. Loads the stories' command sets too, for an install that shows stories.
   - `pub fn placement(mut self, store: Arc<Mutex<Store>>) -> Self`. Sets the store viewport mounts save their window placement in.
@@ -4619,6 +4622,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::Room`: re-export of `craft_ui::testing::fixture::Room`.
 - `craft_ui::testing::Target`: re-export of `craft_ui::testing::fixture::Target`.
 - `craft_ui::testing::audit_replays`: `pub fn set(ctx: &Context, on: bool)`. Turns the audit on or off in `ctx`, in place of `CRAFT_UI_AUDIT_REPLAY`.
+- `craft_ui::testing::document_face_budget`: `pub fn set_budget(ctx: &Context, bytes: usize)`. Sets the budget of `ctx`'s document faces to `bytes` in place of [`MAX_DOCUMENT_FACE_BYTES`], so a trial reaches
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
 - `craft_ui::testing::in_audit_run`: `pub fn in_run(ctx: &Context) -> bool`. Whether the code running in `ctx` is a run of the audit: a test that counts its own runs of a view counts none in
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.

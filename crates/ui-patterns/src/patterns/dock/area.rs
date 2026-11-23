@@ -1607,8 +1607,8 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
         .ghost(props.label.clone())
         .label(props.label.clone())
         .show_at(ui, strip);
-    if let Some(press) = held.drag_started {
-        props.sent.send(press);
+    if let Some(origin) = held.drag_origin {
+        props.sent.send(origin);
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);

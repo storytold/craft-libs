@@ -373,7 +373,7 @@ pub struct FamilyRow {
     pub shown: String,
     /// The family is a favourite.
     pub starred: bool,
-    /// The family's class once it has been read: by a class filter, or by the list drawing the row.
+    /// The family's class; `None` for a served row and a family no class fits.
     pub class: Option<FontClass>,
     /// The family's format; `None` only for a served row.
     pub format: Option<FontFormat>,
