@@ -1,9 +1,10 @@
 //! Stories of `Swatch`.
 
-use super::{Swatch, SwatchShape};
+use super::{Swatch, SwatchFill, SwatchImage, SwatchShape};
 use crate::choice::RadioGroup;
 use crate::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::{Row, Stack};
+use crate::testing::pictures::sample_picture;
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
@@ -79,6 +80,52 @@ fn swatch_table_cells(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Swatch<u8>, covers = [], drive = Drive::Never)]
 fn swatch_hexagon(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Swatch::new("Hexagon", BLUE).shape(SwatchShape::Hexagon).show(ui).into()
+}
+
+/// A round well.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_round(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Swatch::new("Round", BLUE).shape(SwatchShape::Round).show(ui).into()
+}
+
+/// A colour before and after a change, in a square and a round well: before at the start edge.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_split(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Row::new().show(ui, |ui, _| {
+        for shape in [SwatchShape::Square, SwatchShape::Round] {
+            Swatch::with_fill("Reds", SwatchFill::Split(PALETTE[0], PALETTE[2])).shape(shape).show(ui);
+        }
+    });
+    StoryOutput::default()
+}
+
+/// The hue wheel in a square and a round well.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_spectrum(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Row::new().show(ui, |ui, _| {
+        for shape in [SwatchShape::Square, SwatchShape::Round] {
+            Swatch::with_fill("Master", SwatchFill::Spectrum).shape(shape).show(ui);
+        }
+    });
+    StoryOutput::default()
+}
+
+/// A picture in a square and a round well.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_image(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let image = SwatchImage::new(sample_picture(7, [64, 64]));
+    Row::new().show(ui, |ui, _| {
+        for shape in [SwatchShape::Square, SwatchShape::Round] {
+            Swatch::with_fill("Sampled", SwatchFill::Image(image.clone())).shape(shape).show(ui);
+        }
+    });
+    StoryOutput::default()
+}
+
+/// An empty well: the checkerboard alone.
+#[story(Swatch<u8>, covers = [], drive = Drive::Never)]
+fn swatch_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Swatch::with_fill("Empty", SwatchFill::Empty).show(ui).into()
 }
 
 /// A well and a line that counts its clicks.

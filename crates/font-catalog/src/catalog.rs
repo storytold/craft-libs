@@ -1,6 +1,7 @@
 //! The catalog: every installed face, found by any of its names, loaded once.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock, Weak};
@@ -128,6 +129,8 @@ struct Index {
     by_family: HashMap<String, Vec<usize>>,
     aliases: HashMap<String, Vec<Alias>>,
     postscript: HashMap<String, usize>,
+    /// A hash of each family's faces by lowercase name, for [`Catalog::changes_since`].
+    signatures: HashMap<String, u64>,
 }
 
 impl Index {
@@ -182,7 +185,33 @@ impl Index {
         }
         families.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
         let infos: Arc<[FaceInfo]> = faces.iter().map(|f| f.info.clone()).collect();
-        Self { faces, infos, families: families.into(), by_family, aliases, postscript }
+        let mut index = Self { faces, infos, families: families.into(), by_family, aliases, postscript, signatures: HashMap::new() };
+        index.signatures = index.family_signatures();
+        index
+    }
+
+    fn family_signatures(&self) -> HashMap<String, u64> {
+        self.by_family
+            .iter()
+            .map(|(key, faces)| {
+                let mut h = DefaultHasher::new();
+                for f in faces.iter().filter_map(|i| self.face(*i)) {
+                    let i = &f.info;
+                    (&i.family, &i.style, &i.postscript_name, &i.path, i.index, i.blob, i.source, i.italic).hash(&mut h);
+                    (i.weight.to_bits(), i.width.to_bits()).hash(&mut h);
+                    for (tag, value) in &i.variations {
+                        (tag, value.to_bits()).hash(&mut h);
+                    }
+                }
+                (key.clone(), h.finish())
+            })
+            .collect()
+    }
+
+    /// The name of the family with lowercase name `key`.
+    fn family_named(&self, key: &str) -> Option<&str> {
+        let i = *self.by_family.get(key)?.first()?;
+        self.face(i).map(|f| f.info.family.as_str())
     }
 
     fn face(&self, i: usize) -> Option<&Face> {
@@ -253,6 +282,93 @@ impl Index {
     }
 }
 
+/// How many changes of the family set the history keeps ([`Catalog::changes_since`]).
+const HISTORY_CHANGES: usize = 64;
+/// How many family names the history holds in all. A change naming more (the first scan of a
+/// large system) clears the history.
+const HISTORY_NAMES: usize = 4096;
+
+/// How a family changed between two indexes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    Added,
+    Removed,
+    Changed,
+}
+
+/// A family's lowercase name, its name and how it changed.
+type FamilyChange = (String, String, Change);
+
+/// The families each recent generation added, removed or changed.
+#[derive(Default)]
+struct History {
+    /// Each generation that changed a family, oldest first.
+    changes: VecDeque<(u64, Vec<FamilyChange>)>,
+    names: usize,
+    /// The oldest generation [`Catalog::changes_since`] can start from: the history holds every
+    /// change after it.
+    floor: u64,
+}
+
+impl History {
+    fn record(&mut self, generation: u64, old: &Index, new: &Index) {
+        let mut changes = Vec::new();
+        for (key, sig) in &new.signatures {
+            let change = match old.signatures.get(key) {
+                None => Change::Added,
+                Some(old) if old != sig => Change::Changed,
+                Some(_) => continue,
+            };
+            changes.push((key.clone(), new.family_named(key).unwrap_or(key).to_owned(), change));
+        }
+        for key in old.signatures.keys().filter(|k| !new.signatures.contains_key(*k)) {
+            changes.push((key.clone(), old.family_named(key).unwrap_or(key).to_owned(), Change::Removed));
+        }
+        if changes.is_empty() {
+            return;
+        }
+        if changes.len() > HISTORY_NAMES {
+            self.changes.clear();
+            self.names = 0;
+            self.floor = generation;
+            return;
+        }
+        self.names += changes.len();
+        self.changes.push_back((generation, changes));
+        while self.changes.len() > HISTORY_CHANGES || self.names > HISTORY_NAMES {
+            let Some((generation, changes)) = self.changes.pop_front() else { break };
+            self.names -= changes.len();
+            self.floor = generation;
+        }
+    }
+}
+
+/// The families lookups find differently since a generation ([`Catalog::changes_since`]): what
+/// an app re-resolves to know which documents to lay out again. Each list is sorted ignoring
+/// case.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Changes {
+    /// The generation these changes lead to: pass it to the next call.
+    pub generation: u64,
+    /// The catalog no longer knows what changed since then: re-resolve every family, and the
+    /// lists are empty.
+    pub full: bool,
+    /// Families found now that weren't.
+    pub added: Vec<String>,
+    /// Families that were found and aren't any more.
+    pub removed: Vec<String>,
+    /// Families found before and now whose faces changed: a style installed or removed, a file
+    /// replaced, a face added over an installed one.
+    pub changed: Vec<String>,
+}
+
+impl Changes {
+    /// Nothing changed.
+    pub fn is_empty(&self) -> bool {
+        !self.full && self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
 /// A style name as compared: normalized, with no style meaning `Regular`.
 fn style_key(style: &str) -> String {
     let ns = norm(style);
@@ -285,6 +401,8 @@ struct Stamp {
     /// Every folder the scan listed, and the folders holding the files listers named, with their
     /// modification times (`None`: missing).
     dirs: Vec<(PathBuf, Option<SystemTime>)>,
+    /// The font store's folders among `dirs`.
+    store_dirs: Vec<(PathBuf, Option<SystemTime>)>,
     /// The fonts registered with Windows.
     registered: Vec<PathBuf>,
 }
@@ -317,10 +435,17 @@ pub struct Catalog {
     scan: Mutex<ScanState>,
     stamp: Mutex<Stamp>,
     generation: AtomicU64,
+    /// Locked while [`Catalog::publish`] moves the generation on, so it and the history agree.
+    history: Mutex<History>,
     added: Mutex<Added>,
     loaded: Mutex<HashMap<String, FamilyLoad>>,
-    files: Mutex<HashMap<PathBuf, Weak<[u8]>>>,
+    /// The bytes of each file read, while a face of it is loaded. A file's own lock is held while it is read, so faces of
+    /// one collection loading on several threads read it once and share the bytes.
+    files: Mutex<HashMap<PathBuf, FileSlot>>,
 }
+
+/// One file's shared bytes while any face of it is loaded, behind the lock held while the file is read.
+type FileSlot = Arc<Mutex<Option<Weak<[u8]>>>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -345,6 +470,7 @@ impl Catalog {
             scan: Mutex::new(ScanState::default()),
             stamp: Mutex::new(Stamp::default()),
             generation: AtomicU64::new(0),
+            history: Mutex::new(History::default()),
             added: Mutex::new(Added::default()),
             loaded: Mutex::new(HashMap::new()),
             files: Mutex::new(HashMap::new()),
@@ -477,6 +603,14 @@ impl Catalog {
         self.read_config().font_service && self.env.os == Os::Windows && stamp.registered != crate::registry::registered_font_files()
     }
 
+    /// Whether the font store's folders ([`font_store_dir`]) changed since the last scan: the
+    /// suite's font store installed or removed a font. It reads only the store's folders, so it
+    /// costs far less than [`Catalog::installed_fonts_changed`] and can be polled often.
+    /// `false` before the first scan.
+    pub fn store_changed(&self) -> bool {
+        self.is_ready() && lock(&self.stamp).store_dirs.iter().any(|(p, t)| modified(p) != *t)
+    }
+
     /// Poll for installed and removed fonts every `interval` on a background thread: when
     /// [`Catalog::installed_fonts_changed`], rescan and call `on_change`. Stops when the returned
     /// [`Watch`] or the catalog is dropped.
@@ -510,15 +644,55 @@ impl Catalog {
         self.generation.load(Ordering::Acquire)
     }
 
+    /// What changed since `generation` (a value of [`Catalog::generation`]): the families added,
+    /// removed and changed, so an app re-resolves only the names those affect and lays out only
+    /// the documents that use them. Take the generation before resolving a document's fonts, so a
+    /// change during that shows in the next call. `full` when the history no longer reaches back
+    /// that far (it keeps the last 64 changes of the family set, and the first scan of a large
+    /// system clears it): re-resolve everything then.
+    pub fn changes_since(&self, generation: u64) -> Changes {
+        let history = lock(&self.history);
+        let now = self.generation();
+        if generation >= now {
+            return Changes { generation: now, ..Changes::default() };
+        }
+        if generation < history.floor {
+            return Changes { generation: now, full: true, ..Changes::default() };
+        }
+        // Each family's state before the first change and after the last, with its latest name.
+        let mut net: HashMap<&str, (bool, bool, &str)> = HashMap::new();
+        for (key, name, change) in history.changes.iter().filter(|(g, _)| *g > generation).flat_map(|(_, c)| c) {
+            let entry = net.entry(key.as_str()).or_insert((*change != Change::Added, false, name.as_str()));
+            entry.1 = *change != Change::Removed;
+            entry.2 = name.as_str();
+        }
+        let mut changes = Changes { generation: now, ..Changes::default() };
+        for (before, after, name) in net.into_values() {
+            match (before, after) {
+                (false, true) => changes.added.push(name.to_owned()),
+                (true, false) => changes.removed.push(name.to_owned()),
+                (true, true) => changes.changed.push(name.to_owned()),
+                (false, false) => {}
+            }
+        }
+        for list in [&mut changes.added, &mut changes.removed, &mut changes.changed] {
+            list.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
+        }
+        changes
+    }
+
     fn snapshot(&self) -> Arc<Index> {
         self.ensure();
         Arc::clone(&self.index.read().unwrap_or_else(PoisonError::into_inner))
     }
 
     fn publish(&self, index: Index) {
-        *self.index.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(index);
+        let mut history = lock(&self.history);
+        let new = Arc::new(index);
+        let old = std::mem::replace(&mut *self.index.write().unwrap_or_else(PoisonError::into_inner), Arc::clone(&new));
         lock(&self.loaded).clear();
-        self.generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        history.record(generation, &old, &new);
     }
 
     /// The family names, sorted ignoring case. Private system families are among them ([`is_private_family`]): a
@@ -581,7 +755,16 @@ impl Catalog {
     }
 
     fn file_bytes(&self, path: &Path) -> Result<Arc<[u8]>, FontFileError> {
-        if let Some(bytes) = lock(&self.files).get(path).and_then(Weak::upgrade) {
+        let slot = {
+            let mut files = lock(&self.files);
+            // A slot another thread holds (it reads the file) stays; the others go once their bytes are dropped.
+            files.retain(|_, slot| {
+                Arc::strong_count(slot) > 1 || slot.try_lock().ok().is_none_or(|held| held.as_ref().is_some_and(|w| w.strong_count() > 0))
+            });
+            Arc::clone(files.entry(path.to_path_buf()).or_default())
+        };
+        let mut held = lock(&slot);
+        if let Some(bytes) = held.as_ref().and_then(Weak::upgrade) {
             return Ok(bytes);
         }
         let size = std::fs::metadata(path)?.len();
@@ -589,9 +772,7 @@ impl Catalog {
             return Err(FontFileError::TooLarge { size, max: MAX_LOAD });
         }
         let bytes: Arc<[u8]> = read_capped(path, MAX_LOAD)?.into();
-        let mut files = lock(&self.files);
-        files.retain(|_, w| w.strong_count() > 0);
-        files.insert(path.to_path_buf(), Arc::downgrade(&bytes));
+        *held = Some(Arc::downgrade(&bytes));
         Ok(bytes)
     }
 
@@ -712,8 +893,13 @@ impl Catalog {
         }
 
         let mut walk = Walk { ignore_case, seen_dirs: HashSet::new(), seen_files: HashSet::new(), entries: 0, dirs: Vec::new(), files: Vec::new() };
+        let mut store_dirs = Vec::new();
         for (root, source) in &roots {
+            let first = walk.dirs.len();
             walk.dir(root, *source, 0);
+            if *source == Source::Store {
+                store_dirs.extend(walk.dirs.iter().skip(first).cloned());
+            }
         }
         let mut parents = HashSet::new();
         for file in named {
@@ -730,10 +916,12 @@ impl Catalog {
         }
 
         let mut files = HashMap::new();
+        let mut read = false;
         for (path, source, by_name) in walk.files {
             let Ok(meta) = std::fs::metadata(&path) else { continue };
             let (len, mtime) = (meta.len(), meta.modified().ok());
             let cached = state.files.remove(&path).filter(|c| c.len == len && c.modified == mtime);
+            read |= cached.is_none();
             let mut faces = match cached {
                 Some(c) => c.faces,
                 None if by_name || scan::is_font_file(&path) || crate::suitcase::is_suitcase(&path) => scan::file_faces(&path, MAX_SCAN_READ, source),
@@ -744,10 +932,16 @@ impl Catalog {
             }
             files.insert(path, Cached { len, modified: mtime, faces });
         }
+        // A rescan that read no file and lost none keeps the index and its generation, so the caches keyed on the
+        // generation (the picker's family infos and samples) stay.
+        let unchanged = !read && state.files.is_empty() && self.generation() > 0;
         state.files = files;
         drop(state);
 
-        *lock(&self.stamp) = Stamp { app_dirs, dirs: walk.dirs, registered };
+        *lock(&self.stamp) = Stamp { app_dirs, dirs: walk.dirs, store_dirs, registered };
+        if unchanged {
+            return;
+        }
         let added = lock(&self.added);
         let scanned = self.scanned();
         self.publish(Index::build(&added.faces, &scanned));
