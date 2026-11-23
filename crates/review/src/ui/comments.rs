@@ -65,6 +65,7 @@ craft_ui::words! {
         add_comment: "comments.add" = "Add a comment";
         reply: "comments.reply" = "Add a reply";
         post: "comments.post" = "Post";
+        save: "comments.save" = "Save";
         cancel: "comments.cancel" = "Cancel";
         more: "comments.more" = "More";
         edit: "comments.edit" = "Edit";

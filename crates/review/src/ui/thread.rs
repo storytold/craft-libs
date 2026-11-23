@@ -24,6 +24,7 @@ craft_ui::words! {
         reply: "thread.reply" = "Reply";
         add_comment: "thread.addComment" = "Add a comment";
         post: "thread.post" = "Post";
+        save: "thread.save" = "Save";
         edit: "thread.edit" = "Edit";
         delete: "thread.delete" = "Delete";
         delete_thread: "thread.deleteThread" = "Delete thread";

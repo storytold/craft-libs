@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_review::ui::{CommentComposer, ComposerClose, NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage};
+use craft_review::ui::{CommentComposer, ComposerClose, ComposerDraft, NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage};
 use craft_ui::buttons::Button;
 use craft_ui::contract::Show as _;
 use craft_ui::contract::overlay::PlacementKind;
@@ -308,4 +308,18 @@ fn the_title_band_runs_under_the_close_control() {
     paint.shapes.iter().for_each(|clipped| band(&clipped.shape, &mut bands));
     let widest = bands.iter().map(|r| r.width()).fold(0.0, f32::max);
     assert!((widest - rect.width()).abs() < 1.5, "the band covers the window's width, close control included: {bands:?}");
+}
+
+/// A composer that edits an existing comment saves it; one that starts a comment posts it.
+#[trial]
+fn an_edit_composer_reads_save_and_a_new_one_reads_post() {
+    for (kind, word, other) in [(ComposerDraft::New, "Post", "Save"), (ComposerDraft::Edit, "Save", "Post")] {
+        let mut draft = String::from("text");
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = CommentComposer::new(Some(pos2(200.0, 200.0)), &mut draft).draft_kind(kind).show(ui);
+        });
+        fixture.room(vec2(800.0, 600.0)).settle();
+        assert!(fixture.by_label(word).is_some(), "{kind:?}: the button reads {word}");
+        assert!(fixture.by_label(other).is_none(), "{kind:?}: not {other}");
+    }
 }

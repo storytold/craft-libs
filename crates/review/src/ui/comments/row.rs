@@ -413,11 +413,11 @@ impl CommentRow<'_> {
             Some((editing, draft)) if editing == index => {
                 let field = sink.field(Slot::EditField, strip(at, room), &words.edit, draft, EDIT_LINES);
                 let y = at.y + field + st.gap;
-                let (post_size, cancel_size) = (sink.push_size(Slot::EditPost, &words.post), sink.push_size(Slot::EditCancel, &words.cancel));
+                let (post_size, cancel_size) = (sink.push_size(Slot::EditPost, &words.save), sink.push_size(Slot::EditCancel, &words.cancel));
                 let right = at.x + room;
                 let cancel = Rect::from_min_size(Pos2::new(right - cancel_size.x, y), cancel_size);
                 let post = Rect::from_min_size(Pos2::new(cancel.left() - st.gap - post_size.x, y), post_size);
-                sink.push(Slot::EditPost, post, &words.post, !draft.trim().is_empty());
+                sink.push(Slot::EditPost, post, &words.save, !draft.trim().is_empty());
                 sink.push(Slot::EditCancel, cancel, &words.cancel, true);
                 y + post_size.y.max(cancel_size.y)
             }

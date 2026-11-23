@@ -367,7 +367,9 @@ impl CommentComposer<'_> {
                     posted.clone_from(&text);
                 }
                 Row::new().show(ui, |ui, _| {
-                    let post = Button::new(words.post.clone()).enabled(text.is_some()).show(ui);
+                    // An edit saves; a new comment posts.
+                    let word = if kind == ComposerDraft::New { &words.post } else { &words.save };
+                    let post = Button::new(word.clone()).enabled(text.is_some()).show(ui);
                     if clicked(&post) && text.is_some() {
                         posted.clone_from(&text);
                     }

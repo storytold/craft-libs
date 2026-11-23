@@ -284,6 +284,7 @@ fn a_heading_folds_its_page_and_a_double_click_edits_a_card() {
     let note = card(&fixture, "Note 2.").expect("card 2").center();
     fixture.click_at(note).click_at(note).settle();
     assert_eq!(state.borrow().editing, Some((ThreadId(2), 0, "Note 2.".to_owned())), "the double click opens the comment's editor");
+    assert!(fixture.by_label("Save").is_some(), "the editor's button is Save, as production's");
 }
 
 /// The Own header draws its Sort, filter and Pages buttons and the Hosted one none; the host's rows follow a
