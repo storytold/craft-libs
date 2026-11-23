@@ -185,10 +185,11 @@ fn multi_selection_ranges_toggles_and_reports_select_for_each_plain_pick() {
         assert_eq!((items(), selects()), (vec![1, 3], 0), "Cmd/Ctrl toggles and reports no Select in {view:?}");
 
         let before = items();
-        fixture.key(Key::Space, Modifiers::COMMAND);
+        // The Control key on every platform: on macOS Cmd+Space is the system's.
+        fixture.key(Key::Space, Modifiers::CTRL);
         fixture.idle(2);
-        assert_ne!(items(), before, "Cmd/Ctrl+Space toggles the lead in {view:?}");
-        assert_eq!(selects(), 0, "Cmd/Ctrl+Space is no pick in {view:?}");
+        assert_ne!(items(), before, "Ctrl+Space toggles the lead in {view:?}");
+        assert_eq!(selects(), 0, "Ctrl+Space is no pick in {view:?}");
 
         click_preset(&mut fixture, 4, Modifiers::NONE);
         events.borrow_mut().clear();
