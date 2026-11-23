@@ -8,13 +8,8 @@ use super::{Env, Restore, Scoped};
 use crate::runtime::egui::child;
 use craft_behavior::MotionMode;
 use craft_i18n::{Direction, WordRows, Words};
-<<<<<<< HEAD
-use craft_theme::{ControlSize, Mode};
-use egui::{Context, Rect, Ui, UiBuilder};
-=======
 use craft_theme::{Contrast, ControlSize, Mode, Size, ThemeDef};
-use egui::{Context, Ui};
->>>>>>> origin/next
+use egui::{Context, Rect, Ui, UiBuilder};
 use std::sync::Arc;
 
 /// Token-changing values for a container: the container itself (its surface, header, rules, scroll bars, pads and

@@ -463,16 +463,15 @@ impl Fixture {
         self.frames.repaint_requested()
     }
 
-<<<<<<< HEAD
-    /// The system cursor the latest frame's output asked for.
-    pub fn cursor_icon(&self) -> egui::CursorIcon {
-        self.frames.cursor_icon()
-=======
     /// The wait the latest frame asked for before the next pass: `Duration::ZERO` for an immediate repaint, `None` when
     /// it asked for none.
     pub fn repaint_delay(&self) -> Option<std::time::Duration> {
         self.frames.repaint_delay()
->>>>>>> origin/next
+    }
+
+    /// The system cursor the latest frame's output asked for.
+    pub fn cursor_icon(&self) -> egui::CursorIcon {
+        self.frames.cursor_icon()
     }
 
     /// The IME output of the latest frame.

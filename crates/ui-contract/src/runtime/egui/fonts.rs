@@ -70,19 +70,26 @@ pub(crate) fn has_family(ctx: &Context, family: &FontRef) -> bool {
     ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family.family()))
 }
 
-<<<<<<< HEAD
 /// Takes the faces called `gone`, and the families of those names, out of egui's definitions and out of every family
-/// that lists them. Then each `(name, chain)` family of a face named after it lists its own face first, then the
-/// faces of `chain` that egui holds, in order, then the faces it listed besides (those script coverage added).
+/// that lists them, and adds each face of `over_interface` under its name with a family of that name: the face, then
+/// the proportional family's chain, so what the face lacks the interface fonts draw. Then each `(name, chain)` family
+/// of a face named after it lists its own face first, then the faces of `chain` that egui holds, in order, then the
+/// faces it listed besides (the interface chain, those script coverage added).
 /// It rebuilds the definitions from the applied ones, so call it only from a begin-pass step, before an install of the
 /// pass can queue its own.
-pub(crate) fn set_document_faces(ctx: &Context, gone: &[String], chains: &[(String, Vec<String>)]) {
+pub(crate) fn edit_faces(ctx: &Context, gone: &[String], over_interface: Vec<(String, FontData)>, chains: &[(String, Vec<String>)]) {
     let mut definitions = ctx.fonts(|fonts| fonts.definitions().clone());
-    let mut changed = !gone.is_empty();
+    let mut changed = !gone.is_empty() || !over_interface.is_empty();
     definitions.font_data.retain(|name, _| !gone.contains(name));
-    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(name) if gone.iter().any(|g| g.as_str() == &**name)));
+    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(name) if gone.iter().any(|gone| gone.as_str() == &**name)));
     for names in definitions.families.values_mut() {
         names.retain(|name| !gone.contains(name));
+    }
+    let interface = definitions.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for (name, data) in over_interface {
+        let chain = std::iter::once(name.clone()).chain(interface.iter().filter(|face| **face != name).cloned()).collect();
+        definitions.families.insert(FontFamily::Name(name.as_str().into()), chain);
+        definitions.font_data.insert(name, Arc::new(data));
     }
     for (name, chain) in chains {
         if !definitions.font_data.contains_key(name) {
@@ -100,24 +107,6 @@ pub(crate) fn set_document_faces(ctx: &Context, gone: &[String], chains: &[(Stri
     if changed {
         set_definitions(ctx, definitions);
     }
-=======
-/// Takes the faces called `gone`, and the families of those names, out of egui's definitions, and adds each face of
-/// `over_interface` under its name with a family of that name: the face, then the proportional family's chain, so
-/// what the face lacks the interface fonts draw.
-/// It rebuilds the definitions from the applied ones, so call it only from a begin-pass step, before an install of the
-/// pass can queue its own.
-pub(crate) fn edit_faces(ctx: &Context, gone: &[String], over_interface: Vec<(String, FontData)>) {
-    let mut definitions = ctx.fonts(|fonts| fonts.definitions().clone());
-    definitions.font_data.retain(|name, _| !gone.contains(name));
-    definitions.families.retain(|family, _| !matches!(family, FontFamily::Name(name) if gone.iter().any(|gone| gone.as_str() == &**name)));
-    let interface = definitions.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    for (name, data) in over_interface {
-        let chain = std::iter::once(name.clone()).chain(interface.iter().filter(|face| **face != name).cloned()).collect();
-        definitions.families.insert(FontFamily::Name(name.as_str().into()), chain);
-        definitions.font_data.insert(name, Arc::new(data));
-    }
-    set_definitions(ctx, definitions);
->>>>>>> origin/next
 }
 
 /// Whether egui's definitions hold the face called `name`.

@@ -22,11 +22,7 @@ pub use claims::capture;
 pub use claims::claim;
 #[doc(hidden)]
 pub use claims::take_claimed;
-<<<<<<< HEAD
-pub(crate) use claims::{fire_claimed, hold_escape};
-=======
-pub(crate) use claims::take_first_claimed;
->>>>>>> origin/next
+pub(crate) use claims::{fire_claimed, hold_escape, take_first_claimed};
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, take_menu_keys, take_nav};
@@ -48,7 +44,9 @@ pub(crate) use intents::{
 pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, focus_in_modal_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts};
+pub(crate) use route::{
+    activated_member, begin, focus_in_modal_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts,
+};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

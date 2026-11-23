@@ -496,18 +496,17 @@ impl KeyUse {
         self
     }
 
-<<<<<<< HEAD
     /// The same use with `nudge_mods` as the modifiers a document canvas acts on with the arrows.
     pub const fn with_nudge_mods(mut self, nudge_mods: NudgeMods) -> Self {
         self.nudge_mods = nudge_mods;
         self
-=======
+    }
+
     /// Whether the component is a document canvas's editor part: the document (`chrome_key`) holding its editor's
     /// text keys. It types letters as a text field does, but it is the document the window's menu keys act over, not
     /// a field inside the chrome.
     pub const fn is_document_editor(&self) -> bool {
         self.chrome_key && matches!(self.owner, OwnerClass::Text)
->>>>>>> origin/next
     }
 
     /// Whether the component claims `chord`.

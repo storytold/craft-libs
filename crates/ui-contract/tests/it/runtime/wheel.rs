@@ -2,22 +2,15 @@
 
 use craft_behavior::{GESTURE_GAP, Sense, Wheel, WheelNotch, WheelPhase, WheelTaker, WheelUnit};
 use craft_host::target::Os;
-<<<<<<< HEAD
 use craft_ui::contract::{Common, Component, Cx, Pointer as _, Props as _, Role, Show as _};
-use craft_ui::style::StyleCx;
-=======
 use craft_ui::runtime::env::{RootEnv, WheelSpeed};
->>>>>>> origin/next
+use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer;
 use craft_ui::testing::sensing::{ProbeRoot, show};
 use craft_ui::testing::wheel::{register, take, take_share};
 use craft_ui::testing::{Fixture, Frames, trial};
-<<<<<<< HEAD
 use craft_ui_test_kit::contract::PlainStyle;
-use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, Response, TouchPhase, Vec2};
-=======
-use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2, ViewportId};
->>>>>>> origin/next
+use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, Response, TouchPhase, Vec2, ViewportId};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -196,7 +189,112 @@ fn a_wheel_gesture_ends_for_a_value_control_in_any_wheel_scope_and_not_for_a_scr
     }
 }
 
-<<<<<<< HEAD
+/// What the view under the pointer took over one step: the summed scroll, the product of the zooms and the number of
+/// shares.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Took {
+    scroll: Vec2,
+    zoom: f32,
+    shares: usize,
+}
+
+/// One step of the wheel-speed trial in `viewport`: a frame with `events` that runs two passes, then a frame with no
+/// input, as an app's tick between OS frames runs one. Returns what the view took over both frames.
+fn speed_step(
+    frames: &mut Frames,
+    viewport: ViewportId,
+    events: Vec<Event>,
+    show: &mut dyn FnMut(&mut egui::Ui),
+    rerun: &Cell<bool>,
+    seen: &RefCell<Vec<Wheel>>,
+) -> Took {
+    seen.borrow_mut().clear();
+    rerun.set(true);
+    let passes = frames.frame_in_viewport(viewport, events, &mut *show);
+    rerun.set(false);
+    assert_eq!(passes, 2, "the wheel frame runs a second pass, which gets none of the frame's events");
+    frames.frame_in_viewport(viewport, Vec::new(), &mut *show);
+    let shares = std::mem::take(&mut *seen.borrow_mut());
+    Took {
+        scroll: shares.iter().fold(Vec2::ZERO, |sum, share| sum + share.scroll),
+        zoom: shares.iter().map(|share| share.zoom).product(),
+        shares: shares.len(),
+    }
+}
+
+/// The wheel-speed trial's steps on `os` with the user's wheel speed `speed`: a line notch, a point delta, a zoom
+/// notch (Ctrl+wheel, Cmd+wheel on macOS) in the main window, then a point delta in a second window.
+fn speed_steps(os: Os, speed: WheelSpeed) -> [Took; 4] {
+    let view = Id::unique("wheel_speed_view");
+    let seen = RefCell::new(Vec::new());
+    let rerun = Cell::new(false);
+    let mut show = |ui: &mut egui::Ui| {
+        register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).zoom(true));
+        let share = take_share(ui.ctx(), view);
+        seen.borrow_mut().extend(share);
+        if rerun.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the wheel frame runs twice");
+        }
+    };
+    let at = Pos2::new(200.0, 150.0);
+    let mut frames = Frames::new();
+    craft_ui::testing::windows::set_os(&frames.ctx, os);
+    frames.root(RootEnv::default().wheel_speed(speed));
+    frames.idle(2, &mut show);
+    frames.frame(vec![pointer::moved(at)], &mut show);
+    // egui reports Ctrl as `ctrl` and `command` off macOS, and Cmd as `mac_cmd` and `command` on it: egui's zoom
+    // modifier either way.
+    let zoom_mods = if os == Os::Mac {
+        Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }
+    } else {
+        Modifiers { ctrl: true, command: true, ..Modifiers::NONE }
+    };
+    let zoom_notch = wheel_event(MouseWheelUnit::Line, Vec2::new(0.0, 1.0), TouchPhase::Move, zoom_mods);
+    let root = ViewportId::ROOT;
+    let line = speed_step(&mut frames, root, vec![pointer::wheel_lines(-1.0)], &mut show, &rerun, &seen);
+    let point = speed_step(&mut frames, root, vec![pointer::wheel(-30.0)], &mut show, &rerun, &seen);
+    let zoom = speed_step(&mut frames, root, vec![zoom_notch], &mut show, &rerun, &seen);
+    let second = ViewportId::from_hash_of("wheel speed second window");
+    frames.frame_in_viewport(second, vec![pointer::moved(at)], &mut show);
+    frames.frame_in_viewport(second, Vec::new(), &mut show);
+    let secondary = speed_step(&mut frames, second, vec![pointer::wheel(-30.0)], &mut show, &rerun, &seen);
+    [line, point, zoom, secondary]
+}
+
+/// SG-31: the runtime multiplies each wheel delta by the user's `WheelSpeed` in the raw-input step, `line` for notches
+/// and `point` for touchpad deltas, in every window. A frame's events reach only its first pass, so a delta is scaled
+/// once however many passes the frame runs and whatever frames follow it. A Ctrl+wheel (Cmd+wheel) zooms by the
+/// device's notch: its distance does not follow the speed.
+#[trial]
+fn the_users_wheel_speed_scales_each_delta_once_and_leaves_zoom_alone() {
+    let speed = WheelSpeed::new(3.0, 2.0);
+    let close = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
+    for os in [Os::Windows, Os::Linux, Os::Mac] {
+        let [line, point, zoom, secondary] = speed_steps(os, WheelSpeed::default());
+        let [fast_line, fast_point, fast_zoom, fast_secondary] = speed_steps(os, speed);
+        for (name, took) in [("line", fast_line), ("point", fast_point), ("zoom", fast_zoom), ("second window", fast_secondary)] {
+            assert_eq!(took.shares, 1, "{os:?} {name}: one share over the frame's two passes and the frame after: {took:?}");
+        }
+        assert!(
+            line.scroll.y != 0.0 && close(fast_line.scroll, line.scroll * speed.line),
+            "{os:?}: a notch scrolls `line` times as far: {fast_line:?} against {line:?}"
+        );
+        assert!(
+            point.scroll.y != 0.0 && close(fast_point.scroll, point.scroll * speed.point),
+            "{os:?}: a point delta scrolls `point` times as far: {fast_point:?} against {point:?}"
+        );
+        assert!(
+            zoom.zoom != 1.0 && (fast_zoom.zoom - zoom.zoom).abs() < 1e-4,
+            "{os:?}: a zoom notch zooms as far at any speed: {fast_zoom:?} against {zoom:?}"
+        );
+        assert!(close(fast_zoom.scroll, Vec2::ZERO), "{os:?}: a zoom notch scrolls nothing: {fast_zoom:?}");
+        assert!(
+            secondary.scroll.y != 0.0 && close(fast_secondary.scroll, secondary.scroll * speed.point),
+            "{os:?}: a second window's delta is scaled too: {fast_secondary:?} against {secondary:?}"
+        );
+    }
+}
+
 /// The points of one wheel line for the takers below.
 const NOTCH: f32 = 25.0;
 
@@ -396,110 +494,4 @@ fn direct_precise_input_cancels_only_older_motion_on_its_axis() {
     // A press drops every ease.
     assert_eq!(step(&mut frames, vec![pointer::press(at.get())]), Vec2::ZERO, "a press stops the owed motion");
     assert_eq!(step(&mut frames, vec![pointer::release(at.get())]), Vec2::ZERO);
-=======
-/// What the view under the pointer took over one step: the summed scroll, the product of the zooms and the number of
-/// shares.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Took {
-    scroll: Vec2,
-    zoom: f32,
-    shares: usize,
-}
-
-/// One step of the wheel-speed trial in `viewport`: a frame with `events` that runs two passes, then a frame with no
-/// input, as an app's tick between OS frames runs one. Returns what the view took over both frames.
-fn speed_step(
-    frames: &mut Frames,
-    viewport: ViewportId,
-    events: Vec<Event>,
-    show: &mut dyn FnMut(&mut egui::Ui),
-    rerun: &Cell<bool>,
-    seen: &RefCell<Vec<Wheel>>,
-) -> Took {
-    seen.borrow_mut().clear();
-    rerun.set(true);
-    let passes = frames.frame_in_viewport(viewport, events, &mut *show);
-    rerun.set(false);
-    assert_eq!(passes, 2, "the wheel frame runs a second pass, which gets none of the frame's events");
-    frames.frame_in_viewport(viewport, Vec::new(), &mut *show);
-    let shares = std::mem::take(&mut *seen.borrow_mut());
-    Took {
-        scroll: shares.iter().fold(Vec2::ZERO, |sum, share| sum + share.scroll),
-        zoom: shares.iter().map(|share| share.zoom).product(),
-        shares: shares.len(),
-    }
-}
-
-/// The wheel-speed trial's steps on `os` with the user's wheel speed `speed`: a line notch, a point delta, a zoom
-/// notch (Ctrl+wheel, Cmd+wheel on macOS) in the main window, then a point delta in a second window.
-fn speed_steps(os: Os, speed: WheelSpeed) -> [Took; 4] {
-    let view = Id::unique("wheel_speed_view");
-    let seen = RefCell::new(Vec::new());
-    let rerun = Cell::new(false);
-    let mut show = |ui: &mut egui::Ui| {
-        register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).zoom(true));
-        let share = take_share(ui.ctx(), view);
-        seen.borrow_mut().extend(share);
-        if rerun.get() && ui.ctx().current_pass_index() == 0 {
-            ui.ctx().request_discard("the wheel frame runs twice");
-        }
-    };
-    let at = Pos2::new(200.0, 150.0);
-    let mut frames = Frames::new();
-    craft_ui::testing::windows::set_os(&frames.ctx, os);
-    frames.root(RootEnv::default().wheel_speed(speed));
-    frames.idle(2, &mut show);
-    frames.frame(vec![pointer::moved(at)], &mut show);
-    // egui reports Ctrl as `ctrl` and `command` off macOS, and Cmd as `mac_cmd` and `command` on it: egui's zoom
-    // modifier either way.
-    let zoom_mods = if os == Os::Mac {
-        Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }
-    } else {
-        Modifiers { ctrl: true, command: true, ..Modifiers::NONE }
-    };
-    let zoom_notch = wheel_event(MouseWheelUnit::Line, Vec2::new(0.0, 1.0), TouchPhase::Move, zoom_mods);
-    let root = ViewportId::ROOT;
-    let line = speed_step(&mut frames, root, vec![pointer::wheel_lines(-1.0)], &mut show, &rerun, &seen);
-    let point = speed_step(&mut frames, root, vec![pointer::wheel(-30.0)], &mut show, &rerun, &seen);
-    let zoom = speed_step(&mut frames, root, vec![zoom_notch], &mut show, &rerun, &seen);
-    let second = ViewportId::from_hash_of("wheel speed second window");
-    frames.frame_in_viewport(second, vec![pointer::moved(at)], &mut show);
-    frames.frame_in_viewport(second, Vec::new(), &mut show);
-    let secondary = speed_step(&mut frames, second, vec![pointer::wheel(-30.0)], &mut show, &rerun, &seen);
-    [line, point, zoom, secondary]
-}
-
-/// SG-31: the runtime multiplies each wheel delta by the user's `WheelSpeed` in the raw-input step, `line` for notches
-/// and `point` for touchpad deltas, in every window. A frame's events reach only its first pass, so a delta is scaled
-/// once however many passes the frame runs and whatever frames follow it. A Ctrl+wheel (Cmd+wheel) zooms by the
-/// device's notch: its distance does not follow the speed.
-#[trial]
-fn the_users_wheel_speed_scales_each_delta_once_and_leaves_zoom_alone() {
-    let speed = WheelSpeed::new(3.0, 2.0);
-    let close = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
-    for os in [Os::Windows, Os::Linux, Os::Mac] {
-        let [line, point, zoom, secondary] = speed_steps(os, WheelSpeed::default());
-        let [fast_line, fast_point, fast_zoom, fast_secondary] = speed_steps(os, speed);
-        for (name, took) in [("line", fast_line), ("point", fast_point), ("zoom", fast_zoom), ("second window", fast_secondary)] {
-            assert_eq!(took.shares, 1, "{os:?} {name}: one share over the frame's two passes and the frame after: {took:?}");
-        }
-        assert!(
-            line.scroll.y != 0.0 && close(fast_line.scroll, line.scroll * speed.line),
-            "{os:?}: a notch scrolls `line` times as far: {fast_line:?} against {line:?}"
-        );
-        assert!(
-            point.scroll.y != 0.0 && close(fast_point.scroll, point.scroll * speed.point),
-            "{os:?}: a point delta scrolls `point` times as far: {fast_point:?} against {point:?}"
-        );
-        assert!(
-            zoom.zoom != 1.0 && (fast_zoom.zoom - zoom.zoom).abs() < 1e-4,
-            "{os:?}: a zoom notch zooms as far at any speed: {fast_zoom:?} against {zoom:?}"
-        );
-        assert!(close(fast_zoom.scroll, Vec2::ZERO), "{os:?}: a zoom notch scrolls nothing: {fast_zoom:?}");
-        assert!(
-            secondary.scroll.y != 0.0 && close(fast_secondary.scroll, secondary.scroll * speed.point),
-            "{os:?}: a second window's delta is scaled too: {fast_secondary:?} against {secondary:?}"
-        );
-    }
->>>>>>> origin/next
 }

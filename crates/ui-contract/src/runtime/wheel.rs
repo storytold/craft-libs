@@ -12,11 +12,7 @@ use craft_behavior::{
     GESTURE_GAP, PointerButton, PointerEvent, Wheel, WheelEase, WheelFocus, WheelGesture, WheelPhase, WheelSource, WheelTaker, WheelUnit,
 };
 use craft_keymap::Mods;
-<<<<<<< HEAD
-use egui::{Context, Id, IdMap, Pos2, Rect, Vec2};
-=======
-use egui::{Context, Id, Pos2, Vec2};
->>>>>>> origin/next
+use egui::{Context, Id, IdMap, Pos2, Vec2};
 
 #[derive(Default)]
 pub(crate) struct State {
@@ -155,20 +151,15 @@ impl State {
 /// Registers a taker for next pass's split. A layer that fades out takes no input, so a taker in its body registers
 /// none: it would hold the wheel over what already shows through it.
 pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
-<<<<<<< HEAD
     if crate::runtime::overlay::drawing_exiting(ctx) {
         return;
     }
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, taker));
+    crate::runtime::replay::journal(ctx, || taker, |ctx, &taker| register(ctx, taker));
     let layer = crate::runtime::overlay::drawing_parent(ctx);
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         state.this_layers.insert(taker.owner, layer);
         state.this.push(taker);
     });
-=======
-    crate::runtime::replay::journal(ctx, || taker, |ctx, &taker| register(ctx, taker));
-    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.this.push(taker));
->>>>>>> origin/next
 }
 
 /// The innermost scroll owner inside the field `owner` under `at` that can still move by the vertical scroll `dy`: the
@@ -287,12 +278,8 @@ pub(crate) fn begin(ctx: &Context) {
                 }
                 state.device_ended = None;
                 // The device's lines and pages become points of each taker: the notch is the scroll owner's to choose.
-<<<<<<< HEAD
                 for (owner, mut share) in shares {
-=======
-                for (owner, mut share) in split(&state.last, at, share, focus, state.armed, &mut state.gesture, now) {
-                    let owner = scroll_owner_inside(&state.last, owner, at, share.scroll.y).unwrap_or(owner);
->>>>>>> origin/next
+                    let owner = scroll_owner_inside(&eligible, owner, at, share.scroll.y).unwrap_or(owner);
                     if unit == WheelUnit::Line {
                         share.lines = share.scroll;
                     }

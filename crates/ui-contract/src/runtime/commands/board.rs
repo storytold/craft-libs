@@ -800,13 +800,9 @@ impl Board {
             catalog_label: def.map(|def| Arc::from(def.label.as_str())),
             icon: state.and_then(|s| s.icon_ref().cloned()).or_else(|| def.and_then(|def| def.icon.clone())),
             chord,
-<<<<<<< HEAD
+            chord_text,
             enabled: flags.enabled && !refused,
             refused,
-=======
-            chord_text,
-            enabled: flags.enabled && modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })),
->>>>>>> origin/next
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
@@ -1344,6 +1340,7 @@ fn resolve_in(
         let gate = board.gate_answer(command);
         if gate.is_some_and(|(_, allowed)| !allowed) {
             resolved.enabled = false;
+            resolved.refused = true;
         }
         let view = board.view_gens(pass::current_viewport(ctx));
         let key = ResolveKey {
@@ -1361,13 +1358,6 @@ fn resolve_in(
     if first_unknown {
         log::warn!("the command {} is in no registered command set: it is an app command with its id as its label", command.id);
     }
-<<<<<<< HEAD
-    if gate.is_some_and(|gate| !gate.allows(command)) {
-        resolved.enabled = false;
-        resolved.refused = true;
-    }
-=======
->>>>>>> origin/next
     (resolved, key)
 }
 
@@ -1635,24 +1625,18 @@ fn queue(ctx: &Context, fired: Fired) {
 pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) {
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
-<<<<<<< HEAD
     // The focused component already declined the command: it answers for it no more.
     let from = with(ctx, |board| Vantage { edits: Some(EditSet::NONE), inactive: Some(EditSet::NONE), ..board.here.clone() });
     let (app, instance) = with(ctx, |board| board.target_of(ctx, &command, &from));
     if !app && instance.is_none() {
         return;
     }
-    let (resolved, _) = resolve_in(ctx, &command, instance, Reach::Focus, Some(&from));
+    let resolved = resolve_once(ctx, &command, instance, Reach::Focus, Some(&from));
     if !resolved.enabled {
         return;
     }
     // An app-scope command a modal layer's instance declares is delivered to that instance.
     let target = if app { resolved.instance } else { instance };
-=======
-    #[cfg(feature = "testing")]
-    measure::count_resolve(ctx, Resolve::New);
-    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here, &mut Reads::default()).0.instance);
->>>>>>> origin/next
     let fired = Fired { target, ..Fired::new(command, FireSource::Key, FirePhase::Press, pass::now(ctx)) };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
@@ -1682,7 +1666,7 @@ pub(crate) fn request_paste_at(ctx: &Context, at: egui::Pos2) {
     if !app && instance.is_none() {
         return;
     }
-    let (resolved, _) = resolve_in(ctx, &command, instance, Reach::Focus, None);
+    let resolved = resolve_once(ctx, &command, instance, Reach::Focus, None);
     if !resolved.enabled {
         return;
     }
@@ -1732,7 +1716,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     let target = if app { resolved.instance } else { instance };
     // A command fired from no component of the window (a native menu, the palette) closes the open popups, as a key's
     // command and a menu pick do, except the popup its instance is in and the popups it was opened from.
-    let inside: Vec<Id> = with(ctx, |board| target.and_then(|target| board.instances.iter().find(|i| i.id == target)?.layer).into_iter().collect());
+    let inside: Vec<Id> = with(ctx, |board| target.and_then(|target| board.instances.get(target)?.layer).into_iter().collect());
     overlay::close_popups_outside(ctx, &inside);
     queue(ctx, Fired { target, ..Fired::new(command.clone(), source, FirePhase::Press, pass::now(ctx)) });
     true
@@ -1858,13 +1842,9 @@ pub(crate) fn binds_scoped(ctx: &Context, chord: &Chord) -> bool {
         let instance = board.innermost(&chain, board.scope_of(&command));
         Some((command, instance, chain))
     });
-<<<<<<< HEAD
     // Key routing runs before the command board refreshes its focus vantage for this pass. Check the actual focused
     // chain, so a focus that just entered a modal can reach its own commands without opening the modal to outsiders.
-    found.is_some_and(|(command, instance, chain)| resolve_in(ctx, &command, instance, Reach::Chain(&chain), None).0.enabled)
-=======
-    found.is_some_and(|(command, instance)| resolve_once(ctx, &command, instance, Reach::Focus, None).enabled)
->>>>>>> origin/next
+    found.is_some_and(|(command, instance, chain)| resolve_once(ctx, &command, instance, Reach::Chain(&chain), None).enabled)
 }
 
 /// Where a shortcut pressed with focus in a menu or on a menu bar matches, and where a hit gives the focus back. The

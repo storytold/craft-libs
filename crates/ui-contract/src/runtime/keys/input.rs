@@ -50,16 +50,13 @@ struct Strip<'a> {
     no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
-<<<<<<< HEAD
     /// The focus is in a menu (`FocusedRecord::menu`).
     in_menu: bool,
-=======
     /// An Alt release in this input ended an Alt+numpad code (`raw_input::take_alt_code_ended`): the code's digits
     /// never reach this stage, so without this the release would read as a lone Alt.
     alt_code_ended: bool,
     /// Whether the window's keymap binds a chord to a command that is enabled now (`commands::runs_now`).
     bound: &'a dyn Fn(&Chord) -> bool,
->>>>>>> origin/next
 }
 
 impl Strip<'_> {
@@ -488,14 +485,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = &input.latin_layout_chars;
-<<<<<<< HEAD
     let requested_paste = commands::board::has_pending_paste(ctx, viewport);
     let mut requested_content = None::<commands::ClipContent>;
-=======
     // S-L177: an Alt chord's text is withheld only when the press can run its command; a bound command that is
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
     let bound = |chord: &Chord| commands::runs_now(ctx, chord);
->>>>>>> origin/next
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
@@ -518,12 +512,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             canvas,
             no_stops,
             label_selection: record.label_selection,
-<<<<<<< HEAD
             in_menu: record.menu.is_some(),
-=======
             alt_code_ended,
             bound: &bound,
->>>>>>> origin/next
         };
         let mut batch = Batch::default();
         let mut visible = None;
@@ -556,8 +547,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             visible = match &read {
                 KeyEvent::PointerPress => Some(false),
                 // An accessibility activation is not the preceding key: a menu it opens must wait for its own navigation.
-                KeyEvent::Access(action)
-                    if matches!(action.kind(), raw_input::ActionKind::Click | raw_input::ActionKind::ShowContextMenu) => Some(false),
+                KeyEvent::Access(action) if matches!(action.kind(), raw_input::ActionKind::Click | raw_input::ActionKind::ShowContextMenu) => {
+                    Some(false)
+                }
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
                 _ => visible,
             };

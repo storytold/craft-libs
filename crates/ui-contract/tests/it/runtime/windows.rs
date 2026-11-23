@@ -1,15 +1,9 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
-<<<<<<< HEAD
-//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows,
-//! injected keys across a focus loss, non-finite injected points, a repeated injected press, the window that has the
-//! keys, a wheel with no known pointer, the placement of a minimized window, the root frame decided again, a held
-//! close, and `act`.
-=======
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows, a
 //! palette's level under a modal and its visibility while the main window is minimized, injected keys across a focus
-//! loss, non-finite injected points, a repeated injected press, the window that has the keys, and `act`.
->>>>>>> origin/next
+//! loss, non-finite injected points, a repeated injected press, the window that has the keys, a wheel with no known
+//! pointer, the placement of a minimized window, the root frame decided again, a held close, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -89,7 +83,6 @@ fn a_press_is_released_after_an_os_resize_of_an_undecorated_window() {
     }
 }
 
-<<<<<<< HEAD
 /// #1518: after the user switches back to a window, the platform sends no pointer move until the mouse moves, so the
 /// first wheel turn found no pointer and scrolled nothing. The pass that receives the wheel gets a move to the system
 /// pointer, mapped into the window, before it; a rerun pass of that frame gets neither again, and the next wheel, with
@@ -256,7 +249,8 @@ fn a_held_close_brings_the_root_window_forward() {
             "{backend:?}: with no close request nothing is raised"
         );
     }
-=======
+}
+
 /// A window that moves reports its inner size again, in points from its physical pixels: at a fractional scale the
 /// same size can come back a float step off (290.4 as 290.40002). That is no OS resize, so the press stays down: a
 /// release there ended every move of a floating panel on Windows a few points into the drag.
@@ -281,7 +275,6 @@ fn a_press_survives_a_size_that_differs_only_by_float_rounding() {
     frame(vec![]);
     frame(vec![]);
     assert!(down.get(), "a float step of size is no resize: the press stays down");
->>>>>>> origin/next
 }
 
 /// One frame of `windows` with the `Modal` open in the child viewport.
@@ -332,7 +325,6 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
     }
 }
 
-<<<<<<< HEAD
 /// A window that a modal in another window blocks takes no wheel, as it takes no press or key: what is under the
 /// pointer there does not scroll.
 #[trial]
@@ -421,7 +413,8 @@ fn wheel_over_a_modal_never_reaches_a_view_under_it_during_a_drag() {
     frame(vec![wheel(-30.0)]);
     assert!(modal_taken.get().is_some(), "the modal's own scroll region takes the wheel");
     assert!(taken.get().is_none(), "the background stays still when the modal scrolls");
-=======
+}
+
 /// A window that closes leaves the next frame's input, as an integration drops it, so the modal it showed in its last
 /// pass blocks no other window: the root window's close request then reaches the app in that frame.
 #[trial]
@@ -437,7 +430,6 @@ fn a_closed_windows_modal_no_longer_blocks_the_root_close() {
     });
     assert!(!listed.get(), "the closed window is gone from the input");
     assert!(asked.get(), "the closed window's modal refuses no close");
->>>>>>> origin/next
 }
 
 /// L-17: the user clicking the main window while a modal in another window blocks it brings the modal's window

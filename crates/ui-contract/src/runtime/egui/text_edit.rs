@@ -46,14 +46,11 @@ pub(crate) struct Edit<'a> {
     /// The screen y of the baseline a single line without a laid-out galley sits on: its control's line's, which a
     /// text in another face (mono digits) shares. `None` centres the line's row on the rect's centre line.
     pub baseline: Option<f32>,
-<<<<<<< HEAD
-    /// The Enter chord that submits a multi-line text; the line break takes the other one.
-    pub submit_key: SubmitKey,
-=======
     /// How far a multi-line text taller than `rect` is scrolled up inside it, in points; the text part owns the offset
     /// (`text_adapter`), and a single line or a laid-out galley ignores it.
     pub scroll: f32,
->>>>>>> origin/next
+    /// The Enter chord that submits a multi-line text; the line break takes the other one.
+    pub submit_key: SubmitKey,
 }
 
 /// What the widget did in one pass.
@@ -99,11 +96,8 @@ pub(crate) fn show(ui: &mut Ui, env: &crate::runtime::env::Env, edit: Edit<'_>) 
         underline,
         galley,
         baseline,
-<<<<<<< HEAD
-        submit_key,
-=======
         scroll,
->>>>>>> origin/next
+        submit_key,
     } = edit;
     // egui inserts the line break itself before the adapter sees the Enter, so the chord that submits must not be the
     // one egui breaks the line on: under `Enter` the line break is Shift+Enter and plain Enter reaches `entered` untaken.

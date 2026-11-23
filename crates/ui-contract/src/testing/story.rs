@@ -2,14 +2,9 @@
 
 use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
-<<<<<<< HEAD
-use crate::runtime::commands::{CommandInput, CommandRef};
-use craft_behavior::{EditEvent, EditEvents, PartKey, PartRef, Value};
-=======
-use crate::runtime::commands::CommandStates;
+use crate::runtime::commands::{CommandRef, CommandStates};
 use craft_behavior::{EditEvent, EditEvents, Mixed, PartKey, PartRef, Value};
 use craft_tracked::{Revision, Tracked};
->>>>>>> origin/next
 use egui::{Id, Response, Ui, Vec2};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -790,56 +785,23 @@ pub fn show_as_only_item<C>(ui: &mut Ui, row: C) -> C::Output
 where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
-<<<<<<< HEAD
-    only_item(ui, row, None)
+    crate::contract::show_item_in_flow(ui, row, crate::runtime::access::SetPosition::new(0).of(1))
 }
 
 /// Shows `row` as the only item of a collection across `span`, as a collection shows its rows across its columns: a
 /// row with column cells spans the cells it is given, where in the flow it would take its own width. The row is as
 /// high as it measures at the span's width, as a collection measures it.
-pub fn show_as_only_item_across<C>(ui: &mut Ui, row: C, span: egui::Rangef) -> C::Output
+pub fn show_as_only_item_across<C>(ui: &mut Ui, mut row: C, span: egui::Rangef) -> C::Output
 where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
-    only_item(ui, row, Some(span))
-}
-
-fn only_item<C>(ui: &mut Ui, row: C, span: Option<egui::Rangef>) -> C::Output
-where
-    C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
-{
-    let id = ui.scope_id().with("only item");
-    let facts = crate::runtime::env::ItemFacts {
-        item: id,
-        flags: crate::style::Flags::empty(),
-        position: crate::runtime::access::SetPosition::new(0).of(1),
-        columns: Vec::new(),
-        toggles: Vec::new(),
-        toggle_keys: Vec::new(),
-        aligns: Vec::new(),
-        pressed: None,
-        menu_open: false,
-    };
-    let installed = crate::runtime::env::Env::install_for(
-        ui,
-        crate::runtime::env::Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(std::sync::Arc::new(facts))),
-    );
-    let mut row = row.id(id);
-    let shown = match span {
-        Some(span) => {
-            let height = row.measure_in(ui, craft_behavior::Proposal::Width(span.span())).y;
-            let top = ui.cursor().min.y;
-            let rect = egui::Rect::from_x_y_ranges(span, top..=top + height);
-            let shown = row.show_at(ui, rect);
-            ui.advance_cursor_after_rect(rect);
-            shown
-        }
-        None => row.show(ui),
-    };
-    crate::runtime::env::Env::restore(ui.ctx(), installed);
+    let at = crate::runtime::access::SetPosition::new(0).of(1);
+    let height = crate::contract::measure_item(ui, &mut row, at, craft_behavior::Proposal::Width(span.span())).y;
+    let top = ui.cursor().min.y;
+    let rect = egui::Rect::from_x_y_ranges(span, top..=top + height);
+    let shown = crate::contract::show_item(ui, rect, row, at);
+    ui.advance_cursor_after_rect(rect);
     shown
-=======
-    crate::contract::show_item_in_flow(ui, row, crate::runtime::access::SetPosition::new(0).of(1))
 }
 
 /// A story value's place in its data, by its name and type, as the data keeps it: with the data's source it names the
@@ -849,5 +811,4 @@ fn slot_offset(name: &str, ty: TypeId) -> usize {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (name, ty).hash(&mut hasher);
     hasher.finish() as usize
->>>>>>> origin/next
 }

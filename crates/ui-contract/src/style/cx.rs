@@ -3,13 +3,8 @@
 use super::key::{EnvKey, Ink};
 use super::look::{DataColor, FocusLook, StyleColor, SurfaceKind, SurfaceLook, TrackLook};
 use super::paint::{
-<<<<<<< HEAD
-    AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarLook, auto_scroll_mark_look, handle_look, marker_look,
-    reset_mark_look, rule_look, scroll_bar_look,
-=======
-    HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, handle_look, marker_look, reset_mark_look, rule_look,
-    scroll_bar_look_of,
->>>>>>> origin/next
+    AutoScrollMarkLook, HandleLook, MarkerLook, ResetMarkLook, RuleKind, RuleLook, ScrollBarKind, ScrollBarLook, auto_scroll_mark_look, handle_look,
+    marker_look, reset_mark_look, rule_look, scroll_bar_look_of,
 };
 use super::surface::{SurfaceStyle, surface_style};
 use super::tokens::UiTokens;

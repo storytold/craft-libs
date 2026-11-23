@@ -693,7 +693,6 @@ pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     true
 }
 
-<<<<<<< HEAD
 /// Takes the one-shot request of the component `id` (`Props::request_focus`) right after its stops registered in the
 /// running pass: its own stop, else its first part stop, takes the focus as a layer's initial stop does, so the press
 /// of the pass does not take it back. A component with no stop this pass (a disabled one) takes none, and a
@@ -712,12 +711,12 @@ pub(crate) fn take_request(ctx: &Context, id: Id, request: FocusRequest) {
         state.focus_stop(rec)
     });
     apply(ctx, acts);
-=======
+}
+
 /// Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
 /// the stop focus is on. An app asks it of a component it shows, such as whether its document canvas has focus.
 pub fn has(ctx: &Context, id: Id) -> bool {
     focused_rec(ctx).is_some_and(|rec| rec.stop.id == id)
->>>>>>> origin/next
 }
 
 /// Applies `target` now, for an AccessKit `Focus` action, which moves focus in the pass that carries it.

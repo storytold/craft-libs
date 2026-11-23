@@ -168,15 +168,10 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
     // modifiers from its own (event-free) input and counts no press twice.
     let mods = with_latched(read.mods, latched);
-<<<<<<< HEAD
     let press_mods = read.press_mods.map(|mods| with_latched(mods, latched));
-    // A drag that started in another window reaches this one through the desktop pointer (8.4).
-    if read.pos.is_none() {
-=======
     // A drag that started in another window reaches this one through the desktop pointer (8.4), never at the place
     // this window saw the pointer last: the source window holds the pointer, and the window may have had no exit.
     if drag::runs_elsewhere(ctx, viewport) {
->>>>>>> origin/next
         read.pos = drag::cross_window_pointer(ctx, viewport);
     }
     let wheel = input::wheel_read(ctx, WHEEL_LINE_POINTS, WHEEL_PAGE_POINTS);
@@ -920,16 +915,10 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
 type Ranked = ((u8, u32), Winner<Id>, Id, bool);
 
 /// The press winners among `ranked`, each root's topmost shape under a point that takes a press with its rank and
-<<<<<<< HEAD
 /// whether the root takes clicks anywhere, and under a top shape that passes its drag the root's next shape that drags:
 /// by the per-kind rule of [`PressWinners`].
-fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinners {
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
-=======
-/// whether the root takes clicks anywhere: by the per-kind rule of [`PressWinners`].
 fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
     ranked.sort_by_key(|entry| std::cmp::Reverse(entry.0));
->>>>>>> origin/next
     let mut winners = PressWinners::default();
     for (_, winner, root, root_clicks) in ranked {
         let (clicks, drags) = (winner.sense.contains(craft_behavior::Sense::CLICK), winner.sense.contains(craft_behavior::Sense::DRAG));

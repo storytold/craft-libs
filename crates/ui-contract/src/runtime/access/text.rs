@@ -122,14 +122,9 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts, value_ove
         let (focus_node, focus_at) = end_of(&entries, owner, focus)?;
         Some((anchor_node, anchor_at, focus_node, focus_at))
     });
-<<<<<<< HEAD
     // An empty editor can name a mixed value without turning its label into editable text.
     let value = (!facts.masked).then_some(if facts.text.is_empty() { value_override.unwrap_or(&facts.text) } else { &facts.text });
-    adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, selection });
-=======
-    let value = (!facts.masked).then_some(facts.text.as_str());
     adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, disabled: facts.disabled, selection });
->>>>>>> origin/next
     Service::<Tables>::run(ctx, |tables| tables.0.insert(owner, entries));
 }
 

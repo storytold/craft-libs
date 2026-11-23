@@ -67,12 +67,8 @@ pub use registry::{Registered, Registry};
 pub use stage::{least_stage_width, room_height, stage, stage_fitting, stage_width};
 #[doc(hidden)]
 pub use story::{
-<<<<<<< HEAD
-    CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, show_as_only_item,
-    show_as_only_item_across, stories,
-=======
     CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, ValueAt, show_as_only_item,
->>>>>>> origin/next
+    show_as_only_item_across,
 };
 pub use windows::install_spec;
 

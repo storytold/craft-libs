@@ -74,7 +74,7 @@ pub enum DropMark {
     },
 }
 
-crate::stays!(Arc<crate::style::UiTokens>);
+crate::stays!(Arc<crate::style::UiTokens>, DropOperation);
 
 impl crate::runtime::Shift for DropMark {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
@@ -284,13 +284,10 @@ struct Registration {
     /// The overlay layer whose body registered the target; `None` for the window's own content.
     scope: Option<Id>,
     mark: DropMark,
-<<<<<<< HEAD
     /// What a drop on the target does with the keys held now; the pointer shows it while the target wins.
     op: DropOperation,
-=======
     /// The tokens of the target's region.
     tokens: Arc<UiTokens>,
->>>>>>> origin/next
     /// The target covers the whole window: any target over a component beats it.
     window: bool,
 }
@@ -462,7 +459,7 @@ fn os_files(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let hovering = !seen.hovered.is_empty();
     let host = WindowHost::of(ctx);
-    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame(ctx).pos };
+    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
     let positioned = position.is_some();
     // A window target can take the drop immediately only if the pointer has not moved since resolution.
     let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window && targets.pointer == position);
@@ -600,21 +597,14 @@ pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
     });
 }
 
-<<<<<<< HEAD
 /// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer a drop doing `op`, with its mark in
-/// layer space. A `window` target covers the whole window.
-pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, op: DropOperation, window: bool) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, owner, layer, mark, op, window));
-=======
-/// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer, with its mark in layer space and the
-/// tokens of the target's region. A `window` target covers the whole window.
-pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, tokens: Arc<UiTokens>, window: bool) {
+/// layer space and the tokens of the target's region. A `window` target covers the whole window.
+pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, op: DropOperation, tokens: Arc<UiTokens>, window: bool) {
     crate::runtime::replay::journal(
         ctx,
-        || (owner, layer, mark, tokens.clone(), window),
-        |ctx, (owner, layer, mark, tokens, window)| register(ctx, *owner, *layer, *mark, tokens.clone(), *window),
+        || (owner, layer, mark, op, tokens.clone(), window),
+        |ctx, (owner, layer, mark, op, tokens, window)| register(ctx, *owner, *layer, *mark, *op, tokens.clone(), *window),
     );
->>>>>>> origin/next
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
         None => mark,
@@ -622,11 +612,7 @@ pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, t
     let scope = overlay::drawing_parent(ctx);
     PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
         let ordinal = targets.this.iter().filter(|registration| registration.owner == owner).count() as u32;
-<<<<<<< HEAD
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, window });
-=======
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, tokens, window });
->>>>>>> origin/next
+        targets.this.push(Registration { owner, ordinal, layer, scope, mark, op, tokens, window });
     });
 }
 
@@ -644,15 +630,9 @@ pub fn next_ordinal(ctx: &Context, owner: Id) -> u32 {
     })
 }
 
-<<<<<<< HEAD
 /// The operation the held modifiers pick now over a target that copies with `copy`.
 pub(crate) fn current_operation(ctx: &Context, copy: CopyKeys) -> DropOperation {
-    operation(ctx, pointer::frame(ctx).mods, copy)
-=======
-/// The operation the held modifiers pick now.
-pub(crate) fn current_operation(ctx: &Context) -> DropOperation {
-    operation(ctx, pointer::frame_raw(ctx).mods)
->>>>>>> origin/next
+    operation(ctx, pointer::frame_raw(ctx).mods, copy)
 }
 
 /// Whether the session's button was released in this pass.
@@ -712,11 +692,7 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     let op = current_operation(ctx, target.copy_keys());
     let drop = target.accept(&*payload, at, op)?;
     let ordinal = next_ordinal(ctx, owner);
-<<<<<<< HEAD
-    register(ctx, owner, zone.layer, target.mark(&drop), op, false);
-=======
-    register(ctx, owner, zone.layer, target.mark(&drop), tokens, false);
->>>>>>> origin/next
+    register(ctx, owner, zone.layer, target.mark(&drop), op, tokens, false);
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
 }
 
@@ -771,7 +747,7 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let host = WindowHost::of(ctx);
-    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame(ctx).pos };
+    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame_raw(ctx).pos };
     // A modal holds input: targets on layers below it, and on the window, never accept.
     let scopes: Vec<Option<Id>> =
         PerViewport::<Targets>::with(ctx, viewport, |targets| targets.this.iter().map(|registration| registration.scope).collect());
@@ -786,28 +762,17 @@ pub(crate) fn end_pass(ctx: &Context) {
             .filter(|(at, _)| open[*at])
             .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
-<<<<<<< HEAD
         targets.winner_window = best.is_some_and(|registration| registration.window);
         targets.pointer = position;
-        let best = best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op)));
-        targets.winner = best.map(|(key, _)| key);
-=======
-        let best = best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.tokens.clone())));
+        let best =
+            best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op, registration.tokens.clone())));
         targets.winner = best.as_ref().map(|(key, _)| *key);
->>>>>>> origin/next
         targets.this.clear();
         best.map(|(_, won)| won)
     });
-<<<<<<< HEAD
-    let over_this_window = pointer::frame(ctx).pos.is_some();
-    let primary_down = pointer::with_pass_pointer(ctx, |pointer| pointer.primary_down);
-    let buttons = pointer::frame(ctx).buttons;
-=======
-    let op = current_operation(ctx);
     let over_this_window = pointer::frame_raw(ctx).pos.is_some();
     let primary_down = pointer::with_pass_raw(ctx, |pointer| pointer.primary_down);
     let buttons = pointer::frame_raw(ctx).buttons;
->>>>>>> origin/next
     let frame = pass::root_frame_nr(ctx);
     let held = board(ctx, |board| board.session.as_ref().map(|session| (session.os, session.button, session.dropped))).is_none_or(
         |(os, button, dropped)| match (os, button) {
@@ -833,15 +798,9 @@ pub(crate) fn end_pass(ctx: &Context) {
             }
         }
         if let Some(session) = &mut board.session {
-<<<<<<< HEAD
-            match winner {
-                Some((mark, _)) => session.mark = Some((viewport, mark)),
-                None if session.mark.is_some_and(|(marked, _)| marked == viewport) => session.mark = None,
-=======
             match &winner {
-                Some((mark, tokens)) => session.mark = Some(ShownMark { viewport, mark: *mark, tokens: tokens.clone() }),
+                Some((mark, _, tokens)) => session.mark = Some(ShownMark { viewport, mark: *mark, tokens: tokens.clone() }),
                 None if session.mark.as_ref().is_some_and(|shown| shown.viewport == viewport) => session.mark = None,
->>>>>>> origin/next
                 None => {}
             }
         }
@@ -859,7 +818,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     if running && over_this_window {
         match winner {
             None => cursor::request(ctx, Cursor::System(CursorIcon::NotAllowed), CursorPriority::Drag),
-            Some((_, op)) => {
+            Some((_, op, _)) => {
                 let icon = match op {
                     DropOperation::Copy => CursorIcon::Copy,
                     DropOperation::Link => CursorIcon::Alias,

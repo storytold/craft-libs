@@ -26,23 +26,15 @@ pub use board::declare_child;
 pub use board::focus_within;
 pub use board::keymap;
 #[doc(hidden)]
-<<<<<<< HEAD
-pub use board::keymap_builds;
+pub use board::note_page_root;
 #[cfg(feature = "testing")]
 pub(crate) use board::observe_fired;
-=======
-pub use board::note_page_root;
->>>>>>> origin/next
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::runs_now;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-<<<<<<< HEAD
-    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_declined, take_delivered, take_fired,
+    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_declined, take_delivered, take_fired,
     window_shortcuts,
-=======
-    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
->>>>>>> origin/next
 };
 #[doc(hidden)]
 pub use board::{bound_around, keymap_generation, take_around};

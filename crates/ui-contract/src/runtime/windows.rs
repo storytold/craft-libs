@@ -332,7 +332,15 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     if handed_off && tracked == Some(viewport) {
         shared(ctx, |shared| shared.tracked_move = None);
     }
-<<<<<<< HEAD
+    let pressed =
+        input.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. }));
+    if pressed {
+        let frame = pass::root_frame_nr(ctx);
+        shared(ctx, |shared| {
+            shared.presses.retain(|(_, at)| at + 1 >= frame);
+            shared.presses.push((viewport, frame));
+        });
+    }
     released || located
 }
 
@@ -360,18 +368,6 @@ fn locate_wheel(ctx: &Context, input: &mut RawInput) -> bool {
     }
     input.events.insert(0, egui::Event::PointerMoved(local));
     true
-=======
-    let pressed =
-        input.events.iter().any(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: true, .. }));
-    if pressed {
-        let frame = pass::root_frame_nr(ctx);
-        shared(ctx, |shared| {
-            shared.presses.retain(|(_, at)| at + 1 >= frame);
-            shared.presses.push((viewport, frame));
-        });
-    }
-    released
->>>>>>> origin/next
 }
 
 /// The begin hook (H5), where the viewport is current: refreshes its window info, and raises the modal's window

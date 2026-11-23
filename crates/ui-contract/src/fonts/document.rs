@@ -4,19 +4,17 @@
 //! per frame; past [`MAX_DOCUMENT_FACES`] the faces the previous frame did not draw are taken out again, which keeps
 //! memory to the faces on screen. Faces still on screen stay, however many there are.
 //!
-<<<<<<< HEAD
-//! A face may name a chain of other document faces ([`FaceBytes::chain`]): a font split over several subsets (Word
-//! embeds one subset per run of characters) draws each character from the first subset that has it, before the
-//! interface family. The chains are linked in the begin-pass step after a face was added or taken out, when egui has
-//! applied every face the pass before added.
-=======
 //! A face is drawn alone ([`DocumentFaces::face`]: a font sample shows what the face itself has) or over the interface
 //! fonts ([`DocumentFaces::over_interface`]: document text such as an input method's composition, whose characters
 //! the face lacks come from the interface stack, CJK included). A face over the interface fonts is installed by the
 //! begin-pass step of the frame after it is asked for, as a family whose chain is the face followed by the
 //! proportional family's: egui builds a family's chain from the definitions alone, so the chain is written into them
 //! where nothing of the pass has queued definitions of its own.
->>>>>>> origin/next
+//!
+//! A face may name a chain of other document faces ([`FaceBytes::chain`]): a font split over several subsets (Word
+//! embeds one subset per run of characters) draws each character from the first subset that has it, before the
+//! interface family. The chains are linked in the begin-pass step after a face was added or taken out, when egui has
+//! applied every face the pass before added.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -34,17 +32,13 @@ pub const DOCUMENT_FACES_PER_PASS: usize = 6;
 /// The faces kept before the ones the previous frame did not draw are taken out.
 pub const MAX_DOCUMENT_FACES: usize = 64;
 
-<<<<<<< HEAD
-/// The bytes of a face, its index in a collection, its variation coordinates (axis tag, value) and the faces that
-/// draw what it lacks.
-=======
 /// The largest font file a face over the interface fonts is drawn from, in bytes (16 MiB). egui parses every face of
 /// the definitions again whenever they change, and a document's CJK fallback can be far larger (Microsoft YaHei is
 /// about 19 MB): text in a larger face is drawn in the interface fonts.
 pub const MAX_INTERFACE_FACE_BYTES: usize = 16 << 20;
 
-/// The bytes of a face, its index in a collection and its variation coordinates (axis tag, value).
->>>>>>> origin/next
+/// The bytes of a face, its index in a collection, its variation coordinates (axis tag, value) and the faces that
+/// draw what it lacks.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct FaceBytes {
@@ -101,7 +95,7 @@ pub enum FaceState {
     Unavailable,
 }
 
-/// A registered face: the frame it was last drawn in, the frame it was added in and the keys of its chain.
+/// A registered face: the frame it was last drawn in, the frame it was added in and the families of its chain.
 struct Registered {
     used: u64,
     added: u64,
@@ -145,13 +139,9 @@ impl Registry {
         for name in &stale {
             self.faces.remove(name);
         }
-<<<<<<< HEAD
-        self.relink |= !stale.is_empty();
-        stale.iter().map(|key| family_name(key)).collect()
-=======
         self.pending.retain(|(name, _)| !stale.contains(name));
+        self.relink |= !stale.is_empty();
         stale
->>>>>>> origin/next
     }
 
     /// The family of every face with a chain, with the families of its chain's registered faces in order.
@@ -159,17 +149,17 @@ impl Registry {
         self.faces
             .iter()
             .filter(|(_, face)| !face.chain.is_empty())
-            .map(|(key, face)| {
-                let chain = face.chain.iter().filter(|link| *link != key && self.faces.contains_key(*link)).map(|link| family_name(link)).collect();
-                (family_name(key), chain)
+            .map(|(name, face)| {
+                let chain = face.chain.iter().filter(|link| *link != name && self.faces.contains_key(*link)).cloned().collect();
+                (name.clone(), chain)
             })
             .collect()
     }
 
-    /// Marks the face `key` and the faces of its chain drawn in this frame.
-    fn mark_drawn(&mut self, key: &str) {
+    /// Marks the face of the family `name` and the faces of its chain drawn in this frame.
+    fn mark_drawn(&mut self, name: &str) {
         let frame = self.frame;
-        let Some(face) = self.faces.get_mut(key) else { return };
+        let Some(face) = self.faces.get_mut(name) else { return };
         face.used = frame;
         let chain = face.chain.clone();
         for link in &chain {
@@ -206,33 +196,21 @@ enum Known {
     New,
 }
 
-<<<<<<< HEAD
-/// The begin-pass step: starts the frame, evicts the faces past the cap and, after a face was added or taken out,
-/// links the chains. Both happen only here, before any install of the pass can queue its definitions, because they
-/// rebuild them from the applied ones; egui has applied the faces the previous pass added before this step runs.
+/// The begin-pass step: starts the frame, evicts the faces past the cap, installs the faces over the interface fonts
+/// the last frame loaded and, after a face was added or taken out, links the chains. All happen only here, in one
+/// edit, before any install of the pass can queue its definitions, because they rebuild them from the applied ones;
+/// egui has applied the faces the previous pass added before this step runs.
 fn begin_pass(ctx: &Context) {
     let now = pass::root_frame_nr(ctx);
     let changed = memory::with::<Registry, _>(ctx, |registry| {
         registry.begin(now);
         let stale = registry.evict(now);
-        std::mem::take(&mut registry.relink).then(|| (stale, registry.chains()))
+        let pending = std::mem::take(&mut registry.pending);
+        let relink = std::mem::take(&mut registry.relink);
+        (relink || !pending.is_empty()).then(|| (stale, pending, registry.chains()))
     });
-    if let Some((stale, chains)) = changed {
-        egui_fonts::set_document_faces(ctx, &stale, &chains);
-=======
-/// The begin-pass step: starts the frame, evicts the faces past the cap and installs the faces over the interface fonts
-/// the last frame loaded. Both happen only here, in one edit, before any install of the pass can queue its
-/// definitions, because they rebuild them from the applied ones.
-fn begin_pass(ctx: &Context) {
-    let now = pass::root_frame_nr(ctx);
-    let (stale, pending) = memory::with::<Registry, _>(ctx, |registry| {
-        registry.begin(now);
-        let stale = registry.evict(now);
-        (stale, std::mem::take(&mut registry.pending))
-    });
-    if !stale.is_empty() || !pending.is_empty() {
-        egui_fonts::edit_faces(ctx, &stale, pending);
->>>>>>> origin/next
+    if let Some((stale, pending, chains)) = changed {
+        egui_fonts::edit_faces(ctx, &stale, pending, &chains);
     }
 }
 
@@ -273,15 +251,9 @@ impl DocumentFaces {
         let (now, known) = memory::with::<Registry, _>(ctx, |registry| {
             let known = if registry.failed.contains(&name) {
                 Known::Failed
-<<<<<<< HEAD
-            } else if let Some(added) = registry.faces.get(key).map(|face| face.added) {
-                registry.mark_drawn(key);
+            } else if let Some(added) = registry.faces.get(&name).map(|face| face.added) {
+                registry.mark_drawn(&name);
                 Known::Added(added)
-=======
-            } else if let Some(face) = registry.faces.get_mut(&name) {
-                face.used = registry.frame;
-                Known::Added(face.added)
->>>>>>> origin/next
             } else {
                 Known::New
             };
@@ -313,12 +285,6 @@ impl DocumentFaces {
             });
             return FaceState::Unavailable;
         };
-<<<<<<< HEAD
-        egui_fonts::add_family_face(ctx, &family, bytes.data());
-        memory::with::<Registry, _>(ctx, |registry| {
-            registry.faces.insert(key.to_owned(), Registered { used: now, added: now, chain: bytes.chain });
-            registry.relink = true;
-=======
         if kind == Kind::Alone {
             egui_fonts::add_family_face(ctx, &family, bytes.data());
         }
@@ -327,8 +293,9 @@ impl DocumentFaces {
                 registry.pending.retain(|(pending, _)| *pending != name);
                 registry.pending.push((name.clone(), bytes.data()));
             }
-            registry.faces.insert(name.clone(), Registered { used: now, added: now })
->>>>>>> origin/next
+            let chain = bytes.chain.iter().map(|link| Kind::Alone.family_name(link)).collect();
+            registry.faces.insert(name.clone(), Registered { used: now, added: now, chain });
+            registry.relink = true;
         });
         FaceState::Loading
     }
