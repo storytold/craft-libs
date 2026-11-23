@@ -51,13 +51,13 @@ pub struct Header {
 }
 
 impl Header {
-    /// Bytes of one frame (one sample of every channel), or 0 if `channels` or `bits` overflow.
+    /// Bytes of one frame (one sample of every channel), or 0 if `channels` or `bits` are unsupported or overflow.
     pub fn frame_bytes(&self) -> usize {
         let pair_bytes = match self.bits {
             16 => 5,
             20 => 6,
             24 => 7,
-            b => ((b as usize).saturating_add(4) * 2) / 8,
+            _ => return 0,
         };
         (self.channels / 2).checked_mul(pair_bytes).unwrap_or(0)
     }
@@ -241,5 +241,17 @@ mod tests {
     fn header_frame_bytes_overflow_does_not_panic() {
         let h = Header { channels: usize::MAX, channel_id: 0, bits: 24, alignment: 0, audio_bytes: 0 };
         assert_eq!(h.frame_bytes(), 0);
+    }
+
+    #[test]
+    fn header_frame_bytes_rejects_unsupported_depth() {
+        let h_max = Header { channels: 2, channel_id: 0, bits: u32::MAX, alignment: 0, audio_bytes: 0 };
+        assert_eq!(h_max.frame_bytes(), 0);
+
+        let h_unsupported = Header { channels: 2, channel_id: 0, bits: 18, alignment: 0, audio_bytes: 0 };
+        assert_eq!(h_unsupported.frame_bytes(), 0);
+
+        let h_zero = Header { channels: 2, channel_id: 0, bits: 0, alignment: 0, audio_bytes: 0 };
+        assert_eq!(h_zero.frame_bytes(), 0);
     }
 }
