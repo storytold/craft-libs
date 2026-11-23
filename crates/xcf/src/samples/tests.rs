@@ -3,6 +3,69 @@ use super::*;
 use crate::Compression;
 use crate::tests::{W, hierarchy};
 
+fn f32_source_tile(data: &[u8], order: SampleOrder) -> SourceTile<'_> {
+    SourceTile {
+        x: 0,
+        y: 0,
+        width: 2,
+        height: 1,
+        drawable: SourceDrawable {
+            width: 2,
+            height: 1,
+            channels: 4,
+            indexed: false,
+            precision: SourcePrecision { storage: Precision { bytes: 4, float: true, linear: true }, transfer: Transfer::Linear },
+            sample_order: order,
+        },
+        data,
+    }
+}
+
+#[test]
+fn bulk_f32_delivery_preserves_every_source_bit_in_either_order() {
+    // Includes signed zero, signed HDR, infinities, a subnormal and a NaN payload.
+    let bits = [0x0000_0000u32, 0x8000_0000, 0xc020_0000, 0x4080_0000, 0x7f80_0000, 0xff80_0000, 0x0000_0001, 0x7fc1_2345];
+    for order in [SampleOrder::BigEndian, SampleOrder::LittleEndian] {
+        let bytes: Vec<_> =
+            bits.iter().flat_map(|word| if order == SampleOrder::LittleEndian { word.to_le_bytes() } else { word.to_be_bytes() }).collect();
+        let tile = f32_source_tile(&bytes, order);
+        let mut samples = tile.f32_samples().unwrap().unwrap();
+        assert_eq!(samples.len(), bits.len());
+        assert_eq!(samples.next().unwrap().to_bits(), bits[0]);
+        assert_eq!(samples.len(), bits.len() - 1);
+        assert_eq!(samples.map(f32::to_bits).collect::<Vec<_>>(), bits[1..]);
+        for (index, expected) in bits.into_iter().enumerate() {
+            let SourceSample::F32(scalar) = tile.sample(index).unwrap() else { panic!("F32") };
+            assert_eq!(scalar.to_bits(), expected, "bulk and scalar retain source bits");
+        }
+    }
+}
+
+#[test]
+fn bulk_f32_delivery_requires_exact_checked_layout_and_does_not_reinterpret_other_storage() {
+    for size in [0, 1, 28, 31, 33, 36] {
+        let bytes = vec![0; size];
+        assert!(f32_source_tile(&bytes, SampleOrder::BigEndian).f32_samples().is_err(), "size {size}");
+    }
+    let bytes = [0; 32];
+    assert_eq!(f32_source_tile(&bytes, SampleOrder::BigEndian).f32_samples().unwrap().unwrap().len(), 8);
+    let mut overflow = f32_source_tile(&[], SampleOrder::BigEndian);
+    overflow.width = u32::MAX;
+    overflow.height = u32::MAX;
+    overflow.drawable.channels = usize::MAX;
+    assert!(overflow.f32_samples().is_err());
+    for storage in [
+        Precision::GAMMA8,
+        Precision { bytes: 4, float: false, linear: false },
+        Precision { bytes: 2, float: true, linear: false },
+        Precision { bytes: 8, float: true, linear: false },
+    ] {
+        let mut tile = f32_source_tile(&[], SampleOrder::LittleEndian);
+        tile.drawable.precision.storage = storage;
+        assert!(tile.f32_samples().unwrap().is_none());
+    }
+}
+
 struct Source {
     version: u32,
     code: u32,

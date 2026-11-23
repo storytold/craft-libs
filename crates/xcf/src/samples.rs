@@ -97,6 +97,31 @@ pub struct SourceTile<'a> {
     pub data: &'a [u8],
 }
 impl SourceTile<'_> {
+    /// Iterate exact F32 source words after validating the tile's complete interleaved layout
+    /// once. Other storage representations return `None`; no narrowing, transfer conversion,
+    /// or nonfinite-value policy is applied. Signed zero and NaN payload bits are preserved.
+    #[inline]
+    pub fn f32_samples(&self) -> Result<Option<impl ExactSizeIterator<Item = f32> + '_>> {
+        let precision = self.drawable.precision.storage;
+        if !precision.float || precision.bytes != 4 {
+            return Ok(None);
+        }
+        let samples = (self.width as usize)
+            .checked_mul(self.height as usize)
+            .and_then(|pixels| pixels.checked_mul(self.drawable.channels))
+            .ok_or_else(|| invalid("tile sample count overflow"))?;
+        let expected = samples.checked_mul(4).ok_or_else(|| invalid("tile byte count overflow"))?;
+        if self.data.len() != expected {
+            return Err(invalid("F32 source bytes do not match the tile dimensions and channels"));
+        }
+        let (words, trailing) = self.data.as_chunks::<4>();
+        if !trailing.is_empty() {
+            return Err(invalid("incomplete F32 source word"));
+        }
+        let little = self.drawable.sample_order == SampleOrder::LittleEndian;
+        Ok(Some(words.iter().map(move |word| if little { f32::from_le_bytes(*word) } else { f32::from_be_bytes(*word) })))
+    }
+
     /// Read one interleaved stored component without f32 narrowing or transfer conversion.
     pub fn sample(&self, index: usize) -> Result<SourceSample> {
         let precision = self.drawable.precision.storage;
