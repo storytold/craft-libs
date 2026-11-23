@@ -167,7 +167,9 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         let phase = cx.press().phase;
-        if self.movable && let PressPhase::DragStart { start, .. } = phase {
+        if self.movable
+            && let PressPhase::DragStart { start, .. } = phase
+        {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
             self.started = Some(start.origin);
         }
