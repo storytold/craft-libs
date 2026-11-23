@@ -426,7 +426,7 @@ fn name_from_labels(elements: &mut [Element]) {
 
 /// A call a component made to the open region's record. Each is noted in the journal of the records open around it
 /// (`replay::journal`), so a memoized view that replays inside a region adds to the region what its run added: the
-/// elements, their parts, facts and commands, and the labels that name them. The hit areas and the Tab order need no
+/// elements, their parts, facts, commands and text values, and the labels that name them. The hit areas and the Tab order need no
 /// step: the sensing and focus services replay their own registrations, and [`finish`] reads those for the elements.
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
@@ -440,6 +440,8 @@ enum Step {
     Facts { id: Id, part: Option<PartRef>, rect: Rect, facts: Facts },
     /// [`labelled`].
     Label { node: Id, label: Id },
+    /// [`note_text_value`].
+    TextValue { id: Id, value: String },
 }
 
 /// A replay at another place moves the boxes the step records.
@@ -520,6 +522,13 @@ fn apply(ctx: &Context, step: &Step) -> bool {
                 }
             }
             Step::Label { node, label } => open.labels.push((*node, *label)),
+            Step::TextValue { id, value } => {
+                let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == *id) else { return true };
+                // A value the node states itself wins over the text the adapter wrote.
+                if let Some(facts) = owner.0.facts.as_mut() {
+                    facts.value.get_or_insert_with(|| value.clone());
+                }
+            }
         }
         true
     })
@@ -579,13 +588,9 @@ pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
 /// Notes the text value the text adapter wrote on the node of the component `id` (`report_text`), unless the node
 /// already states a value: the inspector then lists what AccessKit reads for a text field.
 pub(crate) fn note_text_value(ctx: &Context, id: Id, value: &str) {
-    pass_state::with::<Log, _>(ctx, |log| {
-        let Some(open) = log.open.last_mut() else { return };
-        let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == id) else { return };
-        if let Some(facts) = owner.0.facts.as_mut() {
-            facts.value.get_or_insert_with(|| value.to_owned());
-        }
-    });
+    if recording(ctx) {
+        run(ctx, Step::TextValue { id, value: value.to_owned() });
+    }
 }
 
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.

@@ -47,6 +47,11 @@ fn each_well_is_named_by_its_own_label() {
         SwatchPair::new("Fill and Stroke", wells, Bind::given(Well::Primary)).popover(false).show(ui);
     });
     fixture.room(vec2(200.0, 200.0)).settle();
-    assert!(fixture.by_label("Fill").is_some(), "the primary well is named Fill");
-    assert!(fixture.by_label("Stroke").is_some(), "the secondary well is named Stroke");
+    let wells = fixture.by_role(Role::RADIO_BUTTON);
+    let names: Vec<Option<&str>> = wells.iter().map(|well| fixture.tree().name_of(well.node)).collect();
+    assert_eq!(names, vec![Some("Fill"), Some("Stroke")], "the two wells are radio buttons named by their own labels, the primary first");
+    let fill = fixture.by_label("Fill").expect("a node is named Fill");
+    let stroke = fixture.by_label("Stroke").expect("a node is named Stroke");
+    assert_eq!(fill.node, wells[0].node, "Fill names the primary well's radio button");
+    assert_eq!(stroke.node, wells[1].node, "Stroke names the secondary well's radio button");
 }

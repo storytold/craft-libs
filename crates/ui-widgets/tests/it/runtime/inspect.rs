@@ -168,14 +168,16 @@ fn a_region_names_generic_components_and_lists_text_values() {
     assert_eq!(value, Some("abc"), "the field's facts list its text as the value");
 }
 
-/// A view showing one button, as a panel shows its slots in a memoized grid.
+/// A view showing one button, as a panel shows its slots in a memoized grid, and a text field holding `text`.
 #[derive(MemoProps)]
 struct Grid {
     label: &'static str,
+    text: &'static str,
 }
 
 fn grid(props: &mut Grid, ui: &mut Ui) {
     Button::new(props.label).show(ui);
+    craft_ui::text::TextField::new("Name", Bind::given(props.text.to_owned())).show(ui);
 }
 
 /// A recorded element and its index in the record.
@@ -199,7 +201,7 @@ fn a_region_keeps_the_components_of_a_memoized_view_in_the_passes_it_replays() {
     let mut fixture = Fixture::new(move |ui| {
         let (_, recorded) = inspect::record(ui, key, |ui| {
             Stack::new().show(ui, |ui, _| {
-                MemoView::new("grid", Grid { label: "Slot" }, grid).show(ui);
+                MemoView::new("grid", Grid { label: "Slot", text: "abc" }, grid).show(ui);
                 Button::new("Footer").show(ui);
             })
         });
@@ -223,6 +225,9 @@ fn a_region_keeps_the_components_of_a_memoized_view_in_the_passes_it_replays() {
         assert!(slot.rect.is_positive() && slot.facts.as_ref().is_some_and(|facts| facts.interactive), "frame {frame}: {slot:?}");
         assert!(recorded.hits.iter().any(|hit| hit.owner == slot.id && hit.rect.is_positive()), "frame {frame}: the view's button has its hit area");
         assert!(slot.stop.is_some() && slot.stop < footer.stop, "frame {frame}: Tab order runs through both, the view's button first");
+        let field = recorded.elements.iter().find(|element| element.component == "TextField");
+        let value = field.and_then(|field| field.facts.as_ref()).and_then(|facts| facts.value.as_deref());
+        assert_eq!(value, Some("abc"), "frame {frame}: the view's text field keeps the value its run recorded");
     }
     assert!(replays > 0, "the view replayed in some of the passes");
 }
