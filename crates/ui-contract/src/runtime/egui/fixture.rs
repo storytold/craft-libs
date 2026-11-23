@@ -130,7 +130,8 @@ impl egui::DroppedFile for DroppedPath {
 }
 
 /// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
-/// reports both, and the fact stays until the next such event. Before any event the focus is unknown.
+/// reports both, and the fact stays until the next such event. Before any event the focus is unknown. The root's input
+/// reports the same focus (`RawInput::focused`), a window with focus while it is unknown.
 fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: Option<f32>) -> egui::ViewportIdMap<egui::ViewportInfo> {
     let last = events.iter().rev().find_map(|event| if let Event::WindowFocused(focused) = event { Some(*focused) } else { None });
     let focused = Service::<WindowFocus>::run(ctx, |state| {
@@ -251,6 +252,7 @@ pub(crate) fn run_frame(
     let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
     let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
+    let focused = viewport != egui::ViewportId::ROOT || viewports.get(&egui::ViewportId::ROOT).and_then(|info| info.focused).unwrap_or(true);
     let children = open_children(ctx, viewport);
     for child in &children {
         viewports
@@ -260,6 +262,7 @@ pub(crate) fn run_frame(
         screen_rect: Some(screen),
         time: Some(time),
         viewport_id: viewport,
+        focused,
         events,
         hovered_files,
         dropped_files,
