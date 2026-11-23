@@ -24,6 +24,7 @@ pub(crate) mod notices;
 pub(crate) mod overlay;
 pub(crate) mod pickers;
 pub(crate) mod picture;
+pub(crate) mod rating;
 pub(crate) mod popover;
 pub(crate) mod runtime;
 
