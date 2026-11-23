@@ -642,6 +642,15 @@ pub(crate) fn holds_input(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.holds())
 }
 
+/// The mode the current frame's root theme resolves to on `ctx`.
+fn effective_mode(ctx: &Context) -> Mode {
+    let root = pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| input.root.clone()));
+    match root {
+        Some(root) => root.effective_mode(ctx),
+        None => RootEnv::fallback(ctx).effective_mode(ctx),
+    }
+}
+
 /// The input hook: egui runs it before it pushes the viewport, so every step reads only `RawInput` and
 /// records keyed by `input.viewport_id`.
 pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
@@ -653,6 +662,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     raw_input::prepare(ctx, input);
     // H0b: the OS colour scheme egui's integration reports reaches the system reader.
     crate::runtime::env::system::input_hook(ctx, &input.events);
+    // H0d: match egui's font coverage transfer function to the pass's resolved theme mode before egui runs
+    // `Fonts::begin_pass`, so dark-on-light and light-on-dark text use the right curve even when the app's mode
+    // differs from the OS's.
+    let mode = effective_mode(ctx);
+    style::set_text_color_transfer(ctx, mode);
     // From H0 to H3 the events go with the input time each arrived at (`Arrived`): held events keep theirs, and the key
     // stage gives each shortcut its own. egui's events are what these stages leave.
     let mut events = Arrived::take(input);
