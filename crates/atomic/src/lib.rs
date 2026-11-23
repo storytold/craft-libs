@@ -549,8 +549,9 @@ const MAX_XATTR_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 /// binding, quarantine, resource forks) to the stage. The attributes are as untrusted as the
 /// bytes, so the reads are bounded; one that cannot be read or written whole, or passes a bound,
 /// refuses the save rather than dropping the user's metadata unnoticed. Only a volume without
-/// extended attributes (`ENOTSUP`) is skipped. `com.apple.provenance` belongs to macOS, which
-/// gives the new file its own. Compression bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
+/// extended attributes (`ENOTSUP`) and a file the user may write but not read (mode 0200, whose
+/// attributes the user can't read either) are skipped; those save as they did before attributes
+/// were kept. `com.apple.provenance` belongs to macOS, which gives the new file its own. Compression bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
 #[cfg(target_os = "macos")]
 fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
@@ -560,7 +561,7 @@ fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     // names another file. NONBLOCK keeps a FIFO put at the name from hanging the open.
     let source = match open(target, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK, Mode::empty()) {
         Ok(fd) => File::from(fd),
-        Err(Errno::NOENT | Errno::LOOP) => return Ok(()),
+        Err(Errno::NOENT | Errno::LOOP | Errno::ACCESS) => return Ok(()),
         Err(e) => return Err(e.into()),
     };
     if !source.metadata()?.is_file() {
