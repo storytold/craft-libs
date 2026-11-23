@@ -458,23 +458,17 @@ fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
 }
 
 /// `PageUp`/`PageDown` on a multiline field move its caret to the start or the end, as the framework's own text
-/// editor does. The keys are not in egui's filter and its `TextEdit` has no Page handler, so the adapter takes them
-/// when `takes` holds; `takes` is false for a list or a step field, which keeps its own Page behavior.
-fn page_keys(ctx: &Context, widget: Id, len: usize, takes: bool) {
+/// editor does. `takes` holds only for a plain Page on a focused multiline field with no list, completion, step
+/// value or live composition; every other part keeps its own Page behavior.
+fn page_keys(ctx: &Context, widget: Id, base: &str, takes: bool) {
     if !takes {
         return;
     }
-    let page = ctx.input(|i| {
-        if i.key_pressed(egui::Key::PageUp) {
-            Some(0)
-        } else if i.key_pressed(egui::Key::PageDown) {
-            Some(len)
-        } else {
-            None
-        }
-    });
-    if let Some(at) = page {
-        select(ctx, widget, at, at);
+    if ctx.input(|i| i.key_pressed(egui::Key::PageUp)) {
+        select(ctx, widget, 0, 0);
+    } else if ctx.input(|i| i.key_pressed(egui::Key::PageDown)) {
+        let end = base.chars().count();
+        select(ctx, widget, end, end);
     }
 }
 
@@ -634,6 +628,18 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
     let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
+    // Page Up/Down move a multiline field's caret to the start/end, as the framework's own text editor does.
+    // egui's TextEdit has no Page handler, so the adapter sets the selection before showing it; the widget's
+    // caret and scroll then follow. A list, a step field, a live composition, or a modified Page (which belongs
+    // to the app/framework) keeps its behavior.
+    let paged = input.focused
+        && multiline
+        && state.preedit.is_none()
+        && !input.list_open
+        && !state.completions.open
+        && !input.options.steps_value
+        && ctx.input(|i| i.modifiers.is_none());
+    page_keys(ctx, widget, &base, paged);
     let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
     if let Some((caret, anchor)) = kept
@@ -641,10 +647,6 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     {
         select(ctx, widget, anchor, caret);
     }
-    // Page Up/Down move a multiline field's caret to the start/end; a list or a step field keeps its own Page
-    // behavior.
-    let paged = shown.focused && multiline && !input.list_open && !state.completions.open && !input.options.steps_value;
-    page_keys(ctx, widget, base.chars().count(), paged);
     // A single line keeps its caret in view through egui's own line offset; a multi-line part scrolls its text itself.
     // The caret is revealed only when it moved (against last pass's, `state.caret`), so a wheel that scrolled it out of
     // view stays where it put the text.

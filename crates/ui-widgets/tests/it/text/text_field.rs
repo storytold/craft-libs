@@ -286,10 +286,20 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.key(Key::PageDown, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), text.borrow().len(), "PageDown moves the caret to the end");
+    let field = rect.get();
+    let last = run_with(&fixture, "\nf");
+    assert!(last.bottom() <= field.bottom() + SNAP, "PageDown scrolls the last line into view: {last:?} in {field:?}");
     fixture.key(Key::PageUp, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), 0, "PageUp moves the caret to the start");
+    let first = run_with(&fixture, "aX");
+    assert!(first.top() >= field.top() - SNAP, "PageUp scrolls the first line into view: {first:?} in {field:?}");
     assert_eq!(*text.borrow(), before, "the Page keys change no text");
+
+    // A modified Page belongs to the app or the framework, not to the field.
+    fixture.key(Key::PageDown, Modifiers::COMMAND);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "a modified PageDown leaves the caret alone");
 }
 
 /// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,
