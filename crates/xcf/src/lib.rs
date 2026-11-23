@@ -22,6 +22,9 @@ mod tests;
 mod tiles;
 pub mod transport;
 
+/// Inert, bounded source effect records (no native mapping or execution).
+pub mod effects;
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Read;
