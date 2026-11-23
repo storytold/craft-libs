@@ -140,6 +140,11 @@ struct Flyouts {
 impl Flyouts {
     /// A column of `groups` on the right window edge when `right`, else the left one; its flyouts stay in `within`.
     fn new(groups: &[&[u8]], right: bool, within: Rect) -> Self {
+        Self::with(groups, right, within, false)
+    }
+
+    /// [`Flyouts::new`] with Auto-Collapse Iconic Panels on when `auto_collapse`.
+    fn with(groups: &[&[u8]], right: bool, within: Rect, auto_collapse: bool) -> Self {
         let mut column = Column::new(groups.iter().map(|panels| Group::new(panels.to_vec(), 0)).collect());
         column.iconic = true;
         let edge = if right { DockEdge::End } else { DockEdge::Start };
@@ -159,6 +164,7 @@ impl Flyouts {
                 .edge(edge)
                 .opens(if right { Side::Start } else { Side::End })
                 .within(within)
+                .auto_collapse(auto_collapse)
                 .show_flyouts_at(ui, place, |group, at, ui, _| {
                     let GroupAt::Show(rect) = at else { return None };
                     let panel = *group.active_panel()?;
@@ -217,6 +223,18 @@ impl Flyouts {
     /// How far a resize grip reaches in from the edge it moves.
     fn grip_reach(&self) -> f32 {
         StyleCx::with_root(self.fixture.ctx(), |cx| crate::contract::grip_band(cx.tokens))
+    }
+}
+
+/// A press outside the open flyout leaves it open; with Auto-Collapse Iconic Panels on it closes it.
+#[trial]
+fn a_press_outside_closes_the_flyout_only_with_auto_collapse() {
+    for auto_collapse in [false, true] {
+        let mut d = Flyouts::with(&[&[1, 2]], false, screen(), auto_collapse);
+        d.open("Brushes");
+        let away = d.rect().right_center() + Vec2::new(100.0, 0.0);
+        d.fixture.click_at(away).settle();
+        assert_eq!(d.shown.get().is_none(), auto_collapse, "auto-collapse {auto_collapse}: a press outside closes the flyout only with it on");
     }
 }
 

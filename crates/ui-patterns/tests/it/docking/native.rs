@@ -266,6 +266,8 @@ struct NativeDock {
     palette: Option<ViewportId>,
     /// The tree the palette window's pass produced in the last frame.
     palette_tree: Option<AccessTree>,
+    /// Whether Auto-Collapse Iconic Panels is on in the frames of a collapsed palette.
+    auto_collapse: bool,
 }
 
 impl NativeDock {
@@ -287,7 +289,7 @@ impl NativeDock {
         windows.child_info(info(true, FLOAT_AT));
         let workspace = Arc::new(Workspace::new(Layout::new(Some(Node::tabs(vec![2], 0)), vec![palette])));
         let specs = Tracked::new(Specs { rights: Permissions::ALL, least: false, stepped });
-        let mut dock = NativeDock { windows, workspace, stepped, specs, builder: None, palette: None, palette_tree: None };
+        let mut dock = NativeDock { windows, workspace, stepped, specs, builder: None, palette: None, palette_tree: None, auto_collapse: false };
         for _ in 0..3 {
             dock.frame(vec![]);
         }
@@ -1034,10 +1036,10 @@ fn collapsed_palette() -> (NativeDock, Rect) {
 /// One frame of `dock` with `panels`, `root` events for the main window and `child` events for the palette's window,
 /// whose OS window follows its commands at `at`: the frame's output.
 fn collapsed_frame(dock: &mut NativeDock, panels: &mut dyn DockPanels<u32>, at: &mut Rect, root: Vec<Event>, child: Vec<Event>) -> Out {
-    let workspace = &mut dock.workspace;
-    let specs = &dock.specs;
+    let (workspace, specs, auto_collapse) = (&mut dock.workspace, &dock.specs, dock.auto_collapse);
     let out = dock.windows.frame(root, child, |ui| {
-        let _ = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default()).show(ui);
+        let area = DockArea::new("Native dock", Bind::bound(workspace), specs, &mut *panels, DockConfig::default());
+        let _ = if auto_collapse { area.auto_collapse() } else { area }.show(ui);
     });
     let palette = dock.palette;
     let commands: Vec<ViewportCommand> =
@@ -1222,22 +1224,26 @@ fn a_tooltip_from_a_native_palette_opens_in_a_popup_os_window() {
     assert!(rect.width() > at.width() && rect.height() < rect.width(), "the tooltip's text runs on one line, wider than the strip: {rect:?}");
 }
 
-/// A press in the main window closes the flyout a collapsed native palette opened in a popup window.
+/// With Auto-Collapse Iconic Panels on, a press in the main window closes the flyout a collapsed native palette opened
+/// in a popup window; with it off the flyout stays open.
 #[trial]
-fn a_press_in_the_main_window_closes_a_native_palettes_flyout() {
-    let (mut dock, mut at) = collapsed_palette();
-    let mut probe = BodyProbe::default();
-    let popup = open_flyout(&mut dock, &mut probe, &mut at);
-    let over = OVER_GROUP - MAIN_AT.min.to_vec2();
-    for root in [vec![moved(over)], vec![press(over)], vec![release(over)]] {
-        collapsed_frame(&mut dock, &mut probe, &mut at, root, vec![]);
+fn a_press_in_the_main_window_closes_a_native_palettes_flyout_with_auto_collapse() {
+    for auto_collapse in [true, false] {
+        let (mut dock, mut at) = collapsed_palette();
+        dock.auto_collapse = auto_collapse;
+        let mut probe = BodyProbe::default();
+        let popup = open_flyout(&mut dock, &mut probe, &mut at);
+        let over = OVER_GROUP - MAIN_AT.min.to_vec2();
+        for root in [vec![moved(over)], vec![press(over)], vec![release(over)]] {
+            collapsed_frame(&mut dock, &mut probe, &mut at, root, vec![]);
+        }
+        // The flyout fades out, then its window closes.
+        let closed = (0..60).any(|_| {
+            let out = collapsed_frame(&mut dock, &mut probe, &mut at, vec![], vec![]);
+            !popups(&dock, &out).contains(&popup)
+        });
+        assert_eq!(closed, auto_collapse, "auto-collapse {auto_collapse}: the flyout's window closed only with it on");
     }
-    // The flyout fades out, then its window closes.
-    let closed = (0..60).any(|_| {
-        let out = collapsed_frame(&mut dock, &mut probe, &mut at, vec![], vec![]);
-        !popups(&dock, &out).contains(&popup)
-    });
-    assert!(closed, "the flyout's window closed");
 }
 
 /// Palettes no smaller than `PALETTE_LEAST`.
