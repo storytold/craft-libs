@@ -330,8 +330,8 @@ impl<'a> Draw<'a> {
 
     /// Paints `run` in its document face with the start of its first baseline at `start`, and returns its layout, whose
     /// top lies at `start.y - layout.first_baseline` ([`FaceRun`] says how the face, its fallback and the size are
-    /// chosen). `load` gives the face's bytes and index the first time `run.key` is drawn, and again only after the
-    /// fonts were replaced; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
+    /// chosen). `load` gives the face's bytes and index, which the caller holds, the first time `run.key` is drawn while
+    /// the face is kept; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
     /// component's run paints at `Opacity::DISABLED`, as `doc` does.
     pub fn face_run(&self, start: Pos2, run: &FaceRun<'_>, load: impl FnOnce() -> Option<FaceBytes>) -> TextLayout {
         let ctx = self.painter.ctx();
