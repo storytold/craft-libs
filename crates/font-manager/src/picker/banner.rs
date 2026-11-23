@@ -4,7 +4,6 @@
 use craft_behavior::Sense;
 use craft_theme::TypeRole;
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
-use craft_ui::primitives::DocRun;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, Corners, DataColor, Metrics, StyleColor, StyleCx, SurfaceKind};
@@ -92,8 +91,8 @@ impl Component for FontPreviewBanner<'_> {
         let style = cx.style;
         let inner = cx.room.map(|room| (room - 2.0 * style.pad).max(0.0));
         let sample = self.face.ready(cx).map_or(0.0, |font| {
-            let runs = [DocRun::new(self.text, font, style.band * SAMPLE_EM, DataColor::new(Color32::PLACEHOLDER))];
-            cx.layout_doc(&faces::sample_text(&runs, inner)).size().x
+            let ink = DataColor::new(Color32::PLACEHOLDER);
+            faces::sample_line(|doc| cx.layout_doc(doc), &font, self.text, style.band * SAMPLE_EM, style.band, inner, ink).layout.size().x
         });
         let name = TextRun::new(self.name).role(TypeRole::Caption);
         let name = inner.map_or_else(|| cx.layout(&name), |width| cx.layout_at(&name, width)).size().x;

@@ -9,8 +9,8 @@ use craft_behavior::{GESTURE_GAP, PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
-    FamilyInfos, FamilySet, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontScript, MissingAdvice,
-    SIMILAR_COUNT, family_rows,
+    FamilyInfos, FamilySet, FontClass, FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, FontPreviewSize, FontScript,
+    MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
 use craft_theme::{Contrast, Mode};
@@ -788,6 +788,86 @@ fn each_row_samples_the_preview_text_and_a_face_without_it_shows_its_name() {
         fx.texts().iter().all(|painted| painted.text != ARABIC_TEXT),
         "the banner of a face without the text's letters shows what its row shows, not the text"
     );
+}
+
+/// The repository's Noto Sans CJK SC subset (CFF): its line (hhea 1160/-288) is taller than Inter's.
+const CJK_SUBSET: &[u8] = include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf");
+
+/// "中文", which the subset draws and Inter lacks.
+const CJK_TEXT: &str = "\u{4E2D}\u{6587}";
+
+/// An open library list at Large over Inter and the CJK subset, with `family` current and the preview text `text`
+/// holds at each pass.
+fn cjk_rig(family: &'static str, text: Rc<Cell<Option<&'static str>>>) -> Fixture {
+    let catalog = catalog_of(&[INTER_REGULAR, CJK_SUBSET]);
+    let mut family = family.to_owned();
+    let mut settings = FontPickerSettings::default();
+    settings.preview = FontPreviewSize::Large;
+    let mut fx = Fixture::new(move |ui| {
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).settings(Bind::bound(&mut settings));
+        if let Some(text) = text.get() {
+            picker = picker.preview_text(text);
+        }
+        picker.show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    open(&mut fx);
+    fx
+}
+
+/// The host's text can arrive while the list is open (a selection made after the menu opened): every row follows it,
+/// in a CJK face too, and no row keeps the sample word.
+#[trial]
+fn rows_sample_the_host_text_that_arrives_after_the_list_opened() {
+    let text = Rc::new(Cell::new(None));
+    let mut fx = cjk_rig("Inter", Rc::clone(&text));
+    assert!(fx.by_label("Inter: Sample").is_some(), "without a host text the rows show the sample word");
+    text.set(Some(CJK_TEXT));
+    fx.settle();
+    assert!(fx.by_label(&format!("Noto Sans CJK SC: {CJK_TEXT}")).is_some(), "the CJK face's row shows the host's text");
+    assert!(fx.by_label("Inter: Inter").is_some(), "Inter lacks the text's letters: its row shows its name");
+    for family in ["Inter", "Noto Sans CJK SC"] {
+        assert!(fx.by_label(&format!("{family}: Sample")).is_none(), "{family}'s row no longer shows the sample word");
+    }
+}
+
+/// The baseline of a painted text, on screen.
+fn baseline_of(text: &egui::epaint::TextShape) -> f32 {
+    let row = text.galley.rows.first().expect("a row");
+    text.pos.y + row.pos.y + row.row.glyphs.first().map_or(row.row.size.y, |glyph| glyph.pos.y)
+}
+
+/// Faces whose lines differ (Inter's and the CJK subset's, which is taller) sit on one baseline in their rows, and each
+/// sample's ink, the rows' and the banner's, stays inside its band: none is clipped.
+#[trial]
+fn every_sample_sits_on_one_baseline_inside_its_band() {
+    let mut fx = cjk_rig("Noto Sans CJK SC", Rc::new(Cell::new(Some(CJK_TEXT))));
+    let shapes = fx.frame_clipped_shapes();
+    let painted = |text: &str, band: egui::Rect| {
+        shapes
+            .iter()
+            .filter_map(|(_, shape)| match shape {
+                egui::Shape::Text(painted) if painted.galley.job.text == text => Some(painted),
+                _ => None,
+            })
+            .find(|painted| band.contains(painted.visual_bounding_rect().center()))
+            .unwrap_or_else(|| panic!("{text} painted in {band:?}"))
+    };
+    let mut offsets = Vec::new();
+    for (family, text) in [("Inter", "Inter"), ("Noto Sans CJK SC", CJK_TEXT)] {
+        let band = fx.by_label(&format!("{family}: {text}")).unwrap_or_else(|| panic!("{family}'s sample")).rect;
+        let sample = painted(text, band);
+        let ink = sample.visual_bounding_rect();
+        assert!(band.expand(0.01).contains_rect(ink), "{family}'s ink {ink:?} stays inside its band {band:?}");
+        offsets.push(baseline_of(sample) - band.top());
+    }
+    assert!((offsets[0] - offsets[1]).abs() < 0.5, "both samples sit on one baseline in their bands: {offsets:?}");
+    let banner = fx.by_label("Font preview: Noto Sans CJK SC").expect("the banner").rect;
+    let ink = painted(CJK_TEXT, banner).visual_bounding_rect();
+    assert!(banner.contains_rect(ink), "the banner's ink {ink:?} stays inside the banner {banner:?}");
+    let name = fx.texts().iter().find(|text| text.text == "Noto Sans CJK SC" && banner.contains_rect(text.rect)).expect("the banner's name").rect;
+    assert!(ink.top() >= name.bottom(), "the banner's sample stays below its name: {ink:?} {name:?}");
 }
 
 /// Production's and Photoshop's row: the star first, then the names in one column whether or not a family has styles
