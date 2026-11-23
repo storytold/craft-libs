@@ -21,6 +21,9 @@ use egui::{Pos2, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// The float slack of the grip comparisons: paint positions are sums of token values.
+const EPS: f32 = 0.01;
+
 fn spec(panel: &u8) -> PanelSpec {
     PanelSpec::new(if *panel == 0 { "Brushes" } else { "Swatches" })
 }
@@ -436,7 +439,7 @@ pub(crate) fn grip_ticks(shapes: &[egui::Shape], strip: Rect) -> Option<(Vec<Rec
     shapes.iter().find_map(|shape| {
         let egui::Shape::Mesh(mesh) = shape else { return None };
         let quads: Vec<Rect> = mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
-        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(0.01).contains_rect(*quad));
+        let inside = !quads.is_empty() && quads.iter().all(|quad| strip.expand(EPS).contains_rect(*quad));
         inside.then(|| (quads, mesh.vertices.first().map_or(egui::Color32::TRANSPARENT, |v| v.color)))
     })
 }
@@ -457,12 +460,12 @@ pub(crate) fn assert_grip_ticks(
     assert_eq!(ticks.len(), usize::from(shape.count), "{what}: {} marks: {ticks:?}", shape.count);
     for tick in ticks {
         assert!(
-            (tick.width() - shape.width).abs() < 0.01 && (tick.height() - height).abs() < 0.01,
+            (tick.width() - shape.width).abs() < EPS && (tick.height() - height).abs() < EPS,
             "{what}: a mark is {} x {height} points: {tick:?}",
             shape.width
         );
     }
-    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < 0.01), "{what}: {} points apart: {ticks:?}", shape.gap);
+    assert!(ticks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < EPS), "{what}: {} points apart: {ticks:?}", shape.gap);
     let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
     assert!((run.center().x - strip.center().x).abs() <= 0.5, "{what}: centred across the strip: {run:?} in {strip:?}");
     assert!(
@@ -501,7 +504,7 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
         let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
         assert!(
-            run.top() - strip.top() >= tight + GRIP_ABOVE - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
+            run.top() - strip.top() >= tight + GRIP_ABOVE - EPS && strip.bottom() - run.bottom() >= tight - EPS,
             "group {group}: the marks keep space.gap.tight ({tight}) and GRIP_ABOVE more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
         );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
@@ -555,9 +558,9 @@ fn a_themes_grip_shape_reaches_the_grips() {
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
     assert!(
-        marks.iter().all(|m| (m.width() - shape.width).abs() < 0.01 && (m.height() - shape.width).abs() < 0.01),
+        marks.iter().all(|m| (m.width() - shape.width).abs() < EPS && (m.height() - shape.width).abs() < EPS),
         "dots the theme's width across: {marks:?}"
     );
-    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < 0.01), "the theme's gap apart: {marks:?}");
+    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < EPS), "the theme's gap apart: {marks:?}");
     assert_ne!(ink, egui::Color32::TRANSPARENT);
 }
