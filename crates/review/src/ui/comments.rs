@@ -697,7 +697,10 @@ impl<H: Value> CommentsPanel<'_, H> {
                         let is_lead = lead == Some(thread.id);
                         let editing = editing.filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (index, text));
                         editor_built |= editing.is_some();
+                        // A lead row built more than once in a pass (measured, then shown) names its openers once, as
+                        // its last build has them: one menu per message.
                         if is_lead {
+                            openers.clear();
                             openers.extend((0..thread.messages.len()).map(|index| (index, item.part_opener(MORE.at(index as u64)))));
                         }
                         CommentRow::card(thread, name)
