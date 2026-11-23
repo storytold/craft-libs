@@ -2,6 +2,9 @@
 //! or indexed expansion is performed; the existing f32 APIs retain their behavior.
 use crate::{Channel, Error, Precision, Result, TILE, Xcf, invalid, props, tiles};
 
+mod effect_masks;
+pub use effect_masks::{EffectMaskError, EffectMaskHeader};
+
 #[cfg(test)]
 mod tests;
 

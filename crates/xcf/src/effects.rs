@@ -137,6 +137,9 @@ impl<'a> Reader<'a> {
 /// One parsed effect; file order and argument order remain explicit.
 #[derive(Debug, PartialEq)]
 pub struct StoredEffect<'a> {
+    // Parser-owned provenance prevents mutable public fields from redirecting a
+    // later auxiliary mask read to another source or unrelated record bytes.
+    pub(crate) source_span: SourceSpan<'a>,
     pub name: &'a str,
     pub icon: &'a str,
     pub operation: &'a str,
@@ -156,6 +159,47 @@ pub struct StoredEffect<'a> {
     pub raw: &'a [u8],
     pub unknown_properties: Vec<SourceProperty<'a>>,
     pub errors: Vec<String>,
+}
+
+pub(crate) struct SourceSpan<'a> {
+    bytes: &'a [u8],
+    version: u32,
+    start: usize,
+    end: usize,
+    mask: u64,
+}
+
+impl std::fmt::Debug for SourceSpan<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceSpan")
+            .field("source_bytes", &self.bytes.len())
+            .field("version", &self.version)
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("mask", &self.mask)
+            .finish()
+    }
+}
+impl PartialEq for SourceSpan<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version && self.start == other.start && self.end == other.end && self.mask == other.mask
+    }
+}
+
+impl<'a> StoredEffect<'a> {
+    pub(crate) fn source_mask(&self, bytes: &[u8], version: u32) -> crate::Result<Option<u64>> {
+        let span = &self.source_span;
+        let raw = span.bytes.get(span.start..span.end).ok_or_else(|| crate::invalid("effect source range is invalid"))?;
+        if !std::ptr::eq(span.bytes, bytes)
+            || span.version != version
+            || self.record_offset != span.start
+            || self.mask_offset != span.mask
+            || !std::ptr::eq(raw, self.raw)
+        {
+            return Err(crate::invalid("effect mask does not belong to this source record"));
+        }
+        Ok((span.mask != 0).then_some(span.mask))
+    }
 }
 
 #[derive(Debug, PartialEq)]

@@ -102,6 +102,7 @@ pub(super) fn decode_with_work<'a>(
     let stored_version = if version >= 22 { Some(string(&mut cursor, work)?) } else { None };
     charge(budget, name.len().saturating_add(icon.len()).saturating_add(operation.len()).saturating_add(stored_version.map_or(0, str::len)))?;
     let mut effect = StoredEffect {
+        source_span: super::SourceSpan { bytes: base.b, version, start: offset, end: offset, mask: 0 },
         name,
         icon,
         operation,
@@ -210,6 +211,8 @@ pub(super) fn decode_with_work<'a>(
         push_error(&mut effect, "effect mask pointer is outside the file".into(), budget)?;
     }
     effect.raw = base.b.get(offset..cursor.pos).ok_or_else(|| invalid("stored effect record range"))?;
+    effect.source_span.end = cursor.pos;
+    effect.source_span.mask = mask;
     Ok(effect)
 }
 
