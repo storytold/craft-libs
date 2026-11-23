@@ -103,30 +103,14 @@ pub struct ImeSeen {
 }
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
+/// `read` are pathless files dropped in the frame whose bytes the page reads after it, by name with the bytes the read
+/// gives. `given` are files dropped in the frame by a relative name with their bytes at hand, as a browser hands them over.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OsFiles {
     pub hovered: Vec<(String, String)>,
     pub dropped: Vec<String>,
-}
-
-/// A dropped file that exists only as a path.
-#[derive(Debug)]
-struct DroppedPath(std::path::PathBuf);
-
-impl egui::DroppedFile for DroppedPath {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        std::fs::read(&self.0).map_err(|error| error.to_string())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
-        Box::pin(std::future::ready(Err("there is no file system on the web".to_owned())))
-    }
+    pub read: Vec<(String, Vec<u8>)>,
+    pub given: Vec<(String, Vec<u8>)>,
 }
 
 /// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
@@ -248,7 +232,18 @@ pub(crate) fn run_frame(
 ) -> FrameResult {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
-    let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+    let dropped_files = files
+        .dropped
+        .iter()
+        .map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle)
+        .chain(
+            files.given.into_iter().map(|(name, bytes)| Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle),
+        )
+        .collect();
+    // The web drop of a pathless file: its reads open in the pass of the drop, and their bytes arrive after it.
+    if !files.read.is_empty() {
+        super::files::open_reads(ctx, viewport, files.read.len());
+    }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
     let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
     let children = open_children(ctx, viewport);
@@ -268,6 +263,10 @@ pub(crate) fn run_frame(
     };
     let mut output = drive(|| run_ui(ctx, input, &children, ui));
     Service::<ImeResets>::run(ctx, |resets| resets.output(viewport, &output.platform_output));
+    for (name, bytes) in files.read {
+        let file = crate::runtime::drag::OsFile { name, path: None, mime: String::new(), bytes: Some(bytes.into()) };
+        super::files::post(ctx, viewport, Some(file));
+    }
     let mut flat = Vec::new();
     for clipped in &output.shapes {
         let mut shapes = Vec::new();
@@ -365,6 +364,7 @@ pub(crate) fn allow_zoom_keys(ctx: &Context) {
 
 /// Sets egui's click options, as an app does for its own widgets: the longest movement and the longest press that
 /// still count as a click.
+#[cfg(feature = "suite")]
 pub(crate) fn set_click_options(ctx: &Context, distance: f32, seconds: f64) {
     ctx.options_mut(|options| {
         options.input_options.max_click_dist = distance;
@@ -374,17 +374,20 @@ pub(crate) fn set_click_options(ctx: &Context, distance: f32, seconds: f64) {
 
 /// Sets egui's surrender option, the app's rule for its own focused widgets: with `never`, a click elsewhere leaves
 /// their focus; otherwise egui's default, which surrenders it on a click elsewhere.
+#[cfg(feature = "suite")]
 pub(crate) fn set_app_surrender(ctx: &Context, never: bool) {
     let rule = if never { egui::SurrenderFocusOn::Never } else { egui::SurrenderFocusOn::Clicks };
     ctx.options_mut(|options| options.input_options.surrender_focus_on = rule);
 }
 
 /// Whether egui's surrender option is egui's default, a click elsewhere.
+#[cfg(feature = "suite")]
 pub(crate) fn app_surrenders_on_click(ctx: &Context) -> bool {
     ctx.options(|options| options.input_options.surrender_focus_on == egui::SurrenderFocusOn::Clicks)
 }
 
 /// egui's click options: the longest movement and the longest press that still count as a click.
+#[cfg(feature = "suite")]
 pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
     ctx.options(|options| (options.input_options.max_click_dist, options.input_options.max_click_duration))
 }
@@ -392,7 +395,7 @@ pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
 /// A fresh context with no plugin and AccessKit on.
 pub(crate) fn bare_context() -> Context {
     let ctx = Context::default();
-    ctx.set_fonts(test_fonts());
+    super::fonts::set_definitions(&ctx, test_fonts());
     ctx.enable_accesskit();
     ctx
 }
@@ -482,29 +485,34 @@ pub(crate) fn focusable_widget(ui: &mut Ui, id: egui::Id) -> Rect {
 
 /// A host's own single-line egui text field of `id` over `text`, as an app that keeps its own widgets beside the
 /// framework's draws it; returns its rect.
+#[cfg(feature = "suite")]
 pub(crate) fn host_field(ui: &mut Ui, id: egui::Id, text: &mut String) -> Rect {
     ui.add(egui::TextEdit::singleline(text).id(id)).rect
 }
 
 /// Gives the host's own egui widget `id` key focus, as the host's code does.
+#[cfg(feature = "suite")]
 pub(crate) fn host_focus(ctx: &Context, id: egui::Id) {
     ctx.memory_mut(|memory| memory.request_focus(id));
 }
 
 /// A host's own clickable egui widget `id` at `rect`, a focus stop for egui's own focus moves; returns whether egui
 /// reports a click on it, by egui's click options.
+#[cfg(feature = "suite")]
 pub(crate) fn host_button(ui: &Ui, id: egui::Id, rect: Rect) -> bool {
     ui.interact(rect, id, egui::Sense::click()).clicked()
 }
 
 /// A host's own egui drag area `id` at `rect`; returns whether egui reports it dragged and whether its drag stopped
 /// this pass.
+#[cfg(feature = "suite")]
 pub(crate) fn host_drag_area(ui: &Ui, id: egui::Id, rect: Rect) -> (bool, bool) {
     let response = ui.interact(rect, id, egui::Sense::drag());
     (response.dragged(), response.drag_stopped())
 }
 
 /// A host's own selectable egui label of `text`; returns its rect.
+#[cfg(feature = "suite")]
 pub(crate) fn host_label(ui: &mut Ui, text: &str) -> Rect {
     ui.add(egui::Label::new(text).selectable(true)).rect
 }

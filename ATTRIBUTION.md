@@ -119,6 +119,10 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 `crates/audio/src/wav_stream.rs` is extracted from AniCraft `crates/audio/src/wav.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0). Tanish Manku is retained as the primary import author, from original commit `30c121d269a49d9abe54a3834ed4aa0201542535`. Odd-data padding accounting, shared API documentation and regression tests are subsequent Dylan M. Taylor changes.
 
+## Audio DSP
+
+`crates/audio-dsp` combines FilmCraft `crates/audio-dsp` at `3f137a7ed420cac79b32145f5243b7f98b31f71c` and SoundCraft `crates/dsp` at `648ed9db9a0e98cc55643babffac381521a556c8` (both MIT OR Apache-2.0). `crates/audio-dsp/NOTICE` keeps the copyright notices of both projects.
+
 ## GIMP palette reader
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
@@ -179,3 +183,9 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 `crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
 
 Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
+
+## Y4M range-backed playback
+
+`crates/media-source/src/y4m.rs` adapts the in-house [FilmCraft Y4mSource at 3f137a7e](https://github.com/storytold/filmcraft/blob/3f137a7ed420cac79b32145f5243b7f98b31f71c/crates/codecs/src/y4m.rs), MIT OR Apache-2.0. Original playback by Lloyd Nicholson ([FilmCraft #1303](https://github.com/storytold/filmcraft/pull/1303)); shared-parser integration by Dylan M. Taylor ([FilmCraft #4862](https://github.com/storytold/filmcraft/pull/4862)). The adaptation changes source/frame types and declines payloads above the shared media allocation ceiling before playback. The parser and its previous header-safety work remain in `craft-y4m` ([craft-libs #933](https://github.com/storytold/craft-libs/pull/933)).
+
+`crates/media-source/tests/it/y4m.rs` contains original repository-authored synthetic test data under MIT OR Apache-2.0: literal YUV samples and a sparse reader that reports only the length of an oversized frame. It does not use external media or decoder output.

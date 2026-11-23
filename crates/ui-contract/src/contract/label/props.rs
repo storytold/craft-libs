@@ -72,7 +72,7 @@ impl GlyphLabel {
 
 /// How the labelled rows under a container show their labels: set once on the container (`ContainerProps::labels`),
 /// read by every label step under it until another container sets its own.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum LabelScheme {
     /// A dialog or a form: a beside label sits against its control and ends with a colon; the control keeps its own
@@ -81,11 +81,39 @@ pub enum LabelScheme {
     Form,
     /// An inspector: a beside label sits at the row's start with no colon, and its control fills the rest of the row.
     Inspector,
+    /// A document dialog: a beside label starts at the row's start and ends with a colon, and its control follows it
+    /// at once, at the control's own width. Labels share no column, so each row reads as one line.
+    Inline,
 }
 
 impl crate::runtime::env::EnvValue for LabelScheme {
     fn root() -> Self {
         LabelScheme::Form
+    }
+}
+
+/// Whether the beside captions of a [`LabelScheme::Inline`] form share one column. Off (the default), each caption is
+/// as wide as its own text and its control follows it at once. On, the captions keep to the row start in one column as
+/// wide as the widest, so the controls after them line up (production's Rotate Pages dialog: Direction:, Pages: and
+/// Rotate: in a column). Other schemes always share their column.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
+pub struct CaptionColumn(bool);
+
+impl CaptionColumn {
+    /// The captions share one column.
+    pub const SHARED: CaptionColumn = CaptionColumn(true);
+    /// Each caption is as wide as its own text (the default).
+    pub const OWN: CaptionColumn = CaptionColumn(false);
+
+    /// Whether the captions share one column.
+    pub const fn shared(self) -> bool {
+        self.0
+    }
+}
+
+impl crate::runtime::env::EnvValue for CaptionColumn {
+    fn root() -> Self {
+        CaptionColumn::OWN
     }
 }
 

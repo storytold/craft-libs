@@ -2,7 +2,7 @@
 
 use super::super::stories::hosted;
 use super::super::{
-    Alert, DialogHost, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
+    Alert, DialogHost, HostedAlert, Prompt, PromptChoice, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
 };
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _};
@@ -26,7 +26,7 @@ const AGES: [(&str, Duration); 4] = [
 fn answers() -> [FooterButton; 3] {
     [
         FooterButton::new("Save", DialogRole::Accept).letter('S'),
-        FooterButton::new("Don't Save", DialogRole::Other).letter('D'),
+        FooterButton::new("Don't Save", DialogRole::Alternate).letter('D'),
         FooterButton::new("Cancel", DialogRole::Cancel).letter('C'),
     ]
 }
@@ -35,7 +35,7 @@ fn answers() -> [FooterButton; 3] {
 fn prompt(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Prompt::new("Unsaved changes", "Do you want to save the changes you made to “poster.psd”?")
         .answers(answers())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }
@@ -51,7 +51,7 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .extras(|ui| {
             Checkbox::new(Bind::bound(&mut apply_to_all)).label("Apply to All").show(ui);
         })
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into();
     *data.value("apply", false) = apply_to_all;
@@ -99,6 +99,23 @@ fn standard_prompt_without_apply(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     StandardPrompt::trash_mask().can_apply(!alternate_form).show(ui).into()
 }
 
+/// A link prompt whose safe answer is the default: Enter cancels.
+#[story(StandardPrompt, covers = [], drive = Drive::Never)]
+fn standard_prompt_default_cancel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    StandardPrompt::custom("Open the link “https://example.com/report”?")
+        .title("Open Link")
+        .button(PromptChoice::Proceed, "Open")
+        .button(PromptChoice::Cancel, "Cancel")
+        .default_choice(PromptChoice::Cancel)
+        .show(ui)
+        .into()
+}
+
+#[story(StandardPrompt, covers = [], drive = Drive::Never)]
+fn standard_prompt_changed_on_disk(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    StandardPrompt::changed_on_disk("poster.pdf").show(ui).into()
+}
+
 #[story(UnsavedChangesDialog, covers = [], drive = Drive::Never)]
 fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let remaining = if *data.value("several_documents", true) { 3 } else { 1 };
@@ -113,6 +130,10 @@ fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn recovery_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let age = *data.choice("age", AGES[1].1, &AGES);
     let blocked = *data.value("recover_blocked", false);
+    let remaining = if *data.value("several_documents", false) { 3 } else { 1 };
+    let protected = *data.value("protected", false);
     let document = RecoveredDocument::new("poster", "poster.psd", age);
-    RecoveryDialog::new(if blocked { document.blocked("Stop recording first") } else { document }).show(ui).into()
+    let document = if blocked { document.blocked("Stop recording first") } else { document };
+    let document = if protected { document.protected() } else { document };
+    RecoveryDialog::new(document).remaining(remaining).show(ui).into()
 }

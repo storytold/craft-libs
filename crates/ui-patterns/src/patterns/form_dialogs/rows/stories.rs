@@ -3,11 +3,10 @@
 use super::{DialogFields, ParamRows};
 use crate::runtime::requests::PathKind;
 
-use crate::contract::Bind;
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use crate::patterns::form_dialogs::{NumberUnit, Param, ParamKind};
-use crate::patterns::presets::PresetRow;
-use crate::runtime::env::UnitKind;
+use crate::patterns::presets::{PresetFns, PresetRow, PresetSource};
+use crate::runtime::env::{Env, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 
 use egui::Ui;
@@ -15,12 +14,16 @@ use egui::Ui;
 const SPEC: &str = r#"{"radius":0.1..1000=1,"method":"spin|zoom","smooth":bool,"seed":u32=0,"tint":color=#336699}"#;
 
 /// The patterns the pattern row offers: a group and two patterns in it.
-fn patterns() -> Vec<PresetRow<String>> {
+fn pattern_rows(_: &(), _: &Env) -> Vec<PresetRow<String>> {
     vec![
         PresetRow::group("nature".to_owned(), "Nature", 0),
         PresetRow::item("grass".to_owned(), "Grass", 1),
         PresetRow::item("sand".to_owned(), "Sand", 1),
     ]
+}
+
+fn patterns() -> PresetSource<'static, String> {
+    PresetSource::new((), PresetFns::new(pattern_rows))
 }
 
 /// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a
@@ -72,14 +75,55 @@ fn params() -> Vec<Param> {
 fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();
     let patterns = patterns();
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).show(ui).into()
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).show(ui).into()
+}
+
+/// Rows that never take input (`Param::disabled`): shown greyed out whatever the other rows hold.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_enable_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let params = vec![
+        Param::new("searchable", "Make Searchable", ParamKind::bool(true)),
+        Param::new("engine", "Engine", ParamKind::choice(vec![("builtin".to_owned(), "Built-in".into())], None)).disabled(),
+        Param::new("dpi", "Resolution", ParamKind::int(Some(72), Some(600), 300)).disabled(),
+    ];
+    ParamRows::new("Recognize Text", &params, data.bind("fields", DialogFields::new())).show(ui).into()
+}
+
+/// Options with descriptions and a disabled option with its reason, on a Choice row and a Radio row.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_rows_option_descriptions(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let modes = || vec![("fast".to_owned(), "Fast".into()), ("accurate".to_owned(), "Accurate".into()), ("cloud".to_owned(), "Cloud".into())];
+    let described = |param: Param| {
+        param
+            .option_description("fast", "Lower accuracy, finishes in seconds")
+            .option_description("accurate", "Best for scanned books and small print")
+            .disabled_option("cloud", "Needs a network connection")
+    };
+    let params = vec![
+        described(Param::new("engine", "Engine", ParamKind::choice(modes(), Some("fast".to_owned())))),
+        described(Param::new("quality", "Quality", ParamKind::radio(modes(), Some("accurate".to_owned())))),
+    ];
+    ParamRows::new("Recognize Text", &params, data.bind("fields", DialogFields::new())).show(ui).into()
+}
+
+/// A Choice row whose open list has a separator line between the standard paper sizes and the custom one.
+#[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
+fn param_choice_separated(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let sizes = vec![
+        ("letter".to_owned(), "Letter".into()),
+        ("legal".to_owned(), "Legal".into()),
+        ("a4".to_owned(), "A4".into()),
+        ("custom".to_owned(), "Custom".into()),
+    ];
+    let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
+    ParamRows::new("Page Setup", &params, data.bind("fields", DialogFields::new())).show(ui).into()
 }
 
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();
     let patterns = patterns();
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).read_only(true).show(ui).into()
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).read_only(true).show(ui).into()
 }

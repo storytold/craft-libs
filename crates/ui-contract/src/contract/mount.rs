@@ -26,7 +26,8 @@ pub(super) struct Mounted {
 }
 
 /// The host for `props.mount`. A layer-like mount of a closed container shows nothing once its exit fade ended.
-pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &Label) -> Mounted {
+/// `moving` is the rect a running drag of the container's move band puts its layer at in this pass.
+pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &Label, moving: Option<Rect>) -> Mounted {
     let ctx = at.ui.ctx();
     let layer = |overlay: &Overlay| {
         let presence = if at.ui.is_sizing_pass() {
@@ -46,7 +47,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
         Mount::Pane(pane) => Mounted { host: Box::new(PaneHost(*pane)), exiting: false },
         Mount::Window { .. } => Mounted { host: Box::new(WindowContentHost), exiting: false },
         Mount::Layer(overlay) => match layer(overlay) {
-            (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props, exiting, fade, at.size)), exiting },
+            (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props, exiting, fade, at.size, moving)), exiting },
             (None, _) => closed(),
         },
         Mount::FullWindow => full_window(props.focus),
@@ -57,7 +58,9 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
                 full_window(fallback.focus)
             } else if !viewports {
                 match layer(fallback) {
-                    (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(fallback.clone(), props, exiting, fade, at.size)), exiting },
+                    (Some(fade), exiting) => {
+                        Mounted { host: Box::new(LayerHost::new(fallback.clone(), props, exiting, fade, at.size, moving)), exiting }
+                    }
                     (None, _) => closed(),
                 }
             } else if open {
@@ -140,13 +143,24 @@ pub(super) fn pane_grip_id(id: Id) -> Id {
 
 impl Host for PaneHost {
     fn run(&mut self, id: Id, parent: &mut Ui, env: &Env, pass: &mut HostPass<'_>) {
-        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as tall as its
-        // content flows from the rect's top and takes its height in the parent's flow.
+        // A pane the caller laid out shows in its rect and leaves the room of its siblings alone; one as large as its
+        // content flows from the rect's outer edge and takes its extent in the parent's flow.
         if let Some(rect) = self.0.at {
-            if self.0.content_height {
+            if self.0.content_extent {
+                let rtl = env.direction.is_rtl();
                 let builder = egui::UiBuilder::new().max_rect(rect);
+                let builder = match self.0.edge {
+                    PaneEdge::Bottom => builder.layout(egui::Layout::bottom_up(egui::Align::Min)),
+                    PaneEdge::Start | PaneEdge::End if (self.0.edge == PaneEdge::Start) == rtl => {
+                        builder.layout(egui::Layout::right_to_left(egui::Align::Min))
+                    }
+                    PaneEdge::Start | PaneEdge::End => builder.layout(egui::Layout::left_to_right(egui::Align::Min)),
+                    _ => builder,
+                };
                 let mut ui = crate::runtime::egui::alloc::child(parent, builder);
-                pass(&mut ui, Some(ShowAt::Flow), None);
+                // A layout room of its own, as a docked pane's.
+                let room = env.new_room();
+                Env::run_in(&mut ui, room.clone(), |ui| pass(ui, Some(ShowAt::Flow), Some(&room)));
                 crate::runtime::egui::alloc::advance_past(parent, ui.min_rect());
             } else {
                 pass(parent, Some(ShowAt::Rect(rect)), None);
@@ -196,12 +210,14 @@ struct LayerHost {
     fade: f32,
     /// The size the container measured for this pass.
     size: Vec2,
+    /// The rect a running drag of the move band puts the layer at in this pass, in screen space.
+    moving: Option<Rect>,
     dismissed: Option<CloseReason>,
 }
 
 impl LayerHost {
-    fn new(overlay: Overlay, props: &ContainerProps, exiting: bool, fade: f32, size: Vec2) -> Self {
-        LayerHost { overlay, save: props.save.clone(), owner: props.owner, exiting, fade, size, dismissed: None }
+    fn new(overlay: Overlay, props: &ContainerProps, exiting: bool, fade: f32, size: Vec2, moving: Option<Rect>) -> Self {
+        LayerHost { overlay, save: props.save.clone(), owner: props.owner, exiting, fade, size, moving, dismissed: None }
     }
 }
 
@@ -227,7 +243,7 @@ impl Host for LayerHost {
             overlay = mapped;
         }
         let screen = overlay::screen_for(&ctx, env, &overlay);
-        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, screen, env.tokens.space.inset.screen);
+        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, self.moving, screen, env.tokens.space.inset.screen);
         // An anchored resizable layer has no position to seed: its default size is held as its minimum until the
         // user resizes it.
         if overlay.fit == overlay::OverlayFit::Resizable
@@ -337,6 +353,8 @@ impl Host for ViewportHost {
             return;
         }
         let ctx = parent.ctx().clone();
+        // The window's content runs in its own viewport's pass, which no record of this one holds.
+        crate::runtime::replay::block(&ctx);
         let focus = self.overlay.focus;
         let mut window_rules = self.overlay.clone();
         window_rules.dismiss.outside = Outside::Keep;

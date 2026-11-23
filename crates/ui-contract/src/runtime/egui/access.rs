@@ -1,12 +1,12 @@
 //! AccessKit node building, `register_accesskit_parent` and `set_accesskit_focus`: the one place that names
 //! AccessKit's node API. `node` writes a decided node, `patch` applies the label scope and the status node, `tree`
-//! reads a finished tree update. What a node says is decided in `runtime::access`.
+//! reads a finished tree update, which automation keeps per viewport (`keep_trees`). What a node says is decided in
+//! `runtime::access`.
 
 mod node;
 mod patch;
 mod roles;
 mod text;
-#[cfg(feature = "testing")]
 mod tree;
 
 use crate::runtime::pass_state;
@@ -17,11 +17,10 @@ use super::{memory, pass};
 
 pub use accesskit::TreeUpdate;
 pub(crate) use node::{NodeAction, NodeSpec, Toggle, write_node};
-pub(crate) use patch::{write_label_patch, write_merge_patch, write_status};
+pub(crate) use patch::{write_label_patch, write_merge_patch, write_set_position, write_status};
 pub(crate) use text::{
     NodeEnd, RunLink, RunNode, TextNode, fold_widget, is_text_request, requested_selection, requested_value, write_run, write_selection, write_text,
 };
-#[cfg(feature = "testing")]
 pub use tree::{AccessTree, Declared, NodeKey};
 
 /// The rect `id`'s response had in the last finished pass, converted as the node's bounds are; `None` when absent,
@@ -121,7 +120,7 @@ pub(crate) fn node_id(id: Id) -> NodeId {
 pub(crate) type NodeRole = accesskit::Role;
 
 /// The AccessKit vocabulary the testing kit reads a tree in.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use accesskit::{Role, Toggled};
 
 /// The AccessKit node number of `id`, the key an action request's target is matched by.
@@ -167,8 +166,17 @@ pub(crate) fn pass_through(ctx: &Context, id: Id) {
     });
 }
 
-/// Reports `id` as the focused node of this pass.
+/// Marks the node of `id` modal, when the pass has written it.
+pub(crate) fn set_modal(ctx: &Context, id: Id) {
+    if ctx.has_accesskit_node(id) {
+        ctx.accesskit_node_builder(id, accesskit::Node::set_modal);
+    }
+}
+
+/// Reports `id` as the focused node of this pass. A replay of the run that reported it reports it again: a view that
+/// holds focus replays while nothing reaches it.
 pub(crate) fn set_focus(ctx: &Context, id: Id) {
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| set_focus(ctx, id));
     with_emitted(ctx, |emitted| emitted.focus_set = true);
     ctx.set_accesskit_focus(id);
 }
@@ -184,6 +192,8 @@ struct Emitted {
     folded: IdMap<Id>,
     /// Whether the runtime reported a focused node this pass.
     focus_set: bool,
+    /// Components that offer a context menu this pass (a `Trigger::Context` opener on them).
+    context: IdSet,
 }
 
 impl Emitted {
@@ -196,17 +206,53 @@ impl Emitted {
 /// One store per viewport: every viewport's pass ends with its own `order_children`, and a nested viewport's pass
 /// runs inside its parent's.
 #[derive(Default)]
-pub(crate) struct Reported(HashMap<ViewportId, Emitted>);
+pub(crate) struct Reported {
+    emitted: HashMap<ViewportId, Emitted>,
+    /// The viewport whose pass ended last. egui leaves a viewport before it runs the output hook of its pass, and a
+    /// nested viewport's output hook runs before its parent's pass ends, so this names the pass an output came from.
+    ended: Option<ViewportId>,
+}
 
 fn with_emitted<R>(ctx: &Context, f: impl FnOnce(&mut Emitted) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
-    pass_state::with::<Reported, _>(ctx, |reported| f(reported.0.entry(viewport).or_default()))
+    pass_state::with::<Reported, _>(ctx, |reported| f(reported.emitted.entry(viewport).or_default()))
 }
 
 /// Makes `parent` the node `id` attaches to. Call it before the node of `id` is created.
 pub(crate) fn register_parent(ctx: &Context, id: Id, parent: Id) {
     ctx.register_accesskit_parent(id, parent);
     emit(ctx, id);
+}
+
+/// The trials' pass-end check that egui's AccessKit parents of the pass hold no cycle; panics naming the ids of the
+/// first one found. egui places a node under the first ancestor that has a node by walking the parents, which a cycle
+/// sends into endless recursion when no node of the cycle exists yet: a replay adds a run's nodes in the order they
+/// were created, and a run only tolerates a cycle while some node of it already exists.
+#[cfg(feature = "testing")]
+pub(crate) fn check_parents_acyclic(ctx: &Context) {
+    let cycle = ctx.with_accesskit_parents(|parents| {
+        let mut acyclic = IdSet::default();
+        for &start in parents.keys() {
+            let mut path: Vec<Id> = Vec::new();
+            let mut on_path = IdSet::default();
+            let mut at = Some(start);
+            while let Some(id) = at.filter(|id| !acyclic.contains(id)) {
+                if !on_path.insert(id) {
+                    let from = path.iter().position(|on| *on == id).unwrap_or_default();
+                    return Some(path.split_off(from));
+                }
+                path.push(id);
+                at = parents.get(&id).copied();
+            }
+            acyclic.extend(path);
+        }
+        None
+    });
+    let cycle = cycle.flatten();
+    assert!(
+        cycle.is_none(),
+        "the AccessKit parents of the pass hold a cycle: {cycle:?}, each the parent of the one before and the first the parent of the last"
+    );
 }
 
 /// Notes that the runtime emitted the node of `id`.
@@ -237,7 +283,11 @@ pub(crate) fn note_written(ctx: &Context, id: Id) {
 /// (the active item of a list the field drives).
 pub(crate) fn order_children(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    let emitted = pass_state::with::<Reported, _>(ctx, |reported| reported.0.remove(&viewport)).unwrap_or_default();
+    let emitted = pass_state::with::<Reported, _>(ctx, |reported| {
+        reported.ended = Some(viewport);
+        reported.emitted.remove(&viewport)
+    })
+    .unwrap_or_default();
     if !emitted.focus_set
         && let Some(owner) = ctx.memory(|memory| memory.focused()).and_then(|widget| emitted.folded.get(&widget))
     {
@@ -266,6 +316,37 @@ fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
             hide(ctx, *id);
         }
     }
+}
+
+/// Records that the component `id` has a `Trigger::Context` opener in this pass, so its node declares the context
+/// menu action. An opener that runs after the component reported (a context menu hung on its response after `show`)
+/// adds the action to the node written already: only the node's own write clears its actions, and that ran.
+pub(crate) fn offer_context_menu(ctx: &Context, id: Id) {
+    let written = with_emitted(ctx, |emitted| {
+        emitted.context.insert(id);
+        emitted.written.contains(&id)
+    });
+    if written {
+        ctx.accesskit_node_builder(id, |node| node.add_action(accesskit::Action::ShowContextMenu));
+    }
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| offer_context_menu(ctx, id));
+}
+
+/// Whether `id` has a `Trigger::Context` opener recorded in this pass.
+pub(crate) fn offers_context_menu(ctx: &Context, id: Id) -> bool {
+    with_emitted(ctx, |emitted| emitted.context.contains(&id))
+}
+
+/// Turns AccessKit output on, so every viewport's pass settles an update ([`settle_output`]) that automation reads
+/// ([`kept_tree`]).
+pub(crate) fn keep_trees(ctx: &Context) {
+    ctx.enable_accesskit();
+}
+
+/// The settled update of `viewport`'s last pass as a tree to walk; `None` before its first pass or while AccessKit is
+/// off.
+pub(crate) fn kept_tree(ctx: &Context, viewport: ViewportId) -> Option<AccessTree> {
+    settled_tree(ctx, viewport).map(AccessTree::new)
 }
 
 /// The tree update of a finished frame.

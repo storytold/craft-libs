@@ -2,12 +2,12 @@
 
 mod words;
 
-mod area;
+pub(crate) mod area;
 mod hide;
-mod switcher;
-mod workspace_dialogs;
+pub(crate) mod switcher;
+pub(crate) mod workspace_dialogs;
 // Task panes: docked panes as shell panes, floating panes as floating frames.
-mod panes;
+pub(crate) mod panes;
 
 pub use area::{DockArea, DockAreaOutput, InvalidGeometry};
 pub use panes::{

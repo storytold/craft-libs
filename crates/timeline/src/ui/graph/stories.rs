@@ -120,8 +120,8 @@ fn show_the_speed_graph(fixture: &mut Fixture) {
 #[story(GraphEditor<'static>, covers = [Default], drive = Drive::Custom(show_the_speed_graph))]
 fn position_curves(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut demo = data.value("demo", Demo::new()).clone();
-    let range = data.value("range", GraphRange::default());
-    let out = shown(ui, &mut demo, Bind::bound(range));
+    let (range, range_at) = data.value_at("range", GraphRange::default());
+    let out = shown(ui, &mut demo, range_at.bind(range));
     *data.value("demo", Demo::new()) = demo;
     out
 }
@@ -130,8 +130,8 @@ fn position_curves(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn speed_graph(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut demo = data.value("demo", Demo::new()).clone();
     let start = GraphRange { mode: GraphMode::Speed, ..GraphRange::default() };
-    let range = data.value("range", start);
-    let out = shown(ui, &mut demo, Bind::bound(range));
+    let (range, range_at) = data.value_at("range", start);
+    let out = shown(ui, &mut demo, range_at.bind(range));
     *data.value("demo", Demo::new()) = demo;
     out
 }
@@ -139,8 +139,8 @@ fn speed_graph(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(GraphEditor<'static>, covers = [Mixed])]
 fn ranges_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut demo = data.value("demo", Demo::new()).clone();
-    let range = data.value("range", Mixed::<GraphRange>::Mixed);
-    let out = shown(ui, &mut demo, Bind::bound_mixed(range));
+    let (range, range_at) = data.value_at("range", Mixed::<GraphRange>::Mixed);
+    let out = shown(ui, &mut demo, range_at.bind_mixed(range));
     *data.value("demo", Demo::new()) = demo;
     out
 }
@@ -149,11 +149,11 @@ fn ranges_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn range_wider_than_the_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut demo = data.value("demo", Demo::new()).clone();
     let wide = GraphRange { high: WIDEST + 1.0, ..GraphRange::default() };
-    let range = data.value("range", wide);
+    let (range, range_at) = data.value_at("range", wide);
     let narrow = |range: &GraphRange| {
         if range.high - range.low > WIDEST { Validity::Refuse(Message::new("The range is wider than the graph shows")) } else { Validity::Ok }
     };
-    let out = shown(ui, &mut demo, Bind::bound(range).check(narrow));
+    let out = shown(ui, &mut demo, range_at.bind(range).check(narrow));
     *data.value("demo", Demo::new()) = demo;
     out
 }

@@ -6,7 +6,6 @@
 //! user did; the dock decides what a drop changes.
 
 use super::divider::{self, Divider, Drag};
-use super::group::GroupGrip;
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
 use crate::contract::{
     Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Props as _, Role, ShowContainer as _,
@@ -23,17 +22,17 @@ use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 mod bar;
 mod sizing;
 
 use bar::panel_names;
 
-pub(super) use bar::{BarRecord, CHEVRON, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, settled_bar, show_bar};
+pub(super) use bar::{BarRecord, CHEVRON, ColumnGrip, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
 use sizing::group_sizes;
-pub use sizing::{GroupSize, column_cells, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
+pub use sizing::{GroupSize, column_cells, fit_widths, group_heights, scale_widths, stacked, width_bounds};
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const EDGE: PartKey = PartKey::new("edge");
@@ -63,13 +62,13 @@ impl ColumnBar {
 }
 
 /// What a column's double arrow does, which names it and sets where it points.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ColumnArrow {
     /// Collapses the column to icons, or expands it.
     #[default]
     Collapse,
-    /// Switches a stepped column ([`stepped`]) between one and two steps. Holds the steps it shows.
+    /// Switches a stepped column ([`DockSizes::stepped`](super::DockSizes::stepped)) between one and two steps. Holds the steps it shows.
     Steps(u16),
     /// Nothing: the column neither collapses nor has steps. It shows no double arrow, and its menu offers no
     /// collapse.
@@ -79,11 +78,11 @@ pub enum ColumnArrow {
 impl ColumnArrow {
     /// The arrow of `column`: an expanded column whose panels do not collapse (`collapses` false) switches steps
     /// when it is stepped and has none otherwise; any other column collapses or expands.
-    pub fn of<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, collapses: bool) -> Self {
+    pub fn of<P>(column: &Column<P>, sizes: &DockSizes, spec: &dyn Fn(&P) -> PanelSpec, collapses: bool) -> Self {
         if collapses || column.iconic {
             return ColumnArrow::Collapse;
         }
-        stepped(column, spec).map_or(ColumnArrow::Fixed, |(_, steps)| ColumnArrow::Steps(steps))
+        sizes.stepped(column, spec).map_or(ColumnArrow::Fixed, |(_, steps)| ColumnArrow::Steps(steps))
     }
 
     /// The steps a click gives a stepped column: two from one, else one. `None` for any other arrow.
@@ -196,10 +195,6 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
-    /// The version of what the column's bar shows of the host's panels and the arrangement: with one, the bar settles
-    /// (`Lazy::content`).
-    #[prop]
-    content: Option<u64>,
     /// The plan `parts` laid out this pass, which update, paint and access read.
     laid: Option<Plan>,
     resized: Vec<(P, f32)>,
@@ -223,7 +218,6 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
             bar: ColumnBar::Own,
             arrow: ColumnArrow::Collapse,
             within: Rect::NOTHING,
-            content: None,
             laid: None,
             resized: Vec::new(),
             width: None,
@@ -250,8 +244,7 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
         at: Option<Rect>,
         mut view: impl FnMut(&Group<P>, Rect, &mut Ui, &mut BodyCx<'_>) + 'a,
     ) -> DockColumnOutput<P> {
-        let (column, spec, auto_collapse, edge, own, arrow, content) =
-            (self.column, self.spec, self.auto_collapse, self.edge, self.bar, self.arrow, self.content);
+        let (column, spec, auto_collapse, edge, own, arrow) = (self.column, self.spec, self.auto_collapse, self.edge, self.bar, self.arrow);
         let mut bar = BarRecord::default();
         let shown = &mut bar;
         let body = move |ui: &mut Ui, body: &mut BodyCx<'_>| {
@@ -262,9 +255,7 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
             let plan = column_plan(column, spec, body.rect, own, &sizes, drags);
             if own == ColumnBar::Own {
                 let band = bar_band(ui, plan.bar, edge);
-                *shown = settled_bar(ui, band, content, |ui| {
-                    column_grip(column, spec, body).map(|grip| show_bar(ui, body, band, true, auto_collapse, arrow, grip)).unwrap_or_default()
-                });
+                *shown = show_bar(ui, band, true, auto_collapse, arrow, false, column_grip(column, spec, body));
             }
             for (group, rect) in column.groups.iter().zip(&plan.groups) {
                 view(group, *rect, ui, body);
@@ -521,13 +512,13 @@ impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
 }
 
 /// The grip of the column bar: a drag moves the whole column, its ghost the column's size and its panels' names.
-pub(super) fn column_grip<P: Value + Hash>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, body: &BodyCx<'_>) -> Option<GroupGrip<P>> {
+pub(super) fn column_grip<P: Value + Hash>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec, body: &BodyCx<'_>) -> Option<ColumnGrip<P>> {
     let first = column.groups.first()?;
     let anchor = first.panels.first()?;
     let active = PanelKey::of(first.active_panel().unwrap_or(anchor));
-    let name = bar_name(column, spec, &body.words::<DockWords>().move_column);
+    let name = Label::from(bar_name(column, spec, &body.words::<DockWords>().move_column));
     let ghost = (body.rect.size(), Label::from(panel_names(column, spec)));
-    Some(GroupGrip::new(DragUnit::Column(anchor.clone()), active).ghost(ghost).label(name))
+    Some(ColumnGrip { unit: DragUnit::Column(anchor.clone()), active, ghost, name })
 }
 
 /// Registers the drop bands of the two edges of the column in `rect` with the dock `dock`: a drop there makes a new

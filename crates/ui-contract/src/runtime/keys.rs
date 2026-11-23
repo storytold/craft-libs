@@ -2,14 +2,13 @@
 //! every key event of the pass, the begin hook turns them into the `Intents` of the focused component,
 //! and claims, menu-bar keys and AccessKit action requests are routed from the same record.
 
-use crate::runtime::commands::FirePhase;
+use crate::runtime::commands::{ClipContent, FirePhase};
 use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
 use egui::{Context, Id, IdMap, Vec2, ViewportId};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 mod claims;
 mod input;
@@ -21,32 +20,33 @@ mod route;
 pub use claims::capture;
 #[doc(hidden)]
 pub use claims::claim;
-pub(crate) use claims::hold_escape;
 #[doc(hidden)]
 pub use claims::take_claimed;
-pub(crate) use claims::take_first_claimed;
+pub(crate) use claims::{fire_claimed, hold_escape, take_first_claimed};
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
-pub(crate) use input::{claims_press, input_hook, queue_nav, take_menu_keys, take_nav};
+pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, take_menu_keys, take_nav};
 #[doc(hidden)]
 pub use input::{down, keyed};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use intents::lent_taken;
 #[doc(hidden)]
 pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
-pub use intents::with_window_intents;
 pub(crate) use intents::{
     Lent, context_part, context_request, context_requests, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel,
     take_every_escape, take_window_cancel,
 };
+pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
+pub(crate) use route::{
+    activated_member, begin, focus_in_modal_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts,
+};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +107,11 @@ enum Taken {
     No,
     /// The press became an intent, a focus move or an activation.
     Yes,
+    /// With nothing focused, the window's document canvas took the press (a nudge it declares, `KeyUse::nudge_mods`,
+    /// or a page move): it is the canvas's alone, as while the canvas has the focus, and no app shortcut runs with it.
+    Canvas,
+    /// A collection under the pointer took the key.
+    Hover,
 }
 
 /// The key events the owner leaves to the app this pass, with the facts the matching needs.
@@ -119,6 +124,8 @@ pub(crate) struct Shortcuts {
     pub(crate) dialog: bool,
     /// The layout that reads the presses.
     pub(crate) layout: Layout,
+    /// The content of a paste no focused component lists: the Paste command the keys fire carries it.
+    pub(crate) pasted: Option<ClipContent>,
 }
 
 /// What the input hook recorded for the next pass's begin hook.
@@ -128,8 +135,10 @@ struct Batch {
     /// How many key presses the strip left in egui's input.
     egui_presses: usize,
     shortcuts: Vec<Shortcut>,
-    /// The text of the paste the focused component takes.
-    paste: Option<String>,
+    /// The content of the paste the focused component takes.
+    paste: Option<ClipContent>,
+    /// The content of a paste no focused component lists, for the command its chord fires (`Fired::pasted`).
+    app_paste: Option<ClipContent>,
     /// Every text event of the pass, in order.
     texts: Vec<Typed>,
     /// How many text events the strip left in egui's input.
@@ -229,6 +238,12 @@ pub(crate) struct Stage {
     routed: HashMap<Option<Id>, Routed>,
     claimed: Vec<(Id, Chord)>,
     claims: Vec<(Id, Chord)>,
+    /// Collections that accept Delete under the pointer in the next pass.
+    hover_deletes: Vec<Id>,
+    /// The state-dependent claims the running pass holds: those registered in the pass before.
+    last_claims: Vec<(Id, Chord)>,
+    /// The claimed chords fired commands stand for (`fire_claimed`), for their owners in the next pass.
+    fired_claims: Vec<(Id, Chord)>,
     /// Chords a container holds for itself while focus is anywhere in the viewport (a window mode), from the
     /// pass that registered them.
     captures: Vec<(Id, Chord)>,
@@ -242,11 +257,13 @@ pub(crate) struct Stage {
     down: Vec<Key>,
     /// The input hook read a key press, typed text or a clipboard event in this pass, withheld ones included.
     keyed: bool,
+    /// How many inputs of the viewport held an event sent to the focus (`count_sent`).
+    sent: u64,
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,
-    /// The paste text the focused component reads through its clipboard handle.
-    pasted: Option<(Id, Arc<str>)>,
+    /// The paste the focused component reads through its clipboard handle.
+    pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.
     queued_edits: Vec<EditCommand>,
     /// The components that asked for a context menu in this pass, with the rect it opens at.
@@ -274,4 +291,13 @@ fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Stage) -> R)
 
 fn current<R>(ctx: &Context, f: impl FnOnce(&mut Stage) -> R) -> R {
     with(ctx, crate::runtime::egui::pass::current_viewport(ctx), f)
+}
+
+pub(crate) fn register_hover_delete(ctx: &Context, id: Id) {
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| register_hover_delete(ctx, id));
+    current(ctx, |stage| {
+        if !stage.hover_deletes.contains(&id) {
+            stage.hover_deletes.push(id);
+        }
+    });
 }

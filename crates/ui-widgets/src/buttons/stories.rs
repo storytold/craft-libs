@@ -1,6 +1,6 @@
 //! Stories of the buttons.
 
-use super::{Arrangement, Button, ControlPlace, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
+use super::{Arrangement, Button, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PressFocus, SplitButton, SplitMenu, ToggleButton};
 use crate::contract::{Bind, BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::display::{Picture, Shade, Text};
 use crate::layout_components::{Grid, Row, Stack};
@@ -74,9 +74,53 @@ fn button_loading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::new("Saving").icon(IconId::new("save")).loading(true).show(ui).into()
 }
 
+/// The command the search opener stories fire: an app command, so it is enabled in a story with no focused field. Its
+/// set is registered in every test binary that links the stories, so its chord keeps clear of the chords trials bind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
+#[command(prefix = "buttonStory", story)]
+enum SearchStoryCommand {
+    #[command(label = "Search", default = "Cmd+Shift+F")]
+    Open,
+}
+
+/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end.
+#[story(CommandSearch, covers = [Default])]
+fn command_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
+}
+
+/// In a narrow room the chord keeps its width and the placeholder is cut; the tooltip shows it whole.
+#[story(CommandSearch, covers = [LongText], drive = Drive::Never, title = "Narrow")]
+fn command_search_narrow(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    ui.set_max_width(ui.available_width() * 0.3);
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
+}
+
+#[story(CommandSearch, covers = [], drive = Drive::Never, title = "Disabled")]
+fn command_search_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").enabled(false).show(ui).into()
+}
+
+/// A right-to-left placeholder: the glyph at the reading start and the chord, which keeps its left-to-right order, at
+/// the reading end.
+#[story(CommandSearch, covers = [], drive = Drive::Never, group = "Right to left", title = "Right to left")]
+fn command_search_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "חיפוש פקודות והגדרות").show(ui).into()
+}
+
 #[story(IconButton<'static>, covers = [Default])]
 fn icon_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     IconButton::new(IconId::new("settings")).label("Settings").show(ui).into()
+}
+
+/// A button whose press leaves the editor focused.
+#[story(IconButton<'static>, covers = [], drive = Drive::Never, title = "Keep focus")]
+fn icon_button_keep_focus(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        crate::text::TextField::new("Text", Bind::bound(data.value("focus_text", String::new()))).show(ui);
+        IconButton::new(IconId::new("close")).label("Close").press_focus(PressFocus::Keep).show(ui);
+    });
+    shown.into()
 }
 
 /// A tool strip: the first tool selected, as the gallery card shows it.
@@ -247,8 +291,8 @@ fn button_in_side_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
-        ToggleButton::new("Snap to grid", Bind::bound(data.value("snap", false))).id_salt("snap").show(ui);
-        ToggleButton::new("Guides", Bind::bound(data.value("on", true))).icon(IconId::new("eye")).id_salt("guides").show(ui);
+        ToggleButton::new("Snap to grid", data.bind("snap", false)).id_salt("snap").show(ui);
+        ToggleButton::new("Guides", data.bind("on", true)).icon(IconId::new("eye")).id_salt("guides").show(ui);
     });
     shown.into()
 }
@@ -258,19 +302,15 @@ fn toggle_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let disabled = *data.value("disabled", false);
     let label = data.value("label", String::from("Snap to grid")).clone();
-    ToggleButton::new(label, Bind::bound(data.value("on", false))).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
+    ToggleButton::new(label, data.bind("on", false)).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
 }
 
 /// A stacked toggle, off and on.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never, title = "Stacked")]
 fn toggle_button_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
-        ToggleButton::new("Gridlines", Bind::bound(data.value("grid", false)))
-            .icon(IconId::new("eye"))
-            .arrangement(Arrangement::Stacked)
-            .id_salt("grid")
-            .show(ui);
-        ToggleButton::new("Show rulers", Bind::bound(data.value("rulers", true)))
+        ToggleButton::new("Gridlines", data.bind("grid", false)).icon(IconId::new("eye")).arrangement(Arrangement::Stacked).id_salt("grid").show(ui);
+        ToggleButton::new("Show rulers", data.bind("rulers", true))
             .icon(IconId::new("eye"))
             .arrangement(Arrangement::Stacked)
             .id_salt("rulers")
@@ -297,12 +337,12 @@ fn toggle_button_stacked_in_ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOu
                     .arrangement(Arrangement::Stacked)
                     .id_salt("page number")
                     .show(ui);
-                ToggleButton::new("Track\nChanges", Bind::bound(data.value("track", false)))
+                ToggleButton::new("Track\nChanges", data.bind("track", false))
                     .icon(IconId::new("eye"))
                     .arrangement(Arrangement::Stacked)
                     .id_salt("track")
                     .show(ui);
-                ToggleButton::new("Select", Bind::bound(data.value("select", true)))
+                ToggleButton::new("Select", data.bind("select", true))
                     .icon(IconId::new("eye"))
                     .arrangement(Arrangement::Stacked)
                     .id_salt("select")
@@ -324,7 +364,7 @@ fn click_and_stay(fixture: &mut Fixture) {
 /// A toggle clicked with the pointer still over it: the output's `hover` is over and clicked until the pointer leaves.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Custom(click_and_stay), title = "Clicked under the pointer")]
 fn toggle_button_clicked_under_pointer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = ToggleButton::new("Snap to grid", Bind::bound(data.value("snap_hover", false))).icon(IconId::new("eye")).show(ui);
+    let shown = ToggleButton::new("Snap to grid", data.bind("snap_hover", false)).icon(IconId::new("eye")).show(ui);
     // The hold is the component's own state, which a measuring run does not carry: the story words it in its readout,
     // not in its data, which the purity probe compares.
     let clicked = shown.hover.clicked;
@@ -333,13 +373,13 @@ fn toggle_button_clicked_under_pointer(ui: &mut Ui, data: &mut StoryData) -> Sto
 
 #[story(ToggleButton<'static>, covers = [Mixed], drive = Drive::Never)]
 fn toggle_button_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ToggleButton::new("Snap to grid", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).into()
+    ToggleButton::new("Snap to grid", data.bind_mixed("mixed", Mixed::Mixed)).show(ui).into()
 }
 
 #[story(ToggleButton<'static>, covers = [Invalid], drive = Drive::Never)]
 fn toggle_button_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_on = |on: &bool| if *on { Validity::Refuse(Message::new("Snapping is not available here")) } else { Validity::Ok };
-    ToggleButton::new("Snap to grid", Bind::bound(data.value("invalid", true)).check(refuse_on)).show(ui).into()
+    ToggleButton::new("Snap to grid", data.bind("invalid", true).check(refuse_on)).show(ui).into()
 }
 
 fn presets() -> [Entry<u8>; 4] {

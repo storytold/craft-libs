@@ -3,15 +3,19 @@
 // The test files name the library as `craft_ui`, as the crates that use it do.
 extern crate craft_ui_canvas as craft_ui;
 
-mod canvas;
-mod canvas_controls;
-mod contract;
+pub(crate) mod canvas;
+pub(crate) mod canvas_controls;
+pub(crate) mod contract;
 // full-window parts
-mod full_window_parts;
+pub(crate) mod full_window_parts;
 // end of full-window parts
 
-use craft_ui::testing::registered;
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registered());
+    craft_ui::testing::run(
+        module_path!(),
+        env!("CARGO_PKG_NAME"),
+        &craft_ui::testing::Registry::of(&[register, craft_ui::testing::register, craft_ui_test_kit::testing::register]),
+    );
 }

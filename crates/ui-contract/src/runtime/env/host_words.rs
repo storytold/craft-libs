@@ -7,31 +7,27 @@ use craft_i18n::{WordRows, Words};
 use egui::Context;
 use std::sync::Arc;
 
-/// The words of the installed `Host`, kept until the `Host` changes so that the word sets built from them are
-/// built once.
+/// The words of the installed `Host`, kept until another host is installed (`Host::generation`; `None` without a
+/// host) so that the word sets built from them are built once.
 #[derive(Default)]
 struct HostWords {
-    host: Option<std::sync::Weak<Host>>,
-    words: Option<Arc<Words>>,
+    words: Option<(Option<u64>, Arc<Words>)>,
 }
 
 /// The catalogs of `host` in its language, English without a host or a catalog.
 pub(super) fn host_words(ctx: &Context, host: Option<&Arc<Host>>) -> Arc<Words> {
+    let generation = host.map(|host| host.generation());
     Service::<HostWords>::run(ctx, |cached| {
-        let same = match (&cached.host, host) {
-            (Some(kept), Some(host)) => std::sync::Weak::ptr_eq(kept, &Arc::downgrade(host)),
-            (None, None) => true,
-            _ => false,
-        };
-        if let (true, Some(words)) = (same, &cached.words) {
+        if let Some((kept, words)) = &cached.words
+            && *kept == generation
+        {
             return Arc::clone(words);
         }
         let words = Arc::new(match host.and_then(|host| host.i18n_shared().map(|i18n| (Arc::clone(i18n), host.lang()))) {
             Some((i18n, lang)) => Words::from_i18n(i18n, lang),
             None => Words::english(),
         });
-        cached.host = host.map(Arc::downgrade);
-        cached.words = Some(Arc::clone(&words));
+        cached.words = Some((generation, Arc::clone(&words)));
         words
     })
 }

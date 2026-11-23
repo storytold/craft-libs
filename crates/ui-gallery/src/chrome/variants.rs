@@ -2,19 +2,46 @@
 //! front centre tab's content.
 
 use super::card::Look;
-use super::overview::{Spec, SpecStory, apply, grid, on_background, selected_type, target_story};
-use super::panels::Panels;
-use crate::viewer::{DIRECTIONS, MODES, PanelId, VariantAxis, entry_of};
+use super::overview::{Centre, Spec, SpecStory, apply, grid, on_background};
+use super::panels::{selected_of, target_story};
+use crate::viewer::{DIRECTIONS, MODES, SETS, VariantAxis, entry_of};
 use craft_i18n::Direction;
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Mode, ModeChoice};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Show as _, ShowContainer as _, StoryLayout};
+use craft_ui::contract::{MemoProps, Show as _, ShowContainer as _, StoryLayout};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
 use craft_ui::notices::Notice;
 use craft_ui::style::TypeRole;
 use egui::Ui;
+
+/// The Variants view open in a centre tab: its axis, and the window's look, which the card that shows it now notes.
+#[derive(Clone, Copy, Debug, PartialEq, MemoProps)]
+#[non_exhaustive]
+pub struct VariantsIn {
+    /// What the view repeats the story over.
+    pub axis: VariantAxis,
+    /// The window's mode, direction and component set.
+    pub shown: Look,
+}
+
+impl VariantsIn {
+    /// The view of `axis` under the window's `shown` look.
+    pub fn new(axis: VariantAxis, shown: Look) -> Self {
+        VariantsIn { axis, shown }
+    }
+}
+
+/// What the Variants view asks of the viewer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum VariantsEvent {
+    /// Close the view.
+    Close,
+    /// Make a card's look the window's, and close the view.
+    Use(Look),
+}
 
 /// One value of an axis: its name, the look a card shows it with, and what picking it sets.
 struct Value {
@@ -29,6 +56,7 @@ fn noun(axis: VariantAxis) -> &'static str {
         VariantAxis::Mode => "mode",
         VariantAxis::Contrast => "contrast",
         VariantAxis::Size => "size",
+        VariantAxis::Set => "set",
         VariantAxis::Direction => "direction",
         VariantAxis::ControlSize => "control size",
         VariantAxis::DirectionAndControlSize => "direction and control size",
@@ -65,6 +93,9 @@ fn values(axis: VariantAxis) -> Option<Vec<Value>> {
                 .map(|choice| Value { label: choice.label, look: Look { direction: direction(choice.value), ..Look::default() } })
                 .collect(),
         ),
+        VariantAxis::Set => {
+            Some(SETS.0.iter().map(|choice| Value { label: choice.label, look: Look { set: Some(choice.value), ..Look::default() } }).collect())
+        }
         VariantAxis::ControlSize => {
             Some(sizes.iter().map(|(size, label)| Value { label, look: Look { size: Some(*size), ..Look::default() } }).collect())
         }
@@ -90,42 +121,19 @@ fn values(axis: VariantAxis) -> Option<Vec<Value>> {
     }
 }
 
-/// Whether the Variants view is open in `tab`: it opens in the tab that is in front when it is asked for and closes
-/// when another one comes to the front.
-fn open_in(p: &mut Panels<'_>, tab: PanelId) -> bool {
-    if p.variants.is_none() {
-        *p.variants_tab = None;
-        return false;
-    }
-    match *p.variants_tab {
-        None => {
-            *p.variants_tab = Some(tab);
-            true
-        }
-        Some(owner) if owner == tab => true,
-        Some(_) => {
-            *p.variants = None;
-            *p.variants_tab = None;
-            false
-        }
-    }
-}
-
-/// Shows the Variants view in `tab` when one is open there. Returns whether it did.
-pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
-    if !open_in(p, tab) {
-        return false;
-    }
-    let Some(axis) = *p.variants else { return false };
+/// Shows the Variants view when one is open in the tab `c` shows. Returns whether it did. Close and Use leave through
+/// `c.variants_out`.
+pub(super) fn show(ui: &mut Ui, c: &mut Centre<'_>) -> bool {
+    let Some(VariantsIn { axis, shown: window }) = c.variants else { return false };
     let mut closed = false;
-    let target = selected_type(p).and_then(|type_name| target_story(p, type_name).map(|index| (type_name, index)));
+    let target = selected_of(c.selection).and_then(|type_name| target_story(c.catalog, c.story_of, type_name).map(|index| (type_name, index)));
     let cards: Vec<Spec> = match (target, values(axis)) {
         (Some((type_name, index)), Some(values)) => {
             let Some(entry) = entry_of(type_name) else { return false };
-            let (mode, direction) = (p.env.appearance(ui.ctx()).mode, p.env.direction);
             let shown = |look: &Look| match axis {
-                VariantAxis::Mode => look.mode == Some(mode),
-                VariantAxis::Direction => look.direction == Some(direction),
+                VariantAxis::Mode => look.mode == window.mode,
+                VariantAxis::Direction => look.direction == window.direction,
+                VariantAxis::Set => look.set == window.set,
                 _ => false,
             };
             values
@@ -135,7 +143,7 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
                     type_name,
                     title: value.label.to_owned(),
                     note: shown(&value.look).then(|| "shown now".to_owned()),
-                    stories: vec![SpecStory::of(p.catalog, index, &entry.name)],
+                    stories: vec![SpecStory::of(c.catalog, index, &entry.name)],
                     layout: StoryLayout::Stacked,
                     surface: entry.surface,
                     open: false,
@@ -150,9 +158,10 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
     };
     let heading = target.and_then(|(type_name, index)| {
         let entry = entry_of(type_name)?;
-        Some(format!("{} · {} in every {}", entry.name, p.catalog.entries[index].registration.story.caption(&entry.name), noun(axis)))
+        Some(format!("{} · {} in every {}", entry.name, c.catalog.entries[index].registration.story.caption(&entry.name), noun(axis)))
     });
     let mut reported = Vec::new();
+    let generation = c.generation;
     on_background(ui, "variants", |ui, cx| {
         Row::new().show(ui, |ui, _| {
             Text::new(heading.clone().unwrap_or_else(|| "Variants".to_owned())).role(TypeRole::Heading).show(ui);
@@ -167,23 +176,16 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
             };
             let _ = Notice::new(Tone::Info, text).show(ui);
         } else {
-            reported = grid(ui, "variants", None, &cards, p, false, None);
+            reported = grid(ui, "variants", None, &cards, c.cells, generation, false, None);
         }
         closed |= cx.take_cancel();
     });
     let used = reported.iter().find(|reported| reported.events.used).map(|reported| reported.spec);
-    apply(p, &cards, reported);
+    apply(c, &cards, reported);
     if let Some(card) = used.and_then(|spec| values(axis).and_then(|values| values.into_iter().nth(spec))) {
-        if let Some(mode) = card.look.mode {
-            p.env.mode = mode.into();
-        }
-        if let Some(direction) = card.look.direction {
-            p.env.direction = direction;
-        }
-        closed = true;
-    }
-    if closed {
-        *p.variants = None;
+        c.variants_out.send(VariantsEvent::Use(card.look));
+    } else if closed {
+        c.variants_out.send(VariantsEvent::Close);
     }
     true
 }

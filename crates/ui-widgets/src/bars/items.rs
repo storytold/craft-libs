@@ -21,7 +21,7 @@ const ITEM: PartKey = PartKey::new("item");
 const MORE: PartKey = PartKey::new("more");
 
 /// What an item shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ItemDisplay {
     /// The command's icon; the label is the tooltip and the accessible name. A command with no icon shows `Text`.
@@ -34,7 +34,7 @@ pub enum ItemDisplay {
 }
 
 /// What the "More" menu of a `BarItems` strip lists.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum MoreMenu {
     /// The items the strip has no room for, and the `Menu` items; "More" shows only when there are any.
@@ -45,7 +45,7 @@ pub enum MoreMenu {
 }
 
 /// One command of a `BarItems` strip.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct BarItem {
     /// The command the item shows and runs.

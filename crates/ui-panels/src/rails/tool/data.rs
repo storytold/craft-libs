@@ -7,7 +7,7 @@ pub type SlotId = u32;
 
 /// One tool of a slot. A tool is a command: the command gives the label, the icon, the chord and the enabled state,
 /// and picking the tool runs it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct RailTool<T> {
     /// The host's identifier for the tool, reported when the tool is selected.
@@ -24,7 +24,7 @@ impl<T> RailTool<T> {
 }
 
 /// A group of tools that share one button; its flyout lists them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct ToolSlot<T> {
     /// The slot's name, chosen by the host; keys the remembered last-used tool.
@@ -49,7 +49,7 @@ impl<T> ToolSlot<T> {
 }
 
 /// The tool each slot showed last. Plain data the host keeps with its workspace.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, crate::contract::MemoProps, crate::contract::PlainData)]
 pub struct LastUsed<T> {
     tools: Vec<(SlotId, T)>,
 }

@@ -2,7 +2,7 @@
 
 use super::kit::{AppCommand, DOCK, Dock, PANE, Pane, PaneCommand, Tap};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Lazy, Trigger};
+use craft_ui::contract::{Bind, MemoProps, MemoView, Trigger};
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::Dialog;
 use craft_ui::menu::{Menu, MenuItem};
@@ -17,7 +17,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::pointer::{press, release};
-use craft_ui::testing::{Frames, trial};
+use craft_ui::testing::{Frames, MemoRun, last_frame_memo_runs, trial};
 use craft_ui::text::TextField;
 use egui::{Id, Pos2, Ui};
 use egui::{Key, Modifiers, ViewportId};
@@ -262,33 +262,46 @@ fn an_instance_back_after_one_missed_pass_is_live_again() {
     assert!(enabled.get(), "and stays so");
 }
 
-/// A settled region that shows a command the focused stop answers for (Cut, which a text field takes) runs when that
+/// A view that shows Cut, a command the focused stop answers for.
+#[derive(MemoProps)]
+struct Edits {}
+
+fn edits(_: &mut Edits, ui: &mut Ui) -> Id {
+    Button::command(EditCommands::Cut).show(ui).id
+}
+
+/// Two idle frames of `show`, and how many times the `Edits` view ran in them.
+fn edits_runs(frames: &mut Frames, show: &mut impl FnMut(&mut Ui)) -> usize {
+    (0..2)
+        .map(|_| {
+            frames.frame(vec![], &mut *show);
+            last_frame_memo_runs(&frames.ctx).iter().filter(|(name, _, run)| name.ends_with("Edits") && *run == MemoRun::Ran).count()
+        })
+        .sum()
+}
+
+/// A memoized view that shows a command the focused stop answers for (Cut, which a text field takes) runs when that
 /// stop's answer changes: with the focus moving from the field to a tap, which takes no edits, Cut no longer waits for a
 /// selection.
 #[trial]
-fn a_settled_region_runs_when_the_focused_stops_answer_changes() {
+fn a_memoized_view_runs_when_the_focused_stops_answer_changes() {
     let text = RefCell::new("hello".to_owned());
     let (field, tap, cut) = (Cell::new(Id::NULL), Cell::new(Id::NULL), Cell::new(Id::NULL));
-    let runs = Cell::new(0);
     let mut show = |ui: &mut Ui| {
         field.set(TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).show(ui).response.id);
         tap.set(Tap::new().id_salt("plain").show(ui).id);
-        Lazy::new("edits", 0.0).settles(true).show(ui, |ui| {
-            runs.set(runs.get() + 1);
-            cut.set(Button::command(EditCommands::Cut).show(ui).id);
-        });
+        if let Some(id) = MemoView::new("edits", Edits {}, edits).show(ui) {
+            cut.set(id);
+        }
     };
     let mut frames = Frames::new();
     frames.idle(2, &mut show);
     request(&frames.ctx, FocusTarget::Id(field.get()));
     frames.idle(30, &mut show);
     assert!(frames.tree().is_disabled(cut.get()), "Cut does nothing with no text selected");
-    runs.set(0);
-    frames.idle(2, &mut show);
-    assert_eq!(runs.get(), 0, "the region is settled");
+    assert_eq!(edits_runs(&mut frames, &mut show), 0, "the view replays");
     request(&frames.ctx, FocusTarget::Id(tap.get()));
-    frames.idle(2, &mut show);
-    assert_eq!(runs.get(), 1, "the new answer for Cut runs the region once");
+    assert!(edits_runs(&mut frames, &mut show) > 0, "the new answer for Cut runs the view");
     assert!(!frames.tree().is_disabled(cut.get()), "which shows Cut enabled");
 }
 

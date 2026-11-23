@@ -90,6 +90,11 @@ pub struct TextOptions {
     pub steps_value: bool,
     /// The whole text is selected when the field takes focus, whatever the codec's caret rule says.
     pub select_on_focus: bool,
+    /// A layer that opens on the field (`FocusOrigin::Open`) leaves the caret where the codec's rule puts it instead
+    /// of selecting the whole text: a field that opens to add to its text (an edited comment) rather than replace it.
+    pub keep_caret_on_open: bool,
+    /// Selects the current text before this pass's typing, unless an IME composition is active.
+    pub select_all: bool,
     /// Enter does something in the field itself (it saves or runs a search): the field takes the `Submit` intent, so the
     /// enclosing dialog's default button does not act on it.
     pub submits: bool,
@@ -99,6 +104,9 @@ pub struct TextOptions {
     pub mixed: bool,
     /// The text sits in the middle of the part instead of at its start (numbers).
     pub centred: bool,
+    /// The text sits at the part's end edge, against what follows it (a number and its attached unit sign). Ignored
+    /// while `centred`.
+    pub end_aligned: bool,
     /// A plain Left or Right with the whole text selected starts from the end of the text, not from the selection's
     /// start: a field whose last digits are what the user edits (a timecode's frames).
     pub arrows_from_end: bool,
@@ -111,6 +119,20 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// The key that submits a multi-line text: under `Enter`, plain, Cmd and Ctrl+Enter submit and Shift+Enter breaks
+    /// the line.
+    pub submit_key: SubmitKey,
+}
+
+/// Which Enter chord submits a multi-line text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SubmitKey {
+    /// Cmd or Ctrl+Enter submits; plain Enter breaks the line.
+    #[default]
+    CommandEnter,
+    /// Plain, Cmd and Ctrl+Enter submit; Shift+Enter breaks the line.
+    Enter,
 }
 
 impl Default for TextOptions {
@@ -134,13 +156,17 @@ impl Default for TextOptions {
             enabled: true,
             steps_value: false,
             select_on_focus: false,
+            keep_caret_on_open: false,
+            select_all: false,
             submits: false,
             mixed: false,
             centred: false,
+            end_aligned: false,
             arrows_from_end: false,
             unparsed: None,
             own_menu: false,
             holds_drafts: false,
+            submit_key: SubmitKey::CommandEnter,
         }
     }
 }
@@ -337,6 +363,6 @@ impl<'a> EditorState<'a> {
 impl TextLayout {
     /// The layout's runs as the borrowed runs an editor line takes.
     pub fn editor_runs(&self) -> Vec<EditorRun<'_>> {
-        self.runs.iter().map(|run| EditorRun::new(run.bytes.clone(), run.rtl, &run.positions, &run.widths)).collect()
+        self.runs().iter().map(|run| EditorRun::new(run.bytes.clone(), run.rtl, &run.positions, &run.widths)).collect()
     }
 }

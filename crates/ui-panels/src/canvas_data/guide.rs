@@ -131,7 +131,8 @@ impl Guide {
 
 /// A guide being created or dragged, as the ruler drag or the guide's own part reports it. Build one with
 /// [`GuideDrag::new_guide`] for a guide dragged out of a ruler and [`GuideDrag::moving`] for an existing guide.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a guide being placed moves with the pointer in every pass of its drag")]
 #[non_exhaustive]
 pub struct GuideDrag {
     /// The guide being moved; `None` for a new guide dragged out of a ruler.

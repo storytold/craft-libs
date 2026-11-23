@@ -3,7 +3,7 @@
 
 mod completion;
 
-use crate::primitives::{TabKey, TextLayout, TextOptions};
+use crate::primitives::{SubmitKey, TabKey, TextLayout, TextOptions};
 use crate::runtime::access::text::{Line, Run};
 use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, memory as egui_memory, repaint, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// How a typing run ended, as the adapter saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum End {
-    /// Enter, or Cmd/Ctrl+Enter in a multi-line field that submits.
+    /// Enter, or the `TextOptions::submit_key` chord in a multi-line field that submits.
     Submit,
     /// A commit-on character was typed.
     Separator,
@@ -471,7 +471,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
-    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
+    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first. In any modal dialog
+    // a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits.
     let dialog_escape = focused_before
         && state.draft.is_some()
         && state.preedit.is_none()
@@ -479,10 +480,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && input.intents.untaken(&Intent::Cancel)
         && crate::runtime::focus::escape_closes_dialog(ctx);
     if dialog_escape {
-        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
-        state.end = Some(End::Escape);
+        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog. A dialog that keeps
+        // typing on Escape (`FocusPolicy::escape_keeps_typing`) commits the draft as leaving the field does.
+        state.end = Some(if crate::runtime::focus::escape_keeps_typing(ctx) { End::Blur } else { End::Escape });
     }
-    let draft_takes = state.draft.is_some() && !dialog_escape;
+    let draft_takes = state.draft.is_some() && !dialog_escape && !(focused_before && keys::focus_in_modal_dialog(ctx));
     let takes_escape =
         if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
     let list_first = input.list_open && !input.options.clear_on_escape;
@@ -518,13 +520,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
             _ => {}
         }
     }
+    let env = crate::runtime::env::Env::of(input.ui);
     let multiline = input.options.multiline();
     let scroll = if multiline { scroll_before(ctx, widget) } else { 0.0 };
     let filter = egui_focus::event_filter(input.keys.keep, false);
     // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
     // the body text's.
     let baseline = (!input.options.multiline()).then(|| {
-        let env = crate::runtime::env::Env::of(input.ui);
         let text_env = super::text::TextEnv { tokens: &env.tokens, direction: env.direction, ink: input.ink, fonts: crate::fonts::stack_facts(ctx) };
         super::text::line_baseline(ctx, &text_env, input.options.role, input.rect.center().y)
     });
@@ -547,17 +549,19 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         preedit: preedit.clone(),
         rtl: input.rtl,
         centred: input.options.centred,
+        end_aligned: input.options.end_aligned,
         caret_visible: input.caret_visible,
         underline: input.underline,
         galley: None,
         baseline,
         scroll,
+        line_break: line_break(input.options.submit_key),
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
-    let secondary = crate::runtime::pointer::frame(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
+    let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
-    let shown = text_edit::show(input.ui, edit);
+    let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
     if let Some((caret, anchor)) = kept
         && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
@@ -599,8 +603,17 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && state.preedit.is_none()
         && state.draft.is_some()
         && egui_input::step_key_pressed(ctx);
-    let submitted =
-        (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| !input.options.multiline() || (input.options.submits && mods.cmd));
+    // `entered` is any Enter; which chord submits a multi-line text is decided here, from the held modifiers. Under
+    // `Enter` the widget broke no line on a submitting chord (`text_edit::show` gives it Shift+Enter alone).
+    let submit_key = input.options.submit_key;
+    let submitted = (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| {
+        !input.options.multiline()
+            || (input.options.submits
+                && match submit_key {
+                    SubmitKey::CommandEnter => mods.cmd,
+                    SubmitKey::Enter => !mods.shift,
+                })
+    });
     if let Some(mods) = submitted {
         state.end = Some(End::Submit);
         state.submit_mods = mods;
@@ -615,7 +628,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     state.focused = shown.focused || input.held;
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
-    let baseline = (!layout.full.is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
+    let baseline = (!layout.full().is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
     AdapterOut { layout, focused: shown.focused, tab, clicked: shown.clicked, baseline }
 }
 
@@ -643,7 +656,8 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     let ctx = ui.ctx().clone();
     let multiline = run.wrap == crate::primitives::Wrap::Wrap;
     let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
-    let mut shown = layout.full.clone();
+    let mut shown = layout.full().to_owned();
+    let env = crate::runtime::env::Env::of(ui);
     // A line longer than its room is cut at the room's edge, as a field's is.
     let mut cut = (layout.size().x > rect.width()).then(|| {
         let mut cut = crate::runtime::egui::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
@@ -652,6 +666,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     });
     text_edit::show(
         cut.as_mut().unwrap_or(&mut *ui),
+        &env,
         text_edit::Edit {
             id: widget,
             rect: layout.galley.rect.translate(at.to_vec2()),
@@ -671,15 +686,27 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             preedit: None,
             rtl: false,
             centred: false,
+            end_aligned: false,
             caret_visible: false,
             underline: 0.0,
             galley: Some(layout.galley.clone()),
             baseline: None,
             scroll: 0.0,
+            line_break: line_break(SubmitKey::default()),
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);
     if crate::runtime::egui::access::enabled(&ctx, widget) {
         crate::runtime::egui::access::fold_widget(&ctx, widget, owner);
+    }
+}
+
+/// The modifiers of the Enter chord that breaks the line under `submit_key`. egui inserts the line break itself before
+/// the adapter sees the Enter, so the chord that submits must not be the one egui breaks the line on: under `Enter` the
+/// line break is Shift+Enter and plain Enter reaches `entered` untaken.
+fn line_break(submit_key: SubmitKey) -> egui::Modifiers {
+    match submit_key {
+        SubmitKey::Enter => egui::Modifiers::SHIFT,
+        SubmitKey::CommandEnter => egui::Modifiers::NONE,
     }
 }

@@ -4,8 +4,8 @@
 mod cards;
 mod details;
 mod presets;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::form::{read_bind, write_bind};
 use super::{FormCx, FormDialog, HostRequests, LinkedSize};
@@ -461,7 +461,7 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
     }
     if right.save {
         let name = session.naming.clone().unwrap_or_default();
-        if details::refusal(&library, &name).is_none() {
+        if details::refusal(&library.names(), &name).is_none() {
             let preset = DocumentOptions { name: name.trim().to_owned(), ..values.clone() };
             if let Ok(id) = library.add(&GroupPath::root(), &name, preset) {
                 changed = true;

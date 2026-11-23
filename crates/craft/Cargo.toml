@@ -66,8 +66,10 @@ craft-ui = { workspace = true, optional = true }
 craft-aaf = { workspace = true, optional = true }
 craft-aep = { workspace = true, optional = true }
 craft-affinity = { workspace = true, optional = true }
+craft-android-res = { workspace = true, optional = true }
 craft-assuan = { workspace = true, optional = true }
 craft-captions = { workspace = true, optional = true }
+craft-cdr = { workspace = true, optional = true }
 craft-cfb = { workspace = true, optional = true }
 craft-codepage = { workspace = true, optional = true }
 craft-crs = { workspace = true, optional = true }
@@ -125,6 +127,7 @@ craft-pdn = { workspace = true, optional = true }
 craft-penpot = { workspace = true, optional = true }
 craft-pkcs7 = { workspace = true, optional = true }
 craft-plotter = { workspace = true, optional = true }
+craft-png = { workspace = true, optional = true }
 craft-pptx = { workspace = true, optional = true }
 craft-prc = { workspace = true, optional = true }
 craft-psd = { workspace = true, optional = true }
@@ -221,6 +224,8 @@ craft-gpu-wgpu = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
+craft-audio-dsp = { workspace = true, optional = true }
+craft-sbs = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -267,6 +272,28 @@ screen-testing = [
     "craft-timeline?/screen-testing",
     "craft-update?/screen-testing",
 ]
+suite = [
+    "screen-testing",
+    "craft-ui/suite",
+    "craft-automation?/suite",
+    "craft-browse?/suite",
+    "craft-color-ui?/suite",
+    "craft-dialogs?/suite",
+    "craft-draw?/suite",
+    "craft-font-manager?/suite",
+    "craft-imaging?/suite",
+    "craft-layers?/suite",
+    "craft-menu?/suite",
+    "craft-pages?/suite",
+    "craft-print?/suite",
+    "craft-review?/suite",
+    "craft-table?/suite",
+    "craft-text?/suite",
+    "craft-theme-editor?/suite",
+    "craft-theme-store?/suite",
+    "craft-timeline?/suite",
+    "craft-update?/suite",
+]
 aaf = ["dep:craft-aaf"]
 
 aep = ["dep:craft-aep"]
@@ -278,6 +305,8 @@ ai = ["dep:craft-ai"]
 ai-local = ["ai", "craft-ai/local"]
 
 ai-core = ["dep:craft-ai-core"]
+
+android-res = ["dep:craft-android-res"]
 
 anicraft-format = ["dep:craft-anicraft-format"]
 
@@ -325,6 +354,8 @@ audio-vmd-decode = ["audio", "craft-audio/vmd-decode"]
 audio-vorbis-decode = ["audio", "craft-audio/vorbis-decode"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
 
+audio-dsp = ["dep:craft-audio-dsp"]
+
 automation = ["dep:craft-automation", "keymap"]
 automation-agents = ["automation", "craft-automation/agents"]
 
@@ -334,6 +365,9 @@ browse = ["dep:craft-browse"]
 
 captions = ["dep:craft-captions"]
 captions-mov-text = ["captions", "craft-captions/mov-text"]
+
+cdr = ["dep:craft-cdr"]
+cdr-synth = ["cdr", "craft-cdr/synth"]
 
 cfb = ["dep:craft-cfb"]
 
@@ -423,6 +457,7 @@ ews = ["dep:craft-ews"]
 
 exr = ["dep:craft-exr"]
 exr-decode = ["exr", "craft-exr/decode"]
+exr-zlib-inflate = ["exr", "craft-exr/zlib-inflate"]
 
 fcproj-format = ["dep:craft-fcproj-format"]
 
@@ -595,6 +630,7 @@ media-serde = ["media", "craft-media/serde"]
 media-vmd = ["media", "craft-media/vmd"]
 
 media-source = ["dep:craft-media-source"]
+media-source-y4m = ["media-source", "craft-media-source/y4m"]
 
 menu = ["dep:craft-menu"]
 
@@ -685,6 +721,8 @@ plist = ["dep:craft-plist"]
 plotter = ["dep:craft-plotter"]
 plotter-serde = ["plotter", "craft-plotter/serde"]
 
+png = ["dep:craft-png"]
+
 ppt-binary = ["dep:craft-ppt-binary"]
 
 pptx = ["dep:craft-pptx"]
@@ -746,6 +784,8 @@ review = ["dep:craft-review", "keymap", "pages"]
 rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
+
+sbs = ["dep:craft-sbs"]
 
 score = ["dep:craft-score"]
 
@@ -874,6 +914,7 @@ theme-editor = ["dep:craft-theme-editor"]
 theme-store = ["dep:craft-theme-store"]
 
 tiff = ["dep:craft-tiff"]
+tiff-plain-rgba16 = ["tiff", "craft-tiff/plain-rgba16"]
 
 time = ["dep:craft-time"]
 
@@ -882,6 +923,7 @@ timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
 tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]

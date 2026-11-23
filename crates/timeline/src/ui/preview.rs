@@ -1,7 +1,7 @@
 //! A decoded frame fitted in a panel, with a status line.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{Axis, Metrics, Sense};
 use craft_theme::Stateful;

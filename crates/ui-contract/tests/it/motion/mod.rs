@@ -1,5 +1,5 @@
 //! The motion service (13) and background results (14).
 
-mod pending;
-mod state;
-mod timers;
+pub(crate) mod pending;
+pub(crate) mod state;
+pub(crate) mod timers;

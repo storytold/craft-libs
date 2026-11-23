@@ -4,15 +4,174 @@
 use craft_behavior::{SelectionChange, keyed};
 use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
-use craft_ui::tabs::{Tab, TabKind, TabRole, TabStrip};
+use craft_ui::tabs::{DocumentTabLook, Tab, TabKind, TabRole, TabStrip};
 use craft_ui::testing::focus::AccessActionKind;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Fixture, Frames, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
+
+#[trial]
+fn overflowing_document_tabs_remain_readable_and_list_every_document() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut reference = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(0, "Document num")];
+        let _ = DocumentTabs::new("Reference", &tabs).selected(0).show(ui);
+    });
+    reference.root_value(DocumentTabLook::Shrinking);
+    reference.room(egui::vec2(600.0, 100.0)).settle();
+    let minimum = reference.by_label("Document num").expect("reference tab").rect.width();
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..12).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.room(egui::vec2(600.0, 100.0)).settle();
+    let shown: Vec<_> = (0..12).filter_map(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).map(|node| node.rect)).collect();
+    assert!(shown.len() > 1, "more than one tab remains visible: {shown:?}");
+    assert!(
+        shown.iter().all(|tab| tab.width() + 0.5 >= minimum),
+        "tabs fit their first 12 characters and close button: {shown:?}, minimum {minimum}"
+    );
+    let more = fixture.by_label("More tabs").expect("overflow button").center();
+    fixture.click_at(more).settle();
+    for i in 0..12 {
+        let name = format!("Document number {i}, scanned.pdf");
+        let tree = fixture.tree();
+        assert!(
+            [Role::MENU_ITEM, Role::MENU_ITEM_CHECK_BOX, Role::MENU_ITEM_RADIO]
+                .into_iter()
+                .flat_map(|role| tree.with_role(role))
+                .any(|key| tree.name_of(key) == Some(name.as_str())),
+            "overflow menu lists {name}"
+        );
+    }
+}
+
+#[trial]
+fn document_tabs_leave_space_between_neighbours() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(1, "One"), DocumentTab::new(2, "Two")];
+        let _ = DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.settle();
+    let first = fixture.by_label("One").expect("first tab").rect;
+    let second = fixture.by_label("Two").expect("second tab").rect;
+    assert!(first.right() < second.left(), "neighbouring document tabs have a visible gap: {first:?}, {second:?}");
+}
+
+#[trial]
+fn document_tabs_shrink_before_overflow() {
+    let fit = TabKind::Document.fit_mode_in(DocumentTabLook::Shrinking).fit(&[100.0, 100.0, 100.0], 0, &[], 240.0, 50.0, 20.0);
+    assert!(fit.overflow.is_empty(), "tabs that can shrink into the strip remain visible");
+    assert!(fit.shown.iter().all(|(_, width)| *width < 100.0));
+}
+
+#[trial]
+fn document_tabs_with_trailing_control_fill_their_parent_row() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Row;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
+        Row::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            Button::new("Home").show(ui);
+            let _ = DocumentTabs::new("Documents", &tabs)
+                .trailing(|ui| {
+                    Button::new("Open").show(ui);
+                })
+                .show(ui);
+            Button::new("Settings").show(ui);
+        });
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let visible = (0..5).filter(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).is_some()).count();
+    assert!(visible > 1, "the strip uses the available width: {visible} tab visible");
+}
+
+#[trial]
+fn document_tabs_reserve_space_for_the_trailing_control() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let trailing_rect = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = trailing_rect.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Long document number {i}, scanned.pdf")).closable(true)).collect();
+        let _ = DocumentTabs::new("Documents", &tabs)
+            .selected(4)
+            .trailing(|ui| {
+                seen.set(Button::new("Open").show(ui).rect);
+            })
+            .show(ui);
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let open = fixture.by_label("Open").unwrap_or_else(|| panic!("trailing button: {:?}", trailing_rect.get())).rect;
+    for i in 0..5 {
+        let tab = fixture.by_label(&format!("Long document number {i}, scanned.pdf")).expect("each tab is visible").rect;
+        assert!(tab.right() <= open.left() + 0.5, "tab {i} overlaps the trailing button: {tab:?}, {open:?}");
+    }
+}
+
+/// Production's Open button follows the last tab; it does not wait at the far end of the row. With tabs that overflow
+/// it is still the strip's last item (the reserve trials above).
+#[trial]
+fn the_trailing_control_follows_the_last_tab_when_they_fit() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..2).map(|i| DocumentTab::new(i, format!("Doc {i}.pdf")).closable(true)).collect();
+        let _ = DocumentTabs::new("Documents", &tabs)
+            .selected(1)
+            .trailing(|ui| {
+                Button::new("Open").show(ui);
+            })
+            .show(ui);
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let open = fixture.by_label("Open").expect("trailing button").rect;
+    let last = fixture.by_label("Doc 1.pdf").expect("last tab").rect;
+    assert!(open.left() >= last.right() - 0.5, "the button is not over the tab: {open:?}, {last:?}");
+    assert!(open.left() - last.right() < 80.0, "the button sits by the last tab, not at the row's end: {open:?}, {last:?}");
+}
+
+#[trial]
+fn nested_document_tabs_reserve_space_for_the_trailing_control() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Row;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Long document number {i}, scanned.pdf")).closable(true)).collect();
+        Row::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            Button::new("Home").show(ui);
+            let _ = DocumentTabs::new("Documents", &tabs)
+                .selected(4)
+                .trailing(|ui| {
+                    Button::new("Open").show(ui);
+                })
+                .show(ui);
+            Button::new("Settings").show(ui);
+        });
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let open = fixture.by_label("Open").expect("trailing button").rect;
+    for i in 0..5 {
+        let tab = fixture.by_label(&format!("Long document number {i}, scanned.pdf")).expect("each tab is visible").rect;
+        assert!(tab.right() <= open.left() + 0.5, "tab {i} overlaps the trailing button: {tab:?}, {open:?}");
+    }
+}
 
 /// An arrow moves the focus to the next tab without showing it; Enter shows it.
 #[trial]
@@ -133,6 +292,30 @@ fn a_double_click_on_the_empty_strip_asks_for_a_new_document() {
     assert!(!seen.contains(&DocumentTabsEvent::EmptyDoubleClick), "{seen:?}");
 }
 
+/// A middle click on a document tab asks to close it, unless the tab cannot close; it does not show the tab.
+#[trial]
+fn a_middle_click_closes_a_closable_document_tab() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    use craft_ui::testing::pointer::middle;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two"), DocumentTab::new(2, "Combine").closable(false)];
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let middle_click = |fixture: &mut Fixture, name: &str| {
+        let at = fixture.by_label(name).expect("the tab's node").rect.center();
+        fixture.frame(vec![moved(at), middle(at, true)]).frame(vec![middle(at, false)]).settle();
+    };
+    middle_click(&mut fixture, "Two");
+    assert_eq!(*seen.borrow(), [DocumentTabsEvent::CloseRequested(1)], "the middle-clicked tab closes and is not shown");
+    seen.borrow_mut().clear();
+    middle_click(&mut fixture, "Combine");
+    assert!(!seen.borrow().iter().any(|event| matches!(event, DocumentTabsEvent::CloseRequested(_))), "{:?}", seen.borrow());
+}
+
 /// The bounds of every tab node named `name`, from the reading start.
 fn tab_rects(tree: &AccessTree, name: &str) -> Vec<Rect> {
     let mut rects: Vec<Rect> =
@@ -241,7 +424,7 @@ fn files_dropped_between_tabs_land_before_the_tab_after_the_gap() {
     let tree = frames.tree();
     let (one, two, three) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"));
 
-    drop_files_at(&mut frames, Pos2::new(two.left() + 1.0, two.center().y), &mut show);
+    drop_files_at(&mut frames, Pos2::new((one.right() + two.left()) / 2.0, two.center().y), &mut show);
     assert_eq!(files_before(&seen.borrow()), Some(Some(1)), "files in the gap go before the tab after it: {:?}", seen.borrow());
 
     seen.borrow_mut().clear();
@@ -263,6 +446,92 @@ fn files_dropped_between_tabs_land_before_the_tab_after_the_gap() {
         "the strip's own drag still reorders: {seen:?}"
     );
     assert_eq!(files_before(&seen), None, "a reorder drops no files: {seen:?}");
+}
+
+/// A pointer drag from `from` to `to` in a few steps, released at `to`.
+fn drag(frames: &mut Frames, from: Pos2, to: Pos2, show: &mut impl FnMut(&mut Ui)) {
+    frames.frame(vec![moved(from)], &mut *show);
+    frames.frame(vec![press(from)], &mut *show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(from.lerp(to, step as f32 / 4.0))], &mut *show);
+    }
+    frames.frame(vec![release(to)], &mut *show);
+    frames.idle(1, &mut *show);
+}
+
+/// A document tab that does not move keeps its place: a drag of it reorders nothing, a drag of another tab past it
+/// reorders nothing, and a drag of another tab that leaves it where it is still reorders.
+#[trial]
+fn a_tab_that_does_not_move_keeps_its_place() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = RefCell::new(Vec::new());
+    let tabs =
+        [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+        seen.borrow_mut().extend(out.events);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let (one, two, three, four) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"), tab_rect(&tree, "Four"));
+    let reordered = |seen: &RefCell<Vec<DocumentTabsEvent<usize>>>| -> Vec<(Vec<usize>, Option<usize>)> {
+        seen.borrow()
+            .iter()
+            .filter_map(|event| match event {
+                DocumentTabsEvent::Reordered { documents, before, .. } => Some((documents.clone(), *before)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    drag(&mut frames, two.center(), Pos2::new(four.right() - 2.0, four.center().y), &mut show);
+    assert!(reordered(&seen).is_empty(), "the fixed tab does not move: {:?}", seen.borrow());
+
+    seen.borrow_mut().clear();
+    drag(&mut frames, three.center(), Pos2::new(one.left() + 2.0, one.center().y), &mut show);
+    assert!(reordered(&seen).is_empty(), "no tab passes the fixed one: {:?}", seen.borrow());
+
+    seen.borrow_mut().clear();
+    drag(&mut frames, four.center(), Pos2::new(three.left() + 2.0, three.center().y), &mut show);
+    assert_eq!(reordered(&seen), vec![(vec![3_usize], Some(2_usize))], "a move that leaves the fixed tab in place reorders: {:?}", seen.borrow());
+}
+
+/// A stacking key moves a tab as a drag does: it does not pass a tab that does not move, and a move that leaves that
+/// tab in place still reorders.
+#[trial]
+fn a_stacking_key_does_not_move_a_tab_past_a_fixed_one() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs =
+            [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let reordered = |seen: &RefCell<Vec<DocumentTabsEvent<usize>>>| -> Vec<(Vec<usize>, Option<usize>)> {
+        seen.borrow()
+            .iter()
+            .filter_map(|event| match event {
+                DocumentTabsEvent::Reordered { documents, before, .. } => Some((documents.clone(), *before)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let three = fixture.by_label("Three").expect("the tab's node").rect;
+    fixture.click_at(three.center()).settle();
+    seen.borrow_mut().clear();
+    fixture.key(Key::OpenBracket, Modifiers::COMMAND).settle();
+    assert!(reordered(&seen).is_empty(), "no tab passes the fixed one by key: {:?}", seen.borrow());
+
+    let four = fixture.by_label("Four").expect("the tab's node").rect;
+    fixture.click_at(four.center()).settle();
+    seen.borrow_mut().clear();
+    fixture.key(Key::OpenBracket, Modifiers::COMMAND).settle();
+    assert_eq!(reordered(&seen), vec![(vec![3_usize], Some(2_usize))], "a key move that leaves the fixed tab in place reorders: {:?}", seen.borrow());
 }
 
 /// Two text tabs both labelled "Options" have a node each, and a click on the second shows the second: the keys, not
@@ -322,6 +591,120 @@ fn the_strip_reports_the_tab_under_the_pointer_while_another_root_holds_the_pres
     assert_eq!(*seen.borrow(), None, "the empty room has no tab");
 }
 
+/// A secondary click on a document tab asks for the tab's menu without showing the tab.
+#[trial]
+fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
+    let shown = Rc::new(Cell::new(0_usize));
+    let menus = Rc::new(Cell::new(0_usize));
+    let (now, asked) = (shown.clone(), menus.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = TabStrip::new("Documents").shown(now.get()).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+        for event in &out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(key) = keys.last()
+            {
+                now.set(*key);
+            }
+        }
+        if out.menu.is_some() {
+            asked.set(asked.get() + 1);
+        }
+    });
+    fixture.settle();
+    let two = tab_rect(fixture.tree(), "Two").center();
+    fixture.frame(vec![moved(two)]);
+    fixture.frame(vec![secondary(two, true)]);
+    fixture.frame(vec![secondary(two, false)]);
+    fixture.settle();
+    assert!(menus.get() > 0, "the secondary click asks for the tab's menu");
+    assert_eq!(shown.get(), 0, "the secondary click does not show the tab");
+}
+
+/// A modified document tab marks itself with the suite's dot, not an asterisk after its name: no `*` is painted and the
+/// tab is as wide as an unmodified one plus the dot's room.
+#[trial]
+fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let look = DocumentTabLook::Shrinking;
+    let tab = |modified: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let tabs = [DocumentTab::new(0, "Report.pdf").modified(modified)];
+            let _ = DocumentTabs::new("Docs", &tabs).selected(0).show(ui);
+        });
+        fixture.root_value(look);
+        fixture.room(egui::vec2(600.0, 100.0)).settle();
+        let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
+        let width = fixture.by_role(Role::TAB).first().map_or(0.0, |tab| tab.rect.width());
+        (stars, width)
+    };
+    let (plain, modified) = (tab(false), tab(true));
+    assert_eq!(modified.0, 0, "no asterisk is painted");
+    assert!(modified.1 > plain.1, "the dot takes room beside the name: {} vs {}", modified.1, plain.1);
+}
+
+/// Upstream's document tabs by default (no `DocumentTabLook` set): whole titles fitted with no shrink, neighbours
+/// touching, and a `*` after a modified tab's name with no dot.
+#[trial]
+fn document_tabs_keep_whole_touching_titles_and_an_asterisk_by_default() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, FitMode};
+    assert_eq!(TabKind::Document.fit_mode(), FitMode::Whole);
+    assert_eq!(TabKind::Document.fit_mode_in(DocumentTabLook::default()), FitMode::Whole);
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(1, "One"), DocumentTab::new(2, "Two").modified(true)];
+        let _ = DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
+    });
+    fixture.room(egui::vec2(600.0, 100.0)).settle();
+    let first = fixture.by_label("One").expect("first tab").rect;
+    let second = fixture.by_role(Role::TAB).get(1).map(|tab| tab.rect).expect("second tab");
+    assert!((second.left() - first.right()).abs() < 0.5, "neighbouring document tabs touch: {first:?}, {second:?}");
+    let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
+    assert_eq!(stars, 1, "the modified tab shows its asterisk");
+}
+
+/// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
+/// name is painted once.
+#[trial]
+fn a_dragged_document_tab_shows_no_badge() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let tabs = [DocumentTab::new(0_usize, "Quarterly"), DocumentTab::new(1, "Other")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let one = tab_rect(&tree, "Quarterly");
+    let to = Pos2::new(one.center().x, one.center().y + 60.0);
+    frames.frame(vec![moved(one.center())], &mut show);
+    frames.frame(vec![press(one.center())], &mut show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(one.center().lerp(to, step as f32 / 4.0))], &mut show);
+    }
+    frames.idle(2, &mut show);
+    let shown = frames.texts().iter().filter(|text| text.text == "Quarterly").count();
+    assert_eq!(shown, 1, "the name is painted once, by the held tab, with no badge beside the pointer");
+}
+
+/// Under `DocumentTabLook::Shrinking` (PdfCraft's tabs) a very long document name does not stretch its tab across the
+/// strip: the tab stays near 22 characters wide and the next tab keeps its room.
+#[trial]
+fn a_very_long_document_name_is_cut_to_a_compact_tab() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let long = "a-very-long-synthetic-document-file-name-for-truncation-test-1234567890.pdf";
+    let tabs = [DocumentTab::new(0_usize, long), DocumentTab::new(1, "Short")];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+    });
+    fixture.root_value(DocumentTabLook::Shrinking);
+    fixture.idle(6);
+    let tab = fixture.by_label(long).expect("the long tab").rect;
+    let short = fixture.by_label("Short").expect("the next tab").rect;
+    assert!(tab.width() < 320.0, "the long name is cut short, got {}", tab.width());
+    assert!(short.left() >= tab.right(), "the next tab follows it");
+}
+
 const PANELS: [&str; 6] = ["Layers", "Channels", "Properties", "Adjustments", "History", "Navigator"];
 
 /// The widths of the panel tabs a strip shows in a room `room` wide, by title, with the second panel shown.
@@ -363,6 +746,53 @@ fn panel_tabs_keep_the_shown_tab_whole_and_overflow_from_the_end() {
         }
     }
     assert!(fewer < PANELS.len(), "the narrowest room overflows");
+}
+
+/// A strip places its tabs by their measure in its first frame: a panel strip too narrow for its tabs fits them by
+/// their measured widths and takes their measured height, in a frame that runs once and measures each tab's height
+/// at most twice (at its ideal width, and at the width the fit shrinks it to), and the strip and every tab have the
+/// rects they have once the strip settles.
+#[trial]
+fn a_tab_strip_takes_its_measured_extents_in_its_first_frame() {
+    let mut fixture = Fixture::new(|ui| {
+        ui.set_max_width(300.0);
+        let keys = [0_usize, 1, 2, 3, 4, 5];
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Panels").kind(TabKind::Panel).natural_height(true).shown(1);
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(PANELS[*key]));
+    });
+    let rects = |fixture: &Fixture| {
+        let strip = fixture.by_label("Panels").expect("the strip's node").rect;
+        (strip, PANELS.map(|name| tab_rects(fixture.tree(), name).first().copied()))
+    };
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == PANELS.len() && measures.iter().all(|(_, count)| *count <= 2), "each tab is measured at most twice: {measures:?}");
+    let first = rects(&fixture);
+    fixture.idle(3);
+    assert_eq!(first, rects(&fixture), "the first frame places the strip and its tabs as the settled strip does");
+}
+
+/// A strip reports the rects of the tabs it places (`tab_rects`, where a dock registers its insertion spots) as it
+/// places them, in the frame a tab's title changes.
+#[trial]
+fn a_strip_reports_its_tab_rects_in_the_frame_a_title_changes() {
+    let titles = Rc::new(RefCell::new(TITLES.map(str::to_owned)));
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let (now, seen) = (titles.clone(), reported.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let names = now.borrow().clone();
+        let out = TabStrip::new("Documents").shown(0).show_items(ui, &source, &mut |key, _| Tab::new(names[*key].clone()));
+        *seen.borrow_mut() = out.tab_rects;
+    });
+    fixture.settle();
+    titles.borrow_mut()[0] = "A much longer first title".to_owned();
+    fixture.idle(1);
+    let placed: Vec<(usize, Rect)> = titles.borrow().iter().enumerate().map(|(key, name)| (key, tab_rect(fixture.tree(), name))).collect();
+    assert_eq!(*reported.borrow(), placed, "the strip reports the tabs where it places them");
 }
 
 /// The ribbon's tab names; the last is the contextual tab.

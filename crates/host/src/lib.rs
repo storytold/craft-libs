@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use craft_i18n::{I18n, Lang};
 
-pub use files::{FileError, FileFilter, Files, NoPickFiles, PickAnswer, PickId, PickKind, PickRequest, Picked, ScriptedFiles};
+pub use files::{FileError, FileFilter, Files, NoPickFiles, PickAnswer, PickId, PickKind, PickRequest, Picked, ScriptedFiles, WriteIntent};
 #[cfg(not(target_arch = "wasm32"))]
 pub use services::ThreadJobs;
 pub use services::{AppInfo, Commands, InlineJobs, Jobs, ManualJobs, MemorySections, NoCommands, Section, SectionStore, Wake};
@@ -30,6 +30,14 @@ pub struct Host {
     commands: Arc<dyn Commands>,
     jobs: Arc<dyn Jobs>,
     files: Arc<dyn Files>,
+    /// Unique per host built (`generation`).
+    generation: u64,
+}
+
+/// A generation no host built before has.
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Collects a [`Host`]'s services; each one defaults when not set.
@@ -47,6 +55,13 @@ impl Host {
     /// Starts a host for `app`; every service not set on the builder gets its default.
     pub fn builder(app: AppInfo) -> HostBuilder {
         HostBuilder { app, i18n: None, lang: None, settings: None, commands: None, jobs: None, files: None }
+    }
+
+    /// Which host this is: a host and its clones hold the same services and language, and one built anew
+    /// ([`HostBuilder::build`], [`Host::with_lang`], [`Host::with_files`]) gets a new generation. What the services
+    /// hold (settings sections, catalogs) changes inside them without changing the generation.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The app's name and version.
@@ -97,12 +112,12 @@ impl Host {
 
     /// A copy in another language; install it to switch the interface.
     pub fn with_lang(&self, lang: Lang) -> Host {
-        Host { lang, ..self.clone() }
+        Host { lang, generation: next_generation(), ..self.clone() }
     }
 
     /// A copy with another file service; install it to switch the pickers.
     pub fn with_files(&self, files: Arc<dyn Files>) -> Host {
-        Host { files, ..self.clone() }
+        Host { files, generation: next_generation(), ..self.clone() }
     }
 
     /// The stored value of section `S`, or `S::default()` when it is missing or does not fit `S`.
@@ -166,6 +181,7 @@ impl HostBuilder {
             commands: self.commands.unwrap_or_else(|| Arc::new(NoCommands)),
             jobs: self.jobs.unwrap_or_else(default_jobs),
             files: self.files.unwrap_or_else(|| Arc::new(NoPickFiles::default())),
+            generation: next_generation(),
         }
     }
 
@@ -262,6 +278,65 @@ mod tests {
     use super::*;
 
     const APP: AppInfo = AppInfo { id: "test", name: "Test", version: "1.0" };
+
+    /// A write to a path set with `failing_writes` returns the refused-write error and keeps what the path held; every
+    /// other path writes: a refusal that wrote anyway, or that refused every path, would test a failed save on the
+    /// wrong path.
+    #[test]
+    fn failing_writes_refuse_only_their_path() {
+        let files = ScriptedFiles::new().with_file("/docs/a.pdf", b"old".to_vec()).failing_writes("/docs/a.pdf");
+        let refused = files.write(std::path::Path::new("/docs/a.pdf"), b"new", WriteIntent::Save);
+        assert_eq!(refused, Err(FileError::PermissionDenied("/docs/a.pdf".into())));
+        assert_eq!(files.file(std::path::Path::new("/docs/a.pdf")).as_deref(), Some(&b"old"[..]), "the refused write kept the old bytes");
+        assert_eq!(files.write(std::path::Path::new("/docs/b.pdf"), b"new", WriteIntent::Save), Ok(false));
+        assert_eq!(files.file(std::path::Path::new("/docs/b.pdf")).as_deref(), Some(&b"new"[..]));
+    }
+
+    /// The written paths list each write that took, in order, and nothing else: a list that took in a refused write or a
+    /// file the test put there would let "nothing was written outside the folder" fail, or pass, on the wrong paths.
+    #[test]
+    fn written_lists_the_writes_that_took_in_order() {
+        let files = ScriptedFiles::new().with_file("/docs/kept.pdf", b"old".to_vec()).failing_writes("/docs/refused.pdf");
+        for path in ["/out/b.pdf", "/docs/refused.pdf", "/out/a.pdf", "/out/b.pdf"] {
+            let _ = files.write(std::path::Path::new(path), b"new", WriteIntent::Save);
+        }
+        let written: Vec<std::path::PathBuf> = ["/out/b.pdf", "/out/a.pdf", "/out/b.pdf"].map(Into::into).into();
+        assert_eq!(files.written(), written);
+    }
+
+    /// `Files::exists` reports files already present or written through the service and ignores refused writes:
+    /// batch writers rely on it to pick a fresh name instead of replacing an existing file.
+    #[test]
+    fn exists_reports_present_and_written_files() {
+        let existing = std::path::Path::new("/batch/notes.pdf");
+        let missing = std::path::Path::new("/batch/new.pdf");
+        let refused = std::path::Path::new("/batch/refused.pdf");
+        let files = ScriptedFiles::new().with_file(existing, b"keep".to_vec()).failing_writes(refused);
+        assert!(files.exists(existing), "a pre-existing scripted file exists");
+        assert!(!files.exists(missing), "a path not in the service does not exist");
+        assert!(files.write(refused, b"no", WriteIntent::SaveAs).is_err());
+        assert!(!files.exists(refused), "a refused write does not create an entry");
+        assert_eq!(files.write(missing, b"ok", WriteIntent::SaveAs), Ok(false));
+        assert!(files.exists(missing), "an accepted write exists afterwards");
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dir = std::env::temp_dir().join(format!("craft-host-exists-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let on_disk = dir.join("present.pdf");
+            let absent = dir.join("absent.pdf");
+            let _ = std::fs::remove_file(&on_disk);
+            let _ = std::fs::remove_file(&absent);
+            let disk = NoPickFiles::default();
+            assert!(!disk.exists(&on_disk));
+            assert!(!disk.exists(&absent));
+            assert_eq!(disk.write(&on_disk, b"data", WriteIntent::SaveAs), Ok(false));
+            assert!(disk.exists(&on_disk), "NoPickFiles reports a written file on disk");
+            assert!(!disk.exists(&absent), "NoPickFiles reports a missing path as absent");
+            let _ = std::fs::remove_file(&on_disk);
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
 
     #[cfg(feature = "ui")]
     #[test]

@@ -27,13 +27,13 @@ pub use search::{Listed, list_pages, matches, row_matches, row_shown, shown_posi
 pub use words::{PreferencesWords, SettingsDocumentWords};
 
 // The page, the window around it and their rows.
-mod page;
-mod path_setting;
+pub(crate) mod page;
+pub(crate) mod path_setting;
 mod rows;
-mod window;
+pub(crate) mod window;
 
-pub use page::{PreferencesPage, PreferencesPageOutput};
+pub use page::{PreferencesLayout, PreferencesPage, PreferencesPageOutput};
 
 pub use path_setting::{PathSetting, PathSettingOutput};
 
-pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesState, PreferencesWindow};
+pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesMode, PreferencesState, PreferencesWindow};

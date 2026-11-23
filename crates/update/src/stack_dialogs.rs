@@ -23,8 +23,8 @@ use crate::release::{Release, safe_web_link};
 use crate::self_update;
 use crate::updater::Status;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 const PROMPT_KEY: &str = "updateDialog.prompt";
 const CHECK_KEY: &str = "updateDialog.check";
@@ -56,6 +56,8 @@ craft_ui::words! {
         checking: "updateDialog.checking" = "Checking for updates…";
         up_to_date: template "updateDialog.upToDate" = "{app} {running} is the newest version.";
         failed: "updateDialog.failed" = "The update check failed.";
+        /// The check dialog's reason when GitHub's request limit was reached ([`crate::updater::Status::RateLimited`]).
+        rate_limited: "updateDialog.rateLimited" = "GitHub's request limit was reached. Try again later.";
         check_again: "updateDialog.checkAgain" = "Check Again";
         check_now: "updateDialog.checkNow" = "Check Now";
         not_checked: "updateDialog.notChecked" = "Updates have not been checked yet.";
@@ -462,7 +464,7 @@ impl UpdateCheckDialog {
             Status::Idle => vec![(CheckChoice::CheckNow, DialogRole::Accept)],
             Status::Checking | Status::Installing | Status::Updated(_) => vec![(CheckChoice::Close, DialogRole::Accept)],
             Status::Ready => vec![(CheckChoice::Close, DialogRole::Accept), (CheckChoice::RestartToUpdate, DialogRole::Other)],
-            Status::UpToDate | Status::Managed | Status::Failed(_) | Status::InstallFailed(_) => {
+            Status::UpToDate | Status::Managed | Status::Failed(_) | Status::RateLimited | Status::InstallFailed(_) => {
                 vec![(CheckChoice::Close, DialogRole::Accept), (CheckChoice::CheckAgain, DialogRole::Other)]
             }
         }
@@ -538,8 +540,12 @@ impl UpdateCheckDialog {
                     Status::UpToDate => {
                         Text::new(words.up_to_date.fill(&[("app", subject.name), ("running", running)])).show(ui);
                     }
-                    Status::Failed(error) => {
-                        Notice::new(Tone::Bad, error.clone()).title(words.failed.clone()).show(ui);
+                    Status::Failed(_) | Status::RateLimited => {
+                        let notice = match status {
+                            Status::Failed(error) => Notice::new(Tone::Bad, error.clone()),
+                            _ => Notice::new(Tone::Bad, words.rate_limited.clone()),
+                        };
+                        notice.title(words.failed.clone()).show(ui);
                         if let Some(app) = subject.app {
                             let url = app.releases_url();
                             Row::new().wrap(true).show(ui, |ui, _| {

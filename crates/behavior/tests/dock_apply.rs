@@ -32,7 +32,7 @@ fn docked() -> Layout<u32> {
         vec![Column::new(vec![g(&[2, 3], 1), g(&[4], 0)]).with_width(180.0), Column::new(vec![g(&[5], 0)]).with_width(120.0)],
     );
     let root = Node::split(Axis::X, SplitSize::FixedSecond(300.0), middle, dock);
-    Layout::new(Some(root), vec![Floating::stack(vec![g(&[6, 7], 1), g(&[8], 0)], window()).unwrap()])
+    Layout::new(Some(root), vec![Floating::stack(100, vec![g(&[6, 7], 1), g(&[8], 0)], window()).unwrap()])
 }
 
 const ALL: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 11, 12];
@@ -79,32 +79,33 @@ fn apply_all_changes_everything_or_nothing_and_reports_the_closed_panels() {
 #[test]
 fn reconcile_drops_unknown_panels_and_places_missing_registered_ones() {
     let default = Workspace::new(docked());
-    let mut workspace = default.clone();
-    workspace.layout.apply(Action::close(5)).unwrap();
-    workspace.layout.apply(Action::close(12)).unwrap();
-    workspace.layout.apply(Action::open_at(99, 2, DockPlacement::tab(None))).unwrap();
-    let stray = workspace.layout.location(&99).unwrap();
-    workspace.hidden.push((98, stray));
+    let mut layout = docked();
+    layout.apply(Action::close(5)).unwrap();
+    layout.apply(Action::close(12)).unwrap();
+    layout.apply(Action::open_at(99, 2, DockPlacement::tab(None))).unwrap();
+    let stray = layout.location(&99).unwrap();
+    let mut workspace = Workspace::from_parts(layout, vec![(98, stray)], Vec::new());
     let registered = |p: &u32| *p < 90;
     workspace.reconcile(registered, allow, &default);
     workspace.validate().unwrap();
     // Unregistered panels wait in `hidden` and come back once registered.
-    assert_eq!(workspace.hidden.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [98, 99]);
-    assert_eq!(sorted(&workspace.layout), ALL);
+    assert_eq!(workspace.hidden().iter().map(|(p, _)| *p).collect::<Vec<_>>(), [98, 99]);
+    assert_eq!(sorted(workspace.layout()), ALL);
     workspace.set_visible(99, true, None, false, allow).unwrap();
-    assert_eq!(group_members(&workspace.layout, 2), [2, 3, 99]);
-    assert_eq!(end_dock(&workspace.layout).len(), 2);
-    assert_eq!(group_members(&workspace.layout, 11), [11, 12]);
+    assert_eq!(group_members(workspace.layout(), 2), [2, 3, 99]);
+    assert_eq!(end_dock(workspace.layout()).len(), 2);
+    assert_eq!(group_members(workspace.layout(), 11), [11, 12]);
 
-    let mut broken = default.clone();
-    broken.layout.floating[0].rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(-1.0, 400.0));
+    let mut layout = docked();
+    layout.floating[0].rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(-1.0, 400.0));
+    let mut broken = Workspace::new(layout);
     broken.reconcile(registered, allow, &default);
-    assert_eq!(broken.layout, default.layout);
+    assert_eq!(broken.layout(), default.layout());
 }
 
 #[test]
 fn a_workspace_set_with_a_floating_group_round_trips_through_json() {
-    let layout = Layout::new(Some(Node::tabs(vec![1u32, 2], 0)), vec![Floating::single(vec![3u32], 0, rect(1.0, 2.0, 300.0, 200.0)).with_id(5)]);
+    let layout = Layout::new(Some(Node::tabs(vec![1u32, 2], 0)), vec![Floating::single(5, vec![3u32], 0, rect(1.0, 2.0, 300.0, 200.0))]);
     let mut set = WorkspaceSet::new(vec![NamedWorkspace::new("essentials", "Essentials", Workspace::default())]);
     set.save("Mine", Workspace::new(layout), WorkspaceChrome::default(), WorkspaceKeeps::new(false, true, true)).unwrap();
     let saved = serde_json::to_string(&set).unwrap();
@@ -134,18 +135,18 @@ fn a_workspace_with_a_bottom_pane_opens_and_closes_it_on_switch() {
     ]);
     let mut live = photography;
     set.select("motion", &mut live).unwrap();
-    let bottom = live.layout.place(&TIMELINE).unwrap();
+    let bottom = live.layout().place(&TIMELINE).unwrap();
     assert_eq!(bottom, PanelPlace::Node(vec![true]), "the Timeline is the second (bottom) frame of the split");
     set.select("photography", &mut live).unwrap();
-    assert!(!live.layout.contains(&TIMELINE), "leaving Motion closes the Timeline");
+    assert!(!live.layout().contains(&TIMELINE), "leaving Motion closes the Timeline");
     set.select("motion", &mut live).unwrap();
-    assert!(live.layout.contains(&TIMELINE), "coming back opens it again");
+    assert!(live.layout().contains(&TIMELINE), "coming back opens it again");
 }
 
-/// Switching and resetting replace the live workspace and move it to a new revision; edits and selecting the shown
-/// workspace keep it, and the revision is neither saved nor compared.
+/// Switching and resetting replace the live workspace and move it to a new generation; edits and selecting the shown
+/// workspace keep it, and the generation is neither saved nor compared.
 #[test]
-fn only_a_replacement_changes_the_live_revision() {
+fn only_a_replacement_changes_the_live_generation() {
     let essentials = Workspace::new(Layout::new(Some(tabs(&[1, 2], 0)), Vec::new()));
     let painting = Workspace::new(Layout::new(Some(tabs(&[3], 0)), Vec::new()));
     let mut set = WorkspaceSet::new(vec![
@@ -153,20 +154,20 @@ fn only_a_replacement_changes_the_live_revision() {
         NamedWorkspace::new("painting", "Painting", painting),
     ]);
     let mut live = essentials.clone();
-    let start = live.revision();
+    let start = live.generation();
     live.apply(Action::activate(2), false, allow).unwrap();
     live.set_visible(1, false, None, false, allow).unwrap();
     set.select("essentials", &mut live).unwrap();
-    assert_eq!(live.revision(), start, "edits and selecting the shown workspace keep the revision");
+    assert_eq!(live.generation(), start, "edits and selecting the shown workspace keep the generation");
     set.select("painting", &mut live).unwrap();
-    let switched = live.revision();
-    assert!(switched != start && live.layout.contains(&3), "a switch replaces the live workspace");
+    let switched = live.generation();
+    assert!(switched != start && live.layout().contains(&3), "a switch replaces the live workspace");
     set.reset(&mut live).unwrap();
-    assert!(live.revision() != switched, "a reset replaces it again");
+    assert!(live.generation() != switched, "a reset replaces it again");
     set.select("essentials", &mut live).unwrap();
-    assert!(!live.layout.contains(&1), "the switch back shows the edited essentials");
+    assert!(!live.layout().contains(&1), "the switch back shows the edited essentials");
     let loaded: Workspace<u32> = serde_json::from_str(&serde_json::to_string(&live).unwrap()).unwrap();
-    assert_eq!(loaded, live, "the revision is not saved and not part of equality");
+    assert_eq!(loaded, live, "the generation is not saved and not part of equality");
 }
 
 /// Open of a hidden panel follows its record: a floating panel returns to its window; a record whose anchor is gone
@@ -175,39 +176,75 @@ fn only_a_replacement_changes_the_live_revision() {
 fn opening_a_closed_floating_panel_restores_its_window_place() {
     let mut workspace = Workspace::new(docked());
     workspace.apply(Action::close(8), false, allow).unwrap();
-    assert!(workspace.layout.place(&8).is_none());
+    assert!(workspace.layout().place(&8).is_none());
     workspace.apply(Action::open(8, Some(11)), false, allow).unwrap();
-    assert!(matches!(workspace.layout.place(&8), Some(PanelPlace::Floating { .. })), "back in its window");
-    assert!(workspace.hidden.is_empty());
+    assert!(matches!(workspace.layout().place(&8), Some(PanelPlace::Floating { .. })), "back in its window");
+    assert!(workspace.hidden().is_empty());
 
-    let mut stray = workspace.layout.location(&5).unwrap();
+    let mut stray = workspace.layout().location(&5).unwrap();
     stray.anchor = Some(99);
-    workspace.hidden.push((50, stray));
+    let mut workspace = Workspace::from_parts(workspace.layout().clone(), vec![(50, stray)], Vec::new());
     workspace.apply(Action::open(50, Some(11)), false, allow).unwrap();
-    assert_eq!(group_members(&workspace.layout, 11), [11, 12, 50]);
+    assert_eq!(group_members(workspace.layout(), 11), [11, 12, 50]);
+}
+
+/// The active tab of the dock or floating group holding `panel`.
+fn front(layout: &Layout<u32>, panel: u32) -> u32 {
+    *layout.group(&layout.place(&panel).unwrap()).unwrap().active_panel().unwrap()
+}
+
+/// Tabs closed in one batch (one at a time, as a preset does, or by Close Tab Group) come back together with whichever
+/// of them reopens, in their order and with that one in front, after a save and a load; a tab closed in a batch of its
+/// own stays closed.
+#[test]
+fn tabs_closed_together_reopen_together_and_a_tab_closed_alone_stays_closed() {
+    let batches = [vec![Action::close(2), Action::close(3)], vec![Action::close(3), Action::close(2)], vec![Action::close_group(2)]];
+    for batch in batches {
+        for open in [2, 3] {
+            let mut workspace = Workspace::new(docked());
+            workspace.apply_all(batch.clone(), false, allow).unwrap();
+            let saved = serde_json::to_string(&workspace).unwrap();
+            let mut workspace: Workspace<u32> = serde_json::from_str(&saved).unwrap();
+            workspace.apply(Action::open(open, None), false, allow).unwrap();
+            let layout = workspace.layout();
+            assert_eq!(group_members(layout, open), [2, 3], "{batch:?}, then {open} opens");
+            assert_eq!(front(layout, open), open, "{batch:?}: the reopened tab is in front");
+            assert_eq!(end_dock(layout)[0].groups[0].panels, [2, 3], "{batch:?}: back above 4 in its column");
+            assert!(workspace.hidden().is_empty());
+        }
+    }
+
+    let mut workspace = Workspace::new(docked());
+    workspace.apply(Action::close(3), false, allow).unwrap();
+    workspace.apply(Action::close(2), false, allow).unwrap();
+    workspace.apply(Action::open(2, None), false, allow).unwrap();
+    assert_eq!(group_members(workspace.layout(), 2), [2]);
+    assert!(workspace.layout().place(&3).is_none(), "3 closed on its own stays closed");
+    workspace.apply(Action::open(3, None), false, allow).unwrap();
+    assert_eq!(group_members(workspace.layout(), 2), [2, 3], "it reopens beside 2");
 }
 
 /// A panel that floats keeps its docked place until it docks or closes; floating again from the float keeps the first.
 #[test]
 fn a_floated_panel_keeps_where_it_was_docked_until_it_docks_or_closes() {
     let mut workspace = Workspace::new(docked());
-    let docked_at = workspace.layout.location(&2).unwrap();
+    let docked_at = workspace.layout().location(&2).unwrap();
     workspace.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
-    assert_eq!(workspace.floated, [(2, docked_at.clone())]);
+    assert_eq!(workspace.floated(), [(2, docked_at.clone())]);
     workspace.apply(Action::float(2, rect(30.0, 30.0, 200.0, 200.0)), false, allow).unwrap();
-    assert_eq!(workspace.floated, [(2, docked_at)], "floating again from the float keeps the first record");
+    assert_eq!(workspace.floated(), [(2, docked_at)], "floating again from the float keeps the first record");
     workspace.apply(Action::move_beside(2, 11, DockPlacement::tab(None)), false, allow).unwrap();
-    assert!(workspace.floated.is_empty(), "docking drops the record");
+    assert!(workspace.floated().is_empty(), "docking drops the record");
     workspace.apply(Action::float(3, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
-    assert_eq!(workspace.floated.len(), 1);
+    assert_eq!(workspace.floated().len(), 1);
     workspace.apply(Action::close(3), false, allow).unwrap();
-    assert!(workspace.floated.is_empty(), "closing drops the record");
+    assert!(workspace.floated().is_empty(), "closing drops the record");
 }
 
 /// Canvas 1; an end dock with an expanded column [2] and a collapsed column [3], [4]; a floating window [6].
 fn columns() -> Layout<u32> {
     let dock = Node::dock(DockEdge::End, vec![Column::new(vec![g(&[2], 0)]), Column::new(vec![g(&[3], 0), g(&[4], 0)]).with_iconic(true)]);
-    Layout::new(Some(Node::split(Axis::X, SplitSize::FixedSecond(300.0), tabs(&[1], 0), dock)), vec![Floating::single(vec![6], 0, window())])
+    Layout::new(Some(Node::split(Axis::X, SplitSize::FixedSecond(300.0), tabs(&[1], 0), dock)), vec![Floating::single(101, vec![6], 0, window())])
 }
 
 fn floats(layout: &Layout<u32>, panel: u32) -> bool {
@@ -318,12 +355,13 @@ fn a_panel_that_does_not_collapse_keeps_its_column_expanded() {
     layout.apply_with_permissions(Action::set_iconic(3, false), rigid).unwrap();
     layout.apply_with_permissions(Action::move_group(2, Target::at(3, DockPlacement::group(true, None))), rigid).unwrap();
 
-    let mut saved = Workspace::new(columns());
-    saved.layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
-    assert!(column_of(&saved.layout, 2).iconic);
+    let mut layout = columns();
+    layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    let mut saved = Workspace::new(layout);
+    assert!(column_of(saved.layout(), 2).iconic);
     saved.reconcile(|_| true, rigid, &Workspace::new(columns()));
-    assert!(!column_of(&saved.layout, 2).iconic, "reconcile expands the column");
-    assert_eq!(group_members(&saved.layout, 2), [2]);
+    assert!(!column_of(saved.layout(), 2).iconic, "reconcile expands the column");
+    assert_eq!(group_members(saved.layout(), 2), [2]);
 }
 
 /// A panel that shares no column (a toolbar) refuses every placement that puts it beside other panels in a column
@@ -348,11 +386,12 @@ fn a_panel_that_shares_no_column_moves_only_to_a_column_of_its_own() {
         assert_eq!(column_of(&moved, 2).panels().count(), 1, "{to:?}");
     }
 
-    let mut saved = Workspace::new(columns());
-    saved.layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    let mut layout = columns();
+    layout.apply(Action::move_group(2, Target::at(3, DockPlacement::group(true, None)))).unwrap();
+    let mut saved = Workspace::new(layout);
     saved.reconcile(|_| true, alone, &Workspace::new(columns()));
-    assert_eq!(column_of(&saved.layout, 2).panels().collect::<Vec<_>>(), [&2], "reconcile gives it a column of its own");
-    assert_eq!(sorted(&saved.layout), [1, 2, 3, 4, 6]);
+    assert_eq!(column_of(saved.layout(), 2).panels().collect::<Vec<_>>(), [&2], "reconcile gives it a column of its own");
+    assert_eq!(sorted(saved.layout()), [1, 2, 3, 4, 6]);
 }
 
 /// A panel that docks only in dock columns (a toolbar, photocraft#12517) refuses every placement that leaves it in a
@@ -395,9 +434,9 @@ fn a_panel_that_docks_only_in_columns_never_lands_in_a_frame() {
     other.apply_with_permissions(Action::move_group(6, Target::at(3, DockPlacement::column(false))), strip).unwrap();
     let mut saved = Workspace::new(split);
     saved.reconcile(|_| true, strip, &Workspace::new(columns()));
-    assert!(matches!(saved.layout.place(&2), Some(PanelPlace::Dock { .. })), "reconcile docks it in a column: {:?}", saved.layout);
-    assert_eq!(column_of(&saved.layout, 2).panels().collect::<Vec<_>>(), [&2]);
-    assert_eq!(sorted(&saved.layout), [1, 2, 3, 4, 6]);
+    assert!(matches!(saved.layout().place(&2), Some(PanelPlace::Dock { .. })), "reconcile docks it in a column: {:?}", saved.layout());
+    assert_eq!(column_of(saved.layout(), 2).panels().collect::<Vec<_>>(), [&2]);
+    assert_eq!(sorted(saved.layout()), [1, 2, 3, 4, 6]);
 }
 
 /// A stepped column (a toolbar's) keeps its step count docked, floating and through JSON, and its width moves only
@@ -419,4 +458,118 @@ fn a_stepped_column_keeps_its_step_count_and_refuses_a_width() {
     assert_eq!(column_of(&layout, 2).steps, Some(2), "a floated stepped column keeps its steps");
     let saved: Layout<u32> = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
     assert_eq!(saved, layout);
+}
+
+/// The names of the `pub fn` methods in `source` whose receiver is `&mut self`.
+fn mutating_methods(source: &str) -> Vec<&str> {
+    let mut names: Vec<&str> = source
+        .split("pub fn ")
+        .skip(1)
+        .filter_map(|rest| {
+            let name = &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?];
+            let receiver = rest[rest.find('(')? + 1..].trim_start();
+            receiver.starts_with("&mut self").then_some(name)
+        })
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// Every method that writes a workspace moves its revision, and only `replace` moves its generation. The trial reads
+/// the workspace's source for its `&mut self` methods, so a new one fails here until it is walked.
+#[test]
+fn every_workspace_mutator_moves_the_revision() {
+    let mut walked: Vec<&str> = Vec::new();
+    let mut moves = |name: &'static str, edit: &dyn Fn(&mut Workspace<u32>)| {
+        let mut workspace = Workspace::new(docked());
+        let (revision, generation) = (workspace.revision(), workspace.generation());
+        edit(&mut workspace);
+        assert_ne!(workspace.revision(), revision, "`{name}` moves the revision");
+        assert_eq!(workspace.generation() != generation, name == "replace", "only `replace` moves the generation, `{name}` included");
+        walked.push(name);
+    };
+    moves("replace", &|workspace| workspace.replace(Workspace::new(columns())));
+    moves("apply", &|workspace| drop(workspace.apply(Action::activate(6), false, allow).unwrap()));
+    moves("apply_all", &|workspace| drop(workspace.apply_all([Action::close(5), Action::close(4)], false, allow).unwrap()));
+    moves("set_visible", &|workspace| workspace.set_visible(5, false, None, false, allow).unwrap());
+    moves("reconcile", &|workspace| workspace.reconcile(|panel| *panel != 5, allow, &Workspace::new(docked())));
+    moves("raise_window_floor", &|workspace| workspace.raise_window_floor(1000));
+    moves("forget_hidden", &|workspace| {
+        workspace.apply(Action::close(5), false, allow).unwrap();
+        let revision = workspace.revision();
+        workspace.forget_hidden(|panel| *panel == 5);
+        assert_ne!(workspace.revision(), revision, "`forget_hidden` moves the revision by itself");
+    });
+    walked.sort_unstable();
+    assert_eq!(walked, mutating_methods(include_str!("../src/dock/workspace.rs")), "every `&mut self` method of `Workspace` is walked");
+
+    let workspace = Workspace::new(docked());
+    assert_ne!(workspace.clone().revision(), workspace.revision(), "a clone is a new source");
+    let mut settled = Workspace::new(docked());
+    let revision = settled.revision();
+    settled.reconcile(|_| true, allow, &Workspace::new(docked()));
+    assert_eq!(settled.revision(), revision, "a reconcile that changes nothing keeps the revision");
+}
+
+fn window_ids(workspace: &Workspace<u32>) -> Vec<u64> {
+    workspace.layout().floating.iter().map(|window| window.id).collect()
+}
+
+/// Window ids come from a counter each layout owns: two workspaces edited side by side each keep their windows' ids
+/// unique, a closed window's id is never drawn again, and a replacement's windows take ids the old layout never gave.
+#[test]
+fn window_ids_stay_unique_within_each_layout_and_are_never_reused() {
+    let (mut a, mut b) = (Workspace::new(docked()), Workspace::new(docked()));
+    for workspace in [&mut a, &mut b] {
+        workspace.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+        workspace.apply(Action::float(5, rect(30.0, 30.0, 200.0, 200.0)), false, allow).unwrap();
+        let mut ids = window_ids(workspace);
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 3, "three windows, three ids: {:?}", window_ids(workspace));
+    }
+
+    let seen = window_ids(&a);
+    a.apply(Action::close(5), false, allow).unwrap();
+    a.apply(Action::float(3, rect(50.0, 50.0, 200.0, 200.0)), false, allow).unwrap();
+    let fresh: Vec<u64> = window_ids(&a).into_iter().filter(|id| !seen.contains(id)).collect();
+    assert!(fresh.len() == 1 && fresh[0] > seen.iter().copied().max().unwrap(), "a new window takes a new id: {fresh:?} after {seen:?}");
+
+    let held: Vec<u64> = seen.iter().chain(&fresh).copied().collect();
+    a.replace(Workspace::new(docked()));
+    let replaced = window_ids(&a);
+    assert!(replaced.iter().all(|id| !held.contains(id)), "the replacement's window takes an id no earlier window had: {replaced:?} after {held:?}");
+
+    let saved = r#"{"layout":{"root":null,"floating":[{"id":7,"panels":[1],"active":0,"rect":[0,0,100,100]},{"id":7,"panels":[2],"active":0,"rect":[0,0,100,100]},{"panels":[3],"active":0,"rect":[0,0,100,100]}]}}"#;
+    let loaded: Workspace<u32> = serde_json::from_str(saved).unwrap();
+    assert_eq!(window_ids(&loaded), [7, 8, 9], "a load keeps the first of a duplicate id and numbers the rest above every saved id");
+
+    // A loaded layout draws above the ids it loaded with, not only the ones it drew: a closed window's id stays used.
+    let saved = r#"{"layout":{"root":{"Tabs":{"panels":[4,5],"active":0}},"floating":[{"id":7,"panels":[1],"active":0,"rect":[0,0,100,100]},{"id":9,"panels":[3],"active":0,"rect":[0,0,100,100]}]}}"#;
+    let mut loaded: Workspace<u32> = serde_json::from_str(saved).unwrap();
+    loaded.apply(Action::close(3), false, allow).unwrap();
+    loaded.apply(Action::float(4, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    assert_eq!(window_ids(&loaded), [7, 10], "the new window does not take the closed window's id 9");
+
+    // An undo brings back an older workspace whose counter is lower: raised to the floor the dock has shown, it draws
+    // no id a later window had.
+    let older = Workspace::new(docked());
+    let mut later = older.clone();
+    later.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    let drawn: Vec<u64> = window_ids(&later).into_iter().filter(|id| !window_ids(&older).contains(id)).collect();
+    let mut undone = older.clone();
+    undone.raise_window_floor(later.layout().window_floor());
+    undone.apply(Action::float(5, rect(30.0, 30.0, 200.0, 200.0)), false, allow).unwrap();
+    assert!(window_ids(&undone).iter().all(|id| !drawn.contains(id)), "the undone workspace draws past {drawn:?}: {:?}", window_ids(&undone));
+
+    // A saved id at the top of the range loads without overflow, and the windows still get unique ids.
+    let saved = format!(
+        r#"{{"layout":{{"root":null,"floating":[{{"id":{},"panels":[1],"active":0,"rect":[0,0,100,100]}},{{"panels":[2],"active":0,"rect":[0,0,100,100]}}]}}}}"#,
+        u64::MAX
+    );
+    let loaded: Workspace<u32> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(window_ids(&loaded), [u64::MAX, 0], "a window without an id takes the least free one once the range above is used");
+    let mut layout = loaded.layout().clone();
+    let fresh = layout.fresh_window_id();
+    assert!(!window_ids(&loaded).contains(&fresh), "a draw past the top of the range takes a free id: {fresh}");
 }

@@ -10,7 +10,7 @@ use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Opens the Save Document Preset pane with the button below the fields, types `name` over the proposed one and saves.
+/// Opens the Save Document Preset pane with the icon on the Name row, types `name` over the proposed one and saves.
 fn save_preset(fixture: &mut Fixture, name: &str) {
     let save = fixture.by_label("Save Document Preset").expect("the Save Document Preset button");
     fixture.click(&save).idle(10);
@@ -266,5 +266,74 @@ fn the_new_document_layout_places_presets_and_details_below_the_tabs() {
     assert!(recent.bottom() <= mode.top(), "tabs go above the details");
     assert!((mode.top() - depth.top()).abs() < 1.0, "color mode and depth share a row");
     assert!(mode.right() <= depth.left(), "depth follows color mode");
-    assert!(mode.bottom() <= save.top() && save.bottom() <= create.top(), "Save Preset is between the fields and the footer");
+    assert!(save.bottom() <= create.top(), "Save Preset is above the footer");
+}
+
+/// The fields run Name, size, Color Mode, Background Contents, then the advanced Color Profile and Pixel Aspect Ratio; the
+/// save icon (no text) sits at the end of the Name row.
+#[trial]
+fn the_new_document_fields_run_background_before_the_advanced_ones_and_save_sits_on_the_name_row() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let top = |fixture: &Fixture, label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field")).rect.top();
+    let (mode, background) = (top(&fixture, "Color Mode"), top(&fixture, "Background Contents"));
+    let (profile, aspect) = (top(&fixture, "Color Profile"), top(&fixture, "Pixel Aspect Ratio"));
+    assert!(mode < background && background < profile && profile < aspect, "Background Contents comes before the advanced fields");
+
+    let name = fixture.by_label("Name").expect("the Name field").rect;
+    let save = fixture.by_label("Save Document Preset").expect("the save action").rect;
+    assert!(save.top() < name.bottom() && name.top() < save.bottom(), "the save icon shares the Name row");
+    assert!(name.right() <= save.left(), "the save icon is at the end of the Name field");
+    assert!(!fixture.texts().iter().any(|run| run.text.starts_with("Save ")), "the save control is an icon, with no text");
+}
+
+/// The caption role sets its text in capitals when it paints; the label stays as written.
+#[trial]
+fn section_captions_paint_in_capitals_and_keep_their_text() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    assert!(shows(&fixture, "PRESET DETAILS"), "the caption paints in capitals");
+    assert!(fixture.by_label("Preset Details").is_some(), "the accessible name keeps the text as written");
+}
+
+/// The preset cards fill the left column's width, and each card's title and size line are painted whole and centred
+/// under the page outline.
+#[trial]
+fn the_preset_cards_fill_the_column_and_show_their_size_lines_whole() {
+    use craft_ui::contract::Gap;
+    use craft_ui::runtime::access::Role;
+    use std::cell::Cell;
+
+    let mut options = DocumentOptions::default();
+    let column_gap = Rc::new(Cell::new(0.0f32));
+    let shared = Rc::clone(&column_gap);
+    let mut fixture = Fixture::new(move |ui| {
+        shared.set(Gap::Row.points(ui));
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let photo = fixture.by_label("Photo").expect("the Photo tab");
+    fixture.click(&photo).idle(10);
+    let cards = fixture.by_role(Role::LIST_ITEM);
+    assert!(cards.len() >= 3, "the tab lists presets");
+    let first_row: Vec<_> = cards.iter().filter(|card| (card.rect.top() - cards[0].rect.top()).abs() < 1.0).collect();
+    assert!(first_row.len() >= 2, "a row holds several cards");
+    let details = fixture.by_label("Preset Details").expect("the details column").rect;
+    let column_end = details.left() - column_gap.get();
+    let last = first_row.last().expect("a row has cards").rect;
+    assert!((column_end - last.right()).abs() <= 1.0, "the row's last card ends at the left column's end ({column_end}): {last:?}");
+    for card in &first_row {
+        let lines: Vec<_> = fixture.texts().iter().filter(|text| card.rect.contains_rect(text.rect)).collect();
+        assert!(lines.iter().any(|text| text.text.contains('\u{d7}')), "the card shows its size line: {:?}", card.rect);
+        for line in lines {
+            assert!(!line.elided, "{:?} is painted whole", line.text);
+            assert!((line.rect.center().x - card.rect.center().x).abs() <= 1.0, "{:?} is centred in its card", line.text);
+        }
+    }
 }

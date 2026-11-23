@@ -2,9 +2,9 @@
 
 use super::{PresetBrowser, PresetReorder};
 use crate::choice::SwatchFace;
-use crate::contract::Bind;
 use crate::list::ThumbAspect;
-use crate::patterns::presets::{PresetEvent, PresetFooterOptions, PresetRow, PresetState, PresetTiles};
+use crate::patterns::presets::{PresetEvent, PresetFns, PresetFooterOptions, PresetRow, PresetSource, PresetState, PresetTiles};
+use crate::runtime::env::Env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Srgba;
 use egui::Ui;
@@ -22,7 +22,7 @@ fn swatch(n: u32) -> Srgba {
 /// A library of 28 swatches: two loose ones, then Warm and Cool, each with three swatches and the folders Pastel and
 /// Deep, which hold three swatches and a Standard folder of two. Presets are keyed 1 to 28, groups from 100 on. No
 /// preset has a caption, so the grid shows bare tiles.
-fn library_rows() -> Vec<PresetRow<u32>> {
+fn library_rows(_: &(), _: &Env) -> Vec<PresetRow<u32>> {
     let mut rows = Vec::new();
     let mut n = 0;
     let mut group = 100;
@@ -55,11 +55,11 @@ fn library_rows() -> Vec<PresetRow<u32>> {
 
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
     let slider = *data.value("slider", true);
     let new_group = *data.value("new_group", true);
     let selected = *data.value("selected", None::<u32>);
-    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    let mut browser = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows)
         .toolbar(true)
         .reorder(PresetReorder::items_and_groups().nest(NESTING))
         .footer(PresetFooterOptions::new().slider(slider).new_group(new_group).can_delete(selected.is_some()));
@@ -83,9 +83,9 @@ fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The chips variant: the same library as small bare chips under text-high group names, as a palette in a popover.
 #[story(PresetBrowser<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_browser_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = library_rows();
+    let rows = PresetSource::new((), PresetFns::new(library_rows));
     let selected = *data.value("selected", None::<u32>);
-    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows).tiles(PresetTiles::Chips);
+    let mut browser = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows).tiles(PresetTiles::Chips);
     if let Some(key) = selected {
         browser = browser.selected(key);
     }

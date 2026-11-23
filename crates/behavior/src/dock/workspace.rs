@@ -6,11 +6,13 @@
 
 use std::{collections::HashSet, hash::Hash};
 
+use craft_tracked::{Revision, Tracked};
+
 use super::{
     DockSide,
     action::{Action, DockPlacement, Location},
     edit::tree_panels,
-    groups::{Column, DockEdge, PanelPlace, Target},
+    groups::{Column, DockEdge, PanelPlace, Target, Unit},
     layout::Layout,
     limits::MAX_PANELS,
     node::Node,
@@ -19,10 +21,12 @@ use super::{
 
 /// A saved arrangement of panels: the [`Layout`] and the closed panels' former places.
 ///
-/// Its [`revision`](Self::revision) changes when another arrangement replaces it (switch, reset, load): replace a
+/// Two signals name its state. [`revision`](Self::revision) moves with every write: the fields are private and every
+/// method that writes moves it, and a clone is a new source, so two workspace values never share a revision.
+/// [`generation`](Self::generation) moves only when another arrangement replaces it (switch, reset, load): replace a
 /// shown workspace with [`replace`](Self::replace) or the [`WorkspaceSet`](super::WorkspaceSet) operations, never by
 /// assignment, so a running drag on it ends. Edits ([`apply`](Self::apply), [`set_visible`](Self::set_visible), the
-/// dock's own) keep the revision.
+/// dock's own) keep the generation.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(bound(deserialize = "P: serde::Deserialize<'de>"))]
 #[non_exhaustive]
@@ -30,25 +34,29 @@ pub struct Workspace<P> {
     /// Format version; files without one are v1 (`{layout, hidden}`). Always written as
     /// [`Workspace::VERSION`].
     #[serde(default = "first_version", serialize_with = "write_version")]
-    pub version: u32,
+    version: u32,
     /// The current arrangement, changes included. A save without one is no workspace: it does not load.
-    pub layout: Layout<P>,
+    layout: Layout<P>,
     /// Closed panels, and panels the application does not register now, with where each one
     /// goes back.
     #[serde(default)]
-    pub hidden: Vec<(P, Location<P>)>,
+    hidden: Vec<(P, Location<P>)>,
     /// Floating panels with the docked location each one left, so Dock Panel can return it. Saved with the
     /// workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub floated: Vec<(P, Location<P>)>,
+    floated: Vec<(P, Location<P>)>,
     /// Counts the replacements of this live workspace. Not saved, and not part of equality.
     #[serde(skip)]
-    revision: u64,
+    generation: u64,
+    /// Moves with every write; a clone is a new source. Not saved, and not part of equality.
+    #[serde(skip)]
+    revision: Tracked<()>,
 }
 
 impl<P: PartialEq> PartialEq for Workspace<P> {
     fn eq(&self, other: &Self) -> bool {
-        self.version == other.version && self.layout == other.layout && self.hidden == other.hidden && self.floated == other.floated
+        self.revision.revision() == other.revision.revision()
+            || (self.version == other.version && self.layout == other.layout && self.hidden == other.hidden && self.floated == other.floated)
     }
 }
 
@@ -73,24 +81,89 @@ impl<P> Workspace<P> {
 
     /// A workspace of `layout`, with no hidden panels.
     pub fn new(layout: Layout<P>) -> Self {
-        Self { version: Self::VERSION, layout, hidden: Vec::new(), floated: Vec::new(), revision: 0 }
+        Self::from_parts(layout, Vec::new(), Vec::new())
     }
 
-    /// The revision of this live workspace: it changes with every [`replace`](Self::replace) and nothing else.
-    pub fn revision(&self) -> u64 {
-        self.revision
+    /// A workspace of `layout` with the closed panels' places `hidden` and the floating panels' docked places
+    /// `floated`, unchecked, as a saved one loads; [`validate`](Self::validate) checks it.
+    pub fn from_parts(layout: Layout<P>, hidden: Vec<(P, Location<P>)>, floated: Vec<(P, Location<P>)>) -> Self {
+        Self { version: Self::VERSION, layout, hidden, floated, generation: 0, revision: Tracked::default() }
     }
 
-    /// Replaces the arrangement with `with` and moves to the next revision.
+    /// The format version the workspace was read with.
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// The current arrangement.
+    pub fn layout(&self) -> &Layout<P> {
+        &self.layout
+    }
+
+    /// The closed panels, and panels the application does not register now, with where each one goes back.
+    pub fn hidden(&self) -> &[(P, Location<P>)] {
+        &self.hidden
+    }
+
+    /// The floating panels with the docked location each one left.
+    pub fn floated(&self) -> &[(P, Location<P>)] {
+        &self.floated
+    }
+
+    /// The revision of this workspace value: it moves with every write, and no other value has it.
+    pub fn revision(&self) -> Revision {
+        self.revision.revision()
+    }
+
+    /// The generation of this live workspace: it moves with every [`replace`](Self::replace) and nothing else.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The workspace with its arrangement replaced by `layout`, for a stored set whose saved arrangement is kept apart.
+    pub(super) fn with_layout(mut self, layout: Layout<P>) -> Self {
+        self.layout = layout;
+        self.touch();
+        self
+    }
+
+    /// Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
+    /// workspace an undo brings back to it, so no id, and no OS window, goes to a second window.
+    pub fn raise_window_floor(&mut self, floor: u64) {
+        if self.layout.raise_window_floor(floor) {
+            self.touch();
+        }
+    }
+
+    /// Drops the closed-panel records of the panels `forget` names, so reopening them does not restore their place.
+    pub fn forget_hidden(&mut self, forget: impl Fn(&P) -> bool) {
+        let before = self.hidden.len();
+        self.hidden.retain(|(panel, _)| !forget(panel));
+        if self.hidden.len() != before {
+            self.touch();
+        }
+    }
+
+    /// Moves the revision. Every method that writes the workspace calls it.
+    fn touch(&mut self) {
+        self.revision.edit(|()| ());
+    }
+
+    /// Replaces the arrangement with `with` and moves to the next generation. The windows of `with` take ids this
+    /// workspace never gave out, so no OS window passes to another window.
     pub fn replace(&mut self, with: Workspace<P>) {
-        let revision = self.revision.wrapping_add(1);
-        *self = Workspace { revision, ..with };
+        let generation = self.generation.wrapping_add(1);
+        let revision = std::mem::take(&mut self.revision);
+        let mut with = with;
+        self.layout.hand_ids_to(&mut with.layout);
+        *self = Workspace { generation, revision, ..with };
+        self.touch();
     }
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
     /// Check the version, the layout, that every hidden panel is hidden once and absent
-    /// from the layout, and that the floated records are bounded and one per panel.
+    /// from the layout and its record is bounded, and that the floated records are bounded and one per panel.
     pub fn validate(&self) -> Result<(), DockError> {
         if self.version > Self::VERSION {
             return Err(DockError::UnsupportedVersion);
@@ -101,9 +174,12 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         }
         let visible: HashSet<&P> = self.layout.panels().into_iter().collect();
         let mut seen = HashSet::new();
-        for (panel, _) in &self.hidden {
+        for (panel, location) in &self.hidden {
             if visible.contains(panel) || !seen.insert(panel) {
                 return Err(DockError::DuplicatePanel);
+            }
+            if location.closed_with.len() > MAX_PANELS {
+                return Err(DockError::LimitExceeded);
             }
         }
         if self.floated.len() > MAX_PANELS {
@@ -138,8 +214,11 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         let policy = |panel: &P| if locked { permissions(panel).locked() } else { permissions(panel) };
         let mut proposed = self.clone();
         let mut all_closed = Vec::new();
+        // The group of each panel as it closes, in closing order.
+        let mut closing_groups = Vec::new();
         for action in actions {
             let closed = proposed.layout.closed_by(&action)?;
+            closing_groups.extend(closed.iter().map(|panel| proposed.layout.members(panel, Unit::Group).unwrap_or_else(|_| vec![panel.clone()])));
             let locations = close_locations(&proposed.layout, &closed);
             let before = proposed.layout.clone();
             // Opening a hidden panel puts it back where it was.
@@ -167,16 +246,20 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         proposed.hidden.retain(|(p, _)| !visible.contains(p));
         let mut seen = HashSet::new();
         all_closed.retain(|p| !visible.contains(p) && seen.insert(p.clone()));
+        proposed.record_closed_together(&all_closed, &closing_groups);
         proposed.validate()?;
-        *self = proposed;
+        let Workspace { layout, hidden, floated, .. } = proposed;
+        (self.layout, self.hidden, self.floated) = (layout, hidden, floated);
+        self.touch();
         Ok(all_closed)
     }
 
     /// Show or hide one panel. Showing restores its recorded location, following the chain of
-    /// hidden anchors when its own anchor is hidden too; otherwise it opens as
-    /// [`Action::Open`] with `fallback` as the anchor, following `permissions`. The hidden
-    /// panels on that chain reopen beside it later, so a group or window closed one panel at a
-    /// time comes back as one.
+    /// hidden anchors when its own anchor is hidden too, and brings back the hidden panels of its
+    /// group that closed with it in one batch (Close Tab Group, a preset) as tabs of its group;
+    /// otherwise it opens as [`Action::Open`] with `fallback` as the anchor, following
+    /// `permissions`. The other hidden panels on that chain reopen beside it later, so a group or
+    /// window closed one panel at a time comes back as one.
     /// A shown panel becomes the active tab of its group. Hiding follows `permissions` and
     /// `locked`, as [`Self::apply`] does, so a protected canvas stays shown.
     pub fn set_visible(
@@ -201,29 +284,91 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
         self.apply_all([open, Action::Activate { panel }], locked, permissions).map(drop)
     }
 
-    /// Restore a hidden `panel` to its recorded place and make it the active tab. `Ok(false)` when the record
-    /// cannot be restored, or the place it restores to refuses the panel under `permissions`; the workspace stays
-    /// as it was and the caller opens the panel by the ordinary, checked path.
+    /// Restore a hidden `panel` to its recorded place, with the hidden panels closed with it, and make it the
+    /// active tab. The set is restored in group order, each panel by its own record, so the group comes back in
+    /// the order it had; a panel closed with it whose place refuses it stays hidden. `Ok(false)` when `panel`'s
+    /// record cannot be restored, or the place it restores to refuses the panel under `permissions`; the workspace
+    /// stays as it was and the caller opens the panel by the ordinary, checked path.
     fn reopen(&mut self, panel: &P, permissions: &impl Fn(&P) -> Permissions) -> Result<bool, DockError> {
-        // The restore also rewrites the records of the hidden panels it passed, so it runs on a copy.
+        let mut restored = self.clone();
+        for member in self.closed_together(panel) {
+            match restored.restored(&member, permissions) {
+                Some(next) => restored = next,
+                None if &member == panel => return Ok(false),
+                None => {}
+            }
+        }
+        restored.layout.apply(Action::Activate { panel: panel.clone() })?;
+        self.layout = restored.layout;
+        self.hidden = restored.hidden;
+        Ok(true)
+    }
+
+    /// The workspace with the hidden `panel` restored to its recorded place, `None` when the record cannot be
+    /// restored or the place refuses the panel under `permissions`. The restore also rewrites the records of the
+    /// hidden panels it passed, so it runs on a copy.
+    fn restored(&self, panel: &P, permissions: &impl Fn(&P) -> Permissions) -> Option<Self> {
         let mut trial = self.clone();
         let mut layout = self.layout.clone();
-        if trial.restore_from_hidden(&mut layout, panel).is_err() {
-            return Ok(false);
-        }
+        trial.restore_from_hidden(&mut layout, panel).ok()?;
         let allowed = layout
             .location(panel)
             .ok()
             .and_then(|location| location.anchor.map(|anchor| location.placement.allowed_by(permissions(&anchor))))
             .unwrap_or(true);
         if !allowed || layout.breaks_columns_beyond(&self.layout, permissions) {
-            return Ok(false);
+            return None;
         }
-        layout.apply(Action::Activate { panel: panel.clone() })?;
-        self.layout = layout;
-        self.hidden = trial.hidden;
-        self.hidden.retain(|(p, _)| p != panel);
-        Ok(true)
+        trial.layout = layout;
+        trial.hidden.retain(|(p, _)| p != panel);
+        Some(trial)
+    }
+
+    /// The hidden `panel` and the hidden panels closed with it, in group order: those its record's
+    /// [`closed_with`](Location::closed_with) names whose own records name it back. A panel that closed again on
+    /// its own since names it no more. `[panel]` when it closed alone.
+    fn closed_together(&self, panel: &P) -> Vec<P> {
+        let record = |p: &P| self.hidden.iter().find(|(q, _)| q == p).map(|(_, location)| location);
+        let mut seen = HashSet::new();
+        let together: Vec<P> = record(panel)
+            .map(|location| &location.closed_with[..])
+            .unwrap_or_default()
+            .iter()
+            .filter(|&p| p == panel || record(p).is_some_and(|location| location.closed_with.contains(panel)))
+            .filter(|&p| seen.insert(p))
+            .cloned()
+            .collect();
+        if together.len() > 1 && together.contains(panel) { together } else { vec![panel.clone()] }
+    }
+
+    /// Records on the hidden panels `closed`, which this batch closed, the panels of their group that closed with
+    /// them. `groups` holds each closing panel's group as it closed, in closing order. The closed panels of one
+    /// group, or of groups that share one, form one set in the order the groups name them.
+    fn record_closed_together(&mut self, closed: &[P], groups: &[Vec<P>]) {
+        let closed: HashSet<&P> = closed.iter().collect();
+        let mut sets: Vec<Vec<P>> = Vec::new();
+        for group in groups {
+            let members: Vec<&P> = group.iter().filter(|p| closed.contains(p)).collect();
+            let (joined, rest): (Vec<Vec<P>>, Vec<Vec<P>>) =
+                std::mem::take(&mut sets).into_iter().partition(|set| set.iter().any(|p| members.contains(&p)));
+            let mut set: Vec<P> = joined.into_iter().flatten().collect();
+            for panel in members {
+                if !set.contains(panel) {
+                    set.push(panel.clone());
+                }
+            }
+            sets = rest;
+            if !set.is_empty() {
+                sets.push(set);
+            }
+        }
+        for set in sets.into_iter().filter(|set| set.len() > 1) {
+            for (panel, location) in &mut self.hidden {
+                if set.contains(panel) {
+                    location.closed_with.clone_from(&set);
+                }
+            }
+        }
     }
 
     /// Update the floated records after an action that turned `before` into the current layout: drop the records of
@@ -291,6 +436,15 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
     /// [`Permissions::locked`] ones.
     /// `hidden` keeps at most [`MAX_PANELS`] entries, dropping the oldest unregistered ones first.
     pub fn reconcile(&mut self, registered: impl Fn(&P) -> bool, permissions: impl Fn(&P) -> Permissions, default: &Workspace<P>) {
+        let before = self.clone();
+        self.reconcile_parts(registered, permissions, default);
+        if *self != before {
+            self.touch();
+        }
+    }
+
+    /// [`Self::reconcile`]'s work, which leaves the revision to it.
+    fn reconcile_parts(&mut self, registered: impl Fn(&P) -> bool, permissions: impl Fn(&P) -> Permissions, default: &Workspace<P>) {
         if self.validate().is_err() {
             self.replace(default.clone());
         }

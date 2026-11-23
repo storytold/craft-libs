@@ -61,7 +61,7 @@ where
 mod drag;
 mod edge;
 pub(super) mod empty_text;
-mod header;
+pub(crate) mod header;
 mod marquee;
 mod request;
 
@@ -183,8 +183,27 @@ impl<S: Default> Default for Held<S> {
     }
 }
 
+/// The rows the item step walks in a pass: the source the caller gave, or the view `Collection::filtered` made of it,
+/// which the hooks own for the pass.
+enum Source<'s, K> {
+    Given(&'s dyn ItemSource<K>),
+    Filtered(Box<dyn ItemSource<K> + 's>),
+}
+
+impl<'s, K> std::ops::Deref for Source<'s, K> {
+    type Target = dyn ItemSource<K> + 's;
+
+    fn deref(&self) -> &(dyn ItemSource<K> + 's) {
+        match self {
+            Source::Given(given) => *given,
+            Source::Filtered(view) => &**view,
+        }
+    }
+}
+
 pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
-    source: &'s dyn ItemSource<C::Key>,
+    /// The rows of the pass: the read step applies the collection's filter once (`Collection::filtered`).
+    source: Source<'s, C::Key>,
     item: &'s mut ItemFn<'r, C>,
     layout: Option<Arc<C::ItemLayout>>,
     /// The layout's column count this pass, which a row pick's whole-row cells span.
@@ -219,6 +238,8 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     visible: Range<usize>,
     /// The rows built this pass with their rects, for `collection_response`.
     shown: Vec<ShownRow<C::Key>>,
+    /// The row under the pointer this pass, for `collection_response`.
+    hovered: Option<C::Key>,
     offset: f64,
     offset_at_read: f64,
     offset_x: f64,
@@ -229,6 +250,10 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     /// The bound column layout as the read step found it; `None` while the header keeps its own memory.
     column_layout_at_read: Option<ColumnLayout>,
     lead: Lead<C::Key>,
+    /// The lead row and the renaming row as step 4 read them: a row's measure at step 5 reads them
+    /// (`known_row`).
+    lead_at_read: Option<C::Key>,
+    renaming_at_read: Option<C::Key>,
     renaming: Renaming<C::Key>,
     ended_rename: bool,
     /// The editor of the rename that ended still held focus, so focus goes back to the collection.
@@ -241,8 +266,6 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     page_reveal: Option<usize>,
     /// The row this pass scrolls into view, placed before the rows are built (`place_reveal`).
     revealing: Option<usize>,
-    /// The rows `place_reveal` built and measured this pass: the build places them by that measure.
-    measured_for_reveal: Vec<usize>,
     /// The row the collection's own press is held on this pass, and where on it.
     pressed: Option<(usize, crate::contract::collection::RowPressed)>,
     /// The rows above and below the edge-press band declared this pass.
@@ -269,7 +292,7 @@ struct Placement {
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     pub(super) fn new(source: &'s dyn ItemSource<C::Key>, item: &'s mut ItemFn<'r, C>) -> Self {
         ItemsHooks {
-            source,
+            source: Source::Given(source),
             item,
             layout: None,
             columns: 0,
@@ -290,6 +313,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             keyed_activation: None,
             visible: 0..0,
             shown: Vec::new(),
+            hovered: None,
             offset: 0.0,
             offset_at_read: 0.0,
             offset_x: 0.0,
@@ -306,7 +330,8 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             drags: Drags::default(),
             page_reveal: None,
             revealing: None,
-            measured_for_reveal: Vec::new(),
+            lead_at_read: None,
+            renaming_at_read: None,
             pressed: None,
             edge: None,
         }

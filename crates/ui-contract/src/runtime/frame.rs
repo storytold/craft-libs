@@ -28,7 +28,7 @@ pub struct FrameInput {
     pub commands: CommandInput,
     /// The app's `Host`, read through `EnvView::host`. The app keeps one `Arc<Host>` across frames and installs a
     /// new one only to switch the language or a service: the scope's words are built again for a new host, and a new
-    /// language runs every settling region again (`Lazy::settles`).
+    /// language runs every memoized view again (the language is part of its place).
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
@@ -106,6 +106,9 @@ pub struct FrameOutput {
     /// The commands components took since the last call, in order, whatever fired them (a key, a menu row, the
     /// palette): what ran inside the framework, for an app that records the commands it runs (an action recorder).
     pub delivered: Vec<Fired>,
+    /// The app-scope commands a key press fired while only the app's own command state disabled them, in order.
+    /// Refusals by the gate or the modal rule are not listed.
+    pub declined: Vec<Fired>,
     /// Text for the live announcement region.
     pub announcements: Vec<String>,
     /// The chrome toggles the windows asked for since the last call, in order: each names its viewport and whether the
@@ -140,6 +143,8 @@ pub(crate) struct FrameState {
     root_passes_hooked: u64,
     prunes: HashMap<TypeId, fn(&Context, &[ViewportId])>,
     sweeps: HashMap<TypeId, fn(&Context)>,
+    /// What a layer above the runtime reads at the begin hook, after the pointer snapshot and before any component runs.
+    begins: HashMap<TypeId, fn(&Context)>,
     frame_layers: Option<fn(&Context)>,
 }
 
@@ -195,6 +200,13 @@ pub enum PassStep {
 pub struct Stamped<T> {
     pass: u64,
     value: T,
+}
+
+impl<T> Stamped<T> {
+    /// The record as its viewport's latest pass left it.
+    pub(crate) fn value(&self) -> &T {
+        &self.value
+    }
 }
 
 impl<T: Default> PerViewport<T> {
@@ -255,6 +267,11 @@ impl<T: Stored> PerViewport<T> {
         if !registered {
             Self::register_prune(ctx);
         }
+    }
+
+    /// Runs `f` on the record of `viewport` when it has one; creates none.
+    pub(crate) fn with_existing<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        T::records(ctx, |records| records.records.iter_mut().find(|(id, _)| *id == viewport).map(|(_, record)| f(record)))
     }
 
     /// Runs `f` on the record of every viewport that has one.
@@ -319,6 +336,14 @@ pub(crate) fn register_prune(ctx: &Context, key: TypeId, prune: fn(&Context, &[V
 pub(crate) fn register_end_sweep(ctx: &Context, key: TypeId, sweep: fn(&Context)) {
     pass_state::with::<FrameState, _>(ctx, |state| {
         state.sweeps.entry(key).or_insert(sweep);
+    });
+}
+
+/// Registers a hook the begin hook runs for each viewport's pass after the pointer snapshot, once per service type:
+/// a service of a layer above the runtime reads its state there before any component runs.
+pub(crate) fn register_begin_hook(ctx: &Context, key: TypeId, hook: fn(&Context)) {
+    pass_state::with::<FrameState, _>(ctx, |state| {
+        state.begins.entry(key).or_insert(hook);
     });
 }
 
@@ -408,6 +433,7 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
     output.delivered = commands::take_delivered(ctx);
+    output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
     // already acted in the key stage.
@@ -447,23 +473,11 @@ pub(crate) fn announce(ctx: &Context, text: String) {
     pass_state::with::<FrameState, _>(ctx, |state| state.output.announcements.push(text));
 }
 
-/// Asks for another pass of the viewport the running pass belongs to. Asked inside a settling child
-/// (`Lazy::settles`), that child runs again; asked outside every one, the app says data it shows changed, so every
-/// settling child runs.
+/// Asks for another pass of the viewport the running pass belongs to. Asked in a memoized view's run, that view runs in
+/// the next pass, and so do the views around it, whose replay would hold its old run. Asked outside every view, every
+/// view replays: app data a view shows reaches it through its props.
 #[doc(hidden)]
 pub fn request_repaint(ctx: &Context) {
-    if crate::runtime::replay::recording(ctx) {
-        crate::runtime::replay::note_unsettled(ctx);
-    } else {
-        crate::runtime::lazy::unsettle(ctx);
-    }
-    raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
-}
-
-/// Asks for another pass of the viewport the running pass belongs to, to move what the caller itself shows (a tool's
-/// preview, a view that eases): no app data changed, so only the settling child it is asked in runs again.
-#[doc(hidden)]
-pub fn request_own_repaint(ctx: &Context) {
     crate::runtime::replay::note_unsettled(ctx);
     raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
 }
@@ -588,7 +602,24 @@ pub(crate) fn facts(ctx: &Context) -> PassFacts {
     })
 }
 
-/// The running pass's time in seconds, read once by the begin hook.
+/// The pass clock in seconds rounded down to a multiple of `step`, for content that changes with time (a rescan every
+/// few seconds, a "5 minutes ago"): the running view is shown again at the next multiple. Between two steps a run
+/// shows what the last one showed, so a memoized view that reads it replays until the next step and runs then. A
+/// `step` of zero or less returns the clock and shows the view again in every pass.
+pub fn stepped_clock(ctx: &Context, step: f64) -> f64 {
+    let now = clock(ctx);
+    if step <= 0.0 {
+        crate::runtime::motion::note_unsettled(ctx);
+        return now;
+    }
+    let at = (now / step).floor() * step;
+    crate::runtime::motion::wake_at(ctx, at + step);
+    at
+}
+
+/// The running pass's time in seconds, read once by the begin hook. Content that changes with time reads
+/// [`stepped_clock`], which shows it again when the value it read changes; this read notes nothing, for timing
+/// events in the component that has the pointer or the focus.
 #[doc(hidden)]
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {
@@ -628,7 +659,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     // H0: one press per pass.
     let frame = pass::frame_nr(ctx, viewport);
     let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(&mut events, frame, &mut record.held));
-    // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
+    // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left. The events sent
+    // to the focus are counted first, before the IME and key stages take theirs.
+    keys::count_sent(ctx, viewport, &events);
     ime::input_hook(ctx, &mut events, viewport);
     let (stripped, later) = keys::input_hook(ctx, input, &mut events);
     if !later.is_empty() {
@@ -681,6 +714,10 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     // H5: the pointer snapshot, before any component runs.
     let input = frame_input.unwrap_or_else(|| FrameInput::new(RootEnv::fallback(&ctx)));
     pointer::begin(&ctx, frame_hit(&ctx), input.latched);
+    let begins: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.begins.values().copied().collect());
+    for hook in begins {
+        hook(&ctx);
+    }
     drag::begin(&ctx);
     // H5: install the root `Env` and the theme styles' direction from `FrameInput.root`.
     let env = Env::from_root(&ctx, &input.root, input.host, scale::pixels_per_point(&ctx));
@@ -738,6 +775,8 @@ pub(crate) fn end_pass(ui: &mut Ui) {
     for prune in prunes {
         prune(&ctx, &live);
     }
+    #[cfg(feature = "testing")]
+    crate::runtime::egui::access::check_parents_acyclic(&ctx);
     RUNNING.with(|running| {
         let mut running = running.borrow_mut();
         if let Some(at) = running.iter().rposition(|pass| pass.ctx == ctx) {

@@ -22,11 +22,11 @@
 
 pub mod layout;
 #[cfg(test)]
-mod layout_tests;
+pub(crate) mod layout_tests;
 pub mod numbering;
 pub mod range;
 #[cfg(test)]
-mod range_tests;
+pub(crate) mod range_tests;
 pub mod setup;
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -36,7 +36,7 @@ pub use layout::{
     parse_display_token, place_pages, shown_row, spread_first,
 };
 pub use numbering::{NumberStyle, PAGE_NUMBER_STYLES, PageNumbering};
-pub use range::{PageRange, PageRangeError, Subset, format_pages, parse_pages};
+pub use range::{PageRange, PageRangeError, PageScope, Subset, format_pages, parse_pages};
 pub use setup::{
     DocumentGrid, GridKind, MARGIN_PRESETS, MAX_GRID_COUNT, MarginPreset, Margins, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize,
     paper_named,
@@ -45,16 +45,19 @@ pub use setup::{
 /// The stories and trials this crate registers.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(all(test, feature = "screen-testing"))]
 extern crate self as craft_pages;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

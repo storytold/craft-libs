@@ -3,7 +3,6 @@
 use super::{
     Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionLayout, ConditionValue, Join, Match,
 };
-use craft_ui::contract::Bind;
 use craft_ui::pickers::PickedDate;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -68,8 +67,8 @@ fn rules() -> ConditionGroup {
 
 #[story(ConditionBuilder<'static>, covers = [Default], drive = Drive::Never)]
 fn condition_builder(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let group = data.value("group", rules());
-    ConditionBuilder::new("Rules", Bind::bound(group), &Photos).show(ui).into()
+    let (group, group_at) = data.value_at("group", rules());
+    ConditionBuilder::new("Rules", group_at.bind(group), &Photos).show(ui).into()
 }
 
 /// Three rules in the joined layout, the third joined to the second by Or, at the rule limit so "+ Rule" is disabled.
@@ -80,7 +79,7 @@ fn condition_builder_joined(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         rule.join = join;
         ConditionItem::Rule(rule)
     };
-    let group = data.value(
+    let (group, group_at) = data.value_at(
         "joined",
         ConditionGroup::new(
             Match::All,
@@ -91,5 +90,5 @@ fn condition_builder_joined(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             ],
         ),
     );
-    ConditionBuilder::new("Rules", Bind::bound(group), &Photos).layout(ConditionLayout::Joined).max_rules(3).show(ui).into()
+    ConditionBuilder::new("Rules", group_at.bind(group), &Photos).layout(ConditionLayout::Joined).max_rules(3).show(ui).into()
 }

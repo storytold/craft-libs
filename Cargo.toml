@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2", "vendor/hayro-cmap", "vendor/hayro-postscript", "vendor/linesweeper"]
+exclude = ["vendor/krilla", "vendor/hayro", "vendor/hayro-interpret", "vendor/hayro-syntax", "vendor/hayro-jbig2", "vendor/hayro-cmap", "vendor/hayro-postscript", "vendor/linesweeper", "vendor/vello_common", "vendor/vello_cpu"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-android-res = { path = "crates/android-res" }
+craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
 craft-java-class = { path = "crates/java-class" }
@@ -36,9 +38,11 @@ log = "0.4"
 craft-plist = { path = "crates/plist" }
 craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
+craft-png = { path = "crates/png" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-win32 = { path = "crates/win32" }
+craft-cdr = { path = "crates/cdr" }
 craft-ai = { path = "crates/ai" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
@@ -91,6 +95,7 @@ craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
 craft-mcmat = { path = "crates/mcmat" }
+craft-sbs = { path = "crates/sbs" }
 craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
@@ -272,6 +277,7 @@ scoped-tls = "1"
 smallvec = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+typeid = "1"
 proptest = "1"
 # Character sets of the WHATWG Encoding Standard (craft-mime). (Apache-2.0 OR MIT) AND BSD-3-Clause.
 encoding_rs = "0.8"
@@ -305,20 +311,22 @@ hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 linesweeper = { path = "vendor/linesweeper" }
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
+vello_common = { path = "vendor/vello_common" }
+vello_cpu = { path = "vendor/vello_cpu" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
 # symphonia's FLAC decoder restores LPC samples as `residual + (prediction as i32)`. In a valid

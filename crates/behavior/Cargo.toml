@@ -21,6 +21,9 @@ bitflags = "2"
 craft-host = { workspace = true }
 craft-keymap = { workspace = true }
 craft-theme = { workspace = true }
+# Value types readers hold in `Tracked` derive its `PlainData` marker.
+craft-tracked = { workspace = true }
+craft-ui-macros = { workspace = true }
 
 # The dock layout is a persisted shape.
 serde = { workspace = true }

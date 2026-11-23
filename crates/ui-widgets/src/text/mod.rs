@@ -1,16 +1,17 @@
 //! Text and number fields: `TextField<C>` and `NumberField` on the text part (18.3).
 
 mod adorn;
-mod alt_text;
-mod chips;
+pub(crate) mod alt_text;
+pub(crate) mod chips;
 mod completions;
-mod hex;
-mod linked;
-mod number;
-mod selectable_text;
-mod text_field;
+pub(crate) mod hex;
+pub(crate) mod linked;
+pub(crate) mod number;
+pub(crate) mod selectable_text;
+pub(crate) mod text_field;
+pub(crate) mod word_run;
 mod words;
-mod zoom_field;
+pub(crate) mod zoom_field;
 
 pub use adorn::{Adornment, Placed, place, reserve};
 pub use alt_text::{AltText, AltTextField, AltTextFieldStyle, AltTextWords};
@@ -20,8 +21,9 @@ pub use linked::{LinkMode, LinkedFields, LinkedFieldsStyle, LinkedLayout, Linked
 pub use number::{NamedOr, NumberField, NumberName, NumberOutput, NumberPick, NumberStepper, NumberStyle, NumberValue, RangeAlert, UnitPlacement};
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
+pub use word_run::{RunWord, WordRun, WordRunOutput, WordRunStyle, WordState};
 pub use words::TextWords;
-pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput};
+pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput, ZoomScale};
 
 use crate::contract::{Bind, EditResponse};
 use crate::primitives::TextKey;

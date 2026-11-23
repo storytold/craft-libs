@@ -8,7 +8,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Meta as _, Outcome, Overlay, OverlayUi,
     Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth};
+use craft_ui::primitives::{DataWidth, Draw, Glyph, IconSpec, PaintShape, StrokeWidth, WellFill};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, DataColor, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle, UiTokens};
@@ -18,8 +18,8 @@ use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, 
 use super::popover::compact_picker;
 use super::{ColorPicker, PickedColor, ScreenPickGesture};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// One of the wells, `WELL.at(0)` the primary and `WELL.at(1)` the secondary.
 const WELL: PartKey = PartKey::new("well");
@@ -496,7 +496,7 @@ impl Component for SwatchPair<'_> {
                 match shown.color.same() {
                     Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
                     color => {
-                        draw.swatch_well(at, style.radius, color.copied());
+                        draw.swatch_well(at, style.radius, color.copied().map_or(WellFill::Mixed, WellFill::Color));
                         draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
                         draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
                     }
@@ -564,7 +564,7 @@ fn outline(at: Rect, style: &SwatchPairStyle) -> PaintShape {
 
 /// The glyphs of the pair's buttons, drawn on a square grid of `GRID` units; they picture the pair, so they mirror
 /// with it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, craft_ui::contract::MemoProps)]
 enum PairGlyph {
     /// Default colours: a black square over a white one, as the wells stand.
     Defaults,

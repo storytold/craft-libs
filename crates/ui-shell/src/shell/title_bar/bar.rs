@@ -1,7 +1,7 @@
 //! `TitleBar`: the app-drawn bar of a window, in the title slot of an `AppShell`.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::measure::{End, Ends, Strip};
 use super::style::TitleBarStyle;
@@ -23,6 +23,7 @@ use craft_behavior::{PartKey, Sense};
 use craft_host::target::{DoubleClick, WindowState};
 use craft_window::desktop::Desktop;
 use egui::{Rect, Response, Ui};
+use std::sync::Arc;
 
 /// What a title bar reports: the caption clicked and whether the window was asked to close.
 #[derive(Debug)]
@@ -163,7 +164,7 @@ pub(super) fn show_end(ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window)
         .map(|(index, slot)| {
             let mut button = CaptionButton::new(slot.caption, window.ends.family).maximized(window.maximized);
             if let Some(icons) = &icons {
-                button = button.icons(icons);
+                button = button.icons(Arc::clone(icons));
             }
             if let Some(edge) = slot.end {
                 button = button.outermost(edge);
@@ -320,16 +321,17 @@ impl Container for TitleBar<'_> {
 
 /// The caption glyphs of the icon theme of the desktop the runtime reports (`WindowHost::desktop`), built with
 /// `CaptionIcons::for_desktop` once per desktop value and kept for the app's bars while the desktop stays the same.
-fn desktop_icons(ctx: &egui::Context) -> Option<CaptionIcons> {
+fn desktop_icons(ctx: &egui::Context) -> Option<Arc<CaptionIcons>> {
     let desktop = WindowHost::of(ctx).desktop()?;
     let key = memory::unique("craft_ui.title_bar.desktop_icons");
-    memory::with_session(ctx, key, |kept: &mut Option<(Desktop, Option<CaptionIcons>)>| {
+    memory::with_session(ctx, key, |kept: &mut Option<(Desktop, Option<Arc<CaptionIcons>>)>| {
         if let Some((seen, icons)) = kept.as_ref()
             && *seen == desktop
         {
             return icons.clone();
         }
-        let icons = CaptionIcons::for_desktop(&desktop, kept.take().and_then(|(_, icons)| icons));
+        let previous = kept.take().and_then(|(_, icons)| icons).map(Arc::unwrap_or_clone);
+        let icons = CaptionIcons::for_desktop(&desktop, previous).map(Arc::new);
         *kept = Some((desktop, icons.clone()));
         icons
     })

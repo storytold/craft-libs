@@ -1,8 +1,7 @@
 //! Stories of `TextStylesPanel` and of the style picker built on `PresetPicker`.
 
-use super::{NamedStyleRow, StylePreview, TextStyleKind, TextStyleRow, TextStylesPanel, style_rows};
+use super::{NamedStyleRow, StylePreview, TextStyleKind, TextStyleRow, TextStylesPanel, style_source};
 use craft_behavior::{IconId, Mixed, Selection};
-use craft_ui::contract::Bind;
 use craft_ui::patterns::presets::{PresetKey, PresetPicker, PresetState};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -18,8 +17,8 @@ fn character_rows() -> Vec<TextStyleRow> {
 #[story(TextStylesPanel<'static>, covers = [], drive = Drive::Never)]
 fn paragraph_styles_with_an_overridden_style(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = paragraph_rows();
-    let selection = data.value("paragraph", Selection::<u64>::default());
-    TextStylesPanel::new("Paragraph Styles", TextStyleKind::Paragraph, &rows, Bind::bound(selection))
+    let (selection, selection_at) = data.value_at("paragraph", Selection::<u64>::default());
+    TextStylesPanel::new("Paragraph Styles", TextStyleKind::Paragraph, &rows, selection_at.bind(selection))
         .current(Some(1), true)
         .target(true)
         .show(ui)
@@ -29,8 +28,8 @@ fn paragraph_styles_with_an_overridden_style(ui: &mut Ui, data: &mut StoryData) 
 #[story(TextStylesPanel<'static>, covers = [], drive = Drive::Never)]
 fn character_styles_with_highlighted_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = character_rows();
-    let selection = data.value("character", Selection::new(vec![1_u64, 2], Some(2), Some(1)));
-    TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection))
+    let (selection, selection_at) = data.value_at("character", Selection::new(vec![1_u64, 2], Some(2), Some(1)));
+    TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, selection_at.bind(selection))
         .current(Some(0), false)
         .target(true)
         .highlighting(true)
@@ -41,8 +40,8 @@ fn character_styles_with_highlighted_rows(ui: &mut Ui, data: &mut StoryData) -> 
 #[story(TextStylesPanel<'static>, covers = [], drive = Drive::Never)]
 fn no_rows_with_empty_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows: Vec<TextStyleRow> = Vec::new();
-    let selection = data.value("empty", Selection::<u64>::default());
-    TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection)).empty("No document").show(ui).into()
+    let (selection, selection_at) = data.value_at("empty", Selection::<u64>::default());
+    TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, selection_at.bind(selection)).empty("No document").show(ui).into()
 }
 
 fn picker_styles() -> Vec<NamedStyleRow> {
@@ -55,7 +54,8 @@ fn picker_styles() -> Vec<NamedStyleRow> {
 
 #[story(TextStylesPanel<'static>, covers = [], drive = Drive::Never)]
 fn style_picker_over_style_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let rows = style_rows(&picker_styles());
-    let (applied, state) = data.value("picker", (Mixed::Same(Some(PresetKey::Item(2_u64))), PresetState::<PresetKey<u64>>::new()));
-    PresetPicker::new("Style", Bind::bound_mixed(applied), &rows, Bind::bound(state)).show(ui).into()
+    let styles = picker_styles();
+    let rows = style_source(&styles);
+    let ((applied, state), picker_at) = data.value_at("picker", (Mixed::Same(Some(PresetKey::Item(2_u64))), PresetState::<PresetKey<u64>>::new()));
+    PresetPicker::new("Style", picker_at.bind_mixed(applied), &rows, picker_at.bind(state)).show(ui).into()
 }

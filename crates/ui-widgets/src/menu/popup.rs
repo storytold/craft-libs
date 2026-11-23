@@ -5,9 +5,9 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use super::words::MenuWords;
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, Popup};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue,
-    Outcome, Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, TooltipSpec,
-    Trigger,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InBar, InMenu, LeastWidth, Mount,
+    NoValue, Outcome, Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing,
+    TooltipSpec, Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label, with_env};
@@ -244,7 +244,8 @@ impl<'a> Menu<'a> {
     }
 
     /// A context menu named `label`, hanging from where the pointer was when it opened, with `opener` getting the
-    /// focus back when it closes by key.
+    /// focus back when it closes by key. An item's menu hangs from its collection's response and shows while the
+    /// collection reports the item's request (`CollectionResponse::menu`), whose key its rows act on.
     pub fn context(label: impl Into<Label>, opener: &Response) -> Self {
         let mut menu = Menu::new(label);
         menu.opener = Some(opener.id);
@@ -353,7 +354,7 @@ impl Component for Menu<'_> {
         level.resume(cx.core.ctx.cumulative_pass_nr());
         while let Some((mv, _)) = cx.intents().take_move() {
             if level.step_active(mv) {
-                frame::request_own_repaint(&cx.core.ctx);
+                frame::request_repaint(&cx.core.ctx);
             }
         }
         // Enter routed from the field arrives as the menu's own activation by key: the row it names runs, and the run
@@ -363,7 +364,7 @@ impl Component for Menu<'_> {
         {
             cx.keep_open();
             level.run(row);
-            frame::request_own_repaint(&cx.core.ctx);
+            frame::request_repaint(&cx.core.ctx);
         }
         // The rows run after this, so the pass that moved the pointer onto a row paints it, and the row it left, as the
         // level now has them.
@@ -393,7 +394,7 @@ impl Component for Menu<'_> {
             cx.claim(chord);
             if cx.take_claimed(chord) {
                 level.run(row);
-                frame::request_own_repaint(&cx.core.ctx);
+                frame::request_repaint(&cx.core.ctx);
             }
         }
     }
@@ -471,8 +472,8 @@ impl CompanionLayer {
             .body_scroll(false)
             .focus(FocusPolicy::NONE)
             .dismiss(Dismiss::new().outside(Outside::Keep))
-            .place(Place::anchored(Anchor::Parent, Side::Above, Align::Center));
-        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::None).sizing(Sizing::Content);
+            .place(Place::anchored(Anchor::Parent, Side::Above, Align::Start));
+        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).pad(Pad::Control).sizing(Sizing::Content);
         CompanionLayer { common: Common::new(), props, open: Bind::given(true) }.label(label).id_salt("menu-companion")
     }
 }
@@ -490,6 +491,10 @@ impl Component for CompanionLayer {
 
     fn sense(&self) -> Sense {
         Sense::empty()
+    }
+
+    fn content_env(&self, _: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
+        values.set(InBar(true));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CompanionOutput {

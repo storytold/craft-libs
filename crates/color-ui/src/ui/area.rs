@@ -13,8 +13,8 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::value_drag::{PointMark, PointPicker};
 use egui::{Mesh, Pos2, Rect, Vec2, pos2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// Vertices along each side of the area's colour mesh (PhotoCraft's 32).
 const MESH: usize = 32;

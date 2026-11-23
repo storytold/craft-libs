@@ -21,8 +21,8 @@ use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The ratio, a ratio field, a preset or W × H × Resolution changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

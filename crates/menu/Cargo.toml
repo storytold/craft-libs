@@ -25,9 +25,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 screen-testing = ["craft-ui/testing"]
 
 [dev-dependencies]
+# The menu integration runner needs the suite runner even when only screen-testing is selected.
+craft-ui = { workspace = true, features = ["suite"] }
 # `default_fonts` so that the shortcuts dialog and native menu tests lay out text.
 egui = { workspace = true }
 

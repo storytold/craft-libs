@@ -8,10 +8,10 @@ use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::PresetId;
 use crate::primitives::{ContentPainterCx, StrokeWidth};
-use crate::runtime::env::{Env, Label, UnitKind};
+use crate::runtime::env::{Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
-use crate::tile_grid::{Tile, TileGrid};
+use crate::tile_grid::{CardText, Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
 use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
@@ -171,10 +171,12 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
         let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
-        Text::new(Env::of(ui).view().resolve(&heading).as_str().to_uppercase()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+        Text::new(heading).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
             .card()
+            .card_text(CardText::Preset)
+            .fill_row()
             .aspect(2.0)
             .select(SelectMode::Single)
             .detail_line()

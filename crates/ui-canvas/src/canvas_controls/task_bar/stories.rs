@@ -3,11 +3,11 @@
 use super::{TaskBar, TaskBarDismiss, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
-use crate::contract::{Bind, Props as _, Show as _};
+use crate::contract::{Props as _, Show as _};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use craft_behavior::kurbo::{Point, Vec2};
-use craft_behavior::overlay::Side;
+use craft_behavior::overlay::{Align, Side};
 use egui::Ui;
 
 /// The corners of a crop frame turned by a few degrees about the document's middle: the Crop tool hangs its bar from
@@ -69,8 +69,8 @@ fn selection_bar_kept_while_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOut
 fn crop_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let corners = turned_frame();
     on_canvas(ui, |ui, area, _| {
-        let place = data.value("place", TaskBarPlace::default());
-        TaskBar::new("Crop", &corners, Bind::bound(place))
+        let (place, place_at) = data.value_at("place", TaskBarPlace::default());
+        TaskBar::new("Crop", &corners, place_at.bind(place))
             .show(ui, area, |ui, cx| {
                 for (icon, name) in [("rotate_ccw", "Rotate left"), ("rotate_cw", "Rotate right"), ("grid", "Overlay")] {
                     let _ = IconButton::new(IconId::new(icon)).label(name).show(ui);
@@ -83,13 +83,45 @@ fn crop_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     })
 }
 
+/// A frame low on the story document: the canvas has no room below it, so a fixed bar hangs above it.
+fn low_frame() -> [Point; 4] {
+    [(120.0, 290.0), (520.0, 290.0), (520.0, 390.0), (120.0, 390.0)].map(|(x, y)| Point::new(x, y))
+}
+
+/// A fixed bar: no grip and no More menu, hung above its frame where there is no room below it.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn fixed_bar(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
+    let corners = low_frame();
+    on_canvas(ui, |ui, area, _| {
+        TaskBar::fixed("Signature", &corners)
+            .show(ui, area, |ui, _| {
+                let _ = Button::new("Cancel").show(ui);
+                let _ = Button::new("Place").show(ui);
+            })
+            .output
+    })
+}
+
+/// A fixed bar at the canvas view's top edge, at its end in reading direction: it takes no anchor.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn edge_bar(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, |ui, area, _| {
+        TaskBar::at_edge("Camera", Align::End)
+            .show(ui, area, |ui, _| {
+                let _ = Button::new("Capture").show(ui);
+                let _ = Button::new("Done").show(ui);
+            })
+            .output
+    })
+}
+
 /// A bar the user moved and pinned: it keeps its place near the canvas's top left while the frame stays where it is.
 #[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
 fn placed_and_pinned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let corners = turned_frame();
     on_canvas(ui, |ui, area, _| {
-        let place = data.value("place", TaskBarPlace { pinned: true, at: Some([24.0, 24.0]) });
-        TaskBar::new("Crop", &corners, Bind::bound(place))
+        let (place, place_at) = data.value_at("place", TaskBarPlace { pinned: true, at: Some([24.0, 24.0]) });
+        TaskBar::new("Crop", &corners, place_at.bind(place))
             .show(ui, area, |ui, _| {
                 let _ = Button::new("Done").show(ui);
             })

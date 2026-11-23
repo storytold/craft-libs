@@ -33,9 +33,9 @@ fn groups() -> Vec<IconPickerGroup<u8>> {
 fn icon_picker_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let groups = groups();
     let opener = Button::new("Choose an icon").show(ui);
-    let open = data.value("open", false);
+    let (open, open_at) = data.value_at("open", false);
     let mut picked = None;
-    let shown = Popover::new("Icons", Bind::bound(open)).opened_by(&opener).show(ui, |ui, _| {
+    let shown = Popover::new("Icons", open_at.bind(open)).opened_by(&opener).show(ui, |ui, _| {
         picked = IconPicker::new("Tool", Bind::bound(&mut None), &groups).show(ui).picked;
     });
     if picked.is_some() {
@@ -52,19 +52,19 @@ fn icon_picker_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(IconPicker<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn icon_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    IconPicker::new("Tool", Bind::bound(data.value("tool", Some(3u8))), &groups()).show(ui).into()
+    IconPicker::new("Tool", data.bind("tool", Some(3u8)), &groups()).show(ui).into()
 }
 
 /// The groups as a filter row: All first, then each group.
 #[story(IconPicker<'static, u8>, covers = [], drive = Drive::Never)]
 fn icon_picker_filter(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    IconPicker::new("Tool", Bind::bound(data.value("tool", Some(3u8))), &groups()).group_display(IconPickerGroups::Filter).show(ui).into()
+    IconPicker::new("Tool", data.bind("tool", Some(3u8)), &groups()).group_display(IconPickerGroups::Filter).show(ui).into()
 }
 
 /// The filter row with a search that matches nothing, and the app's own empty text.
 #[story(IconPicker<'static, u8>, covers = [], drive = Drive::Type("zzz"))]
 fn icon_picker_filter_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    IconPicker::new("Tool", Bind::bound(data.value("none", None)), &groups())
+    IconPicker::new("Tool", data.bind("none", None), &groups())
         .group_display(IconPickerGroups::Filter)
         .empty("No icons in this category")
         .show(ui)
@@ -73,5 +73,5 @@ fn icon_picker_filter_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 
 #[story(IconPicker<'static, u8>, covers = [Empty], drive = Drive::Type("zzz"))]
 fn icon_picker_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    IconPicker::new("Tool", Bind::bound(data.value("none", None)), &groups()).show(ui).into()
+    IconPicker::new("Tool", data.bind("none", None), &groups()).show(ui).into()
 }

@@ -1,6 +1,6 @@
 //! Stories of `PreferencesPage`.
 
-use crate::contract::Bind;
+use super::PreferencesLayout;
 use crate::patterns::preferences::{PageSpec, PrefValue, PreferencesModel, PreferencesPage, PreferencesState, RowKind, RowSpec};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::Rgba;
@@ -53,9 +53,13 @@ impl PreferencesModel for Live {
         }
     }
 
-    fn custom_row(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_row(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
-    fn custom_page(&mut self, _: &mut Ui, _: &str) {}
+    fn custom_page(&mut self, _: &mut Ui, _: &str) -> bool {
+        false
+    }
 
     fn reset_page(&mut self, page: &str) {
         let defaults = Live::default();
@@ -69,8 +73,13 @@ impl PreferencesModel for Live {
 
 /// The page over the story's settings.
 fn page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    laid_out(ui, data, PreferencesLayout::Paged)
+}
+
+/// The page over the story's settings, laid out as `layout` says.
+fn laid_out(ui: &mut Ui, data: &mut StoryData, layout: PreferencesLayout) -> StoryOutput {
     let mut live = data.value("live", Live::default()).clone();
-    let shown = PreferencesPage::new(Bind::bound(data.value("state", PreferencesState::default()))).show(ui, &mut live);
+    let shown = PreferencesPage::new(data.bind("state", PreferencesState::default())).layout(layout).show(ui, &mut live);
     *data.value("live", Live::default()) = live;
     shown.into()
 }
@@ -84,4 +93,10 @@ fn preferences_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PreferencesPage<'static>, covers = [], drive = Drive::Type("size"))]
 fn preferences_page_searching(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     page(ui, data)
+}
+
+/// The page as one scrolling column of cards.
+#[story(PreferencesPage<'static>, covers = [], drive = Drive::Never)]
+fn preferences_page_cards(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    laid_out(ui, data, PreferencesLayout::Cards)
 }

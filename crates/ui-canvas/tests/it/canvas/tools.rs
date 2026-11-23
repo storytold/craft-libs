@@ -86,7 +86,7 @@ impl Rig {
     /// Hovers and presses at `at` in separate frames.
     fn press(&mut self, at: Pos2) {
         self.tick(FRAME, vec![pointer::moved(at)]);
-        self.tick(FRAME, vec![pointer::press(at)]);
+        self.fixture.frame_held(vec![pointer::press(at)]);
     }
 
     /// Moves from `from` to `to` in `steps` frames of `dt` seconds.

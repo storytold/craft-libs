@@ -158,6 +158,7 @@ pub struct NumberCodec {
     custom: Option<Custom>,
     /// Typing rules of a zoom field ([`NumberCodec::zoom_typing`]).
     zoom: bool,
+    signed_zoom: bool,
 }
 
 impl fmt::Debug for NumberCodec {
@@ -167,6 +168,7 @@ impl fmt::Debug for NumberCodec {
             .field("decimals", &self.decimals)
             .field("fixed", &self.fixed)
             .field("zoom", &self.zoom)
+            .field("signed_zoom", &self.signed_zoom)
             .field("custom", &self.custom.is_some())
             .finish()
     }
@@ -179,7 +181,12 @@ impl PartialEq for NumberCodec {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         };
-        self.reader == other.reader && self.decimals == other.decimals && self.fixed == other.fixed && self.zoom == other.zoom && same_custom
+        self.reader == other.reader
+            && self.decimals == other.decimals
+            && self.fixed == other.fixed
+            && self.zoom == other.zoom
+            && self.signed_zoom == other.signed_zoom
+            && same_custom
     }
 }
 
@@ -213,7 +220,7 @@ const NUMBER_SAMPLE: &str = "0000.00";
 impl NumberCodec {
     /// A codec reading with `reader` and writing at most `decimals` decimal places.
     pub fn new(reader: Reader, decimals: usize) -> Self {
-        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false }
+        NumberCodec { reader, decimals, fixed: false, custom: None, zoom: false, signed_zoom: false }
     }
 
     /// The same codec writing every decimal place, trailing zeros included ("1.00"), as a field of a quantity shown
@@ -230,8 +237,14 @@ impl NumberCodec {
         self
     }
 
+    /// Allow a leading minus in zoom input so the field can reject negative values instead of discarding the sign.
+    pub fn signed_zoom(mut self) -> Self {
+        self.signed_zoom = true;
+        self
+    }
+
     /// The zoom reading of trimmed, non-empty `text`: the text before a second decimal separator, then `a/b` as a
-    /// percentage or a plain number. The filter keeps `+`, `-` and `*` out, so the reader's expressions never run.
+    /// percentage or a plain number. The filter keeps `+` and `*` out, so the reader's expressions never run.
     fn read_zoom(&self, text: &str) -> Result<(f64, ParseNote), NotAValue> {
         let separator = self.reader.decimal_separator();
         let second = text.char_indices().filter(|&(_, c)| c == separator).nth(1).map(|(at, _)| at);
@@ -239,6 +252,9 @@ impl NumberCodec {
             Some(at) => (&text[..at], true),
             None => (text, false),
         };
+        if kept.strip_prefix('-').unwrap_or(kept).contains('-') {
+            return Err(NotAValue);
+        }
         let number = match kept.split_once('/') {
             Some((part, whole)) => {
                 let part = self.reader.read(part, None)?;
@@ -303,13 +319,18 @@ impl Codec for NumberCodec {
 
     fn format(&self, v: &Option<f64>) -> String {
         let Some(number) = v else { return String::new() };
-        let fixed = format!("{number:.*}", self.decimals);
+        let written = format!("{number:.*}", self.decimals);
+        // A value that rounds to zero at these decimals carries no sign.
+        let fixed = match written.strip_prefix('-') {
+            Some(digits) if digits.bytes().all(|byte| matches!(byte, b'0' | b'.')) => digits,
+            _ => &written,
+        };
         let trimmed = if self.fixed {
-            &fixed
+            fixed
         } else if fixed.contains('.') {
             fixed.trim_end_matches('0').trim_end_matches('.')
         } else {
-            &fixed
+            fixed
         };
         trimmed.replace('.', &self.reader.decimal_separator().to_string())
     }
@@ -336,12 +357,26 @@ impl Codec for NumberCodec {
         }
     }
 
-    /// Zoom typing takes ASCII digits, `/` and the decimal separator; every other number field takes every character.
+    /// Zoom typing takes ASCII digits, `/` and the decimal separator, with an optional minus; other fields take every character.
     fn filter(&self, c: char) -> bool {
-        !self.zoom || c.is_ascii_digit() || c == '/' || c == self.reader.decimal_separator()
+        !self.zoom || c.is_ascii_digit() || (self.signed_zoom && c == '-') || c == '/' || c == self.reader.decimal_separator()
     }
 
     fn sample(&self, _current: &Option<f64>) -> Cow<'_, str> {
         Cow::Borrowed(NUMBER_SAMPLE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_value_that_rounds_to_zero_is_written_without_a_sign() {
+        let one = NumberCodec::new(Reader::new(), 1);
+        assert_eq!(one.format(&Some(-0.0)), "0");
+        assert_eq!(one.format(&Some(-0.04)), "0");
+        assert_eq!(one.format(&Some(-0.06)), "-0.1");
+        assert_eq!(NumberCodec::new(Reader::new(), 1).fixed().format(&Some(-0.04)), "0.0");
     }
 }

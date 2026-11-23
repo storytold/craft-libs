@@ -3,8 +3,8 @@
 
 mod body;
 mod events;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use events::{LayerCompsEvent, LayerCompsOutput, LayerCompsRowCommands};

@@ -1,7 +1,7 @@
 //! `PathRow`: a path typed in a text field, with a Browse button that asks the host to pick one.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::buttons::Button;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing, TooltipSpec, clicked};

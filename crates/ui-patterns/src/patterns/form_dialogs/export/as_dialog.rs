@@ -10,7 +10,9 @@ use crate::buttons::IconButton;
 use crate::contract::clicked;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::form::{read_bind, write_bind};
-use crate::patterns::presets::{GroupPath, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState};
+use crate::patterns::presets::{
+    GroupPath, NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetFns, PresetLibrary, PresetPicker, PresetRow, PresetSource, PresetState,
+};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathKind, PathRequest};
 use crate::text::TextField;
 use craft_behavior::IconId;
@@ -138,8 +140,8 @@ pub struct ExportAsDialog<'a> {
     /// The formats the list offers.
     #[prop(into)]
     formats: Vec<ExportFormat>,
-    /// The resample methods the list offers, in the order of [`Resample::ALL`]; all of them when empty. A method the
-    /// list lacks, remembered or from a preset, opens as the first listed one.
+    /// The resample methods the list offers, in the order given; all of them when empty. A method the list lacks,
+    /// remembered or from a preset, opens as Automatic when listed, else as the first listed one.
     #[prop]
     methods: Vec<Resample>,
     /// The dialog's title in place of "Export As" ("Export As: Layer 1").
@@ -449,7 +451,7 @@ impl HostedExportAs {
         self
     }
 
-    /// The resample methods the list offers, in the order of [`Resample::ALL`]; all of them when empty
+    /// The resample methods the list offers, in the order given; all of them when empty
     /// ([`ExportAsDialog::methods`]).
     #[must_use]
     pub fn methods(mut self, methods: Vec<Resample>) -> Self {
@@ -718,12 +720,13 @@ impl Pass<'_> {
         let words = self.words;
         let shown = {
             let presets = library.borrow();
-            let rows: Vec<PresetRow<String>> = presets.items().iter().map(|item| PresetRow::item(item.name.clone(), item.name.clone(), 0)).collect();
+            let names: Vec<String> = presets.items().iter().map(|item| item.name.clone()).collect();
+            let rows = PresetSource::new(names.as_slice(), PresetFns::new(name_rows));
             let current = presets.items().iter().find(|item| item.value == *options).map(|item| item.name.clone());
             let picker = PresetPicker::new(words.preset.clone(), Bind::given(current), &rows, Bind::bound(&mut held.picker)).field(PickerField::Name);
             NamedPresetRow::new(words.preset.clone(), picker)
                 .suggest_name(words.new_preset_name.as_str().to_owned())
-                .check_name(|typed| presets.name_error(typed))
+                .check_name(NameCheck::new(presets.names(), |names, typed| names.name_error(typed)))
                 .show(ui)
         };
         for event in shown.events {
@@ -955,4 +958,9 @@ fn choose<T: craft_behavior::Value>(ui: &mut Ui, name: &Label, salt: &str, entri
             *value = picked;
         }
     });
+}
+
+/// One preset row per name, keyed by it.
+fn name_rows(names: &&[String], _: &Env) -> Vec<PresetRow<String>> {
+    names.iter().map(|name| PresetRow::item(name.clone(), name.clone(), 0)).collect()
 }

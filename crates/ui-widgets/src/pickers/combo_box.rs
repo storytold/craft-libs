@@ -4,8 +4,8 @@
 //! component's own popup on the dropdown preset, so focus stays in the text part and the host hands the list keys to
 //! the list. The option the keys make active puts its text in the field; the list's Escape puts back what was typed.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::dress::RowDress;
 use super::rows::EntryRows;
@@ -134,8 +134,8 @@ impl<'a> ComboBox<'a> {
         options
     }
 
-    fn trailing(name: Label) -> [Adornment; 1] {
-        [Adornment::button(CHEVRON, crate::controls::disclosure::DisclosureGlyph::dropdown(), name)]
+    fn trailing(name: Label, arrow: crate::controls::disclosure::DropdownArrow) -> [Adornment; 1] {
+        [Adornment::button(CHEVRON, crate::controls::disclosure::DisclosureGlyph::dropdown_of(arrow), name)]
     }
 
     /// Whether any option's label matches `query`.
@@ -177,13 +177,13 @@ impl Component for ComboBox<'_> {
         let texts = self.options.iter().filter_map(|option| option.value().map(String::as_str)).chain([current, placeholder]);
         let widest = texts.map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
         let name = cx.words::<PickerWords>().combo_options.clone();
-        Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name)), widest.y)
+        Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name, cx.env.get())), widest.y)
     }
 
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let value = cx.value();
         let name = cx.words::<PickerWords>().combo_options.clone();
-        let trailing = Self::trailing(name);
+        let trailing = Self::trailing(name, cx.env.get());
         let placed = place(cx.content_rect, cx.style, &[], &trailing, cx.flow.is_rtl());
         if let Some(at) = placed.trailing.first() {
             cx.part(CHEVRON, *at)
@@ -263,11 +263,13 @@ impl Component for ComboBox<'_> {
         let rows = EntryRows::new(options, &labels);
         let mut over_rows = false;
         let mut under_pointer: Option<usize> = None;
-        let events = ui.show(popup, Overlay::dropdown(), |ui, _| {
+        let list = cx.id.with("options");
+        let events = ui.show(popup, Overlay::dropdown().list(list), |ui, _| {
             let selection = current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, Selection::single);
             let shown = List::<usize>::options(name.clone())
+                .id(list)
                 .selection(Bind::given(selection))
-                .filter(&query, |key| labels[*key].clone())
+                .filter(&query, |key| vec![labels[*key].clone()])
                 .ranked(true)
                 .show_items(ui, &rows, &mut |key, _| rows.row(*key, current, decorate, None));
             under_pointer = shown.shown.iter().find(|row| row.hovered).map(|row| row.key);
@@ -330,7 +332,7 @@ impl Component for ComboBox<'_> {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let name = cx.words::<PickerWords>().combo_options.clone();
-        ui.face(CHEVRON, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
+        ui.face(CHEVRON, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown_of(cx.env.get())).label(name));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> ComboBoxOutput {

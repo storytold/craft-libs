@@ -154,7 +154,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                 events.borrow_mut().extend(out);
             })
             .show(ui, |ui, stack| {
-                let mods = craft_ui::runtime::pointer::frame(&ctx).mods;
+                let mods = craft_ui::runtime::pointer::mods(&ctx);
                 while let Some((command, _)) = stack.take_command::<ChannelsCommands>() {
                     match (command, targeted_row(rows)) {
                         (ChannelsCommands::RenameChannel, Some(row)) if row.kind.renames() => request_rename(&ctx, list, &row.key),

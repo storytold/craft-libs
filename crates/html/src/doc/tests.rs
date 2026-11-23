@@ -2049,3 +2049,118 @@ fn zero_alpha_colors_with_none_channels() {
     let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
     assert_eq!(p2.props.shading, None);
 }
+
+#[test]
+fn zero_rowspan_stops_at_the_row_group_boundary() {
+    for boundary in ["</tbody><tbody>", "<tbody>", "</tbody>", "<caption>Heading</caption>", "<colgroup><col></colgroup>", "<col>"] {
+        let html = format!("<table><tr><td rowspan=0>A<td>B<tr><td>C{boundary}<tr><td>D<td>E</table>");
+        let flow = parse(&html);
+        let table = flow
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                FBlock::Table(table) => Some(table),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(table.rows.len(), 3, "{boundary}: expected three rows");
+        assert_eq!(table.rows[0][0].rowspan, 2, "{boundary}: A spans the first two rows");
+        assert!(table.rows[1][0].covered, "{boundary}: row two continues A");
+        assert!(!table.rows[2][0].covered, "{boundary}: the next group starts at column one");
+        assert_eq!(table.rows[2].len(), 2, "{boundary}: D and E retain their columns");
+    }
+}
+
+#[test]
+fn zero_rowspan_covers_an_empty_middle_row() {
+    let flow = parse("<table><tbody><tr><td rowspan=0>A<td>B</tr><tr></tr><tr><td>C</tr></tbody></table>");
+    let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected a table") };
+
+    assert_eq!(table.rows.len(), 3);
+    assert_eq!(table.rows[0][0].rowspan, 3);
+    assert!(table.rows[1][0].covered);
+    assert!(table.rows[2][0].covered);
+    assert_eq!(table.rows[2][1].text(), "C");
+}
+
+#[test]
+fn zero_rowspan_covers_an_empty_trailing_row() {
+    let flow = parse("<table><tbody><tr><td rowspan=0>A<td>B</tr><tr><td>C</tr><tr></tr></tbody><tbody><tr><td>D</tr></tbody></table>");
+    let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected a table") };
+
+    assert_eq!(table.rows[0][0].rowspan, 3);
+    assert_eq!(table.rows.len(), 4);
+    assert!(table.rows[2][0].covered);
+    assert!(!table.rows[3][0].covered);
+    assert_eq!(table.rows[3][0].text(), "D");
+}
+
+/// A copy's HTML has no style sheet, so its top-level paragraphs and headings carry their own
+/// spacing and indents (as margins and `text-indent`, in points), and a mail client lays the text
+/// out as the app does. A page saved as HTML doesn't write them.
+#[test]
+fn the_fragment_writes_a_paragraphs_spacing_and_indents() {
+    let chr = craft_wordmodel::CharProps::default();
+    let mut spaced = craft_wordmodel::Paragraph::with_text("Spaced", chr.clone());
+    spaced.props.space_before = Some(6.0);
+    spaced.props.space_after = Some(12.0);
+    spaced.props.indent_left = Some(36.0);
+    spaced.props.indent_first = Some(-18.0);
+    let mut plain = craft_wordmodel::Paragraph::with_text("Plain", chr.clone());
+    plain.props.indent_right = Some(-0.0);
+    plain.props.indent_first = Some(0.0);
+    plain.props.space_after = Some(f32::NAN);
+    // Values that round to zero print as 0 (never "-0"), and a first-line indent that does is left out.
+    let mut tiny = craft_wordmodel::Paragraph::with_text("Tiny", chr.clone());
+    tiny.props.indent_left = Some(-0.004);
+    tiny.props.indent_first = Some(0.001);
+    let mut heading = craft_wordmodel::Paragraph::with_text("Heading", chr).styled("Heading1");
+    heading.props.space_before = Some(24.0);
+    let mut d = Document::new();
+    d.body = vec![
+        craft_wordmodel::para_block(spaced),
+        craft_wordmodel::para_block(plain),
+        craft_wordmodel::para_block(tiny),
+        craft_wordmodel::para_block(heading),
+    ];
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("<p style=\"margin-top:6pt;margin-bottom:12pt;margin-left:36pt;text-indent:-18pt\">Spaced</p>"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-right:0pt\">Plain</p>"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-left:0pt\">Tiny</p>"), "{fragment}");
+    assert!(fragment.contains("<h1 style=\"margin-top:24pt\">Heading</h1>"), "{fragment}");
+    let page = export(&d);
+    assert!(!page.contains("margin-") && !page.contains("text-indent"), "{page}");
+}
+
+/// Quotes, list items and code keep the fragment's plain markup, while a paragraph between them
+/// still writes its spacing.
+#[test]
+fn the_fragment_spaces_only_top_level_paragraphs_and_headings() {
+    let chr = craft_wordmodel::CharProps::default();
+    let mut quote = craft_wordmodel::Paragraph::with_text("Quoted", chr.clone()).styled("Quote");
+    quote.props.space_after = Some(10.0);
+    let mut body = craft_wordmodel::Paragraph::with_text("Body", chr.clone());
+    body.props.space_after = Some(8.0);
+    let mut d = Document::new();
+    let num = std::sync::Arc::make_mut(&mut d.numbering).add_list(craft_wordmodel::ListKind::Bullet);
+    let mut item = craft_wordmodel::Paragraph::with_text("Item", chr).styled("ListParagraph");
+    item.props.numbering = Some(craft_wordmodel::props::NumRef { num, level: 0 });
+    item.props.space_after = Some(6.0);
+    d.body = vec![craft_wordmodel::para_block(quote), craft_wordmodel::para_block(body), craft_wordmodel::para_block(item)];
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("<blockquote>\n<p>Quoted</p>\n</blockquote>"), "{fragment}");
+    assert!(fragment.contains("<p style=\"margin-bottom:8pt\">Body</p>"), "{fragment}");
+    assert!(fragment.contains("<ul><li>Item</li></ul>"), "{fragment}");
+}
+
+/// Code blocks and the paragraphs of a table cell keep the fragment's plain markup, whatever their
+/// spacing.
+#[test]
+fn the_fragment_leaves_code_and_table_cells_unspaced() {
+    let d = import(
+        "<table><tr><td><p style='margin-left:20pt'>One</p><p style='margin-left:20pt'>Two</p></td></tr></table>         <pre style='margin-left:30pt'>code</pre>",
+    );
+    let fragment = export_fragment(&d);
+    assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
+    assert!(!fragment.contains("margin-"), "{fragment}");
+}

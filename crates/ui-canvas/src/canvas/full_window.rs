@@ -21,10 +21,10 @@ use egui::Ui;
 pub use hosted::{FullWindowWorkspace, HostedWorkspace, WorkspaceCx, WorkspacePass};
 
 mod hosted;
-#[cfg(feature = "testing")]
-mod stories;
-#[cfg(feature = "testing")]
-mod trials;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod trials;
 
 /// The style of a full-window dialog: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -278,7 +278,7 @@ impl Container for FullWindowDialog<'_> {
         if self.props.outer_edit {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable));
+        frame::header(ui, cx, frame::close_action(self.closable), None, None);
     }
 
     fn end(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

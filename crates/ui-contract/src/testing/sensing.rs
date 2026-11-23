@@ -23,17 +23,24 @@ pub struct ProbePart {
     priority: HitPriority,
     over: bool,
     cursor: Option<CursorIcon>,
+    drag_to_root: bool,
 }
 
 impl ProbePart {
     /// A part `key` over `rect` sensing `sense`.
     pub fn new(key: PartKey, rect: Rect, sense: Sense) -> Self {
-        ProbePart { key, index: None, rect, sense, priority: HitPriority::BODY, over: false, cursor: None }
+        ProbePart { key, index: None, rect, sense, priority: HitPriority::BODY, over: false, cursor: None, drag_to_root: false }
     }
 
     /// The part's tier among the shapes of its stack position.
     pub fn level(mut self, level: HitLevel, sub: u8) -> Self {
         self.priority = HitPriority::new(level, sub);
+        self
+    }
+
+    /// Send a passed drag to the arena root.
+    pub fn drag_to_root(mut self) -> Self {
+        self.drag_to_root = true;
         self
     }
 
@@ -61,6 +68,7 @@ impl ProbePart {
         decl.priority = self.priority;
         decl.over = self.over;
         decl.cursor = self.cursor.map(Cursor::System);
+        decl.drag_to_root = self.drag_to_root;
         decl
     }
 }
@@ -365,6 +373,7 @@ fn show_root(ui: &mut Ui, ctx: &Context, root: &ProbeRoot) -> RootReport {
     };
     // The owner places its `over` parts once its body has shown: above its members.
     sensing::place_over_widgets(ui, id, None, &decls);
+    sensing::widen_root(ctx, id, false);
     RootReport {
         root: SenseReport {
             id,

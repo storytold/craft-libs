@@ -4,14 +4,14 @@
 
 #![warn(missing_docs)]
 
-mod browser;
+pub(crate) mod browser;
 mod chip;
-mod detail;
-mod layer;
-mod problems;
+pub(crate) mod detail;
+pub(crate) mod layer;
+pub(crate) mod problems;
 mod rows;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod subject;
 mod words;
 
@@ -26,10 +26,13 @@ pub use words::summary;
 /// The stories this crate registers for the integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

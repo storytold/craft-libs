@@ -1,4 +1,4 @@
-//! `ControlChannel` deadlines and the loopback server's limits.
+//! `ControlChannel` deadlines and the loopback server's limits: connections, request size, authentication.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -8,7 +8,7 @@ use std::time::Duration;
 use craft_automation::client::ControlClient;
 use craft_automation::control::{ControlChannel, ControlRequest, ControlResponse, Reply, expired_error, result_reply, timeout_error};
 use craft_automation::protocol::MAX_RESPONSE_BYTES;
-use craft_automation::security::{CHALLENGE_METHOD, MAX_REQUEST_BYTES, ProofRole, generate_nonce, handshake_proof, proof_matches};
+use craft_automation::security::{CHALLENGE_METHOD, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ProofRole, generate_nonce, handshake_proof, proof_matches};
 use craft_automation::server;
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
@@ -120,6 +120,70 @@ fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
     let served = started.elapsed();
     assert!(closed, "the trickle did not keep the connection open");
     assert!(served < deadline + Duration::from_secs(3), "the trickle did not extend the deadline: {served:?}");
+    assert!(rx.try_recv().is_err(), "nothing was dispatched");
+}
+
+/// Whether the server closed the connection: the next read is the end of the stream, not a timeout or an error.
+fn is_closed(reader: &mut impl BufRead) -> bool {
+    let mut line = String::new();
+    matches!(reader.read_line(&mut line), Ok(0))
+}
+
+/// With `MAX_CONNECTIONS` connections open, the next one is told `connection limit reached` and closed; once one of
+/// the open ones ends, its place serves a new connection.
+#[trial]
+fn connections_past_the_limit_are_refused_with_the_reason() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let connect = || {
+        let stream = TcpStream::connect(server.addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        let reader = BufReader::new(stream.try_clone().expect("cloned"));
+        (stream, reader)
+    };
+    // Unauthenticated, so each holds its place until it closes or the authentication deadline passes.
+    let mut open: Vec<TcpStream> = (0..MAX_CONNECTIONS).map(|_| connect().0).collect();
+
+    let (_extra, mut reader) = connect();
+    let refused = read_json(&mut reader).expect("a refusal");
+    assert_eq!(refused, json!({"id": null, "ok": false, "error": "connection limit reached"}));
+    assert!(is_closed(&mut reader), "the refused connection is closed");
+
+    drop(open.pop());
+    // The server frees the place when it reads the close; a new connection is served once it has.
+    let started = motion::now();
+    let served = loop {
+        let (mut stream, mut reader) = connect();
+        writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).expect("written");
+        let reply = read_json(&mut reader).expect("a reply");
+        if reply["ok"] == true || started.elapsed() > Duration::from_secs(5) {
+            break reply;
+        }
+        assert_eq!(reply["error"], "connection limit reached", "{reply}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(served["result"]["authenticated"], true, "the freed place serves: {served}");
+    assert!(rx.try_recv().is_err(), "nothing was dispatched");
+    drop(open);
+}
+
+/// A first frame that is not JSON, and one with a wrong token, each get the `authentication required` refusal and the
+/// connection closes at once, without waiting for the deadline and without dispatching anything: a client cannot keep
+/// guessing on one connection.
+#[trial]
+fn a_refused_first_frame_closes_the_connection() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let wrong = "f".repeat(TOKEN.len());
+    for (first, id) in [("not json".to_owned(), Value::Null), (json!({"id": 4, "method": "auth", "params": {"token": wrong}}).to_string(), json!(4))]
+    {
+        let mut stream = TcpStream::connect(server.addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+        writeln!(stream, "{first}").expect("written");
+        assert_eq!(read_json(&mut reader).expect("a refusal"), json!({"id": id, "ok": false, "error": "authentication required"}), "{first}");
+        // The server may already have closed while this is written.
+        let _ = writeln!(stream, "{}", json!({"id": 5, "method": "auth", "params": {"token": TOKEN}}));
+        assert!(is_closed(&mut reader), "{first}: the connection is closed, the second guess unanswered");
+    }
     assert!(rx.try_recv().is_err(), "nothing was dispatched");
 }
 
@@ -370,4 +434,61 @@ fn a_repeated_auth_is_answered_already_authenticated_without_dispatching() {
     assert_eq!(after["id"], 9);
     assert_eq!(after["result"], "still serving");
     handler.join().expect("handler ran");
+}
+
+/// Ported from WordCraft (#7317). A request that is complete JSON but ends at EOF with no newline (the client wrote it
+/// and shut its end down) still reaches the app and is answered: a client cannot know it was dropped.
+#[trial]
+fn a_complete_json_request_at_eof_can_reach_the_app() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let handler = std::thread::spawn(move || {
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("the request reached the app");
+        assert_eq!(req.method, "test.once");
+        req.reply.send(json!({"ok": true, "result": "once"})).expect("replied");
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "it ran exactly once");
+    });
+    let (mut stream, mut reader) = authenticated(server.addr);
+    stream.write_all(json!({"id": 3, "method": "test.once"}).to_string().as_bytes()).expect("written");
+    stream.shutdown(std::net::Shutdown::Write).expect("shut down");
+    let reply = read_json(&mut reader).expect("a reply");
+    assert_eq!((&reply["id"], &reply["result"]), (&json!(3), &json!("once")));
+    let mut rest = String::new();
+    assert_eq!(reader.read_line(&mut rest).expect("closed, not timed out"), 0, "closed after the last request: {rest:?}");
+    handler.join().expect("handler ran");
+}
+
+/// Ported from WordCraft (#7317). Connections that never authenticate cannot fill the server: past the limit a new
+/// one is refused, and a slot freed by a closed connection is admitted again.
+#[trial]
+fn idle_unauthenticated_connections_are_limited() {
+    use craft_automation::security::MAX_CONNECTIONS;
+    // Far longer than the trial, so only the limit refuses.
+    let (rx, server) = server::serve_with_deadline(TcpListener::bind("127.0.0.1:0").expect("bound"), TOKEN.into(), host(), Duration::from_secs(60))
+        .expect("started");
+    let idle: Vec<TcpStream> = (0..MAX_CONNECTIONS).map(|_| TcpStream::connect(server.addr).expect("connected")).collect();
+    // Admission is counted by the accept thread: it is done once the next connection is answered.
+    let refused = |addr| {
+        let stream = TcpStream::connect(addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        read_json(&mut BufReader::new(stream))
+    };
+    let reply = refused(server.addr).expect("a refusal");
+    assert_eq!(reply["ok"], false);
+    assert!(reply["error"].as_str().is_some_and(|e| e.contains("limit")), "{reply}");
+    drop(idle);
+    // The freed slots go back as the closed connections are noticed.
+    let started = motion::now();
+    loop {
+        let mut stream = TcpStream::connect(server.addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+        // A refused connection may already be closed when the request is written (Windows resets it).
+        let auth = json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}});
+        if writeln!(stream, "{auth}").is_ok() && read_json(&mut reader).is_some_and(|r| r["ok"] == true) {
+            break;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "no slot came back");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(rx.try_recv().is_err());
 }

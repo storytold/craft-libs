@@ -15,8 +15,8 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, PointerButton, PressPhase, Sense};
 use egui::{Id, Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a section: no surface or padding of its own; the header and body carry the look.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -163,7 +163,14 @@ impl<'a> Section<'a> {
     #[must_use]
     pub fn strength(mut self, strength: HeaderStrength) -> Self {
         self.strength = strength;
-        self.update_header(|header| header.rule_above(strength != HeaderStrength::Caption));
+        self.update_header(|header| header.rule_above(!matches!(strength, HeaderStrength::Caption | HeaderStrength::Overline)));
+        self
+    }
+
+    /// The header carries no rule above it: a page heading rather than a boundary between panel sections.
+    #[must_use]
+    pub fn quiet_header(mut self) -> Self {
+        self.update_header(|header| header.rule_above(false));
         self
     }
 

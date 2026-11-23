@@ -16,7 +16,6 @@ pub fn preset_name(shape_type: u16) -> Option<&'static str> {
         5 => "triangle",
         6 => "rtTriangle",
         7 => "parallelogram",
-        8 => "trapezoid",
         9 => "hexagon",
         10 => "octagon",
         11 => "plus",
@@ -168,18 +167,39 @@ pub fn is_connector(shape_type: u16) -> bool {
 /// The geometry of a shape: its preset (checked against the presets `craft_drawingml` draws, with a
 /// rounded rectangle's corner carried over), else its freeform path, else a rectangle.
 pub fn geometry(shape_type: u16, props: &Props) -> Geom {
+    if shape_type == TRAPEZOID {
+        return trapezoid(props.get(prop::ADJUST_VALUE));
+    }
     if let Some(name) = preset_name(shape_type).filter(|n| craft_drawingml::preset::build(n, 100.0, 100.0, &[]).is_some()) {
         let mut adj = vec![];
-        // A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the
-        // shorter side in DrawingML.
         if shape_type == 2
             && let Some(v) = props.get(prop::ADJUST_VALUE)
         {
-            adj.push(f64::from(v as i32).clamp(0.0, 10800.0) / 21600.0 * 100_000.0);
+            adj.push(round_rect_adjust(v as i32));
         }
         return Geom::Preset { name: name.into(), adj };
     }
     custom_path(props).map(|paths| Geom::Custom { paths }).unwrap_or_default()
+}
+
+/// A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the shorter
+/// side in DrawingML.
+pub(crate) fn round_rect_adjust(v: i32) -> f64 {
+    f64::from(v).clamp(0.0, 10800.0) / 21600.0 * 100_000.0
+}
+
+/// `msosptTrapezoid`. It has no preset: DrawingML's `trapezoid` is wide at the bottom, OfficeArt's
+/// at the top.
+const TRAPEZOID: u16 = 8;
+
+/// OfficeArt's trapezoid as an outline in its 21600-unit box: the full width along the top, the
+/// bottom edge inset by `adjust` (5400 unless the file says otherwise) at each end. PowerPoint
+/// writes the shape the same way when it saves a `.ppt` trapezoid as `.pptx`. A preset flipped
+/// upright would turn the shape's text upside down.
+pub(crate) fn trapezoid(adjust: Option<u32>) -> Geom {
+    let a = adjust.map_or(5400, |v| (v as i32).clamp(0, 10800));
+    let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
+    Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
 }
 
 /// Segments followed at most in one path.
@@ -353,6 +373,26 @@ mod tests {
                 assert!(craft_drawingml::preset::build(name, 100.0, 100.0, &[]).is_some(), "type {t}: {name}");
             }
         }
+    }
+
+    /// OfficeArt's trapezoid is wide at the top, DrawingML's `trapezoid` preset at the bottom: type 8
+    /// is the outline PowerPoint writes for it, with the file's adjust value or 5400, clamped.
+    #[test]
+    fn a_trapezoid_is_wide_at_the_top() {
+        let outline = |adjust: Option<u32>| {
+            let table = adjust.map(|v| props(&[(prop::ADJUST_VALUE, v)], &[])).unwrap_or_default();
+            let mut p = Props::default();
+            if let Some(r) = Rec::at(&table, 0) {
+                p.add_table(&r);
+            }
+            let Geom::Custom { paths } = geometry(8, &p) else { panic!("not custom") };
+            assert_eq!((paths[0].w, paths[0].h), (21600.0, 21600.0));
+            paths[0].d.clone()
+        };
+        assert_eq!(outline(None), "M 0 0 L 5400 21600 L 16200 21600 L 21600 0 Z");
+        assert_eq!(outline(Some(3000)), "M 0 0 L 3000 21600 L 18600 21600 L 21600 0 Z");
+        assert_eq!(outline(Some(20000)), "M 0 0 L 10800 21600 L 10800 21600 L 21600 0 Z");
+        assert_eq!(outline(Some(u32::MAX)), "M 0 0 L 0 21600 L 21600 21600 L 21600 0 Z", "a negative adjust is 0");
     }
 
     #[test]
