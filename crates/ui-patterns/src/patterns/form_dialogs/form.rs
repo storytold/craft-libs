@@ -344,7 +344,6 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
 
     /// While no value differs from the one the dialog opened with, a Close button stands in place of OK and Cancel (as
     /// a Properties dialog does); the first edit brings them back.
-    #[must_use]
     pub fn close_unchanged(mut self, on: bool) -> Self {
         self.close_unchanged = on;
         self

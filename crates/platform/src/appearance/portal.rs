@@ -385,6 +385,24 @@ async fn next_event(settings: &mut [zbus::MessageStream], owners: &mut zbus::Mes
     });
     futures_lite::future::race(setting, async { owners.next().await.map(Event::Owner) }).await
 }
+/// GNOME's text scale, read on GNOME-like sessions only (`TEXT_SCALE_KEY`).
+async fn read_text_scale(connection: &zbus::Connection, gnome: bool) -> Option<Option<f32>> {
+    if gnome { read_with(connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None }
+}
+/// Publishes the contrast, motion and text scale of the first concurrent read.
+fn publish_first_reads(shared: &Shared, fallbacks: &mut Fallbacks, contrast: Option<Contrast>, answers: &Answers, text_scale: Option<Option<f32>>) {
+    if let Some(contrast) = contrast {
+        shared.publish_contrast(contrast);
+    }
+    match answers.reduced_motion() {
+        Some(reduced) => shared.publish_motion(reduced),
+        // A portal that knows none of the keys (a bare window manager's) leaves the files to answer.
+        None => fallbacks.motion(shared),
+    }
+    if let Some(scale) = text_scale {
+        shared.publish_text_scale(scale);
+    }
+}
 async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected: &mut bool, connection: zbus::Connection) -> Option<()> {
     // MatchRule installs before activation: unlike a proxy subscription it needs no current owner.
     let mut settings = [
@@ -405,21 +423,11 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
             zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
             zip(read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply), read_motion(&connection)),
         ),
-        async { if shared.gnome { read_with(&connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None } },
+        read_text_scale(&connection, shared.gnome),
     )
     .await;
     let mut answers = Answers { standard, gnome, motion, gnome_motion, kde_motion };
-    if let Some(contrast) = contrast {
-        shared.publish_contrast(contrast);
-    }
-    match answers.reduced_motion() {
-        Some(reduced) => shared.publish_motion(reduced),
-        // A portal that knows none of the keys (a bare window manager's) leaves the files to answer.
-        None => fallbacks.motion(shared),
-    }
-    if let Some(scale) = text_scale {
-        shared.publish_text_scale(scale);
-    }
+    publish_first_reads(shared, fallbacks, contrast, &answers, text_scale);
     match combined(standard, gnome) {
         Some(answer) => {
             *connected = true;

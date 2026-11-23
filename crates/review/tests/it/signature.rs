@@ -266,9 +266,11 @@ impl Section for Stored {
 fn a_saved_image_round_trips_as_png_and_an_oversize_one_is_refused() {
     let host = Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).settings(Arc::new(MemorySections::default())).build();
     let initials = SavedSignature::Typed("AR".into());
-    let mut settings = SignatureSettings::default();
-    settings.signature = Some(SavedSignature::Image(SignatureImage::new(5, 1, PHOTO.to_vec())));
-    settings.initials = Some(initials.clone());
+    let settings = SignatureSettings {
+        signature: Some(SavedSignature::Image(SignatureImage::new(5, 1, PHOTO.to_vec()))),
+        initials: Some(initials.clone()),
+        ..SignatureSettings::default()
+    };
     host.set_setting(&settings);
 
     let stored = host.setting::<Stored>();

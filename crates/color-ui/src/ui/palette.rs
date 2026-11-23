@@ -129,14 +129,12 @@ impl<'a> SwatchPalette<'a> {
 
     /// An Other… cell after the swatches, named `label`: activating it files a `ColorRequest` keyed `key` at the bound
     /// colour as `pick_color`, for the host's own picker, and sets nothing.
-    #[must_use]
     pub fn other(mut self, key: impl Into<String>, label: impl Into<Label>) -> Self {
         self.other = Some((key.into(), label.into()));
         self
     }
 
     /// A row of recent `colors` under `caption`, below the grid, each named by its hex; an empty slice shows no row.
-    #[must_use]
     pub fn recent(mut self, caption: impl Into<Label>, colors: &'a [Srgba]) -> Self {
         self.recent = Some((caption.into(), colors));
         self

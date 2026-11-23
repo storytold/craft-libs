@@ -1,7 +1,7 @@
 //! Painting a row's trailing items, toggles, thumbnails, text and cells.
 
 use super::ListRow;
-use super::placement::{Placed, action_link};
+use super::placement::{Placed, StatusMeasure, action_link};
 use super::show::{LINK, STATUS_ACTION, TEXT_CELL, TOGGLE};
 use super::style::{ListRowStyle, RowForm, row_ink_of};
 use super::thumb::{RowThumb, target_at};
@@ -292,8 +292,14 @@ impl ListRow<'_> {
             let action = {
                 let draw = ui.draw();
                 // The action's slot is its part's rect, which `parts` declared from the link's measured width.
-                let slots =
-                    self.status_slots(*at, cell, sizes, rtl, role, &|run| draw.layout(run, f32::INFINITY).size().x, &|_| cx.part(part).rect.width());
+                let slots = self.status_slots(
+                    *at,
+                    cell,
+                    sizes,
+                    rtl,
+                    role,
+                    StatusMeasure { text_width: &|run| draw.layout(run, f32::INFINITY).size().x, action_width: &|_| cx.part(part).rect.width() },
+                );
                 if let (Some(slot), Some(icon)) = (slots.icon, tone_icon(status.tone)) {
                     draw.icon(Rect::from_center_size(slot.center(), Vec2::splat(sizes.mark)), &IconSpec::svg(IconId::new(icon)).color(ink));
                 }

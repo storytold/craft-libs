@@ -255,7 +255,6 @@ impl<'a> CommentComposer<'a> {
     }
 
     /// A header of `title` and the `author` above the field; the card is named `title`.
-    #[must_use]
     pub fn header(mut self, title: impl Into<Label>, author: &'a str) -> Self {
         self.header = Some((title.into(), author));
         self
@@ -263,21 +262,18 @@ impl<'a> CommentComposer<'a> {
 
     /// What the field asks for, in place of "Add a comment": its name and its placeholder ("Text to insert" for an
     /// insertion).
-    #[must_use]
     pub fn hint(mut self, hint: impl Into<Label>) -> Self {
         self.hint = Some(hint.into());
         self
     }
 
     /// The rule the post applies to the draft.
-    #[must_use]
     pub fn draft_kind(mut self, kind: ComposerDraft) -> Self {
         self.kind = kind;
         self
     }
 
     /// When the composer closes.
-    #[must_use]
     pub fn close(mut self, close: ComposerClose) -> Self {
         self.close = close;
         self
@@ -358,8 +354,10 @@ impl CommentComposer<'_> {
                     });
                 }
                 let hint = hint.clone().unwrap_or_else(|| words.add_comment.clone());
-                let field =
-                    TextField::new(hint.clone(), Bind::bound(&mut *draft)).lines(COMPOSER_ROWS).placeholder(hint).submits().default_stop().show(ui);
+                let field = TextField::new(hint.clone(), Bind::bound(&mut *draft)).lines(COMPOSER_ROWS).placeholder(hint).submits().default_stop();
+                // An edit opens with the caret after the comment's text, so typing adds to it; a new comment's empty
+                // field has nothing to replace either way.
+                let field = if kind == ComposerDraft::New { field } else { field.keep_caret_on_open() }.show(ui);
                 cancel |= field.escaped;
                 let text = kind.posted(draft);
                 // The multi-line field submits on Cmd/Ctrl+Enter; plain Enter adds a line.

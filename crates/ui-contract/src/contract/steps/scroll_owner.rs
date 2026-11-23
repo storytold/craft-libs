@@ -138,9 +138,12 @@ pub(crate) fn scroll_moves(ctx: &Context, owner: Id, quiet: bool) -> Vec<(NavMov
     })
 }
 
+/// Moves with their modifiers, in the order they came.
+type Moves = Vec<(NavMove, MoveMods)>;
+
 /// [`scroll_moves`] apart: the page and end moves a component inside left for its scroll owner, and the moves a
 /// region's fallback collection takes as its own keys (every move, page and end included, L-319).
-pub(crate) fn scroll_and_fallback_moves(ctx: &Context, owner: Id, quiet: bool) -> (Vec<(NavMove, MoveMods)>, Vec<(NavMove, MoveMods)>) {
+pub(crate) fn scroll_and_fallback_moves(ctx: &Context, owner: Id, quiet: bool) -> (Moves, Moves) {
     pass_state::with::<ScrollMoves, _>(ctx, |moves| {
         let (mut scrolls, mut fallback) = (Vec::new(), Vec::new());
         for &(id, mv, mods, through_fallback) in &moves.0 {

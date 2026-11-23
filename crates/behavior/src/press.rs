@@ -1004,9 +1004,13 @@ mod tests {
         assert_eq!(end.target, Some(2));
         assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
         assert_eq!(end.activated, None, "a passed press is no click");
+    }
 
-        // The move past slop came in the press's own pass: the shape below gets the Down, its DragStart next pass,
-        // and a release in between waits for it.
+    /// The move past slop came in the press's own pass: the shape below gets the Down, its DragStart next pass, and a
+    /// release in between waits for it.
+    #[test]
+    fn a_drag_past_slop_in_the_press_pass_hands_the_down_over() {
+        let origin = pos2(0.0, 0.0);
         let mut machine = PressMachine::new();
         let first = passing_pass(&mut machine, &[press(0.0, 1.0), moved(40.0)]);
         assert!(matches!(first.phase, Some(PressPhase::Down { .. })) && first.passes.is_some(), "{first:?}");
@@ -1020,8 +1024,11 @@ mod tests {
         let end = passing_pass(&mut machine, &[]);
         assert_eq!(end.target, Some(2));
         assert!(matches!(end.phase, Some(PressPhase::Release { click: false, .. })), "{:?}", end.phase);
+    }
 
-        // No shape took the passed press: it is abandoned, and its release is no click.
+    /// No shape took the passed press: it is abandoned, and its release is no click.
+    #[test]
+    fn a_passed_press_no_shape_takes_is_abandoned() {
         let mut machine = PressMachine::new();
         let _ = passing_pass(&mut machine, &[press(0.0, 1.0)]);
         assert!(passing_pass(&mut machine, &[moved(40.0)]).passes.is_some());

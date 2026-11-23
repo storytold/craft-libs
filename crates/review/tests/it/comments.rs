@@ -64,7 +64,7 @@ fn a_locked_comment_still_offers_reply_actions() {
     });
     fixture.settle();
     let menus = fixture.by_role(Role::BUTTON);
-    let reply_menu = menus.into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("More")).last().expect("the reply menu");
+    let reply_menu = menus.into_iter().rfind(|target| fixture.tree().name_of(target.node) == Some("More")).expect("the reply menu");
     fixture.click(&reply_menu).settle();
     let edit = fixture.by_label("Edit").expect("editing the reply is offered");
     let delete = fixture.by_label("Delete").expect("deletion is shown");
@@ -201,8 +201,7 @@ fn the_filter_and_sorts_hide_and_order_threads() {
     let mut reviewed = thread(9, 1, "Reviewed.");
     reviewed.statuses = vec![reviewer("Ana", ReviewStatus::Accepted), reviewer("Bo", ReviewStatus::Rejected)];
     let unreviewed = thread(10, 1, "Unreviewed.");
-    let mut filter = CommentFilter::default();
-    filter.hidden_statuses = vec![ReviewStatus::Accepted];
+    let mut filter = CommentFilter { hidden_statuses: vec![ReviewStatus::Accepted], ..CommentFilter::default() };
     assert!(filter.shows(&reviewed), "Bo's Rejected still shows the thread");
     assert!(filter.shows(&unreviewed), "a thread without statuses counts as None, which shows");
     filter.hidden_statuses.push(ReviewStatus::Rejected);
@@ -407,9 +406,12 @@ fn an_editor_the_app_opens_takes_the_focus_once() {
     assert_eq!(state.borrow().new_comment, "Elsewhere", "the add box keeps it");
 }
 
+/// A value the rig and its trial share.
+type Shared<T> = Rc<RefCell<T>>;
+
 /// A panel over 120 threads on page 1, scrolled by a reveal to thread 100; the threads are shared so a trial can
 /// change them between frames.
-fn long_list() -> (Rc<RefCell<Vec<CommentThread>>>, Rc<RefCell<CommentsPanelState>>, Fixture) {
+fn long_list() -> (Shared<Vec<CommentThread>>, Shared<CommentsPanelState>, Fixture) {
     let threads = Rc::new(RefCell::new((1..=120).map(|id| thread(id, 1, &format!("Note {id}."))).collect::<Vec<_>>()));
     let state = Rc::new(RefCell::new(CommentsPanelState::default()));
     let (shown_threads, shown_state) = (threads.clone(), state.clone());

@@ -129,8 +129,7 @@ fn latch_middle(fixture: &mut Fixture) {
 fn latched_middle_scroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = crate::testing::stage(ui);
     let view = data.value("view", StoryDocument::STANDARD.view(room, ui.pixels_per_point(), LATCHED));
-    let mut navigation = NavigationOptions::default();
-    navigation.middle_button = MiddleButton::AutoScroll;
+    let navigation = NavigationOptions { middle_button: MiddleButton::AutoScroll, ..NavigationOptions::default() };
     let target = ViewTarget::new(StoryDocument::STANDARD.rect().size());
     let canvas = Canvas::new("Document").view(Bind::bound(view)).document(target).navigation(navigation);
     canvas.show_at(ui, room, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD)).output.into()

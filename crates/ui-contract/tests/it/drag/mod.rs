@@ -504,12 +504,15 @@ impl WindowDropTarget<OsFiles> for ReadOnWindow {
     }
 }
 
+/// The drops a window took: the pass each landed in, with each file's name and content.
+type Drops = Vec<(usize, Vec<(String, Option<Vec<u8>>)>)>;
+
 /// A window that takes dropped files with their content, and the pass of its frame each drop landed in.
 #[derive(Component)]
 struct ReadDrop<'a> {
     #[common]
     common: Common,
-    landed: &'a RefCell<Vec<(usize, Vec<(String, Option<Vec<u8>>)>)>>,
+    landed: &'a RefCell<Drops>,
     pass: usize,
 }
 

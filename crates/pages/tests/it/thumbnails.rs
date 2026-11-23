@@ -129,8 +129,11 @@ fn a_moved_page_keeps_its_identity_across_a_move() {
     assert_eq!(moved, vec![1, 2, 3, 0, 4]);
 }
 
+/// A value the rig and its trial share.
+type Shared<T> = Rc<RefCell<T>>;
+
 /// An Organize grid of `count` pages with id `id` and current page `current`; the events it reports and the picked set.
-fn organize_rig(count: usize, id: egui::Id, current: usize) -> (Fixture, Rc<RefCell<Vec<ThumbnailEvent>>>, Rc<RefCell<Selection<usize>>>) {
+fn organize_rig(count: usize, id: egui::Id, current: usize) -> (Fixture, Shared<Vec<ThumbnailEvent>>, Shared<Selection<usize>>) {
     let events: Rc<RefCell<Vec<ThumbnailEvent>>> = Rc::default();
     let seen = Rc::clone(&events);
     let picked: Rc<RefCell<Selection<usize>>> = Rc::default();

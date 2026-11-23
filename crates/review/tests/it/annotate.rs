@@ -163,8 +163,7 @@ fn eraser_reports_one_erase_per_annotation_crossing_a_b_a() {
 #[trial]
 fn per_stroke_ink_reports_a_create_per_release_and_a_dot_on_a_click() {
     for kind in [AnnotationKind::Ink, AnnotationKind::FreehandHighlight] {
-        let mut options = DrawOptions::default();
-        options.ink = InkStrokes::PerStroke;
+        let options = DrawOptions { ink: InkStrokes::PerStroke, ..DrawOptions::default() };
         let mut rig = rig(AnnotateTool::new(AnnotationTool::Draw(kind), 0).draw_options(options));
         drag(&mut rig, Point::new(20.0, 20.0), Point::new(120.0, 60.0));
         drag(&mut rig, Point::new(20.0, 100.0), Point::new(120.0, 140.0));
@@ -282,9 +281,7 @@ fn placing_kinds_report_a_place_and_a_short_text_box_drag_is_a_click() {
 /// Ink and freehand highlights whose box its path reaches, and no stroke-by-stroke `Erase`.
 #[trial]
 fn the_path_eraser_reports_its_path_and_reach() {
-    let mut options = DrawOptions::default();
-    options.erase = EraseMode::Path;
-    options.eraser_radius = 6.0;
+    let options = DrawOptions { erase: EraseMode::Path, eraser_radius: 6.0, ..DrawOptions::default() };
     let mut tool = AnnotateTool::new(AnnotationTool::Eraser, 0).draw_options(options);
     let boxed = |id: u64, kind: AnnotationKind, rect: Rect| {
         let mut a = annotation(id, kind, rect);
@@ -369,9 +366,7 @@ fn a_move_a_resize_and_a_shape_under_their_slips_commit_nothing() {
 fn a_pass_through_tool_ignores_empty_and_markup_presses() {
     let mut highlight = annotation(1, AnnotationKind::Highlight, Rect::new(100.0, 100.0, 200.0, 120.0));
     highlight.points = vec![Point::new(100.0, 100.0), Point::new(200.0, 100.0), Point::new(200.0, 120.0), Point::new(100.0, 120.0)];
-    let mut options = SelectOptions::default();
-    options.empty_press = EmptyPress::PassThrough;
-    options.markup_press = MarkupPress::ClickOnly;
+    let options = SelectOptions { empty_press: EmptyPress::PassThrough, markup_press: MarkupPress::ClickOnly, ..SelectOptions::default() };
     for (passes, tool) in
         [(true, AnnotateTool::new(AnnotationTool::Select, 0).select_options(options)), (false, AnnotateTool::new(AnnotationTool::Select, 0))]
     {
@@ -443,8 +438,7 @@ fn a_fixed_aspect_holds_on_every_corner_and_shift_takes_the_boxs_own() {
 /// selected line's end draws a new line from there: the drawing tools do not take end and corner points.
 #[trial]
 fn while_drawing_edit_takes_resize_handles_but_not_point_handles() {
-    let mut options = SelectOptions::default();
-    options.handles_while_drawing = HandlesWhileDrawing::Edit;
+    let options = SelectOptions { handles_while_drawing: HandlesWhileDrawing::Edit, ..SelectOptions::default() };
     let commits = |rig: &ToolFixture<AnnotateTool>| -> Vec<AnnotationEdit> {
         rig.tool_mut()
             .take_edits()
@@ -522,8 +516,7 @@ fn a_click_on_a_hosts_part_selects_toggles_and_opens_by_the_tools_rules() {
         "a plain click on a selected comment keeps the others and makes it the primary"
     );
 
-    let mut options = SelectOptions::default();
-    options.toggle = ToggleMods::ShiftOrCommand;
+    let mut options = SelectOptions { toggle: ToggleMods::ShiftOrCommand, ..SelectOptions::default() };
     let mut tool = tool.select_options(options);
     tool.click(AnnotationId(1), Mods::CMD, 1, &words);
     assert_eq!(tool.selected, vec![AnnotationId(2)], "Command toggles under ShiftOrCommand");
@@ -601,8 +594,7 @@ fn colored_paths(shapes: &[Shape], color: Color32) -> Vec<&egui::epaint::PathSha
 /// still previews the closing side); under the default `Angle45`, Shift snaps to 45-degree steps.
 #[trial]
 fn new_lines_arrows_and_poly_sides_honour_shift_lock() {
-    let mut ortho = SelectOptions::default();
-    ortho.shift_lock = ShiftLock::LevelOrPlumb;
+    let ortho = SelectOptions { shift_lock: ShiftLock::LevelOrPlumb, ..SelectOptions::default() };
     let color = [0x10, 0x80, 0xE0];
     let stroke_color = Color32::from_rgb(color[0], color[1], color[2]);
 
@@ -730,9 +722,7 @@ fn place_and_erase_drags_paint_their_preview_while_held() {
 
     // Path eraser: swath stroke width matches 2 * eraser_radius while held, gone on release.
     for radius in [6.0_f32, 36.0_f32] {
-        let mut options = DrawOptions::default();
-        options.erase = EraseMode::Path;
-        options.eraser_radius = radius;
+        let options = DrawOptions { erase: EraseMode::Path, eraser_radius: radius, ..DrawOptions::default() };
         let mut eraser_rig = rig(AnnotateTool::new(AnnotationTool::Eraser, 0).draw_options(options));
         let swath_widths = |shapes: &[Shape]| -> Vec<f32> {
             shapes

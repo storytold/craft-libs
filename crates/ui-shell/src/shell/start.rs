@@ -475,7 +475,6 @@ impl<'a> StartScreen<'a> {
 
     /// Shows `body` as a host section at `place` on the start screen, after the sections given there before it. Its
     /// least width counts in whether the rail fits beside the page.
-    #[must_use]
     pub fn section(mut self, place: StartPlace, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
         self.sections.push((place, RefCell::new(Box::new(body))));
         self
@@ -1166,9 +1165,9 @@ fn shown_files(folder: &PinnedFolder) -> &[PinnedFile] {
 fn folder_note(words: &ShellWords, folder: &PinnedFolder) -> Option<Label> {
     match &folder.listing {
         None => None,
-        Some(FolderListing::Pending) => Some(words.looking_for_files.clone().into()),
-        Some(FolderListing::Unavailable) => Some(words.folder_unavailable.clone().into()),
-        Some(FolderListing::Listed { files, .. }) if files.is_empty() => Some(words.folder_empty.clone().into()),
+        Some(FolderListing::Pending) => Some(words.looking_for_files.clone()),
+        Some(FolderListing::Unavailable) => Some(words.folder_unavailable.clone()),
+        Some(FolderListing::Listed { files, .. }) if files.is_empty() => Some(words.folder_empty.clone()),
         Some(FolderListing::Listed { files, total }) if *total > files.len() => {
             let (shown, total) = (files.len().to_string(), total.to_string());
             Some(Label::from(words.newest_of.fill(&[("shown", shown.as_str()), ("total", total.as_str())])))

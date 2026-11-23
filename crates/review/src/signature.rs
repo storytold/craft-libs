@@ -168,7 +168,7 @@ impl SignatureImage {
         let high = f32::from(cutoff);
         let span = f32::from(feather.max(1));
         let mut rgba = self.rgba.clone();
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             let whiteness = f32::from(pixel[0].min(pixel[1]).min(pixel[2]));
             let keep = ((high - whiteness) / span).clamp(0.0, 1.0);
             pixel[3] = (f32::from(pixel[3]) * keep).round() as u8;

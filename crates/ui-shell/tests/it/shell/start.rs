@@ -4,7 +4,7 @@
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::display::Text;
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::Env;
 use craft_ui::shell::{
     FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, RecentFile, RecentList, RecentSort, RecentView, ShellWords, StartAction,
     StartLayout, StartLink, StartPlace, StartScreen, Template,
@@ -379,9 +379,8 @@ fn pinned_screen(folders: Vec<PinnedFolder>) -> (Fixture, Log, Pins, Notes) {
         let folders = held.borrow().clone();
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
-        *words_seen.borrow_mut() = [&words.looking_for_files, &words.folder_unavailable]
-            .map(|word| env.view().resolve(&Label::from(word.clone())).as_str().to_owned())
-            .to_vec();
+        *words_seen.borrow_mut() =
+            [&words.looking_for_files, &words.folder_unavailable].map(|word| env.view().resolve(word).as_str().to_owned()).to_vec();
         let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &[]).pinned(&folders).show(ui);
         seen.borrow_mut().extend(out.actions);
     });

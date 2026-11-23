@@ -269,6 +269,9 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
     }
 }
 
+/// The host's own menu rows for a thread's message at an index.
+type HostRows<'a, H> = Box<dyn Fn(&CommentThread, usize) -> Vec<Entry<H>> + 'a>;
+
 /// Acrobat's right-hand comment list.
 ///
 /// - Header ([`CommentsHeader::Own`]) "Comments N" with "N replies" under it, search, the Sort by menu, the funnel
@@ -307,7 +310,7 @@ pub struct CommentsPanel<'a, H: Value = NoHostRow> {
     page_order: PageOrder,
     reply_submit: SubmitKey,
     select_mode: SelectMode,
-    host_rows: Option<Box<dyn Fn(&CommentThread, usize) -> Vec<Entry<H>> + 'a>>,
+    host_rows: Option<HostRows<'a, H>>,
 }
 
 /// The host row type of a panel whose cards' menus take no host rows: it has no value.
@@ -347,7 +350,6 @@ impl<'a> CommentsPanel<'a> {
 
     /// The rows a card's menu appends behind a separator, from the thread and the card's message index; a row the
     /// user picks is reported as `CommentsPanelOutput::host`.
-    #[must_use]
     pub fn card_rows<H: Value>(self, rows: impl Fn(&CommentThread, usize) -> Vec<Entry<H>> + 'a) -> CommentsPanel<'a, H> {
         let CommentsPanel { label, threads, state, read_only, now, page_label, header, page_order, reply_submit, select_mode, host_rows: _ } = self;
         CommentsPanel {
@@ -368,28 +370,24 @@ impl<'a> CommentsPanel<'a> {
 
 impl<'a, H: Value> CommentsPanel<'a, H> {
     /// Who draws the header.
-    #[must_use]
     pub fn header(mut self, header: CommentsHeader) -> Self {
         self.header = header;
         self
     }
 
     /// How threads on one page are ordered under the Page sort.
-    #[must_use]
     pub fn page_order(mut self, order: PageOrder) -> Self {
         self.page_order = order;
         self
     }
 
     /// The key that submits the reply box; an inline editor keeps `CommandEnter`.
-    #[must_use]
     pub fn reply_submit(mut self, key: SubmitKey) -> Self {
         self.reply_submit = key;
         self
     }
 
     /// How a click selects cards.
-    #[must_use]
     pub fn select_mode(mut self, mode: SelectMode) -> Self {
         self.select_mode = mode;
         self
@@ -540,6 +538,62 @@ fn kind_name(words: &CommentsWords, kinds: &AnnotateWords, kind: Option<Annotati
     kind.map_or_else(|| words.plain_kind.as_str().to_owned(), |kind| kinds.kind(kind).to_owned())
 }
 
+/// A group heading's title, with its page under the Page sort.
+type Heading = (String, Option<usize>);
+
+/// The list's rows: each shown thread's card under its group heading (by `sort`; none by date), with the group's
+/// count, and a folded page group's heading without its cards.
+fn row_entries<'t>(
+    threads: &[CommentThread],
+    shown: &[&'t CommentThread],
+    sort: CommentSort,
+    collapsed: &[usize],
+    heading_of: &dyn Fn(&CommentThread) -> Option<Heading>,
+    digits: &dyn Fn(usize) -> String,
+) -> Vec<(CardKey, RowEntry<'t>)> {
+    let by_page = sort == CommentSort::Page;
+    let grouped = sort != CommentSort::Date;
+    let mut page_counts: BTreeMap<usize, usize> = BTreeMap::new();
+    for page in threads.iter().filter_map(|thread| thread.anchor.page()) {
+        *page_counts.entry(page).or_default() += 1;
+    }
+    let mut shown_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for thread in shown {
+        if let Some((title, _)) = heading_of(thread) {
+            *shown_counts.entry(title).or_default() += 1;
+        }
+    }
+    let mut entries: Vec<(CardKey, RowEntry<'_>)> = Vec::new();
+    let mut last: Option<String> = None;
+    let mut groups = 0;
+    // The source lists the rows on show: a folded group keeps its heading and drops its cards.
+    let mut folded = false;
+    for &thread in shown {
+        let heading = if grouped { heading_of(thread) } else { None };
+        let depth = usize::from(heading.is_some());
+        if heading.is_none() {
+            folded = false;
+        }
+        if let Some((title, page)) = heading
+            && last.as_deref() != Some(title.as_str())
+        {
+            let count = match page {
+                Some(number) if by_page => page_counts.get(&number).copied().unwrap_or_default(),
+                _ => shown_counts.get(&title).copied().unwrap_or_default(),
+            };
+            let open = !page.is_some_and(|number| collapsed.contains(&number));
+            folded = !open;
+            entries.push((CardKey::Group(groups), RowEntry::Group { title: title.clone(), count: digits(count), page, open }));
+            groups += 1;
+            last = Some(title);
+        }
+        if !folded {
+            entries.push((CardKey::Thread(thread.id), RowEntry::Card { thread, depth }));
+        }
+    }
+    entries
+}
+
 /// The heading a thread falls under for `sort`, with its page; `None` for none.
 fn group_of(
     words: &CommentsWords,
@@ -547,7 +601,7 @@ fn group_of(
     page_label: &dyn Fn(usize) -> String,
     thread: &CommentThread,
     sort: CommentSort,
-) -> Option<(String, Option<usize>)> {
+) -> Option<Heading> {
     match sort {
         CommentSort::Page => thread.anchor.page().map(|page| (words.page.fill(&[("label", &page_label(page))]), Some(page))),
         CommentSort::Author => {
@@ -632,46 +686,8 @@ impl<H: Value> CommentsPanel<'_, H> {
             }
             let by_page = state.sort == CommentSort::Page;
             let grouped = state.sort != CommentSort::Date;
-            let mut page_counts: BTreeMap<usize, usize> = BTreeMap::new();
-            for page in threads.iter().filter_map(|thread| thread.anchor.page()) {
-                *page_counts.entry(page).or_default() += 1;
-            }
             let heading_of = |thread: &CommentThread| group_of(&words, &kinds, &*page_label, thread, state.sort);
-            let mut shown_counts: BTreeMap<String, usize> = BTreeMap::new();
-            for thread in &shown {
-                if let Some((title, _)) = heading_of(thread) {
-                    *shown_counts.entry(title).or_default() += 1;
-                }
-            }
-            let mut entries: Vec<(CardKey, RowEntry<'_>)> = Vec::new();
-            let mut last: Option<String> = None;
-            let mut groups = 0;
-            // The source lists the rows on show: a folded group keeps its heading and drops its cards.
-            let mut folded = false;
-            for thread in &shown {
-                let heading = if grouped { heading_of(thread) } else { None };
-                let depth = usize::from(heading.is_some());
-                if heading.is_none() {
-                    folded = false;
-                }
-                if let Some((title, page)) = heading
-                    && last.as_deref() != Some(title.as_str())
-                {
-                    let count = match page {
-                        Some(number) if by_page => page_counts.get(&number).copied().unwrap_or_default(),
-                        _ => shown_counts.get(&title).copied().unwrap_or_default(),
-                    };
-                    let open = !page.is_some_and(|number| state.collapsed_pages.contains(&number));
-                    folded = !open;
-                    entries.push((CardKey::Group(groups), RowEntry::Group { title: title.clone(), count: digits(count), page, open }));
-                    groups += 1;
-                    last = Some(title);
-                }
-                if !folded {
-                    entries.push((CardKey::Thread(thread.id), RowEntry::Card { thread, depth }));
-                }
-            }
-            let source = Rows { entries };
+            let source = Rows { entries: row_entries(threads, &shown, state.sort, &state.collapsed_pages, &heading_of, &digits) };
             let lead = state.selected.lead;
             let chosen = state.selected.items.clone();
             let mut selection = card_selection(&state.selected);

@@ -359,6 +359,9 @@ impl<D> Outcome for SplitViewsOutput<D> {
     }
 }
 
+/// Whether a tab drop of these documents may land on a target.
+type AcceptsDrop<'a, D> = Box<dyn Fn(&[D], TabDropTarget) -> bool + 'a>;
+
 /// One canvas area shown as views of one document, or a grid of panes the caller fills (one document each), in the
 /// panes of a [`SplitLayout`]. The active pane is the app's: it routes tools and keys there. An inactive pane is a
 /// Tab stop: a press, Enter or Space reports it in [`SplitViewsOutput::activated`]. By default the first press selects
@@ -384,7 +387,7 @@ pub struct SplitViews<'a, D: Clone + Send + Sync + 'static = ()> {
     #[prop]
     count: usize,
     activated: Option<usize>,
-    accepts: Option<Box<dyn Fn(&[D], TabDropTarget) -> bool + 'a>>,
+    accepts: Option<AcceptsDrop<'a, D>>,
     /// The tab drop released over the views in this pass.
     tab_drop: Option<TabDrop<D>>,
 }

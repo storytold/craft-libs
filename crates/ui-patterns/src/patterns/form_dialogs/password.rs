@@ -274,21 +274,18 @@ impl<'a> PasswordFields<'a> {
     }
 
     /// Adds the Re-type field over `confirm`, with the mismatch help and the strength help and meter.
-    #[must_use]
     pub fn confirm(mut self, confirm: Bind<'a, String>) -> Self {
         self.confirm = Some(confirm);
         self
     }
 
     /// With a confirmation field, two empty entries are valid too: they clear the password. Off by default.
-    #[must_use]
     pub fn clearable(mut self, on: bool) -> Self {
         self.clearable = on;
         self
     }
 
     /// The line under the field, in the error colour.
-    #[must_use]
     pub fn error(mut self, error: Option<Label>) -> Self {
         self.error = error;
         self
@@ -296,7 +293,6 @@ impl<'a> PasswordFields<'a> {
 
     /// The first field stands across the width with no caption before it, its name its placeholder: a prompt that asks
     /// for one password, as production's does.
-    #[must_use]
     pub fn bare(mut self, bare: bool) -> Self {
         self.bare = bare;
         self

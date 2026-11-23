@@ -454,15 +454,7 @@ impl<'a> PageThumbnails<'a> {
         // The New Slide row's key comes after the pages' and the section headers'.
         let new_page = count + groups.len();
         let tail: Vec<TailRow<usize>> = if new_page_row { vec![TailRow::new(new_page, words.new_page.clone())] } else { Vec::new() };
-        // Organize uses a portrait page frame for every page, so landscape pages fit inside it
-        // instead of collapsing the room reserved for the controls around the picture.
-        let aspect = if organize {
-            0.85
-        } else if count == 0 {
-            1.0
-        } else {
-            aspect_of(source, 0)
-        };
+        let aspect = grid_aspect(source, organize);
         let mut grid = TileGrid::<usize>::new(label)
             .id_source(id)
             .selection(Bind::bound(&mut *picked))
@@ -490,18 +482,7 @@ impl<'a> PageThumbnails<'a> {
             grid = grid.checks(true).action_place(TileActionPlace::Band);
         }
         if editable {
-            // Pages copy as files do in a file manager: Ctrl off macOS, Option on macOS.
-            let rule = if organize { ReorderRule::new().copy_with(CopyKeys::Platform) } else { ReorderRule::new() };
-            grid = grid
-                .reorder(rule)
-                .accepts(move |_, _, insert| insert <= new_page)
-                .drag_count(words.count.counted())
-                .takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true))
-                .deletable(true)
-                .delete_target(craft_ui::contract::DeleteTarget::FocusOrHover);
-            if organize && let Some(insert_label) = insert_label {
-                grid = grid.insert_gaps(insert_label);
-            }
+            grid = editing(grid, &words, organize, new_page, insert_label);
         }
         let ctx = ui.ctx().clone();
         let thumbnails = Thumbnails::<usize>::in_context(&ctx, "page-thumbnails", ThumbnailOptions::new().max_side(texture_side(&ctx)));
@@ -583,6 +564,42 @@ impl<'a> PageThumbnails<'a> {
         }
         let auto_scrolling = shown.response.auto_scrolling;
         PageThumbnailsOutput { response: shown.response.response, events, drop_target, file_gap, auto_scrolling }
+    }
+}
+
+/// The grid's tile aspect: Organize's portrait frame for every page, else the first page's.
+fn grid_aspect(source: &dyn PageSource, organize: bool) -> f32 {
+    // Organize uses a portrait page frame for every page, so landscape pages fit inside it instead of collapsing the
+    // room reserved for the controls around the picture.
+    if organize {
+        0.85
+    } else if source.page_count() == 0 {
+        1.0
+    } else {
+        aspect_of(source, 0)
+    }
+}
+
+/// An editable grid's rules: reordering and copying, file drops between pages, deleting, and Organize's insert gaps.
+fn editing<'g>(
+    grid: TileGrid<'g, usize>,
+    words: &ThumbnailWords,
+    organize: bool,
+    new_page: usize,
+    insert_label: Option<&'g dyn Fn(usize) -> Label>,
+) -> TileGrid<'g, usize> {
+    // Pages copy as files do in a file manager: Ctrl off macOS, Option on macOS.
+    let rule = if organize { ReorderRule::new().copy_with(CopyKeys::Platform) } else { ReorderRule::new() };
+    let grid = grid
+        .reorder(rule)
+        .accepts(move |_, _, insert| insert <= new_page)
+        .drag_count(words.count.counted())
+        .takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true))
+        .deletable(true)
+        .delete_target(craft_ui::contract::DeleteTarget::FocusOrHover);
+    match insert_label {
+        Some(insert_label) if organize => grid.insert_gaps(insert_label),
+        _ => grid,
     }
 }
 

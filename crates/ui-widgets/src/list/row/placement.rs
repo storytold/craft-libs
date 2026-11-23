@@ -394,19 +394,11 @@ impl ListRow<'_> {
     }
 
     /// The pieces of the status cell `at` in its `cell`, inset as a text cell's text is, for a text and a link in
-    /// `role` as `text_width` measures the text and `action_width` the action's link. The action keeps its whole width
+    /// `role` as `measure` measures the text and the action's link. The action keeps its whole width
     /// where the cell has room for it; the text
     /// takes what the icon and the action leave and is cut there.
-    pub(super) fn status_slots(
-        &self,
-        at: usize,
-        cell: Rect,
-        sizes: &Sizes,
-        rtl: bool,
-        role: TypeRole,
-        text_width: &dyn Fn(&TextRun<'_>) -> f32,
-        action_width: &dyn Fn(&Label) -> f32,
-    ) -> StatusSlots {
+    pub(super) fn status_slots(&self, at: usize, cell: Rect, sizes: &Sizes, rtl: bool, role: TypeRole, measure: StatusMeasure<'_>) -> StatusSlots {
+        let StatusMeasure { text_width, action_width } = measure;
         let status = &self.statuses[at].status;
         let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
         let flow = Flow::new(room, rtl);
@@ -646,4 +638,10 @@ pub struct RowPlacement {
     pub disclosure: Option<Rect>,
     /// The label's least width under the fixed sizes.
     pub min_label: f32,
+}
+
+/// How a status cell's pieces measure: the text's width and the action link's.
+pub(super) struct StatusMeasure<'m> {
+    pub(super) text_width: &'m dyn Fn(&TextRun<'_>) -> f32,
+    pub(super) action_width: &'m dyn Fn(&Label) -> f32,
 }

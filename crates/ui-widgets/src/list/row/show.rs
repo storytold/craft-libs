@@ -3,7 +3,7 @@
 use super::ListRowStyleKey;
 use super::output::{RowEvent, RowOutput};
 use super::paint::draw_clip_arrow;
-use super::placement::{Sizes, action_link, lead_run};
+use super::placement::{Placed, Sizes, StatusMeasure, action_link, lead_run};
 use super::style::{FillKey, ListRowStyle, RowForm, fill_of, hued_ink, quiet_row_ink, row_ink_of, selected_outline};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{HostedSize, TrailingFace, TrailingItem, TrailingPart, below_key, cell_key, field_key};
@@ -207,39 +207,7 @@ impl Component for ListRow<'_> {
         self.measure_hosted(cx);
         let widths = self.widths(&cx.style.sizes, &|run| cx.layout_at(run, f32::INFINITY).size().x);
         let placed = self.place(&cx.style.sizes, &widths, rect, cx.flow.is_rtl());
-        for (at, cell) in &placed.toggles {
-            let toggle = &self.toggles[*at];
-            let mut flags = Flags::empty();
-            flags.set(Flags::CHECKED, toggle.state == ToggleState::On);
-            flags.set(Flags::MIXED, toggle.state == ToggleState::Mixed);
-            let shape = if matches!(toggle.face, ToggleFace::Check) {
-                Rect::from_center_size(cell.center(), Vec2::splat(cx.style.sizes.icon))
-            } else {
-                *cell
-            };
-            let key = self.toggle_keys.iter().find(|(column, _)| *column == toggle.column).map(|(_, chord)| *chord);
-            let tip = match (&toggle.tooltip, key) {
-                (Some(tip), None) => Some(tip.clone()),
-                (tip, Some(chord)) => {
-                    let base = match tip {
-                        Some(tip) => cx.env.resolve(tip).as_str().to_owned(),
-                        None => named(toggle.name_pattern(&cx.words::<ListWords>()), cx.resolved.label),
-                    };
-                    Some(Label::from(crate::contract::tooltip::with_chord(&base, &chord, crate::runtime::windows::os_of(cx.ui.ctx()))))
-                }
-                (None, None) => None,
-            };
-            let held = match &self.pressed {
-                Some(RowPressed::Cell(column)) => *column == toggle.column,
-                Some(RowPressed::Row) => toggle.row_press,
-                _ => false,
-            };
-            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held);
-            let _ = match tip {
-                Some(tip) => part.tooltip(tip),
-                None => part,
-            };
-        }
+        self.toggle_parts(&placed, cx);
         for (at, position, _) in &placed.texts {
             if self.cell_selects(*at) {
                 cx.selectable_text(TEXT_CELL.at(*position as u64), &self.cell_run(cx.style, *at));
@@ -278,10 +246,17 @@ impl Component for ListRow<'_> {
         let role = cx.style.cell.role;
         for (at, position, cell) in &placed.statuses {
             let cell = Rect::from_x_y_ranges(cell.x_range(), rect.y_range());
-            let slots =
-                self.status_slots(*at, cell, &cx.style.sizes, cx.flow.is_rtl(), role, &|run| cx.layout_at(run, f32::INFINITY).size().x, &|action| {
-                    cx.face(action_link(action, role)).x
-                });
+            let slots = self.status_slots(
+                *at,
+                cell,
+                &cx.style.sizes,
+                cx.flow.is_rtl(),
+                role,
+                StatusMeasure {
+                    text_width: &|run| cx.layout_at(run, f32::INFINITY).size().x,
+                    action_width: &|action| cx.face(action_link(action, role)).x,
+                },
+            );
             let status = &self.statuses[*at].status;
             if let Some(tip) = &status.tip {
                 // The tip covers the icon and the text; the action keeps its own pointer target beside them.
@@ -755,5 +730,42 @@ impl ListRow<'_> {
     /// The name of the trailing part `part`: the one given, or "More ({row})" for the row's menu button.
     fn part_name(&self, part: TrailingPart, name: &Label, words: &ListWords, row: &str) -> Label {
         if part == TrailingPart::MENU { Label::from(named(&words.more, row)) } else { name.clone() }
+    }
+
+    /// The parts of the row's toggle cells: their flags, held state and tooltip with the toggle's key.
+    fn toggle_parts(&self, placed: &Placed, cx: &mut PartsCx<'_, Self>) {
+        for (at, cell) in &placed.toggles {
+            let toggle = &self.toggles[*at];
+            let mut flags = Flags::empty();
+            flags.set(Flags::CHECKED, toggle.state == ToggleState::On);
+            flags.set(Flags::MIXED, toggle.state == ToggleState::Mixed);
+            let shape = if matches!(toggle.face, ToggleFace::Check) {
+                Rect::from_center_size(cell.center(), Vec2::splat(cx.style.sizes.icon))
+            } else {
+                *cell
+            };
+            let key = self.toggle_keys.iter().find(|(column, _)| *column == toggle.column).map(|(_, chord)| *chord);
+            let tip = match (&toggle.tooltip, key) {
+                (Some(tip), None) => Some(tip.clone()),
+                (tip, Some(chord)) => {
+                    let base = match tip {
+                        Some(tip) => cx.env.resolve(tip).as_str().to_owned(),
+                        None => named(toggle.name_pattern(&cx.words::<ListWords>()), cx.resolved.label),
+                    };
+                    Some(Label::from(crate::contract::tooltip::with_chord(&base, &chord, crate::runtime::windows::os_of(cx.ui.ctx()))))
+                }
+                (None, None) => None,
+            };
+            let held = match &self.pressed {
+                Some(RowPressed::Cell(column)) => *column == toggle.column,
+                Some(RowPressed::Row) => toggle.row_press,
+                _ => false,
+            };
+            let part = cx.part(TOGGLE.at(*at as u64), shape).flags(flags).held(held);
+            let _ = match tip {
+                Some(tip) => part.tooltip(tip),
+                None => part,
+            };
+        }
     }
 }

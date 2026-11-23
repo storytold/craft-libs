@@ -1248,7 +1248,7 @@ pub(crate) fn edited_rows(params: &[Param], before: &DialogFields, after: &Dialo
         .iter()
         .filter(|param| {
             differs(&param.key)
-                || param.unit_key().is_some_and(|key| differs(key))
+                || param.unit_key().is_some_and(&differs)
                 || matches!(&param.kind, ParamKind::Custom(row) if row.companions.iter().any(|key| differs(key)))
                 || (matches!(param.kind, ParamKind::Files { .. }) && (differs(&param.folder_key()) || differs(&param.use_folder_key())))
         })

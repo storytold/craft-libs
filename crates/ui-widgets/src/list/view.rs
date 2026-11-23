@@ -324,10 +324,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 }
 
+/// The texts a row's key matches by.
+type KeyTexts<'a, K> = Box<dyn Fn(&K) -> Vec<Label> + 'a>;
+
 /// What `List::filter` keeps: the query and the texts a row's key matches by.
 struct Filter<'a, K> {
     query: String,
-    texts: Box<dyn Fn(&K) -> Vec<Label> + 'a>,
+    texts: KeyTexts<'a, K>,
 }
 
 impl<K> Filter<'_, K> {

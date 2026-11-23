@@ -1562,18 +1562,15 @@ impl KeyMoves {
         if let Some(forward) = to_end {
             (moves.to_end, moves.go_to) = end(forward);
         }
-        match keys.page.filter(|(_, mods)| !mods.extend && !mods.fine) {
-            Some((step @ (NavMove::PageUp | NavMove::PageDown), mods)) => {
-                let forward = step == NavMove::PageDown;
-                if state.continuous && !mods.lead {
-                    // A key line of the last screen stays in view, so the reader keeps their place.
-                    let screen = (f64::from(rect.height()) - line).max(line);
-                    moves.pan.1 += if forward { screen } else { -screen };
-                } else {
-                    moves.turn = Some(forward);
-                }
+        if let Some((step @ (NavMove::PageUp | NavMove::PageDown), mods)) = keys.page.filter(|(_, mods)| !mods.extend && !mods.fine) {
+            let forward = step == NavMove::PageDown;
+            if state.continuous && !mods.lead {
+                // A key line of the last screen stays in view, so the reader keeps their place.
+                let screen = (f64::from(rect.height()) - line).max(line);
+                moves.pan.1 += if forward { screen } else { -screen };
+            } else {
+                moves.turn = Some(forward);
             }
-            _ => {}
         }
         if let Some((direction, mods)) = nudge
             && direction.y != 0.0

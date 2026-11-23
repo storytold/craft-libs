@@ -198,11 +198,11 @@ impl Component for Picture<'_> {
                 // A side past the cap is refused below; the saturating cast keeps that refusal for absurd sizes.
                 let (width, height) = (width as u32, height as u32);
                 let store = store(&cx.ctx);
-                let key = (cx.resolved.id, svg_key(*svg, width, height));
+                let key = (cx.resolved.id, svg_key(svg, width, height));
                 let texture = match store.state(&cx.ctx, &key, self.revision) {
                     TextureState::Ready(texture) => texture,
                     TextureState::Empty | TextureState::Failed { .. } => return,
-                    _ => match rasterise_svg(*svg, width, height) {
+                    _ => match rasterise_svg(svg, width, height) {
                         Some(image) => store.put(&cx.ctx, key, self.revision, image),
                         None => {
                             log::error!("picture {:?}: the SVG is refused or does not draw at {width}x{height}", cx.resolved.id);

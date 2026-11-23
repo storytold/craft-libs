@@ -304,7 +304,6 @@ impl<'a> NotePopup<'a> {
     }
 
     /// The note's colour, straight RGB; `None` takes the default note colour.
-    #[must_use]
     pub fn color(mut self, color: Option<[u8; 3]>) -> Self {
         self.color = color;
         self
@@ -313,28 +312,24 @@ impl<'a> NotePopup<'a> {
     /// The annotation's screen rect (the first quad or the icon) and whether the host's page part is hovered: the
     /// pop-up paints the faint connector from the mark to its window while `mark_hovered`, the window is hovered or the
     /// note is selected, and only when the two do not overlap.
-    #[must_use]
     pub fn anchor(mut self, mark: egui::Rect, mark_hovered: bool) -> Self {
         self.anchor = Some((mark, mark_hovered));
         self
     }
 
     /// Whether the note is the selected one.
-    #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
     }
 
     /// The current time in Unix seconds, which the ages count from.
-    #[must_use]
     pub fn now(mut self, unix_seconds: i64) -> Self {
         self.now = unix_seconds;
         self
     }
 
     /// Whether the document allows commenting: replying and editing.
-    #[must_use]
     pub fn allowed(mut self, allowed: bool) -> Self {
         self.allowed = allowed;
         self

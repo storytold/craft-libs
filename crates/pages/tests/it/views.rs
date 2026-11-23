@@ -1166,11 +1166,11 @@ fn a_fit_holds_the_page_at_the_top_still_while_pages_of_other_sizes_scroll_past(
     let source = Recording::new(DemoPages::new(sizes.len()), sizes, &Rc::default());
     let Rig { mut fixture, state, out, .. } = rig_over(source, state_with(|s| s.fit = Fit::Width), NavigationOptions::default(), true);
     let (zoom, rects) = (state.borrow().zoom, out.borrow().rects.clone());
-    for page in 1..rects.len() {
-        state.borrow_mut().offset.1 = rects[page].y0;
+    for (page, rect) in rects.iter().enumerate().skip(1) {
+        state.borrow_mut().offset.1 = rect.y0;
         fixture.idle(2);
         assert_eq!(state.borrow().zoom, zoom, "page {page} at the top leaves the fitted zoom alone");
-        assert_eq!(out.borrow().rects[page], rects[page], "page {page} at the top keeps its place and size");
+        assert_eq!(out.borrow().rects[page], *rect, "page {page} at the top keeps its place and size");
     }
 }
 
@@ -1408,7 +1408,8 @@ fn reselecting_the_display_moves_nothing_and_a_change_keeps_the_current_page() {
     view.fixture.idle(2);
     assert_eq!(view.state.borrow().offset, offset, "writing the display it has moves nothing");
 
-    let changes: [(&str, fn(&mut PageViewState)); 2] = [("display", |s| s.display = PageDisplay::TwoUp), ("fit", |s| s.fit = Fit::Page)];
+    type Change = (&'static str, fn(&mut PageViewState));
+    let changes: [Change; 2] = [("display", |s| s.display = PageDisplay::TwoUp), ("fit", |s| s.fit = Fit::Page)];
     for (what, change) in changes {
         // Where a go-to to the current page puts the view, from the same state.
         let mut reference = rig(6, view.state.borrow().clone());
@@ -1719,7 +1720,7 @@ fn command_page_down_turns_a_page_and_right_a_spread_in_a_scrolling_view() {
     fixture.idle(2);
     assert_eq!(state.borrow().current, 1, "Cmd+Page Down turns one page");
     let top = out.borrow().rects[1].y0 - out.borrow().offset.1;
-    assert!(top >= 0.0 && top < 40.0, "the page's top comes to the view's top: {top}");
+    assert!((0.0..40.0).contains(&top), "the page's top comes to the view's top: {top}");
     fixture.key(Key::PageUp, Modifiers::COMMAND);
     fixture.idle(2);
     assert_eq!(state.borrow().current, 0, "Cmd+Page Up turns back");

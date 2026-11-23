@@ -466,34 +466,12 @@ impl<'a> Canvas<'a> {
         let mut zoom_anchor = None;
         let wheel = cx.take_wheel();
         let wheeled = wheel.is_some();
-        if let Some(wheel) = wheel {
-            let (line, os) = (self.navigation.wheel_line, cx.env.shell().os);
-            let mut zoomed = false;
-            if let Some(action) = motion.wheel.read(&wheel, line, os, &self.navigation) {
-                match action {
-                    // The eased wheel hands a line's pan to the wheel service, which pays it out over the passes after.
-                    WheelAction::Pan(delta) if self.navigation.eased_wheel && wheel.unit == WheelUnit::Line => line_pan = delta,
-                    action => {
-                        zoomed = !matches!(action, WheelAction::Pan(_));
-                        // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in
-                        // its body covers it.
-                        let at = wheel.at.unwrap_or_else(|| view.rect.center());
-                        let (anchor, zoom) = (WheelNavigation::zoom_anchor(&view, action, at, size), view.zoom);
-                        jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
-                        if view.zoom != zoom {
-                            zoom_anchor = anchor;
-                        }
-                    }
-                }
-            }
-            // A trackpad rotation or a twist of two fingers turns the view; a mirrored view turns the other way.
-            if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(&wheel, line, os), &self.navigation) {
-                view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(degrees, view.flip_x));
-                jumped = true;
-                zoomed = true;
-            }
-            halt |= zoomed;
-            motion.glide.read(&wheel, now, !zoomed && self.navigation.touchpad_glide);
+        if let Some(wheel) = &wheel {
+            let read = self.read_wheel(cx, &mut motion, &mut view, wheel, now);
+            line_pan = read.line_pan;
+            jumped |= read.jumped;
+            zoom_anchor = read.zoom_anchor.or(zoom_anchor);
+            halt |= read.zoomed;
         }
         // Every pass feeds the ease, the line pan or nothing, so owed motion keeps paying; the service takes the time
         // from its own clock, so a later pass of the same frame pays nothing.
@@ -620,6 +598,40 @@ impl<'a> Canvas<'a> {
         let mark = motion.autoscroll.mark();
         motion.restore(&ctx, id);
         Settled { target, shown, easing, keys, wheel, auto_scrolling, mark, swallowing, zoom_anchor }
+    }
+
+    /// One pass's wheel on `view`: a pan the eased wheel pays out later, or a pan, zoom or turn applied now, and the
+    /// touchpad glide's reading of it.
+    fn read_wheel(&self, cx: &mut Cx<'_, Self>, motion: &mut ViewMotion, view: &mut CanvasView, wheel: &Wheel, now: f64) -> WheelRead {
+        let pixels_per_point = cx.env.scale().0;
+        let size = self.document_size().unwrap_or(Size::ZERO);
+        let (line, os) = (self.navigation.wheel_line, cx.env.shell().os);
+        let mut read = WheelRead::default();
+        if let Some(action) = motion.wheel.read(wheel, line, os, &self.navigation) {
+            match action {
+                // The eased wheel hands a line's pan to the wheel service, which pays it out over the passes after.
+                WheelAction::Pan(delta) if self.navigation.eased_wheel && wheel.unit == WheelUnit::Line => read.line_pan = delta,
+                action => {
+                    read.zoomed = !matches!(action, WheelAction::Pan(_));
+                    // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in
+                    // its body covers it.
+                    let at = wheel.at.unwrap_or_else(|| view.rect.center());
+                    let (anchor, zoom) = (WheelNavigation::zoom_anchor(view, action, at, size), view.zoom);
+                    read.jumped |= WheelNavigation::apply(view, action, at, size, pixels_per_point);
+                    if view.zoom != zoom {
+                        read.zoom_anchor = anchor;
+                    }
+                }
+            }
+        }
+        // A trackpad rotation or a twist of two fingers turns the view; a mirrored view turns the other way.
+        if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(wheel, line, os), &self.navigation) {
+            view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(degrees, view.flip_x));
+            read.jumped = true;
+            read.zoomed = true;
+        }
+        motion.glide.read(wheel, now, !read.zoomed && self.navigation.touchpad_glide);
+        read
     }
 
     /// One pass of the middle button's autoscroll over `view`: a middle press on the background starts it under
@@ -1076,4 +1088,17 @@ fn clamped(mut view: CanvasView, document: Option<Size>, navigation: &Navigation
         CanvasScrollbars::clamp(&mut view, DocRect::from_origin_size(Point::ZERO, document));
     }
     view
+}
+
+/// What a pass's wheel did to the view ([`Canvas::read_wheel`]).
+#[derive(Default)]
+struct WheelRead {
+    /// A line's pan the eased wheel pays out over the passes after.
+    line_pan: Vec2,
+    /// Whether the view moved at once.
+    jumped: bool,
+    /// The screen point a zoom kept still.
+    zoom_anchor: Option<Pos2>,
+    /// Whether the wheel zoomed or turned the view.
+    zoomed: bool,
 }

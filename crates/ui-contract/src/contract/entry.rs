@@ -17,7 +17,8 @@ pub struct Entry<T> {
 
 #[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 enum Row<T> {
-    Item(Item<T>),
+    // Boxed: an item's labels make it far larger than a heading or a separator.
+    Item(Box<Item<T>>),
     Heading(Label),
     Separator,
 }
@@ -39,7 +40,7 @@ impl<T> Entry<T> {
     /// An entry reporting `value` when picked, shown as `label`: enabled and unchecked, without an icon.
     pub fn new(value: T, label: impl Into<Label>) -> Self {
         Entry {
-            row: Row::Item(Item {
+            row: Row::Item(Box::new(Item {
                 value,
                 label: label.into(),
                 closed: None,
@@ -49,7 +50,7 @@ impl<T> Entry<T> {
                 description: None,
                 checked: false,
                 stepped: true,
-            }),
+            })),
         }
     }
 
@@ -156,7 +157,7 @@ impl<T> Entry<T> {
     /// The text a closed control shows for the entry: its closed label, else its label.
     pub fn face_label(&self) -> &Label {
         match &self.row {
-            Row::Item(Item { closed: Some(closed), .. }) => closed,
+            Row::Item(item) => item.closed.as_ref().unwrap_or(&item.label),
             _ => self.label(),
         }
     }

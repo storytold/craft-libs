@@ -693,18 +693,7 @@ impl Component for Notice<'_> {
                 y += size.y;
             }
             if !plan.action_rows.is_empty() {
-                y += stack.max(gap);
-                for (range, row_height) in &plan.action_rows {
-                    let mut line = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), *row_height)), rtl);
-                    for size in plan.actions.get(range.clone()).unwrap_or_default() {
-                        let width = size.x.min(line.rect().width().max(0.0));
-                        let (slot, rest) = line.take_start(width);
-                        let top = y + (*row_height - size.y) / 2.0;
-                        placed.actions.push(Rect::from_min_size(Pos2::new(slot.min.x, top), Vec2::new(width, size.y)));
-                        line = rest.take_start(gap).1;
-                    }
-                    y += row_height + gap;
-                }
+                place_action_rows(&plan, rect, y + stack.max(gap), rtl, gap, &mut placed.actions);
             }
         } else {
             let mut y = rect.top() + ((rect.height() - plan.height) / 2.0).max(0.0);
@@ -924,5 +913,21 @@ pub(crate) fn tone_icon(tone: Tone) -> Option<&'static str> {
         Tone::Warn => Some("warning"),
         Tone::Bad => Some("error"),
         _ => None,
+    }
+}
+
+/// Places a row notice's action rows across `rect` from `top` down, each action at its width and centred on its row.
+fn place_action_rows(plan: &Plan, rect: Rect, top: f32, rtl: bool, gap: f32, actions: &mut Vec<Rect>) {
+    let mut y = top;
+    for (range, row_height) in &plan.action_rows {
+        let mut line = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), *row_height)), rtl);
+        for size in plan.actions.get(range.clone()).unwrap_or_default() {
+            let width = size.x.min(line.rect().width().max(0.0));
+            let (slot, rest) = line.take_start(width);
+            let top = y + (*row_height - size.y) / 2.0;
+            actions.push(Rect::from_min_size(Pos2::new(slot.min.x, top), Vec2::new(width, size.y)));
+            line = rest.take_start(gap).1;
+        }
+        y += row_height + gap;
     }
 }

@@ -28,9 +28,12 @@ fn paragraph(text: &'static str, width: f32) -> Fixture {
     fixture
 }
 
+/// A painted row: its top, its text in reading order, and each glyph's character, screen left and advance.
+type PaintedRow = (f32, String, Vec<(char, f32, f32)>);
+
 /// Each painted row of the text shape whose text holds `part`: its top, its text in reading order, and each glyph's
 /// character, screen left and advance.
-fn painted_rows(fixture: &mut Fixture, part: &str) -> Vec<(f32, String, Vec<(char, f32, f32)>)> {
+fn painted_rows(fixture: &mut Fixture, part: &str) -> Vec<PaintedRow> {
     let shapes = fixture.frame_shapes();
     let shown = shapes
         .iter()
