@@ -507,8 +507,8 @@ fn a_linked_smart_object_shows_a_chain_link_badge_red_while_its_file_is_missing(
         let (broken_thumb, (broken, broken_tex, broken_tint), missing_said) = badge(&layers[2]);
 
         let side = (thumb.height() * 11.0 / 24.0).round().clamp(9.0, 18.0);
-        let expected = egui::Rect::from_min_max(thumb.max - Vec2::splat(side), thumb.max).shrink(1.0);
-        for (what, glyph) in [("chain link", link), ("broken link", broken)] {
+        for (what, glyph, on) in [("chain link", link, thumb), ("broken link", broken, broken_thumb)] {
+            let expected = egui::Rect::from_min_max(on.max - Vec2::splat(side), on.max).shrink(1.0);
             assert!(
                 (glyph.width() - expected.width()).abs() < 0.6 && (glyph.center() - expected.center()).length() < 0.6,
                 "{size:?}: the {what} fills the {side}-point badge in the thumbnail's corner: {glyph:?}, want {expected:?}"
