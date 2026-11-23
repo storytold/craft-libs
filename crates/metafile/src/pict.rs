@@ -50,15 +50,22 @@ const FLAT: u32 = 0x200;
 struct Be<'a> {
     data: &'a [u8],
     pos: usize,
+    eof: bool,
 }
 
 impl<'a> Be<'a> {
     fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos }
+        Self { data, pos, eof: false }
     }
     fn bytes(&mut self, n: usize) -> Option<&'a [u8]> {
         let end = self.pos.checked_add(n)?;
-        let b = self.data.get(self.pos..end)?;
+        let b = match self.data.get(self.pos..end) {
+            Some(b) => b,
+            None => {
+                self.eof = true;
+                return None;
+            }
+        };
         self.pos = end;
         Some(b)
     }
@@ -72,6 +79,7 @@ impl<'a> Be<'a> {
             self.pos = end;
             Some(())
         } else {
+            self.eof = true;
             None
         }
     }
@@ -1458,6 +1466,7 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
     let mut q = Pict::new(h.frame);
     let mut r = Be::new(bytes, h.ops);
     let mut reached_end = false;
+    let mut halted_for_record_error = false;
     let mut reason = None;
     for _ in 0..MAX_OPS {
         if h.v2 && r.pos % 2 == 1 && r.skip(1).is_none() {
@@ -1473,14 +1482,18 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
             break;
         }
         if q.op(op, &mut r).is_none() {
-            reason = Some(TruncationReason::PrematureEof);
+            if r.eof {
+                reason = Some(TruncationReason::PrematureEof);
+            } else {
+                halted_for_record_error = true;
+            }
             break;
         }
     }
-    if !reached_end && reason.is_none() {
+    if !reached_end && !halted_for_record_error && reason.is_none() {
         reason = Some(TruncationReason::OpcodeLimitExceeded);
     }
-    if reason.is_some() {
+    if !reached_end {
         q.truncated = true;
         q.truncation_reason = reason;
     }
