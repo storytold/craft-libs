@@ -1,0 +1,184 @@
+use super::*;
+use crate::Xcf;
+use crate::tests::W;
+
+// Original synthetic wire records from the public XCF layouts, not producer assets.
+fn cubic(w: &mut W) {
+    for value in [1, 0, 2, 3] {
+        w.u32(value);
+    }
+    for (kind, x, y) in [(1, -2.0f32, 3.0f32), (0, 4.0, 5.0), (1, 6.0, 7.0)] {
+        w.u32(kind);
+        w.u32(x.to_bits());
+        w.u32(y.to_bits());
+    }
+}
+
+fn historical(kind: u32, label: &str) -> Vec<u8> {
+    let mut w = W { out: Vec::new(), wide: false };
+    if kind == 25 {
+        w.u32(1);
+    }
+    w.u32(0); // Active source index.
+    w.u32(1);
+    w.string(label);
+    if kind == 23 {
+        w.u32(0); // Linked flag.
+        w.out.push(0); // Legacy state.
+        for value in [0, 0, 1] {
+            // Open, no points, legacy version 1.
+            w.u32(value);
+        }
+    } else {
+        for value in [7, 1, 0, 0, 1] {
+            // Tattoo, visible, linked, parasites, strokes.
+            w.u32(value);
+        }
+        cubic(&mut w);
+    }
+    w.out
+}
+
+fn standalone(label: &str) -> Vec<u8> {
+    let mut payload = W { out: Vec::new(), wide: false };
+    payload.prop_u32(20, 11);
+    payload.prop(43, &[]);
+    payload.end();
+    payload.u32(1);
+    payload.u32(1);
+    cubic(&mut payload);
+    let mut w = W { out: Vec::new(), wide: false };
+    w.string(label);
+    w.u32(payload.out.len() as u32);
+    w.out.extend(payload.out);
+    w.out
+}
+
+fn file(version: u32, properties: &[(u32, Vec<u8>)], aliases: usize) -> (Vec<u8>, usize, usize) {
+    let mut w = W::new(version);
+    for value in [4, 4, 0] {
+        w.u32(value);
+    }
+    if version >= 4 {
+        w.u32(150);
+    }
+    for (kind, bytes) in properties {
+        w.prop(*kind, bytes);
+    }
+    w.end();
+    w.ptr(0); // Layer table.
+    w.ptr(0); // Channel table.
+    let table = w.out.len();
+    let slots: Vec<_> = if version >= 18 { (0..aliases).map(|_| w.slot()).collect() } else { Vec::new() };
+    if version >= 18 {
+        w.ptr(0);
+    }
+    let source = w.out.len();
+    if aliases != 0 {
+        w.out.extend(standalone("Standalone"));
+        for slot in slots {
+            w.patch(slot, source);
+        }
+    }
+    (w.out, table, source)
+}
+
+#[test]
+fn indexed_paths_keep_coexisting_encodings_geometry_and_original_identity() {
+    for version in [11, 18, 26] {
+        let props = [(23, historical(23, "Legacy")), (25, historical(25, "Vectors"))];
+        let (bytes, _, source) = file(version, &props, usize::from(version >= 18));
+        let xcf = Xcf::parse(&bytes).unwrap();
+        let declared = xcf.image().path_count;
+        let paths = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(paths.stopped, None);
+        let names: Vec<_> = paths.records.iter().map(|path| path.name).collect();
+        assert_eq!(names, if version >= 18 { vec!["Legacy", "Vectors", "Standalone"] } else { vec!["Legacy", "Vectors"] });
+        assert_eq!(declared, paths.records.len());
+        assert_eq!(xcf.image().path_count, declared, "optional access does not mutate the legacy index");
+        assert!(paths.records.iter().all(|path| path.selected && path.source_index == 0));
+        for path in &paths.records {
+            assert_eq!(bytes.get(path.offset..path.offset + path.raw.len()), Some(path.raw), "records borrow exact original source spans");
+        }
+        let vector = &paths.records[1];
+        assert_eq!(vector.tattoo, Some(7));
+        assert_eq!(vector.strokes[0].knots[0].anchor.position, [4., 5.]);
+        assert_eq!(vector.strokes[0].knots[0].incoming.position, [-2., 3.]);
+        if version >= 18 {
+            assert_eq!(paths.records[2].offset, source);
+            assert_eq!(paths.records[2].tattoo, Some(11));
+            assert!(paths.records[2].geometry_complete());
+        }
+    }
+}
+
+#[test]
+fn optional_table_and_path_truncation_are_typed_without_rejecting_the_image() {
+    let props = [(25, historical(25, "Vectors"))];
+    let (bytes, table, _) = file(26, &props, 1);
+    for truncated in [&bytes[..table + 4], &bytes[..bytes.len() - 1]] {
+        let xcf = Xcf::parse(truncated).unwrap();
+        assert_eq!((xcf.image().width, xcf.image().height), (4, 4));
+        let paths = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(paths.records.len(), 1);
+        assert_eq!(paths.records[0].name, "Vectors");
+        assert_eq!(paths.stopped.unwrap().reason, StopReason::Malformed);
+    }
+    let xcf = Xcf::parse(&bytes[..table + 4]).unwrap();
+    let pointers = xcf.path_offsets(super::super::super::Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(pointers.records.is_empty());
+    assert_eq!(pointers.stopped.unwrap().offset, table);
+}
+
+#[test]
+fn path_limits_cover_properties_aliases_and_shared_nonrefundable_work() {
+    let (bytes, _, source) = file(26, &[(25, historical(25, "Vectors"))], 2);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let paths = xcf.paths(Limits { paths: 2, ..Default::default() }, &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(paths.records.len(), 2);
+    assert_eq!(paths.records[1].offset, source);
+    assert_eq!(paths.stopped.unwrap().reason, StopReason::RecordLimit);
+    let full = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(full.records.len(), 3);
+    assert_eq!(full.records[1].raw, full.records[2].raw);
+    assert_eq!((full.records[1].source_index, full.records[2].source_index), (0, 1));
+    let mut work = Budget::new(8, 1024);
+    let first = xcf.path_offsets(super::super::super::Limits::default(), &mut work, &|| true).unwrap();
+    assert_eq!(first.records, [source]);
+    assert_eq!(first.stopped.unwrap().reason, StopReason::WorkLimit);
+    let again = xcf.path_offsets(super::super::super::Limits::default(), &mut work, &|| true).unwrap();
+    assert!(again.records.is_empty());
+    assert_eq!(again.stopped.unwrap().reason, StopReason::WorkLimit);
+    let no_storage = xcf.paths(Limits::default(), &mut Budget::new(1 << 20, 0), &|| true).unwrap();
+    assert!(no_storage.records.is_empty());
+    assert_eq!(no_storage.stopped.unwrap().reason, StopReason::RetainedLimit);
+}
+
+#[test]
+fn a_malformed_historical_list_preserves_only_the_disclosed_prefix() {
+    let props = [(23, historical(23, "Legacy")), (25, vec![0; 3])];
+    let (bytes, _, _) = file(26, &props, 1);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    let scan = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records.len(), 1);
+    assert_eq!(scan.records[0].name, "Legacy");
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
+fn optional_path_cancellation_wins_at_entry_and_during_a_source_list() {
+    let (bytes, _, _) = file(26, &[(25, historical(25, "Vectors"))], 2);
+    let xcf = Xcf::parse(&bytes).unwrap();
+    assert!(matches!(xcf.paths(Limits::default(), &mut Budget::new(0, 0), &|| false), Err(Error::Cancelled)));
+    assert!(matches!(xcf.path_offsets(super::super::super::Limits::default(), &mut Budget::new(0, 0), &|| false), Err(Error::Cancelled)));
+    let calls = std::cell::Cell::new(0);
+    let keep = || {
+        calls.set(calls.get() + 1);
+        calls.get() < 20
+    };
+    assert!(matches!(xcf.paths(Limits::default(), &mut Budget::default(), &keep), Err(Error::Cancelled)));
+    assert_eq!(calls.get(), 20);
+    let completed = xcf.paths(Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(completed.stopped.is_none());
+    assert_eq!(completed.records.len(), 3);
+}

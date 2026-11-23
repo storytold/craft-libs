@@ -3,6 +3,8 @@
 use super::{Budget, Diagnostic, Property, Scan, StopReason};
 use crate::{Cursor, Error, Result};
 
+pub(crate) mod index;
+
 /// Per-list structural limits; cumulative work and storage use the shared Budget.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {

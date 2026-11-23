@@ -1,0 +1,125 @@
+//! Optional file path indexing; geometry is decoded only by the existing readers.
+use super::{Budget, Diagnostic, Limits, Property, Scan, SourcePath, StopReason};
+use crate::{Cursor, Error, Result};
+
+fn check(keep_going: &dyn Fn() -> bool) -> Result<()> {
+    if keep_going() { Ok(()) } else { Err(Error::Cancelled) }
+}
+
+pub(crate) fn offsets(
+    mut cursor: Cursor<'_>,
+    start: Option<usize>,
+    limits: super::super::Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<usize>> {
+    check(keep_going)?;
+    let Some(start) = start else { return Ok(Scan::complete(Vec::new(), 0)) };
+    cursor.pos = start;
+    let mut records = Vec::new();
+    loop {
+        check(keep_going)?;
+        let offset = cursor.pos;
+        let result = (|| {
+            budget.work(if cursor.wide { 8 } else { 4 })?;
+            let pointer = cursor.ptr().map_err(|_| StopReason::Malformed)?;
+            if pointer == 0 {
+                return Ok(None);
+            }
+            // Keep optional traversal within the legacy reader's structural cap.
+            if records.len() >= limits.records.min(crate::MAX_CHANNELS) {
+                return Err(StopReason::RecordLimit);
+            }
+            Ok(Some(pointer))
+        })();
+        match result {
+            Ok(None) => return Ok(Scan::complete(records, cursor.pos)),
+            Ok(Some(pointer)) => {
+                if let Err(reason) = budget.retain(&mut records, pointer) {
+                    return Ok(Scan::stopped(records, offset, reason));
+                }
+            }
+            Err(reason) => return Ok(Scan::stopped(records, offset, reason)),
+        }
+    }
+}
+
+fn merge<'a>(
+    output: &mut Vec<SourcePath<'a>>,
+    scan: Scan<SourcePath<'a>>,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<(usize, Option<Diagnostic>)> {
+    let Scan { records, stopped, end_offset } = scan;
+    if output.is_empty() {
+        *output = records;
+    } else {
+        // Both containers may be live: admit geometric output growth before allocating.
+        for path in records {
+            check(keep_going)?;
+            let offset = path.offset;
+            if let Err(reason) = budget.retain(output, path) {
+                return Ok((offset, Some(Diagnostic { offset, ordinal: output.len(), reason })));
+            }
+        }
+    }
+    Ok((end_offset, stopped.map(|diagnostic| Diagnostic { ordinal: output.len(), ..diagnostic })))
+}
+
+pub(crate) fn decode<'a>(
+    cursor: Cursor<'a>,
+    start: Option<usize>,
+    properties: Scan<Property<'a>>,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<SourcePath<'a>>> {
+    check(keep_going)?;
+    let mut output = Vec::new();
+    let mut end_offset = properties.end_offset;
+    for property in properties.records {
+        check(keep_going)?;
+        if !matches!(property.kind, 23 | 25) {
+            continue;
+        }
+        let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), ..limits };
+        let Some(offset) = property.offset.checked_add(8) else { return Ok(Scan::stopped(output, property.offset, StopReason::Malformed)) };
+        let scan = if property.kind == 23 {
+            super::legacy(property.payload, offset, remaining, budget, keep_going)?
+        } else {
+            super::vectors(property.payload, offset, remaining, budget, keep_going)?
+        };
+        let (_, stopped) = merge(&mut output, scan, budget, keep_going)?;
+        if let Some(diagnostic) = stopped {
+            return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
+        }
+    }
+    if let Some(diagnostic) = properties.stopped {
+        return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
+    }
+    let table = offsets(
+        cursor.at(0),
+        start,
+        super::super::Limits { records: limits.paths.saturating_sub(output.len()), ..Default::default() },
+        budget,
+        keep_going,
+    )?;
+    end_offset = end_offset.max(table.end_offset);
+    for (source_index, offset) in table.records.into_iter().enumerate() {
+        check(keep_going)?;
+        let remaining = Limits { paths: limits.paths.saturating_sub(output.len()), ..limits };
+        let scan = super::standalone(cursor.b, offset, source_index, remaining, budget, keep_going)?;
+        let (end, stopped) = merge(&mut output, scan, budget, keep_going)?;
+        end_offset = end_offset.max(end);
+        if let Some(diagnostic) = stopped {
+            return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
+        }
+    }
+    if let Some(diagnostic) = table.stopped {
+        return Ok(Scan::stopped(output, diagnostic.offset, diagnostic.reason));
+    }
+    Ok(Scan::complete(output, end_offset))
+}
+
+#[cfg(test)]
+mod tests;

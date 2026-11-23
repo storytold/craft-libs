@@ -511,7 +511,7 @@ pub struct Image {
     pub icc_profile: Option<Vec<u8>>,
     /// The `gimp-comment` parasite.
     pub comment: Option<String>,
-    /// Paths the file holds (they are not read).
+    /// Paths the file declares. Decode optional geometry with [`Xcf::paths`].
     pub path_count: usize,
     /// Every layer structure in file order, topmost first, floating selections included.
     pub layers: Vec<Layer>,
@@ -564,6 +564,8 @@ pub struct Xcf<'a> {
     channels: Vec<usize>,
     // Reuse the already-bounded pointer table for opt-in source-record access.
     layer_sources: Vec<usize>,
+    // Preserve the optional table location without eagerly decoding or retaining path records.
+    path_sources: Option<usize>,
     /// What is left of [`MAX_METADATA_BYTES`] after the layers; channel names are charged too.
     meta_budget: Cell<usize>,
 }
@@ -638,6 +640,7 @@ impl<'a> Xcf<'a> {
         };
         let layer_ptrs = pointers(&mut c, MAX_LAYERS, "layers")?;
         let channels = pointers(&mut c, MAX_CHANNELS, "channels")?;
+        let path_sources = (version >= 18).then_some(c.pos);
         if version >= 18 {
             let mut n = 0;
             while c.ptr().ok().is_some_and(|p| p != 0) {
@@ -658,7 +661,7 @@ impl<'a> Xcf<'a> {
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }
-        Ok(Xcf { precision_code, c, image, channels, layer_sources: layer_ptrs, meta_budget: Cell::new(meta_budget) })
+        Ok(Xcf { precision_code, c, image, channels, layer_sources: layer_ptrs, path_sources, meta_budget: Cell::new(meta_budget) })
     }
 
     /// The file's header and structure.
@@ -676,6 +679,33 @@ impl<'a> Xcf<'a> {
     ) -> Result<records::Scan<records::Property<'a>>> {
         let start = MAGIC.len() + 5 + 12 + if self.image.version >= 4 { 4 } else { 0 };
         records::properties(self.c.b, start, limits, budget, keep_going)
+    }
+
+    /// Read the optional version-18+ standalone path pointer table.
+    /// Truncation and caller limits return a disclosed prefix; default parsing and
+    /// [`Image::path_count`] retain their existing tolerant behavior.
+    pub fn path_offsets(&self, limits: records::Limits, budget: &mut records::Budget, keep_going: &dyn Fn() -> bool) -> Result<records::Scan<usize>> {
+        records::paths::index::offsets(self.c.at(0), self.path_sources, limits, budget, keep_going)
+    }
+
+    /// Decode saved paths in image-property order, then standalone pointer order.
+    /// All coexisting encodings are exposed; applications choose native precedence.
+    /// `source_index` remains local to its original list, and absolute offsets identify
+    /// the original records. An incomplete optional list returns its usable prefix.
+    /// Reuse `budget` for cumulative source work, geometry and conservative merge staging.
+    /// Shape limits apply per original list; `limits.paths` bounds the combined result.
+    pub fn paths(
+        &self,
+        limits: records::paths::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::paths::SourcePath<'a>>> {
+        let properties = self.image_properties(
+            records::Limits { records: limits.properties, string_bytes: limits.name_bytes, payload_bytes: limits.payload_bytes },
+            budget,
+            keep_going,
+        )?;
+        records::paths::index::decode(self.c.at(0), self.path_sources, properties, limits, budget, keep_going)
     }
 
     /// Borrow the properties of one layer, preserving duplicate records and offsets.
