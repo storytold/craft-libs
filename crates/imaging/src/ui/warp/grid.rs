@@ -514,7 +514,19 @@ impl Component for WarpGrid<'_> {
             draw.fill(&square, look(anchor, &style.anchor.fill));
             draw.stroke(&square, StrokeWidth::Thin, style.anchor.stroke);
         }
-        for index in ends {
+        // The handles on the grid's border are drawn at rest too, as the reference application draws them (a dot where
+        // each edge's curve is pulled from); the interior ones only once revealed, with their arms.
+        let (w, h) = (mesh.width(), mesh.height());
+        let on_border = |index: usize| {
+            let (i, j) = (index % w.max(1), index / w.max(1));
+            i == 0 || j == 0 || i + 1 == w || j + 1 == h
+        };
+        let border: Vec<usize> = mesh
+            .anchors()
+            .flat_map(|anchor| mesh.handles(anchor).into_iter().map(|(index, _)| index))
+            .filter(|&index| on_border(index) && !ends.contains(&index))
+            .collect();
+        for index in ends.into_iter().chain(border) {
             let circle = PaintShape::Circle(screen(index), style.end.side / 2.0);
             draw.fill(&circle, look(index, &style.end.fill));
             draw.stroke(&circle, StrokeWidth::Thin, style.end.stroke);

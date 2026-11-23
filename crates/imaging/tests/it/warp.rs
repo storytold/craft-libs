@@ -492,3 +492,31 @@ fn enter_after_a_point_drag_reaches_the_canvas_tool() {
     let seen = &canvas.tool().seen;
     assert!(matches!(seen[..], [craft_ui::canvas::ToolKey::Submit]), "Enter reaches the tool: {seen:?}");
 }
+
+fn circles(shapes: &[egui::Shape], out: &mut Vec<Pos2>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => circles(inner, out),
+            egui::Shape::Circle(circle) => out.push(circle.center),
+            _ => {}
+        }
+    }
+}
+
+/// At rest, with the pointer away, the grid draws a dot on each handle of its border (where each edge's curve is pulled
+/// from), as the reference application does, and none on the interior handles or the corners (their squares). The
+/// grid drew handles only near the pointer, so its edges' handles could not be seen until hovered.
+#[trial]
+fn the_borders_handles_are_drawn_at_rest() {
+    let mut h = harness(WarpMesh::identity(RECT, 1, 1));
+    let mut found = Vec::new();
+    circles(&h.fixture.frame_shapes(), &mut found);
+    let mesh = h.mesh.borrow().clone();
+    let at = |index: usize| h.screen(mesh.points[index]);
+    for index in [1usize, 2, 4, 7, 8, 11, 13, 14] {
+        assert!(found.iter().any(|c| c.distance(at(index)) < 0.01), "border handle {index} has a dot: {found:?}");
+    }
+    for index in [0usize, 3, 12, 15, 5, 6, 9, 10] {
+        assert!(!found.iter().any(|c| c.distance(at(index)) < 0.01), "point {index} has no dot: {found:?}");
+    }
+}
