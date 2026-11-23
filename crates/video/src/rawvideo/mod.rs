@@ -4,7 +4,7 @@
 //! | [`Layout`] | Samples | Packing |
 //! |---|---|---|
 //! | `Uyvy` | 8-bit 4:2:2 | `U Y0 V Y1` per two pixels (QuickTime `2vuy`, `UYVY`) |
-//! | `Yuyv` | 8-bit 4:2:2 | `Y0 U Y1 V` (`YUY2`, `yuv2`, `YUYV`) |
+//! | `Yuyv` | 8-bit 4:2:2 | `Y0 U Y1 V` (`YUY2`, `YUYV`) |
 //! | `Yvyu` | 8-bit 4:2:2 | `Y0 V Y1 U` (`YVYU`) |
 //! | `V210` | 10-bit 4:2:2 | six pixels in four little-endian 32-bit words (`Cb0 Y0 Cr0`, `Y1 Cb1 Y2`, `Cr1 Y3 Cb2`, `Y4 Cr2 Y5`, ten bits each, the low field first); rows padded to a multiple of 128 bytes |
 //! | `R210` | 10-bit RGB | one big-endian 32-bit word per pixel, `R` in bits 29-20, `G` in 19-10, `B` in 9-0; rows padded to a multiple of 256 bytes |
