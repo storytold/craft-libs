@@ -65,6 +65,10 @@ pub struct PickRequest {
     pub file_name: Option<String>,
     /// The extension a Save answer gets when the user typed none (`"png"`), lowercase.
     pub suggested_extension: Option<String>,
+    /// Forces the in-app chooser for this request.
+    pub fallback: bool,
+    /// The save makes the document a new file on the host page; other services ignore it.
+    pub save_as: bool,
 }
 
 impl PickRequest {
@@ -79,6 +83,8 @@ impl PickRequest {
             default_directory: None,
             file_name: None,
             suggested_extension: None,
+            fallback: false,
+            save_as: false,
         }
     }
 
@@ -138,6 +144,19 @@ impl PickRequest {
         self.suggested_extension = Some(extension.into().trim_start_matches('.').to_ascii_lowercase());
         self
     }
+
+    /// Forces the in-app chooser for this request instead of the system's file dialog.
+    pub fn fallback(mut self, on: bool) -> Self {
+        self.fallback = on;
+        self
+    }
+
+    /// Makes the save a new file on the host page: a Save As, or a Save under a name the page
+    /// never sent. Services without a host page ignore it.
+    pub fn save_as(mut self, on: bool) -> Self {
+        self.save_as = on;
+        self
+    }
 }
 
 /// The ticket of a pending pick; the answer carries it back.
@@ -159,6 +178,11 @@ pub enum Picked {
     /// the text is the technical cause, not a sentence for the user. A feature without a status
     /// line to report on treats it as nothing chosen.
     Unavailable(String),
+    /// A chosen save path that could not be written; the message is the system's.
+    Failed(String),
+    /// A save the browser handed to the user as a download, under this file name. The page holds no
+    /// file of the document, so it names nothing the app could reopen.
+    Downloaded(String),
 }
 
 impl Picked {
@@ -167,8 +191,17 @@ impl Picked {
         match self {
             Picked::Paths(paths) => paths.first().cloned(),
             Picked::Contents(files) => files.first().map(|(name, _)| PathBuf::from(name)),
-            Picked::Cancelled | Picked::Unavailable(_) => None,
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => None,
         }
+    }
+
+    /// Whether the document is now the file a finished save made. A save answers
+    /// [`Picked::Paths`] with the file it made: the path a native service wrote, or the name
+    /// under which a hosted browser page now holds the document. A browser download answers
+    /// [`Picked::Downloaded`], which names a file the page does not hold, so this is false for it.
+    /// The app sets its session path only when this is true.
+    pub fn records_file(&self) -> bool {
+        matches!(self, Picked::Paths(paths) if !paths.is_empty())
     }
 
     /// Every chosen path; on wasm the files' names. Empty when cancelled or unavailable.
@@ -176,7 +209,7 @@ impl Picked {
         match self {
             Picked::Paths(paths) => paths.clone(),
             Picked::Contents(files) => files.iter().map(|(name, _)| PathBuf::from(name)).collect(),
-            Picked::Cancelled | Picked::Unavailable(_) => Vec::new(),
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Vec::new(),
         }
     }
 }
@@ -249,6 +282,15 @@ pub trait Files: Send + Sync {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError>;
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
+    /// Queues a save of `bytes` as ticket `request`'s answer, taken with
+    /// [`take_answer`](Files::take_answer): the desktop service asks for the path, then writes
+    /// atomically; the browser service opens the save picker or makes one download. Counted in
+    /// [`pick_pending`](Files::pick_pending).
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId;
+    /// Whether a pick can answer paths that [`read`](Files::read) opens again.
+    fn can_pick(&self) -> bool;
+    /// Whether [`save`](Files::save) hands the bytes to the browser instead of writing a path.
+    fn browser_saves(&self) -> bool;
 }
 
 /// No pickers (every pick answers `Cancelled`); reads and writes go to the file system. The
@@ -307,12 +349,26 @@ impl Files for NoPickFiles {
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
         None
     }
+
+    /// Answers `Cancelled` like [`pick`](Files::pick); nothing is written.
+    fn save(&self, request: PickRequest, _bytes: Vec<u8>) -> PickId {
+        self.pick(request)
+    }
+
+    fn can_pick(&self) -> bool {
+        false
+    }
+
+    fn browser_saves(&self) -> bool {
+        false
+    }
 }
 
 /// A file service that answers from a script, for tests of the features that ask for files. It
 /// records every [`PickRequest`], keeps files in memory, and answers each pick in order from the
 /// answers the test queued: the first queued answer goes to the first pick, and a pick with
-/// nothing queued is `Cancelled`.
+/// nothing queued is `Cancelled`. A [`save`](Files::save) is a pick whose bytes go to the chosen
+/// path in memory when it is answered with `Paths`.
 ///
 /// A test that expects no picker asserts [`requests`](ScriptedFiles::requests) is empty. Every
 /// method takes `&self`, so a test keeps its own `Arc<ScriptedFiles>` and hands a clone to the
@@ -336,6 +392,23 @@ struct ScriptState {
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
     files: HashMap<PathBuf, Vec<u8>>,
+    /// The bytes of the saves not answered yet, written to the chosen path with the answer.
+    saves: HashMap<PickId, Vec<u8>>,
+    /// Stands in for a browser host.
+    browser: bool,
+}
+
+impl ScriptState {
+    /// Files `picked` as ticket `id`'s answer; a save's bytes go to the path it chose.
+    fn settle(&mut self, id: PickId, request: PickRequest, picked: Picked) {
+        if let Some(bytes) = self.saves.remove(&id)
+            && let Picked::Paths(paths) = &picked
+            && let Some(path) = paths.first()
+        {
+            self.files.insert(path.clone(), bytes);
+        }
+        self.answered.push(PickAnswer { id, request, picked });
+    }
 }
 
 impl ScriptedFiles {
@@ -367,6 +440,13 @@ impl ScriptedFiles {
         self
     }
 
+    /// A service that stands in for a browser host: [`Files::can_pick`] answers false and
+    /// [`Files::browser_saves`] true.
+    pub fn in_browser(self) -> Self {
+        self.state().browser = true;
+        self
+    }
+
     /// Puts a file in memory, for [`Files::read`].
     pub fn with_file(self, path: impl Into<PathBuf>, bytes: impl Into<Vec<u8>>) -> Self {
         self.state().files.insert(path.into(), bytes.into());
@@ -392,7 +472,7 @@ impl ScriptedFiles {
     pub fn answer(&self, picked: Picked) -> Option<PickId> {
         let mut state = self.state();
         let (id, request) = state.open.pop()?;
-        state.answered.push(PickAnswer { id, request, picked });
+        state.settle(id, request, picked);
         Some(id)
     }
 
@@ -401,7 +481,7 @@ impl ScriptedFiles {
         let mut state = self.state();
         let Some(at) = state.open.iter().position(|(open, _)| *open == id) else { return false };
         let (_, request) = state.open.remove(at);
-        state.answered.push(PickAnswer { id, request, picked });
+        state.settle(id, request, picked);
         true
     }
 
@@ -419,13 +499,15 @@ impl ScriptedFiles {
         let name = PathBuf::from(request.file_name.clone().unwrap_or_default());
         Picked::Paths(vec![request.directory.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name))])
     }
-}
 
-impl Files for ScriptedFiles {
-    fn pick(&self, request: PickRequest) -> PickId {
+    /// Records `request` and answers it from the script; a save's `bytes` wait for the answer.
+    fn ask(&self, request: PickRequest, bytes: Option<Vec<u8>>) -> PickId {
         let mut state = self.state();
         state.next += 1;
         let id = PickId(state.next);
+        if let Some(bytes) = bytes {
+            state.saves.insert(id, bytes);
+        }
         let suggested = (state.save_suggested && request.kind == PickKind::Save).then(|| Self::suggested(&request));
         state.asked.push(request.clone());
         if state.held {
@@ -433,8 +515,14 @@ impl Files for ScriptedFiles {
             return id;
         }
         let picked = suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled);
-        state.answered.push(PickAnswer { id, request, picked });
+        state.settle(id, request, picked);
         id
+    }
+}
+
+impl Files for ScriptedFiles {
+    fn pick(&self, request: PickRequest) -> PickId {
+        self.ask(request, None)
     }
 
     fn take_answer(&self, id: PickId) -> Option<Picked> {
@@ -447,6 +535,7 @@ impl Files for ScriptedFiles {
         let mut state = self.state();
         state.answered.retain(|a| a.id != id);
         state.open.retain(|(open, _)| *open != id);
+        state.saves.remove(&id);
     }
 
     fn pick_pending(&self) -> bool {
@@ -464,6 +553,18 @@ impl Files for ScriptedFiles {
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
         None
+    }
+
+    fn save(&self, request: PickRequest, bytes: Vec<u8>) -> PickId {
+        self.ask(request, Some(bytes))
+    }
+
+    fn can_pick(&self) -> bool {
+        !self.state().browser
+    }
+
+    fn browser_saves(&self) -> bool {
+        self.state().browser
     }
 }
 

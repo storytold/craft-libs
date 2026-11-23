@@ -1,12 +1,14 @@
 //! App-defined env values: EnvValue, StyleValue and AppValues.
 
+use crate::contract::{MemoKey, MemoProps};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// An app-defined value inherited down the tree like the library's own.
-pub trait EnvValue: Clone + PartialEq + Send + Sync + 'static {
+/// An app-defined value inherited down the tree like the library's own. `MemoProps`, because a memoized view under a
+/// scope that sets it keys on it (`MemoView`): its key follows every value the view can read.
+pub trait EnvValue: Clone + PartialEq + MemoProps + Send + Sync + 'static {
     /// A value that changes how components look is folded into the style key, so cached styles follow it.
     const AFFECTS_STYLE: bool = false;
 
@@ -31,9 +33,20 @@ pub struct AppValues {
     entries: Arc<ValueEntries>,
 }
 
+/// Feeds the value behind an entry into a key.
+type Keyer = fn(&(dyn Any + Send + Sync), &mut MemoKey);
+
+fn keyer<T: EnvValue>(value: &(dyn Any + Send + Sync), key: &mut MemoKey) {
+    if let Some(value) = value.downcast_ref::<T>() {
+        value.key(key);
+    }
+}
+
 #[derive(Clone, Default)]
 struct ValueEntries {
     map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    /// How each value feeds a key, by type.
+    keyers: HashMap<TypeId, Keyer>,
     /// The hash of each style-affecting value, by type.
     style: HashMap<TypeId, u64>,
     /// The hash of every style-affecting value, independent of the order they were set in.
@@ -68,6 +81,7 @@ impl AppValues {
             None => entries.style.remove(&TypeId::of::<T>()),
         };
         entries.map.insert(TypeId::of::<T>(), Arc::new(value));
+        entries.keyers.insert(TypeId::of::<T>(), keyer::<T>);
         entries.rehash();
         self
     }
@@ -75,6 +89,22 @@ impl AppValues {
     /// The hash of every style-affecting value, independent of the order they were set in.
     pub(crate) fn style_hash(&self) -> u64 {
         self.entries.style_hash
+    }
+
+    /// Feeds every value into `key`, independent of the order they were set in: each value keys its own `MemoKey` (of
+    /// `key`'s view), and the sum of those keys is fed. Returns the bytes the values fed.
+    pub(crate) fn key(&self, key: &mut MemoKey) -> usize {
+        let (mut sum, mut bytes) = (0u128, 0);
+        for (ty, value) in &self.entries.map {
+            let Some(keyer) = self.entries.keyers.get(ty) else { continue };
+            let mut one = key.child();
+            one.feed_hash(ty);
+            keyer(&**value, &mut one);
+            sum = sum.wrapping_add(one.finish());
+            bytes += one.bytes();
+        }
+        key.write(&sum.to_le_bytes());
+        bytes
     }
 
     /// A clone of the value, else `T::root()`.
@@ -92,6 +122,9 @@ impl AppValues {
         let entries = Arc::make_mut(&mut self.entries);
         for (ty, value) in &other.entries.map {
             entries.map.insert(*ty, Arc::clone(value));
+            if let Some(keyer) = other.entries.keyers.get(ty) {
+                entries.keyers.insert(*ty, *keyer);
+            }
             match other.entries.style.get(ty) {
                 Some(hash) => entries.style.insert(*ty, *hash),
                 None => entries.style.remove(ty),

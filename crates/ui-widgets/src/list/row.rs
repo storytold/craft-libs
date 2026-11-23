@@ -10,7 +10,7 @@
 use super::toggle::ToggleCell;
 use super::words::ListWords;
 use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
-use crate::primitives::{ContentPainterCx, HAlign, IconSpec};
+use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span};
 use crate::runtime::env::Label;
 use craft_behavior::{ColumnKey, Cursor};
 use craft_theme::variant::Tone;
@@ -23,7 +23,7 @@ mod paint;
 mod placement;
 mod show;
 mod style;
-mod thumb;
+pub(crate) mod thumb;
 mod trailing;
 
 use crate::contract::Hosting;
@@ -36,7 +36,7 @@ pub use placement::indent_steps;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use placement::placement_under_fixed_sizes;
-pub use placement::tree_steps;
+pub use placement::{TreeLeaves, tree_steps};
 pub use style::{ListRowStyle, RowStyleCx};
 pub(crate) use thumb::RowThumb;
 pub(super) use thumb::Thumb;
@@ -166,6 +166,11 @@ pub struct ListRow<'a> {
     /// The label in italics.
     #[prop]
     pub(super) italic: bool,
+    /// The label drawn from styled spans, as `Text::styled` draws them: a search result's match in the theme's
+    /// highlight look (`Span::highlight`). The label given to `new` is their joined text, which is also what a screen
+    /// reader reads. Empty for a plain label.
+    #[prop]
+    pub(super) label_spans: Vec<Span<'static>>,
     /// The hover look without the pointer (the canvas hovers the layer).
     #[prop]
     pub(super) highlight: bool,
@@ -173,9 +178,6 @@ pub struct ListRow<'a> {
     /// or thumbnail.
     #[prop]
     pub(super) clipped: bool,
-    /// A divider rule along the row's bottom edge, in a plain row too.
-    #[prop]
-    pub(super) rule: bool,
     /// The rename editor replaces the label; `state` sets it from the collection's row state.
     pub(super) renaming: bool,
     /// Where the collection holds a press on the row, from its row state: the toggle cell it acts on shows it.
@@ -209,6 +211,9 @@ pub struct ListRow<'a> {
     #[prop(into)]
     pub(super) accessible_name: Option<String>,
     pub(super) spacer: bool,
+    /// A spacer that draws a rule across the row: the line between groups of options (`separator`).
+    #[style_key]
+    pub(super) separator: bool,
     pub(super) cells: Vec<(ColumnKey, Rect)>,
     /// Each column's alignment and whether its figures are tabular, from `columns(..)`.
     pub(super) aligns: Vec<(ColumnKey, HAlign, bool)>,
@@ -260,6 +265,9 @@ pub struct ListRow<'a> {
     /// The host declares and paints the disclosure part of this group row (a face has no parts of its own): the row
     /// keeps the disclosure column and paints no disclosure.
     pub(super) disclosure_by_host: bool,
+    /// How the row's tree lines up its leaves: the collection gives it (`List::tree_leaves`).
+    #[prop(vis = "pub(crate)")]
+    pub(super) leaves: TreeLeaves,
     /// The row is an option of a listbox, not an item of a list: inset and rounded, the chosen option outlined.
     #[style_key]
     #[prop(flag)]
@@ -301,9 +309,9 @@ impl<'a> ListRow<'a> {
             sub_steps: 0,
             divider_below: true,
             italic: false,
+            label_spans: Vec::new(),
             highlight: false,
             clipped: false,
-            rule: false,
             renaming: false,
             pressed: None,
             menu_open: false,
@@ -316,6 +324,7 @@ impl<'a> ListRow<'a> {
             progress: None,
             accessible_name: None,
             spacer: false,
+            separator: false,
             cells: Vec::new(),
             aligns: Vec::new(),
             muted: Vec::new(),
@@ -339,6 +348,7 @@ impl<'a> ListRow<'a> {
             depth: None,
             group: None,
             disclosure_by_host: false,
+            leaves: TreeLeaves::Compact,
             option: false,
             command: false,
             check: None,
@@ -361,6 +371,14 @@ impl<'a> ListRow<'a> {
     pub fn spacer() -> Self {
         let mut row = Self::new(Label::Empty);
         row.spacer = true;
+        row
+    }
+
+    /// A line between groups of rows, as a menu's separator: a spacer (no item, no sense, no AccessKit node; mark its
+    /// position `ItemSource::is_section`) as high as the divider rule and the room around it, drawing the rule.
+    pub fn separator() -> Self {
+        let mut row = Self::spacer();
+        row.separator = true;
         row
     }
 
@@ -562,8 +580,8 @@ impl<'a> ListRow<'a> {
         self.trailing_part_revealed(TrailingPart::MENU, TrailingFace::Icon(IconSpec::svg(craft_behavior::IconId::new("more"))), Label::Empty)
     }
 
-    /// A component at the trailing end, as wide as it measures, that always shows: a field that edits a value of the
-    /// row, or a button. The row shows `field` in its slot and hands its output to `output` in the pass it is shown.
+    /// A component at the trailing end, as wide as it measures and at its own height up to the row's, that always
+    /// shows: a field that edits a value of the row, or a button. The row shows `field` in its slot and hands its output to `output` in the pass it is shown.
     /// The field's stop joins the row's roving group like the row's focusable parts (Forward from the row enters it,
     /// Tab leaves the collection); it takes the keys it declares.
     #[must_use]
@@ -571,7 +589,8 @@ impl<'a> ListRow<'a> {
         self.hosted(Hosting::new(field, output), false)
     }
 
-    /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one, that drops out when the
+    /// A component at the trailing end as [`trailing_field`](Self::trailing_field) adds one (its own width, its own
+    /// height up to the row's), that drops out when the
     /// label would get narrower than its least width with it (a binding's badge). A row sized to its content makes
     /// room for it.
     #[must_use]

@@ -1,7 +1,7 @@
 //! `TextField<C>`: a text field over a codec, with the search form and the adornment layout.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::adorn::{self, Adornment};
 use super::{FieldStyle, completions, text_part, words};
@@ -9,9 +9,9 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
-use crate::primitives::{Completer, IconSpec, TextOptions, TextRun};
+use crate::primitives::{Completer, IconSpec, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
-use craft_behavior::{Codec, IconId, PartKey, PlainText, Proposal, Sense};
+use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -72,6 +72,17 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     /// the id the collection is built with (`Props::id`), so a pattern can name a collection it shows after the field.
     #[prop]
     drives: Option<Id>,
+    /// Binds the caret, as a byte offset into the text: a value the app writes places the caret at the character
+    /// boundary at or before it, collapses the selection and scrolls the caret into view; the user moving the caret
+    /// writes its offset back.
+    #[prop]
+    caret: Option<Bind<'a, usize>>,
+    /// The most lines a multi-line field grows to before its text scrolls inside it.
+    max_lines: Option<usize>,
+    /// The width the field asks for, in characters ([`width_chars`](Self::width_chars)); `None` asks for the field
+    /// length (`size.length.field`).
+    #[style_key]
+    width_chars: Option<u16>,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -106,6 +117,9 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             leading: Vec::new(),
             arrow: false,
             drives: None,
+            caret: None,
+            max_lines: None,
+            width_chars: None,
         }
         .label(label)
     }
@@ -171,6 +185,25 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// A multi-line field grows with its text up to `lines` lines, then scrolls inside with the caret in view; never
+    /// fewer lines than [`lines`](Self::lines) shows. A field sized `Sizing::Fill` takes its whole room instead.
+    #[must_use]
+    pub fn max_lines(mut self, lines: usize) -> Self {
+        self.max_lines = Some(lines.max(1));
+        self
+    }
+
+    /// The field asks for the width of `chars` characters instead of the field length (`size.length.field`): `chars`
+    /// times the width of a `0` in the field's body face, as CSS's `ch` unit, plus the field's padding. The width
+    /// follows the text size and the face, as the field length does. It is the width the field asks for, not a fixed
+    /// one: a row that lacks room still narrows it, and a field sized `Sizing::Content` or `Sizing::FillWidth` takes
+    /// its own width as before. `0` keeps the field length.
+    #[must_use]
+    pub fn width_chars(mut self, chars: u16) -> Self {
+        self.width_chars = (chars > 0).then_some(chars);
+        self
+    }
+
     /// The most characters the text holds; `None` clears the limit. A single-line field holds 1024 characters unless
     /// this is set; a multi-line field has no limit unless this is set.
     #[must_use]
@@ -179,10 +212,18 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
-    /// Tab inserts a tab.
+    /// Tab inserts a tab; off, Tab moves focus.
     #[must_use]
     pub fn tab_inserts(mut self, on: bool) -> Self {
-        self.options.tab_inserts = on;
+        self.options.tab = if on { TabKey::Inserts } else { TabKey::Moves };
+        self
+    }
+
+    /// Tab keeps focus and is reported in the edit response (`EditResponse::tab`): `Some(true)` for Tab, `Some(false)`
+    /// for Shift+Tab.
+    #[must_use]
+    pub fn tab_reports(mut self) -> Self {
+        self.options.tab = TabKey::Reports;
         self
     }
 
@@ -267,8 +308,11 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     type Output = EditResponse<C::Value>;
 
     /// The field's shortest width (`size.length.short`) is `measure`'s, so a content-sized field can go without it.
-    fn style(cx: &crate::style::StyleCx<'_>, _: TextFieldStyleKey<C>) -> FieldStyle {
+    fn style(cx: &crate::style::StyleCx<'_>, key: TextFieldStyleKey<C>) -> FieldStyle {
         let mut style = FieldStyle::at(cx);
+        if let Some(chars) = key.width_chars {
+            style = style.held_at(FieldStyle::chars_width(cx, chars));
+        }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
         style
     }
@@ -286,10 +330,20 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         };
         let text = if sample.is_empty() { self.options.placeholder.as_ref().map_or("", Label::as_str) } else { sample.as_ref() };
         let mut size = cx.field_text(&TextRun::new(text).role(self.options.role));
-        // A multi-line field takes the height of its lines, and grows past them with longer text, as the editor does.
+        // A multi-line field takes the height of its lines, and grows past them with longer text, as the editor does, up
+        // to `max_lines`; past that its text scrolls inside it (the text part is its scroll owner). The rows are the
+        // field's own text wrapped as the editor wraps it, not the codec's width sample, which a plain field leaves
+        // empty.
         if let Some(lines) = self.options.lines.filter(|_| self.options.multiline()) {
             let line = cx.layout(&TextRun::new("M").role(self.options.role)).size().y;
-            size.y = size.y.max(cx.style.metrics().min_size.y + line * (lines - 1) as f32);
+            let height = |lines: usize| cx.style.metrics().min_size.y + line * lines.saturating_sub(1) as f32;
+            let shown = cx.value().map(|value| self.codec.format(value)).unwrap_or_default();
+            let tall = cx.layout(&TextRun::new(shown).role(self.options.role).wrap(Wrap::Wrap)).size().y;
+            let rows = if line > 0.0 { (tall / line).round() as usize } else { 1 };
+            size.y = size.y.max(height(lines.max(rows)));
+            if let Some(most) = self.max_lines {
+                size.y = size.y.min(height(most.max(lines)));
+            }
         }
         // At its least a field shows a short part of its text and scrolls the rest.
         if cx.proposal == Proposal::Min {
@@ -303,6 +357,18 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         if cx.proposal != Proposal::Min && cx.resolved.sizing() != Some(Sizing::Content) {
             let padding = cx.style.metrics.padding;
             size.x = size.x.max(cx.tokens.size.length.short - padding.start - padding.end);
+        }
+        // A filling multi-line field takes the room it is offered, whatever its text and `max_lines`; its text scrolls
+        // inside it.
+        if let Proposal::Size(room) = cx.proposal
+            && self.options.multiline()
+            && cx.resolved.sizing() == Some(Sizing::Fill)
+            && room.x.is_finite()
+            && room.y.is_finite()
+        {
+            // The measure gives the content, which step 5 pads: the room less the padding fills it.
+            let padding = cx.style.metrics.padding;
+            return Vec2::new((room.x - padding.start - padding.end).max(0.0), (room.y - padding.top - padding.bottom).max(0.0));
         }
         size
     }
@@ -320,7 +386,13 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         }
         if let Some(start) = value.or(self.empty.as_ref()) {
             let limit = self.limit.effective(self.options.multiline());
-            let options = TextOptions { mixed: value.is_none(), limit, ..self.options.clone() };
+            // The bound caret goes to the text part every pass; the part places it only when it differs from the caret
+            // its widget has, which this field wrote back last pass (`finish`).
+            let caret = self.caret.as_mut().and_then(|caret| match caret.reborrow().get() {
+                Some(Mixed::Same(at)) => Some(at),
+                _ => None,
+            });
+            let options = TextOptions { mixed: value.is_none(), limit, caret, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }
@@ -359,7 +431,18 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<C::Value> {
-        cx.edit_response()
+    /// The caret the user moved goes back through its binding: a caret that differs from the bound value after the
+    /// pass was moved in the field, as one the app wrote differs before it.
+    fn finish(mut self, mut cx: Cx<'_, Self>) -> EditResponse<C::Value> {
+        let response = cx.edit_response();
+        if let (Some(bind), Some(at)) = (self.caret.as_mut(), response.caret) {
+            let before = bind.reborrow().read(&mut cx);
+            if before != Some(Mixed::Same(at)) {
+                // A caret move is no edit of the document: it names no undo step.
+                let event = EditEvent::set(before.unwrap_or(Mixed::Same(at)), at, Arc::from(""), None);
+                let _ = bind.reborrow().write(&mut cx, &event);
+            }
+        }
+        response
     }
 }

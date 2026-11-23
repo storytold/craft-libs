@@ -17,7 +17,7 @@
 //! non-positive or past [`MAX_PPI`] gives `None`, so the caller keeps its own default.
 
 use crate::Limits;
-use crate::codecs::{jpeg, png, webp};
+use crate::codecs::{jpeg, png};
 use crate::resolution::exif_resolution;
 
 /// Resolutions above this many pixels per inch are treated as corrupt.
@@ -102,10 +102,28 @@ fn png_exif(bytes: &[u8]) -> Option<(f32, f32)> {
     exif_resolution(&exif?)
 }
 
-/// The resolution of a WebP's `EXIF` chunk, read by the decoder's own container probe.
+/// The resolution of a WebP's `EXIF` chunk, read from the RIFF container within its declared size.
 fn webp_exif(bytes: &[u8]) -> Option<(f32, f32)> {
-    let (_, _, exif) = webp::probe(bytes, &Limits::default()).ok()?;
-    exif_resolution(&exif?)
+    let riff = usize::try_from(le_u32(bytes, 4)?).ok()?;
+    let end = 8usize.checked_add(riff)?.min(bytes.len());
+    let mut pos = 12usize;
+    for _ in 0..MAX_CHUNKS {
+        let kind = bytes.get(pos..pos.checked_add(4)?)?;
+        let size = usize::try_from(le_u32(bytes, pos.checked_add(4)?)?).ok()?;
+        let data = pos.checked_add(8)?;
+        if data.checked_add(size)? > end {
+            return None;
+        }
+        if kind == b"EXIF" {
+            let exif = bytes.get(data..data + size)?;
+            let tiff = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
+            if let Some(dpi) = exif_resolution(tiff).filter(|&d| usable(d)) {
+                return Some(dpi);
+            }
+        }
+        pos = data.checked_add(size.checked_add(size & 1)?)?;
+    }
+    None
 }
 
 /// BMP: the info header size at 14 (40 or more for a header with resolution fields), then the

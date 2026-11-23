@@ -19,8 +19,8 @@ use super::picker::{ChannelRow, ChannelRule};
 use crate::harmony::{Guide, GuideOptions, Harmony, Variation};
 use craft_ui::choice::{SwatchTable, SwatchTableOutput};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the harmony controls and of the Color Guide panel menu.

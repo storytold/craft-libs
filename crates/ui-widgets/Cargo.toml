@@ -15,6 +15,7 @@ test = false
 workspace = true
 
 [features]
+suite = ["testing", "craft-ui-contract/suite"]
 default = []
 # `craft_ui::testing` with the story helpers that show components.
 testing = ["craft-ui-contract/testing"]
@@ -32,13 +33,13 @@ smallvec = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-craft-ui-widgets = { path = ".", features = ["testing"] }
+craft-ui-widgets = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 
 [[test]]

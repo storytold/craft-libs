@@ -143,8 +143,6 @@ fn name_key(name: &str) -> String {
 }
 
 fn compare(a: &Contributor, b: &Contributor, mode: NameMode, sort: ContributorSort) -> Ordering {
-    // Someone credited only through a merged pull request has no date and sorts after everyone with one.
-    let dated = |date: &str| (date.is_empty(), date.to_owned());
     match sort {
         ContributorSort::Name => name_key(&a.name(mode)).cmp(&name_key(&b.name(mode))),
         ContributorSort::Prs => a.prs.cmp(&b.prs),
@@ -154,8 +152,17 @@ fn compare(a: &Contributor, b: &Contributor, mode: NameMode, sort: ContributorSo
         ContributorSort::LinesDelta => a.lines_delta().cmp(&b.lines_delta()),
         ContributorSort::BinaryAdded => a.binary_added.cmp(&b.binary_added),
         ContributorSort::BinaryDeleted => a.binary_deleted.cmp(&b.binary_deleted),
-        ContributorSort::FirstCommit => dated(&a.first_commit).cmp(&dated(&b.first_commit)),
-        ContributorSort::LastCommit => dated(&a.last_commit).cmp(&dated(&b.last_commit)),
+        ContributorSort::FirstCommit => a.first_commit.cmp(&b.first_commit),
+        ContributorSort::LastCommit => a.last_commit.cmp(&b.last_commit),
+    }
+}
+
+/// Whether `c` has no date for a sort by date: someone credited only through a merged pull request.
+fn undated(c: &Contributor, sort: ContributorSort) -> bool {
+    match sort {
+        ContributorSort::FirstCommit => c.first_commit.is_empty(),
+        ContributorSort::LastCommit => c.last_commit.is_empty(),
+        _ => false,
     }
 }
 
@@ -168,6 +175,9 @@ pub(super) fn sorted_indices(list: &[Contributor], mode: NameMode, sort: Contrib
     sort_rows(&mut order, Some(&by), |&a, &b, column| {
         ContributorSort::of_column(column).map_or(Ordering::Equal, |key| compare(&list[a], &list[b], mode, key))
     });
+    // The undated follow the dated after the direction is applied, so a descending sort keeps them last; the sort is
+    // stable, so each part keeps its order.
+    order.sort_by_key(|&at| undated(&list[at], sort));
     order
 }
 

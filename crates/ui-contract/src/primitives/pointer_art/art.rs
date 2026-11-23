@@ -17,6 +17,9 @@ const ARC_HANDLE: f32 = 0.552_284_8;
 pub(crate) enum Mark {
     /// A straight line with square-cut ends.
     Line(Vec2, Vec2, Stroke),
+    /// An axis-aligned line whose position and width round to whole device pixels, so a thin stroke is never split
+    /// across two pixel columns; a slanted one is drawn along its longer axis.
+    Rule(Vec2, Vec2, Stroke),
     /// A circle's outline.
     Ring(Vec2, f32, Stroke),
     /// A rectangle's outline, centred on its edges.
@@ -40,6 +43,8 @@ impl Mark {
             |points: &[Vec2], stroke: &Stroke| Rect::from_points(&points.iter().map(|p| p.to_pos2()).collect::<Vec<_>>()).expand(stroke.width / 2.0);
         match self {
             Mark::Line(a, b, stroke) => around(&[*a, *b], stroke),
+            // A point of room covers the rounding of the edges at any scale from one up.
+            Mark::Rule(a, b, stroke) => around(&[*a, *b], stroke).expand(1.0),
             Mark::Ring(centre, radius, stroke) => Rect::from_center_size(centre.to_pos2(), Vec2::splat(2.0 * radius + stroke.width)),
             Mark::Frame(rect, stroke) => rect.expand(stroke.width / 2.0),
             Mark::Disc(centre, radius, _) => Rect::from_center_size(centre.to_pos2(), Vec2::splat(2.0 * radius)),
@@ -61,6 +66,11 @@ impl Art {
         self.marks.push(mark);
     }
 
+    /// The rect the marks cover, around the hotspot at the origin; `None` for art with no marks.
+    pub(crate) fn bounds(&self) -> Option<Rect> {
+        self.marks.iter().map(Mark::bounds).reduce(|a, b| a.union(b))
+    }
+
     /// Paints the art with its hotspot at `at`.
     pub(crate) fn paint(&self, painter: &Painter, at: Pos2) {
         let path = |points: &[Vec2]| points.iter().map(|p| at + *p).collect::<Vec<_>>();
@@ -68,6 +78,17 @@ impl Art {
             match mark {
                 Mark::Line(a, b, stroke) => {
                     painter.line_segment([at + *a, at + *b], *stroke);
+                }
+                Mark::Rule(a, b, stroke) => {
+                    // Round to the painter's physical pixels, as egui rounds a pixel-aligned shape.
+                    let ppp = painter.pixels_per_point();
+                    if ppp.is_finite() && ppp > 0.0 && stroke.width > 0.0 && stroke.color.a() > 0 {
+                        let scaled = |p: &Vec2| Pos2::new((at.x + p.x) * ppp, (at.y + p.y) * ppp);
+                        let device = snapped_rule(scaled(a), scaled(b), stroke.width * ppp);
+                        let back = |p: Pos2| Pos2::new(p.x / ppp, p.y / ppp);
+                        let rect = Rect::from_min_max(back(device.min), back(device.max));
+                        painter.rect_filled(rect, 0.0, stroke.color);
+                    }
                 }
                 Mark::Ring(centre, radius, stroke) => {
                     painter.circle_stroke(at + *centre, *radius, *stroke);
@@ -99,7 +120,7 @@ impl Art {
         if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
-        let bounds = self.marks.iter().map(Mark::bounds).reduce(|a, b| a.union(b))?;
+        let bounds = self.bounds()?;
         let reach = [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y].into_iter().map(f32::abs).fold(0.0, f32::max);
         let half = (reach * scale + FRINGE_PX).ceil();
         if !half.is_finite() || half > f32::from(max_side.saturating_sub(1) / 2) {
@@ -190,9 +211,36 @@ fn rounded_path(rect: Rect, round: f32) -> Option<tiny_skia::Path> {
     builder.finish()
 }
 
+/// `width` device pixels as the nearest odd whole number, at least one: a rule of odd width is centred on a pixel, so
+/// rules of different widths on one line (a stem and its halo) share one centre and the halo is even on both sides.
+fn odd_pixels(width: f32) -> f32 {
+    ((width - 1.0) / 2.0).round().max(0.0) * 2.0 + 1.0
+}
+
+/// The rect of a rule from `a` to `b` of `width`, all in device pixels, with every edge on a whole pixel and an odd
+/// number of pixels wide, centred on the pixel its centre line falls in. The rule runs along the axis its ends differ
+/// most on.
+fn snapped_rule(a: Pos2, b: Pos2, width: f32) -> Rect {
+    let width = odd_pixels(width);
+    if (a.x - b.x).abs() <= (a.y - b.y).abs() {
+        let left = ((a.x + b.x) / 2.0).floor() + 0.5 - width / 2.0;
+        Rect::from_min_max(Pos2::new(left, a.y.min(b.y).round()), Pos2::new(left + width, a.y.max(b.y).round()))
+    } else {
+        let top = ((a.y + b.y) / 2.0).floor() + 0.5 - width / 2.0;
+        Rect::from_min_max(Pos2::new(a.x.min(b.x).round(), top), Pos2::new(a.x.max(b.x).round(), top + width))
+    }
+}
+
 fn draw(pixmap: &mut tiny_skia::Pixmap, mark: &Mark, transform: tiny_skia::Transform, scale: f32, origin: f32) {
     match mark {
         Mark::Line(a, b, stroke) => stroke_path(pixmap, polyline(&[*a, *b], false), *stroke, transform),
+        Mark::Rule(a, b, stroke) => {
+            if stroke.width > 0.0 && stroke.color.a() > 0 {
+                let device = |p: &Vec2| Pos2::new(origin + p.x * scale, origin + p.y * scale);
+                let rect = snapped_rule(device(a), device(b), stroke.width * scale);
+                fill_path(pixmap, rect_path(rect), stroke.color, tiny_skia::Transform::identity());
+            }
+        }
         Mark::Ring(centre, radius, stroke) => {
             stroke_path(pixmap, tiny_skia::PathBuilder::from_circle(centre.x, centre.y, *radius), *stroke, transform)
         }

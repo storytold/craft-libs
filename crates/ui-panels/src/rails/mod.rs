@@ -3,11 +3,11 @@
 mod words;
 
 // The Edit Toolbar drawer.
-mod drawer;
+pub(crate) mod drawer;
 
 // The tool rail and its flyout button.
-mod flyout;
-mod tool;
+pub(crate) mod flyout;
+pub(crate) mod tool;
 
 pub use drawer::{DrawerGroup, ToolbarDrawer, ToolbarDrawerOutput, ToolbarEdit, apply_toolbar_edit, drop_edit};
 pub use flyout::{FlyoutButton, FlyoutButtonStyle, FlyoutOutput, SlotEdit};

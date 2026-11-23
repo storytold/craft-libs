@@ -419,7 +419,7 @@ pub fn write(header: &OutHeader, events: &[OutEvent]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 
@@ -595,7 +595,7 @@ M2   A001           -012.0                00;00;00;00\n\
 }
 
 #[cfg(test)]
-mod report_limit_tests {
+pub(crate) mod report_limit_tests {
     use super::*;
     use craft_ui::testing::trial;
 

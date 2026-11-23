@@ -31,7 +31,7 @@ pub trait Focus {
     fn is_focused(&self) -> bool;
     /// The component holds focus and shows it.
     fn focus_visible(&self) -> bool;
-    /// Asks the nearest scroll owner to bring `rect` into view.
+    /// Asks the scroll owner around the component to bring `rect` into view.
     fn reveal(&mut self, rect: Rect);
     /// For a container that is its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`): the
     /// page and end moves its focused children left untaken, with their modifiers, in the order they arrived.
@@ -44,6 +44,13 @@ pub trait Focus {
     fn register_menu_bar(&mut self);
     /// The menu-bar keys of the pass: F10 or a lone Alt press focus the bar, Alt and a letter open a menu.
     fn take_menu_keys(&mut self) -> Vec<MenuKey>;
+    /// Registers this component as a menu bar like [`register_menu_bar`](Focus::register_menu_bar) that has no mnemonic
+    /// letters of its own (keytips): an Alt+letter reaches it only as a chord it claims, and any other stays the app's
+    /// shortcut.
+    fn register_menu_bar_by_claim(&mut self);
+    /// The earliest of `chords` that arrived this pass for this component, consuming it, so a caller applies the
+    /// claimed keys of a frame in the order they were pressed.
+    fn take_first_claimed(&mut self, chords: &[Chord]) -> Option<Chord>;
 }
 
 impl Focus for CxCore<'_> {
@@ -70,7 +77,7 @@ impl Focus for CxCore<'_> {
 
     fn focus_arrived_by_key(&self) -> Option<PartRef> {
         let facts = if focus::writes() == self.focus.at { self.focus } else { focus::facts(&self.ctx, self.id) };
-        self.focus_arrived().filter(|_| facts.arrived_origin == Some(focus::FocusOrigin::Request))
+        self.focus_arrived().filter(|_| matches!(facts.arrived_origin, Some(focus::FocusOrigin::Request | focus::FocusOrigin::Open)))
     }
 
     fn is_focused(&self) -> bool {
@@ -100,7 +107,15 @@ impl Focus for CxCore<'_> {
     }
 
     fn register_menu_bar(&mut self) {
-        focus::register_menu_bar(&self.ctx, self.id);
+        focus::register_menu_bar(&self.ctx, self.id, false);
+    }
+
+    fn register_menu_bar_by_claim(&mut self) {
+        focus::register_menu_bar(&self.ctx, self.id, true);
+    }
+
+    fn take_first_claimed(&mut self, chords: &[Chord]) -> Option<Chord> {
+        crate::runtime::keys::take_first_claimed(&self.ctx, self.id, chords)
     }
 
     fn take_menu_keys(&mut self) -> Vec<MenuKey> {
@@ -155,6 +170,14 @@ impl<C: Component> Focus for Cx<'_, C> {
 
     fn register_menu_bar(&mut self) {
         self.core.register_menu_bar();
+    }
+
+    fn register_menu_bar_by_claim(&mut self) {
+        self.core.register_menu_bar_by_claim();
+    }
+
+    fn take_first_claimed(&mut self, chords: &[Chord]) -> Option<Chord> {
+        self.core.take_first_claimed(chords)
     }
 
     fn take_menu_keys(&mut self) -> Vec<MenuKey> {

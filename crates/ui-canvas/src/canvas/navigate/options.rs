@@ -1,6 +1,28 @@
 //! `NavigationOptions`: the user's navigation choices (Photoshop's Preferences, General, Tools and Enhanced Controls
 //! rows), which the app owns and hands to the navigation pieces and the view tools.
 
+/// How the wheel navigates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WheelScheme {
+    /// Photoshop's: the wheel scrolls, and Zoom with Scroll Wheel decides what zooms.
+    #[default]
+    Photoshop,
+    /// A document's: Ctrl/Cmd+wheel zooms by zoom ladder rungs and Shift+wheel scrolls sideways.
+    Document,
+}
+
+/// What the middle button does on the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MiddleButton {
+    /// A middle drag pans.
+    #[default]
+    Pan,
+    /// A middle click starts autoscroll and a middle drag pans.
+    Autoscroll,
+}
+
 /// The navigation choices, with Photoshop's defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -28,6 +50,10 @@ pub struct NavigationOptions {
     pub trackpad_rotate: bool,
     /// Enhanced Controls, Enable Gestures: a touch screen's two-finger pinch and twist. On.
     pub touch_gestures: bool,
+    /// How the wheel navigates. Photoshop's.
+    pub wheel: WheelScheme,
+    /// What the middle button does. A pan.
+    pub middle_button: MiddleButton,
 }
 
 impl Default for NavigationOptions {
@@ -44,6 +70,8 @@ impl Default for NavigationOptions {
             pinch_zooms: true,
             trackpad_rotate: false,
             touch_gestures: true,
+            wheel: WheelScheme::default(),
+            middle_button: MiddleButton::default(),
         }
     }
 }

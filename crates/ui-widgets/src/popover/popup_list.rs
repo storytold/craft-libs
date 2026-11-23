@@ -6,10 +6,10 @@ use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
-use egui::Response;
+use egui::{Id, Response};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a popup list: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -23,7 +23,8 @@ pub struct PopupListStyle {
 ///
 /// - The popup is at least as wide as its opener and capped to a share of the viewport.
 /// - The opener keeps the keyboard focus. While the popup is open the host hands the opener's list keys (Up, Down,
-///   Page, Home, End, Enter and type-ahead on an opener that is not a text field) to the list.
+///   Page, Home, End, Enter and type-ahead on an opener that is not a text field) to the list named with
+///   [`PopupList::list`].
 /// - Activating a row closes the popup with `CloseReason::Activated`; Escape and a press outside close it too.
 /// - Open state: the caller's binding. The output's `closed` says why it closed in this pass.
 /// - The popup is a group; the caller's `List::options` is the listbox inside it.
@@ -55,6 +56,17 @@ impl<'a> PopupList<'a> {
             _ => Overlay::dropdown(),
         };
         self.props = self.props.mount(Mount::Layer(overlay.opened_by(opener, Trigger::Manual)));
+        self
+    }
+
+    /// The caller's `List`, by the id it is shown with: it takes the opener's list keys while the popup is open.
+    #[must_use]
+    pub fn list(mut self, list: Id) -> Self {
+        let overlay = match std::mem::take(&mut self.props.mount) {
+            Mount::Layer(overlay) => overlay,
+            _ => Overlay::dropdown(),
+        };
+        self.props = self.props.mount(Mount::Layer(overlay.list(list)));
         self
     }
 }

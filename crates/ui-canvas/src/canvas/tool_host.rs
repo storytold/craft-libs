@@ -22,7 +22,7 @@
 //!    the app's shortcuts in the next pass: a plain Delete with nothing to delete runs the app's Edit > Clear.
 //!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
 //!    arrows toward and away from the reading end.
-//! 6. The tool paints over the canvas and requests its cursor at tool priority.
+//! 6. The tool paints over the canvas and requests its cursor at tool priority, within the view on the canvas's layer.
 //! 7. A drag past the canvas edge ([`CanvasTool::autoscrolls`]), and a hover in the band inside it
 //!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`] and the pass's
 //!    [`ToolHostResponse::scroll`]; the app moves its view by it with [`Autoscroll::scroll`].
@@ -62,7 +62,9 @@
 //! host ends such keys where it drops injected input (a withdrawal, a focus loss, a cancel, the end of the session).
 //!
 //! Readouts: a tool's [`ToolContext::readout`] rows paint only while the root env's `ShowReadouts` holds; its
-//! [`ToolContext::hud`] rows always paint. A secondary press the tool did not take is reported in
+//! [`ToolContext::hud`] rows always paint. A tool's [`ToolContext::tip`] from `hover` shows at the pointer through the
+//! framework tooltip, with its look and delay, while no gesture runs; the pointer leaving or a press drops it, and
+//! [`ToolHostResponse::tip`] repeats it as data. A secondary press the tool did not take is reported in
 //! [`ToolHostResponse::context`], and so are a secondary click with the momentary Hand (whose drag pans) and the Menu
 //! key.
 //!
@@ -91,7 +93,7 @@ use super::zoom_motion::{self, Steer};
 use super::{CanvasSpace, Snap, ToolPass, context_click};
 use crate::canvas_controls::paint_lines;
 use crate::canvas_controls::{SmartGuides, SmartLine};
-use crate::contract::{Component, Meta as _};
+use crate::contract::{Component, Meta as _, Tooltip, tooltip};
 use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord};
 use crate::runtime::access::{self, Name, Role, SubDecl, SubNode};
 use crate::runtime::commands;
@@ -262,6 +264,9 @@ pub struct ToolHostResponse {
     pub context: Option<ContextRequest>,
     /// The document distance the view centre moved this pass from a `pan_view`, after the Overscroll clamp.
     pub pan: Option<ViewPan>,
+    /// The text of the tip the tool asked for at the pointer ([`ToolContext::tip`]) while it stands: the host shows it
+    /// after the tooltip delay; this is the data for automation.
+    pub tip: Option<Label>,
 }
 
 /// Where and how the app opens its canvas menu, from [`ToolHostResponse::context`].
@@ -274,6 +279,18 @@ pub struct ContextRequest {
     pub mods: Mods,
     /// The momentary tool in effect at the press (a Space-held Hand).
     pub momentary: Option<MomentaryTool>,
+    /// How the canvas menu was asked for: by the pointer or by a key.
+    pub source: ContextSource,
+}
+
+/// How the canvas menu was asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ContextSource {
+    /// The secondary button was released.
+    Pointer,
+    /// The Menu key, Shift+F10 or the accessibility context-menu action.
+    Key,
 }
 
 /// A pan of the view, from [`ToolHostResponse::pan`].
@@ -345,6 +362,12 @@ struct HostState {
     time: Option<f64>,
     /// The open secondary press the tool refused or the momentary Hand took: its release asks for the canvas menu.
     secondary: Option<SecondaryPress>,
+    /// The tip the tool's last hover asked for: the tool answers again only when the pointer moves, so it stands
+    /// while the pointer rests, until a press, a gesture or the pointer leaving drops it.
+    tip: Option<Tooltip>,
+    /// A press ran since the last hover: the next resting pass hovers at the pointer even when it did not move, so the
+    /// tool answers again for where the pointer rests and the tip the press dropped comes back.
+    rehover: bool,
 }
 
 fn state_id(canvas: Id) -> Id {
@@ -388,7 +411,8 @@ fn keys_down(ctx: &Context, holds: &[Key]) -> Vec<Key> {
 }
 
 /// The tool input a canvas publishes to its body.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InToolPass(Option<ToolPass>);
 
 impl EnvValue for InToolPass {
@@ -544,6 +568,7 @@ impl<'m> ToolHost<'m> {
             cancelled: false,
             ending: None,
             hover_scrolls: false,
+            hovered: false,
         };
         run.call(None, |tool, cx| tool.each_pass(cx));
         run.hover_scrolls = run.pick_as(None).autoscrolls_on_hover();
@@ -558,7 +583,7 @@ impl<'m> ToolHost<'m> {
             run.keys(&ctx, pass.id, env.direction.is_rtl());
             run.menu_key();
         }
-        let Run { mut response, requests, momentary: momentary_tool, .. } = run;
+        let Run { mut response, requests, momentary: momentary_tool, hovered, .. } = run;
         let before = space.map(|space| space.target());
         if let Some(past) = response.past_edge {
             let step = frame_step(input.time - state.time.unwrap_or(input.time));
@@ -612,8 +637,19 @@ impl<'m> ToolHost<'m> {
             }
         };
         paint_tool(ui, &env, effective, context());
+        // The tip stands while the pointer rests on the background with no gesture running; each hover answers anew.
+        let resting = matches!(phase, PressPhase::Hover) && state.gesture.is_none() && !disabled;
+        if hovered {
+            state.tip = requests.tip;
+        }
+        if !resting {
+            state.tip = None;
+        }
+        let tip_at = current.filter(|_| resting).map(|pointer| pointer.pos);
+        tooltip::at_pointer(ui, pass.id, state.tip.as_ref(), tip_at, phase.is_press() || state.gesture.is_some());
+        response.tip = state.tip.as_ref().map(|tip| tip.spec().text.clone());
         if pass.snap.as_ref().is_some_and(|snap| snap.options().smart_guides) {
-            paint_smart_lines(ui, &env, rect, space, &requests.snapped, smart_guide_color);
+            paint_smart_lines(ui, &env, space, &requests.snapped, smart_guide_color);
         }
         response.snapped = requests.snapped;
         let cx = context();
@@ -624,7 +660,9 @@ impl<'m> ToolHost<'m> {
         }
         if over {
             let wanted = effective.cursor(&cx);
-            cursor::request(&ctx, wanted.clone(), CursorPriority::Tool);
+            // A tip outline is a mark on the canvas: it shows inside the view, on the canvas's layer.
+            let view = space.map_or(rect, |space| space.view.rect).intersect(rect);
+            cursor::request_within(&ctx, wanted.clone(), CursorPriority::Tool, cursor::CursorRegion::new(ui.layer_id(), view));
             response.cursor = Some(wanted);
         }
         if let Some(at) = current.map(|pointer| pointer.pos) {
@@ -639,7 +677,7 @@ impl<'m> ToolHost<'m> {
             }
         }
         if requests.repaint {
-            frame::request_own_repaint(&ctx);
+            frame::request_repaint(&ctx);
         }
         for chord in claimed_chords(state.claims) {
             keys::claim(&ctx, pass.id, chord);
@@ -714,7 +752,7 @@ impl<'m> ToolHost<'m> {
         tool.cancel(reason, &mut cx);
         if let Some(view) = cx.take_requests().view {
             with_session(ctx, state_id(canvas), |state: &mut HostState| state.cancelled_view = Some(view));
-            frame::request_own_repaint(ctx);
+            frame::request_repaint(ctx);
         }
         true
     }
@@ -789,9 +827,9 @@ fn sub_decl(owner: Id, node: &SubNode, rect: Rect, parent: Id) -> SubDecl<'_> {
     SubDecl { owner, component: "", node, rect, enabled: true, focusable: false, clickable: false, active: false, face: None, label: "", parent }
 }
 
-/// Paints the tool over the canvas, clipped to it.
+/// Paints the tool over the canvas, under the clip of the body it runs in: the canvas's view.
 fn paint_tool(ui: &Ui, env: &Env, tool: &dyn CanvasTool, cx: ToolContext<'_>) {
-    let painter = ui.painter().with_clip_rect(cx.rect);
+    let painter = ui.painter().clone();
     let record = RefCell::new(PaintRecord::default());
     let draw = Draw::new(&painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: env.ink });
     let content = ContentPainterCx::new(painter.clone(), env, env.ink);
@@ -818,13 +856,13 @@ fn host_style<'a>(ui: &'a Ui, env: &'a Env) -> StyleCx<'a> {
 
 /// Paints the smart kinds of the snap `lines` over the canvas through the smart guides' one line loop, in `color` or
 /// the theme's smart guide colour. `SmartGuides` itself paints only inside a canvas body, which the host is not in.
-fn paint_smart_lines(ui: &Ui, env: &Env, rect: Rect, space: Option<CanvasSpace>, lines: &[SnapLine], color: Option<DataColor>) {
+fn paint_smart_lines(ui: &Ui, env: &Env, space: Option<CanvasSpace>, lines: &[SnapLine], color: Option<DataColor>) {
     let Some(space) = space else { return };
     let smart: Vec<SmartLine> = lines.iter().filter(|line| line.kind.is_smart()).map(|line| SmartLine::of(line, space.view.visible())).collect();
     if smart.is_empty() {
         return;
     }
-    let content = ContentPainterCx::new(ui.painter().with_clip_rect(rect), env, env.ink);
+    let content = ContentPainterCx::new(ui.painter().clone(), env, env.ink);
     let style = resolve_style(&host_style(ui, env), SmartGuides::new(&[], &[]).style_key(), ui.ctx(), <SmartGuides<'static> as Component>::style);
     paint_lines(&content, &space.view, &smart, &style, color);
 }
@@ -910,6 +948,8 @@ struct Run<'a, 't> {
     ending: Option<GestureId>,
     /// The tool autoscrolls on hover, in its state after `each_pass`.
     hover_scrolls: bool,
+    /// The tool had a hover over the canvas this pass: its tip request, or none, replaces the standing tip.
+    hovered: bool,
     /// The Command stand-in.
     command: Option<&'a mut (dyn CanvasTool + 't)>,
     /// The Alt stand-in.
@@ -946,6 +986,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         self.requests.readout = asked.readout.or(self.requests.readout.take());
         self.requests.repaint |= asked.repaint;
         self.requests.hud = asked.hud.or(self.requests.hud.take());
+        self.requests.tip = asked.tip.or(self.requests.tip.take());
         self.requests.snapped.extend(asked.snapped);
         self.requests.pan = asked.pan.or(self.requests.pan);
         if let Some(at) = asked.autoscroll_at {
@@ -1165,7 +1206,8 @@ impl<'a, 't: 'a> Run<'a, 't> {
     fn menu_key(&mut self) {
         let Some(space) = self.space else { return };
         if space.background().context_key && self.response.context.is_none() {
-            self.response.context = Some(ContextRequest { at: space.view.rect.center(), mods: self.mods, momentary: self.momentary });
+            self.response.context =
+                Some(ContextRequest { at: space.view.rect.center(), mods: self.mods, momentary: self.momentary, source: ContextSource::Key });
         }
     }
 
@@ -1193,6 +1235,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
 
     fn hover(&mut self, pointer: ToolPointer) {
         self.call(Some(pointer), |tool, cx| tool.hover(&pointer, cx));
+        self.hovered = true;
         if let Some(past) = self.hover_edge(pointer.pos) {
             self.response.past_edge = Some(past);
         }
@@ -1214,14 +1257,21 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// The canvas background's press phase of this pass. A pass carries one phase, so a press that moved or
     /// released in the pass it began in starts here.
     fn phase(&mut self, press: &PressState, frame: &PointerFrame) {
+        if press.phase.is_press() {
+            self.state.rehover = true;
+        }
         match press.phase {
             PressPhase::Idle => self.state.spent = false,
             PressPhase::Hover => {
                 self.state.spent = false;
                 // A pointer that stands still keeps the position its last move gave the tool. One that rests in
-                // the edge band gets a hover at its own position in every pass, since the view scrolls under it.
+                // the edge band gets a hover at its own position in every pass, since the view scrolls under it. The
+                // first resting pass after a press hovers too: the press dropped the tip, and a pointer that came up
+                // where it went down gets it back (WordCraft showed a link's tip again after a Ctrl+click on it).
                 if let Some(pointer) = hover_pointer(frame, *press)
-                    && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred) || self.hover_edge(pointer.pos).is_some())
+                    && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred)
+                        || std::mem::take(&mut self.state.rehover)
+                        || self.hover_edge(pointer.pos).is_some())
                 {
                     self.hover(pointer);
                 }
@@ -1257,7 +1307,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
                 if let (Some(asked), Some(at)) = (self.state.secondary.take(), context_click(press))
                     && (!asked.taken || press.phase.is_click())
                 {
-                    self.response.context = Some(ContextRequest { at, mods: asked.mods, momentary: asked.momentary });
+                    self.response.context = Some(ContextRequest { at, mods: asked.mods, momentary: asked.momentary, source: ContextSource::Pointer });
                 }
             }
             PressPhase::Cancel { reason, .. } => {

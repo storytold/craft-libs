@@ -3,14 +3,57 @@
 
 use craft_theme::{Channel, ColorModel, DefaultOn, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, Srgba};
 use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::dialog::stories::hosted;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, TrackRamp};
 use super::screen_pick::ScreenPickButton;
 use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
-use crate::ui::{AreaMode, ColorPickerDialog, ColorWarning};
-use craft_ui::dialog::stories::hosted;
+use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab, ColorWarning};
+
+type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
+
+/// A colour of full brightness and saturation at `hue` (0 to 1).
+fn hue_color(hue: f32) -> Srgba {
+    let channel = |n: f32| (((hue * 6.0 + n) % 6.0 - 3.0).abs() - 1.0).clamp(0.0, 1.0);
+    Srgba::rgb(channel(5.0), channel(3.0), channel(1.0))
+}
+
+/// The Standard tab's honeycomb of 19 hues and its row of greys.
+fn standard_colors() -> StandardColors {
+    let cells = (0..19).map(|i| (Label::from(format!("Color {}", i + 1)), hue_color(i as f32 / 19.0))).collect();
+    let greys = (0..8)
+        .map(|i| {
+            let level = i as f32 / 7.0;
+            (Label::from(format!("Gray {}", i + 1)), Srgba::rgb(level, level, level))
+        })
+        .collect();
+    (cells, greys)
+}
+
+/// The tabbed dialog on the story's dialog host, opened from a button, on `tab`.
+fn tabbed(ui: &mut Ui, data: &mut StoryData, tab: ColorPickerTab) -> StoryOutput {
+    hosted(ui, data, (), || {
+        let (cells, greys) = standard_colors();
+        ColorPickerDialog::new("story", "Colors", Srgba::rgb(0.2, 0.5, 0.8))
+            .layout(ColorPickerDialogLayout::Tabbed)
+            .standard(cells, greys)
+            .tab(tab)
+            .web_colors_remembered(false)
+    })
+}
+
+#[story(ColorPickerDialog, covers = [], drive = Drive::Never)]
+fn color_picker_dialog_tabbed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    tabbed(ui, data, ColorPickerTab::Standard)
+}
+
+#[story(ColorPickerDialog, covers = [], drive = Drive::Never)]
+fn color_picker_dialog_tabbed_custom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    tabbed(ui, data, ColorPickerTab::Custom)
+}
 
 /// A naive CMYK in percent, without a working space: a host's model for the stories. A real host converts through its
 /// CMYK profile.
@@ -52,7 +95,7 @@ impl ColorModel for NaiveCmyk {
     }
 }
 
-static CMYK_MODEL: NaiveCmyk = NaiveCmyk;
+const CMYK_MODEL: NaiveCmyk = NaiveCmyk;
 
 /// The picker's output with the readout of its latest event, kept in the story's data across passes.
 fn with_readout(data: &mut StoryData, shown: ColorPickerOutput) -> StoryOutput {
@@ -71,16 +114,16 @@ fn start() -> PickedColor {
 /// The compact popup's picker: the default models and the screen-pick button.
 #[story(ColorPicker<'static>, covers = [Default], drive = Drive::Never)]
 fn color_picker_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", start());
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).eyedropper(true).show(ui);
+    let (color, color_at) = data.value_at("color", start());
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).eyedropper(true).show(ui);
     with_readout(data, shown)
 }
 
 /// The compact picker with the opacity row.
 #[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
 fn color_picker_compact_alpha(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", start());
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).alpha(true).eyedropper(true).show(ui);
+    let (color, color_at) = data.value_at("color", start());
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).alpha(true).eyedropper(true).show(ui);
     with_readout(data, shown)
 }
 
@@ -89,8 +132,8 @@ fn color_picker_compact_alpha(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let web = *data.value("web", true);
     let mut web = web;
-    let color = data.value("color", start());
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).web_colors(Bind::bound(&mut web)).show(ui);
+    let (color, color_at) = data.value_at("color", start());
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).web_colors(Bind::bound(&mut web)).show(ui);
     with_readout(data, shown)
 }
 
@@ -100,9 +143,9 @@ fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut mode = *data.value("mode", AreaMode::default());
     let current = Srgba::rgb(0.9, 0.2, 0.1);
-    let color = data.value("color", PickedColor::rgb(Srgba::rgb(1.0, 0.0, 1.0)));
+    let (color, color_at) = data.value_at("color", PickedColor::rgb(Srgba::rgb(1.0, 0.0, 1.0)));
     let models: [&'static dyn ColorModel; 4] = [&HsbModel, &RgbModel, &LabModel, &CMYK_MODEL];
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color))
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color))
         .layout(ColorPickerLayout::Full)
         .models(models)
         .mode(Bind::bound(&mut mode))
@@ -119,9 +162,9 @@ fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// An InDesign-like model set: RGB in the first group; Lab, OKLCH (with its radios) and the host's CMYK in the second.
 #[story(ColorPicker<'static>, covers = [Many], drive = Drive::Never)]
 fn color_picker_full_models(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", start());
+    let (color, color_at) = data.value_at("color", start());
     let models: [&'static dyn ColorModel; 4] = [&RgbModel, &LabModel, &OklchModel, &CMYK_MODEL];
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).layout(ColorPickerLayout::Full).models(models).show(ui);
+    let shown = ColorPicker::new("Foreground color", color_at.bind(color)).layout(ColorPickerLayout::Full).models(models).show(ui);
     with_readout(data, shown)
 }
 
@@ -144,9 +187,9 @@ fn track_ramp(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(ChannelRow<'static>, covers = [], drive = Drive::Never)]
 fn channel_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("value", 40.0_f64);
+    let (value, value_at) = data.value_at("value", 40.0_f64);
     let channel = HsbModel.channels()[1];
-    let row = ChannelRow::new("Saturation", Bind::bound(value), ChannelRule::of(&channel))
+    let row = ChannelRow::new("Saturation", value_at.bind(value), ChannelRule::of(&channel))
         .track(vec![Srgba::rgb(1.0, 1.0, 1.0), Srgba::rgb(1.0, 0.0, 0.0)]);
     match row.show(ui) {
         Some(edit) => StoryOutput::from(edit),

@@ -2,8 +2,8 @@
 //! deformation of a grid), and the options bar.
 
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
-use craft_ui::contract::{Bind, Show as _};
-use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
+use craft_ui::contract::Show as _;
+use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, ValueAt, story};
 use egui::{Ui, vec2};
 
 use super::{Pin, PinDensity, PinEdit, PinMeshView, PinSolver, PinWarp, PinWarpBar, PinWarpOptions, PinWarpSession, PinWarpSettings};
@@ -107,9 +107,8 @@ pub(crate) fn sample_pins(layer: DocRect) -> Vec<Pin> {
 }
 
 /// Shows `pins` over the transform preview stage: the layer's picture drawn by the real `TransformPreview` through
-/// the solver's mesh as the pins deform it, the pins over it; the selection the pins report is kept.
-fn on_canvas(ui: &mut Ui, data: &mut StoryData, pins: &mut Vec<Pin>, show_mesh: bool) -> StoryOutput {
-    let selected = data.value("selected", vec![1usize]).clone();
+/// the solver's mesh as the pins deform it, the pins over it; the selection the pins report is kept in `selected`.
+fn on_canvas(ui: &mut Ui, pins: &mut Vec<Pin>, pins_at: ValueAt<'_>, selected: &mut Vec<usize>, show_mesh: bool) -> StoryOutput {
     let doc = Document::standard();
     let textures = doc.textures();
     let layer = layer();
@@ -117,12 +116,12 @@ fn on_canvas(ui: &mut Ui, data: &mut StoryData, pins: &mut Vec<Pin>, show_mesh: 
     let shown = doc.canvas(ui, Zoom::Fit, None, |ui, at| {
         let solver = IdwSolver::solved(layer, pins);
         draw(ui, at, &doc, &textures, PreviewMap::pins(solver.view(), layer), 1.0, false);
-        let output = PinWarp::new("Pins", Bind::bound(&mut *pins), solver.view()).selected_pins(&selected).show_mesh(show_mesh).show_at(ui, at);
+        let output = PinWarp::new("Pins", pins_at.bind(&mut *pins), solver.view()).selected_pins(selected).show_mesh(show_mesh).show_at(ui, at);
         reported = output.select.clone();
         StoryOutput::from(output)
     });
     if let Some(select) = reported {
-        *data.value("selected", vec![1usize]) = select;
+        *selected = select;
     }
     shown
 }
@@ -135,10 +134,8 @@ fn pins_with_a_fixed_turn() -> Vec<Pin> {
 
 #[story(PinWarp<'static>, covers = [Default], drive = Drive::Drag(Grip::part(super::overlay::PIN.at(1)).toward(vec2(1.0, 0.0))))]
 fn pins_with_a_fixed_rotation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut pins = data.value("pins", pins_with_a_fixed_turn()).clone();
-    let output = on_canvas(ui, data, &mut pins, true);
-    *data.value("pins", pins_with_a_fixed_turn()) = pins;
-    output
+    let ((pins, pins_at), (selected, _)) = data.pair_at(("pins", pins_with_a_fixed_turn()), ("selected", vec![1usize]));
+    on_canvas(ui, pins, pins_at, selected, true)
 }
 
 /// A session on the sample pins with pin 1 selected and, when `fixed`, its rotation fixed.

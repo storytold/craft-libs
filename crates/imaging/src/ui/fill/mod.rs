@@ -22,14 +22,14 @@
 //! [`FullWindowDialog`]: craft_ui::dialog::FullWindowDialog
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod bar;
+pub(crate) mod bar;
 mod commands;
 mod lasso;
 mod overlay;
-mod panel;
-mod preview_pane;
+pub(crate) mod panel;
+pub(crate) mod preview_pane;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;
@@ -62,7 +62,7 @@ use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::canvas_controls::{Marquee, MarqueeLook};
-use craft_ui::contract::{Bind, BodyCx, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft_ui::dialog::{
     DialogResult, DialogWords, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView,
     FullWindowWorkspace, RasterOverlay, SideFooter, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
@@ -238,7 +238,8 @@ pub struct ContentAwareFillWorkspace {
     preview_view: FullWindowView,
     framing: PreviewFraming,
     tool: FillTool,
-    last_used: LastUsed<FillTool>,
+    last_used: Tracked<LastUsed<FillTool>>,
+    slots: Tracked<Vec<ToolSlot<FillTool>>>,
     options: FillToolOptions,
     canvas: FillCanvas,
     hand: HandTool,
@@ -294,7 +295,8 @@ impl ContentAwareFillWorkspace {
             preview_view: FullWindowView::new(),
             framing: PreviewFraming::default(),
             tool: FillTool::SamplingBrush,
-            last_used: LastUsed::default(),
+            last_used: Tracked::new(LastUsed::default()),
+            slots: Tracked::new(FillTool::slots()),
             canvas: FillCanvas::new(),
             hand: HandTool::new(navigation),
             zoom: ZoomTool::new(navigation),
@@ -388,7 +390,6 @@ impl ContentAwareFillWorkspace {
         let params = env.words::<ParamDialogWords>();
         let title =
             FullWindowTitle::new(env.words::<FillWords>().name.clone()).subject(self.subject.clone()).zoom(self.view.zoom_percent()).label(&env);
-        let slots = FillTool::slots();
         let mut reset_all = false;
         let this = RefCell::new(&mut *self);
 
@@ -410,7 +411,7 @@ impl ContentAwareFillWorkspace {
             })
             .show(ui, |ui, cx| {
                 let mut guard = this.borrow_mut();
-                guard.show_body(ui, cx, &env, &slots, source);
+                guard.show_body(ui, cx, &env, source);
             });
 
         let work = this.into_inner();
@@ -604,7 +605,7 @@ impl ContentAwareFillWorkspace {
     }
 
     /// The body: the steps and keys, the options bar, the tool strip and the canvas; then the preview job.
-    fn show_body(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, env: &Env, slots: &[ToolSlot<FillTool>], source: &dyn FillSource) {
+    fn show_body(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, env: &Env, source: &dyn FillSource) {
         let ctx = ui.ctx().clone();
         let words = env.words::<FillWords>();
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
@@ -623,7 +624,7 @@ impl ContentAwareFillWorkspace {
                     if fired.phase == FirePhase::Release {
                         continue;
                     }
-                    let slot = slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
+                    let slot = self.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
                     let tools: Vec<&RailTool<FillTool>> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                     let picked = slot.and_then(|slot| {
                         tool_pick(&tools, slot.id, &self.tool, &self.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
@@ -652,9 +653,9 @@ impl ContentAwareFillWorkspace {
             }
 
             Row::new().fill().show(ui, |ui, _| {
-                let rail = ToolRail::new(words.tools.clone(), slots, &self.tool, &self.last_used).show_column(ui, |_, _| {});
+                let rail = ToolRail::new(words.tools.clone(), &self.slots, &self.tool, &self.last_used).show_column(ui, |_, _| {});
                 if let Some(next) = rail.last_used {
-                    self.last_used = next;
+                    *self.last_used = next;
                 }
                 if let Some(tool) = rail.select {
                     self.pick(Some(&ctx), tool);

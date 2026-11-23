@@ -29,7 +29,7 @@ pub struct ClipboardProbe {
 
 impl ClipboardProbe {
     /// Starts the worker with the backend `make` builds there, asking for `mimes`. `None` on wasm
-    /// or when the thread can't be spawned: the app asks [`Clipboard::has`] in line instead.
+    /// or when the thread can't be spawned: the app asks [`Clipboard::has`](crate::clipboard::Clipboard::has) in line instead.
     // vectorcraft: crates/ui-egui/src/clipboard_probe.rs:33 Probe::start
     pub fn start(make: Box<dyn FnOnce() -> Box<dyn ClipboardBackend> + Send>, mimes: Vec<&'static str>, wake: Wake) -> Option<Self> {
         if cfg!(target_arch = "wasm32") {

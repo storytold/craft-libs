@@ -1,7 +1,8 @@
 //! Stories of the transform box: Free Transform with its reference point, the Move tool's controls, Distort, the
-//! Ellipse tool's centre mark and the Line tool's live-line controls.
+//! Ellipse tool's centre mark, the rotate handle and the Line tool's live-line controls, with box or free ends.
 
-use super::{BOX, LineLook, RotateZone, TransformBox};
+use super::{BOX, LINE_END, LineEnd, LineEnds, LineLook, ROTATE_HANDLE, RotateZone, TransformBox, TransformBoxOutput};
+use craft_behavior::GesturePhase;
 use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, TransformMode};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_ui::canvas::Canvas;
@@ -27,16 +28,21 @@ fn free_box(state: Bind<'_, BoxState>) -> TransformBox<'_> {
 
 /// Shows the box `make` builds over the story's box as the only canvas control of a canvas.
 fn on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> StoryOutput {
-    let state = data.value("box", BoxState::from_rect(PICTURE));
+    shown_on_canvas(ui, data, make).map(|output| StoryOutput::from(output.edit)).unwrap_or_default()
+}
+
+/// [`on_canvas`] with the box's whole output.
+fn shown_on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> Option<TransformBoxOutput> {
+    let (state, state_at) = data.value_at("box", BoxState::from_rect(PICTURE));
     let room = craft_ui::testing::stage(ui);
     let view = craft_ui::testing::canvas_story::story_view(room, ui.pixels_per_point(), PICTURE.center(), 100.0);
     let layer = layer();
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
         show_quad(ui, body.rect, "Layer", state.quad, &layer);
-        make(Bind::bound(&mut *state)).show_at(ui, body.rect)
+        make(state_at.bind(&mut *state)).show_at(ui, body.rect)
     });
-    shown.inner.map(|output| StoryOutput::from(output.edit)).unwrap_or_default()
+    shown.inner
 }
 
 #[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(BOX.at(BoxPart::Corner(2).index())).toward(vec2(1.0, 1.0))))]
@@ -79,4 +85,39 @@ fn live_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let quad = data.value("box", BoxState::from_rect(PICTURE)).quad;
     let line = LineLook::new(quad[3], quad[1]);
     on_canvas(ui, data, move |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).line(line))
+}
+
+/// Free Transform turned only by the rotate handle on its stem above the top side; the rest of the outside is the
+/// tool's.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(ROTATE_HANDLE.at(0)).toward(vec2(1.0, 0.0))))]
+fn rotate_handle(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| free_box(state).reference_point(true).rotate_zone(RotateZone::Handle))
+}
+
+/// A live line whose ends are free points: dragging an end moves only that end, at any angle, and the story commits
+/// it as a host does; the box stays.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(LINE_END.at(1)).toward(vec2(1.0, -1.0))))]
+fn line_free_ends(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let quad = BoxState::from_rect(PICTURE).quad;
+    let ends = *data.value("ends", [quad[3], quad[1]]);
+    let line = LineLook::new(ends[0], ends[1]).ends(LineEnds::Free);
+    let shown =
+        shown_on_canvas(ui, data, move |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).line(line));
+    let Some(output) = shown else { return StoryOutput::default() };
+    if let Some(drag) = output.line_end {
+        let index = usize::from(drag.end == LineEnd::To);
+        match drag.phase {
+            GesturePhase::Cancel => {
+                let before = *data.value("before", ends);
+                *data.value("ends", ends) = before;
+            }
+            phase => {
+                if phase == GesturePhase::Begin {
+                    *data.value("before", ends) = ends;
+                }
+                data.value("ends", ends)[index] = drag.at;
+            }
+        }
+    }
+    StoryOutput::from(output.edit)
 }

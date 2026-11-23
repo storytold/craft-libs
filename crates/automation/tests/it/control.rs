@@ -123,6 +123,33 @@ fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
     assert!(rx.try_recv().is_err(), "nothing was dispatched");
 }
 
+/// A web page can reach loopback: a browser `POST` whose body is a valid `auth` line is refused at its request line
+/// and the connection closed, so neither the body's `auth` nor a request after it reaches the app.
+#[trial]
+fn a_browser_post_never_reaches_the_app() {
+    // Far longer than the trial, so the close comes from the refusal, not the deadline.
+    let (rx, server) = server::serve_with_deadline(TcpListener::bind("127.0.0.1:0").expect("bound"), TOKEN.into(), host(), Duration::from_secs(60))
+        .expect("started");
+    let mut stream = TcpStream::connect(server.addr).expect("connected");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+    let body = format!("{}\n{}\n", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}}), json!({"id": 2, "method": "test.ping"}));
+    write!(stream, "POST / HTTP/1.1\r\n").expect("written");
+    let refused = read_json(&mut reader).expect("a reply to the request line");
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["error"], "authentication required", "{refused}");
+    // The rest of what the browser sends; the server may already have closed.
+    let _ = write!(stream, "Host: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+    let _ = stream.flush();
+    let mut rest = String::new();
+    let closed = match reader.read_line(&mut rest) {
+        Ok(read) => read == 0,
+        Err(e) => !matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    };
+    assert!(closed, "the connection closes after the refusal, answering nothing more: {rest:?}");
+    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "nothing reached the app");
+}
+
 /// A request line over `MAX_REQUEST_BYTES` without a newline gets an error reply and the connection is closed.
 #[trial]
 fn an_over_long_request_is_refused_and_closes_the_connection() {

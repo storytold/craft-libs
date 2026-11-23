@@ -199,8 +199,6 @@ pub struct ScrollBarLook {
     pub thumb_width: Stateful<f32>,
     /// The shortest the thumb gets along the bar.
     pub min_thumb: f32,
-    /// The length of the fade at an edge past which content is hidden.
-    pub fade: f32,
 }
 
 /// The shortest a scroll bar's thumb gets along the bar, whatever the bar's kind.
@@ -231,7 +229,10 @@ pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> Scro
         )),
     };
     let hover = style_color(c.state.hover);
-    let (thickness, thin) = (tokens.size.handle.sm, tokens.stroke.thick);
+    let (thickness, thin) = match kind {
+        ScrollBarKind::Floating => (tokens.size.handle.sm, tokens.stroke.thick),
+        ScrollBarKind::Docked => (tokens.size.icon.md, tokens.size.icon.md),
+    };
     let (track, rest) = match kind {
         ScrollBarKind::Floating => (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), thin),
         ScrollBarKind::Docked => {
@@ -245,7 +246,6 @@ pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> Scro
         thickness,
         thumb_width: Stateful::new(rest).off(craft_theme::States::new(rest, thickness, thickness, rest)),
         min_thumb: min_thumb(tokens),
-        fade: tokens.size.scroll_fade,
     }
 }
 

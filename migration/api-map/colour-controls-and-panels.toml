@@ -1121,7 +1121,7 @@ name = "SwatchTable"
 old = ""
 new = "craft_ui::choice::SwatchTable"
 status = "replaced"
-note = "An items component on the collection contract with Swatch cells: `new(label, &[(Label, Srgba)])` with `selection(Bind<Selection<usize>>)`, `per_row(n)` in place of `columns` and `multiple(bool)`; `show_all(ui)` returns `SwatchTableOutput { response, selected, chosen, open }`. Replaces `SwatchPalette::table`."
+note = "An items component on the collection contract with Swatch cells: `new(label, &[(Label, Srgba)])` with `selection(Bind<Selection<usize>>)`, `per_row(n)` in place of `columns` and `multiple(bool)`; `show_all(ui)` returns `SwatchTableOutput { response, selected, chosen, open, preview }`. Replaces `SwatchPalette::table`."
 
 [[type]]
 name = "SwatchTableResponse"

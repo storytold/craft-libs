@@ -10,7 +10,7 @@ use craft_ui::contract::{
     Bind, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
     Validity, clicked,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -23,8 +23,8 @@ use craft_ui::text::{NumberField, NumberOutput};
 use egui::{Pos2, Rect, Ui, Vec2, pos2, vec2};
 use std::cell::Cell;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The most columns PowerPoint takes; the
 /// dialog's limit without [`word`](TextColumnsDialog::word) and the default for a host that
@@ -41,6 +41,8 @@ pub const MIN_COLUMN_WIDTH: f32 = 18.0;
 /// The largest spacing, points (22 in, PowerPoint).
 pub const MAX_SPACING: f32 = 1584.0;
 
+/// The OK footer button's index, in the order the buttons are given.
+const OK: usize = 0;
 /// The spacing between columns Word gives a preset and a new section's columns, points: Word's
 /// 0.5 in.
 const DEFAULT_SPACING: f32 = 0.5 * 72.0;
@@ -144,6 +146,9 @@ pub struct TextColumnsDialog {
     unit: DocUnit,
     /// The edited columns from before the running gesture: Escape restores them.
     draft: Option<TextColumns>,
+    /// Whether OK files its result for the app to judge instead of closing.
+    hold: bool,
+    held: HeldAnswer<Option<TextColumns>>,
 }
 
 impl TextColumnsDialog {
@@ -157,6 +162,8 @@ impl TextColumnsDialog {
             apply_choices: Vec::new(),
             unit: DocUnit::default(),
             draft: None,
+            hold: false,
+            held: HeldAnswer::new(),
         }
     }
 
@@ -424,27 +431,30 @@ impl TextColumnsDialog {
             let codec = NumberCodec::new(units.reader(None), 0);
             let most = self.most_columns();
             let message = Self::number_message(words, units, most);
-            let count_check = move |count: &Option<f64>| match count {
-                Some(n) if !(1.0..=f64::from(most)).contains(n) => Validity::Error(Message::new(message.clone())),
+            let count_check = |(most, message): &(u32, &str), count: &Option<f64>| match count {
+                Some(n) if !(1.0..=f64::from(*most)).contains(n) => Validity::Error(Message::new((*message).to_owned())),
                 _ => Validity::Ok,
             };
             let edit = Field::new(words.number.clone())
-                .show(ui, |ui, _| NumberField::new(words.number.clone(), Bind::given(shown).check(&count_check)).codec(codec.clone()).show(ui))
+                .show(ui, |ui, _| {
+                    NumberField::new(words.number.clone(), Bind::given(shown).check_with((most, message.as_str()), count_check))
+                        .codec(codec.clone())
+                        .show(ui)
+                })
                 .inner;
             self.edit_count(edit.map(|out| out.edit.events).unwrap_or_default());
             if self.word.is_none() {
                 let points = self.edited.spacing.map_or(Mixed::Mixed, |p| Mixed::Same(Some(f64::from(p))));
                 let range = 0.0..=f64::from(MAX_SPACING);
                 let message = self.spacing_message(words, units);
-                let in_range = range.clone();
-                let spacing_check = move |spacing: &Option<f64>| match spacing {
-                    Some(points) if !in_range.contains(points) => Validity::Error(Message::new(message.clone())),
+                let spacing_check = |(range, message): &(std::ops::RangeInclusive<f64>, &str), spacing: &Option<f64>| match spacing {
+                    Some(points) if !range.contains(points) => Validity::Error(Message::new((*message).to_owned())),
                     _ => Validity::Ok,
                 };
                 let lengths = self.unit.lengths();
                 let edit = Field::new(words.spacing.clone())
                     .show(ui, |ui, _| {
-                        let bind = Bind::given(points).check(&spacing_check);
+                        let bind = Bind::given(points).check_with((range.clone(), message.as_str()), spacing_check);
                         let field = NumberField::length(words.spacing.clone(), bind, lengths).range(range.clone());
                         field.show(ui).edit.events.map(|v| v.map(|p| p as f32))
                     })
@@ -593,6 +603,36 @@ fn bare(caption: &str) -> &str {
     caption.trim_end_matches([':', '\u{ff1a}'])
 }
 
+impl TextColumnsDialog {
+    /// OK files its result for the app to accept or refuse before the dialog closes.
+    #[must_use]
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
+    }
+
+    /// The result OK filed, once, for the app to judge.
+    pub fn take_ok(&mut self) -> Option<Option<TextColumns>> {
+        self.held.take()
+    }
+
+    /// The app's answer to the filed result: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        self.held.answer(answer);
+    }
+
+    /// Files `changes` and keeps the dialog open when OK is held; a plain dialog closes with them.
+    fn settle(&mut self, changes: Option<TextColumns>) -> Option<Option<TextColumns>> {
+        if !self.hold {
+            return Some(changes);
+        }
+        if !self.held.is_waiting() {
+            self.held.file(changes);
+        }
+        None
+    }
+}
+
 impl StackDialog for TextColumnsDialog {
     /// The fields that changed; `None` when none did (OK applies nothing).
     type Result = Option<TextColumns>;
@@ -602,25 +642,66 @@ impl StackDialog for TextColumnsDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Option<TextColumns>>> {
+        if let Some(changes) = self.held.finish() {
+            return Some(DialogResult::Ok(changes));
+        }
         let env = Env::of(ui);
         let words = env.words::<TextColumnsWords>();
         let common = env.words::<CommonWords>();
         let units = env.units();
         let valid = Cell::new(self.is_valid());
-        let buttons = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let waiting = self.held.is_waiting();
+        let refused = self.held.refusal().map(|(reason, changes)| (reason.clone(), changes.clone()));
+        let unchanged = Cell::new(true);
+        let buttons = [
+            FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
+            FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
+        ];
         let shown = Dialog::new(words.title.clone())
             .buttons(buttons)
             .settle_buttons(|_, buttons| {
                 if let Some(ok) = buttons.first_mut() {
-                    ok.set_enabled(valid.get());
+                    ok.set_enabled(valid.get() && !waiting);
                 }
             })
-            .show(ui, |ui, _| self.body(ui, &words, &units, &valid));
+            .refusal(|| refused.as_ref().filter(|_| unchanged.get()).map(|(reason, _)| reason.clone()))
+            .show(ui, |ui, _| {
+                self.body(ui, &words, &units, &valid);
+                if let Some((_, changes)) = &refused {
+                    unchanged.set(self.changes() == *changes);
+                }
+            });
+        if refused.is_some() && !unchanged.get() {
+            self.held.clear_refusal();
+        }
+        // A held OK stays open: its pick files the answer, and only Cancel closes.
+        if self.hold && shown.output.picked == Some(OK) {
+            if !valid.get() {
+                return None;
+            }
+            let changes = self.changes();
+            return self.settle(changes).map(DialogResult::Ok);
+        }
         match shown.output.result(|| self.changes()) {
-            Some(DialogResult::Ok(changes)) if valid.get() => Some(DialogResult::Ok(changes)),
+            Some(DialogResult::Ok(changes)) if valid.get() => self.settle(changes).map(DialogResult::Ok),
             Some(DialogResult::Cancel) => Some(DialogResult::Cancel),
             _ => None,
         }
+    }
+
+    fn confirm(&mut self, _: &egui::Context) -> Option<Option<TextColumns>> {
+        if let Some(changes) = self.held.finish() {
+            return Some(changes);
+        }
+        if !self.is_valid() {
+            return None;
+        }
+        let changes = self.changes();
+        self.settle(changes)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
     }
 }
 

@@ -15,6 +15,7 @@ use craft_behavior::Mixed;
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, Mods};
 use craft_quit::{CloseAnswer, CloseScope};
+use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
 use serde_json::{Value, json};
 
@@ -53,6 +54,9 @@ impl Outcome for UnsavedChangesOutput {
 /// guard has more documents, an "Apply to All" check box. Windows and Linux ask Yes, No and Cancel. Reverting asks
 /// Revert and Cancel; Revert answers `CloseAnswer::DontSave`.
 ///
+/// The node has the alert-dialog role (`Role::ALERT_DIALOG`), described by the consequence message and any save
+/// failure reason.
+///
 /// The result is `Ok(UnsavedAnswer)` for every answer, Cancel included (the guard needs it), and
 /// `DialogResult::Cancel` only when the host closed the dialog from outside.
 #[derive(crate::contract::Pattern)]
@@ -65,12 +69,30 @@ pub struct UnsavedChangesDialog {
     open: bool,
     /// What a programmatic OK answers; the accepting answer's when `None`.
     chosen: Option<CloseAnswer>,
+    /// Why the last save failed, shown under the message.
+    reason: Option<String>,
 }
 
 impl UnsavedChangesDialog {
     /// The question for the document `document_name`, closing under `scope`; the guard asks about one document.
     pub fn new(scope: CloseScope, document_name: impl Into<String>) -> Self {
-        Self { id: dialog_id("unsaved-changes"), scope, name: document_name.into(), remaining: 1, apply_to_all: false, open: true, chosen: None }
+        Self {
+            id: dialog_id("unsaved-changes"),
+            scope,
+            name: document_name.into(),
+            remaining: 1,
+            apply_to_all: false,
+            open: true,
+            chosen: None,
+            reason: None,
+        }
+    }
+
+    /// Shows why the last save failed, in the bad tone under the message.
+    #[must_use]
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
     }
 
     /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
@@ -108,9 +130,9 @@ impl UnsavedChangesDialog {
                     CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if mac => {
-                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
+                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Alternate).chord(Chord::new(Mods::CMD, Key::D))
                     }
-                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Other),
+                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Alternate),
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
                 };
                 (answer, reply)
@@ -145,7 +167,10 @@ impl UnsavedChangesDialog {
         let replies = self.replies(&words, common.cancel.clone(), env.view().shell().os);
         let answers: Vec<CloseAnswer> = replies.iter().map(|(answer, _)| *answer).collect();
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
-        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).answers(buttons(&env, replies));
+        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).alert().answers(buttons(&env, replies));
+        if let Some(reason) = &self.reason {
+            prompt = prompt.tone(Tone::Bad, reason.clone());
+        }
         let mut ticked = hosted && self.apply_to_all;
         if self.offers_apply_to_all() {
             let label = words.unsaved_apply_to_all.clone();
@@ -197,6 +222,9 @@ impl StackDialog for UnsavedChangesDialog {
         let mut fields = json!({ "choice": answer_name(self.chosen()) });
         if self.offers_apply_to_all() {
             fields["applyToAll"] = Value::Bool(self.apply_to_all);
+        }
+        if let Some(reason) = &self.reason {
+            fields["reason"] = Value::String(reason.clone());
         }
         Some(fields)
     }

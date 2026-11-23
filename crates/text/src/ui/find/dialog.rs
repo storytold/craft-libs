@@ -1,13 +1,17 @@
 //! The Find and Replace dialog: tabs, search options, Replace and Replace All.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use craft_behavior::{SelectionChange, keyed};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
-use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{
+    ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
+};
 use craft_ui::display::Text;
+use craft_ui::form::{Field as FormField, Help};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
@@ -15,12 +19,14 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::text::TextField;
 use egui::Ui;
+use serde::{Deserialize, Serialize};
 
 use super::FindLabels;
 use crate::find::FindOptions;
 
 /// Which tab of Find and Replace is open.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum FindTab {
     /// Find.
@@ -82,6 +88,60 @@ pub enum FindRequest {
         /// The typed target, such as a page number.
         target: String,
     },
+    /// Next or Previous on an empty Go To target of a [`GoToTarget::Typed`] kind that steps.
+    #[non_exhaustive]
+    GoToStep {
+        /// Index into the Go To kinds.
+        kind: usize,
+        /// `true` for Next, `false` for Previous.
+        forward: bool,
+    },
+}
+
+/// One Go To kind and its target.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct GoToKind {
+    /// The kind's name in the Go to what list.
+    pub label: String,
+    /// What the target field is.
+    pub target: GoToTarget,
+}
+
+impl GoToKind {
+    /// A kind whose target is typed, with `hint` as the field's help line; with `steps`, an empty field turns the
+    /// accept button into Next and adds Previous.
+    pub fn typed(label: impl Into<String>, hint: impl Into<Label>, steps: bool) -> Self {
+        GoToKind { label: label.into(), target: GoToTarget::Typed { hint: hint.into(), steps } }
+    }
+
+    /// A kind whose target is picked from `names`; with none, `empty` shows as the help line and Go To is disabled.
+    pub fn named(label: impl Into<String>, names: Vec<String>, empty: impl Into<Label>) -> Self {
+        GoToKind { label: label.into(), target: GoToTarget::Named { names, empty: empty.into() } }
+    }
+}
+
+/// What a Go To kind's target is.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum GoToTarget {
+    /// A text field with `hint` as its help line; with `steps`, an empty field turns the accept button into Next and
+    /// adds Previous.
+    #[non_exhaustive]
+    Typed {
+        /// The help line.
+        hint: Label,
+        /// Whether an empty target steps.
+        steps: bool,
+    },
+    /// A `Select` over `names`; with none, `empty` shows as the help line and Go To is disabled.
+    #[non_exhaustive]
+    Named {
+        /// The names to pick from.
+        names: Vec<String>,
+        /// The help line when there are no names.
+        empty: Label,
+    },
 }
 
 impl FindRequest {
@@ -109,6 +169,11 @@ impl FindRequest {
     pub fn go_to(kind: usize, target: impl Into<String>) -> Self {
         FindRequest::GoTo { kind, target: target.into() }
     }
+
+    /// Step Go To to the next (`forward`) or previous target of the kind at index `kind`.
+    pub fn go_to_step(kind: usize, forward: bool) -> Self {
+        FindRequest::GoToStep { kind, forward }
+    }
 }
 
 /// The two text fields of the Find and Replace tabs.
@@ -126,6 +191,29 @@ enum Press {
     Highlight(bool),
     /// PowerPoint's Replace… on the Find tab.
     ShowReplace,
+    /// Previous on an empty target of a stepping Go To kind.
+    Previous,
+}
+
+/// The dialog's values as automation reads and sets them. `message` is the app's report and is read only.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindFields {
+    tab: FindTab,
+    query: String,
+    with: String,
+    more: bool,
+    match_case: bool,
+    whole_word: bool,
+    wildcards: bool,
+    prefix: bool,
+    suffix: bool,
+    ignore_punctuation: bool,
+    ignore_space: bool,
+    regex: bool,
+    go_to_kind: usize,
+    go_to_target: String,
+    message: String,
 }
 
 /// Find and Replace, modeless on the dialog stack (the document stays editable under it).
@@ -146,7 +234,8 @@ pub struct FindReplaceDialog {
     tab: FindTab,
     word: bool,
     more: bool,
-    go_to_kinds: Vec<String>,
+    go_to_kinds: Vec<GoToKind>,
+    highlighted: bool,
     message: String,
     request: Option<FindRequest>,
     /// The field that last had the keyboard: where Special inserts.
@@ -168,6 +257,7 @@ impl FindReplaceDialog {
             word: false,
             more: false,
             go_to_kinds: Vec::new(),
+            highlighted: false,
             message: String::new(),
             request: None,
             last_field: Field::Find,
@@ -185,23 +275,86 @@ impl FindReplaceDialog {
         self
     }
 
-    /// Sets the starting options for Match case, Whole words and the rest.
+    /// Sets the starting options for Match case, Whole words and the rest. An option that only Search Options shows
+    /// (Match prefix, Match suffix, Ignore punctuation, Ignore white-space, Regular expressions) opens Search Options,
+    /// so an option that is on is never hidden.
     #[must_use]
     pub fn options(mut self, options: FindOptions) -> Self {
         self.options = options;
+        self.more |= options.prefix || options.suffix || options.ignore_punctuation || options.ignore_space || options.regex;
         self
+    }
+
+    /// Shows `tab` in the open dialog, and puts `query` in Find what when given (Find or Replace asked again with a
+    /// selection). Replace with, the options, Search Options and the Go To target stay as they are.
+    pub fn show_tab(&mut self, tab: FindTab, query: Option<String>) {
+        self.tab = tab;
+        if let Some(query) = query {
+            self.query = query;
+        }
+    }
+
+    /// Replaces Go To's kinds in the open dialog (the document's bookmarks changed, say); the chosen kind and target
+    /// stay.
+    pub fn set_go_to_kinds(&mut self, kinds: Vec<GoToKind>) {
+        self.go_to_kinds = kinds;
     }
 
     /// Go To's kinds (Page, Section, Line, Bookmark, Comment, …), the app's.
     #[must_use]
-    pub fn go_to_kinds(mut self, kinds: Vec<String>) -> Self {
+    pub fn go_to_kinds(mut self, kinds: Vec<GoToKind>) -> Self {
         self.go_to_kinds = kinds;
+        self
+    }
+
+    /// The Find tab opens with Reading Highlight on (Clear highlight enabled); the app passes its session state.
+    #[must_use]
+    pub fn highlighted(mut self, on: bool) -> Self {
+        self.highlighted = on;
         self
     }
 
     /// The request the user made since the last call, if any.
     pub fn take_request(&mut self) -> Option<FindRequest> {
         self.request.take()
+    }
+
+    fn fields(&self) -> FindFields {
+        FindFields {
+            tab: self.tab,
+            query: self.query.clone(),
+            with: self.with.clone(),
+            more: self.more,
+            match_case: self.options.match_case,
+            whole_word: self.options.whole_word,
+            wildcards: self.options.wildcards,
+            prefix: self.options.prefix,
+            suffix: self.options.suffix,
+            ignore_punctuation: self.options.ignore_punctuation,
+            ignore_space: self.options.ignore_space,
+            regex: self.options.regex,
+            go_to_kind: self.go_to_kind,
+            go_to_target: self.go_to_target.clone(),
+            message: self.message.clone(),
+        }
+    }
+
+    /// Takes every value of `fields` but the message, which only the app sets.
+    fn apply(&mut self, fields: FindFields) {
+        self.tab = fields.tab;
+        self.query = fields.query;
+        self.with = fields.with;
+        self.more = fields.more;
+        self.options.match_case = fields.match_case;
+        self.options.whole_word = fields.whole_word;
+        self.options.wildcards = fields.wildcards;
+        self.options.prefix = fields.prefix;
+        self.options.suffix = fields.suffix;
+        self.options.ignore_punctuation = fields.ignore_punctuation;
+        self.options.ignore_space = fields.ignore_space;
+        self.options.regex = fields.regex;
+        self.go_to_kind = fields.go_to_kind;
+        self.go_to_target = fields.go_to_target;
     }
 
     /// The status line under the options, the last line of the body.
@@ -217,6 +370,24 @@ impl StackDialog for FindReplaceDialog {
         dialog_id("find-replace")
     }
 
+    fn modeless(&self) -> bool {
+        true
+    }
+
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        serde_fields(&self.fields())
+    }
+
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        if field == "message" {
+            return Err(FieldRefusal::ReadOnly.message(field));
+        }
+        let mut fields = self.fields();
+        set_serde_field(&mut fields, field, value)?;
+        self.apply(fields);
+        Ok(())
+    }
+
     fn show(&mut self, ui: &mut Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
         let words = Env::of(ui).words::<FindLabels>();
         let (word, tab) = (self.word, self.tab);
@@ -225,7 +396,6 @@ impl StackDialog for FindReplaceDialog {
         let mut options = self.options;
         let mut more = self.more;
         let mut last_field = self.last_field;
-        let mut go_kind = self.go_to_kind;
         let mut target = std::mem::take(&mut self.go_to_target);
         let mut next_tab = tab;
         let mut picked_code: Option<(Field, String)> = None;
@@ -233,125 +403,198 @@ impl StackDialog for FindReplaceDialog {
         let pending = self.insert.take();
         let kinds = self.go_to_kinds.clone();
         let message = self.message.clone();
+        let highlighted = self.highlighted;
+        let kind_at = self.go_to_kind.min(kinds.len().saturating_sub(1));
+        let mut go_kind = kind_at;
+        let go_target = kinds.get(kind_at).map(|kind| &kind.target);
+        // An empty target of a stepping kind steps: Next takes the accept button, Previous sits beside it.
+        let stepping = matches!(go_target, Some(GoToTarget::Typed { steps: true, .. })) && target.trim().is_empty();
 
-        let accept_label = if tab == FindTab::GoTo { words.go_to.clone() } else { words.find_next.clone() };
+        let accept_label = match tab {
+            FindTab::GoTo if stepping => words.next.clone(),
+            FindTab::GoTo => words.go_to.clone(),
+            _ => words.find_next.clone(),
+        };
         let extras: Vec<(Label, Press)> = match (tab, word) {
             (FindTab::Replace, _) => vec![(words.replace.clone(), Press::Replace), (words.replace_all.clone(), Press::ReplaceAll)],
             (FindTab::Find, true) => {
                 vec![(words.highlight_all.clone(), Press::Highlight(true)), (words.clear_highlight.clone(), Press::Highlight(false))]
             }
             (FindTab::Find, false) => vec![(words.replace_more.clone(), Press::ShowReplace)],
+            (FindTab::GoTo, _) if stepping => vec![(words.previous.clone(), Press::Previous)],
             (FindTab::GoTo, _) => Vec::new(),
         };
-        let accept_enabled = if tab == FindTab::GoTo { !kinds.is_empty() } else { !query.is_empty() };
+        let accept_enabled = match tab {
+            FindTab::GoTo => match go_target {
+                None => false,
+                Some(GoToTarget::Named { names, .. }) => !names.is_empty(),
+                Some(_) => true,
+            },
+            _ => !query.is_empty(),
+        };
+        // The Find tab's accept button follows the Find what text as the body left it, not as the last pass did.
+        let ready = Cell::new(accept_enabled);
         let mut buttons = vec![FooterButton::new(accept_label, DialogRole::Accept).stays_open(true).enabled(accept_enabled)];
-        buttons.extend(extras.iter().map(|(label, _)| FooterButton::new(label.clone(), DialogRole::Other).stays_open(true)));
+        buttons.extend(extras.iter().map(|(label, press)| {
+            FooterButton::new(label.clone(), DialogRole::Other).stays_open(true).enabled(highlighted || *press != Press::Highlight(false))
+        }));
         buttons.push(FooterButton::new(words.close_button.clone(), DialogRole::Cancel));
         let close_at = buttons.len() - 1;
 
-        let shown = Dialog::new(words.title.clone()).modeless().button_place(ButtonPlace::Side).buttons(buttons).show(ui, |ui, _| {
-            if word {
-                let tabs = [
-                    (FindTab::Find, words.find_tab.as_str().to_owned()),
-                    (FindTab::Replace, words.replace_tab.as_str().to_owned()),
-                    (FindTab::GoTo, words.go_to_tab.as_str().to_owned()),
-                ];
-                let source = keyed(&tabs[..], |tab: &(FindTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
-                let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(tab).natural_height(true);
-                let out = strip.show_items(ui, &source, &mut |key, _| {
-                    Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
-                });
-                for event in out.response.events {
-                    if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
-                        && let Some(chosen) = keys.last()
-                    {
-                        next_tab = *chosen;
+        let shown = Dialog::new(words.title.clone())
+            .modeless()
+            .button_place(ButtonPlace::Side)
+            .buttons(buttons)
+            .settle_buttons(|_, buttons| {
+                if let Some(accept) = buttons.get_mut(0) {
+                    accept.set_enabled(ready.get());
+                }
+            })
+            .show(ui, |ui, _| {
+                if word {
+                    let tabs = [
+                        (FindTab::Find, words.find_tab.as_str().to_owned()),
+                        (FindTab::Replace, words.replace_tab.as_str().to_owned()),
+                        (FindTab::GoTo, words.go_to_tab.as_str().to_owned()),
+                    ];
+                    let source = keyed(&tabs[..], |tab: &(FindTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
+                    let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(tab).natural_height(true);
+                    let out = strip.show_items(ui, &source, &mut |key, _| {
+                        Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
+                    });
+                    for event in out.response.events {
+                        if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                            && let Some(chosen) = keys.last()
+                        {
+                            next_tab = *chosen;
+                        }
                     }
                 }
-            }
-            if tab == FindTab::GoTo {
-                Text::new(words.go_to_what.clone()).show(ui);
-                let entries: Vec<Entry<usize>> = kinds.iter().enumerate().map(|(at, kind)| Entry::new(at, kind.clone())).collect();
-                let edit = Select::new(words.go_to_what.clone(), Bind::given(go_kind.min(kinds.len().saturating_sub(1))), &entries).show(ui);
-                if let Some(value) = edit.events.value() {
-                    go_kind = *value;
+                if tab == FindTab::GoTo {
+                    Text::new(words.go_to_what.clone()).show(ui);
+                    let entries: Vec<Entry<usize>> = kinds.iter().enumerate().map(|(at, kind)| Entry::new(at, kind.label.clone())).collect();
+                    let edit = Select::new(words.go_to_what.clone(), Bind::given(kind_at), &entries).show(ui);
+                    if let Some(value) = edit.events.value() {
+                        go_kind = *value;
+                    }
+                    if let Some(kind) = kinds.get(kind_at) {
+                        match &kind.target {
+                            GoToTarget::Typed { hint, .. } => {
+                                let mut field = FormField::new(Label::from(kind.label.clone())).id_salt("go-to-target");
+                                if !hint.as_str().is_empty() {
+                                    field = field.help(Help::Text(hint.clone()));
+                                }
+                                field.show(ui, |ui, _| {
+                                    let edit = TextField::new(Label::from(kind.label.clone()), Bind::given(target.clone())).show(ui);
+                                    if let Some(value) = edit.events.value() {
+                                        target.clone_from(value);
+                                    }
+                                });
+                            }
+                            GoToTarget::Named { names, empty } => match names.iter().position(|name| *name == target).or(names.first().map(|_| 0)) {
+                                None => {
+                                    FormField::new(Label::from(kind.label.clone())).id_salt("go-to-target").help(Help::Text(empty.clone())).show(
+                                        ui,
+                                        |ui, _| {
+                                            TextField::new(Label::from(kind.label.clone()), Bind::given(String::new())).enabled(false).show(ui);
+                                        },
+                                    );
+                                }
+                                Some(at) => {
+                                    // The field always names one of the names, so Go To has a target before the user picks.
+                                    target.clone_from(&names[at]);
+                                    let entries: Vec<Entry<usize>> =
+                                        names.iter().enumerate().map(|(at, name)| Entry::new(at, name.clone())).collect();
+                                    let edit = Select::new(Label::from(kind.label.clone()), Bind::given(at), &entries).show(ui);
+                                    if let Some(&picked) = edit.events.value()
+                                        && let Some(name) = names.get(picked)
+                                    {
+                                        target.clone_from(name);
+                                    }
+                                }
+                            },
+                        }
+                    }
+                    if !message.is_empty() {
+                        Text::new(message.clone()).show(ui);
+                    }
+                    return;
                 }
-                let edit = TextField::new(words.go_to.clone(), Bind::given(target.clone())).show(ui);
-                if let Some(value) = edit.events.value() {
-                    target.clone_from(value);
-                }
-                return;
-            }
 
-            Text::new(words.find_what.clone()).show(ui);
-            let mut field = TextField::new(words.find_what.clone(), Bind::given(query.clone()));
-            if let Some((Field::Find, code)) = &pending {
-                field = field.replace_selection(code.clone());
-            }
-            let edit = field.show(ui);
-            if edit.response.has_focus() {
-                last_field = Field::Find;
-            }
-            if let Some(value) = edit.events.value() {
-                query.clone_from(value);
-            }
-            submitted |= edit.submitted;
-            if tab == FindTab::Replace {
-                Text::new(words.replace_with.clone()).show(ui);
-                let mut field = TextField::new(words.replace_with.clone(), Bind::given(with.clone()));
-                if let Some((Field::With, code)) = &pending {
+                Text::new(words.find_what.clone()).show(ui);
+                let mut field = TextField::new(words.find_what.clone(), Bind::given(query.clone()));
+                if let Some((Field::Find, code)) = &pending {
                     field = field.replace_selection(code.clone());
                 }
                 let edit = field.show(ui);
                 if edit.response.has_focus() {
-                    last_field = Field::With;
+                    last_field = Field::Find;
                 }
                 if let Some(value) = edit.events.value() {
-                    with.clone_from(value);
+                    query.clone_from(value);
                 }
-            }
+                ready.set(!query.is_empty());
+                submitted |= edit.submitted;
+                if tab == FindTab::Replace {
+                    Text::new(words.replace_with.clone()).show(ui);
+                    let mut field = TextField::new(words.replace_with.clone(), Bind::given(with.clone()));
+                    if let Some((Field::With, code)) = &pending {
+                        field = field.replace_selection(code.clone());
+                    }
+                    let edit = field.show(ui);
+                    if edit.response.has_focus() {
+                        last_field = Field::With;
+                    }
+                    if let Some(value) = edit.events.value() {
+                        with.clone_from(value);
+                    }
+                }
 
-            let check = |ui: &mut Ui, label: &Label, value: &mut bool, enabled: bool| {
-                Checkbox::new(Bind::bound(value)).label(label.clone()).enabled(enabled).show(ui);
-            };
-            if !word {
-                check(ui, &words.match_case.clone(), &mut options.match_case, true);
-                check(ui, &words.whole_words.clone(), &mut options.whole_word, true);
-                return;
-            }
-            if clicked(&Button::new(words.search_options.clone()).show(ui)) {
-                more = !more;
-            }
-            if !more {
-                return;
-            }
-            // Word greys the case, word and ignore options out while wildcards are on.
-            let free = !options.wildcards || options.regex;
-            let no_regex = !options.regex;
-            check(ui, &words.match_case.clone(), &mut options.match_case, free);
-            check(ui, &words.whole_words.clone(), &mut options.whole_word, free);
-            check(ui, &words.use_wildcards.clone(), &mut options.wildcards, no_regex);
-            check(ui, &words.match_prefix.clone(), &mut options.prefix, free);
-            check(ui, &words.match_suffix.clone(), &mut options.suffix, free);
-            check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
-            check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
-            check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
-            let entries = special_entries(&words, tab == FindTab::Replace);
-            let button = Button::new(words.special.clone()).show(ui);
-            if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
-                let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
-                picked_code = Some((field, code.to_owned()));
-            }
-            if !message.is_empty() {
-                Text::new(message.clone()).show(ui);
-            }
-        });
+                let check = |ui: &mut Ui, label: &Label, value: &mut bool, enabled: bool| {
+                    Checkbox::new(Bind::bound(value)).label(label.clone()).enabled(enabled).show(ui);
+                };
+                if !word {
+                    check(ui, &words.match_case.clone(), &mut options.match_case, true);
+                    check(ui, &words.whole_words.clone(), &mut options.whole_word, true);
+                    return;
+                }
+                if clicked(&Button::new(words.search_options.clone()).show(ui)) {
+                    more = !more;
+                }
+                if !more {
+                    return;
+                }
+                // Word greys the case, word and ignore options out while wildcards are on.
+                let free = !options.wildcards || options.regex;
+                let no_regex = !options.regex;
+                check(ui, &words.match_case.clone(), &mut options.match_case, free);
+                check(ui, &words.whole_words.clone(), &mut options.whole_word, free);
+                check(ui, &words.use_wildcards.clone(), &mut options.wildcards, no_regex);
+                check(ui, &words.match_prefix.clone(), &mut options.prefix, free);
+                check(ui, &words.match_suffix.clone(), &mut options.suffix, free);
+                check(ui, &words.ignore_punctuation.clone(), &mut options.ignore_punctuation, free);
+                check(ui, &words.ignore_space.clone(), &mut options.ignore_space, free);
+                check(ui, &words.regular_expressions.clone(), &mut options.regex, true);
+                let entries = special_entries(&words, tab == FindTab::Replace, options.wildcards);
+                let button = Button::new(words.special.clone()).show(ui);
+                if let Some(code) = Menu::new(words.special.clone()).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
+                    let field = if last_field == Field::With && tab == FindTab::Replace { Field::With } else { Field::Find };
+                    picked_code = Some((field, code.to_owned()));
+                }
+                if !message.is_empty() {
+                    Text::new(message.clone()).show(ui);
+                }
+            });
 
         self.query = query;
         self.with = with;
         self.options = options;
         self.more = more;
         self.last_field = last_field;
+        if go_kind != kind_at {
+            target.clear();
+            self.message.clear();
+        }
         self.go_to_kind = go_kind;
         self.go_to_target = target;
         self.tab = next_tab;
@@ -359,8 +602,12 @@ impl StackDialog for FindReplaceDialog {
 
         let picked = shown.output.picked;
         if picked == Some(0) || (submitted && tab != FindTab::GoTo) {
+            // The target as the body left it decides whether Go To steps.
+            let steps_now = matches!(go_target, Some(GoToTarget::Typed { steps: true, .. })) && self.go_to_target.trim().is_empty();
             self.request = match tab {
-                FindTab::GoTo => Some(FindRequest::GoTo { kind: self.go_to_kind, target: self.go_to_target.clone() }),
+                FindTab::GoTo if kinds.is_empty() => None,
+                FindTab::GoTo if steps_now => Some(FindRequest::go_to_step(kind_at, true)),
+                FindTab::GoTo => Some(FindRequest::go_to(kind_at, self.go_to_target.clone())),
                 _ if self.query.is_empty() => None,
                 _ => Some(FindRequest::FindNext { query: self.query.clone(), options: self.options }),
             };
@@ -371,7 +618,11 @@ impl StackDialog for FindReplaceDialog {
             let (query, with, options) = (self.query.clone(), self.with.clone(), self.options);
             match which {
                 Press::ShowReplace => self.tab = FindTab::Replace,
-                Press::Highlight(on) => self.request = Some(FindRequest::Highlight { query, options, on: *on }),
+                Press::Highlight(on) => {
+                    self.highlighted = *on;
+                    self.request = Some(FindRequest::Highlight { query, options, on: *on });
+                }
+                Press::Previous => self.request = Some(FindRequest::go_to_step(kind_at, false)),
                 Press::Replace if !query.is_empty() => self.request = Some(FindRequest::Replace { query, with, options }),
                 Press::ReplaceAll if !query.is_empty() => self.request = Some(FindRequest::ReplaceAll { query, with, options }),
                 Press::Replace | Press::ReplaceAll => {}
@@ -381,37 +632,88 @@ impl StackDialog for FindReplaceDialog {
     }
 }
 
-/// The Special menu: the `^` codes of Find what, or of Replace with.
-fn special_entries(words: &FindLabels, replacing: bool) -> Vec<Entry<&'static str>> {
-    let find: [(&str, &'static str); 14] = [
-        (words.paragraph_mark.as_str(), "^p"),
-        (words.tab_character.as_str(), "^t"),
-        (words.any_character.as_str(), "^?"),
-        (words.any_digit.as_str(), "^#"),
-        (words.any_letter.as_str(), "^$"),
-        (words.caret_character.as_str(), "^^"),
-        (words.em_dash.as_str(), "^+"),
-        (words.en_dash.as_str(), "^="),
-        (words.nonbreaking_hyphen.as_str(), "^~"),
-        (words.nonbreaking_space.as_str(), "^s"),
-        (words.optional_hyphen.as_str(), "^-"),
-        (words.white_space.as_str(), "^w"),
-        (words.section_break.as_str(), "^b"),
-        (words.line_break.as_str(), "^l"),
-    ];
-    let replace: [(&str, &'static str); 11] = [
-        (words.paragraph_mark.as_str(), "^p"),
-        (words.tab_character.as_str(), "^t"),
-        (words.caret_character.as_str(), "^^"),
-        (words.em_dash.as_str(), "^+"),
-        (words.en_dash.as_str(), "^="),
-        (words.nonbreaking_hyphen.as_str(), "^~"),
-        (words.nonbreaking_space.as_str(), "^s"),
-        (words.optional_hyphen.as_str(), "^-"),
-        (words.line_break.as_str(), "^l"),
-        (words.found_text.as_str(), "^&"),
-        (words.clipboard_contents.as_str(), "^c"),
-    ];
-    let items: &[(&str, &'static str)] = if replacing { &replace } else { &find };
-    items.iter().map(|(label, code)| Entry::new(*code, words.special_item.fill(&[("name", *label), ("code", *code)]))).collect()
+/// A Special menu item: the word that names it and the code it inserts.
+type Code = (fn(&FindLabels) -> &str, &'static str);
+
+/// Find what without wildcards.
+const FIND_CODES: [Code; 19] = [
+    (|w| w.paragraph_mark.as_str(), "^p"),
+    (|w| w.tab_character.as_str(), "^t"),
+    (|w| w.any_character.as_str(), "^?"),
+    (|w| w.any_digit.as_str(), "^#"),
+    (|w| w.any_letter.as_str(), "^$"),
+    (|w| w.caret_character.as_str(), "^^"),
+    (|w| w.column_break.as_str(), "^n"),
+    (|w| w.em_dash.as_str(), "^+"),
+    (|w| w.en_dash.as_str(), "^="),
+    (|w| w.endnote_mark.as_str(), "^e"),
+    (|w| w.footnote_mark.as_str(), "^f"),
+    (|w| w.graphic.as_str(), "^g"),
+    (|w| w.line_break.as_str(), "^l"),
+    (|w| w.page_break.as_str(), "^m"),
+    (|w| w.nonbreaking_hyphen.as_str(), "^~"),
+    (|w| w.nonbreaking_space.as_str(), "^s"),
+    (|w| w.optional_hyphen.as_str(), "^-"),
+    (|w| w.section_break.as_str(), "^b"),
+    (|w| w.white_space.as_str(), "^w"),
+];
+
+/// Find what with wildcards: the wildcard expressions and the codes that still apply.
+const FIND_WILDCARD_CODES: [Code; 23] = [
+    (|w| w.paragraph_mark.as_str(), "^p"),
+    (|w| w.tab_character.as_str(), "^t"),
+    (|w| w.any_single_character.as_str(), "?"),
+    (|w| w.any_run.as_str(), "*"),
+    (|w| w.any_digit.as_str(), "[0-9]"),
+    (|w| w.any_letter.as_str(), "[a-zA-Z]"),
+    (|w| w.word_start.as_str(), "<"),
+    (|w| w.word_end.as_str(), ">"),
+    (|w| w.caret_character.as_str(), "^^"),
+    (|w| w.column_break.as_str(), "^n"),
+    (|w| w.em_dash.as_str(), "^+"),
+    (|w| w.en_dash.as_str(), "^="),
+    (|w| w.endnote_mark.as_str(), "^e"),
+    (|w| w.footnote_mark.as_str(), "^f"),
+    (|w| w.graphic.as_str(), "^g"),
+    (|w| w.line_break.as_str(), "^l"),
+    (|w| w.page_break.as_str(), "^m"),
+    (|w| w.nonbreaking_hyphen.as_str(), "^~"),
+    (|w| w.nonbreaking_space.as_str(), "^s"),
+    (|w| w.optional_hyphen.as_str(), "^-"),
+    (|w| w.section_break.as_str(), "^b"),
+    (|w| w.white_space.as_str(), "^w"),
+    (|w| w.field_code.as_str(), "^d"),
+];
+
+/// Replace with.
+const REPLACE_CODES: [Code; 15] = [
+    (|w| w.paragraph_mark.as_str(), "^p"),
+    (|w| w.tab_character.as_str(), "^t"),
+    (|w| w.caret_character.as_str(), "^^"),
+    (|w| w.column_break.as_str(), "^n"),
+    (|w| w.em_dash.as_str(), "^+"),
+    (|w| w.en_dash.as_str(), "^="),
+    (|w| w.graphic.as_str(), "^g"),
+    (|w| w.line_break.as_str(), "^l"),
+    (|w| w.page_break.as_str(), "^m"),
+    (|w| w.nonbreaking_hyphen.as_str(), "^~"),
+    (|w| w.nonbreaking_space.as_str(), "^s"),
+    (|w| w.optional_hyphen.as_str(), "^-"),
+    (|w| w.section_break.as_str(), "^b"),
+    (|w| w.found_text.as_str(), "^&"),
+    (|w| w.clipboard_contents.as_str(), "^c"),
+];
+
+/// With wildcards on, Replace with starts with the back-reference to the Find what expression.
+const FIND_EXPRESSION: Code = (|w| w.find_expression.as_str(), "\\1");
+
+/// The Special menu: the `^` codes of Find what, or of Replace with, by whether wildcards are on.
+fn special_entries(words: &FindLabels, replacing: bool, wildcards: bool) -> Vec<Entry<&'static str>> {
+    let table: Vec<&Code> = match (replacing, wildcards) {
+        (false, false) => FIND_CODES.iter().collect(),
+        (false, true) => FIND_WILDCARD_CODES.iter().collect(),
+        (true, false) => REPLACE_CODES.iter().collect(),
+        (true, true) => std::iter::once(&FIND_EXPRESSION).chain(REPLACE_CODES.iter()).collect(),
+    };
+    table.into_iter().map(|(name, code)| Entry::new(*code, words.special_item.fill(&[("name", name(words)), ("code", *code)]))).collect()
 }

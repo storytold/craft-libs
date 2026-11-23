@@ -23,19 +23,18 @@ pub mod ui;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod args;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod control;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod dialogs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod protocol;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod screenshot;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod security;
-#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+#[cfg(feature = "ui")]
 pub mod synthetic;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace;
@@ -57,16 +56,19 @@ pub use security::AutomationError;
 /// The trials this crate registers, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(all(test, feature = "screen-testing"))]
 extern crate self as craft_automation;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

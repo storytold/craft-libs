@@ -13,7 +13,7 @@ set -euo pipefail
 photocraft=74330157cb601573ae4523a95bb9132822fc3918
 fetcher=.test-inputs/photocraft
 
-if [ -z "$(ls -A "$fetcher/corpus" 2>/dev/null)" ]; then
+if [[ -z "$(ls -A "$fetcher/corpus" 2>/dev/null)" ]]; then
   rm -rf "$fetcher"
   mkdir -p "$fetcher"
   git -C "$fetcher" init --quiet

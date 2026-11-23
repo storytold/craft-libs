@@ -1,9 +1,7 @@
 //! `FakeLayers`: a `LayerTree` for stories and tests.
 
-use std::cell::Cell;
-
 use craft_theme::LabelColor;
-use craft_ui::contract::Entry;
+use craft_ui::contract::{Entry, PlainData};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut as S, blend_entries};
 use craft_ui::runtime::env::Label;
 
@@ -15,7 +13,7 @@ use super::tree::{
 };
 
 /// One layer of a [`FakeLayers`] tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PlainData)]
 #[non_exhaustive]
 pub struct FakeLayer {
     /// The layer's id.
@@ -36,7 +34,7 @@ pub struct FakeLayer {
 
 /// A fake document's layers, kept in plain vectors: the tests' and stories' `LayerTree`. Ids are
 /// `u32`; the app's state (open groups, selection, effects open) is a field the test sets.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PlainData)]
 #[non_exhaustive]
 pub struct FakeLayers {
     /// Every layer, each group before its children, topmost first among siblings.
@@ -45,15 +43,11 @@ pub struct FakeLayers {
     pub selection: LayerSelection<u32>,
     /// The layer under the pointer on the canvas.
     pub hovered: Option<u32>,
-    /// The revision the tree reports; `None` walks every pass.
-    pub revision: Option<u64>,
     /// The layers with no visible pixels, which only the app knows: the Attribute filter's Empty.
     pub empty: Vec<u32>,
     /// The linked smart objects whose file is not there, which only the app knows: the Smart Object
     /// filter's Missing.
     pub missing: Vec<u32>,
-    info_calls: Cell<usize>,
-    sub_rows_calls: Cell<usize>,
 }
 
 impl FakeLayers {
@@ -301,16 +295,6 @@ impl FakeLayers {
         tree.selection.sub_row = Some(LayerRowKey::Filters(smart, Some(0)));
         tree
     }
-
-    /// How many times `info` was called since the last [`take_info_calls`](Self::take_info_calls).
-    pub fn take_info_calls(&self) -> usize {
-        self.info_calls.replace(0)
-    }
-
-    /// How many times `sub_rows` was called since the last [`take_sub_rows_calls`](Self::take_sub_rows_calls).
-    pub fn take_sub_rows_calls(&self) -> usize {
-        self.sub_rows_calls.replace(0)
-    }
 }
 
 impl FakeLayers {
@@ -380,7 +364,6 @@ impl LayerTree for FakeLayers {
     }
 
     fn info(&self, id: &u32) -> LayerInfo {
-        self.info_calls.set(self.info_calls.get() + 1);
         self.layer(id).map(|layer| layer.info.clone()).unwrap_or_else(|| LayerInfo::new(String::new(), LayerKind::Pixel))
     }
 
@@ -400,7 +383,6 @@ impl LayerTree for FakeLayers {
     }
 
     fn sub_rows(&self, id: &u32, group: SubRowGroup) -> Option<SubRows> {
-        self.sub_rows_calls.set(self.sub_rows_calls.get() + 1);
         let layer = self.layer(id)?;
         match group {
             SubRowGroup::Effects => layer.effects.clone(),
@@ -466,10 +448,6 @@ impl LayerTree for FakeLayers {
 
     fn hovered(&self) -> Option<u32> {
         self.hovered
-    }
-
-    fn revision(&self) -> Option<u64> {
-        self.revision
     }
 
     fn footer(&self) -> LayersFooterState {

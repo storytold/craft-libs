@@ -868,4 +868,4 @@ pub(crate) fn job_filename(title: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

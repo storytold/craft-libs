@@ -27,6 +27,10 @@ craft_ui::words! {
 
         scroll_horizontal: "canvasScrollbars.horizontal" = "Horizontal scroll bar";
         scroll_vertical: "canvasScrollbars.vertical" = "Vertical scroll bar";
+        scroll_left: "canvasScrollbars.left" = "Scroll left";
+        scroll_right: "canvasScrollbars.right" = "Scroll right";
+        scroll_up: "canvasScrollbars.up" = "Scroll up";
+        scroll_down: "canvasScrollbars.down" = "Scroll down";
 
         navigate_zoom: "navigateBar.zoom" = "Zoom";
         navigate_direction: "navigateBar.direction" = "Zoom direction";

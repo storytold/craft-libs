@@ -71,6 +71,9 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# Direct Stream Digital (DSD) files: DSF and DSDIFF decoders and DSD-to-PCM decimation.
+dsd = []
+
 # MPEG-1/2 Layer II (MP2) encoder (`mpa::encoder`). It shares the polyphase analysis filter of the
 # MP3 encoder and the tables of the MP1/MP2 decoder.
 mpa-encode = ["mpa-decode", "mp3-encode"]

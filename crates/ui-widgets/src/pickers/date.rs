@@ -5,10 +5,10 @@
 //! button opens the calendar; the day under the pointer is proposed while it is open and a pick commits it. Escape
 //! or a press outside closes it and restores the value.
 
-mod calendar;
+pub(crate) mod calendar;
 mod codec;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use calendar::{Calendar, CalendarOutput, CalendarStyle, CalendarView, local_month_grid, month_grid};
 pub use codec::DateCodec;
@@ -18,8 +18,9 @@ use crate::buttons::{IconButton, Link};
 use crate::choice::Segmented;
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, Input, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi,
-    PartsCx, Props as _, Remember as _, Role, Show as _, WordSetCx as _, clicked,
+    PartsCx, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _, clicked,
 };
+use crate::layout_components::Row;
 use crate::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::text::{Adornment, FieldStyle, place, reserve};
@@ -338,7 +339,7 @@ impl Component for DatePicker<'_> {
                 view = next;
             }
             let mut pick = page.picked.map(Some);
-            ui.horizontal(|ui| {
+            let _ = Row::new().show(ui, |ui, _| {
                 let at_precision = today.map(|today| match view.precision {
                     DatePrecision::Day => today,
                     DatePrecision::Month => PickedDate::month(today.year, today.month.unwrap_or(1)),

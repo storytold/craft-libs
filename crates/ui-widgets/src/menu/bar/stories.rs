@@ -2,7 +2,7 @@
 
 use super::{MenuBar, MenuHelp, MenuTitle};
 use crate::buttons::{IconButton, PopupMark};
-use crate::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::contract::{Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::menu::{EditMenu, GroupItem, HelpEntry, Menu, MenuItem, PanelMenu, PanelRow};
 use crate::runtime::commands::EditCommands;
@@ -70,8 +70,9 @@ fn titles() -> Vec<MenuTitle<'static>> {
 fn menu_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
     let search = *data.value("search", true);
+    let entries = || HELP.clone();
     let bar = MenuBar::new("Main menu", titles()).size(size);
-    let bar = if search { bar.help(MenuHelp::new(5, HELP.as_slice())) } else { bar };
+    let bar = if search { bar.help(MenuHelp::new(5, &entries)) } else { bar };
     bar.show(ui).into()
 }
 
@@ -88,12 +89,13 @@ fn menu_bar_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(MenuBar<'static>, covers = [], drive = Drive::Never)]
 fn menu_bar_with_help_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBar::new("Main menu", titles()).help(MenuHelp::new(5, HELP.as_slice())).show(ui).into()
+    let entries = || HELP.clone();
+    MenuBar::new("Main menu", titles()).help(MenuHelp::new(5, &entries)).show(ui).into()
 }
 
 #[story(EditMenu, covers = [Default], drive = Drive::Never)]
 fn edit_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    StoryOutput::from(Menu::new("Edit").open(Bind::bound(data.value("open", true))).show(ui, |ui, _| EditMenu.show(ui)).output)
+    StoryOutput::from(Menu::new("Edit").open(data.bind("open", true)).show(ui, |ui, _| EditMenu.show(ui)).output)
 }
 
 #[story(PanelMenu, covers = [Default], drive = Drive::Never)]
@@ -108,10 +110,8 @@ fn panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).popup_mark(PopupMark::Menu).label("Panel menu").show(ui);
     let mut picked = None;
-    let shown = Menu::new("Panel menu")
-        .open(Bind::bound(data.value("open", false)))
-        .opened_by(&opener, Trigger::Click)
-        .show(ui, |ui, _| picked = panel().show(ui).picked);
+    let shown =
+        Menu::new("Panel menu").open(data.bind("open", false)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| picked = panel().show(ui).picked);
     let chosen = data.note("chosen", None::<GroupItem>);
     if picked.is_some() {
         *chosen = picked;

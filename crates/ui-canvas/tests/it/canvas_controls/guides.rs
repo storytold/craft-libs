@@ -3,7 +3,7 @@
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{Axis, CancelReason, CanvasView};
-use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Rulers, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::canvas_controls::reading::{GuideReading, running};
 use craft_ui::contract::{Bind, BodyCx, Show as _};
@@ -136,29 +136,30 @@ fn the_running_guide_reading_follows_the_drag_and_goes_when_it_ends() {
 /// Where guides may live, in document units.
 const BOUNDS: DocRect = DocRect::new(100.0, 100.0, 600.0, 400.0);
 
-/// A canvas at `zoom` that snaps to horizontal guide targets at y = 224.3 and y = 250.3, its body showing rulers and
-/// interactive guides kept inside [`BOUNDS`], in a room that holds the bounds with a margin, so a release outside them
-/// still lands on the canvas; the body's rect, read each pass.
-fn ruled(zoom: f64, guides: &Shared<Vec<Guide>>) -> (ToolFixture<Recorder>, Rc<Cell<Rect>>) {
+/// A canvas at `zoom` that snaps to horizontal guide targets at y = 224.3 and y = 250.3, its rulers shown by the canvas and its body
+/// showing interactive guides kept inside [`BOUNDS`], in a room that holds the bounds with a margin, so a release outside them
+/// still lands on the canvas.
+fn ruled(zoom: f64, guides: &Shared<Vec<Guide>>) -> ToolFixture<Recorder> {
     let mut targets = SnapTargets::new();
     targets.add(SnapTarget::new(Axis::X, 224.3, SnapKind::Guide));
     targets.add(SnapTarget::new(Axis::X, 250.3, SnapKind::Guide));
     let snap = Snap::new(Arc::new(targets), SnapOptions::default());
     let (shown, zero) = (Rc::clone(guides), Rc::new(RefCell::new(Point::ZERO)));
-    let body = Rc::new(Cell::new(Rect::NOTHING));
-    let seen = Rc::clone(&body);
-    let mut fixture = ToolFixture::with_snap("Document", Recorder::default(), view_at(zoom), snap, move |ui, cx| {
-        seen.set(cx.rect);
-        let rulers = Rulers::new("Rulers", Bind::bound(&mut *zero.borrow_mut())).show_at(ui, cx.rect);
+    // The view lies inside the strips: it keeps the document point under the screen point it was given, so at zoom 1
+    // document and screen points coincide, from the second pass on (the strips' inset is the first pass's body).
+    let inset = Rc::new(Cell::new(Vec2::ZERO));
+    let moved = Rc::clone(&inset);
+    let view = move |room: Rect| {
+        let centre = room.center() + inset.get() / 2.0;
+        CanvasView::new(room, Point::new(f64::from(centre.x), f64::from(centre.y)), zoom)
+    };
+    let mut fixture = ToolFixture::with_rulers("Document", Recorder::default(), view, snap, zero, move |ui, cx| {
+        moved.set(cx.rect.min.to_vec2());
         let mut guides = shown.borrow_mut();
-        let mut control = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *guides)).interactive(true).bounds(BOUNDS);
-        if let Some(drag) = rulers.guide {
-            control = control.pending(drag);
-        }
-        let _ = control.show_at(ui, cx.rect);
+        let _ = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *guides)).interactive(true).bounds(BOUNDS).show_at(ui, cx.rect);
     });
     fixture.fixture().room(Vec2::new(700.0, 500.0)).settle();
-    (fixture, body)
+    fixture
 }
 
 /// A drag with `mods` held from `from` to `to`.
@@ -176,8 +177,8 @@ fn drag_with(fixture: &mut ToolFixture<Recorder>, mods: Modifiers, from: Pos2, t
 #[trial]
 fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_change_where_it_lands() {
     let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
-    let (mut fixture, body) = ruled(1.0, &guides);
-    let rect = body.get();
+    let mut fixture = ruled(1.0, &guides);
+    let rect = fixture.canvas().rect;
     // Inside the top strip, clear of the corner, and inside the left strip.
     let top = |x: f32| pos2(x, rect.min.y + 4.0);
     let left = |y: f32| pos2(rect.min.x + 4.0, y);
@@ -219,8 +220,8 @@ fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_cha
     assert_eq!(guides.borrow().len(), count - 1);
 
     let deep: Shared<Vec<Guide>> = Rc::new(RefCell::new(Vec::new()));
-    let (mut fixture, body) = ruled(8.0, &deep);
-    let rect = body.get();
+    let mut fixture = ruled(8.0, &deep);
+    let rect = fixture.canvas().rect;
     let centre = rect.center();
     drag_with(&mut fixture, Modifiers::SHIFT, pos2(centre.x, rect.min.y + 4.0), centre + Vec2::new(0.0, 13.0));
     let landed: Vec<f64> = deep.borrow().iter().map(|guide| guide.position).collect();

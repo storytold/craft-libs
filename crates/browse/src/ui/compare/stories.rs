@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::PreviewView;
@@ -71,16 +71,16 @@ fn compare_pair(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let labels = ["Select", "Candidate"];
     let output = filling(ui, |ui, area| {
         let mut active = *data.value("active", 0usize);
-        let view = data.value("view", PreviewView::fitting());
+        let (view, view_at) = data.value_at("view", PreviewView::fitting());
         let pair = ComparePair::new(space).rtl(rtl);
         let [left, right] = pair.rects(area);
         Divider::vertical().show_at(ui, pair.divider(area));
         let select =
-            CompareTile::new(labels[0], Bind::bound(view), image(1)).caption(caption(labels[0], "IMG_0001.jpg")).active(active == 0).place(ui, left);
+            CompareTile::new(labels[0], view_at.bind(view), image(1)).caption(caption(labels[0], "IMG_0001.jpg")).active(active == 0).place(ui, left);
         if select.clicked {
             active = 0;
         }
-        let candidate = CompareTile::new(labels[1], Bind::bound(view), image(2))
+        let candidate = CompareTile::new(labels[1], view_at.bind(view), image(2))
             .caption(caption(labels[1], "IMG_0002.jpg"))
             .active(active == 1)
             .rejected(true)
@@ -98,9 +98,9 @@ fn compare_pair(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(CompareTile<'static>, covers = [LongText], drive = Drive::Never)]
 fn compare_tile_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     filling(ui, |ui, area| {
-        let view = data.value("view", PreviewView::fitting());
+        let (view, view_at) = data.value_at("view", PreviewView::fitting());
         let rect = Rect::from_min_size(area.min, Vec2::splat(area.width() * NARROW_SHARE));
-        CompareTile::new("Select", Bind::bound(view), image(1))
+        CompareTile::new("Select", view_at.bind(view), image(1))
             .caption(caption("Select", "A_file_name_much_longer_than_the_tile.jpeg"))
             .place(ui, rect)
             .into()
@@ -110,8 +110,8 @@ fn compare_tile_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(CompareTile<'static>, covers = [], drive = Drive::Never)]
 fn compare_tile_pending(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     filling(ui, |ui, area| {
-        let view = data.value("view", PreviewView::fitting());
-        CompareTile::new("Candidate", Bind::bound(view), image(2))
+        let (view, view_at) = data.value_at("view", PreviewView::fitting());
+        CompareTile::new("Candidate", view_at.bind(view), image(2))
             .caption(caption("Candidate", "IMG_0002.jpg"))
             .state(RenderState::Pending(true))
             .place(ui, area)
@@ -122,8 +122,8 @@ fn compare_tile_pending(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(CompareTile<'static>, covers = [], drive = Drive::Never)]
 fn compare_tile_failed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     filling(ui, |ui, area| {
-        let view = data.value("view", PreviewView::fitting());
-        CompareTile::new("Candidate", Bind::bound(view), CompareImage::None)
+        let (view, view_at) = data.value_at("view", PreviewView::fitting());
+        CompareTile::new("Candidate", view_at.bind(view), CompareImage::None)
             .caption(CompareCaption::new("Candidate", "IMG_0002.jpg"))
             .state(RenderState::Failed("The renderer stopped".into()))
             .place(ui, area)
@@ -138,12 +138,12 @@ fn compare_survey(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     const ASPECT: f32 = 1.5;
     let rtl = Env::of(ui).view().direction().is_rtl();
     filling(ui, |ui, area| {
-        let view = data.value("view", PreviewView::fitting());
+        let (view, view_at) = data.value_at("view", PreviewView::fitting());
         let mut outs = Vec::new();
         for at in 0..COUNT {
             let rect = survey_cell(COUNT, at, area, ASPECT, rtl);
             let name = format!("IMG_{at:04}.jpg");
-            let out = CompareTile::new(name.clone(), Bind::bound(view), image(at as u64))
+            let out = CompareTile::new(name.clone(), view_at.bind(view), image(at as u64))
                 .caption(CompareCaption::new("", name))
                 .survey(true)
                 .place(ui, rect);

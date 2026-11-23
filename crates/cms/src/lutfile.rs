@@ -124,6 +124,34 @@ impl Format {
     }
 }
 
+/// Most files [`list_folder`] lists.
+const MAX_FILES: usize = 500;
+/// Largest file [`list_folder`] lists: a 129³ `.cube` is about 60 MB.
+const MAX_BYTES: u64 = 64 << 20;
+
+/// The `.cube`, `.3dl` and `.look` files directly in `dir` as (file name, path), sorted by name
+/// without regard to case. An unreadable folder lists nothing; hidden files, subfolders and files
+/// too large to be a LUT are skipped, and a symlink to a LUT file is listed.
+pub fn list_folder(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<(String, std::path::PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let extension = name.rsplit_once('.')?.1.to_ascii_lowercase();
+            if name.starts_with('.') || !matches!(extension.as_str(), "cube" | "3dl" | "look") {
+                return None;
+            }
+            let path = entry.path();
+            let meta = std::fs::metadata(&path).ok()?;
+            (meta.is_file() && meta.len() <= MAX_BYTES).then_some((name, path))
+        })
+        .collect();
+    out.sort_by_key(|(name, _)| name.to_lowercase());
+    out.truncate(MAX_FILES);
+    out
+}
+
 /// Parses a LUT, picking the format from `file_name`'s extension (falls back to sniffing).
 pub fn parse(file_name: &str, bytes: &[u8]) -> Result<LutFile, LutError> {
     parse_as(Format::detect(file_name, bytes), bytes)

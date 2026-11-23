@@ -21,8 +21,8 @@ use craft_ui::sections::Panel;
 use craft_ui::style::{SurfaceKind, TypeRole};
 use egui::{Id, Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The pane's words, English by default.

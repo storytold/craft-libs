@@ -38,7 +38,10 @@ fn held() -> (Dialogs<Rc<str>>, Shown, Arc<AtomicUsize>) {
     }));
     let shown = Rc::new(RefCell::new(Vec::new()));
     let log = shown.clone();
-    dialogs.set_custom(move |request, reply| log.borrow_mut().push((request, reply)));
+    dialogs.set_custom(move |request, reply| {
+        log.borrow_mut().push((request, reply));
+        crate::native::Shown::default()
+    });
     (dialogs, shown, wakes)
 }
 
@@ -75,4 +78,45 @@ fn a_worker_that_ends_without_answering_closes_the_dialog() {
     assert!(!dialogs.is_open());
     dialogs.show_pending(NONE);
     assert_eq!(shown.borrow().len(), 1, "the next request shows");
+}
+
+/// A scripted dialog: it stays open for `open` on the test's clock, then answers `answer`.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+async fn scripted(answer: Answer, open: std::time::Duration, clock: Rc<std::cell::Cell<std::time::Duration>>) -> Answer {
+    clock.set(clock.get() + open);
+    answer
+}
+
+/// An empty answer at once is a dialog that never showed: it is asked again (without a parent),
+/// and empty at once again is unavailable. A slow empty answer is the user's cancel.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
+#[trial]
+fn a_dialog_that_closes_at_once_is_asked_again_without_a_parent() {
+    use crate::native::timed;
+    use crate::portal::{CLOSED_AT_ONCE, TOO_QUICK};
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    let (at_once, slow) = (Duration::from_millis(5), TOO_QUICK + Duration::from_millis(1));
+    let picked = Answer::Paths(vec![std::path::PathBuf::from("/s/a.txt")]);
+    // The first dialog's answer and how long it was open, the same for the second; gives the
+    // answer and whether the second was asked.
+    let run = |first: (Answer, Duration), second: (Answer, Duration)| {
+        let clock = Rc::new(Cell::new(Duration::ZERO));
+        let again = Rc::new(Cell::new(false));
+        let (opened, reopened, read, asked) = (clock.clone(), clock.clone(), clock, again.clone());
+        let answer = futures_lite::future::block_on(timed(
+            scripted(first.0, first.1, opened),
+            move || {
+                asked.set(true);
+                scripted(second.0, second.1, reopened)
+            },
+            move || read.get(),
+        ));
+        (answer, again.get())
+    };
+    assert_eq!(run((Answer::Cancelled, at_once), (Answer::Cancelled, at_once)), (Answer::Unavailable(CLOSED_AT_ONCE.into()), true));
+    assert_eq!(run((Answer::Cancelled, at_once), (picked.clone(), at_once)), (picked.clone(), true), "the second dialog's pick counts");
+    assert_eq!(run((Answer::Cancelled, slow), (picked.clone(), at_once)), (Answer::Cancelled, false), "a slow empty answer is a cancel");
+    assert_eq!(run((picked.clone(), at_once), (Answer::Cancelled, at_once)), (picked, false), "a quick pick is a pick");
 }

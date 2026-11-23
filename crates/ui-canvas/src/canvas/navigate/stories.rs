@@ -39,23 +39,23 @@ fn drag_rim(fixture: &mut Fixture) {
 
 #[story(RotateView<'static>, covers = [Default], drive = Drive::Custom(drag_rim))]
 fn compass(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let angle = data.value("angle", TURNED);
-    in_corner(ui, *angle, |ui, at| RotateView::new("Rotation", Bind::bound(&mut *angle), false).show_at(ui, at))
+    let (angle, angle_at) = data.value_at("angle", TURNED);
+    in_corner(ui, *angle, |ui, at| RotateView::new("Rotation", angle_at.bind(&mut *angle), false).show_at(ui, at))
 }
 
 #[story(RotateView<'static>, covers = [Mixed], drive = Drive::Custom(drag_rim))]
 fn views_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let angle = data.value("angle", Mixed::<f64>::Mixed);
-    in_corner(ui, 0.0, |ui, at| RotateView::new("Rotation", Bind::bound_mixed(&mut *angle), false).show_at(ui, at))
+    let (angle, angle_at) = data.value_at("angle", Mixed::<f64>::Mixed);
+    in_corner(ui, 0.0, |ui, at| RotateView::new("Rotation", angle_at.bind_mixed(&mut *angle), false).show_at(ui, at))
 }
 
 #[story(RotateView<'static>, covers = [Invalid], drive = Drive::Custom(drag_rim))]
 fn too_far(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let angle = data.value("angle", MOST + TURNED);
+    let (angle, angle_at) = data.value_at("angle", MOST + TURNED);
     in_corner(ui, *angle, |ui, at| {
         let near =
             |angle: &f64| if angle.abs() > MOST { Validity::Refuse(Message::new("The view turns at most a quarter turn")) } else { Validity::Ok };
-        RotateView::new("Rotation", Bind::bound(&mut *angle).check(near), false).show_at(ui, at)
+        RotateView::new("Rotation", angle_at.bind(&mut *angle).check(near), false).show_at(ui, at)
     })
 }
 

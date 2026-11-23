@@ -27,9 +27,10 @@ pub use web::{not_web_safe, web_safe};
 extern crate self as craft_color_ui;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

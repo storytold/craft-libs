@@ -6,7 +6,7 @@ use craft_layers::ui::filter::{EffectKind, FilterBy, FilterKind, LayerAttribute,
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayersEvent, LayersPanel};
 use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerSelection};
-use craft_ui::contract::Bind;
+use craft_ui::contract::{Bind, Tracked};
 use craft_ui::testing::{Fixture, trial};
 use egui::Vec2;
 use std::cell::{Cell, RefCell};
@@ -23,14 +23,14 @@ type Shared<T> = Rc<RefCell<T>>;
 /// A panel over the artboard tree and a filter the trial sets; Find Layers runs in the pass after `find` is set.
 struct Rig {
     fixture: Fixture,
-    tree: Shared<FakeLayers>,
+    tree: Shared<Tracked<FakeLayers>>,
     filter: Shared<LayerFilter>,
     find: Rc<Cell<bool>>,
 }
 
 /// The rig, its filter set by `start`.
 fn rig(start: impl FnOnce(&mut LayerFilter)) -> Rig {
-    let tree = Rc::new(RefCell::new(FakeLayers::boards()));
+    let tree = Rc::new(RefCell::new(Tracked::new(FakeLayers::boards())));
     let mut filter = LayerFilter::default();
     start(&mut filter);
     let filter = Rc::new(RefCell::new(filter));
@@ -196,7 +196,7 @@ fn find_layers_puts_the_caret_in_the_name_field_with_its_text_selected() {
 /// Kind, reported as a filter event so the app stores it.
 #[trial]
 fn the_type_select_lists_only_the_offered_types() {
-    let tree = Rc::new(RefCell::new(FakeLayers::boards()));
+    let tree = Rc::new(RefCell::new(Tracked::new(FakeLayers::boards())));
     let mut start = LayerFilter::default();
     start.by = FilterBy::Artboard;
     let filter = Rc::new(RefCell::new(start));
@@ -226,7 +226,7 @@ fn the_type_select_lists_only_the_offered_types() {
 fn a_filter_the_bar_applies_deselects_what_it_hides() {
     let mut tree = FakeLayers::sample();
     tree.selection = LayerSelection::new(vec![3, 2, 4], Some(3), LayerPart::Pixels);
-    let tree = Rc::new(RefCell::new(tree));
+    let tree = Rc::new(RefCell::new(Tracked::new(tree)));
     let filter = Rc::new(RefCell::new(LayerFilter::default()));
     let find = Rc::new(Cell::new(false));
     let seen: Shared<Vec<LayersEvent<u32>>> = Rc::default();

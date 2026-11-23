@@ -18,12 +18,12 @@ fn ready(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let faces = catalog.styles("Hack");
     let face = match faces.first() {
         Some(face) => SampleFace::Face { catalog: &catalog, owner: Owner::Installed, face },
-        None => SampleFace::Interface,
+        None => SampleFace::Missing,
     };
     FontSample::new("Hack: sample", PANGRAM, face, POINTS).show(ui).into()
 }
 
 #[story(FontSample<'static>, covers = [], drive = Drive::Never)]
 fn unavailable(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    FontSample::new("Hack: sample", PANGRAM, SampleFace::Interface, POINTS).show(ui).into()
+    FontSample::new("Hack: sample", PANGRAM, SampleFace::Missing, POINTS).show(ui).into()
 }

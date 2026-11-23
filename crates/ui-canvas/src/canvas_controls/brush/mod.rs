@@ -22,14 +22,16 @@
 //! [`BrushCursor::tip_cell`] at the canvas rect in the canvas body, and the tool hands
 //! [`BrushResize::readout_rows`] to `ToolContext::readout`.
 
-mod cursor;
-mod falloff;
+pub(crate) mod cursor;
+pub(crate) mod falloff;
 mod resize;
-mod source_marker;
-#[cfg(feature = "testing")]
-mod stories;
+pub(crate) mod source_marker;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod tip;
-mod trail;
+pub(crate) mod trail;
+#[cfg(feature = "testing")]
+pub(crate) mod trials;
 
 pub use cursor::{BrushCursor, BrushCursorOptions, PaintingCursor, TipCell, TipCellStyle};
 pub use falloff::{FalloffPreview, FalloffPreviewStyle, TipFalloff};

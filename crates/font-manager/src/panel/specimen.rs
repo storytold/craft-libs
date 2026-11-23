@@ -1,5 +1,7 @@
 //! `FontSample`: text in a font face at the user's sample size, on one line at the reading start of its rect.
 
+use std::borrow::Cow;
+
 use craft_behavior::Sense;
 use craft_ui::contract::{Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use craft_ui::fonts::FontRef;
@@ -12,10 +14,15 @@ use crate::Catalog;
 use crate::FaceInfo;
 use crate::panel::faces::{self, Owner, Shown};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
-/// The ink of a sample: the text colour for a face that drew, the muted one for the interface face standing in.
+/// The height of a sample whose face is not ready, in ems of its size: a usual line height (Inter's line box is 1.21
+/// em), so a row keeps about the height it has once the face draws, without laying the text out in a face that may
+/// lack its characters.
+const LINE_EM: f32 = 1.2;
+
+/// The ink of a sample.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub(crate) struct FontSampleStyle {
@@ -23,8 +30,6 @@ pub(crate) struct FontSampleStyle {
     metrics: Metrics,
     /// The sample in its own face (`text.normal`).
     ink: StyleColor,
-    /// The sample in the interface face, because its own is not available (`text.muted`).
-    muted: StyleColor,
 }
 
 /// The face a sample is drawn in.
@@ -32,40 +37,47 @@ pub(crate) struct FontSampleStyle {
 pub(crate) enum SampleFace<'a> {
     /// A face of `catalog`, which the document-face registry loads when the sample is measured or painted.
     Face { catalog: &'a Catalog, owner: Owner, face: &'a FaceInfo },
-    /// No face is here to draw with: the sample shows in the interface face.
-    Interface,
+    /// No face is here to draw with: the sample keeps its band and shows nothing.
+    Missing,
 }
 
 impl SampleFace<'_> {
-    fn shown(&self, at: &impl craft_ui::primitives::FacesCx) -> Shown {
+    /// The font that draws the sample once its face is ready; none while it loads, when it is not available, or for
+    /// [`SampleFace::Missing`]. A sample is laid out and drawn only in this font, never in the interface face, which
+    /// may lack the sample's characters.
+    pub(crate) fn ready(&self, at: &impl craft_ui::primitives::FacesCx) -> Option<FontRef> {
         match self {
-            SampleFace::Face { catalog, owner, face } => faces::shown(at, catalog, *owner, face),
-            SampleFace::Interface => Shown::Unavailable,
+            SampleFace::Face { catalog, owner, face } => match faces::shown(at, catalog, *owner, face) {
+                Shown::Ready(font) => Some(font),
+                _ => None,
+            },
+            SampleFace::Missing => None,
         }
     }
 }
 
-/// A sample of `text` in `face`, `points` high. While the face loads the sample shows nothing and keeps its band;
-/// a face that is not available shows the sample in the interface face, muted. `points` is the user's sample size
-/// (data, as `DocRun::size`), not a UI size. The label names the sample for a screen reader (the family and the
-/// sample text).
+/// A sample of `text` in `face`, `points` high. Until the face is ready (while it loads, and for good when it is not
+/// available) the sample shows nothing and keeps its band. `points` is the user's sample size (data, as
+/// `DocRun::size`), not a UI size. The label names the sample for a screen reader (the family and the sample text).
 ///
 /// Its measure is the sample laid out in the face at `points` on one row, cut with an ellipsis where the room does
-/// not fit it (`faces::sample_text`, the layout `paint` draws).
+/// not fit it (`faces::sample_text`, the layout `paint` draws). Without a ready face it reserves the most that layout
+/// can take, the room's width, at [`LINE_EM`] of `points` high: the band the sample will draw in, so the face
+/// arriving never widens it.
 #[derive(craft_ui::contract::Component)]
 #[component(content_painter)]
 pub(crate) struct FontSample<'a> {
     #[common]
     common: Common,
-    text: &'a str,
+    text: Cow<'a, str>,
     face: SampleFace<'a>,
     points: f32,
 }
 
 impl<'a> FontSample<'a> {
     /// A sample of `text` in `face` at `points`, named `label`.
-    pub(crate) fn new(label: impl Into<Label>, text: &'a str, face: SampleFace<'a>, points: f32) -> Self {
-        FontSample { common: Common::new(), text, face, points }.label(label)
+    pub(crate) fn new(label: impl Into<Label>, text: impl Into<Cow<'a, str>>, face: SampleFace<'a>, points: f32) -> Self {
+        FontSample { common: Common::new(), text: text.into(), face, points }.label(label)
     }
 }
 
@@ -79,8 +91,7 @@ impl Component for FontSample<'_> {
     type Output = egui::Response;
 
     fn style(cx: &StyleCx<'_>, _: FontSampleStyleKey) -> FontSampleStyle {
-        let text = &cx.tokens.color.text;
-        FontSampleStyle { metrics: Metrics::new(), ink: cx.color(text.normal), muted: cx.color(text.muted) }
+        FontSampleStyle { metrics: Metrics::new(), ink: cx.color(cx.tokens.color.text.normal) }
     }
 
     fn sense(&self) -> Sense {
@@ -88,24 +99,17 @@ impl Component for FontSample<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        // A face that is loading keeps the band the interface face would take.
-        let font = match self.face.shown(cx) {
-            Shown::Ready(font) => font,
-            _ => FontRef::proportional(),
+        let Some(font) = self.face.ready(cx) else {
+            return Vec2::new(cx.room.unwrap_or(0.0), self.points * LINE_EM);
         };
-        let runs = [DocRun::new(self.text, font, self.points, DataColor::new(Color32::PLACEHOLDER))];
+        let runs = [DocRun::new(self.text.as_ref(), font, self.points, DataColor::new(Color32::PLACEHOLDER))];
         cx.layout_doc(&faces::sample_text(&runs, cx.room)).size()
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let painter = ui.content_painter(cx);
-        let ink = |color: StyleColor| DataColor::new(color.egui());
-        match self.face.shown(cx) {
-            Shown::Ready(font) => faces::paint_sample(&painter, cx.content_rect, &font, self.text, self.points, ink(cx.style.ink)),
-            Shown::Unavailable => {
-                faces::paint_sample(&painter, cx.content_rect, &FontRef::proportional(), self.text, self.points, ink(cx.style.muted));
-            }
-            _ => {}
+        if let Some(font) = self.face.ready(cx) {
+            let ink = DataColor::new(cx.style.ink.egui());
+            faces::paint_sample(&ui.content_painter(cx), cx.content_rect, &font, &self.text, self.points, ink);
         }
     }
 

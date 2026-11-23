@@ -131,6 +131,88 @@ fn an_edge_rule_lies_on_the_pixels_just_inside_its_side_at_any_scale() {
 }
 
 #[trial]
+fn a_dotted_rule_is_whole_pixel_dots_at_one_pitch_between_its_ends() {
+    use craft_ui::primitives::Rule;
+    use craft_ui::style::{RuleLook, RuleWidth};
+    use egui::{Color32, Rect, Shape};
+
+    let whole = |v: f32| (v - v.round()).abs() < EPS;
+    for ppp in [1.0, 1.5, 2.0] {
+        for width in [RuleWidth::Hairline, RuleWidth::Points(1.0), RuleWidth::Points(2.0)] {
+            let look = RuleLook { color: Color32::WHITE, width };
+            // Ends off the pixel grid, level and upright.
+            for (from, to) in [(pos2(10.3, 20.6), pos2(41.1, 20.6)), (pos2(7.7, 3.2), pos2(7.7, 29.9))] {
+                let shapes = Rule::dotted(&look, from, to, 3.0, ppp);
+                let [Shape::Mesh(mesh)] = shapes.as_slice() else { panic!("the dots are one mesh") };
+                let dots: Vec<Rect> =
+                    mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
+                assert!(dots.len() > 2, "{width:?} at {ppp}x: several dots");
+                let level = from.y == to.y;
+                let across = width.points(ppp);
+                let span = if level {
+                    Rect::from_two_pos(from, to).expand2(egui::vec2(0.0, across))
+                } else {
+                    Rect::from_two_pos(from, to).expand2(egui::vec2(across, 0.0))
+                };
+                for dot in &dots {
+                    let px = *dot * ppp;
+                    assert!([px.min.x, px.min.y, px.max.x, px.max.y].into_iter().all(whole), "{width:?} at {ppp}x: {px:?} is not whole pixels");
+                    assert!((dot.width() - dot.height()).abs() < EPS, "{width:?} at {ppp}x: a dot is square");
+                    assert!(span.expand(EPS).contains_rect(*dot), "{width:?} at {ppp}x: {dot:?} leaves the line {from:?}..{to:?}");
+                }
+                let starts: Vec<f32> = dots.iter().map(|dot| if level { dot.min.x } else { dot.min.y }).collect();
+                let pitch = starts[1] - starts[0];
+                assert!(pitch > dots[0].width(), "{width:?} at {ppp}x: dots are apart");
+                assert!(starts.windows(2).all(|w| (w[1] - w[0] - pitch).abs() < EPS), "{width:?} at {ppp}x: one pitch: {starts:?}");
+            }
+        }
+    }
+}
+
+#[trial]
+fn ticks_stand_across_a_level_rule_and_lie_across_an_upright_one() {
+    use craft_ui::primitives::Rule;
+    use craft_ui::style::{RuleLook, RuleWidth};
+    use egui::{Color32, Rect, Shape};
+
+    let whole = |v: f32| (v - v.round()).abs() < EPS;
+    for ppp in [1.0, 1.25, 1.5, 2.0] {
+        let look = RuleLook { color: Color32::WHITE, width: RuleWidth::Points(1.0) };
+        let side = look.width.points(ppp);
+        let long = (4.0 * ppp).round() / ppp;
+        for (from, to) in [(pos2(10.3, 20.6), pos2(31.1, 20.6)), (pos2(7.7, 3.2), pos2(7.7, 24.9))] {
+            let shapes = Rule::ticks(&look, from, to, 1.0, 4.0, ppp);
+            let [Shape::Mesh(mesh)] = shapes.as_slice() else { panic!("the ticks are one mesh") };
+            let ticks: Vec<Rect> = mesh.vertices.chunks(4).map(|quad| Rect::from_points(&quad.iter().map(|v| v.pos).collect::<Vec<_>>())).collect();
+            assert!(ticks.len() > 2, "at {ppp}x: several ticks");
+            let level = from.y == to.y;
+            for tick in &ticks {
+                let px = *tick * ppp;
+                assert!([px.min.x, px.min.y, px.max.x, px.max.y].into_iter().all(whole), "at {ppp}x: {px:?} is not whole pixels");
+                let (along, across) = if level { (tick.width(), tick.height()) } else { (tick.height(), tick.width()) };
+                assert!((along - side).abs() < EPS && (across - long).abs() < EPS, "at {ppp}x: {tick:?} is {side} along, {long} across");
+            }
+            let starts: Vec<f32> = ticks.iter().map(|tick| if level { tick.min.x } else { tick.min.y }).collect();
+            assert!(starts.windows(2).all(|w| w[1] - w[0] > side + EPS), "at {ppp}x: ticks are apart: {starts:?}");
+        }
+    }
+}
+
+#[trial]
+fn a_dotted_rule_is_the_ticks_as_long_as_the_line_is_wide() {
+    use craft_ui::primitives::Rule;
+    use craft_ui::style::{RuleLook, RuleWidth};
+    use egui::Color32;
+
+    for ppp in [1.0, 1.5, 2.0] {
+        let look = RuleLook { color: Color32::WHITE, width: RuleWidth::Points(1.0) };
+        let (from, to) = (pos2(10.3, 20.6), pos2(41.1, 20.6));
+        let across = look.width.points(ppp);
+        assert_eq!(Rule::dotted(&look, from, to, 2.0, ppp), Rule::ticks(&look, from, to, 2.0, across, ppp), "at {ppp}x");
+    }
+}
+
+#[trial]
 fn ant_edges_are_whole_device_pixels_at_a_fractional_scale() {
     use craft_theme::{Contrast, Mode};
     use egui::{Rect, Shape};

@@ -14,7 +14,7 @@ use craft_automation::agents::{
 };
 use craft_automation::server;
 use craft_automation::ui::agents::AgentsPage;
-use craft_host::{AppInfo, Host, PickId, Picked, ScriptedFiles, Wake};
+use craft_host::{AppInfo, Host, PickId, Picked, ScriptedFiles};
 use craft_ui::contract::Role;
 use craft_ui::patterns::preferences::SettingsDraft;
 use craft_ui::runtime::motion;
@@ -68,9 +68,9 @@ fn the_switch_wakes_once_per_change() {
     };
     let wake = {
         let wakes = wakes.clone();
-        Wake::new(move || {
+        move || {
             wakes.fetch_add(1, Ordering::Relaxed);
-        })
+        }
     };
     let switch = AgentSwitch::watch_with(true, probe, Duration::from_millis(5), wake);
     let clone = switch.clone();
@@ -161,7 +161,9 @@ fn host() -> WindowHost {
 }
 
 fn on(port: u32) -> AgentSettings {
-    AgentSettings { control_port: port, ..AgentSettings::default() }
+    let mut s = AgentSettings::default();
+    s.control_port = port;
+    s
 }
 
 /// A port nothing listens on: bound, then closed.
@@ -188,7 +190,8 @@ fn turning_agents_on_publishes_a_reachable_connection_and_off_removes_it() {
     assert!(probe(port, PROBE_TIMEOUT));
     let token = std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap();
 
-    let folders = AgentSettings { read_root: "/in".into(), ..on(0) };
+    let mut folders = on(0);
+    folders.read_root = "/in".into();
     let kept = link.sync(Some(&folders), &host);
     assert!(kept.requests.is_none() && !kept.stopped && kept.changed, "a folder change keeps the server");
     assert_eq!(link.status().port, Some(port));
@@ -266,7 +269,9 @@ fn allow_agent_control_off_and_no_settings_folder_keep_agents_out() {
     let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x");
     assert!(link.sync(Some(&on(0)), &host).requests.is_some());
     let port = link.status().port.expect("listening");
-    let refused = link.sync(Some(&AgentSettings { allow_agent_control: false, ..on(0) }), &host);
+    let mut off = on(0);
+    off.allow_agent_control = false;
+    let refused = link.sync(Some(&off), &host);
     assert!(refused.stopped && refused.requests.is_none());
     assert_eq!(link.status().problem, Some(LinkProblem::NotAllowed));
     assert!(!dir.path().join(CONNECTION_FILE).exists());
