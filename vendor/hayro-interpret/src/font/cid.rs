@@ -649,8 +649,8 @@ const MAX_VERTICAL_LOOKUPS: usize = 32;
 /// substitution (`vrt2` when it has no `vert`), as a vertical line set in that face would; a
 /// face without one draws the character's ordinary glyph, as before.
 struct VerticalForms {
-    /// The UTF-16 `-H` and `-V` CMaps.
-    unicode: CMapPair,
+    /// The UTF-16 `-H` and `-V` CMaps, when the resolver has them.
+    unicode: Option<CMapPair>,
     /// The UCS-2 `-H` and `-V` CMaps, when the resolver has them.
     legacy: Option<CMapPair>,
     /// The script whose `vert` lookups apply first (`kana`, `hani` or `hang`).
@@ -697,7 +697,7 @@ impl CMapPair {
 
 impl VerticalForms {
     /// `None` for a collection without Unicode CMaps (Identity, custom ones), and when the
-    /// resolver doesn't have them.
+    /// resolver has neither the UTF-16 nor the UCS-2 pair.
     fn new(family: &CidFamily, resolver: &CMapResolverFn) -> Option<Self> {
         use hayro_cmap::CMapName;
         let (unicode, legacy, script) = match family {
@@ -723,9 +723,14 @@ impl VerticalForms {
             ),
             CidFamily::AdobeIdentity | CidFamily::Custom { .. } => return None,
         };
+        let unicode = CMapPair::new(unicode.0, unicode.1, resolver);
+        let legacy = CMapPair::new(legacy.0, legacy.1, resolver);
+        if unicode.is_none() && legacy.is_none() {
+            return None;
+        }
         Some(Self {
-            unicode: CMapPair::new(unicode.0, unicode.1, resolver)?,
-            legacy: CMapPair::new(legacy.0, legacy.1, resolver),
+            unicode,
+            legacy,
             script: Tag::new(script),
             lookups: OnceLock::new(),
         })
@@ -733,9 +738,6 @@ impl VerticalForms {
 
     /// Whether `cid` is the vertical form of `character`, its character in the UCS2 CMap.
     fn is_vertical_form(&self, cid: u32, character: char) -> bool {
-        let Some((horizontal, vertical)) = self.unicode.maps() else {
-            return false;
-        };
         // The UTF-16 CMaps take a character as its UTF-16 code units, one or two.
         let mut units = [0; 2];
         let (code, len) = match *character.encode_utf16(&mut units) {
@@ -743,13 +745,17 @@ impl VerticalForms {
             [high, low] => ((u32::from(high) << 16) | u32::from(low), 4),
             _ => return false,
         };
-        // The character's horizontal CID is no vertical form, and most CIDs drawn are that one:
-        // they never read the UCS-2 CMaps.
-        if horizontal.lookup_cid_code(code, len) == Some(cid) {
-            return false;
-        }
-        if vertical.lookup_cid_code(code, len) == Some(cid) {
-            return true;
+        // Either pair may be missing or fail to parse (a caller's resolver need not have both);
+        // the other still decides.
+        if let Some((horizontal, vertical)) = self.unicode.as_ref().and_then(CMapPair::maps) {
+            // The character's horizontal CID is no vertical form, and most CIDs drawn are that
+            // one: they never read the UCS-2 CMaps.
+            if horizontal.lookup_cid_code(code, len) == Some(cid) {
+                return false;
+            }
+            if vertical.lookup_cid_code(code, len) == Some(cid) {
+                return true;
+            }
         }
         // The UCS-2 CMaps cover the Basic Multilingual Plane, a character's one code unit.
         len == 2

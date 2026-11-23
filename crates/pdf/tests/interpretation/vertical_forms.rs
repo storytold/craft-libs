@@ -169,8 +169,13 @@ trailer << /Root 1 0 R >>
 
 /// The glyphs drawn for `pdf`'s page with `face` as the substitute for every font.
 fn glyphs(pdf: &[u8], face: &[u8]) -> Vec<u32> {
+    glyphs_with(pdf, face, InterpreterSettings::default())
+}
+
+/// [`glyphs`] with `settings`, whose font resolver is replaced.
+fn glyphs_with(pdf: &[u8], face: &[u8], settings: InterpreterSettings) -> Vec<u32> {
     let data: FontData = Arc::new(face.to_vec());
-    let settings = InterpreterSettings { font_resolver: Arc::new(move |_| Some((data.clone(), 0))), ..Default::default() };
+    let settings = InterpreterSettings { font_resolver: Arc::new(move |_| Some((data.clone(), 0))), ..settings };
     let pdf = craft_pdf::open_slice(pdf, None).unwrap();
     let page = &pdf.pages()[0];
     let cache = InterpreterCache::new();
@@ -254,5 +259,30 @@ fn a_vertical_cid_only_the_ucs2_cmaps_name_draws_the_vertical_glyph() {
         ("Identity-H", "006C", quote, "horizontal"),
     ] {
         assert_eq!(glyphs(&pdf(encoding, code), &face), [u32::from(expected)], "{encoding} <{code}> is the {form} “");
+    }
+}
+
+/// A caller's CMap resolver may have the UCS-2 CMaps and not the UTF-16 ones: the UCS-2 pair
+/// alone then tells the vertical forms from the horizontal ones.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_ucs2_cmaps_alone_tell_the_vertical_forms() {
+    use hayro_cmap::CMapName;
+    let (bracket, vertical) = (glyph('「'), vertical_bracket());
+    let resolver = InterpreterSettings::default().cmap_resolver;
+    let settings = InterpreterSettings {
+        cmap_resolver: Arc::new(move |name| match name {
+            CMapName::UniJisUtf16H | CMapName::UniJisUtf16V => None,
+            name => resolver(name),
+        }),
+        ..Default::default()
+    };
+    for (encoding, code, expected, form) in [
+        ("UniJIS-UCS2-V", "300C", vertical, "vertical"),
+        ("Identity-H", "1EE7", vertical, "vertical"),
+        ("UniJIS-UCS2-H", "300C", bracket, "horizontal"),
+        ("Identity-H", "02AE", bracket, "horizontal"),
+    ] {
+        assert_eq!(glyphs_with(&pdf(encoding, code), TINY_GLYF, settings.clone()), [u32::from(expected)], "{encoding} <{code}> is the {form} 「");
     }
 }
