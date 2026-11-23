@@ -1,24 +1,33 @@
-//! Outline-font embedding permissions from raw OS/2 `fsType` flags.
+//! Outline-font embedding classification from supplied OS/2 `fsType` flags.
 //!
-//! This classifies flags for outline embedding; it does not parse font data.
+//! This preserves VectorCraft's compatibility policy for outline embedding. It accepts flags,
+//! not font data or an OS/2 table version, and does not apply the version-specific rules in the
+//! [OpenType specification](https://learn.microsoft.com/en-us/typography/opentype/spec/os2#fstype).
+//! Callers remain responsible for selecting and interpreting the appropriate table data.
 
 // Ported from VectorCraft by bflatastic, fa3dcab4110f39ee91d3e471ec4e03aefb5a169e.
 
-/// What a font's licence lets a document do with it (OS/2 `fsType`).
+/// An outline-font embedding classification under [`Embedding::from_fs_type`]'s compatibility policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Embedding {
-    /// The font may be embedded, as a subset.
+    /// This policy allows subset embedding of the outlines.
     Subset,
-    /// The font may be embedded whole only (no subsetting).
+    /// This policy allows whole-font embedding only (no subsetting).
     Whole,
-    /// Restricted licence, or bitmap embedding only: the outlines may not be embedded.
+    /// This policy forbids outline embedding for restricted or bitmap-only flags.
     Forbidden,
 }
 
 impl Embedding {
-    /// The permission an OS/2 `fsType` value grants. Bits 0–3 are the usage permissions (none:
-    /// installable; 2: restricted; 4: preview and print; 8: editable), the most permissive one
-    /// winning when several are set; bit 8 forbids subsetting and bit 9 allows bitmaps only.
+    /// Classify supplied OS/2 `fsType` flags using VectorCraft's compatibility policy.
+    ///
+    /// The restricted flag (`0x0002`) forbids outlines unless preview/print (`0x0004`) or
+    /// editable (`0x0008`) is also set. Bitmap-only (`0x0200`) forbids outlines regardless of
+    /// those usage flags. Otherwise, no-subsetting (`0x0100`) selects whole-font embedding;
+    /// the remaining values select subset embedding.
+    ///
+    /// No OS/2 table version is supplied, so this does not apply version-specific OpenType
+    /// rules. The caller remains responsible for selecting and interpreting the table data.
     pub fn from_fs_type(fs: u16) -> Self {
         let restricted = fs & 0x0002 != 0 && fs & 0x000c == 0;
         if restricted || fs & 0x0200 != 0 {

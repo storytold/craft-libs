@@ -3,7 +3,9 @@
 //! Shared text processing for the Craft apps. It sits below the composer: layout code calls it on
 //! plain text and a language before it shapes and places glyphs.
 //!
-//! [`embed`] is always available and classifies raw OS/2 `fsType` flags for outline embedding.
+//! [`embed`] is always available and classifies supplied OS/2 `fsType` flags using VectorCraft's
+//! outline-embedding compatibility policy. See its documentation for the caller's table-data
+//! responsibilities.
 //!
 //! Feature-gated modules, each behind the cargo feature of the same name:
 //! - [`hyphen`] (default): hyphenation points, with bundled US English data and optional
