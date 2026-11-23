@@ -647,7 +647,12 @@ impl<'a> Canvas<'a> {
         let moved = 'pass: {
             if run.mark().is_some() {
                 let keyed = crate::runtime::keys::keyed(&ctx);
-                let unfocused = !ctx.input(|i| i.focused);
+                // The window's blur reaches the pass as its event (`PassPointer::focus_lost`) before egui's focus flag
+                // follows it, and a pointer gone from the window as its event: either ends the run in that pass.
+                let left = crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| {
+                    pointer.focus_lost || pointer.events.iter().any(|event| matches!(event, craft_behavior::PointerEvent::Gone))
+                });
+                let unfocused = left || !ctx.input(|i| i.focused);
                 let off = self.navigation.middle_button != MiddleButton::AutoScroll;
                 if keyed || ended || down || input.press.is_some() || unfocused || input.pos.is_none() || off {
                     // Escape only stops the scroll; any other key also does its own job.
