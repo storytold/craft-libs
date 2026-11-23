@@ -632,6 +632,13 @@ fn chrome(ui: &mut egui::Ui, family: &mut String, size: &mut Option<f32>, famili
   inset 6 pt with radius 8 elsewhere. Group captions default to on except on macOS
   (`ribbon::captions_default`). Groups are contiguous, at least as wide as their caption, with an
   optional dialog launcher.
+  `ribbon::fit` holds the card's three bands: the tab strip the app draws itself, the command band
+  and the 18 pt group-label band under it. An app that passes the widths its groups measured last
+  frame (`.groups(&measured)`) gets the groups that no longer fit folded to one row, which opens
+  the whole group in a drop-down; `ribbon::fit::Collapse` chooses between folding from the first
+  group that does not fit (Word, Excel) and folding from the end (PowerPoint). Each
+  `GroupResponse` reports its `level` and `width` for the next frame's plan, and a plan whose
+  folded row is still too wide reports `overflow` so the app scrolls instead of clipping.
 - **Font box.** Two rounded fields with the chevron inside; both accept typing, and the list
   narrows while typing. Grow/shrink walk the size presets, then whole points (Word's behaviour).
   An empty family or `None` size is a mixed selection (blank, still editable); `.enabled(false)`
