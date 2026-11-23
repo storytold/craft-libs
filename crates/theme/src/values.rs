@@ -98,6 +98,9 @@ pub enum ColorSource {
         to: ColorToken,
         /// The text the fill moves away from.
         away_from: ColorToken,
+        /// The least OKLCH lightness distance from `base`, so a variant under a seed whose ramp
+        /// steps lie close together (a light dark-mode accent) still shows.
+        min: f64,
     },
     /// White or black, whichever has the higher lowest contrast on all of these tokens.
     OnSolid(&'static [ColorToken]),
@@ -136,6 +139,11 @@ const SOLID_HOVER: usize = 10;
 /// A pressed solid fill: step `.0` moved `.2` of the way toward step `.1` (`accent.pressed`,
 /// `status.<s>.solid_pressed`).
 const SOLID_PRESSED: (usize, usize, f64) = (10, 11, 0.5);
+
+/// The least OKLCH lightness a hovered `accent.strong` moves from rest, and a pressed one. The
+/// dark ramp's steps 9 and 10 lie 0.01 apart for a light seed, which hides the hover.
+const STRONG_HOVER_MIN: f64 = 0.06;
+const STRONG_PRESSED_MIN: f64 = 0.10;
 
 /// How far a bevel's lit edge (`edge.light`) lies above `surface.panel` in OKLCH lightness, in
 /// either mode. Windows 2000's #d4d0c8 face (L 0.86) has a white lit edge.
@@ -225,8 +233,12 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         T::AccentHover => Accent(SOLID_HOVER),
         T::AccentPressed => AccentMix { from: pressed_from, to: pressed_to, t: pressed_t },
         T::AccentStrong => SolidFrom(T::AccentSolid),
-        T::AccentStrongHover => ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentHover, away_from: T::TextOnStrong },
-        T::AccentStrongPressed => ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentPressed, away_from: T::TextOnStrong },
+        T::AccentStrongHover => {
+            ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentHover, away_from: T::TextOnStrong, min: STRONG_HOVER_MIN }
+        }
+        T::AccentStrongPressed => {
+            ShiftedFrom { base: T::AccentStrong, from: T::AccentSolid, to: T::AccentPressed, away_from: T::TextOnStrong, min: STRONG_PRESSED_MIN }
+        }
         T::AccentSoft => Accent(pick(4, 3)),
         T::AccentBorder => Same(T::AccentSolid),
         T::AccentText => Accent(11),
