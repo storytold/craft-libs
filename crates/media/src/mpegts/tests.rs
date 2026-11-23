@@ -792,6 +792,23 @@ fn scrambled_packet_is_skipped_with_a_warning() {
 }
 
 #[test]
+fn repeated_pat_and_pmt_packets_are_dropped_before_the_section_parser() {
+    let clean = audio_ts(2);
+    let first = |pid: u16| {
+        (0..clean.len() / 188).map(|i| i * 188).find(|&o| (((clean[o + 1] & 0x1F) as u16) << 8 | clean[o + 2] as u16) == pid).expect("packet exists")
+    };
+    let mut dup = clean.clone();
+    for pid in [0x100, 0] {
+        let o = first(pid);
+        let copy = dup[o..o + 188].to_vec();
+        dup.splice(o + 188..o + 188, copy);
+    }
+    let f = open(&dup).unwrap();
+    assert!(f.warnings.iter().any(|w| w.contains("2 duplicate packet(s) dropped")), "{:?}", f.warnings);
+    assert!(!f.warnings.iter().any(|w| w.contains("continuity") || w.contains("CRC")), "{:?}", f.warnings);
+}
+
+#[test]
 fn duplicate_packet_is_dropped_but_a_different_payload_with_the_same_counter_is_kept() {
     let clean = audio_ts(6);
     let base = open(&clean).unwrap();

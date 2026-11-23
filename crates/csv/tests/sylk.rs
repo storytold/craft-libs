@@ -115,3 +115,36 @@ fn survives_huge_relative_offsets_and_width_floods() {
         let _ = read(&b);
     }
 }
+
+#[test]
+fn decodes_excels_character_escapes_in_text() {
+    // storytold/gridcraft#4321: Excel writes `Größe für Köln` with `ESC N` escapes (ISO 6937 codes
+    // less 0x80: `H` is the diaeresis, put on the next letter; `{` is ß).
+    let file = "ID;PWXL;N;E\r\nC;Y1;X1;K\"Gr\u{1b}NHo\u{1b}N{e f\u{1b}NHur K\u{1b}NHoln\"\r\nC;Y2;X1;K\"Plain ASCII 123\"\r\n\
+        C;Y3;X1;K\"\u{1b}NBe \u{1b}NAa \u{1b}NCa \u{1b}NKc \u{1b}NOs \u{1b}NMo \u{1b}NJa \u{1b}NDn\"\r\n\
+        C;Y4;X1;K\"\u{1b}NAa \u{1b}NAZ\"\r\nC;Y5;X1;K\"\u{1b}Nq \u{1b}NyStra\u{1b}N{e \u{1b}Na\u{1b}Ni\"\r\n\
+        C;Y6;X1;K\"\u{1b}NHq \u{1b}N\u{1b}NHo end\u{1b}N\"\r\nC;Y7;X1;K\"\u{1b}N\u{7f} \u{1b}NL \u{1b}X\"\r\nC;Y8;X1;K\"\u{1b}NH\u{1b}NHo \u{1b}NB\tx\"\r\n\
+        C;Y9;X1;K\"\u{1b}NB |\u{1b}NE |\u{1b}NF |\u{1b}NG |\u{1b}NH |\u{1b}NJ |\u{1b}NK |\u{1b}NM |\u{1b}NN |\u{1b}NO |\u{1b}NA |\u{1b}NC \"\r\nE\r\n";
+    let sh = read(file.as_bytes()).unwrap();
+    let value = |a: &str| sh.cells.get(&at(a)).map(|c| c.value.clone()).unwrap_or_default();
+    let text = |s: &str| Value::Text(s.into());
+    assert_eq!(value("A1"), text("Größe für Köln"));
+    assert_eq!(value("A2"), text("Plain ASCII 123"), "plain ASCII is unchanged");
+    // Acute, grave, circumflex, cedilla, caron, double acute, ring, tilde.
+    assert_eq!(value("A3"), text("é à â ç š ő å ñ"));
+    // A letter the mark has no precomposed form with keeps the combining mark.
+    assert_eq!(value("A4"), text("à Z\u{300}"));
+    // Spacing characters, one code each: `q` æ, `y` ø, `{` ß, `a` Æ, `i` Ø.
+    assert_eq!(value("A5"), text("æ øStraße ÆØ"));
+    // A diacritic on a letter with no precomposed form, and a stray `ESC N` before an escape.
+    assert_eq!(value("A6"), text("q\u{308} \u{1b}Nö end\u{1b}N"));
+    // Codes ISO 6937 doesn't define (0xFF, 0xCC) and an `ESC` without `N` stay as written.
+    assert_eq!(value("A7"), text("\u{1b}N\u{7f} \u{1b}NL \u{1b}X"));
+    // A diacritic followed by another escape (or a control character) is kept as written, and the
+    // next escape still decodes.
+    assert_eq!(value("A8"), text("\u{1b}NHö \u{1b}NB\tx"));
+    // A diacritic on a SPACE is the spacing accent: acute, macron, breve, dot above, diaeresis, ring,
+    // cedilla, double acute, ogonek, caron. The grave and circumflex have none (`` ` `` and `^` are
+    // ASCII), so they stay a space with the combining mark.
+    assert_eq!(value("A9"), text("´|¯|˘|˙|¨|˚|¸|˝|˛|ˇ| \u{300}| \u{302}"));
+}

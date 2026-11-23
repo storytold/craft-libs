@@ -42,6 +42,7 @@ fn strict() -> Vec<u8> {
                 .as_bytes(),
         ),
     ])
+    .unwrap()
 }
 
 #[test]
@@ -101,7 +102,8 @@ fn a_strict_workbook_with_prefixes() {
 
 #[test]
 fn a_damaged_sheet_keeps_the_rows_before_the_damage() {
-    let bytes = workbook(&[("S", r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><!-- never closed"#)], &[]);
+    let bytes =
+        workbook(&[("S", r#"<row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><!-- never closed"#)], &[]).unwrap();
     let wb = read(&bytes).unwrap();
     assert_eq!(wb.sheets[0].cells.len(), 2);
     assert!(wb.warnings.iter().any(|w| w.contains("is damaged") && w.contains("kept 2 rows")), "{:?}", wb.warnings);
@@ -109,7 +111,7 @@ fn a_damaged_sheet_keeps_the_rows_before_the_damage() {
 
 #[test]
 fn the_caller_can_stop_a_sheet() {
-    let bytes = workbook(&[("S", r#"<row r="1"/><row r="2"/><row r="3"/>"#)], &[]);
+    let bytes = workbook(&[("S", r#"<row r="1"/><row r="2"/><row r="3"/>"#)], &[]).unwrap();
     let mut p = Package::open(&bytes, &Limits::default()).unwrap();
     let wb = p.workbook().unwrap();
     let mut seen = 0;
@@ -126,7 +128,8 @@ fn cells_outside_the_grid_are_dropped_and_counted() {
     let bytes = workbook(
         &[("S", r#"<row r="1048577"><c><v>1</v></c></row><row r="2"><c r="XFE2"><v>1</v></c><c r="A0"><v>1</v></c><c r="XFD2"><v>3</v></c></row>"#)],
         &[],
-    );
+    )
+    .unwrap();
     let wb = read(&bytes).unwrap();
     assert_eq!(wb.sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(1, 16383)]);
     assert!(wb.warnings.iter().any(|w| w.contains("3 cells or rows outside")), "{:?}", wb.warnings);
@@ -135,26 +138,36 @@ fn cells_outside_the_grid_are_dropped_and_counted() {
 #[test]
 fn the_workbook_part_is_found_or_named() {
     // No package relationship: the usual name.
-    let plain = zip(&[("xl/workbook.xml", br#"<workbook><sheets><sheet name="A" r:id="x"/></sheets></workbook>"#)]);
+    let plain = zip(&[("xl/workbook.xml", br#"<workbook><sheets><sheet name="A" r:id="x"/></sheets></workbook>"#)]).unwrap();
     assert_eq!(Package::open(&plain, &Limits::default()).unwrap().workbook().unwrap().sheets.len(), 1);
     // A relationship to a part that is not there, with the usual part present.
     let stray = zip(&[
         ("_rels/.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="w" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="nowhere.xml"/></Relationships>"#),
         ("xl/workbook.xml", b"<workbook/>"),
-    ]);
+    ])
+    .unwrap();
     let mut p = Package::open(&stray, &Limits::default()).unwrap();
     assert!(p.workbook().is_ok());
     assert_eq!(p.workbook_part(), "xl/workbook.xml");
-    let odf = zip(&[("mimetype", b"application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", b"<x/>")]);
+    let odf = zip(&[("mimetype", b"application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", b"<x/>")]).unwrap();
     assert!(Package::open(&odf, &Limits::default()).unwrap().workbook().unwrap_err().to_string().contains("OpenDocument"));
-    let other = zip(&[("xl/workbook.xml", b"<document/>")]);
+    let other = zip(&[("xl/workbook.xml", b"<document/>")]).unwrap();
     assert!(matches!(Package::open(&other, &Limits::default()).unwrap().workbook(), Err(Error::Invalid(_))));
     assert!(matches!(Package::open(b"not a zip", &Limits::default()), Err(Error::Zip(_))));
 }
 
 #[test]
+fn a_fixture_that_cannot_be_written_returns_the_writer_error() {
+    let twice = zip(&[("xl/workbook.xml", b"<workbook/>"), ("xl/workbook.xml", b"<workbook/>")]);
+    match twice {
+        Err(craft_opc::Error::Write(message)) => assert!(message.contains("xl/workbook.xml"), "{message}"),
+        other => panic!("expected the writer's error, got {other:?}"),
+    }
+}
+
+#[test]
 fn a_missing_shared_strings_part_is_a_warning() {
-    let bytes = workbook(&[("S", r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#)], &["x"]);
+    let bytes = workbook(&[("S", r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#)], &["x"]).unwrap();
     let mut entries = vec![];
     let mut archive = Package::open(&bytes, &Limits::default()).unwrap();
     for n in archive.opc().names().iter().map(|s| s.to_string()).collect::<Vec<_>>() {
@@ -163,7 +176,7 @@ fn a_missing_shared_strings_part_is_a_warning() {
         }
     }
     let entries: Vec<(&str, &[u8])> = entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
-    let wb = read(&zip(&entries)).unwrap();
+    let wb = read(&zip(&entries).unwrap()).unwrap();
     assert!(wb.sheets[0].cells.is_empty());
     assert!(wb.warnings.iter().any(|w| w.contains("missing part xl/sharedStrings.xml")), "{:?}", wb.warnings);
 }
@@ -187,7 +200,8 @@ fn shared_strings_at_the_conventional_path_work_without_a_relationship() {
         ("xl/_rels/workbook.xml.rels", workbook_rels.as_bytes()),
         ("xl/worksheets/sheet1.xml", worksheet.as_bytes()),
         ("xl/sharedStrings.xml", strings.as_bytes()),
-    ]);
+    ])
+    .unwrap();
 
     let mut package = Package::open(&bytes, &Limits::default()).unwrap();
     let strings = package.shared_strings().unwrap();
@@ -206,7 +220,7 @@ fn shared_strings_at_the_conventional_path_work_without_a_relationship() {
 #[test]
 fn limits_are_errors() {
     let rows: String = (1..=2000).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
-    let bytes = workbook(&[("S", &rows)], &[]);
+    let bytes = workbook(&[("S", &rows)], &[]).unwrap();
     let small = Limits { package: craft_opc::Limits::new(100, 4096, 1 << 20), ..Limits::default() };
     assert!(matches!(read_with(&bytes, &small), Err(Error::TooLarge(_))));
     let few = Limits { package: craft_opc::Limits::new(3, 1 << 20, 1 << 20), ..Limits::default() };
@@ -215,6 +229,6 @@ fn limits_are_errors() {
     let narrow = Limits { xml: craft_xml::Limits { max_nodes: 50, ..craft_xml::Limits::DEFAULT }, ..Limits::default() };
     assert_eq!(read_with(&bytes, &narrow).unwrap().sheets[0].cells.len(), 2000);
     let wide: String = (0..40).map(|c| format!("<c><v>{c}</v></c>")).collect();
-    let damaged = read_with(&workbook(&[("S", &format!("<row>{wide}</row>"))], &[]), &narrow).unwrap();
+    let damaged = read_with(&workbook(&[("S", &format!("<row>{wide}</row>"))], &[]).unwrap(), &narrow).unwrap();
     assert!(damaged.sheets[0].cells.is_empty() && damaged.warnings.iter().any(|w| w.contains("is damaged")));
 }

@@ -418,3 +418,54 @@ fn inset(elements: &[&El]) -> Option<[f64; 4]> {
         None
     }
 }
+
+/// Document view-unit and ruler-origin preferences.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewPreferenceValues {
+    pub horizontal_units: String,
+    pub vertical_units: String,
+    pub ruler_origin: String,
+    pub cursor_key_increment: f64,
+}
+
+impl ViewPreferenceValues {
+    /// Emits a canonical `ViewPreference` element.
+    pub fn to_el(&self) -> El {
+        El::new("ViewPreference")
+            .with_attr("HorizontalMeasurementUnits", &self.horizontal_units)
+            .with_attr("VerticalMeasurementUnits", &self.vertical_units)
+            .with_attr("RulerOrigin", &self.ruler_origin)
+            .with_attr("CursorKeyIncrement", crate::value::num(self.cursor_key_increment))
+            .with_attr("PointsPerInch", "72")
+    }
+}
+
+/// Document superscript and subscript text preferences.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextPreferenceValues {
+    pub superscript_size: f64,
+    pub superscript_position: f64,
+    pub subscript_size: f64,
+    pub subscript_position: f64,
+}
+
+impl TextPreferenceValues {
+    /// Emits a canonical `TextPreference` element.
+    pub fn to_el(&self) -> El {
+        El::new("TextPreference")
+            .with_attr("SuperscriptSize", crate::value::num(self.superscript_size))
+            .with_attr("SuperscriptPosition", crate::value::num(self.superscript_position))
+            .with_attr("SubscriptSize", crate::value::num(self.subscript_size))
+            .with_attr("SubscriptPosition", crate::value::num(self.subscript_position))
+    }
+}
+
+/// Emits a `PasteboardPreference` element with horizontal and vertical margins in points.
+pub fn pasteboard_preference_el(horizontal: f64, vertical: f64) -> El {
+    El::new("PasteboardPreference").with_attr("PasteboardMargins", format!("{} {}", crate::value::num(horizontal), crate::value::num(vertical)))
+}
+
+/// Emits a `TransparencyPreference` element for the given blending space (`"CMYK"` or `"RGB"`).
+pub fn transparency_preference_el(blending_space: &str) -> El {
+    El::new("TransparencyPreference").with_attr("BlendingSpace", blending_space)
+}

@@ -410,7 +410,10 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>, jpeg_only: bool) -> Opt
         .or(largest)
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    let best = best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)));
+    // ORF capability must not remove the scan fallback for unsupported modes and damaged preview pointers.
+    let best = best.or_else(|| {
+        format.filter(|f| !f.is_supported() || matches!(f, crate::RawFormat::Erf | crate::RawFormat::Orf)).and_then(|_| scan_for_jpeg(bytes))
+    });
     // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
     #[cfg(feature = "hasselblad")]
     let best = best.or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::hasselblad::rgb_preview(&tiff, bytes)).flatten());
@@ -643,9 +646,15 @@ fn cr3_preview(bytes: &[u8]) -> Option<&[u8]> {
 /// A CR3's full-size JPEG track, when it holds a DCT JPEG.
 #[cfg(feature = "cr3")]
 fn cr3_full_jpeg(bytes: &[u8]) -> Option<&[u8]> {
-    let full = craft_metadata::cr3::parse_cr3(bytes)
-        .and_then(|c| c.tracks.iter().find(|t| t.kind == craft_metadata::cr3::Cr3TrackKind::Jpeg).and_then(|t| t.data));
-    full.and_then(|(at, len)| bytes.get(at..at.checked_add(len)?)).filter(|j| is_dct_jpeg(j))
+    let cr3 = craft_metadata::cr3::parse_cr3(bytes)?;
+    // An unusable preview track must not hide a later usable one. Share the marker budget
+    // across candidates so overlapping hostile track ranges cannot cause quadratic walks.
+    let mut work = CR3_MAX_WALK;
+    cr3.tracks.iter().filter(|t| t.kind == craft_metadata::cr3::Cr3TrackKind::Jpeg).find_map(|t| {
+        let (at, len) = t.data?;
+        let jpeg = bytes.get(at..at.checked_add(len)?)?;
+        first_frame_within(jpeg, &mut work).filter(|(m, _)| matches!(m, 0xc0..=0xc2)).map(|_| jpeg)
+    })
 }
 
 /// Marker-walk budget of the CR3 fallback: candidates can overlap (each claiming the rest of the file) and

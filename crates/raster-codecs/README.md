@@ -1,12 +1,9 @@
 # craft-raster-codecs
 
-Small raster image formats for the Craft apps, from PhotoCraft's `photocraft-codecs`: one module
-per format, one implementation of each. Decoders take untrusted bytes and `Limits`, check the
-declared size before allocating, and never panic. No `unsafe`; it builds for
-`wasm32-unknown-unknown`. The `common` RGBA image facade delegates PNG/JPEG/BMP/GIF/TIFF/WebP
-decoding and PNG/JPEG encoding to [`craft-image-codecs`](../image-codecs/README.md), the shared
-depth- and metadata-preserving codec implementation. Other dependencies are `thiserror`, and
-`rayon` on native targets (the DDS encoder compresses rows of blocks in parallel).
+Compatibility facade for the small raster-format modules in older Craft app versions. The
+format readers and writers are implemented once in [`craft-image-codecs`](../image-codecs/README.md);
+these modules forward calls and adapt the older `Image` and `Limits` types. The `common` RGBA
+image facade also delegates to that crate.
 
 ```toml
 craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
@@ -14,7 +11,7 @@ craft-raster-codecs = { git = "https://github.com/storytold/craft-libs", rev = "
 
 | Module | Format | Read | Write |
 |---|---|---|---|
-| `dds` | DirectDraw Surface: uncompressed masks, luminance, BC1/BC2/BC3 (DXT1/3/5), legacy and DX10 headers; top mip level | yes | uncompressed and BC1-BC3, optional mip chain |
+| `dds` | DirectDraw Surface: uncompressed masks, luminance, BC1/BC2/BC3 (DXT1/3/5), unsigned BC4/BC5 (ATI1/2, as gray and as RGB with blue 0), 16-bit `R16`, `R16G16` (as RGB with blue 0) and `R16G16B16A16` at 16 bits, legacy and DX10 headers; top mip level | yes | uncompressed and BC1-BC3, optional mip chain |
 | `dicom` | DICOM Part 10, uncompressed transfer syntaxes: MONOCHROME1/2, RGB, YBR_FULL, 8 and 16 bits | yes | no |
 | `fits` | FITS primary HDU or first `IMAGE` extension, every `BITPIX`, `BSCALE`/`BZERO`, header cards as text | yes | gray or RGB; 8-bit, 16-bit, float |
 | `iff` | IFF ILBM (1 to 8 planes with a palette, 24 planes, mask plane or transparent colour) and PBM, stored or ByteRun1; HAM and EHB are refused | yes | 24-plane ILBM with an optional mask plane |
@@ -37,9 +34,8 @@ assert_eq!(image.data(), &[0, 255]);
 let bytes = pnm::encode(&image)?;
 ```
 
-Each module has a `looks_like_*` (or `is_dicom`) sniffer for the format's signature. `dds` and
-`fits` also have `has_additional_images`, which says without decoding whether a file holds
-more than the one image `decode` returns (cube faces, array slices, further HDUs).
+The module sniffers and the `dds`/`fits` additional-image queries forward to shared detection and
+metadata inspection in `craft-image-codecs`.
 
 `xpm::x11_color_rgb` also looks up exact normalized X11 names as RGB channels in `0..=1`.
 It accepts only 1–64 lowercase ASCII letters or digits, without normalization, XPM-only aliases,
