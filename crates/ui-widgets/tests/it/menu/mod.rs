@@ -52,3 +52,27 @@ fn rows_of_an_inline_menu_shown_from_its_container_record_take_the_columns_of_la
         fixture.frame(vec![]);
     }
 }
+
+/// A text-only row shows no icon and reserves no icon column, even with an icon set: its menu's labels start where a
+/// menu with no icons at all starts them.
+#[trial]
+fn a_row_with_no_icon_takes_no_icon_column() {
+    let redo_left = |with_icon: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            Stack::new().show(ui, |ui, _| {
+                Menu::inline("Edit").show(ui, |ui, _| {
+                    let undo = MenuItem::new("Undo");
+                    if with_icon {
+                        undo.icon(IconSpec::svg(IconId::new("history"))).no_icon(true).show(ui);
+                    } else {
+                        undo.show(ui);
+                    }
+                    MenuItem::new("Redo").show(ui);
+                });
+            });
+        });
+        fixture.settle();
+        fixture.texts().iter().find(|text| text.text == "Redo").map(|text| text.rect.left() - fixture.shown().left())
+    };
+    assert_eq!(redo_left(true), redo_left(false), "the iconless row reserves no icon column");
+}

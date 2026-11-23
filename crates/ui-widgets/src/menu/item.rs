@@ -213,6 +213,9 @@ pub struct MenuItem<'a> {
     /// An icon before the label.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
+    /// The row shows no icon, not even the one its command names: a text-only menu's row, which is also a line shorter.
+    #[prop]
+    no_icon: bool,
     /// A check mark, shown while the value is true; the row reserves the mark column either way.
     #[prop]
     check: Option<bool>,
@@ -254,6 +257,7 @@ impl<'a> MenuItem<'a> {
             submenu: false,
             heading: false,
             icon: None,
+            no_icon: false,
             check: None,
             radio_mark: None,
             mnemonic: None,
@@ -304,6 +308,9 @@ impl<'a> MenuItem<'a> {
     }
 
     fn lead_icon(&self, command: Option<&ResolvedCommand>) -> Option<IconSpec<'_>> {
+        if self.no_icon {
+            return None;
+        }
         self.icon.clone().or_else(|| MenuItem::command_icon(command))
     }
 

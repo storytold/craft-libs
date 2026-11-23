@@ -35,11 +35,18 @@ pub(crate) struct Rows<'a> {
     target: Target,
     english: Option<&'a EnglishHook<'a>>,
     preferred: &'a [(&'a str, char)],
+    /// Whether rows show their command's icon.
+    icons: bool,
 }
 
 impl<'a> Rows<'a> {
     pub(crate) fn new(target: Target) -> Self {
-        Rows { target, english: None, preferred: &[] }
+        Rows { target, english: None, preferred: &[], icons: true }
+    }
+
+    pub(crate) fn icons(mut self, on: bool) -> Self {
+        self.icons = on;
+        self
     }
 
     pub(crate) fn english(mut self, english: Option<&'a EnglishHook<'a>>) -> Self {
@@ -156,7 +163,7 @@ impl<'a> Rows<'a> {
                 }
             }
             _ => {
-                command_row(ui, item, label, shortcut).show(ui);
+                command_row(ui, item, label, shortcut).no_icon(!self.icons).show(ui);
             }
         }
     }
