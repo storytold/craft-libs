@@ -549,9 +549,11 @@ const MAX_XATTR_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 /// binding, quarantine, resource forks) to the stage. The attributes are as untrusted as the
 /// bytes, so the reads are bounded; one that cannot be read or written whole, or passes a bound,
 /// refuses the save rather than dropping the user's metadata unnoticed. Only a volume without
-/// extended attributes (`ENOTSUP`) and a file the user may write but not read (mode 0200, whose
-/// attributes the user can't read either) are skipped; those save as they did before attributes
-/// were kept. `com.apple.provenance` belongs to macOS, which gives the new file its own. Compression bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
+/// extended attributes (`ENOTSUP`) is skipped, and so is a file whose data the user may not read
+/// (mode 0200) when it has no attribute names the user can list either; one whose names can be
+/// listed refuses the save, as its attributes can't be copied without its data.
+/// `com.apple.provenance` belongs to macOS, which gives the new file its own. Compression
+/// bookkeeping stays hidden (no `XATTR_SHOWCOMPRESSION`).
 #[cfg(target_os = "macos")]
 fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     use rustix::fs::{Mode, OFlags, XattrFlags, fgetxattr, fgetxattr_query, flistxattr, fsetxattr, open};
@@ -561,7 +563,8 @@ fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
     // names another file. NONBLOCK keeps a FIFO put at the name from hanging the open.
     let source = match open(target, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK, Mode::empty()) {
         Ok(fd) => File::from(fd),
-        Err(Errno::NOENT | Errno::LOOP | Errno::ACCESS) => return Ok(()),
+        Err(Errno::NOENT | Errno::LOOP) => return Ok(()),
+        Err(Errno::ACCESS) => return unreadable_has_no_attributes(target),
         Err(e) => return Err(e.into()),
     };
     if !source.metadata()?.is_file() {
@@ -595,6 +598,27 @@ fn copy_xattrs(target: &Path, stage: &File) -> io::Result<()> {
         total = total.saturating_add(value.len());
     }
     Ok(())
+}
+
+/// For a target whose data can't be opened for reading: `Ok` when it has no extended attribute the
+/// user can list (or the volume has none), so the save loses nothing; otherwise refuse the save, as
+/// the attributes can't be copied without opening the file. The names are read without following a
+/// link, by path.
+#[cfg(target_os = "macos")]
+fn unreadable_has_no_attributes(target: &Path) -> io::Result<()> {
+    use rustix::fs::llistxattr;
+    use rustix::io::Errno;
+    let mut names = vec![0u8; MAX_XATTR_NAMES_BYTES];
+    match llistxattr(target, names.as_mut_slice()) {
+        Ok(0) | Err(Errno::NOTSUP | Errno::ACCESS | Errno::NOENT) => Ok(()),
+        Ok(len) if names.get(..len).is_some_and(|names| names.split(|b| *b == 0).all(|name| name.is_empty() || name == b"com.apple.provenance")) => {
+            Ok(())
+        }
+        Ok(_) | Err(Errno::RANGE) => {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "the file can't be read, so its extended attributes can't be copied"))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Read one attribute value of `size` bytes (already within the bounds) with `read`, then ask
