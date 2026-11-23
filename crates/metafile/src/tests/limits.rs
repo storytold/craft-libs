@@ -312,3 +312,38 @@ fn masking_a_bitmap_to_a_clip_stops_at_the_work_cap() {
     assert!(side(fits));
     assert!(!side(fits + 2));
 }
+
+#[test]
+fn pict_truncated_halfway_through_rectangle_reports_premature_eof() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Truncated halfway through a rectangle opcode (paintRect 0x0031):
+    // Rectangle opcode expects 8 bytes [top, left, bottom, right], but only 4 bytes are provided.
+    pict.extend([0x00, 0x31]);
+    pict.extend([0, 0, 0, 5]);
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(crate::TruncationReason::PrematureEof));
+}
+
+#[test]
+fn pict_records_exceeding_max_opcode_budget_reports_opcode_limit_exceeded() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Valid records exceeding MAX_OPS budget (e.g. NOP opcodes 0x0000):
+    pict.resize(pict.len() + 2 * (crate::pict::MAX_OPS + 1), 0);
+    pict.extend([0x00, 0xFF]);
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(crate::TruncationReason::OpcodeLimitExceeded));
+}
