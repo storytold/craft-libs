@@ -11,11 +11,7 @@ use super::toggle::ToggleCell;
 use super::view::DocumentRows;
 use super::words::ListWords;
 use crate::contract::{Common, OpenChange, RowHeight, RowPressed, RowState, Show};
-<<<<<<< HEAD
 use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span, TextRun};
-=======
-use crate::primitives::{ContentPainterCx, HAlign, IconSpec, Span};
->>>>>>> origin/next
 use crate::runtime::env::Label;
 use crate::style::DataColor;
 use craft_behavior::{ColumnKey, Cursor};

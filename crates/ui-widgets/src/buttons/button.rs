@@ -298,17 +298,6 @@ impl Component for Button<'_> {
         if self.loading { Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
     }
 
-<<<<<<< HEAD
-    /// A loading button declares the slot of its spinner, which paints as the face of its part.
-    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
-        if !self.loading {
-            return;
-        }
-        let (content, rtl) = (cx.content_rect, cx.flow.is_rtl());
-        let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, content, rtl);
-        if let Some(rect) = spinner {
-            cx.part(SPINNER, rect);
-=======
     /// A loading button declares the slot of its spinner, which paints as the face of that part; any other button with
     /// a picture declares the picture's box, where `paint` shows it.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
@@ -322,7 +311,6 @@ impl Component for Button<'_> {
             && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style), &cx.style.face, cx.style.icon.side, area, rtl)
         {
             cx.part(PICTURE, rect);
->>>>>>> origin/next
         }
     }
 

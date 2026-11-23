@@ -106,7 +106,6 @@ fn a_letter_typed_into_a_field_is_its_own() {
     assert!(!app_read.borrow().contains(&Key::T), "and the app reads no press of it");
 }
 
-<<<<<<< HEAD
 /// A field a click opens with a `Take` request, sent in that one pass, takes the typed keys at once: the press on
 /// the opening button does not take the focus back. A field shown later with a `WhenNone` request leaves the focus
 /// where it is.
@@ -148,7 +147,8 @@ fn a_one_shot_focus_request_takes_the_keys_and_when_none_leaves_a_held_focus() {
     fixture.idle(2);
     assert_eq!(*inline.borrow(), "abcd", "the focused field keeps the keys");
     assert_eq!(*search.borrow(), "", "a `WhenNone` request takes no focus a field holds");
-=======
+}
+
 /// A two-line field capped at four grows with each typed line past its two up to four, then keeps its height: the
 /// text scrolls inside it with the caret's line, the last, in view, and the wheel over it scrolls the text back.
 #[trial]
@@ -274,5 +274,4 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.key(Key::ArrowRight, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), 4, "the user's caret move past the two-byte \"é\" writes its byte offset back");
->>>>>>> origin/next
 }

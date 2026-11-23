@@ -16,13 +16,8 @@ use crate::popover::Popover;
 use crate::primitives::{ContentPainterCx, IconSpec, Span};
 use crate::runtime::env::{Env, Label};
 use crate::style::{Corners, SurfaceKind};
-<<<<<<< HEAD
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
-=======
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
-use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection};
->>>>>>> origin/next
+use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Rect, Ui};
 use std::borrow::Cow;
@@ -454,27 +449,12 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = names(4);
-<<<<<<< HEAD
-    let out = List::<usize>::new("Layers")
-        .rename(true)
-        .row_menu()
-        .selection(Bind::bound(data.value("selection", Selection::single(1_usize))))
-        .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
-    if let Some(row) = out.menu.as_ref().map(|request| request.key) {
-=======
     let out = List::<usize>::new("Layers").rename(true).row_menu().selection(data.bind("selection", Selection::single(1_usize))).show_items(
         ui,
         &Names(&names),
         &mut |key, _| ListRow::new(names[*key].clone()),
     );
-    let menu_row = data.value("menu", None::<usize>);
-    for event in &out.events {
-        if let CollectionEvent::ContextMenu(request) = event {
-            *menu_row = Some(request.key);
-        }
-    }
-    if let Some(row) = *menu_row {
->>>>>>> origin/next
+    if let Some(row) = out.menu.as_ref().map(|request| request.key) {
         let entries = [
             Entry::new(String::from("rename"), "Rename"),
             Entry::new(String::from("duplicate"), "Duplicate"),

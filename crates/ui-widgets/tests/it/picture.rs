@@ -1,10 +1,12 @@
-<<<<<<< HEAD
-//! `Picture`'s SVG source on hostile input.
+//! `Picture`: its SVG source on hostile input, and sizing in device pixels.
 
 use craft_ui::contract::Show as _;
-use craft_ui::display::Picture;
+use craft_ui::display::{Picture, PictureSize};
+use craft_ui::runtime::env::Scale;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Rect, Shape, Vec2, pos2, vec2};
+use egui::{Color32, ColorImage, Rect, Shape, Vec2, pos2, vec2};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// A small valid drawing.
 const MARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#2a7"/></svg>"##;
@@ -75,16 +77,8 @@ fn a_malformed_or_oversized_svg_draws_nothing_and_never_panics() {
         }
         let marks = drawn.iter().filter(|picture| valid.expand(0.5).contains_rect(**picture)).count();
         assert_eq!(marks, 1, "frame {frame}: the valid mark draws one picture: {drawn:?}");
-=======
-//! `Picture` sized in device pixels.
-
-use craft_ui::contract::Show as _;
-use craft_ui::display::{Picture, PictureSize};
-use craft_ui::runtime::env::Scale;
-use craft_ui::testing::{Fixture, trial};
-use egui::{Color32, ColorImage, Vec2};
-use std::cell::Cell;
-use std::rc::Rc;
+    }
+}
 
 /// The side, in texels, of the picture's image.
 const SIDE: usize = 32;
@@ -110,6 +104,5 @@ fn a_device_pixel_picture_keeps_one_texel_to_a_pixel_at_every_scale() {
             (device.x - SIDE as f32).abs() < 0.01 && (device.y - SIDE as f32).abs() < 0.01,
             "at scale {scale} the picture is {device:?} device pixels, not {SIDE} square"
         );
->>>>>>> origin/next
     }
 }

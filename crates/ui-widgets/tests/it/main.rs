@@ -6,32 +6,13 @@ extern crate craft_ui_widgets as craft_ui;
 pub(crate) mod access;
 pub(crate) mod bars;
 pub(crate) mod body;
-<<<<<<< HEAD
-mod commands;
-mod contract;
-mod disabled_fade;
-mod field_text_centred;
-mod focus_ring;
-mod keys;
-mod label;
-mod layer;
-mod layout;
-mod link;
-mod list;
-mod menu;
-mod notices;
-mod overlay;
-mod pickers;
-mod picture;
-mod popover;
-mod runtime;
-=======
 pub(crate) mod buttons;
 pub(crate) mod checkbox_sweep;
 pub(crate) mod commands;
 pub(crate) mod contract;
 pub(crate) mod disabled_fade;
 pub(crate) mod field_text_centred;
+pub(crate) mod focus_ring;
 pub(crate) mod keys;
 pub(crate) mod label;
 pub(crate) mod layer;
@@ -41,12 +22,10 @@ pub(crate) mod list;
 pub(crate) mod menu;
 pub(crate) mod notices;
 pub(crate) mod overlay;
-
 pub(crate) mod pickers;
 pub(crate) mod picture;
 pub(crate) mod popover;
 pub(crate) mod runtime;
->>>>>>> origin/next
 
 pub(crate) mod suite_rtl;
 pub(crate) mod suite_rules;

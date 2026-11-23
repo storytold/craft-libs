@@ -5,12 +5,8 @@ use crate::contract::LabelScheme;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
-<<<<<<< HEAD
-use crate::primitives::{Completer, Completion, IconSpec, SubmitKey};
-=======
 use crate::layout_components::Stack;
-use crate::primitives::{Completer, Completion, IconSpec};
->>>>>>> origin/next
+use crate::primitives::{Completer, Completion, IconSpec, SubmitKey};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Mixed, PlainText};

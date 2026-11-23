@@ -4,13 +4,9 @@ pub(crate) mod bar;
 
 pub(crate) mod closed;
 
-<<<<<<< HEAD
-mod icon_row;
-
-mod native;
-=======
 pub(crate) mod companion;
->>>>>>> origin/next
+
+pub(crate) mod icon_row;
 
 pub(crate) mod native;
 

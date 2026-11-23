@@ -35,7 +35,17 @@ fn picture_thumbnail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     .into()
 }
 
-<<<<<<< HEAD
+/// A picture made off the frame: its source renders as a `Later` job, so the picture shows the placeholder until the
+/// job lands on the loader's lanes, then the picture. The job runs inline, so the picture lands in the next frame and
+/// not whenever a thread ends: the suite's settled frames are the same on every run.
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let options = ThumbnailOptions::new().jobs(Arc::new(InlineJobs));
+    let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "craft_ui::stories::picture_rendered", options);
+    let source = FakeThumbSource::<u64>::new().later(true).opaque(true);
+    Picture::rendered("Rendered", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
+}
+
 /// An original mark: a teal disc with an amber diamond, so the SVG's own colours and its fit show.
 const MARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#1f8a8a"/><path d="M12 4 L19 12 L12 20 L5 12 Z" fill="#f2b233"/></svg>"##;
 
@@ -65,17 +75,6 @@ fn picture_wide_svg(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]
 fn picture_svg_invalid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Picture::svg("Broken", NOT_SVG).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui).into()
-=======
-/// A picture made off the frame: its source renders as a `Later` job, so the picture shows the placeholder until the
-/// job lands on the loader's lanes, then the picture. The job runs inline, so the picture lands in the next frame and
-/// not whenever a thread ends: the suite's settled frames are the same on every run.
-#[story(Picture<'static>, covers = [], drive = Drive::Never)]
-fn picture_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let options = ThumbnailOptions::new().jobs(Arc::new(InlineJobs));
-    let thumbnails = Thumbnails::<u64>::in_context(ui.ctx(), "craft_ui::stories::picture_rendered", options);
-    let source = FakeThumbSource::<u64>::new().later(true).opaque(true);
-    Picture::rendered("Rendered", 1, &thumbnails, &source).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
->>>>>>> origin/next
 }
 
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]

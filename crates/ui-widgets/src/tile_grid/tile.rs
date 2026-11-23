@@ -148,10 +148,9 @@ pub(super) struct AroundPicture {
 }
 
 impl AroundPicture {
-<<<<<<< HEAD
-    fn of(cx: &StyleCx<'_>, card: bool, action_place: TileActionPlace) -> AroundPicture {
+    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool, action_place: TileActionPlace) -> AroundPicture {
         let around = |place: CaptionPlace, detail: bool| {
-            let sizes = Sizes::of(cx, card, place);
+            let sizes = Sizes::of(cx, card, text, place, regular_card_padding);
             let mut around = sizes.around(place, detail);
             if action_place == TileActionPlace::Band {
                 around.start = sizes.glyph + sizes.column(place);
@@ -161,10 +160,6 @@ impl AroundPicture {
             }
             around
         };
-=======
-    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool) -> AroundPicture {
-        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, text, place, regular_card_padding).around(place, detail);
->>>>>>> origin/next
         AroundPicture {
             below: around(CaptionPlace::Below, false),
             below_detail: around(CaptionPlace::Below, true),
@@ -579,13 +574,8 @@ impl<'a> Tile<'a> {
     }
 
     /// What a tile adds around its picture for every caption arrangement.
-<<<<<<< HEAD
-    pub(super) fn around(cx: &StyleCx<'_>, card: bool, action_place: TileActionPlace) -> AroundPicture {
-        AroundPicture::of(cx, card, action_place)
-=======
-    pub(super) fn around(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool) -> AroundPicture {
-        AroundPicture::of(cx, card, text, regular_card_padding)
->>>>>>> origin/next
+    pub(super) fn around(cx: &StyleCx<'_>, card: bool, text: CardText, regular_card_padding: bool, action_place: TileActionPlace) -> AroundPicture {
+        AroundPicture::of(cx, card, text, regular_card_padding, action_place)
     }
 
     /// Whether the caption band holds a detail line.
@@ -793,9 +783,9 @@ impl Component for Tile<'_> {
         let (state, text) = (&colors.state, &colors.text);
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-<<<<<<< HEAD
-        let sizes = Sizes::of(cx, key.card, key.caption);
-        // Band tiles use the collection's selection fill over the whole tile.
+        let sizes = Sizes::of(cx, key.card, key.card_text, key.caption, key.regular_card_padding);
+        // Band tiles use the collection's selection fill over the whole tile. Otherwise selection and hover are rings
+        // around the picture; only a card has a fill of its own.
         let fill = if key.action_place == TileActionPlace::Band {
             Stateful::new(c(clear)).off(States::new(c(clear), c(state.hover), c(state.pressed), c(clear))).on(States::new(
                 c(state.selected),
@@ -804,11 +794,6 @@ impl Component for Tile<'_> {
                 c(state.selected),
             ))
         } else if key.card {
-=======
-        let sizes = Sizes::of(cx, key.card, key.card_text, key.caption, key.regular_card_padding);
-        // Selection and hover are rings around the picture; only a card has a fill of its own.
-        let fill = if key.card {
->>>>>>> origin/next
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
             let on = if key.flat_thumbnail {
@@ -1085,7 +1070,6 @@ impl Component for Tile<'_> {
             return;
         }
         let flat = CornerRadius::ZERO;
-<<<<<<< HEAD
         {
             let draw = ui.draw();
             for sheet in &placed.sheets {
@@ -1093,10 +1077,9 @@ impl Component for Tile<'_> {
                 draw.stroke(&PaintShape::Rect(*sheet, flat), StrokeWidth::Thin, style.sheet_edge);
             }
         }
-        {
-=======
+        // A card's picture is the sunken surface, which the placeholder's fill matches.
+        let placeholder = if !style.sizes.card && cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
         if !self.flat_thumbnail {
->>>>>>> origin/next
             // Filled from the outside in, under the picture, so the rings sit outside its edge.
             let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
             let draw = ui.draw();
@@ -1106,31 +1089,15 @@ impl Component for Tile<'_> {
             if ring > 0.0 {
                 draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
             }
-            if style.sizes.card {
-                ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-            } else {
-                let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
-                ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+            // A band tile's selection fill covers the whole tile, picture included: no well over it.
+            if self.action_place != TileActionPlace::Band {
+                if style.sizes.card {
+                    ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
+                } else {
+                    ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+                }
             }
         }
-<<<<<<< HEAD
-        // A card's picture is the sunken surface, which the placeholder's fill matches.
-        let placeholder = if !style.sizes.card && cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
-        if self.action_place != TileActionPlace::Band {
-            if style.sizes.card {
-                ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-            } else {
-                ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
-            }
-        }
-        if let Some(paint) = self.first.take() {
-            let _ = ui.child("picture", picture, RowThumb::new(paint));
-        }
-        let face_ink = match self.hue {
-            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(placeholder.egui()))),
-            None => cx.resolve(&style.face.color),
-        };
-=======
         // Only over the sunken well: a flat thumbnail (a page outline on the card, as the New Document presets draw)
         // has no well and takes no frame.
         let framed = style.sizes.card && !self.flat_thumbnail && (self.first.is_some() || self.picture.is_some());
@@ -1145,7 +1112,10 @@ impl Component for Tile<'_> {
             // frame goes over the picture so all four sides show.
             ui.draw().surface(picture, SurfaceKind::Frame, Corners::All);
         }
->>>>>>> origin/next
+        let face_ink = match self.hue {
+            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(placeholder.egui()))),
+            None => cx.resolve(&style.face.color),
+        };
         {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));

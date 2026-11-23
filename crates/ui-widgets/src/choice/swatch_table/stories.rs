@@ -3,11 +3,7 @@
 use super::{SwatchArrangement, SwatchTable, SwatchTableOutput};
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-<<<<<<< HEAD
-use craft_behavior::{IconId, Selection};
-=======
-use craft_behavior::{Preview, Selection};
->>>>>>> origin/next
+use craft_behavior::{IconId, Preview, Selection};
 use craft_theme::Srgba;
 use egui::Ui;
 

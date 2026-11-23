@@ -7,14 +7,9 @@
 
 pub(crate) mod calendar;
 mod codec;
-<<<<<<< HEAD
 mod popover;
-#[cfg(feature = "testing")]
-mod stories;
-=======
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
->>>>>>> origin/next
 
 pub use calendar::{Calendar, CalendarOutput, CalendarStyle, CalendarView, local_month_grid, month_grid};
 pub use codec::DateCodec;
@@ -23,15 +18,9 @@ pub use popover::{CalendarPopover, CalendarPopoverStyle};
 use super::words::PickerWords;
 use crate::buttons::IconButton;
 use crate::contract::{
-<<<<<<< HEAD
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Props as _, Remember as _, Role, WordSetCx as _,
-=======
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, Input, MeasureCx, Overlay, OverlayUi, Overlays as _, PaintUi,
-    PartsCx, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _, clicked,
->>>>>>> origin/next
 };
-use crate::layout_components::Row;
 use crate::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::text::{Adornment, FieldStyle, place, reserve};
@@ -331,7 +320,6 @@ impl Component for DatePicker<'_> {
         };
         let today = self.today.or_else(|| cx.env.today().and_then(PickedDate::from_calendar_date));
         let name = cx.label();
-<<<<<<< HEAD
         let at = CalendarAt {
             current,
             settled,
@@ -345,63 +333,6 @@ impl Component for DatePicker<'_> {
             name: &name,
         };
         let chosen = ui.show(popup, Overlay::popover(), |ui, body| calendar_body(ui, body, at));
-=======
-        let chosen = ui.show(popup, Overlay::popover(), |ui, body| {
-            let mut view = (*body.memory::<Option<CalendarView>>()).unwrap_or_else(|| CalendarView::open(current, today, precisions, &dates));
-            if precisions.len() > 1 {
-                let entries: Vec<Entry<DatePrecision>> = precisions
-                    .iter()
-                    .map(|precision| {
-                        let label = match precision {
-                            DatePrecision::Year => &words.date_year,
-                            DatePrecision::Month => &words.date_month,
-                            _ => &words.date_day,
-                        };
-                        Entry::new(*precision, label.clone())
-                    })
-                    .collect();
-                let mut precision = view.precision;
-                Segmented::new(words.date_precision.clone(), Bind::bound(&mut precision), &entries).show(ui);
-                if precision != view.precision {
-                    view = view.switched(precision, &dates);
-                    view = view.landed(current, today, &dates);
-                }
-            }
-            let mut calendar = Calendar::new(name.clone(), view, current);
-            if let Some(min) = min {
-                calendar = calendar.min(min);
-            }
-            if let Some(max) = max {
-                calendar = calendar.max(max);
-            }
-            if let Some(today) = today {
-                calendar = calendar.today(today);
-            }
-            let page = calendar.show(ui);
-            if let Some(next) = page.moved {
-                view = next;
-            }
-            let mut pick = page.picked.map(Some);
-            let _ = Row::new().show(ui, |ui, _| {
-                let at_precision = today.map(|today| match view.precision {
-                    DatePrecision::Day => today,
-                    DatePrecision::Month => PickedDate::month(today.year, today.month.unwrap_or(1)),
-                    _ => PickedDate::year(today.year),
-                });
-                if let Some(today) = at_precision {
-                    let allowed = today.in_bounds(min.as_ref(), max.as_ref());
-                    if clicked(&Link::new(words.date_today.clone()).enabled(allowed).show(ui)) {
-                        pick = Some(Some(today));
-                    }
-                }
-                if clicked(&Link::new(words.date_clear.clone()).enabled(current.is_some()).show(ui)) {
-                    pick = Some(None);
-                }
-            });
-            *body.memory::<Option<CalendarView>>() = Some(view);
-            Chosen { hovered: page.hovered, pick }
-        });
->>>>>>> origin/next
         let Some(chosen) = chosen else { return };
         match chosen.pick {
             Some(date) => {

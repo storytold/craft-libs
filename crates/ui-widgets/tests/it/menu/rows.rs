@@ -191,7 +191,6 @@ fn a_letter_no_row_takes_while_a_menu_is_open_does_not_reach_the_text_field_unde
     assert_eq!(*text.borrow(), "hello", "the letter does not reach the field");
 }
 
-<<<<<<< HEAD
 /// A radio row that is not the choice shows an empty ring in its mark column, so the choices read as a group; the
 /// chosen one shows the dot.
 #[trial]
@@ -208,7 +207,8 @@ fn an_unchosen_radio_row_shows_an_empty_ring() {
         _ => false,
     });
     assert!(ring, "an unchosen radio row paints a ring");
-=======
+}
+
 /// The fills painted as rects inside `row`, a row's highlight among them.
 fn fills_in(shapes: &[egui::Shape], row: egui::Rect) -> Vec<egui::Color32> {
     shapes
@@ -296,5 +296,4 @@ fn the_open_submenu_parent_keeps_the_accent_when_the_pointer_enters_its_child() 
         assert_eq!(parent_state.get(), (false, true), "the parent remains open with the active row now in its submenu");
         assert_eq!(fills_in(&shapes, parent), accent, "the parent keeps its accent while its child is active at {scale}×");
     }
->>>>>>> origin/next
 }

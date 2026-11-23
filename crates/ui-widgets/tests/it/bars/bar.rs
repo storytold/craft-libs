@@ -450,7 +450,6 @@ fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
     assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
 }
 
-<<<<<<< HEAD
 /// A text tab strip in a tool bar's row, as a window's mode strip: the row gives it unbounded room, so it measures
 /// the natural length of its tabs and every tab shows, none in the overflow menu, and the strip ends before the
 /// bar's trailing group.
@@ -487,7 +486,8 @@ fn a_tab_strip_in_a_bar_row_takes_its_tabs_natural_length() {
     let length: f32 = shown.iter().map(Rect::width).sum();
     assert!(strip.width() >= length - SLACK, "the strip is as long as its tabs: {dump}");
     assert!(strip.max.x <= trailing.min.x + SLACK, "and ends before the trailing group: {dump}");
-=======
+}
+
 /// An icon-only button in an options bar draws its icon at the tool size, as the align strip's buttons do.
 #[trial]
 fn an_icon_button_in_an_options_bar_draws_its_icon_at_the_tool_size() {
@@ -566,5 +566,4 @@ fn a_tool_bar_reports_set_positions_from_its_first_pass() {
     fixture.idle(1);
     let joined = places(&fixture);
     assert!(joined.len() == 4 && joined.iter().all(|(_, held)| *held == size + 1), "the set counts the new tool in the frame it joins: {joined:?}");
->>>>>>> origin/next
 }

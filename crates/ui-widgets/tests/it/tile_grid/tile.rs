@@ -106,7 +106,6 @@ fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlaps() {
     }
 }
 
-<<<<<<< HEAD
 /// A named hover action carries its tile in its accessible name, so the shown actions of different tiles are told
 /// apart; a selected tile shows its actions without the pointer, and the actions of a tile that does not show them
 /// stay out of the tree.
@@ -150,7 +149,8 @@ fn a_selected_band_tile_is_outlined() {
         shapes.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.stroke.width > 0.0 && rect.stroke.color.a() > 0)).count()
     };
     assert!(edges(true) > edges(false), "selected {} against unselected {}", edges(true), edges(false));
-=======
+}
+
 /// A card of a preset centres its name; a card of a file sets it at the reading start.
 #[trial]
 fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
@@ -170,5 +170,4 @@ fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
     assert!((name.center().x - tile.center().x).abs() <= 1.0, "a preset's name is centred: {name:?} in {tile:?}");
     let (tile, name) = name_in(CardText::File);
     assert!(name.left() - tile.left() < tile.width() / 4.0, "a file's name starts at the tile's start edge: {name:?} in {tile:?}");
->>>>>>> origin/next
 }

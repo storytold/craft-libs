@@ -9,11 +9,7 @@ use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, OverlayUi, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
     Styled as _, WordSetCx as _,
 };
-<<<<<<< HEAD
-use crate::primitives::{Completer, IconSpec, SubmitKey, TextOptions, TextRun};
-=======
-use crate::primitives::{Completer, IconSpec, TabKey, TextOptions, TextRun, Wrap};
->>>>>>> origin/next
+use crate::primitives::{Completer, IconSpec, SubmitKey, TabKey, TextOptions, TextRun, Wrap};
 use crate::runtime::env::{Label, Message};
 use craft_behavior::{Codec, EditEvent, IconId, Mixed, PartKey, PlainText, Proposal, Sense};
 use egui::{Id, Rect, Vec2};

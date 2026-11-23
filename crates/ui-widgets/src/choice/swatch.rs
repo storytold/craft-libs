@@ -312,12 +312,9 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-<<<<<<< HEAD
         let fill = if self.icon.is_some() { WellFill::Empty } else { well_fill(self.color) };
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), fill, self.icon.as_ref(), self.marked);
-=======
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), self.color, self.marked, self.shape);
->>>>>>> origin/next
+        let face = WellFace { fill, glyph: self.icon.as_ref(), shape: self.shape };
+        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), face, self.marked);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
@@ -329,7 +326,6 @@ impl<T: Value + 'static> Component for Swatch<T> {
     }
 }
 
-<<<<<<< HEAD
 /// What the well of a swatch of `color` shows: the colour, the "no colour" diagonal, or the mixed dash.
 fn well_fill(color: Mixed<Option<Srgba>>) -> WellFill {
     match color {
@@ -339,32 +335,32 @@ fn well_fill(color: Mixed<Option<Srgba>>) -> WellFill {
     }
 }
 
-/// The one swatch face painter: the well `fill` in `well` (a checkerboard behind a translucent colour, the dash of a
-/// mixed one, the diagonal of none), the `glyph` of an icon cell in the text colour, then the outline ring, the mark
+/// What a swatch's well shows, and its shape.
+struct WellFace<'a> {
+    fill: WellFill,
+    /// The glyph of an icon cell, over the empty well.
+    glyph: Option<&'a IconId>,
+    shape: SwatchShape,
+}
+
+/// The one swatch face painter: the well `face.fill` in `well` (a checkerboard behind a translucent colour, the dash of
+/// a mixed one, the diagonal of none), the glyph of an icon cell in the text colour, then the outline ring, the mark
 /// when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, fill: WellFill, glyph: Option<&IconId>, marked: bool) {
-    let shape = PaintShape::Rect(well, style.radius);
-    draw.swatch_well(well, style.radius, fill);
-    if let Some(glyph) = glyph {
-        let side = style.glyph.min(well.width()).min(well.height());
-        draw.icon(Rect::from_center_size(well.center(), Vec2::splat(side)), &IconSpec::svg(glyph.clone()).color(style.mark));
-    }
-    draw.stroke(&shape, StrokeWidth::Thin, state.resolve(&style.edge));
-=======
-/// The one swatch face painter: the well of `color` in `well` (a checkerboard behind a translucent colour, the dash
-/// of a mixed one), then the outline ring, the mark when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, color: Mixed<Srgba>, marked: bool, shape: SwatchShape) {
-    let outline = |rect: Rect| match shape {
+fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, face: WellFace<'_>, marked: bool) {
+    let outline = |rect: Rect| match face.shape {
         SwatchShape::Square => PaintShape::Rect(rect, style.radius),
         SwatchShape::Hexagon => PaintShape::Polygon(hexagon(rect)),
     };
     let edge = outline(well);
-    match shape {
-        SwatchShape::Square => draw.swatch_well(well, style.radius, color.same().copied()),
-        SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), color.same().copied()),
+    match face.shape {
+        SwatchShape::Square => draw.swatch_well(well, style.radius, face.fill),
+        SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), face.fill),
+    }
+    if let Some(glyph) = face.glyph {
+        let side = style.glyph.min(well.width()).min(well.height());
+        draw.icon(Rect::from_center_size(well.center(), Vec2::splat(side)), &IconSpec::svg(glyph.clone()).color(style.mark));
     }
     draw.stroke(&edge, StrokeWidth::Thin, state.resolve(&style.edge));
->>>>>>> origin/next
     if marked {
         let inside = outline(well.shrink(draw.width(StrokeWidth::Thin)));
         draw.stroke(&inside, StrokeWidth::Thin, style.mark);
@@ -421,10 +417,7 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-<<<<<<< HEAD
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, well_fill(self.color), None, false));
-=======
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, self.color, false, SwatchShape::Square));
->>>>>>> origin/next
+        let face = WellFace { fill: well_fill(self.color), glyph: None, shape: SwatchShape::Square };
+        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, face, false));
     }
 }

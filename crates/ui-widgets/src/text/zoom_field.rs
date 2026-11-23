@@ -32,7 +32,7 @@ pub struct ZoomField {
     stepper: bool,
     scrub: bool,
     enabled: bool,
-<<<<<<< HEAD
+    status_bar: bool,
     scale: ZoomScale,
 }
 
@@ -56,16 +56,12 @@ impl ZoomScale {
             ZoomScale::Points => 1.0,
         }
     }
-=======
-    status_bar: bool,
->>>>>>> origin/next
 }
 
 impl ZoomField {
     /// A zoom field named `label` over `view` (`None` when no view is known) of a document of `document` units.
     pub fn new(label: impl Into<Label>, view: Option<CanvasView>, document: Size) -> Self {
-<<<<<<< HEAD
-        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, scale: ZoomScale::Device }
+        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, status_bar: false, scale: ZoomScale::Device }
     }
 
     /// What 100 % means: device pixels (the default) or document points.
@@ -73,9 +69,6 @@ impl ZoomField {
     pub fn scale(mut self, scale: ZoomScale) -> Self {
         self.scale = scale;
         self
-=======
-        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, status_bar: false }
->>>>>>> origin/next
     }
 
     /// The arrow keys and the wheel step along the zoom ladder.
@@ -137,17 +130,13 @@ impl ZoomField {
         if self.scrub {
             field = field.scrub_by_label();
         }
-<<<<<<< HEAD
+        if self.status_bar {
+            field = field.status_zoom();
+        }
         let shown = match rect {
             Some(rect) => field.show_at(ui, rect),
             None => field.show(ui),
         };
-=======
-        if self.status_bar {
-            field = field.status_zoom();
-        }
-        let shown = field.show(ui);
->>>>>>> origin/next
         let invalid_zoom = range.filter(|_| shown.cut).map(|range| InvalidZoom { low: *range.start(), high: *range.end() });
         let view = match self.view {
             Some(current) => shown

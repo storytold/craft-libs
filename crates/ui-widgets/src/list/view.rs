@@ -281,11 +281,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for List<'_, K> {
     }
 
     fn dress<'r>(&self, row: Self::Item<'r>, state: &RowState) -> Self::Item<'r> {
-<<<<<<< HEAD
-        let row = row.rows(self.items.row_height).sub_row(state).document(self.document.clone());
-=======
-        let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves);
->>>>>>> origin/next
+        let row = row.rows(self.items.row_height).sub_row(state).leaves(self.tree_leaves).document(self.document.clone());
         if self.row_menu { row.row_menu() } else { row }
     }
 

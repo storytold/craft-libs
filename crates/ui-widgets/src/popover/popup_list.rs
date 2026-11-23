@@ -80,12 +80,12 @@ impl<'a> PopupList<'a> {
         self
     }
 
-<<<<<<< HEAD
     /// The field the popup hangs from. The popup closes when the opener is no longer shown.
     #[must_use]
     pub fn opened_by(self, opener: &Response) -> Self {
         self.overlay(|overlay| overlay.opened_by(opener, Trigger::Manual))
-=======
+    }
+
     /// The caller's `List`, by the id it is shown with: it takes the opener's list keys while the popup is open.
     #[must_use]
     pub fn list(mut self, list: Id) -> Self {
@@ -95,7 +95,6 @@ impl<'a> PopupList<'a> {
         };
         self.props = self.props.mount(Mount::Layer(overlay.list(list)));
         self
->>>>>>> origin/next
     }
 }
 

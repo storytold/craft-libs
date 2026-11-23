@@ -15,13 +15,9 @@ use crate::contract::MemoProps;
 use crate::runtime::env::EnvValue;
 
 pub use button::{Button, ButtonOutput, ButtonStyle};
-<<<<<<< HEAD
 pub use command_search::{CommandSearch, CommandSearchStyle};
-pub use icon_button::{IconButton, IconButtonStyle, PopupMark, PressFocus};
-=======
 pub use face::Arrangement;
-pub use icon_button::{IconButton, IconButtonStyle, PopupMark};
->>>>>>> origin/next
+pub use icon_button::{IconButton, IconButtonStyle, PopupMark, PressFocus};
 pub use link::{Link, LinkStyle};
 pub use split_button::{SplitButton, SplitButtonStyle, SplitMenu, SplitOutput};
 pub use toggle_button::{ToggleButton, ToggleButtonStyle};

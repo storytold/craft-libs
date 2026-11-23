@@ -4,23 +4,16 @@
 use super::display_sense;
 use crate::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use crate::list::{ThumbAspect, ThumbSize};
-<<<<<<< HEAD
-use crate::primitives::{ContentPainterCx, Revision, TextureState, TextureStore, TextureStoreOptions, fit_rect, svg_tree};
-use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{Metrics, Sense};
-use egui::{Color32, ColorImage, Id, Pos2, Rect, Response, Vec2};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-=======
 use crate::primitives::{
-    ContentPainterCx, Priority, Revision, TextureStore, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails, fit_rect,
+    ContentPainterCx, Priority, Revision, TextureState, TextureStore, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails,
+    fit_rect, svg_tree,
 };
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
-use egui::{ColorImage, Id, Rect, Response, Vec2};
->>>>>>> origin/next
+use egui::{Color32, ColorImage, Id, Rect, Response, Vec2};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
@@ -61,13 +54,10 @@ enum Source<'a> {
     Image { key: u64, image: &'a dyn Fn() -> ColorImage },
     /// A content painter that paints into the picture's rect.
     Painter(Paint<'a>),
-<<<<<<< HEAD
-    /// An SVG asset, rasterised at the picture's drawn size.
-    Svg(&'static [u8]),
-=======
     /// A picture rendered off the frame by a thumbnail source, shown pending until it arrives.
     Rendered { key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64> },
->>>>>>> origin/next
+    /// An SVG asset, rasterised at the picture's drawn size.
+    Svg(&'static [u8]),
 }
 
 /// A picture of an image the caller makes (`new`), of what a content painter paints (`painter`) or of an SVG asset
@@ -108,12 +98,6 @@ impl<'a> Picture<'a> {
         Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
     }
 
-<<<<<<< HEAD
-    /// A picture of the SVG asset `svg`, rasterised through `craft-svg` at the picture's drawn size; a malformed or
-    /// oversized SVG draws nothing. `label` names it for a screen reader; an empty one leaves it decorative.
-    pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
-        Picture::from_source(label, Source::Svg(svg))
-=======
     /// A picture made off the frame by `source` for `key`: pending, with the framework's placeholder, until the
     /// source's picture arrives, then fitted as `new`'s texture is. `label` names it for a screen reader.
     /// The source's picture is asked through [`Thumbnails::state`] at the picture's rect and the screen's density,
@@ -121,7 +105,12 @@ impl<'a> Picture<'a> {
     /// source's, not the `revision` prop.
     pub fn rendered(label: impl Into<Label>, key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64>) -> Self {
         Picture::from_source(label, Source::Rendered { key, thumbnails, source })
->>>>>>> origin/next
+    }
+
+    /// A picture of the SVG asset `svg`, rasterised through `craft-svg` at the picture's drawn size; a malformed or
+    /// oversized SVG draws nothing. `label` names it for a screen reader; an empty one leaves it decorative.
+    pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
+        Picture::from_source(label, Source::Svg(svg))
     }
 
     fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
@@ -193,7 +182,12 @@ impl Component for Picture<'_> {
                 ui.content_painter(cx).picture(texture.id, target, texture.uv(), 0.0);
             }
             Source::Painter(paint) => paint(&ui.content_painter(cx), cx.content_rect),
-<<<<<<< HEAD
+            Source::Rendered { key, thumbnails, source } => {
+                let rect = cx.content_rect;
+                let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.ctx.pixels_per_point());
+                let state = thumbnails.state(&cx.ctx, *source, key, &request, Priority::VISIBLE);
+                thumbnails.paint(&ui.content_painter(cx), rect, &state, &ThumbPaint::default());
+            }
             Source::Svg(svg) => {
                 let ppp = cx.ctx.pixels_per_point();
                 let size = cx.content_rect.size() * ppp;
@@ -203,7 +197,7 @@ impl Component for Picture<'_> {
                 }
                 // A side past the cap is refused below; the saturating cast keeps that refusal for absurd sizes.
                 let (width, height) = (width as u32, height as u32);
-                let store = TextureStore::<(Id, u64)>::in_context(&cx.ctx, "picture", TextureStoreOptions::thumbnails());
+                let store = store(&cx.ctx);
                 let key = (cx.resolved.id, svg_key(*svg, width, height));
                 let texture = match store.state(&cx.ctx, &key, self.revision) {
                     TextureState::Ready(texture) => texture,
@@ -218,15 +212,8 @@ impl Component for Picture<'_> {
                     },
                 };
                 let target = fit_rect(cx.content_rect, texture.size_vec2());
-                let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-                ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
-=======
-            Source::Rendered { key, thumbnails, source } => {
-                let rect = cx.content_rect;
-                let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.ctx.pixels_per_point());
-                let state = thumbnails.state(&cx.ctx, *source, key, &request, Priority::VISIBLE);
-                thumbnails.paint(&ui.content_painter(cx), rect, &state, &ThumbPaint::default());
->>>>>>> origin/next
+                // The store packs, so the texture is the picture's part of a shared page.
+                ui.content_painter(cx).picture(texture.id, target, texture.uv(), 0.0);
             }
         }
     }
@@ -236,7 +223,12 @@ impl Component for Picture<'_> {
     }
 }
 
-<<<<<<< HEAD
+/// The pictures' store of `ctx`: packed, so many small pictures (style tiles, font samples, SVG assets) share a few
+/// page textures; a larger picture takes a texture of its own.
+fn store(ctx: &egui::Context) -> TextureStore<(Id, u64)> {
+    TextureStore::in_context(ctx, "picture", TextureStoreOptions::thumbnails().packed_small())
+}
+
 /// The longest side, in physical pixels, an SVG picture rasterises at; past it the picture draws nothing.
 const MAX_SVG_SIDE: u32 = 4096;
 /// Bytes drawing one SVG picture may allocate, its target included.
@@ -286,10 +278,4 @@ fn rasterise_svg(svg: &[u8], width: u32, height: u32) -> Option<ColorImage> {
     }))
     .ok()
     .flatten()
-=======
-/// The pictures' store of `ctx`: packed, so many small pictures (style tiles, font samples) share a few page
-/// textures; a larger picture takes a texture of its own.
-fn store(ctx: &egui::Context) -> TextureStore<(Id, u64)> {
-    TextureStore::in_context(ctx, "picture", TextureStoreOptions::thumbnails().packed_small())
->>>>>>> origin/next
 }

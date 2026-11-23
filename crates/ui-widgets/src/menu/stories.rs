@@ -1,14 +1,8 @@
 //! Stories of the menu rows and the menu.
 
-<<<<<<< HEAD
 use super::{Menu, MenuIcon, MenuIconRow, MenuItem};
-use crate::buttons::Button;
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
-=======
-use super::{Menu, MenuItem};
 use crate::buttons::{Button, IconButton};
-use crate::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger};
->>>>>>> origin/next
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::layout_components::{Row, Stack};
 use crate::primitives::ContentPainterCx;

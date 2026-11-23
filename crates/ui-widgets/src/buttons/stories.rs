@@ -1,16 +1,7 @@
 //! Stories of the buttons.
 
-<<<<<<< HEAD
-use super::{Button, CommandSearch, IconButton, Link, PressFocus, SplitButton, ToggleButton};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
-use crate::display::{Shade, Text};
-use crate::layout_components::{Grid, Row};
-use crate::primitives::IconSpec;
-use crate::runtime::env::Message;
-use crate::style::DataColor;
-=======
-use super::{Arrangement, Button, ControlPlace, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
-use crate::contract::{BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
+use super::{Arrangement, Button, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PressFocus, SplitButton, SplitMenu, ToggleButton};
+use crate::contract::{Bind, BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::display::{Picture, Shade, Text};
 use crate::layout_components::{Grid, Row, Stack};
 use crate::list::ThumbAspect;
@@ -20,7 +11,6 @@ use crate::runtime::commands::EditCommands;
 use crate::runtime::env::{Message, with_env};
 use crate::style::{DataColor, SurfaceKind};
 use crate::testing::pictures::sample_picture;
->>>>>>> origin/next
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnWidth, IconId, Mixed, Proposal};
 use craft_theme::{ControlSize, Variant};

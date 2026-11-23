@@ -590,17 +590,12 @@ impl Component for Notice<'_> {
             detail,
             line,
             more,
-<<<<<<< HEAD
             icon: if key.layout == NoticeLayout::Centred {
                 // An empty state's picture: large and quiet above its message.
                 IconLook::new(cx.tokens.size.icon.lg * EMPTY_ICON_IN_LARGE, stateful(muted))
             } else {
                 IconLook::new(control.icon, stateful(tone))
             },
-            card_width: cx.tokens.size.notice.width,
-=======
-            icon: IconLook::new(control.icon, stateful(tone)),
->>>>>>> origin/next
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }
     }
@@ -614,12 +609,8 @@ impl Component for Notice<'_> {
             // that hosts content (a progress bar) has no text width of its own and takes the card width.
             (NoticeLayout::Card | NoticeLayout::Toast, room) => {
                 let padding = cx.style.metrics.padding;
-<<<<<<< HEAD
-                let cap = cx.style.card_width - padding.start - padding.end;
+                let cap = CARD_WIDTH - padding.start - padding.end;
                 let width = if self.content_sizes.is_empty() { natural.min(cap) } else { cap };
-=======
-                let width = CARD_WIDTH - padding.start - padding.end;
->>>>>>> origin/next
                 room.map_or(width, |room| width.min(room))
             }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),

@@ -2,13 +2,9 @@
 
 use super::{PopupList, PopupListKind};
 use crate::buttons::Button;
-<<<<<<< HEAD
 use crate::contract::overlay::Anchor;
-use crate::contract::{Bind, Show as _, ShowCollection as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, Props as _, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use crate::fonts::FontRef;
-=======
-use crate::contract::{Props as _, Show as _, ShowCollection as _, ShowContainer as _};
->>>>>>> origin/next
 use crate::layout_components::Stack;
 use crate::list::{DocumentRows, List, ListRow};
 use crate::primitives::HAlign;

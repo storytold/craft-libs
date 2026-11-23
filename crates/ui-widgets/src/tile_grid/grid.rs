@@ -11,11 +11,7 @@ pub(crate) mod stories;
 use super::headers::Outline;
 use super::layout::{Around, ArrangeSpacing, GridLayout, Recipe, Slot, TailRow, TileGroup, Tiling, arrange, aspects_of, slot_at};
 use super::tile::AroundPicture;
-<<<<<<< HEAD
-use super::{CaptionPlace, Tile, TileActionPlace, TilePartEvent, TileZoom, ZoomStep};
-=======
-use super::{CaptionPlace, CardText, Tile, TilePartEvent, ZoomStep};
->>>>>>> origin/next
+use super::{CaptionPlace, CardText, Tile, TileActionPlace, TilePartEvent, TileZoom, ZoomStep};
 use crate::contract::{
     Access, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, ColumnKind, ColumnSpec, Common, Component,
     ContainerProps, Cx, DropKind, EditResponse, Focus as _, ListDrag, Meta as _, NoValue, Notch, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
@@ -184,21 +180,13 @@ struct GridSizes {
 }
 
 impl GridSizes {
-<<<<<<< HEAD
-    fn of(cx: &StyleCx<'_>, card: bool, rows: RowHeight, action_place: TileActionPlace) -> GridSizes {
-=======
-    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, rows: RowHeight, regular_card_padding: bool) -> GridSizes {
->>>>>>> origin/next
+    fn of(cx: &StyleCx<'_>, card: bool, text: CardText, rows: RowHeight, regular_card_padding: bool, action_place: TileActionPlace) -> GridSizes {
         let spacing =
             ArrangeSpacing::new(if card { cx.tokens.space.gap.section } else { cx.tokens.space.gap.stack }, cx.tokens.space.gap.inline, rows.of(cx));
         GridSizes {
             card: cx.tokens.size.thumb.card,
             thumbs: [cx.tokens.size.thumb.sm, cx.tokens.size.thumb.md, cx.tokens.size.thumb.lg],
-<<<<<<< HEAD
-            around: Tile::around(cx, card, action_place),
-=======
-            around: Tile::around(cx, card, text, regular_card_padding),
->>>>>>> origin/next
+            around: Tile::around(cx, card, text, regular_card_padding, action_place),
             spacing,
             // Bare tiles sit with no gap between them: the room around each picture keeps them apart.
             bare_spacing: if card { spacing } else { ArrangeSpacing { gap: 0.0, ..spacing } },
@@ -500,11 +488,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// The layout of this pass: `previous` when it was made from the same recipe, else a new arrangement. A card is
     /// the picture plus what the tile adds around it in every tiling.
     fn laid_out(&self, previous: Option<GridLayout>, source: &dyn ItemSource<K>, width: f32, item: Option<Vec2>, cx: &StyleCx<'_>) -> GridLayout {
-<<<<<<< HEAD
-        let style = GridSizes::of(cx, self.card, self.items.row_height, self.action_place);
-=======
-        let style = GridSizes::of(cx, self.card, self.card_text, self.items.row_height, self.regular_card_padding);
->>>>>>> origin/next
+        let style = GridSizes::of(cx, self.card, self.card_text, self.items.row_height, self.regular_card_padding, self.action_place);
         let spacing = style.spacing(self.caption);
         let around = style.around.get(self.caption, self.detail_line);
         // A card never outgrows the grid: in a column narrower than a card the card takes the column.
@@ -1002,11 +986,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     fn dress_inputs(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-<<<<<<< HEAD
-        (self.caption, self.detail_line, self.card, self.action_place, self.checks).hash(&mut hasher);
-=======
-        (self.caption, self.detail_line, self.card, self.card_text, self.regular_card_padding).hash(&mut hasher);
->>>>>>> origin/next
+        (self.caption, self.detail_line, self.card, self.card_text, self.regular_card_padding, self.action_place, self.checks).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -1015,11 +995,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         if self.card_columns == 0 {
             return 0.0;
         }
-<<<<<<< HEAD
-        let style = GridSizes::of(cx, self.card, self.items.row_height, self.action_place);
-=======
-        let style = GridSizes::of(cx, self.card, self.card_text, self.items.row_height, self.regular_card_padding);
->>>>>>> origin/next
+        let style = GridSizes::of(cx, self.card, self.card_text, self.items.row_height, self.regular_card_padding, self.action_place);
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
         let around = style.around.get(self.caption, self.detail_line);
         let card = style.card(self.picture_side(&style, item, around), aspect, around).x;
@@ -1043,15 +1019,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     /// Every tile gets the grid's caption place, detail line and actions' place, the card look, and its row's rename
     /// state. Under `checks` a tile's check is its own selection, so the app keeps no second copy of it.
     fn dress<'r>(&self, tile: Self::Item<'r>, row: &RowState) -> Self::Item<'r> {
-<<<<<<< HEAD
         let tile =
             tile.caption(self.caption).detail_line(self.detail_line).action_place(self.action_place).renaming(row.renaming).selected(row.selected);
         let tile = if self.checks { tile.check(if row.selected { ToggleState::On } else { ToggleState::Off }) } else { tile };
-        if self.card { tile.card() } else { tile }
-=======
-        let tile = tile.caption(self.caption).detail_line(self.detail_line).renaming(row.renaming);
         if self.card { tile.card().card_text(self.card_text).regular_card_padding(self.regular_card_padding) } else { tile }
->>>>>>> origin/next
     }
 
     fn can_rename(&self, key: &K) -> bool {

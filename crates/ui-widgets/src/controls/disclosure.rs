@@ -52,13 +52,8 @@ pub struct DisclosureGlyph {
     pub stroke: StrokeWidth,
 }
 
-<<<<<<< HEAD
 /// The arrow of a field or picker: the small filled triangle pointing down.
-static DROPDOWN: DisclosureGlyph = DisclosureGlyph::new(1.0);
-=======
-/// The arrow of a field or picker.
-const DROPDOWN: DisclosureGlyph = DisclosureGlyph::dropdown_form();
->>>>>>> origin/next
+const DROPDOWN: DisclosureGlyph = DisclosureGlyph::new(1.0);
 /// The arrow of a button that opens a menu.
 const MENU_BUTTON: DisclosureGlyph = DisclosureGlyph { open: 1.0, form: ArrowForm::Dropdown, stroke: StrokeWidth::Medium };
 /// The submenu arrow.

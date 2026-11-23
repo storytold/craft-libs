@@ -97,13 +97,9 @@ impl Text {
             role: TypeRole::Body,
             elide: Elide::Off,
             spans: Vec::new(),
-<<<<<<< HEAD
-            italic: false,
-            numeric: None,
-=======
             styled: Vec::new(),
             italic: false,
->>>>>>> origin/next
+            numeric: None,
         }
         .label(text)
     }
@@ -220,20 +216,15 @@ impl Component for Text {
             };
         }
         let role = cx.style.text.role;
-<<<<<<< HEAD
-        // Rows reserve the widest word, up to an enclosing reading-width cap.
+        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word, up to
+        // an enclosing reading-width cap.
         let widest = || {
-            cx.resolved
-                .label
-                .split_whitespace()
-                .map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x)
+            self.word_runs(role, cx.resolved.label)
+                .iter()
+                .map(|word| cx.layout_at(word, f32::INFINITY).size().x)
                 .fold(0.0, f32::max)
                 .min(cx.wrap_limit().unwrap_or(f32::INFINITY))
         };
-=======
-        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
-        let widest = || self.word_runs(role, cx.resolved.label).iter().map(|word| cx.layout_at(word, f32::INFINITY).size().x).fold(0.0, f32::max);
->>>>>>> origin/next
         if cx.proposal == Proposal::Min && self.elide == Elide::Off {
             let widest = widest();
             return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
