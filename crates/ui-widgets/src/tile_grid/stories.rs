@@ -21,6 +21,12 @@ fn tile(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tile::new("IMG_0001.jpg").detail("00:12").show(ui).into()
 }
 
+/// A tile that is not a card, with no sunken plate behind its picture.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_bare(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Painter").thumb(ThumbAspect::SQUARE, StoryPictures::of(ui.ctx()).thumb(1)).bare().show(ui).into()
+}
+
 #[story(Tile<'static>, covers = [LongText], drive = Drive::Never)]
 fn tile_long_text(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tile::new("IMG_20261101_123456_a_name_much_longer_than_the_tile_is_wide.jpeg").show(ui).into()

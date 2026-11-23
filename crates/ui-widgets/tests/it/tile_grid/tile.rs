@@ -81,3 +81,30 @@ fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
     let (tile, name) = name_in(CardText::File);
     assert!(name.left() - tile.left() < tile.width() / 4.0, "a file's name starts at the tile's start edge: {name:?} in {tile:?}");
 }
+
+/// Whether a tile paints a `surface.sunken` fill inside its own rect, with `bare` set or not.
+fn paints_plate(bare: bool) -> bool {
+    use craft_ui::runtime::env::Env;
+    use egui::Color32;
+    let mut frames = Frames::new();
+    let (mut tile, mut sunken, mut shapes) = (Rect::NOTHING, Color32::TRANSPARENT, Vec::new());
+    for _ in 0..3 {
+        shapes = frames.frame_shapes(|ui| {
+            let [r, g, b, a] = Env::of(ui).tokens.tokens().color.surface.sunken.0;
+            sunken = Color32::from_rgba_unmultiplied(r, g, b, a);
+            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0));
+            tile = in_region(ui, region, |ui| {
+                let tile = Tile::new("Poster");
+                (if bare { tile.bare() } else { tile }).show(ui).response.rect
+            });
+        });
+    }
+    shapes.iter().any(|shape| matches!(shape, Shape::Rect(r) if r.fill == sunken && tile.expand(1.0).contains_rect(r.rect) && r.rect.area() > 100.0))
+}
+
+/// A non-card tile keeps its sunken plate unless it is `bare`, so a picture that paints its own ground sits on the surface.
+#[trial]
+fn a_bare_tile_paints_no_sunken_plate_and_a_default_tile_keeps_it() {
+    assert!(paints_plate(false), "a default tile paints the plate behind its picture");
+    assert!(!paints_plate(true), "a bare tile paints none");
+}

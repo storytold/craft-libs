@@ -320,6 +320,10 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop(flag)]
     flat_thumbnail: bool,
+    /// A tile that is not a card paints no `surface.sunken` plate behind its picture: for pictures that paint their own
+    /// ground (a painter picker whose art sits on the dialog surface). Rings, dimming and the picture itself stay.
+    #[prop(flag)]
+    bare: bool,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -397,6 +401,7 @@ impl<'a> Tile<'a> {
             card: false,
             card_text: CardText::File,
             flat_thumbnail: false,
+            bare: false,
             detail: None,
             accessible_name: None,
             rating: None,
@@ -864,7 +869,7 @@ impl Component for Tile<'_> {
             }
             if style.sizes.card {
                 ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-            } else {
+            } else if !self.bare {
                 let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
                 ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
             }
