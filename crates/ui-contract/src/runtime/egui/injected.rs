@@ -330,6 +330,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
     let (pass_nr, focused) = (pass::pass_nr(ctx, viewport), crate::runtime::focus::record(ctx, viewport).focused);
     let frame = pass::frame_nr(ctx, viewport);
     let blurred = input.events.iter().any(|event| matches!(event, Event::WindowFocused(false)));
+    let held = crate::runtime::frame::held_for(ctx, viewport, frame);
     let mut wake = None;
     let follow = Service::<Injected>::run(ctx, |injected| {
         if blurred {
@@ -358,13 +359,19 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
                 return false;
             }
         }
-        if let Some(flight) = &lane.flight {
+        if let Some(flight) = &mut lane.flight {
             if flight.pass < pass_nr {
                 if let (Some(until), Some(now)) = (flight.until, input.time)
                     && now < until
                 {
                     wake = Some(until - now);
                     return false;
+                }
+                // Events of the step that the frame it entered held back (behind a real press there, H0) arrive in this
+                // pass: the step's pass is this one too, so it acts for the client, and the next step waits for it.
+                if flight.step.events.iter().any(|event| held.contains(event)) {
+                    flight.pass = pass_nr;
+                    return !lane.queue.is_empty();
                 }
                 lane.flight = None;
             } else if flight.focus != focused {

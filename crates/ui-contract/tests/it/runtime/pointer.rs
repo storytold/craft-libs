@@ -356,6 +356,31 @@ fn a_rerun_pass_delivers_none_of_the_frames_input_again() {
     assert!(log[0].stirred && log[0].injected && !log[1].stirred && !log[1].injected, "the first pass carries the input");
 }
 
+/// An injected step that enters a frame behind a real pointer press waits for the next frame (one press per pass), and
+/// the pass that carries it acts for the automation client. Guards against a step whose flight ended with the frame it
+/// entered, so the pass its text arrived in read as the user's (`injected_pass` false).
+#[trial]
+fn an_injected_step_held_behind_a_press_arrives_in_an_injected_pass() {
+    let log: Rc<RefCell<Vec<(bool, bool)>>> = Rc::default();
+    let sink = log.clone();
+    let mut show = move |ui: &mut Ui| {
+        let ctx = ui.ctx().clone();
+        let typed = ctx.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "x")));
+        sink.borrow_mut().push((typed, craft_ui::runtime::windows::WindowHost::of(&ctx).injected_pass()));
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    craft_ui::runtime::windows::WindowHost::of(&frames.ctx).inject_text(egui::ViewportId::ROOT, "x");
+    log.borrow_mut().clear();
+    let at = Pos2::new(20.0, 20.0);
+    frames.frame(vec![pointer::moved(at), pointer::press(at)], &mut show);
+    frames.frame(vec![pointer::release(at)], &mut show);
+    frames.idle(2, &mut show);
+    let log = log.borrow();
+    let carrying: Vec<bool> = log.iter().filter(|(typed, _)| *typed).map(|(_, injected)| *injected).collect();
+    assert_eq!(carrying, [true], "one pass carries the text, and it is the client's: {log:?}");
+}
+
 fn downs(phases: &[PressPhase]) -> usize {
     phases.iter().filter(|phase| matches!(phase, PressPhase::Down { .. })).count()
 }

@@ -63,6 +63,11 @@ impl HeldInput {
     pub(crate) fn holds(&self) -> bool {
         !self.events.is_empty()
     }
+
+    /// The held events the frame `frame`'s input gets: none once that frame took them.
+    pub(crate) fn delivered_in(&self, frame: u64) -> Vec<Event> {
+        if self.frame == Some(frame) { Vec::new() } else { self.events.iter().map(|arrived| arrived.event.clone()).collect() }
+    }
 }
 
 /// H0: this pass carries at most one pointer press, as its last pointer event. Events after the first press
