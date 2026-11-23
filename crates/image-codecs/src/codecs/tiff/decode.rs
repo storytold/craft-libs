@@ -294,12 +294,14 @@ pub(crate) fn orientation(bytes: &[u8], page: Option<usize>) -> u16 {
 }
 
 /// The page's metadata; the ICC profile goes to `icc`. A SubIFD without a profile of its own
-/// takes the profile of `parent`, the directory listing it: a SubIFD is part of the same image
-/// (a reduced copy, or the primary image under an IFD0 thumbnail), and some writers keep the
-/// profile only in IFD0.
+/// takes the profile of `parent`, the directory listing it, when both have the same
+/// PhotometricInterpretation: such a SubIFD is part of the same image (a reduced copy, or the
+/// primary image under an IFD0 thumbnail), and some writers keep the profile only in IFD0. A
+/// SubIFD of another colour model (a grey mask under an RGB page) can't use that profile.
 fn metadata(f: &File<'_>, dir: &Ifd, parent: Option<&Ifd>, icc: &mut Option<Vec<u8>>) -> Metadata {
     let profile = |d: &Ifd| f.tag_bytes(d, Tag::IccProfile.to_u16()).filter(|b| !b.is_empty()).map(<[u8]>::to_vec);
-    *icc = profile(dir).or_else(|| parent.and_then(profile));
+    let photometric = |d: &Ifd| f.tag_uint(d, ifd::TAG_PHOTOMETRIC);
+    *icc = profile(dir).or_else(|| parent.filter(|p| photometric(p).is_some() && photometric(p) == photometric(dir)).and_then(profile));
     let text = |tag: u16| {
         let b = f.tag_bytes(dir, tag)?;
         let s = std::str::from_utf8(b).ok()?.trim_end_matches('\0');

@@ -602,6 +602,12 @@ fn a_thumbnail_ifd0_opens_its_largest_full_resolution_sub_ifd_with_its_profile()
             let b = scan_layout(little, big, bits, &[(9, 7)], Some(&own));
             assert_eq!(decode_ok(&b.bytes).icc, Some(own), "{what}");
         }
+        // a grey SubIFD can't take the RGB profile of its parent
+        let sub_ty = if big { IFD8 } else { IFD };
+        let thumb = strips(4, 3, 8, 3, 2, 3, &[1; 36]).tag(254, LONG, &[1]).bytes(34675, UNDEFINED, &common::sample_icc(64)).sub_ifds(sub_ty, &[1]);
+        let b = build(little, big, &[thumb, gray_page(9, 7, 5, Some(0))], &[0]);
+        let img = decode_ok(&b.bytes);
+        assert_eq!((img.dimensions(), img.icc), ((9, 7), None), "little {little} big {big}: grey SubIFD");
     }
 }
 
