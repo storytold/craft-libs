@@ -9,6 +9,7 @@ mod kit;
 pub(crate) mod linked;
 pub(crate) mod mixed_blank;
 pub(crate) mod number;
+pub(crate) mod number_derived;
 pub(crate) mod number_length;
 pub(crate) mod number_scrub_step;
 pub(crate) mod selectable;

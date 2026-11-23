@@ -447,14 +447,16 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = core.popup(EDIT_MENU).is_open_in(core);
+    // The text the part shows now: its resting text while it is idle and has one, else the value's own.
+    let current = decl.options.resting.as_deref().filter(|_| !focused && !held && state.draft.is_none()).unwrap_or(&decl.shown);
     // The bound caret is compared with the widget's before anything else this pass moves it (AccessKit, Select All,
     // the typing): last pass reported the widget's caret, so only an app write differs here. A composition keeps its
     // caret.
     let caret_placed =
         state.preedit.is_none() && adapter::place_caret(&ctx, widget, state.draft.as_deref().unwrap_or(&decl.shown), decl.options.caret);
-    serve_access(core, state, widget, &decl.shown, read_only);
+    serve_access(core, state, widget, current, read_only);
     if std::mem::take(&mut state.select_all) {
-        let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();
+        let len = state.draft.as_deref().unwrap_or(current).chars().count();
         adapter::select(&ctx, widget, 0, len);
     }
     core.surface_slot = Some(ui.painter().add(egui::Shape::Noop));

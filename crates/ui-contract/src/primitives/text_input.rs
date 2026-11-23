@@ -115,6 +115,10 @@ pub struct TextOptions {
     /// A press on a part declared `holds_drafts`, or on a popup layer above the field, leaves the focused draft
     /// unapplied.
     pub holds_drafts: bool,
+    /// The text shown, and exposed as the part's accessible value, instead of the value's own text while the part has
+    /// neither focus nor a draft (a derived number in parentheses). Focus, and any typing, start from the value's own
+    /// text: this changes only what an idle part shows, never what the codec formats or parses.
+    pub resting: Option<String>,
 }
 
 impl Default for TextOptions {
@@ -146,6 +150,7 @@ impl Default for TextOptions {
             unparsed: None,
             own_menu: false,
             holds_drafts: false,
+            resting: None,
         }
     }
 }

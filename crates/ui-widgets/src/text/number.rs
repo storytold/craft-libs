@@ -153,6 +153,14 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// An empty field means automatic: it shows the "Auto" word as its placeholder.
     #[prop]
     automatic: bool,
+    /// The value is derived, not chosen (an automatic leading that follows the font size). While the field is not in
+    /// edit it shows the value in parentheses, with its unit inside them ("(87.6 pt)"), and that text is its
+    /// accessible value; the field draws no separate unit then, as the unit is in the text. Focus starts an edit from
+    /// the plain number, without parentheses or unit. A committed edit reports the value as usual: it is the host's
+    /// job to turn this off, as the value is no longer derived. Steppers, presets and the popup slider work as usual.
+    /// A blank, mixed or named value is shown as it would be without this.
+    #[prop]
+    derived: bool,
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
@@ -222,6 +230,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             snap_popup_slider: true,
             snap_typed: false,
             automatic: false,
+            derived: false,
             commit_decimals: None,
             fixed_decimals: None,
             lengths: None,
@@ -279,13 +288,32 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         }
     }
 
-    /// The unit drawn inside the field after the number: the field's own, else the symbol of its unit kind; none when
-    /// the host draws it after the field.
-    fn shown_unit(&self, units: &Units) -> Option<Label> {
+    /// The unit the field shows with its number: the field's own, else the symbol of its unit kind; none when the host
+    /// draws it after the field.
+    fn unit_label(&self, units: &Units) -> Option<Label> {
         if self.status_zoom || self.unit_placement == UnitPlacement::After {
             return None;
         }
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
+    }
+
+    /// The unit drawn inside the field after the number: [`Self::unit_label`], except for a derived value, whose unit
+    /// is in its parenthesised text.
+    fn shown_unit(&self, units: &Units, value: Option<&V>) -> Option<Label> {
+        if self.derives(value) { None } else { self.unit_label(units) }
+    }
+
+    /// Whether `value` is shown as a derived value: the field is `derived` and the value is a number it shows.
+    fn derives(&self, value: Option<&V>) -> bool {
+        self.derived && !self.shows_blank(value) && value.is_some_and(|value| value.named().is_none())
+    }
+
+    /// `number`, as the field writes it, as a derived value: in parentheses with its unit.
+    fn derived_text(&self, number: &str, units: &Units) -> String {
+        match self.unit_label(units) {
+            Some(unit) => format!("({number} {})", unit.as_str()),
+            None => format!("({number})"),
+        }
     }
 
     /// `stored` in the shown unit.
@@ -383,7 +411,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
         let shared = content_sized(cx);
-        let unit = self.shown_unit(&cx.env.units()).map(|unit| {
+        let unit = self.shown_unit(&cx.env.units(), cx.value()).map(|unit| {
             let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
             if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
         });
@@ -481,6 +509,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let (sample, role) = if no_zoom_value {
             // Text editors draw their hint in the proportional face.
             (Cow::Borrowed(BLANK), self.options.role)
+        } else if self.derives(shown) {
+            // A derived value is sized as it shows at rest, in parentheses with its unit.
+            (Cow::Owned(self.derived_text(&codec.sample(shown.unwrap_or(&blank)), &cx.env.units())), TypeRole::Mono)
         } else {
             (codec.sample(shown.unwrap_or(&blank)), TypeRole::Mono)
         };
@@ -527,7 +558,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
         let names = self.names(|row| cx.env.resolve(&row.label().clone()));
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        cx.text(text_part::<V>(), text, &self.ruled(&cx.env.units(), shown.is_none(), names), shown.unwrap_or(&blank), &self.options);
+        let ruled = self.ruled(&cx.env.units(), shown.is_none(), names);
+        // A derived value shows in parentheses until the field is edited; the text part keeps the plain number for the
+        // edit to start from.
+        self.options.resting = shown.filter(|value| self.derives(Some(*value))).map(|value| self.derived_text(&ruled.format(value), &cx.env.units()));
+        cx.text(text_part::<V>(), text, &ruled, shown.unwrap_or(&blank), &self.options);
         let slider_reason =
             if self.presets.is_some() { "Alt+Down opens the presets list; the slider opens by pointer" } else { "Alt+Down opens the slider" };
         let chevron_rects = &placed.trailing[placed.trailing.len() - chevrons.len()..];
@@ -671,7 +706,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
         // A mixed value shows the dash alone: a unit beside it would claim a measure the selection does not have.
-        if self.shown_unit(&cx.env.units()).is_some()
+        if self.shown_unit(&cx.env.units(), cx.value()).is_some()
             && cx.value().is_some_and(|value| !non_finite(Some(value)))
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {

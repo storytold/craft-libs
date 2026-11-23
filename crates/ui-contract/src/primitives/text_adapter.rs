@@ -454,7 +454,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         // The menu closed a pass ago and the focus went elsewhere: nothing comes back to the held selection.
         state.held_selection = None;
     }
-    let mut base = state.draft.clone().or_else(|| state.normalised.take()).unwrap_or_else(|| input.shown.to_owned());
+    // An idle part shows its resting text, if it has one; focus (or the edit menu holding it) and any draft show the
+    // value's own text.
+    let resting = input.options.resting.as_deref().filter(|_| !input.focused && !input.held);
+    let mut base =
+        state.draft.clone().or_else(|| state.normalised.take()).or_else(|| resting.map(str::to_owned)).unwrap_or_else(|| input.shown.to_owned());
     let mut edited = apply(&mut input, state, &mut base, widget);
     if let Some((range, insert)) = state.completions.take(&base) {
         let chars = |byte: usize| base.get(..byte).map_or_else(|| base.chars().count(), |head| head.chars().count());
