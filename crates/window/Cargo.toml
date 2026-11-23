@@ -37,7 +37,7 @@ x11rb = { version = "0.13", default-features = false, features = ["xkb"] }
 craft-appkit = { workspace = true, optional = true }
 muda = { version = "0.21.2", default-features = false, optional = true }
 objc2 = { version = "0.6.4", default-features = false, features = ["std"], optional = true }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSScreen", "NSTextInputContext", "NSUserInterfaceLayout", "NSView", "NSWindow"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSPanel", "NSResponder", "NSScreen", "NSTextInputContext", "NSUserInterfaceLayout", "NSView", "NSWindow"], optional = true }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSEnumerator", "NSGeometry", "NSLocale", "NSProcessInfo", "NSString"], optional = true }
 
 # `caps_lock`: the toggle bit of the Caps Lock key, through winsafe's safe wrapper (the workspace forbids `unsafe`).
