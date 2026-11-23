@@ -200,6 +200,12 @@ pub struct StandardPrompt {
     details: Option<(Label, Label)>,
     tone: Option<(Tone, Label)>,
     lines: Vec<Label>,
+    /// The role of the Alternate button in place of the kind's: by default `DialogRole::Alternate` (an answer that
+    /// closes the question: No, Don't Save, Discard), and `DialogRole::Alternative` for a changed file's Save As….
+    /// `DialogRole::Alternative` gives production's order: a second way to answer ("Save as…", "Keep editable", a
+    /// script's "No") between Cancel and the accepting button.
+    #[prop]
+    alternate_role: Option<DialogRole>,
     /// Whether the host can apply the mask (`PromptKind::TrashMask`); with `false` the Apply button is disabled and
     /// takes no click, letter or Enter. Other kinds ignore it.
     #[prop]
@@ -239,6 +245,7 @@ impl StandardPrompt {
             details: None,
             tone: None,
             lines: Vec::new(),
+            alternate_role: None,
             can_apply: true,
             instance: None,
         }
@@ -371,10 +378,11 @@ impl StandardPrompt {
             message = own.clone();
         }
         // A changed file's Save as… is a second way to save, not an answer that closes the question.
-        let (alternate, alternate_role) = match self.kind {
+        let (alternate, kind_role) = match self.kind {
             PromptKind::ChangedOnDisk { .. } => (&words.save_as, DialogRole::Alternative),
             _ => (&words.discard, DialogRole::Alternate),
         };
+        let alternate_role = self.alternate_role.unwrap_or(kind_role);
         // `Prompt` and the footer take the first Accept answer as the default (Enter and the default stop), so the
         // default choice's reply is the Accept one and an Accept Proceed that is not the default steps back to Other.
         // A Destructive Proceed keeps its look.

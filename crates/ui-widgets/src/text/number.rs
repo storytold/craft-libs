@@ -413,8 +413,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
             if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
         });
-        let chevrons =
-            chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
+        let arrow = crate::controls::disclosure::DisclosureGlyph::dropdown_of(cx.env.get());
+        let chevrons = chevrons.iter().map(|(key, name)| Adornment::button(*key, arrow.clone(), name.clone()));
         unit.into_iter().chain(chevrons).collect()
     }
 
@@ -737,7 +737,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             glyph.paint(ui, *at, cx.resolve(&cx.style.handle), self.options.role);
         }
         for (key, name) in chevrons {
-            ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
+            ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown_of(cx.env.get())).label(name));
         }
     }
 

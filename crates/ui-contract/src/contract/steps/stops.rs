@@ -53,8 +53,13 @@ fn roving_group(id: Id) -> Id {
 /// The roving group a stop shown among a component's parts joins: the body group `joined` when the component joined it
 /// in this pass (`Cx::join_roving`), else the group of the component's own parts. The one source for the parts'
 /// registration and for a component the header hosts in its cells.
-pub(crate) fn parts_group(id: Id, joined: Option<Id>) -> Id {
-    joined.unwrap_or_else(|| roving_group(id))
+///
+/// A part group that nests in the body group (it moves on the crossing axis, so its group was registered with the body
+/// group as its parent) keeps its own group: its parts rove among themselves and the body steps over them as one member.
+pub(crate) fn parts_group(ctx: &Context, id: Id, joined: Option<Id>) -> Id {
+    let own = roving_group(id);
+    let nested = joined.is_some_and(|body| focus::with(ctx, |state| state.current_group(own)).is_some_and(|group| group.parent == Some(body)));
+    joined.filter(|_| !nested).unwrap_or(own)
 }
 pub(crate) fn body_group(id: Id) -> Id {
     sub(id, "body_roving")
@@ -114,7 +119,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
             let stop = if extras.nudges { stop.role(input.role.nudge(true)) } else { stop };
             let stop = if extras.default_stop { stop.default_stop() } else { stop };
             // A part group that joined the body's roving group has its parts registered there, unless it nests in it.
-            let joined = group.map(|_| parts_group(input.id, input.group.filter(|_| !nested)));
+            let joined = group.map(|_| parts_group(ctx, input.id, input.group.filter(|_| !nested)));
             let stop = if let Some(group) = row_parts.or(joined).or(input.row) { stop.in_group(group) } else { stop };
             if extras.after_header {
                 after_header.push(stop);

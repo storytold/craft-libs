@@ -1003,9 +1003,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         let (ghosts, departed) = self.reserved(cx, &keys);
         // Each end item is measured in this pass, with its label and icon only.
         let ends = self.trailing.iter().map(|end| end.fit_item(cx)).collect();
-        let fitting = Fitting { selected, mode: self.kind.fit_mode(), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
-        // Document tabs stand apart by the inline gap; the other kinds touch.
-        let tab_gap = if self.kind == TabKind::Document { cx.tokens.space.gap.inline } else { 0.0 };
+        let look = cx.env::<super::DocumentTabLook>();
+        let fitting = Fitting { selected, mode: self.kind.fit_mode_in(look), kept, ends, gap: cx.tokens.space.gap.inline, ghosts, departed };
+        // Shrinking document tabs stand apart by the inline gap; the other kinds and looks touch.
+        let tab_gap = if self.kind.shrinks_in(look) { cx.tokens.space.gap.inline } else { 0.0 };
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 

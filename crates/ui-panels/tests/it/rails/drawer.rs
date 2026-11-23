@@ -72,16 +72,14 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
     assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "the focus is back on Edit Toolbar");
 }
 
-/// A grouped tool can also be dragged from the drawer into its own slot.
-#[trial]
-fn a_grouped_tool_also_drags_from_the_drawer() {
+/// Whether `label`'s row of the drawer `story` (opened from the rail's Edit Toolbar button) starts a drag, for each label.
+fn drawer_drags(story: &str, labels: &[&str]) -> Vec<bool> {
     let registry = Registry::of(&[craft_ui::testing::register]);
-    let entry = registry.stories().iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
+    let entry = registry.stories().iter().find(|entry| entry.story.name == story).expect("the drawer story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
     let opener = fixture.by_label("Edit Toolbar").expect("the rail's Edit Toolbar button");
     fixture.click(&opener).settle();
-    // Pencil is on the toolbar behind Brush, so its only button is the drawer's row.
     let drags = |fixture: &mut Fixture, label: &str| {
         let row = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
         let before = drag::started(fixture.ctx());
@@ -90,8 +88,26 @@ fn a_grouped_tool_also_drags_from_the_drawer() {
         fixture.release_at(row.center() + Vec2::new(0.0, 30.0)).settle();
         started
     };
-    assert!(drags(&mut fixture, "Pencil"), "Pencil can also have its own slot");
-    assert!(drags(&mut fixture, "Eraser"), "Eraser is not");
+    labels.iter().map(|label| drags(&mut fixture, label)).collect()
+}
+
+/// By default a tool already on the toolbar, grouped behind another tool too, is dimmed and does not drag; a tool that
+/// is not on it drags to the rail.
+#[trial]
+fn only_a_tool_off_the_toolbar_drags() {
+    // Pencil is on the toolbar behind Brush.
+    assert_eq!(drawer_drags("toolbar_drawer", &["Pencil", "Eraser"]), [false, true], "Pencil is on the toolbar, Eraser is not");
+}
+
+/// With `grouped_tools_drag` (PdfCraft's drawer) a grouped tool can also be dragged from the drawer into its own slot.
+#[trial]
+fn a_grouped_tool_also_drags_from_the_drawer() {
+    // Pencil is on the toolbar behind Brush, so its only button is the drawer's row.
+    assert_eq!(
+        drawer_drags("toolbar_drawer_with_grouped_tools_dragging", &["Pencil", "Eraser"]),
+        [true, true],
+        "Pencil can also have its own slot; Eraser is off the toolbar"
+    );
 }
 
 #[trial]

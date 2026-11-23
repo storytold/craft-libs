@@ -76,6 +76,9 @@ const PROGRESS: PartKey = PartKey::new("progress");
 
 /// How many of a title's first letters a shrunk tab still shows.
 const MIN_LETTERS: usize = 3;
+
+/// The modified mark of a tab whose look shows no marker dot for it.
+const MARK: &str = "*";
 const CLOSE_REASON: &str = "The Close command closes the focused tab";
 
 /// The padding on each side of a ribbon tab's label: the strip insets its sliding underline by it, so the underline
@@ -131,6 +134,9 @@ pub struct TabStyle {
     divider: bool,
     close_side: CloseSide,
     sizes: Sizes,
+    /// Document tabs in [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking): a name capped at
+    /// `MAX_NAME_DIGITS` digits' width, a readable prefix at their least, and the marker dot for a modified tab.
+    shrinking: bool,
     /// The marker dot's diameter.
     marker: f32,
     /// The marker dot of a marked tab.
@@ -146,7 +152,9 @@ struct Placed {
     icon: Option<Rect>,
     label: Rect,
     detail: Option<Rect>,
-    /// The marker dot, after the last text: a modified tab's too.
+    /// The modified mark `*`, right after the last text, where the look shows no dot for it.
+    mark: Option<Rect>,
+    /// The marker dot, after the last text: a modified tab's too where the look shows the dot for it.
     marker: Option<Rect>,
     /// The band the label, detail and marker share.
     band: Rect,
@@ -177,7 +185,8 @@ pub struct Tab<'a> {
     /// An icon before the label.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
-    /// Unsaved changes: the marker dot after the detail, or after the label without one.
+    /// Unsaved changes: a `*` after the detail, or after the label without one; the marker dot there under
+    /// [`DocumentTabLook::Shrinking`](super::DocumentTabLook::Shrinking).
     #[prop(flag)]
     modified: bool,
     /// Whether the tab can be closed; by default whether the kind shows a close button.
@@ -237,10 +246,20 @@ impl<'a> Tab<'a> {
         TextRun::new(text).role(style.label.role)
     }
 
-    /// Whether the marker dot shows: the tab's content has something to show, or the document is modified (the one
-    /// modified mark of the suite is the dot).
-    fn dotted(&self) -> bool {
-        self.marked || self.modified
+    /// Whether the marker dot shows: the tab's content has something to show, or the document is modified and the
+    /// look marks a modified tab with the dot.
+    fn dotted(&self, style: &TabStyle) -> bool {
+        self.marked || (self.modified && style.shrinking)
+    }
+
+    /// Whether the modified mark `*` shows: a modified tab whose look shows no dot for it.
+    fn starred(&self, style: &TabStyle) -> bool {
+        self.modified && !style.shrinking
+    }
+
+    /// The modified mark, in the label's type.
+    fn mark_run(&self, style: &TabStyle) -> TextRun<'static> {
+        TextRun::new(MARK).role(style.label.role)
     }
 
     /// Where the parts lie in `content`, with `natural` the unbounded width of a run. `parts` registers its parts
@@ -265,11 +284,13 @@ impl<'a> Tab<'a> {
         let band = flow.rect();
         let label_natural = natural(&self.label_run(style, label));
         let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(style.detail.role)));
-        // The marker keeps its room; the label is cut first, then the detail.
-        let marker_width = if self.dotted() { sizes.gap + style.marker } else { 0.0 };
+        // The marks keep their room; the label is cut first, then the detail.
+        let mark_width = if self.starred(style) { natural(&self.mark_run(style)) } else { 0.0 };
+        let marker_width = if self.dotted(style) { sizes.gap + style.marker } else { 0.0 };
+        let marks = mark_width + marker_width;
         let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
-        let label_width = label_natural.min((band.width() - marker_width - detail_gap - detail_natural).max(0.0));
-        let detail_width = detail_natural.min((band.width() - marker_width - label_width - detail_gap).max(0.0));
+        let label_width = label_natural.min((band.width() - marks - detail_gap - detail_natural).max(0.0));
+        let detail_width = detail_natural.min((band.width() - marks - label_width - detail_gap).max(0.0));
         let line = |rect: Rect, height: f32| {
             let top = if sizes.text_only && !sizes.middle { content.top() } else { content.center().y - height / 2.0 };
             Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
@@ -281,13 +302,19 @@ impl<'a> Tab<'a> {
         } else {
             (None, rest)
         };
+        let (mark, after) = if mark_width > 0.0 {
+            let (mark, after) = after.take_start(mark_width);
+            (Some(line(mark, sizes.label_line)), after)
+        } else {
+            (None, after)
+        };
         let label = line(label, sizes.label_line);
-        let marker = self.dotted().then(|| {
+        let marker = self.dotted(style).then(|| {
             let slot = after.take_start(sizes.gap).1.take_start(style.marker).0;
             Rect::from_center_size(Pos2::new(slot.center().x, label.center().y), Vec2::splat(style.marker))
         });
         let cut = label_width < label_natural || detail_width < detail_natural;
-        Placed { close, icon, label, detail, marker, band, cut }
+        Placed { close, icon, label, detail, mark, marker, band, cut }
     }
 
     fn name(&self, label: &str, words: &TabWords) -> String {
@@ -388,6 +415,7 @@ impl Component for Tab<'_> {
             divider: key.kind.trailing_divider(),
             close_side: close_side(cx.os, cx.direction.is_rtl()),
             sizes,
+            shrinking: key.kind.shrinks_in(cx.env::<super::DocumentTabLook>()),
             marker: marker.side,
             marker_color: marker.color,
             marker_edge: marker.edge,
@@ -401,18 +429,14 @@ impl Component for Tab<'_> {
             let first: String = cx.resolved.label.chars().take(MIN_LETTERS).collect();
             cx.layout_at(&self.label_run(cx.style, &first), f32::INFINITY).size().x
         };
-        if cx.proposal == Proposal::Min && self.kind != TabKind::Document {
+        if cx.proposal == Proposal::Min && !cx.style.shrinking {
             return Vec2::new(letters(), sizes.label_line);
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
         let label_width = width(&self.label_run(cx.style, cx.resolved.label));
         // A document tab never takes more than a name of `MAX_NAME_DIGITS` digits' width, as production's tabs cut a long
         // name short so the other tabs and the Open control keep their room; the label is cut with an ellipsis.
-        let capped = if self.kind == TabKind::Document {
-            label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS))))
-        } else {
-            label_width
-        };
+        let capped = if cx.style.shrinking { label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS)))) } else { label_width };
         let mut natural = sizes.tail + capped;
         if self.icon.is_some() {
             natural += sizes.icon + sizes.gap;
@@ -420,7 +444,10 @@ impl Component for Tab<'_> {
         if let Some(detail) = self.detail_text() {
             natural += sizes.gap + width(&TextRun::new(detail).role(cx.style.detail.role));
         }
-        if self.dotted() {
+        if self.starred(cx.style) {
+            natural += width(&self.mark_run(cx.style));
+        }
+        if self.dotted(cx.style) {
             natural += sizes.gap + cx.style.marker;
         }
         if self.shows_close() {
@@ -522,6 +549,9 @@ impl Component for Tab<'_> {
         draw.text(placed.label, &if self.kind.clips_label() { label.wrap(Wrap::Clip) } else { label.elide() });
         if let (Some(at), Some(detail)) = (placed.detail, self.detail_text()) {
             draw.text(at, &TextRun::new(detail).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide());
+        }
+        if let Some(at) = placed.mark {
+            draw.text(at, &self.mark_run(style).color(cx.resolve(&style.label.color)));
         }
         if let Some(at) = placed.marker {
             paint_marker(&draw, at.center(), &MarkerStyle { side: style.marker, color: style.marker_color, edge: style.marker_edge });

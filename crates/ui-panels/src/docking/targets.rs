@@ -136,7 +136,14 @@ impl DockSizes {
     /// The height above a floating window's body: its title row, the rule under it and, for a window in the app
     /// window (`in_app`), the band over it.
     pub fn window_chrome(&self, in_app: bool) -> f32 {
-        self.title_row + self.title_rule.points(self.pixels_per_point) + if in_app { self.top_band } else { 0.0 }
+        self.window_chrome_ruled(in_app, true)
+    }
+
+    /// The height above a floating window's body with or without the rule under its title row: a grip title row
+    /// (`FloatingGroup::grip`) draws no rule and keeps no band for one.
+    pub(crate) fn window_chrome_ruled(&self, in_app: bool, ruled: bool) -> f32 {
+        let rule = if ruled { self.title_rule.points(self.pixels_per_point) } else { 0.0 };
+        self.title_row + rule + if in_app { self.top_band } else { 0.0 }
     }
 
     /// The sizes for a window on a display of `pixels_per_point`: an OS window lays out at its own monitor's scale.

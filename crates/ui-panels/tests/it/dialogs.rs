@@ -623,25 +623,77 @@ fn a_space_between_row_in_a_dialog_keeps_its_children_apart_at_both_edges() {
     assert!(dialog.max.x - remove.max.x < 40.0, "Remove sits at the row's end edge: {remove:?} in {dialog:?}");
 }
 
-/// Production's dialogs show Cancel as plain text beside the accented answer: a footer's Cancel is a ghost button, not
-/// an outlined one.
-#[trial]
-fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
-    use craft_theme::Variant;
+/// The variants of the buttons a prompt's footer shows, with the app's `DialogButtonLook` when `look` names one.
+fn footer_variants(look: Option<craft_ui::sections::DialogButtonLook>) -> Vec<craft_theme::Variant> {
     let mut fixture = Fixture::new(|ui| {
-        let _ = StandardPrompt::custom("Revert?")
-            .button(craft_ui::dialog::PromptChoice::Proceed, "Revert")
+        let _ = StandardPrompt::custom("Close?")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Save")
+            .button(craft_ui::dialog::PromptChoice::Alternate, "Don't Save")
             .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel")
             .show(ui);
     });
+    if let Some(look) = look {
+        fixture.root_value(look);
+    }
     fixture.settle();
-    let seen = fixture.styles_of(std::any::type_name::<craft_ui::buttons::Button<'static>>());
-    assert!(
-        seen.iter().any(|style| style.variant == Variant::GHOST),
-        "Cancel is a ghost button: {:?}",
-        seen.iter().map(|s| s.variant).collect::<Vec<_>>()
-    );
-    assert!(!seen.iter().any(|style| style.variant == Variant::SECONDARY), "no outlined button in the footer");
+    fixture.styles_of(std::any::type_name::<craft_ui::buttons::Button<'static>>()).iter().map(|style| style.variant).collect()
+}
+
+/// Upstream's footer by default: Cancel and the Alternate answer are outlined (secondary) buttons beside the accented
+/// answer; no button is a ghost.
+#[trial]
+fn a_footer_cancel_is_an_outlined_button_by_default() {
+    use craft_theme::Variant;
+    let seen = footer_variants(None);
+    assert!(seen.contains(&Variant::SECONDARY), "Cancel and Don't Save are outlined: {seen:?}");
+    assert!(!seen.contains(&Variant::GHOST), "no ghost button in the footer: {seen:?}");
+}
+
+/// Production's dialogs (`DialogButtonLook::Quiet`) show Cancel and Don't Save as plain text beside the accented
+/// answer: ghost buttons, not outlined ones.
+#[trial]
+fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
+    use craft_theme::Variant;
+    let seen = footer_variants(Some(craft_ui::sections::DialogButtonLook::Quiet));
+    assert!(seen.contains(&Variant::GHOST), "Cancel is a ghost button: {seen:?}");
+    assert!(seen.contains(&Variant::PRIMARY), "Save is the accented button: {seen:?}");
+    assert!(!seen.contains(&Variant::SECONDARY), "no outlined button in the footer: {seen:?}");
+}
+
+/// The left edges of a Save anyway / Save as… / Cancel prompt's buttons on Linux, with the Alternate's role set to
+/// `role` when it names one.
+fn alternate_edges(role: Option<DialogRole>) -> (f32, f32, f32) {
+    let mut fixture = Fixture::new(move |ui| {
+        let prompt = StandardPrompt::custom("Changed on disk")
+            .button(craft_ui::dialog::PromptChoice::Proceed, "Save anyway")
+            .button(craft_ui::dialog::PromptChoice::Alternate, "Save as…")
+            .button(craft_ui::dialog::PromptChoice::Cancel, "Cancel");
+        let prompt = match role {
+            Some(role) => prompt.alternate_role(role),
+            None => prompt,
+        };
+        let _ = prompt.show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let left = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name} button")).rect.left();
+    (left("Save as…"), left("Cancel"), left("Save anyway"))
+}
+
+/// By default a prompt's Alternate answer is upstream's Alternate role: it closes the question, so it stands first off
+/// Windows ("Save as…, Cancel, Save anyway").
+#[trial]
+fn a_prompts_alternate_answer_stands_first_by_default() {
+    let (alternate, cancel, accept) = alternate_edges(None);
+    assert!(alternate < cancel && cancel < accept, "Save as…, Cancel, Save anyway: {alternate} {cancel} {accept}");
+}
+
+/// With `alternate_role(DialogRole::Alternative)` (production's order) the Alternate answer is a second way to answer,
+/// between Cancel and the accepting button ("Cancel, Save as…, Save anyway").
+#[trial]
+fn a_prompts_alternative_answer_stands_between_cancel_and_accept() {
+    let (alternate, cancel, accept) = alternate_edges(Some(DialogRole::Alternative));
+    assert!(cancel < alternate && alternate < accept, "Cancel, Save as…, Save anyway: {cancel} {alternate} {accept}");
 }
 
 /// A dialog's title row carries a close x; an app whose dialogs end with their buttons (production's) turns it off

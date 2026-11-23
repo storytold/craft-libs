@@ -4,7 +4,7 @@
 use craft_behavior::{SelectionChange, keyed};
 use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
-use craft_ui::tabs::{Tab, TabKind, TabRole, TabStrip};
+use craft_ui::tabs::{DocumentTabLook, Tab, TabKind, TabRole, TabStrip};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -21,12 +21,14 @@ fn overflowing_document_tabs_remain_readable_and_list_every_document() {
         let tabs = [DocumentTab::new(0, "Document num")];
         let _ = DocumentTabs::new("Reference", &tabs).selected(0).show(ui);
     });
+    reference.root_value(DocumentTabLook::Shrinking);
     reference.room(egui::vec2(600.0, 100.0)).settle();
     let minimum = reference.by_label("Document num").expect("reference tab").rect.width();
     let mut fixture = Fixture::new(|ui| {
         let tabs: Vec<_> = (0..12).map(|i| DocumentTab::new(i, format!("Document number {i}, scanned.pdf"))).collect();
         let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.room(egui::vec2(600.0, 100.0)).settle();
     let shown: Vec<_> = (0..12).filter_map(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).map(|node| node.rect)).collect();
     assert!(shown.len() > 1, "more than one tab remains visible: {shown:?}");
@@ -56,6 +58,7 @@ fn document_tabs_leave_space_between_neighbours() {
         let tabs = [DocumentTab::new(1, "One"), DocumentTab::new(2, "Two")];
         let _ = DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.settle();
     let first = fixture.by_label("One").expect("first tab").rect;
     let second = fixture.by_label("Two").expect("second tab").rect;
@@ -64,7 +67,7 @@ fn document_tabs_leave_space_between_neighbours() {
 
 #[trial]
 fn document_tabs_shrink_before_overflow() {
-    let fit = TabKind::Document.fit_mode().fit(&[100.0, 100.0, 100.0], 0, &[], 240.0, 50.0, 20.0);
+    let fit = TabKind::Document.fit_mode_in(DocumentTabLook::Shrinking).fit(&[100.0, 100.0, 100.0], 0, &[], 240.0, 50.0, 20.0);
     assert!(fit.overflow.is_empty(), "tabs that can shrink into the strip remain visible");
     assert!(fit.shown.iter().all(|(_, width)| *width < 100.0));
 }
@@ -87,6 +90,7 @@ fn document_tabs_with_trailing_control_fill_their_parent_row() {
             Button::new("Settings").show(ui);
         });
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.room(egui::vec2(1000.0, 100.0)).settle();
     let visible = (0..5).filter(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).is_some()).count();
     assert!(visible > 1, "the strip uses the available width: {visible} tab visible");
@@ -108,6 +112,7 @@ fn document_tabs_reserve_space_for_the_trailing_control() {
             })
             .show(ui);
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.room(egui::vec2(1000.0, 100.0)).settle();
     let open = fixture.by_label("Open").unwrap_or_else(|| panic!("trailing button: {:?}", trailing_rect.get())).rect;
     for i in 0..5 {
@@ -132,6 +137,7 @@ fn the_trailing_control_follows_the_last_tab_when_they_fit() {
             })
             .show(ui);
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.room(egui::vec2(1000.0, 100.0)).settle();
     let open = fixture.by_label("Open").expect("trailing button").rect;
     let last = fixture.by_label("Doc 1.pdf").expect("last tab").rect;
@@ -158,6 +164,7 @@ fn nested_document_tabs_reserve_space_for_the_trailing_control() {
             Button::new("Settings").show(ui);
         });
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.room(egui::vec2(1000.0, 100.0)).settle();
     let open = fixture.by_label("Open").expect("trailing button").rect;
     for i in 0..5 {
@@ -620,11 +627,13 @@ fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
 #[trial]
 fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let look = DocumentTabLook::Shrinking;
     let tab = |modified: bool| {
         let mut fixture = Fixture::new(move |ui| {
             let tabs = [DocumentTab::new(0, "Report.pdf").modified(modified)];
             let _ = DocumentTabs::new("Docs", &tabs).selected(0).show(ui);
         });
+        fixture.root_value(look);
         fixture.room(egui::vec2(600.0, 100.0)).settle();
         let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
         let width = fixture.by_role(Role::TAB).first().map_or(0.0, |tab| tab.rect.width());
@@ -633,6 +642,25 @@ fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
     let (plain, modified) = (tab(false), tab(true));
     assert_eq!(modified.0, 0, "no asterisk is painted");
     assert!(modified.1 > plain.1, "the dot takes room beside the name: {} vs {}", modified.1, plain.1);
+}
+
+/// Upstream's document tabs by default (no `DocumentTabLook` set): whole titles fitted with no shrink, neighbours
+/// touching, and a `*` after a modified tab's name with no dot.
+#[trial]
+fn document_tabs_keep_whole_touching_titles_and_an_asterisk_by_default() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, FitMode};
+    assert_eq!(TabKind::Document.fit_mode(), FitMode::Whole);
+    assert_eq!(TabKind::Document.fit_mode_in(DocumentTabLook::default()), FitMode::Whole);
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(1, "One"), DocumentTab::new(2, "Two").modified(true)];
+        let _ = DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
+    });
+    fixture.room(egui::vec2(600.0, 100.0)).settle();
+    let first = fixture.by_label("One").expect("first tab").rect;
+    let second = fixture.by_role(Role::TAB).get(1).map(|tab| tab.rect).expect("second tab");
+    assert!((second.left() - first.right()).abs() < 0.5, "neighbouring document tabs touch: {first:?}, {second:?}");
+    let stars = fixture.texts().iter().filter(|run| run.text.contains('*')).count();
+    assert_eq!(stars, 1, "the modified tab shows its asterisk");
 }
 
 /// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
@@ -659,8 +687,8 @@ fn a_dragged_document_tab_shows_no_badge() {
     assert_eq!(shown, 1, "the name is painted once, by the held tab, with no badge beside the pointer");
 }
 
-/// A very long document name does not stretch its tab across the strip: the tab stays near 22 characters wide and the
-/// next tab keeps its room.
+/// Under `DocumentTabLook::Shrinking` (PdfCraft's tabs) a very long document name does not stretch its tab across the
+/// strip: the tab stays near 22 characters wide and the next tab keeps its room.
 #[trial]
 fn a_very_long_document_name_is_cut_to_a_compact_tab() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
@@ -669,6 +697,7 @@ fn a_very_long_document_name_is_cut_to_a_compact_tab() {
     let mut fixture = Fixture::new(move |ui| {
         let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
     });
+    fixture.root_value(DocumentTabLook::Shrinking);
     fixture.idle(6);
     let tab = fixture.by_label(long).expect("the long tab").rect;
     let short = fixture.by_label("Short").expect("the next tab").rect;

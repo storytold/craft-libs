@@ -116,6 +116,27 @@ fn a_grip_window_shows_a_grip_and_no_title_actions() {
     assert!(fixture.by_label("Select").is_some(), "the body stays");
 }
 
+// A grip title row draws no rule under it, so the window keeps no band for one: its body starts the rule's width
+// (a point or more) higher than an ordinary window's, whose rule takes a band of its own.
+#[trial]
+fn a_grip_window_keeps_no_band_for_a_title_rule() {
+    use craft_ui::docking::{FloatingGroup, WindowColumn};
+    let body_top = |grip: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let group = FloatingGroup::new("Quick tools", Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(120.0, 200.0)))
+                .column(WindowColumn::expanded(craft_behavior::dock::DockEdge::Start))
+                .grip(grip);
+            let _ = group.show_group(ui, |ui, _| {
+                Button::new("Select").show(ui);
+            });
+        });
+        fixture.settle();
+        fixture.by_label("Select").map_or(f32::NAN, |button| button.rect.top())
+    };
+    let (ruled, grip) = (body_top(false), body_top(true));
+    assert!(ruled - grip >= 0.5, "the grip window's body ({grip}) starts above the ruled window's ({ruled})");
+}
+
 // A toolbar's marked grip is a handle (photocraft#16467): the grab cursor over it and grabbing while it is held, as
 // the grips of a collapsed column show. An unmarked band and a grip that does not move keep the plain arrow.
 #[trial]
@@ -139,4 +160,26 @@ fn a_marked_grip_shows_the_grab_cursor() {
         frames.frame(vec![], &mut show);
         assert_eq!(frames.cursor_icon(), held, "the grip held (ticks {ticks}, movable {movable})");
     }
+}
+
+// A panel's toggle command marks its tab (the marker dot) as it marks the panel's rail button. The marks resolve
+// outside the memoized tab row and join its key, so a mark that comes or goes repaints the settled row.
+#[trial]
+fn a_tab_mark_change_repaints_the_tab_row() {
+    use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands};
+    let command: CommandRef = EditCommands::Undo.into();
+    let panels = vec![PanelTitle::new(PanelKey::new(1), "Brushes").command(Some(command.clone())), PanelTitle::new(PanelKey::new(2), "Swatches")];
+    let mut fixture = Fixture::new(move |ui| {
+        let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[1].key);
+        group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(400.0, 200.0)), |_, _| {});
+    });
+    let width = |fixture: &mut Fixture| fixture.by_label("Brushes").map_or(0.0, |tab| tab.rect.width());
+    fixture.settle();
+    let plain = width(&mut fixture);
+    fixture.command_state(command.clone(), CommandState::new().checked(false).marked(true)).settle();
+    let marked = width(&mut fixture);
+    assert!(marked > plain, "the mark's dot widens the settled tab: {plain} then {marked}");
+    fixture.command_state(command, CommandState::new().checked(false)).settle();
+    let cleared = width(&mut fixture);
+    assert!((cleared - plain).abs() < 0.5, "the tab loses its dot again: {plain} then {cleared}");
 }

@@ -170,6 +170,11 @@ pub struct ToolbarDrawer<'a, T: Value + 'static> {
     /// Whether the drawer searches: a searchable drawer shows a search field under its title and filters its tool rows.
     #[prop]
     kind: DrawerKind,
+    /// PdfCraft's drawer: a tool the toolbar holds only inside a group (behind another tool of its slot) stays
+    /// draggable and undimmed, so it can also get a slot of its own. By default any tool on the toolbar is dimmed and
+    /// does not drag.
+    #[prop(flag)]
+    grouped_tools_drag: bool,
 }
 
 /// What a `ToolbarDrawer` offers besides its list.
@@ -188,7 +193,7 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
     /// A drawer beside `rail` (the rail's rect), listing `groups`, over a toolbar of `toolbar` slots. `dropped` is the
     /// drag the rail took in this pass (`ToolRailOutput::dropped`); the drawer turns it into an edit.
     pub fn new(rail: Rect, groups: &'a [DrawerGroup<T>], toolbar: &'a [ToolSlot<T>], dropped: Option<ToolDropped>) -> Self {
-        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None, kind: DrawerKind::Plain }
+        ToolbarDrawer { rail, groups, toolbar, opens: Side::End, dropped, opener: None, kind: DrawerKind::Plain, grouped_tools_drag: false }
     }
 
     /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
@@ -268,15 +273,16 @@ fn match_texts<T>(command: &ResolvedCommand, tool: &RailTool<T>) -> Vec<Label> {
     texts
 }
 
-/// Whether the toolbar already has a separate slot for `id`.
-fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
-    toolbar.iter().any(|slot| slot.tools.len() == 1 && slot.tools.iter().any(|tool| tool.id == *id))
+/// Whether the toolbar holds the tool `id`: in any slot, or with `own_slot` only in a slot of its own (a tool grouped
+/// behind another counts as off the toolbar).
+fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T, own_slot: bool) -> bool {
+    toolbar.iter().any(|slot| (!own_slot || slot.tools.len() == 1) && slot.tools.iter().any(|tool| tool.id == *id))
 }
 
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
-        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener, kind } = self;
+        let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener, kind, grouped_tools_drag } = self;
         let searchable = kind == DrawerKind::Searchable;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
@@ -336,7 +342,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                             .select(SelectMode::None)
                             .activate(ActivateOn::Click)
                             .can_drag(|key| match *key {
-                                DrawerKey::Tool { group, tool } => !on_toolbar(toolbar, &groups[group].tools[tool].id),
+                                DrawerKey::Tool { group, tool } => !on_toolbar(toolbar, &groups[group].tools[tool].id, grouped_tools_drag),
                                 DrawerKey::Group(_) => false,
                             })
                             .drag_payload(|drag: &ListDrag<DrawerKey>| match drag.grabbed {
@@ -359,7 +365,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 if let Some(icon) = &command.icon {
                                     row = row.icon(IconSpec::svg(IconId::from(icon.clone())));
                                 }
-                                if on_toolbar(toolbar, &groups[group].tools[tool].id) {
+                                if on_toolbar(toolbar, &groups[group].tools[tool].id, grouped_tools_drag) {
                                     row = row.ink(RowInk::Dimmed).description(words.in_toolbar.as_str());
                                 }
                                 match chord_of(command) {

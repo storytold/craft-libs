@@ -364,6 +364,16 @@ pub struct StartScreen<'a> {
     /// The heading of the pinned folders section, in place of the built-in word.
     #[prop(into)]
     pinned_title: Option<Label>,
+    /// PdfCraft's section look: the Recent, Pinned Folders and Templates headings in the heading strength and quiet,
+    /// a ghost Pin Folder button, and a Clear button among Recent's controls that reports
+    /// [`StartAction::ClearRecent`]. By default the sections keep their plain titles and buttons and Recent has no
+    /// Clear button.
+    #[prop(flag)]
+    heading_sections: bool,
+    /// The pinned folders stand above the recent files, as production's Folders section does. By default they follow
+    /// the recent files.
+    #[prop(flag)]
+    pinned_first: bool,
     /// The host's sections, each at its place, in call order.
     sections: Vec<(StartPlace, HostSection<'a>)>,
 }
@@ -442,6 +452,8 @@ impl<'a> StartScreen<'a> {
             offers_new: true,
             offers_open: true,
             pinned_title: None,
+            heading_sections: false,
+            pinned_first: false,
             sections: Vec::new(),
         }
     }
@@ -506,11 +518,19 @@ pub(super) struct Page<'p> {
     pub(super) offers_open: bool,
     /// The heading of the pinned folders section, in place of the built-in word.
     pub(super) pinned_title: Option<&'p Label>,
+    /// PdfCraft's section look (`StartScreen::heading_sections`).
+    pub(super) heading_sections: bool,
 }
 
 impl<'p> Page<'p> {
     pub(super) fn push(&self, action: StartAction) {
         self.actions.borrow_mut().push(action);
+    }
+
+    /// A section of the page titled `title`: in the heading strength and quiet under `heading_sections`.
+    pub(super) fn section(&self, title: Label) -> Section<'static> {
+        let section = Section::fixed(title);
+        if self.heading_sections { section.strength(HeaderStrength::Heading).quiet_header() } else { section }
     }
 
     /// The line a recent file shows under its card's name and at its row's end: the app's note, else the age.
@@ -638,6 +658,8 @@ impl StartScreen<'_> {
             offers_new,
             offers_open,
             pinned_title,
+            heading_sections,
+            pinned_first,
             sections,
         } = self;
         let env = Env::of(ui);
@@ -656,6 +678,7 @@ impl StartScreen<'_> {
             offers_new,
             offers_open,
             pinned_title: pinned_title.as_ref(),
+            heading_sections,
             actions: &actions,
         };
         let view = RefCell::new(view);
@@ -697,8 +720,9 @@ impl StartScreen<'_> {
             if layout == StartLayout::Greeting {
                 greeting_body(&page, ui, title.as_ref(), more_templates.as_ref(), templates, recent, max_recent);
             } else {
-                // The pinned folders stand above the recent files, as production's Folders section does.
-                if let Some(pinned) = pinned {
+                // With `pinned_first` the pinned folders stand above the recent files, as production's Folders section
+                // does; else they follow them.
+                if let Some(pinned) = pinned.filter(|_| pinned_first) {
                     pinned_section(&page, ui, pinned);
                 }
                 if max_recent > 0 {
@@ -712,6 +736,9 @@ impl StartScreen<'_> {
                         let desktop_home = drop_area.is_some_and(|(_, wide)| wide);
                         recent_section(&page, ui, &view, &sort, current_view, &files, desktop_home);
                     }
+                }
+                if let Some(pinned) = pinned.filter(|_| !pinned_first) {
+                    pinned_section(&page, ui, pinned);
                 }
                 if !templates.is_empty() {
                     templates_section(&page, ui, templates);
@@ -1068,18 +1095,19 @@ fn recent_section(
         Entry::new(RecentSort::Name, words.sort_name.clone()),
         Entry::new(RecentSort::Created, words.sort_created.clone()),
     ];
-    let _ = Section::fixed(words.recent.clone())
-        .strength(HeaderStrength::Heading)
-        .quiet_header()
+    let _ = page
+        .section(words.recent.clone())
         .header_gap(Gap::Section)
         .command_scope(StartRecentCommands::SCOPE)
         .controls(|ui, _| {
             let _ = Segmented::new(words.view.clone(), view.borrow_mut().reborrowed(), &modes).show(ui);
             let _ = Select::new(words.sort.clone(), sort.borrow_mut().reborrowed(), &orders).show(ui);
             // Clear empties the list, as the menu's Clear Recent Files does; with no files there is nothing to clear.
-            let clear = Button::new(words.clear_recent.clone()).icon(IconId::new("trash")).enabled(!files.is_empty()).id_salt("clear").show(ui);
-            if clicked(&clear) {
-                page.push(StartAction::ClearRecent);
+            if page.heading_sections {
+                let clear = Button::new(words.clear_recent.clone()).icon(IconId::new("trash")).enabled(!files.is_empty()).id_salt("clear").show(ui);
+                if clicked(&clear) {
+                    page.push(StartAction::ClearRecent);
+                }
             }
         })
         .show(ui, |ui, cx| recent_body(page, ui, cx, files, current, &words.no_recent, desktop_home));
@@ -1251,13 +1279,14 @@ fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
 
 fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
     let words = page.words;
-    let _ = Section::fixed(page.pinned_title.cloned().unwrap_or_else(|| words.pinned.clone()))
-        .strength(HeaderStrength::Heading)
-        .quiet_header()
+    let _ = page
+        .section(page.pinned_title.cloned().unwrap_or_else(|| words.pinned.clone()))
         .header_gap(Gap::Section)
         .command_scope(StartPinnedCommands::SCOPE)
         .controls(|ui, _| {
-            if clicked(&Button::new(words.pin_folder.clone()).id_salt("pin").variant(Variant::GHOST).icon(IconId::new("new_folder")).show(ui)) {
+            let pin = Button::new(words.pin_folder.clone()).id_salt("pin").icon(IconId::new("new_folder"));
+            let pin = if page.heading_sections { pin.variant(Variant::GHOST) } else { pin };
+            if clicked(&pin.show(ui)) {
                 page.push(StartAction::PinFolder);
             }
         })
@@ -1321,11 +1350,7 @@ fn pinned_section(page: &Page<'_>, ui: &mut Ui, folders: &[PinnedFolder]) {
 }
 
 fn templates_section(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
-    let _ = Section::fixed(page.words.templates.clone())
-        .strength(HeaderStrength::Heading)
-        .quiet_header()
-        .header_gap(Gap::Section)
-        .show(ui, |ui, _| templates_grid(page, ui, templates));
+    let _ = page.section(page.words.templates.clone()).header_gap(Gap::Section).show(ui, |ui, _| templates_grid(page, ui, templates));
 }
 
 /// The template cards, which report the chosen one as [`StartAction::UseTemplate`].
