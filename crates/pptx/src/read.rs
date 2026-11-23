@@ -916,7 +916,9 @@ fn default_text_anchor(p: &mut Presentation) {
 /// layout's picture placeholder cut into a shape keeps that shape on the slide. Anything left
 /// is a rectangle.
 fn inherit_placeholder_geometry(p: &mut Presentation) {
-    let unset = |g: &Geom| matches!(g, Geom::Custom { paths } if paths.is_empty());
+    // The marker is an empty custom geometry (`shapes::mark_inherited_geometry`). One with
+    // connection sites and no path is the shape's own: nothing drawn, only places to glue to.
+    let unset = |g: &Geom| matches!(g, Geom::Custom { paths, sites } if paths.is_empty() && sites.is_empty());
     // Masters first, then layouts (from their masters), then slides (from layouts and masters).
     for m in &mut p.masters {
         let m = Arc::make_mut(m);

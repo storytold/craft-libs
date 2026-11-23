@@ -1121,7 +1121,7 @@ fn arrow_line(ends: [i32; 4], heads: [u8; 2], f: Option<Format>) -> Vec<u8> {
 /// PowerPoint 95's trapezoid outline with bottom corners inset by `a`.
 fn trapezoid_95(a: i32) -> Geom {
     let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
-    Geom::Custom { paths: vec![craft_pptx::CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
+    Geom::Custom { paths: vec![craft_pptx::CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }], sites: vec![] }
 }
 
 fn preset_of(s: &Shape) -> (&str, &[f64]) {
@@ -1738,7 +1738,7 @@ fn group_95(members: &[Vec<u8>]) -> Vec<u8> {
 }
 
 fn path_of(s: &Shape) -> (f64, f64, &str) {
-    let Geom::Custom { paths } = &s.geom else { panic!("{} is not a path", s.name) };
+    let Geom::Custom { paths, .. } = &s.geom else { panic!("{} is not a path", s.name) };
     (paths[0].w, paths[0].h, &paths[0].d)
 }
 
@@ -2380,7 +2380,7 @@ fn outline_corners(s: &Shape) -> Option<Vec<(f64, f64)>> {
             let g = craft_drawingml::preset::build(name, x.w, x.h, adj)?;
             g.outline().elements().iter().filter_map(|e| e.end_point()).map(|p| (p.x, p.y)).collect()
         }
-        Geom::Custom { paths } => {
+        Geom::Custom { paths, .. } => {
             let p = paths.first()?;
             let v: Vec<f64> = p.d.split_whitespace().filter_map(|t| t.parse().ok()).collect();
             v.as_chunks::<2>().0.iter().map(|[u, v]| (u * x.w / p.w, v * x.h / p.h)).collect()

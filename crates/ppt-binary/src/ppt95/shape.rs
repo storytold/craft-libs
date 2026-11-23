@@ -214,7 +214,7 @@ pub(super) fn freeform_path(points: &[(i32, i32)], [l, t, r, b]: [i32; 4], close
     if closed {
         d.push_str(" Z");
     }
-    Geom::Custom { paths: vec![CustomPath { w, h, d, ..Default::default() }] }
+    Geom::Custom { paths: vec![CustomPath { w, h, d, ..Default::default() }], sites: vec![] }
 }
 
 /// The share of its square a balloon's body takes, from the top; the tail reaches the bottom.

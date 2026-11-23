@@ -179,7 +179,7 @@ pub fn geometry(shape_type: u16, props: &Props) -> Geom {
         }
         return Geom::Preset { name: name.into(), adj };
     }
-    custom_path(props).map(|paths| Geom::Custom { paths }).unwrap_or_default()
+    custom_path(props).map(|paths| Geom::Custom { paths, sites: vec![] }).unwrap_or_default()
 }
 
 /// A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the shorter
@@ -199,7 +199,7 @@ const TRAPEZOID: u16 = 8;
 pub(crate) fn trapezoid(adjust: Option<u32>) -> Geom {
     let a = adjust.map_or(5400, |v| (v as i32).clamp(0, 10800));
     let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
-    Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
+    Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }], sites: vec![] }
 }
 
 /// Segments followed at most in one path.
@@ -385,7 +385,7 @@ mod tests {
             if let Some(r) = Rec::at(&table, 0) {
                 p.add_table(&r);
             }
-            let Geom::Custom { paths } = geometry(8, &p) else { panic!("not custom") };
+            let Geom::Custom { paths, .. } = geometry(8, &p) else { panic!("not custom") };
             assert_eq!((paths[0].w, paths[0].h), (21600.0, 21600.0));
             paths[0].d.clone()
         };
@@ -413,7 +413,7 @@ mod tests {
         );
         let mut p = Props::default();
         p.add_table(&Rec::at(&t, 0).unwrap());
-        let Geom::Custom { paths } = geometry(0, &p) else { panic!("not custom") };
+        let Geom::Custom { paths, .. } = geometry(0, &p) else { panic!("not custom") };
         assert_eq!(paths[0].d, "M 0 100 L 50 0 L 100 100 Z");
         assert_eq!((paths[0].w, paths[0].h), (100.0, 100.0));
     }
@@ -426,7 +426,7 @@ mod tests {
         let t = props(&[(0x8000 | prop::VERTICES, v.len() as u32)], &v);
         let mut p = Props::default();
         p.add_table(&Rec::at(&t, 0).unwrap());
-        let Geom::Custom { paths } = geometry(0, &p) else { panic!("not custom") };
+        let Geom::Custom { paths, .. } = geometry(0, &p) else { panic!("not custom") };
         let d = &paths[0].d;
         assert_eq!(d.matches('M').count() + d.matches('L').count(), MAX_POINTS);
     }
@@ -449,7 +449,7 @@ mod tests {
     }
 
     fn path_of(g: Geom) -> String {
-        let Geom::Custom { paths } = g else { panic!("not custom: {g:?}") };
+        let Geom::Custom { paths, .. } = g else { panic!("not custom: {g:?}") };
         paths[0].d.clone()
     }
 

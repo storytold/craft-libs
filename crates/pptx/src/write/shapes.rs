@@ -86,7 +86,17 @@ fn extra_guides(name: &str) -> &'static [(&'static str, i64)] {
     }
 }
 
-pub fn geometry(w: &mut Writer, g: &Geom) {
+/// The shape's extent in EMU, the space a custom geometry's connection sites are written in. A
+/// shape without a transform of its own (a placeholder inheriting its box) uses the extent the
+/// reader assumes for it, never zero, so its sites keep their fractions through a round trip.
+fn extent_emu(s: &Shape) -> (i64, i64) {
+    let inherited = craft_drawingml::custgeom::INHERITED_EXTENT_EMU as i64;
+    s.xfrm.map(|xf| (craft_drawingml::pt_to_emu(xf.w), craft_drawingml::pt_to_emu(xf.h))).unwrap_or((inherited, inherited))
+}
+
+/// `ext` is the shape's extent in EMU (`extent_emu`), the space a custom geometry's connection
+/// sites are written in.
+pub fn geometry(w: &mut Writer, g: &Geom, ext: (i64, i64)) {
     match g {
         Geom::Preset { name, adj } => {
             let name = preset_name(name);
@@ -117,15 +127,14 @@ pub fn geometry(w: &mut Writer, g: &Geom) {
             }
             w.close();
         }
-        Geom::Custom { paths } => {
-            if paths.is_empty() {
+        Geom::Custom { paths, sites } => {
+            if paths.is_empty() && sites.is_empty() {
                 w.tag("a:prstGeom").attr("prst", "rect").open();
                 w.empty("a:avLst", &[]);
                 w.close();
             } else {
-                // `craft-pptx` does not yet retain custom-geometry connection sites.
-                // Zero extent keeps the previous path-only output until the model carries them.
-                craft_drawingml::custgeom::write_cust_geom(w, paths, &[], (0, 0));
+                // Sites and no path: a custom geometry with an empty path list keeps the sites.
+                craft_drawingml::custgeom::write_cust_geom(w, paths, sites, ext);
             }
         }
     }
@@ -245,7 +254,7 @@ fn sp_pr_tag(w: &mut Writer, x: &mut Exp, o: &mut Out, s: &Shape, geom: bool, ta
         dml::xfrm(w, "a:xfrm", xf, None);
     }
     if geom && (s.xfrm.is_some() || s.ph.is_none() || !matches!(&s.geom, Geom::Preset { name, adj } if name == "rect" && adj.is_empty())) {
-        geometry(w, &s.geom);
+        geometry(w, &s.geom, extent_emu(s));
     }
     if let Some(f) = &s.fill {
         dml::fill(w, &mut Snk(x, o), f);
@@ -637,7 +646,7 @@ fn ink_shape(st: &crate::InkStroke, i: usize) -> Option<Shape> {
         id: ShapeId(0),
         name: format!("Ink {}", i + 1),
         xfrm: Some(Xfrm::new(x0, y0, w, h)),
-        geom: Geom::Custom { paths: vec![crate::CustomPath { w, h, d, fill: craft_drawingml::preset::FillMode::None, stroke: true }] },
+        geom: Geom::Custom { paths: vec![crate::CustomPath { w, h, d, fill: craft_drawingml::preset::FillMode::None, stroke: true }], sites: vec![] },
         fill: Some(Fill::None),
         line: Some(crate::Line {
             cap: Some(crate::style::LineCap::Round),
@@ -1035,18 +1044,18 @@ mod tests {
     #[test]
     fn preset_guides_are_complete() {
         let mut w = Writer::new();
-        geometry(&mut w, &Geom::Preset { name: "star5".into(), adj: vec![20000.0] });
+        geometry(&mut w, &Geom::Preset { name: "star5".into(), adj: vec![20000.0] }, (0, 0));
         let s = w.finish();
         assert_eq!(
             s,
             r#"<a:prstGeom prst="star5"><a:avLst><a:gd name="adj" fmla="val 20000"/><a:gd name="hf" fmla="val 105146"/><a:gd name="vf" fmla="val 110557"/></a:avLst></a:prstGeom>"#
         );
         let mut w = Writer::new();
-        geometry(&mut w, &Geom::Preset { name: "rightArrow".into(), adj: vec![10000.0] });
+        geometry(&mut w, &Geom::Preset { name: "rightArrow".into(), adj: vec![10000.0] }, (0, 0));
         let s = w.finish();
         assert!(s.contains(r#"name="adj1" fmla="val 10000""#) && s.contains(r#"name="adj2" fmla="val 50000""#), "{}", s);
         let mut w = Writer::new();
-        geometry(&mut w, &Geom::Preset { name: "textBox".into(), adj: vec![] });
+        geometry(&mut w, &Geom::Preset { name: "textBox".into(), adj: vec![] }, (0, 0));
         let s = w.finish();
         assert_eq!(s, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#);
     }
