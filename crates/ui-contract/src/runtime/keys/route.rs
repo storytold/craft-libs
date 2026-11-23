@@ -252,6 +252,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
     let dialog = owner == KeyOwner::Class(OwnerClass::Dialog);
     // The focused component keeps its own keys inside a dialog: a text field its typing, a widget its activation.
     let typing = owner != KeyOwner::Blocked && own == Some(OwnerClass::Text);
+    let command_keys = typing && target.is_some_and(|rec| rec.stop.keys.command_keys);
     let held: Vec<bool> = batch
         .presses
         .iter()
@@ -275,7 +276,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .collect();
     let keys = batch.shortcuts.iter().zip(&kept).filter(|(_, stays)| **stays).map(|(shortcut, _)| *shortcut).collect();
     let mods = remap_mods(&batch.mods, &kept);
-    (Shortcuts { keys, typing, dialog, layout: Layout::default(), mods, focus_lost: batch.focus_lost }, held)
+    (Shortcuts { keys, typing, command_keys, dialog, layout: Layout::default(), mods, focus_lost: batch.focus_lost }, held)
 }
 
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither

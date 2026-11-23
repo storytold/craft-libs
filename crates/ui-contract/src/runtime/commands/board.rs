@@ -2080,7 +2080,14 @@ pub(crate) fn begin(ctx: &Context) {
                     let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
                     resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
                 };
-                let typing = shortcuts.typing && !shortcut.canvas;
+                // A text component that lets command keys through leaves their presses to the app's commands.
+                let command_key = shortcuts.command_keys
+                    && shortcuts
+                        .layout
+                        .candidates(&shortcut.input)
+                        .first()
+                        .is_some_and(|chord| TypingRule::CommandKeysOnly.fires(chord, keys.keymap.platform()));
+                let typing = shortcuts.typing && !shortcut.canvas && !command_key;
                 let hold = key
                     .filter(|_| !typing && !modal_at_start)
                     .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));

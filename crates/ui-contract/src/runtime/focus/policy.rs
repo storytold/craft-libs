@@ -312,6 +312,10 @@ pub struct KeyUse {
     /// The component is a text field whose draft a press on a part declared `holds_drafts`, or on a popup layer above
     /// it, leaves unapplied; a lone Alt in the field only alerts and a window deactivation does not commit the draft.
     pub holds_drafts: bool,
+    /// While the component types, chords with the platform's command modifier and function keys still run the app's
+    /// commands whatever the app's typing rule, as under `TypingRule::CommandKeysOnly`; the text editing chords stay
+    /// the component's. For a canvas tool's text editor whose app runs its commands while typing.
+    pub command_keys: bool,
 }
 
 /// Which Tab stops a dialog's Tab order visits.
@@ -348,6 +352,7 @@ impl KeyUse {
         session: false,
         type_ahead: false,
         holds_drafts: false,
+        command_keys: false,
     };
     /// A divider between panes: it takes the arrows as moves of its value, but it is no document and no canvas tool, so
     /// it marks no window as showing a document and takes no nudges.
@@ -389,12 +394,19 @@ impl KeyUse {
             session: false,
             type_ahead: false,
             holds_drafts: false,
+            command_keys: false,
         }
     }
 
     /// The same use declaring that a press that would apply the focused draft leaves it unapplied (`holds_drafts`).
     pub const fn with_holds_drafts(mut self) -> Self {
         self.holds_drafts = true;
+        self
+    }
+
+    /// The same use letting command chords and function keys run the app's commands while it types (`command_keys`).
+    pub const fn with_command_keys(mut self) -> Self {
+        self.command_keys = true;
         self
     }
 
