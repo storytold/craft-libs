@@ -855,3 +855,43 @@ fn long_comments_and_many_unclosed_inline_openers_preserve_text() {
     let flow = parse(&matched);
     assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == "before after"));
 }
+
+#[test]
+fn list_comment_definitions_do_not_shadow_visible_references() {
+    for (marker, spaces) in [("- ", 2), ("1. ", 3), ("- - ", 4)] {
+        let pad = " ".repeat(spaces);
+        let md = format!("{marker}<!--\n\n{pad}[x]: /wrong\n{pad}-->\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+    for md in ["- <!--\n\n[x]: /right\n\n[x]", "- <!--\n- visible\n\n[x]: /right\n\n[x]", "-     <!--\n\n[x]: /right\n\n[x]"] {
+        let flow = parse(md);
+        assert!(
+            flow.blocks
+                .iter()
+                .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+                .flat_map(|p| &p.inlines)
+                .any(|i| matches!(i, Inline::Text(_, f) if f.link.as_deref() == Some("/right"))),
+            "{md}"
+        );
+    }
+}
+
+#[test]
+fn comment_tail_reference_definitions_are_extracted_without_losing_delimiters() {
+    for comment in ["<!-- -->", "<!--\n-->", "<!-- first --><!-- second -->", "<!-- árvíztűrő -->"] {
+        let flow = parse(&format!("{comment}[x]: /right\n\n[x]"));
+        let paras: Vec<_> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+        let links: Vec<_> =
+            paras.iter().flat_map(|p| &p.inlines).filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None }).collect();
+        assert_eq!(links, ["/right"], "{comment}");
+        assert!(paras.iter().all(|p| !p.text().contains("[x]:")), "the definition is not visible");
+    }
+}
