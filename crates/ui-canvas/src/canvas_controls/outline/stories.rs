@@ -51,6 +51,12 @@ fn solid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(SelectionOutline<'static>, covers = [Default], drive = Drive::Never)]
+fn faint(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let paths = paths();
+    on_canvas(ui, |ui, at, _| SelectionOutline::faint("Editable objects", &paths).show_at(ui, at))
+}
+
+#[story(SelectionOutline<'static>, covers = [Default], drive = Drive::Never)]
 fn dashed(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let paths = paths();
     on_canvas(ui, |ui, at, _| SelectionOutline::dashed("Selected paths", &paths).show_at(ui, at))

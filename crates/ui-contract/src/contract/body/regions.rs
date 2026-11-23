@@ -49,6 +49,7 @@ pub(super) fn shared_line(props: &ContainerProps, sizes: RegionSizes) -> Option<
 pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
     let pads = &tokens.tokens().space.pad;
     match pad {
+        Pad::Tight => tokens.tokens().space.gap.tight,
         Pad::Control => pads.control,
         Pad::Regular => pads.regular,
         Pad::Roomy => pads.roomy,

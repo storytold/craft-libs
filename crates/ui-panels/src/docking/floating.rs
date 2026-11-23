@@ -18,6 +18,8 @@ use crate::contract::{
     Mount, NoValue, OsFiles, Outcome, Overlay, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing,
     WordSetCx as _,
 };
+use crate::display::Icon;
+use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -25,7 +27,7 @@ use crate::runtime::windows::WindowSpec;
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
-use craft_behavior::{GesturePhase, Metrics, Sense};
+use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
 use egui::{Event, Id, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
@@ -192,7 +194,7 @@ pub struct FloatingGroupOutput {
     pub collapsed_width: Option<f32>,
     /// The files dropped on the group's window that no target there took.
     pub files: Vec<OsFile>,
-    /// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`) of the group's own OS window that
+    /// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`, `PasteImage`) of the group's own OS window that
     /// nothing took this pass, for an app that runs shortcuts of its own: the key stage and the window's widgets took
     /// theirs, and so did a command the shortcut dispatcher fired. egui hands each OS window only its own input, so
     /// the app's main window never sees these. Empty while a component of the window has keyboard focus, and for a
@@ -270,6 +272,14 @@ pub struct FloatingGroup<'a> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
+    /// The title row is a bare grip (a small handle that moves the window), with no menu, float or close action, no
+    /// column arrow and no rule under it: a quick-action strip's look.
+    #[prop]
+    grip: bool,
+    /// The surfaces the body paints keep to the window's rounded lower corners (`frame_surfaces`), and the window's
+    /// edge is drawn again over the body, which covers it along the sides: the window reads as one rounded piece.
+    #[prop]
+    rounded_body: bool,
     /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
     open: Bind<'a, bool>,
     taken: Option<HeaderAction>,
@@ -325,6 +335,8 @@ impl<'a> FloatingGroup<'a> {
             native: None,
             menu: None,
             actions: ACTIONS.to_vec(),
+            grip: false,
+            rounded_body: false,
             open: Bind::given(true),
             taken: None,
             menu_opener: None,
@@ -387,15 +399,27 @@ impl<'a> FloatingGroup<'a> {
         // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
         let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
         let sizes = self.scale.map_or(sizes, |scale| sizes.at_scale(scale));
-        (self.header, self.chrome, self.rtl) = (sizes.title_row, sizes.window_chrome(self.native.is_none()), env.direction.is_rtl());
+        // A grip title row has no rule under it, so the chrome keeps no band for one.
+        (self.header, self.chrome, self.rtl) =
+            (sizes.title_row, sizes.window_chrome_ruled(self.native.is_none(), !self.grip), env.direction.is_rtl());
+        if self.grip {
+            self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
+        }
         let mount = self.mount();
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
+        // The window's lower corners: its body ends at the window's foot and sides.
+        let window = UiTokens::corner(env.tokens.shape.radius.window);
+        let lower = egui::CornerRadius { nw: 0, ne: 0, sw: window.sw, se: window.se };
+        let rounded = self.rounded_body;
         // A group in an OS window runs its body in the window's own pass; one that fell back to a layer, or an
         // embedded window, runs in this one, whose keys are not the window's.
         let (viewport, native) = (ui.ctx().viewport_id(), self.native.is_some());
         let (mut keys, mut shown_modifiers) = (Vec::new(), None);
         let mut shown = self.show(ui, |ui, cx| {
+            if rounded {
+                crate::primitives::frame_surfaces(ui, cx.rect, lower);
+            }
             let inner = (!minimized).then(|| body(ui, cx));
             if native && !ui.is_sizing_pass() && ui.ctx().viewport_id() != viewport {
                 keys.extend(crate::runtime::keys::unclaimed(ui.ctx()));
@@ -462,7 +486,7 @@ impl<'a> FloatingGroup<'a> {
 
     /// The double arrow's square at the end of the title row the window keeps to.
     fn chevron_edge(&self) -> Option<HeaderEdge> {
-        let column = self.column.filter(|column| column.arrow.shown())?;
+        let column = self.column.filter(|column| column.arrow.shown() && !self.grip)?;
         Some(if column.edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start })
     }
 }
@@ -506,6 +530,9 @@ impl Component for FloatingGroup<'_> {
 
     /// The double arrow, over the title row's surface.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.rounded_body {
+            ui.draw().surface_edge(cx.rect, SurfaceKind::Floating);
+        }
         let Some(column) = self.column.filter(|_| self.chevron_declared) else { return };
         paint_chevron(ui, column.edge, column.arrow, column.collapsed.is_none(), cx.flow.is_rtl(), &cx.words::<DockWords>());
     }
@@ -569,6 +596,13 @@ impl Container for FloatingGroup<'_> {
         // A drag bar with no title: the tabs below name the panels. A collapsed column's title row is its bar alone,
         // the band and the double arrow; the menu, which a context request on the band opens, keeps its rows.
         let collapsed = self.column.is_some_and(|column| column.collapsed.is_some());
+        if self.grip {
+            ui.vertical_centered(|ui| {
+                let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(cx.words::<DockWords>().move_window.clone()).show(ui);
+            });
+            self.toggled |= cx.band_double_pressed();
+            return;
+        }
         let actions = if collapsed { &[][..] } else { &self.actions[..] };
         let shown = TitleRow::new("").strength(HeaderStrength::Bar).actions(actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);

@@ -11,7 +11,6 @@ use crate::menu::{Menu, MenuItem};
 use crate::primitives::IconSpec;
 use crate::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails};
 use crate::runtime::env::{Env, Label};
-use crate::runtime::memory::Remember as _;
 use crate::sections::{FooterAction, FooterBar};
 use craft_behavior::{ColumnKey, ColumnWidth, GesturePhase, IconId, Selection, SelectionChange, keyed};
 use craft_keymap::Mods;
@@ -173,12 +172,8 @@ impl Outcome for HistoryPanelOutput {
     }
 }
 
-/// The row a context menu was asked for; it lives in the panel's stack memory while the menu is open.
 /// Whether a row may be deleted.
 type DeletePredicate<'a> = Box<dyn Fn(&HistoryKey) -> bool + 'a>;
-
-#[derive(Clone, Copy, Default)]
-struct MenuTarget(Option<HistoryKey>);
 
 /// The footer buttons, in the order they stand.
 #[derive(Clone, Copy)]
@@ -332,8 +327,7 @@ impl<'a> HistoryPanel<'a> {
             });
         }
 
-        let shown = stack.show(ui, |ui, stack| {
-            let mut target = stack.memory::<MenuTarget>().0;
+        let shown = stack.show(ui, |ui, _| {
             let mut held = current.map_or_else(Selection::default, Selection::single);
             let set = Arc::clone(&deletable);
             let mut list = List::<HistoryKey>::new(words.history_list.clone())
@@ -379,6 +373,8 @@ impl<'a> HistoryPanel<'a> {
                 item
             });
             let response = out.response.clone();
+            // The row whose menu is open, as the list keeps it while the menu stays open.
+            let target = out.menu.as_ref().map(|request| request.key);
             let mut picked = events.borrow_mut();
             for event in out.events {
                 match event {
@@ -411,7 +407,6 @@ impl<'a> HistoryPanel<'a> {
                     CollectionEvent::Delete(keys) => {
                         picked.extend(keys.into_iter().filter(|key| deletable.contains(key)).map(|key| HistoryEvent::Delete(Some(key))));
                     }
-                    CollectionEvent::ContextMenu(request) => target = Some(request.key),
                     _ => {}
                 }
             }
@@ -421,7 +416,7 @@ impl<'a> HistoryPanel<'a> {
                 let renamable = enabled && matches!(key, HistoryKey::Snapshot(_));
                 let removable = enabled && deletable.contains(&key);
                 let mut deleted = false;
-                let menu = Menu::context(words.history_list.clone(), &response).show(ui, |ui, _| {
+                Menu::context(words.history_list.clone(), &response).show(ui, |ui, _| {
                     if MenuItem::new(words.history_rename.clone()).enabled(renamable).show(ui).ran {
                         request_rename(&ctx, list_id, &key);
                     }
@@ -432,11 +427,7 @@ impl<'a> HistoryPanel<'a> {
                 if deleted {
                     events.borrow_mut().push(HistoryEvent::Delete(Some(key)));
                 }
-                if menu.output.closed.is_some() {
-                    target = None;
-                }
             }
-            stack.memory::<MenuTarget>().0 = target;
         });
         HistoryPanelOutput { response: shown.output, events: events.into_inner() }
     }

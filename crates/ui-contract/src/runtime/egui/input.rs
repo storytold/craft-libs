@@ -1,6 +1,7 @@
 //! Raw input in the input hook, key events converted to craft-keymap's key types, `InputOptions`.
 
 use super::control_click::ControlClick;
+use crate::runtime::commands::ClipContent;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::pen::PenPass;
 use craft_behavior::one_press::split_after_first_press;
@@ -8,6 +9,7 @@ use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerS
 use craft_host::target::Os;
 use craft_keymap::{KeyInput, Mods};
 use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
+use std::sync::Arc;
 
 pub use egui::RawInput;
 
@@ -153,8 +155,8 @@ pub(crate) enum KeyEvent {
     Release { input: KeyInput },
     /// Typed text.
     Text(String),
-    /// egui's own clipboard events; a paste carries its text.
-    Clip { command: craft_behavior::EditCommand, text: Option<String> },
+    /// egui's own clipboard events; a paste carries its text or image.
+    Clip { command: craft_behavior::EditCommand, pasted: Option<ClipContent> },
     /// A pointer press, which ends keyboard modality.
     PointerPress,
     /// An AccessKit action request.
@@ -171,7 +173,7 @@ pub(crate) enum KeyEvent {
 pub(crate) enum Leftover {
     /// A key press (an auto-repeat when `repeat`) or release.
     Key { pressed: bool, repeat: bool },
-    /// Text or a clipboard event, which stands for itself.
+    /// Text or a clipboard event (a pasted image too), which stands for itself.
     Plain,
     /// Any other event, which that host does not read.
     Other,
@@ -181,7 +183,7 @@ pub(crate) enum Leftover {
 pub(crate) fn leftover(event: &Event) -> Leftover {
     match event {
         Event::Key { pressed, repeat, .. } => Leftover::Key { pressed: *pressed, repeat: *repeat },
-        Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) => Leftover::Plain,
+        Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) | Event::PasteImage(_) => Leftover::Plain,
         _ => Leftover::Other,
     }
 }
@@ -205,9 +207,17 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> K
         Event::Key { pressed: false, .. } => read(event).map_or(KeyEvent::Other, |input| KeyEvent::Release { input }),
         Event::Text(text) => KeyEvent::Text(text.clone()),
         Event::ModifiersChanged(modifiers) => KeyEvent::Modifiers(Mods::from_egui(modifiers, os)),
-        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None },
-        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None },
-        Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()) },
+        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, pasted: None },
+        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, pasted: None },
+        // A pasted image is the same Paste as pasted text: the command runs, and its reader takes the image.
+        Event::Paste(text) => KeyEvent::Clip {
+            command: craft_behavior::EditCommand::Paste,
+            pasted: Some(ClipContent { text: Some(Arc::from(text.as_str())), ..ClipContent::default() }),
+        },
+        Event::PasteImage(image) => KeyEvent::Clip {
+            command: craft_behavior::EditCommand::Paste,
+            pasted: Some(ClipContent { image: Some(Arc::clone(image)), ..ClipContent::default() }),
+        },
         Event::PointerButton { pressed: true, .. } => KeyEvent::PointerPress,
         Event::AccessKitActionRequest(request) => KeyEvent::Access(Action(request.clone())),
         _ => KeyEvent::Other,
@@ -284,6 +294,8 @@ pub(crate) struct PointerRead {
     pub primary_pressed: bool,
     /// The modifiers held.
     pub mods: Mods,
+    /// Modifiers carried by this pass's press, if any.
+    pub press_mods: Option<Mods>,
     /// The pass's time in seconds.
     pub time: f64,
     pub kind: PointerKind,
@@ -354,7 +366,11 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
         let mut zoom = 1.0_f32;
         let mut barrel_press = tablet.as_ref().is_some_and(|tablet| tablet.barrel_press);
         let mut barrel_pressed = false;
+        let mut press_mods = None;
         for event in &input.raw.events {
+            if let Event::PointerButton { pressed: true, modifiers, .. } = event {
+                press_mods = Some(Mods::from_egui(modifiers, os));
+            }
             match event {
                 Event::PointerButton { pos, button, pressed, .. } if *button != egui::PointerButton::Primary => {
                     let button = button_of(*button);
@@ -459,6 +475,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
             other_press,
             primary_pressed: input.pointer.primary_pressed() && !barrel_pressed,
             mods: Mods::from_egui(&input.modifiers, os),
+            press_mods,
             time: input.time,
             kind,
             sample,

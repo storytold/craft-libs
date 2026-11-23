@@ -6,9 +6,7 @@ use std::sync::Arc;
 use crate::ui::length::{DocUnit, length_field, shown};
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec, Preview};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{
-    Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec,
-};
+use craft_ui::contract::{Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -38,6 +36,16 @@ pub(crate) struct LengthRow<'p> {
     pub(crate) value: Option<f32>,
     pub(crate) range: RangeInclusive<f64>,
     pub(crate) presets: &'p [Entry<NumberPick>],
+    /// Why the field is disabled; `None` while it is enabled.
+    pub(crate) disabled: Option<Label>,
+}
+
+impl LengthRow<'_> {
+    /// The field is disabled for `reason`, which its tooltip shows.
+    pub(crate) fn disabled(mut self, reason: &Label) -> Self {
+        self.disabled = Some(reason.clone());
+        self
+    }
 }
 
 /// A plain number field of a row: a count, a percentage, or a value in thousandths.
@@ -48,17 +56,40 @@ pub(crate) struct PlainRow<'p> {
     pub(crate) range: RangeInclusive<f64>,
     pub(crate) percent: bool,
     pub(crate) presets: &'p [Entry<NumberPick>],
+    /// Why the field is disabled; `None` while it is enabled.
+    pub(crate) disabled: Option<Label>,
+}
+
+impl PlainRow<'_> {
+    /// The field is disabled for `reason`, which its tooltip shows.
+    pub(crate) fn disabled(mut self, reason: &Label) -> Self {
+        self.disabled = Some(reason.clone());
+        self
+    }
+}
+
+/// `component`, named `name`, disabled for `reason` when one is given: the tooltip shows the reason while it is
+/// disabled. Every row helper and pattern control that can be unavailable goes through it.
+pub(crate) fn disabled_for<P: Props>(component: P, name: &Label, reason: Option<&Label>) -> P {
+    match reason {
+        Some(reason) => component.enabled(false).tooltip(TooltipSpec::new(name.clone()).disabled_text(reason.clone())),
+        None => component,
+    }
 }
 
 impl Lengths<'_> {
     /// A field over a length in points, shown in the unit: its event in points and the preset row picked. The field
     /// fills its grid cell.
     pub(crate) fn row(&self, ui: &mut Ui, spec: LengthRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
-        let LengthRow { label, side, value, range, presets } = spec;
+        let LengthRow { label, side, value, range, presets, disabled } = spec;
         let points = value.map_or(Mixed::Mixed, |value| Mixed::Same(Some(f64::from(value))));
         let field = Field::new(label.clone()).side(side).show(ui, |ui, _| {
-            let out =
-                length_field(self.unit, label.clone(), points, range.clone()).presets(presets).scrub_by_label().sizing(Sizing::FillWidth).show(ui);
+            let field = length_field(self.unit, label.clone(), points, range.clone())
+                .presets(presets)
+                .scrub_by_label()
+                .mixed_word(true)
+                .sizing(Sizing::FillWidth);
+            let out = disabled_for(field, &label, disabled.as_ref()).show(ui);
             (out.edit.events, out.preset)
         });
         field.inner.unwrap_or_default()
@@ -84,7 +115,7 @@ impl Lengths<'_> {
 
     /// A field over a number that is not a length: its event and the preset row picked.
     pub(crate) fn plain(&self, ui: &mut Ui, spec: PlainRow<'_>) -> (EditEvents<Option<f64>>, Option<NumberPick>) {
-        let PlainRow { label, side, value, range, percent, presets } = spec;
+        let PlainRow { label, side, value, range, percent, presets, disabled } = spec;
         let units = self.units;
         let shown = Field::new(label.clone()).side(side).show(ui, |ui, _| {
             let field = NumberField::new(label.clone(), Bind::given(value)).range(range.clone()).presets(presets).scrub_by_label();
@@ -93,7 +124,7 @@ impl Lengths<'_> {
             } else {
                 field.codec(NumberCodec::new(units.reader(None), 0))
             };
-            let out = field.show(ui);
+            let out = disabled_for(field, &label, disabled.as_ref()).show(ui);
             (out.edit.events, out.preset)
         });
         shown.inner.unwrap_or_default()
@@ -153,7 +184,12 @@ pub(crate) fn number_presets<'g>(units: &Units, groups: impl Iterator<Item = &'g
 
 /// The size menu's rows: the point presets in the type unit.
 pub(crate) fn size_menu(units: &Units, unit: DocUnit) -> Vec<Entry<NumberPick>> {
-    SIZE_PRESETS
+    length_menu(units, unit, &SIZE_PRESETS)
+}
+
+/// The rows of a length field's presets menu: `presets` in points, shown in `unit`.
+pub(crate) fn length_menu(units: &Units, unit: DocUnit, presets: &[f32]) -> Vec<Entry<NumberPick>> {
+    presets
         .iter()
         .map(|&p| {
             let points = f64::from(p);
@@ -183,7 +219,7 @@ pub(crate) fn leading_row(
         Some(Leading::Auto) => size.map(|size| size * AUTO_LEADING),
         None => None,
     };
-    let row = LengthRow { label: words.leading.clone(), side, value, range: LEADING_RANGE, presets };
+    let row = LengthRow { label: words.leading.clone(), side, value, range: LEADING_RANGE, presets, disabled: None };
     let (event, picked) = lengths.row(ui, row);
     let mut edits: Vec<_> = number_change(event, |points| CharacterChange::Leading(Leading::Fixed(points))).into_iter().collect();
     if picked == Some(NumberPick::Choice(AUTO_ROW)) {
@@ -245,11 +281,8 @@ pub(crate) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: &[Toggl
     row.wrap(true).show(ui, |ui, _| {
         for toggle in toggles {
             let bind = Bind::given(mixed(toggle.on));
-            let mut button = ToggleButton::new(toggle.name.clone(), bind).icon(IconId::new(toggle.icon)).icon_only();
-            if let Some(reason) = &toggle.disabled {
-                button = button.enabled(false).tooltip(TooltipSpec::new(toggle.name.clone()).disabled_text(reason.clone()));
-            }
-            let out = button.show(ui);
+            let button = ToggleButton::new(toggle.name.clone(), bind).icon(IconId::new(toggle.icon)).icon_only();
+            let out = disabled_for(button, &toggle.name, toggle.disabled.as_ref()).show(ui);
             edits.extend(out.events.map(&toggle.change));
         }
     });
@@ -265,29 +298,39 @@ pub(crate) struct FamilyField {
     pub preview: Preview<String>,
     /// The family the pointer or keyboard rested on in the open list.
     pub rested: Option<String>,
+    /// The key of the host row run in the open list; a host pick is never a family edit.
+    pub host_picked: Option<String>,
 }
 
 /// The family field of the character controls, the style options and the type bar: the font picker in a
-/// hidden-label field when a `picker` source is given, else a select over `families`.
+/// hidden-label field when a `picker` source is given, else a select over `families`. A `disabled` reason disables the
+/// field and shows in its tooltip.
 pub(crate) fn family_field(
     ui: &mut Ui,
     words: &CharacterWords,
     values: &CharacterValues,
     families: &[String],
+    disabled: Option<&Label>,
     #[cfg(feature = "font-picker")] picker: Option<&mut FontPickerSource<'_>>,
 ) -> FamilyField {
     let value = mixed(values.family.clone());
     #[cfg(feature = "font-picker")]
     if let Some(source) = picker {
         let shown = Field::new(words.family.clone()).side(hidden_side()).show(ui, |ui, _| {
-            let mut field = FontPicker::new(words.family.clone(), Bind::given(value.clone()), source.catalog)
-                .settings(source.settings.reborrowed())
-                .filters(source.filters.reborrowed())
-                .served(source.served);
+            let mut field = FontPicker::new(words.family.clone(), Bind::given(value.clone()), source.catalog).served(source.served).host(source.host);
+            if let Some(key) = source.current_host.clone() {
+                field = field.current_host(key);
+            }
+            if let Some(settings) = source.settings.as_mut() {
+                field = field.settings(settings.reborrowed());
+            }
+            if let Some(filters) = source.filters.as_mut() {
+                field = field.filters(filters.reborrowed());
+            }
             if let Some(text) = source.preview_text {
                 field = field.preview_text(text);
             }
-            field.show(ui)
+            disabled_for(field, &words.family, disabled).show(ui)
         });
         let Some(out) = shown.inner else { return FamilyField::default() };
         let mut edits: Vec<EditEvent<CharacterChange>> = out
@@ -300,10 +343,14 @@ pub(crate) fn family_field(
         if let Some(style) = out.picked_style {
             edits.push(picked_event(CharacterChange::Style(style), words.style.as_str()));
         }
-        return FamilyField { edits, preview: out.preview, rested: out.rested };
+        return FamilyField { edits, preview: out.preview, rested: out.rested, host_picked: out.host_picked };
     }
     let entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
-    let edits = select_row(ui, &words.family, hidden_side(), value, &entries, CharacterChange::Family).into_iter().collect();
+    let shown = Field::new(words.family.clone()).side(hidden_side()).show(ui, |ui, _| {
+        let select = Select::new(words.family.clone(), Bind::given(value.clone()), &entries).placeholder("—");
+        disabled_for(select, &words.family, disabled).show(ui).events
+    });
+    let edits = shown.inner.unwrap_or_default().map(CharacterChange::Family).into_iter().collect();
     FamilyField { edits, ..FamilyField::default() }
 }
 
