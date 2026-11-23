@@ -447,6 +447,42 @@ fn a_long_layer_list_asks_only_for_the_rows_in_view() {
     assert_eq!(calls[0], calls[1], "a settled frame builds as many rows for 2,000 layers as for 200");
 }
 
+/// Where [`paint_reference_icons`] paints: right of the panel's room, one row per side.
+const REFERENCE_X: f32 = 600.0;
+/// The glyph sides [`paint_reference_icons`] paints, in points: every side a link badge's glyph takes.
+const REFERENCE_SIDES: std::ops::RangeInclusive<u8> = 7..=16;
+
+/// Paints the catalog's `link`, `unlink` and `app_window` icons at every side in [`REFERENCE_SIDES`], right of the
+/// panel, so a test can tell which icon a badge drew by its texture: an icon's texture is the same wherever it is
+/// painted at one size.
+fn paint_reference_icons(ui: &egui::Ui) {
+    use craft_behavior::IconId;
+    use craft_ui::primitives::{ContentPainterCx, IconSpec};
+    let env = craft_ui::runtime::env::Env::of(ui);
+    // On a layer of its own, unclipped by the panel's room.
+    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("reference-icons"));
+    let painter = ContentPainterCx::new(egui::Painter::new(ui.ctx().clone(), layer, egui::Rect::EVERYTHING), &env, env.ink);
+    for side in REFERENCE_SIDES {
+        let y = 20.0 * f32::from(side);
+        for (at, icon) in ["link", "unlink", "app_window"].into_iter().enumerate() {
+            let rect = egui::Rect::from_min_size(egui::pos2(REFERENCE_X + 30.0 * at as f32, y), Vec2::splat(f32::from(side)));
+            painter.icon(rect, &IconSpec::svg(IconId::new(icon)));
+        }
+    }
+}
+
+/// The texture of the reference icon `icon` (0 `link`, 1 `unlink`, 2 `app_window`) of `side` points among `shapes`.
+fn reference_texture(shapes: &[egui::Shape], icon: usize, side: f32) -> egui::TextureId {
+    let at = egui::Rect::from_min_size(egui::pos2(REFERENCE_X + 30.0 * icon as f32, 20.0 * side), Vec2::splat(side));
+    shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) if at.expand(0.5).contains_rect(mesh.calc_bounds()) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no reference icon {icon} at {side} points"))
+}
+
 /// The icons painted wholly inside the bottom corner of the thumbnail `thumb`, leaving out the kind glyph centred on
 /// the tile (on a small thumbnail it reaches into the corner too): each textured mesh's bounds, texture and tint.
 fn badge_icons(shapes: &[egui::Shape], thumb: egui::Rect) -> Vec<(egui::Rect, egui::TextureId, egui::Color32)> {
@@ -489,6 +525,7 @@ fn a_linked_smart_object_shows_a_chain_link_badge_red_while_its_file_is_missing(
         settings.options.thumbnail_size = size;
         let mut fixture = Fixture::new(move |ui| {
             let _ = LayersPanel::new(&tree).settings(&settings).show(ui);
+            paint_reference_icons(ui);
         });
         fixture.room(PANEL);
         fixture.settle();
@@ -514,8 +551,10 @@ fn a_linked_smart_object_shows_a_chain_link_badge_red_while_its_file_is_missing(
                 "{size:?}: the {what} fills the {side}-point badge in the thumbnail's corner: {glyph:?}, want {expected:?}"
             );
         }
-        assert_ne!(link_tex, smart_tex, "{size:?}: the linked badge is not the smart object's window glyph");
-        assert_ne!(broken_tex, link_tex, "{size:?}: a missing file breaks the link");
+        let glyph = side - 2.0;
+        assert_eq!(link_tex, reference_texture(&shapes, 0, glyph), "{size:?}: the linked badge is the chain link");
+        assert_eq!(broken_tex, reference_texture(&shapes, 1, glyph), "{size:?}: a missing file breaks the link");
+        assert_ne!(link_tex, smart_tex, "{size:?}: not the smart object's window glyph");
         assert_eq!(link_tint, smart_tint, "{size:?}: the chain link is in the badge's ink");
         let red = |c: egui::Color32| c.r() > c.g().saturating_add(40) && c.r() > c.b().saturating_add(40);
         assert!(!red(link_tint) && red(broken_tint), "{size:?}: only the missing link is red: {link_tint:?} {broken_tint:?}");
