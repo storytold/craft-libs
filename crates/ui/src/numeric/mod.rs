@@ -692,7 +692,8 @@ impl Scrubber {
         }
         s.pending += f64::from(resp.drag_delta().x / PX_PER_STEP) * size;
         let n = (s.pending / step + s.pending.signum() * 1e-9).trunc();
-        if n == 0.0 {
+        // The drag's first frame only starts it: host apps open their undo group on the next frame.
+        if n == 0.0 || resp.drag_started() {
             return None;
         }
         s.pending -= n * step;
