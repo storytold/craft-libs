@@ -164,3 +164,28 @@ fn space_on_a_focused_menu_opener_opens_its_menu() {
     fixture.key(egui::Key::Space, egui::Modifiers::NONE).settle();
     assert!(fixture.by_label("Clear All").is_some(), "Space on the focused opener opens the menu");
 }
+
+/// A menu opened from the keyboard is driven by the keyboard: Space on the focused opener opens it with its first row
+/// lit, and Return then runs that row and closes the menu.
+#[trial]
+fn return_in_a_menu_opened_by_space_runs_its_first_row() {
+    let ran = Rc::new(Cell::new(None::<&'static str>));
+    let seen = ran.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).label("Panel menu").show(ui);
+        Menu::new("Panel menu").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            for row in ["Clear All", "Reset"] {
+                if MenuItem::new(row).show(ui).ran {
+                    seen.set(Some(row));
+                }
+            }
+        });
+    });
+    fixture.settle();
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    fixture.key(egui::Key::Space, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Clear All").is_some(), "Space on the focused opener opens the menu");
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+    assert_eq!(ran.get(), Some("Clear All"), "Return runs the menu's first row");
+    assert!(menu_rect(&fixture).is_none(), "running the row closes the menu");
+}
