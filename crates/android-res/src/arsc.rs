@@ -303,6 +303,7 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
     let mut pos = h;
     while pos < size {
         let Some((ct, _ch, cs)) = chunk(&r, pos) else {
+            table.truncated = true;
             table.warnings.push(format!("unreadable chunk at offset {pos}"));
             break;
         };
@@ -316,7 +317,10 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
                     table.global_strings = p.declared;
                     global = p;
                 }
-                Err(e) => table.warnings.push(format!("global string pool: {e}")),
+                Err(e) => {
+                    table.truncated = true;
+                    table.warnings.push(format!("global string pool: {e}"));
+                }
             },
             RES_PACKAGE => {
                 if table.packages.len() >= MAX_PACKAGES {
@@ -338,12 +342,14 @@ pub fn parse(data: &[u8], limits: Limits) -> Result<Table, Error> {
 
 fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table: &mut Table, limits: Limits) {
     let Some(data) = pos.checked_add(cs).and_then(|end| data.get(..end)) else {
+        table.truncated = true;
         table.warnings.push("package runs past its resource table".into());
         return;
     };
     let r = Reader::new(data);
     let hsize = usize::from(r.u16_le(pos + 2).unwrap_or(0));
     if hsize < 284 {
+        table.truncated = true;
         table.warnings.push(format!("package at offset {pos}: incomplete header"));
         return;
     }
@@ -365,6 +371,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
             return StringPool::default();
         }
         let Some(start) = pos.checked_add(offset).filter(|&start| offset >= hsize && start < end) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: {label} string pool is outside its payload"));
             return StringPool::default();
         };
@@ -381,6 +388,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 pool
             }
             Err(error) => {
+                table.truncated = true;
                 table.warnings.push(format!("package {name}: {label} string pool: {error}"));
                 StringPool::default()
             }
@@ -393,12 +401,14 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
     let mut c = pos.saturating_add(hsize.max(8));
     while c < end {
         let Some((ct, ch, sz)) = chunk(&r, c) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: unreadable chunk at offset {c}"));
             break;
         };
         // Each child was checked against its package; reads within it must also stop before
         // the next sibling, including fixed-width library records and bag headers.
         let Some(child) = data.get(..c.saturating_add(sz)) else {
+            table.truncated = true;
             table.warnings.push(format!("package {name}: child chunk runs past its package"));
             break;
         };
@@ -449,6 +459,9 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 if n > available {
                     table.warnings.push(format!("package {name}: library records run past their chunk"));
                 }
+                if n > available.min(256) {
+                    table.truncated = true;
+                }
                 for i in 0..n.min(256).min(available) {
                     let e = c + ch + i * 260;
                     if let Some(lid) = r.u32_le(e) {
@@ -457,6 +470,7 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 }
             }
             (RES_TYPE_SPEC | RES_TYPE | RES_LIBRARY, _) => {
+                table.truncated = true;
                 table.warnings.push(format!("package {name}: incomplete chunk header at offset {c}"));
             }
             _ => {}
@@ -493,10 +507,12 @@ fn parse_type(
     let mut slots: Vec<(u32, usize)> = Vec::new();
     let table_bytes = if sparse || off16 { count.saturating_mul(if sparse { 4 } else { 2 }) } else { count.saturating_mul(4) };
     if c.saturating_add(ch).saturating_add(table_bytes) > end {
+        table.truncated = true;
         table.warnings.push(format!("{tname} ({cfg}): entry table runs past its chunk"));
         return;
     }
     if count != 0 && (entries_start < ch.saturating_add(table_bytes) || entries_start > sz) {
+        table.truncated = true;
         table.warnings.push(format!("{tname} ({cfg}): invalid entry data start"));
         return;
     }
@@ -517,15 +533,16 @@ fn parse_type(
             }
         }
     }
+    let mut skipped = 0usize;
     for (idx, o) in slots {
         if table.entries.len() >= limits.max_entries {
             table.truncated = true;
-            return;
+            break;
         }
-        let Some(e) = c.checked_add(entries_start).and_then(|x| x.checked_add(o)) else { continue };
-        if e.saturating_add(8) > end {
+        let Some(e) = c.checked_add(entries_start).and_then(|x| x.checked_add(o)).filter(|e| e.saturating_add(8) <= end) else {
+            skipped += 1;
             continue;
-        }
+        };
         let esize = usize::from(r.u16_le(e).unwrap_or(0));
         let eflags = r.u16_le(e + 2).unwrap_or(0);
         let id = (p.id << 24) | (u32::from(type_id) << 16) | (idx & 0xffff);
@@ -589,10 +606,17 @@ fn parse_type(
                     entry.value = Some(v.format(global));
                     entry.value_type = Some(v.type_name());
                     entry.raw = Some(v);
+                } else {
+                    table.truncated = true;
+                    table.warnings.push(format!("{tname} ({cfg}): incomplete value"));
                 }
             }
         }
         table.entries.push(entry);
+    }
+    if skipped > 0 {
+        table.truncated = true;
+        table.warnings.push(format!("{tname} ({cfg}): {skipped} entries run past their chunk"));
     }
 }
 
@@ -640,6 +664,30 @@ mod tests {
         assert_eq!(style.parent.as_deref(), Some("@0x01030005"));
         assert_eq!(style.bag[0].value, "#ff336699");
         assert_eq!(style.config, "night-xhdpi-v21");
+    }
+
+    #[test]
+    fn skipped_type_chunks_and_entries_mark_the_table_partial() {
+        let bytes = fx::resources_arsc();
+        // The French type chunk: RES_TYPE, an 84-byte header, and "fr" in its configuration.
+        let fr = (0..bytes.len() - 30).find(|&i| bytes[i..i + 4] == [0x01, 0x02, 84, 0] && &bytes[i + 28..i + 30] == b"fr").unwrap();
+        let corrupt = |at: usize, value: u32| {
+            let mut b = bytes.clone();
+            b[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            parse(&b, Limits::default()).unwrap()
+        };
+        for (what, t) in [
+            ("entry table past its chunk", corrupt(fr + 12, 1000)),
+            ("invalid entry data start", corrupt(fr + 16, 0xffff)),
+            ("an entry past its chunk", corrupt(fr + 84, 0x1000)),
+            // The second entry's header fits, but its value runs past the chunk.
+            ("a value past its chunk", corrupt(fr + 88, 24)),
+        ] {
+            let french = t.entries.iter().filter(|e| e.locale == "fr" && e.value.is_some()).count();
+            assert!(french < 2, "{what}: the corruption should lose a French value");
+            assert!(t.truncated, "{what}: lost content must mark the table partial");
+            assert!(!t.warnings.is_empty(), "{what}: lost content must be reported");
+        }
     }
 
     #[test]
