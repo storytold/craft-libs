@@ -10,7 +10,7 @@ use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::windows::{FullOutput, RawInput};
-use egui::{Context, Event, HoveredFile, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{Context, Event, HoveredFile, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
@@ -20,6 +20,8 @@ const CHILD_SIZE: Vec2 = Vec2::new(400.0, 300.0);
 thread_local! {
     /// The events the next child pass receives (the renderer runs on the trial's thread).
     static CHILD_EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    /// The modifiers held in the child's window, which every child pass reports.
+    static CHILD_MODIFIERS: Cell<Modifiers> = const { Cell::new(Modifiers::NONE) };
     /// The files hovering over and dropped on the child's window in the next child pass.
     static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<String>)> = const { RefCell::new((Vec::new(), Vec::new())) };
     /// The window facts every child opened from the root reports.
@@ -172,6 +174,7 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     let mut input = RawInput {
         viewport_id: viewport.ids.this,
         events,
+        modifiers: CHILD_MODIFIERS.with(Cell::get),
         hovered_files,
         dropped_files,
         // The pass lays out in the window as large as its facts say, as the OS gives it.
@@ -277,6 +280,7 @@ impl Windows {
         Context::set_immediate_viewport_renderer(render_child);
         CHILD_EVENTS.with(|events| events.borrow_mut().clear());
         CHILD_FILES.with(|files| *files.borrow_mut() = Default::default());
+        CHILD_MODIFIERS.with(|held| held.set(Modifiers::NONE));
         CHILD_INFO.with(|info| *info.borrow_mut() = ViewportInfo::default());
         OWN_INFO.with(|own| own.borrow_mut().clear());
         CHILDREN.with(|children| children.borrow_mut().clear());
@@ -295,6 +299,11 @@ impl Windows {
     /// [`child_info`](Self::child_info) gave.
     pub fn facts(&self, viewport: ViewportId) -> ViewportInfo {
         with_facts(viewport, |info| info.clone())
+    }
+
+    /// The modifiers held in the child's window, which its passes report from now on.
+    pub fn child_modifiers(&self, held: Modifiers) {
+        CHILD_MODIFIERS.with(|kept| kept.set(held));
     }
 
     /// The window facts the root viewport reports from now on.

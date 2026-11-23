@@ -78,7 +78,9 @@ Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collap
 
 A panel in a column collapsed to icons shows in its flyout (`Layout::opens_in_flyout`). The host opens and closes it by writing the `flyout` binding, not the layout: `WindowMenuRows` checks such a panel's row while its flyout is open (`WindowMenuRows::flyout`) and reports a pick in `WindowMenuRowsOutput::flyout`.
 
-`DockAreaOutput` holds the `actions` taken, the bodies' `requested` actions, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, `columns`, the OS `windows` the floating windows showed in (by a panel of each), `window_files`, and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
+`DockAreaOutput` holds the `actions` taken, the bodies' `requested` actions, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, `columns`, the OS `windows` the floating windows showed in (by a panel of each), `window_files`, `forwarded` and `forwarded_modifiers`, and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
+
+`forwarded` holds the key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`) of the floating windows that show in OS windows of their own and that nothing took this pass, and `forwarded_modifiers` the modifiers held in the window that forwarded the last of them. egui gives each OS window only its own input, so a host that runs shortcuts from its main window's input runs them on these as well, to keep them working while a floating window has the focus. The key stage's own keys (Escape, Tab and focus moves, claimed and edit chords) and what the window's widgets read are not in them, and a command the shortcut dispatcher fired for a key is not forwarded too. A window where a component has keyboard focus forwards nothing: its keys are that component's. Floating windows in the app window forward nothing, as their keys are the app window's.
 
 The host handles these `DockEvent`s:
 

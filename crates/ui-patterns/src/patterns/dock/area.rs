@@ -83,6 +83,17 @@ pub struct DockAreaOutput<P> {
     pub windows: Vec<(P, ViewportId)>,
     /// The files dropped on the area's windows this pass, for the host to open.
     pub window_files: Vec<drag::OsFile>,
+    /// The key, text and clipboard events (`Key`, `Text`, `Copy`, `Cut`, `Paste`) of the area's floating windows in their
+    /// own OS windows that nothing took this pass, in the order of the windows. egui hands each OS window only its own
+    /// input, so the app's main window never sees these: an app that runs its shortcuts from its main window's input
+    /// runs them on these too, to keep them working while a floating window has the focus. The framework took its own
+    /// keys in the window (Escape, Tab and focus moves, claimed and edit chords, a command a shortcut fired), and the
+    /// window's widgets theirs. A window where a component has keyboard focus forwards nothing: its keys are that
+    /// component's. A clipboard chord stands for the `Copy`, `Cut` or `Paste` event without its key. Floating windows
+    /// that show in the app window forward nothing: their keys are the app window's own.
+    pub forwarded: Vec<egui::Event>,
+    /// The modifiers held in the window that forwarded the last of `forwarded`; `None` when it is empty.
+    pub forwarded_modifiers: Option<egui::Modifiers>,
     /// The area's response.
     pub response: Response,
 }
@@ -254,6 +265,10 @@ struct Report<P> {
     windows: Vec<(P, ViewportId)>,
     /// The files dropped on the floating windows that no target there took.
     files: Vec<drag::OsFile>,
+    /// The keyboard events the floating windows' own OS windows left, and the modifiers held in the last window that
+    /// left any.
+    forwarded: Vec<egui::Event>,
+    forwarded_modifiers: Option<egui::Modifiers>,
 }
 
 /// The inputs of the workspace's derived values: the workspace, the panels' specs and the lock.
@@ -346,6 +361,8 @@ struct Passed<P> {
     columns: Vec<(P, Rect)>,
     windows: Vec<(P, ViewportId)>,
     files: Vec<drag::OsFile>,
+    forwarded: Vec<egui::Event>,
+    forwarded_modifiers: Option<egui::Modifiers>,
 }
 
 /// How a group is shown: minimized, whether it is an accordion section (with its open state), and whether it is in
@@ -482,18 +499,21 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             passed = Some(result);
         });
         let requested = close_requests::<P>(&ctx);
-        let Passed { geometry, actions, events, focused, picked, edit, space, columns, windows, files } = passed.unwrap_or_else(|| Passed {
-            geometry: Vec::new(),
-            actions: Vec::new(),
-            events: Vec::new(),
-            focused: None,
-            picked: None,
-            edit: EditEvents::new(),
-            space: None,
-            columns: Vec::new(),
-            windows: Vec::new(),
-            files: Vec::new(),
-        });
+        let Passed { geometry, actions, events, focused, picked, edit, space, columns, windows, files, forwarded, forwarded_modifiers } = passed
+            .unwrap_or_else(|| Passed {
+                geometry: Vec::new(),
+                actions: Vec::new(),
+                events: Vec::new(),
+                focused: None,
+                picked: None,
+                edit: EditEvents::new(),
+                space: None,
+                columns: Vec::new(),
+                windows: Vec::new(),
+                files: Vec::new(),
+                forwarded: Vec::new(),
+                forwarded_modifiers: None,
+            });
         if shown.output.dropped.is_some() {
             cross_window::accept_cross_window(&ctx);
         }
@@ -510,6 +530,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             columns,
             windows,
             window_files: files,
+            forwarded,
+            forwarded_modifiers,
             response: shown.output.response,
         }
     }
@@ -631,6 +653,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             placed: Vec::new(),
             windows: Vec::new(),
             files: Vec::new(),
+            forwarded: Vec::new(),
+            forwarded_modifiers: None,
         },
         dock: id,
     };
@@ -731,6 +755,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         columns: report.placed,
         windows: report.windows,
         files: report.files,
+        forwarded: report.forwarded,
+        forwarded_modifiers: report.forwarded_modifiers,
     }
 }
 
@@ -1427,6 +1453,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             self.dock = area_dock;
             let output = shown.output;
             self.report.files.extend(output.files);
+            if !output.keys.is_empty() {
+                self.report.forwarded_modifiers = output.key_modifiers;
+                self.report.forwarded.extend(output.keys);
+            }
             if let Some(dropped) = dropped.into_inner() {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);

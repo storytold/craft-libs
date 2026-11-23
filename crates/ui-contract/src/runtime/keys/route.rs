@@ -11,8 +11,8 @@ use craft_behavior::focus::{EscapeRouting, key_owner};
 use craft_behavior::keys;
 use craft_behavior::{EditCommand, Intent, KeyOwner, MoveMods, NavMove, OwnerClass};
 use craft_host::target::Os;
-use craft_keymap::{Chord, Key, Layout, Mods};
-use egui::{Context, Id, IdMap, Vec2};
+use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
+use egui::{Context, Event, Id, IdMap, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -24,6 +24,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let target = focus::focused_rec(ctx);
     let (batch, nodes, captures, held_claims) = current(ctx, |stage| {
         stage.routed.clear();
+        stage.fired.clear();
         stage.contexts.clear();
         stage.claimed.clear();
         stage.activated.clear();
@@ -161,6 +162,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             stage.menu.push(MenuKey::Focus);
         }
         stage.shortcuts = shortcuts;
+        stage.left_clips = batch.left_clips;
         if !stage.shortcuts.keys.is_empty() {
             stage.shortcuts.layout = stage.layout.clone();
         }
@@ -380,6 +382,70 @@ pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
         toggle.inspect(|toggle| request_chrome_toggle(ctx, viewport, *toggle)).is_none()
     });
     shortcuts
+}
+
+/// Records that the shortcut dispatcher fired a command for the press `input` in the running pass, so
+/// [`unclaimed`] leaves the press, its release and the clipboard event that stood for it to the command.
+pub(crate) fn note_fired(ctx: &Context, input: &KeyInput) {
+    let held = input.physical.or(input.typed);
+    current(ctx, |stage| {
+        stage.fired.push(*input);
+        if let Some(key) = held.filter(|key| !stage.fired_down.contains(key)) {
+            stage.fired_down.push(key);
+        }
+    });
+}
+
+/// The key, text and clipboard events of the running pass that nothing took: no component of the viewport has
+/// keyboard focus (a framework stop or an app's own widget), and the key stage neither stripped an event for itself
+/// (Escape, Tab and focus moves, claimed and edit chords, the menu bar's keys) nor handed it to a component
+/// (typing, a list's keys), and no widget has read it from egui's input since, nor has the shortcut dispatcher fired a
+/// command for it (`note_fired`). Call it once the viewport's content has run, for a host that runs its own shortcuts
+/// on the input of a window the framework gives it no commands for: an OS window of a dock, whose keys egui hands to
+/// that window only.
+///
+/// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
+/// as the `Copy`, `Cut` or `Paste` event. Empty while a component has focus, as that component owns the keys then.
+#[doc(hidden)]
+pub fn unclaimed(ctx: &Context) -> Vec<Event> {
+    let viewport = crate::runtime::egui::pass::current_viewport(ctx);
+    let record = focus::record(ctx, viewport);
+    if record.focused.is_some() || record.foreign || ctx.memory(|memory| memory.focused().is_some()) {
+        return Vec::new();
+    }
+    let platform = craft_keymap::egui::platform(ctx);
+    let (fired, clips, mut down) = current(ctx, |stage| (stage.fired.clone(), stage.left_clips.clone(), std::mem::take(&mut stage.fired_down)));
+    let key_of = |input: &KeyInput| input.physical.or(input.typed);
+    let same = |input: &KeyInput, other: &KeyInput| key_of(input) == key_of(other) && input.mods == other.mods;
+    let events = ctx.input(|input| input.events.clone());
+    let mut left = Vec::with_capacity(events.len());
+    for event in events {
+        match &event {
+            Event::Key { pressed, .. } => {
+                let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
+                if *pressed && fired.iter().any(|fired| same(fired, &input)) {
+                    continue;
+                }
+                if !*pressed && let Some(at) = key_of(&input).and_then(|key| down.iter().position(|held| *held == key)) {
+                    down.swap_remove(at);
+                    continue;
+                }
+                left.push(event);
+            }
+            Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) => left.push(event),
+            _ => {}
+        }
+    }
+    for (event, input) in clips {
+        if !fired.iter().any(|fired| same(fired, &input)) {
+            left.push(event);
+        }
+    }
+    current(ctx, |stage| {
+        // What this pass did not release stays down for a later pass's release.
+        stage.fired_down = down;
+    });
+    left
 }
 
 /// Asks the focused component of the running viewport to take `command` as `Intent::Edit` in the next pass.

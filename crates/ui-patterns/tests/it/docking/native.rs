@@ -20,8 +20,11 @@ use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
+use craft_ui::text::TextField;
 use craft_ui_test_kit::windows::{AppKitWindow, Out, Windows};
 use egui::{Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -1373,6 +1376,64 @@ fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
     };
     assert_eq!(reached(false), 1, "a file no target took arrives once");
     assert_eq!(reached(true), 0, "a file a target in the window took does not");
+}
+
+/// Palettes whose body is a text field, which takes the keys of its window while it has focus. `at` is where it showed.
+struct Fielded {
+    text: String,
+    at: Rc<Cell<Rect>>,
+}
+
+impl DockPanels<u32> for Fielded {
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        self.at.set(TextField::new("Name", Bind::bound(&mut self.text)).show(ui).response.rect);
+    }
+}
+
+/// A key pressed in a native float's own OS window that nothing there took reaches `DockAreaOutput::forwarded`, with the
+/// modifiers held in that window, so an app can run its shortcuts from its main window's input while the float has the
+/// focus; the same key is the field's own while a text field in that window has focus, and is not forwarded.
+#[trial]
+fn a_key_nothing_took_in_a_native_float_is_forwarded_unless_a_field_in_it_has_focus() {
+    let windows = Windows::new();
+    windows.root_info(info(true, ROOT_AT));
+    windows.child_info(info(true, PALETTE_AT));
+    let mut workspace = Arc::new(Workspace::new(Layout::new(None, vec![float()])));
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let mut panels = Fielded { text: String::new(), at: at.clone() };
+    let mut frame = |child: Vec<Event>| {
+        let mut forwarded = (Vec::new(), None);
+        windows.frame(vec![], child, |ui| {
+            let config = DockConfig::default().native_windows(true);
+            let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &Specs::with(Permissions::ALL), &mut panels, config).show(ui);
+            forwarded = (shown.forwarded, shown.forwarded_modifiers);
+        });
+        forwarded
+    };
+    for _ in 0..5 {
+        frame(vec![]);
+    }
+    let saved = key_press(Key::S, Modifiers::COMMAND);
+    let is_saved = |event: &Event| matches!(event, Event::Key { key: Key::S, pressed: true, .. });
+
+    // Nothing in the window has focus: the key is left to the app, with the modifiers held.
+    windows.child_modifiers(Modifiers::COMMAND);
+    let (keys, modifiers) = frame(vec![saved.clone()]);
+    windows.child_modifiers(Modifiers::NONE);
+    assert!(keys.iter().any(is_saved), "the key nothing took is forwarded: {keys:?}");
+    assert_eq!(modifiers, Some(Modifiers::COMMAND), "with the modifiers held in the window");
+    assert!(frame(vec![]).0.is_empty(), "a pass with no key forwards none");
+
+    // A click focuses the field: its keys are its own.
+    let field = at.get().center();
+    for events in [vec![moved(field)], vec![press(field)], vec![release(field)], vec![]] {
+        frame(events);
+    }
+    windows.child_modifiers(Modifiers::COMMAND);
+    let (keys, modifiers) = frame(vec![saved, Event::Text("s".to_owned())]);
+    windows.child_modifiers(Modifiers::NONE);
+    assert!(keys.is_empty(), "no key is forwarded while a field in the window has focus: {keys:?}");
+    assert_eq!(modifiers, None);
 }
 
 /// A palette float made in the app window.

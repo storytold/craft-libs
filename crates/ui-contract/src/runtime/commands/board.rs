@@ -1928,6 +1928,8 @@ pub(crate) fn begin(ctx: &Context) {
                         board.held.push(Held { key, command: hit.command.clone(), target });
                     }
                 });
+                // A host that reads the keys nothing took (`keys::unclaimed`) leaves this press to the command.
+                keys::note_fired(ctx, &shortcut.input);
                 fired.push(Fired {
                     command: hit.command,
                     target,

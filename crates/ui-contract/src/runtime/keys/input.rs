@@ -12,7 +12,7 @@ use crate::runtime::sampler;
 use craft_behavior::{EditCommand, OwnerClass};
 use craft_host::target::Os;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Event, Id, ViewportId};
 use std::sync::Arc;
 
 /// What the strip of one event decided.
@@ -154,7 +154,7 @@ impl Strip<'_> {
             KeyEvent::Clip { .. } if self.foreign => true,
             KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
-            KeyEvent::Clip { command, .. } => {
+            KeyEvent::Clip { command, text } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
                 // web sends the chord's press as well.
                 let key = match command {
@@ -172,6 +172,13 @@ impl Strip<'_> {
                     self.press(batch, key, &input, false, at);
                 } else if !sent {
                     batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at });
+                    // No component took it, so a host that reads what is left over (`unclaimed`) gets the event back.
+                    let event = match command {
+                        EditCommand::Cut => Event::Cut,
+                        EditCommand::Paste => Event::Paste(text.unwrap_or_default()),
+                        _ => Event::Copy,
+                    };
+                    batch.left_clips.push((event, input));
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.

@@ -7,7 +7,7 @@ use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
-use egui::{Context, Id, IdMap, Vec2, ViewportId};
+use egui::{Context, Event, Id, IdMap, Vec2, ViewportId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -46,7 +46,9 @@ pub(crate) use intents::{
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
+#[doc(hidden)]
+pub use route::unclaimed;
+pub(crate) use route::{activated_member, begin, layout_of, note_fired, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +137,9 @@ struct Batch {
     /// How many text events the strip left in egui's input.
     egui_texts: usize,
     clips: Vec<EditCommand>,
+    /// The clipboard events the strip took from egui's input for a shortcut press that no component lists the command
+    /// of (`Strip::event`), each with the press it stands for, so a host reading what no component took gets them back.
+    left_clips: Vec<(Event, KeyInput)>,
     access: Vec<Action>,
     escapes: usize,
     claimed: Vec<Chord>,
@@ -247,6 +252,12 @@ pub(crate) struct Stage {
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,
+    /// The clipboard events `Batch::left_clips` held, for this pass.
+    left_clips: Vec<(Event, KeyInput)>,
+    /// The presses the shortcut dispatcher fired a command for in this pass (`note_fired`).
+    fired: Vec<KeyInput>,
+    /// The keys whose press a command fired and whose release has not come yet: the release is the command's too.
+    fired_down: Vec<Key>,
     /// The paste text the focused component reads through its clipboard handle.
     pasted: Option<(Id, Arc<str>)>,
     /// Edit commands fired from the queue for the focused component.
