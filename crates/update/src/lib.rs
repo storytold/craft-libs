@@ -90,10 +90,14 @@ impl From<&str> for CheckError {
 
 /// Checks for an update against GitHub releases for the given app.
 pub fn check_for_update(app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
+    check_releases_at(&format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo), app, http, current_version)
+}
+
+/// [`check_for_update`] against the release list at `url` (a loopback server in tests).
+fn check_releases_at(url: &str, app: &App, http: &Http, current_version: &str) -> Result<Option<Release>, CheckError> {
     let version = self_update::current_version(app, current_version).map(|v| v.to_string());
     let current_version = version.as_deref().unwrap_or(current_version);
-    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", app.repo);
-    match http.get_api(&url, None)? {
+    match http.get_api(url, None)? {
         crate::http::Fetched::Body { text, .. } => Ok(offered_release(&text, app.repo, current_version)?),
         crate::http::Fetched::RateLimited { .. } => Err(CheckError::RateLimited),
         crate::http::Fetched::NotModified | crate::http::Fetched::NotFound => Ok(None),
