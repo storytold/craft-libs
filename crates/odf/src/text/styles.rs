@@ -1661,6 +1661,23 @@ impl Styles {
         {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
+        // And its East Asian and complex-script languages, which the document's defaults take
+        // from Standard too (#1836).
+        if s.parent.is_none() {
+            let doc = self.document_scripts();
+            // The default style's language where the document's differs from it.
+            let differs = |default: &Option<String>, doc: &Option<String>| default.clone().filter(|l| doc.as_ref() != Some(l));
+            if let Some(l) = differs(&self.default_scripts.lang_ea, &doc.lang_ea)
+                && fmt.extra.as_ref().is_none_or(|x| x.lang_ea.is_none())
+            {
+                fmt.extra.get_or_insert_with(Default::default).lang_ea = Some(l);
+            }
+            if let Some(l) = differs(&self.default_scripts.lang_bidi, &doc.lang_bidi)
+                && fmt.extra.as_ref().is_none_or(|x| x.lang_bidi.is_none())
+            {
+                fmt.extra.get_or_insert_with(Default::default).lang_bidi = Some(l);
+            }
+        }
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),

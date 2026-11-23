@@ -544,22 +544,28 @@ fn a_language_with_a_script_keeps_it() {
     assert_eq!(d.styles.default_chr.lang.as_deref(), Some("sr-RS"));
 }
 
-/// A style with no parent inherits the default style's language, not Standard's (the document's
-/// here), and one based on Standard takes Standard's.
+/// A style with no parent inherits the default style's languages, not Standard's (the document's
+/// here), and one based on Standard takes Standard's: the Western, East Asian and complex-script
+/// ones alike (#1836).
 #[test]
 fn a_style_with_no_parent_has_the_default_styles_language() {
     let styles = format!(
-        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="en" fo:country="US"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:language="de" fo:country="DE"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph"/><style:style style:name="Gesagt" style:display-name="Gesagt" style:family="paragraph"><style:text-properties fo:language="fr" fo:country="FR"/></style:style><style:style style:name="Kind" style:display-name="Kind" style:family="paragraph" style:parent-style-name="Standard"/></office:styles></office:document-styles>"#
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="en" fo:country="US" style:language-asian="zh" style:country-asian="CN" style:language-complex="hi" style:country-complex="IN"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:language="de" fo:country="DE" style:language-asian="ja" style:country-asian="JP" style:language-complex="ar" style:country-complex="EG"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph"/><style:style style:name="Gesagt" style:display-name="Gesagt" style:family="paragraph"><style:text-properties fo:language="fr" fo:country="FR" style:language-asian="ko" style:country-asian="KR" style:language-complex="he" style:country-complex="IL"/></style:style><style:style style:name="Kind" style:display-name="Kind" style:family="paragraph" style:parent-style-name="Standard"/></office:styles></office:document-styles>"#
     );
     let content = format!(
         r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Eigen">a</text:p><text:p text:style-name="Gesagt">b</text:p><text:p text:style-name="Kind">c</text:p></office:text></office:body></office:document-content>"#
     );
     let check = |d: &craft_wordmodel::Document| {
-        assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
-        let lang = |id: &str| d.styles.resolve_char(Some(id), &Default::default()).lang;
-        assert_eq!(lang("Eigen").as_deref(), Some("en-US"), "no parent: the default style's");
-        assert_eq!(lang("Gesagt").as_deref(), Some("fr-FR"), "its own");
-        assert_eq!(lang("Kind").as_deref(), Some("de-DE"), "based on Standard");
+        let c = &d.styles.default_chr;
+        assert_eq!((c.lang.as_deref(), c.lang_ea.as_deref(), c.lang_bidi.as_deref()), (Some("de-DE"), Some("ja-JP"), Some("ar-EG")));
+        let langs = |id: &str| {
+            let c = d.styles.para_style_props(id).1;
+            (c.lang, c.lang_ea, c.lang_bidi)
+        };
+        let want = |l: &str, ea: &str, bidi: &str| (Some(l.to_string()), Some(ea.to_string()), Some(bidi.to_string()));
+        assert_eq!(langs("Eigen"), want("en-US", "zh-CN", "hi-IN"), "no parent: the default style's");
+        assert_eq!(langs("Gesagt"), want("fr-FR", "ko-KR", "he-IL"), "its own");
+        assert_eq!(langs("Kind"), want("de-DE", "ja-JP", "ar-EG"), "based on Standard");
     };
     let d = import(&crate::text::tests::package(&content, Some(&styles))).unwrap();
     check(&d);
