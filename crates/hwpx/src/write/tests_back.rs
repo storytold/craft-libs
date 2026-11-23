@@ -248,6 +248,34 @@ fn write_back_reports_moved_paragraphs() {
     assert!(report.skipped.is_empty(), "{report:?}");
 }
 
+/// Attributes in single quotes, or with spaces around `=`, are read and rewritten as XML allows.
+/// A run whose shape is written `charPrIDRef='7'` keeps it when text is added to it. Before,
+/// the shape read as 0 and the run's existing text took shape 0 too.
+#[test]
+fn single_quoted_attributes_are_read() {
+    let attrs = crate::write::back::tag_attrs(r#"<hp:run charPrIDRef='7' a = "1" b='x"y'>"#);
+    assert_eq!(attrs.get("charPrIDRef").map(String::as_str), Some("7"));
+    assert_eq!(attrs.get("a").map(String::as_str), Some("1"));
+    assert_eq!(attrs.get("b").map(String::as_str), Some(r#"x"y"#));
+    let original = hwpx(&format!(r#"<hs:sec {NS}><hp:p paraPrIDRef='0'><hp:run charPrIDRef='7'><hp:t>원래</hp:t></hp:run></hp:p></hs:sec>"#));
+    let (out, report) = write_back(&original, &edited(&original, "원래", "원래 글"));
+    assert_eq!(report.modified, 1, "{report:?}");
+    let sec = zip_part(&out, "Contents/section0.xml");
+    assert!(sec.contains("원래 글"), "{sec}");
+    let runs: Vec<String> = sec.match_indices("<hp:run").map(|(i, _)| sec[i..i + sec[i..].find('>').unwrap()].to_string()).collect();
+    assert!(runs.iter().all(|r| r.contains("charPrIDRef=\"7\"") || r.contains("charPrIDRef='7'")), "{runs:?}");
+}
+
+/// A WebP or TIFF picture in a new HWPX (or one added on a save) is named and listed as what it
+/// is. Before, every unknown kind became a .png said to be image/png.
+#[test]
+fn hwpx_pictures_are_named_by_what_they_hold() {
+    let webp = [b"RIFF".as_slice(), &[0, 0, 0, 0], b"WEBPVP8 "].concat();
+    assert_eq!(crate::write::new::image_kind(&webp), ("webp", "image/webp"));
+    assert_eq!(crate::write::new::image_kind(b"II*\0rest"), ("tif", "image/tiff"));
+    assert_eq!(crate::write::new::image_kind(b"\x89PNG\r\n"), ("png", "image/png"));
+}
+
 #[test]
 fn write_back_finds_the_fewest_edits_and_keeps_shapes() {
     use crate::write::back::tests_api::{opcodes, rewrite_text};
@@ -469,4 +497,24 @@ fn fewest_edits(a: &str, b: &str) -> usize {
         }
     }
     a.len() + b.len() - 2 * row[b.len()]
+}
+
+/// A paragraph typed in after an edited one: the edited one is still the paragraph it was (the
+/// more alike of the two), so it keeps its own paragraph shape, and the new one copies it.
+#[test]
+fn an_edited_paragraph_beside_a_new_one_keeps_its_own_shape() {
+    let original = hwpx(&format!(
+        r#"<hs:sec {NS}><hp:p paraPrIDRef="0"><hp:run><hp:t>머리 문단</hp:t></hp:run></hp:p><hp:p paraPrIDRef="5"><hp:run><hp:t>고칠 문단의 글</hp:t></hp:run></hp:p></hs:sec>"#
+    ));
+    let mut doc = edited(&original, "고칠 문단의 글", "고친 문단의 글");
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text("새 문단", CharProps::default()))));
+    let (out, report) = write_back(&original, &doc);
+    assert_eq!((report.modified, report.inserted), (1, 1), "{report:?}");
+    let sec = crate::xml::parse(zip_part(&out, "Contents/section0.xml").as_bytes(), false).unwrap();
+    let shape_of = |text: &str| {
+        sec.children.iter().find(|p| p.iter("hp:t").any(|t| t.text.contains(text))).and_then(|p| p.get("paraPrIDRef")).map(str::to_string)
+    };
+    assert_eq!(shape_of("고친 문단의 글").as_deref(), Some("5"));
+    assert_eq!(shape_of("새 문단").as_deref(), Some("5"));
+    assert_eq!(shape_of("머리 문단").as_deref(), Some("0"));
 }
