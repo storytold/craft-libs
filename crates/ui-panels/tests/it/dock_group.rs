@@ -94,3 +94,27 @@ fn a_titled_group_shows_the_panel_title_and_a_close_button_instead_of_tabs() {
     fixture.click(&close).settle();
     assert!(closed.get(), "it closes the shown panel");
 }
+
+// A floating window of a quick-action strip is a bare grip on top: no menu, float or close action, and no column
+// arrow, as production's floating toolbar is a rounded strip with grip dots.
+#[trial]
+fn a_grip_window_shows_a_grip_and_no_title_actions() {
+    use craft_ui::docking::{FloatingGroup, WindowColumn};
+    let grip = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&grip);
+    let mut fixture = Fixture::new(move |ui| {
+        let group = FloatingGroup::new("Quick tools", Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(60.0, 200.0)))
+            .column(WindowColumn::expanded(craft_behavior::dock::DockEdge::Start))
+            .grip(seen.get());
+        let _ = group.show_group(ui, |ui, _| {
+            Button::new("Select").show(ui);
+        });
+    });
+    fixture.settle();
+    let actions = |fixture: &Fixture| ["Close", "Panel Menu", "Float"].iter().filter(|name| fixture.by_label(name).is_some()).count();
+    assert!(actions(&fixture) > 0, "an ordinary floating window shows its title actions");
+    grip.set(true);
+    fixture.settle();
+    assert_eq!(actions(&fixture), 0, "a grip window shows none");
+    assert!(fixture.by_label("Select").is_some(), "the body stays");
+}

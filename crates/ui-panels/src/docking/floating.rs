@@ -21,10 +21,12 @@ use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::WindowSpec;
+use crate::display::Icon;
+use crate::primitives::IconSpec;
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;
-use craft_behavior::{GesturePhase, Metrics, Sense};
+use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
 use craft_ui_widgets::popover::WholeWindow;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
@@ -208,6 +210,8 @@ pub struct FloatingGroup<'a> {
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     menu: Option<MenuRows<'a>>,
     actions: Vec<HeaderAction>,
+    /// The title row is a bare grip: no actions, no column arrow, no rule.
+    grip: bool,
     /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
     open: Bind<'a, bool>,
     taken: Option<HeaderAction>,
@@ -255,6 +259,7 @@ impl<'a> FloatingGroup<'a> {
             native: None,
             menu: None,
             actions: ACTIONS.to_vec(),
+            grip: false,
             open: Bind::given(true),
             taken: None,
             menu_opener: None,
@@ -307,11 +312,22 @@ impl<'a> FloatingGroup<'a> {
         self
     }
 
+    /// The title row is a bare grip (a small handle that moves the window), with no menu, float or close action, no
+    /// column arrow and no rule under it: a quick-action strip's look.
+    #[must_use]
+    pub fn grip(mut self, on: bool) -> Self {
+        self.grip = on;
+        self
+    }
+
     /// Shows the group; `body` fills the area under the title row unless the group is minimized.
     pub fn show_group<R>(mut self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<FloatingGroupOutput, R> {
         let env = Env::of(ui);
         let header = title_row(&env.tokens);
         (self.header, self.rtl) = (header, env.direction.is_rtl());
+        if self.grip {
+            self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
+        }
         let mount = self.mount(header);
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
@@ -362,7 +378,7 @@ impl<'a> FloatingGroup<'a> {
 
     /// The double arrow's square at the end of the title row the window keeps to.
     fn chevron_edge(&self) -> Option<HeaderEdge> {
-        let column = self.column.filter(|column| column.arrow.shown())?;
+        let column = self.column.filter(|column| column.arrow.shown() && !self.grip)?;
         Some(if column.edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start })
     }
 }
@@ -469,6 +485,13 @@ impl Container for FloatingGroup<'_> {
         // A drag bar with no title: the tabs below name the panels. A collapsed column's title row is its bar alone,
         // the band and the double arrow; the menu, which a context request on the band opens, keeps its rows.
         let collapsed = self.column.is_some_and(|column| column.collapsed.is_some());
+        if self.grip {
+            ui.vertical_centered(|ui| {
+                let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(cx.words::<DockWords>().move_window.clone()).show(ui);
+            });
+            self.toggled |= cx.band_double_pressed();
+            return;
+        }
         let actions = if collapsed { &[][..] } else { &self.actions[..] };
         let shown = TitleRow::new("").strength(HeaderStrength::Strong).actions(actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);

@@ -1253,6 +1253,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .sized(Sizing::Fill)
                 .column(shape)
                 .actions(actions)
+                .grip(scene.config.floating_grip)
                 .window_of(anchor.clone())
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)

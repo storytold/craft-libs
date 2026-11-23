@@ -73,6 +73,9 @@ pub struct DockConfig {
     pub close_menu_items: bool,
     /// Shows a close action on the title bar of a floating window whose panels are all closable.
     pub close_button: bool,
+    /// A floating window's title row is a bare grip (no menu, float or close action, no column arrow): a quick-action
+    /// strip's look.
+    pub floating_grip: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -106,6 +109,7 @@ impl Default for DockConfig {
             title_bar_docks: true,
             close_menu_items: true,
             close_button: true,
+            floating_grip: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
@@ -191,6 +195,13 @@ impl DockConfig {
     #[must_use]
     pub fn close_button(mut self, on: bool) -> Self {
         self.close_button = on;
+        self
+    }
+
+    /// A floating window's title row as a bare grip on or off.
+    #[must_use]
+    pub fn floating_grip(mut self, on: bool) -> Self {
+        self.floating_grip = on;
         self
     }
 
