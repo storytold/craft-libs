@@ -611,3 +611,53 @@ fn a_brightness_disc_drag_whose_host_takes_another_colour_is_cancelled() {
     });
     assert_eq!(ends, [Some(CancelReason::HostChanged)], "an outside change cancels the drag");
 }
+
+/// Tb-8 (2): a marker of a linked harmony wheel dragged a quarter turn, a few points at a time, by a host that moves
+/// every colour from the colours at the drag's start (`move_on_wheel`, linked) and keeps 8-bit colours, as the recolor
+/// dialog does: the drag runs to its release and the other colour turns with it.
+#[trial]
+fn a_linked_harmony_drag_turns_the_other_colour_to_the_release() {
+    use craft_color_ui::harmony::move_on_wheel;
+    use craft_color_ui::ui::HarmonyWheel;
+    let colours = Rc::new(RefCell::new(vec![Srgba::rgb(1.0, 0.0, 0.0), Srgba::rgb(0.0, 1.0, 1.0)]));
+    let (shown, start, ends) = (colours.clone(), Rc::new(RefCell::new(None::<Vec<Srgba>>)), Rc::new(RefCell::new(Vec::new())));
+    let (began, ended) = (start.clone(), ends.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let now = shown.borrow().clone();
+        let out = HarmonyWheel::new("Color wheel", &now).selected_marker(Some(0)).base(Some(0)).show(ui);
+        for (marker, event) in out.edits {
+            match event {
+                EditEvent::Begin { .. } => *began.borrow_mut() = Some(shown.borrow().clone()),
+                EditEvent::Cancel { reason, .. } => ended.borrow_mut().push(Some(reason)),
+                event => {
+                    let Some(set) = event.value().copied() else { continue };
+                    let mut moved = began.borrow().clone().unwrap_or_else(|| shown.borrow().clone());
+                    let old = moved[marker].to_hsb();
+                    let target = [set[0].unwrap_or(old.h), set[1].unwrap_or(old.s), set[2].unwrap_or(old.b)];
+                    move_on_wheel(&mut moved, marker, target, true);
+                    *shown.borrow_mut() = moved.into_iter().map(eight_bit).collect();
+                    if matches!(event, EditEvent::Commit { .. }) {
+                        ended.borrow_mut().push(None);
+                    }
+                }
+            }
+        }
+    });
+    fixture.room(vec2(320.0, 400.0));
+    fixture.settle();
+    let red = fixture.by_label(&Srgba::rgb(1.0, 0.0, 0.0).to_hex()).expect("the red marker").center();
+    let cyan = fixture.by_label(&Srgba::rgb(0.0, 1.0, 1.0).to_hex()).expect("the cyan marker").center();
+    let (centre, radius) = (red + (cyan - red) / 2.0, red.distance(cyan) / 2.0);
+    let path: Vec<Pos2> = (1..=12).map(|k| centre + hue_direction(6.0 * k as f32) * radius * (1.0 - 0.25 * k as f32 / 12.0)).collect();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(red)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(red)]);
+    for at in &path {
+        fixture.frame(vec![craft_ui::testing::pointer::moved(*at)]);
+    }
+    let turned = colours.borrow()[1].to_hsb().h;
+    fixture.frame(vec![craft_ui::testing::pointer::release(path[11])]);
+    fixture.settle();
+    let gap = (turned - 180.0).rem_euclid(360.0).min((180.0 - turned).rem_euclid(360.0));
+    assert!(gap > 10.0, "the other colour turned with the dragged one: {:?}", colours.borrow());
+    assert_eq!(*ends.borrow(), [None], "the drag commits, never cancelled");
+}
