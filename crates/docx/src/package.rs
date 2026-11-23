@@ -222,6 +222,12 @@ fn opc_error(e: craft_opc::Error) -> DocxError {
     }
 }
 
+// Armed only around a test's public read; retain every reset rather than overwriting one.
+#[cfg(test)]
+std::thread_local! {
+    static READ_BUDGETS: std::cell::RefCell<Option<Vec<usize>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The decompressed parts of a package (bounded), read with `craft-opc`. Shared, so a part the
 /// document keeps as it is (a picture, an embedded object) is handed over rather than copied.
 pub struct Package {
@@ -276,6 +282,12 @@ impl Package {
     /// Start a read's element budget over: the budget is per read, not per package's lifetime.
     pub(crate) fn reset_budget(&self) {
         self.budget.set(self.budget_cap);
+        #[cfg(test)]
+        READ_BUDGETS.with(|observed| {
+            if let Some(budgets) = observed.borrow_mut().as_mut() {
+                budgets.push(self.budget.get());
+            }
+        });
     }
 
     /// The XML elements left of the package's budget: nested documents open within it.
@@ -546,10 +558,27 @@ mod tests {
         // proves the read consumed the shared allowance, rather than only reading the body.
         assert!(matches!(pkg.xml("word/charts/chart8.xml"), Err(DocxError::Limit(_))));
 
-        // The normal public caller also reads this same small, valid package without a
-        // test-only cap. No production-limit value or private counter is an oracle here.
-        let doc = crate::read(&z).expect("the default caller reads the nine-part document");
+        // #2212 also pins the production allowance and the public read's use of it,
+        // without rebuilding the original multi-million-element fixture.
+        struct ObserveBudget;
+        impl Drop for ObserveBudget {
+            fn drop(&mut self) {
+                READ_BUDGETS.with(|observed| *observed.borrow_mut() = None);
+            }
+        }
+        READ_BUDGETS.with(|observed| {
+            let mut observed = observed.borrow_mut();
+            assert!(observed.is_none(), "read budget observation is already armed");
+            *observed = Some(Vec::new());
+        });
+        let observation = ObserveBudget;
+        let result = crate::read(&z);
+        let budgets = READ_BUDGETS.with(|observed| observed.borrow_mut().take().unwrap());
+        drop(observation);
+        let doc = result.expect("the default caller reads the nine-part document");
         assert_eq!(doc.body.len(), parts, "the document's own paragraphs read");
+        assert_eq!(xml::MAX_ELEMENTS_TOTAL, 16_000_000, "the production element allowance");
+        assert_eq!(budgets, [16_000_000], "the public read resets one package to the production allowance");
     }
 
     #[test]
