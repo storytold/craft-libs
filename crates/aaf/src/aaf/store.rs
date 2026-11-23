@@ -450,28 +450,21 @@ impl R<'_> {
         }
         let mut o = Obj::new(e.clsid);
         let props = self.stream(entry, "properties")?;
-        if props.len() < 4 {
-            return Err(bad("short properties stream"));
-        }
-        if props[0] != BYTE_ORDER_LE {
-            return Err(bad("big-endian AAF files are not supported"));
-        }
-        let n = rd_u16(&props, 2).unwrap_or(0) as usize;
-        let mut at = 4 + n * 6;
-        if at > props.len() {
-            return Err(bad("truncated property index"));
-        }
+        use super::properties::{Properties, Property, PropertyError};
+        let framing = |e| match e {
+            PropertyError::ShortHeader => bad("short properties stream"),
+            PropertyError::UnsupportedByteOrder => bad("big-endian AAF files are not supported"),
+            PropertyError::TruncatedIndex => bad("truncated property index"),
+            PropertyError::TruncatedValue => bad("truncated property value"),
+        };
+        let mut records = Properties::new(&props).map_err(framing)?;
         // A properties stream can name tens of thousands of ids: do not rescan all earlier ids.
-        let mut seen = std::collections::HashSet::with_capacity(n);
-        for i in 0..n {
-            let (Some(pid), Some(sf), Some(len)) = (rd_u16(&props, 4 + i * 6), rd_u16(&props, 6 + i * 6), rd_u16(&props, 8 + i * 6)) else {
-                return Err(bad("truncated property index"));
-            };
+        let mut seen = std::collections::HashSet::with_capacity(records.remaining_count());
+        while let Some(pid) = records.next_id() {
             if !seen.insert(pid) {
                 return Err(bad("duplicate property id"));
             }
-            let v = props.get(at..at + len as usize).ok_or_else(|| bad("truncated property value"))?;
-            at += len as usize;
+            let Property { form: sf, payload: v, .. } = records.next().ok_or_else(|| bad("truncated property index"))?.map_err(framing)?;
             let value = match sf {
                 SF_STRONG => {
                     let c = self.child(entry, &utf16_of(v))?;
