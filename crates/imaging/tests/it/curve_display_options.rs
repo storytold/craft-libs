@@ -60,8 +60,24 @@ fn rig(width: f32) -> Rig {
     Rig { fixture, value, channel, dialog, visible }
 }
 
+/// Address the named control by role even when disabled controls declare no actions.
+fn display_control(fixture: &Fixture, label: &str) -> craft_ui::testing::Target {
+    let role = match label {
+        "4x4 grid" | "10x10 grid" => Role::BUTTON,
+        "Channel Overlays" | "Histogram" | "Baseline" | "Intersection Line" => Role::CHECK_BOX,
+        _ => panic!("unexpected display control {label}"),
+    };
+    let mut targets = fixture
+        .by_role(role)
+        .into_iter()
+        .filter(|target| craft_ui::testing::access::name(fixture.tree(), target.node) == Some(label));
+    let target = targets.next().unwrap_or_else(|| panic!("the {label} control"));
+    assert!(targets.next().is_none(), "one {label} control");
+    target
+}
+
 fn checked(fixture: &Fixture, label: &str) -> bool {
-    let target = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} control"));
+    let target = display_control(fixture, label);
     assert_eq!(fixture.tree().role_of(target.node), Some(if label.ends_with("grid") { Role::BUTTON } else { Role::CHECK_BOX }));
     match fixture.tree().toggled_of(target.node) {
         Some(Mixed::Same(value)) => value,
@@ -72,7 +88,7 @@ fn checked(fixture: &Fixture, label: &str) -> bool {
 }
 
 fn click(fixture: &mut Fixture, label: &str) {
-    let target = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} control"));
+    let target = display_control(fixture, label);
     fixture.click(&target).settle();
 }
 
@@ -207,7 +223,7 @@ fn single_channel_and_pencil_disable_the_options_without_losing_their_choices() 
     rig.value.borrow_mut().mode = CurvesMode::Pencil;
     rig.fixture.settle();
     for label in ["Channel Overlays", "Intersection Line"] {
-        let target = rig.fixture.by_label(label).expect("disabled control stays visible");
+        let target = display_control(&rig.fixture, label);
         assert!(rig.fixture.tree().is_disabled_key(target.node), "{label} is disabled");
         click(&mut rig.fixture, label);
         assert!(!checked(&rig.fixture, label), "disabled click does not change {label}");
@@ -216,7 +232,7 @@ fn single_channel_and_pencil_disable_the_options_without_losing_their_choices() 
     rig.value.borrow_mut().mode = CurvesMode::Points;
     rig.fixture.settle();
     for label in ["Channel Overlays", "Intersection Line"] {
-        let target = rig.fixture.by_label(label).expect("enabled control");
+        let target = display_control(&rig.fixture, label);
         assert!(!rig.fixture.tree().is_disabled_key(target.node));
         assert!(!checked(&rig.fixture, label));
         click(&mut rig.fixture, label);
