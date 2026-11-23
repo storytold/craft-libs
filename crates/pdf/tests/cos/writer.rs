@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use crate::testkit::Pdf;
 use craft_pdf::cos::{
-    AppendBlocker, CosError, Dict, Document, ObjRef, Object, SaveOptions, Stream, append_blocker, write_append_only, write_full, write_incremental,
+    AppendBlocker, AppendOnlyError, Dict, Document, ObjRef, Object, SaveOptions, Stream, append_blocker, write_append_only, write_full,
+    write_incremental,
 };
 
 /// Four pages, a shared font, document info with a non-ASCII title.
@@ -643,7 +644,7 @@ fn append_only_save_refuses_a_repaired_file_where_incremental_rewrites_it() {
     assert!(doc.reconstructed(), "the broken chain was rebuilt");
     doc.add(Object::Int(7));
     assert_eq!(append_blocker(&doc), Some(AppendBlocker::Reconstructed));
-    assert_eq!(write_append_only(&doc, &SaveOptions::default()), Err(CosError::CannotAppend(AppendBlocker::Reconstructed)));
+    assert_eq!(write_append_only(&doc, &SaveOptions::default()), Err(AppendOnlyError::Blocked(AppendBlocker::Reconstructed)));
     let rewritten = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(!rewritten.starts_with(&original), "write_incremental keeps its documented fallback");
 }
@@ -654,18 +655,19 @@ fn append_only_save_refuses_a_repaired_file_where_incremental_rewrites_it() {
 fn append_only_save_names_each_reason_and_otherwise_matches_incremental() {
     let original = fixture();
     let mut doc = Document::open(Arc::new(original.clone())).unwrap();
+    let revisions = doc.revisions().len();
     doc.add(Object::Int(7));
     assert_eq!(append_blocker(&doc), None);
     let opts = SaveOptions::default();
     let appended = write_append_only(&doc, &opts).unwrap();
     assert!(appended.starts_with(&original));
     assert_eq!(appended, write_incremental(&doc, &opts).unwrap());
-    assert_eq!(Document::open(Arc::new(appended)).unwrap().revisions().len(), 2);
+    assert_eq!(Document::open(Arc::new(appended)).unwrap().revisions().len(), revisions + 1);
 
     let mut redacted = doc.clone();
     redacted.require_full_save();
     assert_eq!(append_blocker(&redacted), Some(AppendBlocker::FullSaveRequired));
-    assert_eq!(write_append_only(&redacted, &opts), Err(CosError::CannotAppend(AppendBlocker::FullSaveRequired)));
+    assert_eq!(write_append_only(&redacted, &opts), Err(AppendOnlyError::Blocked(AppendBlocker::FullSaveRequired)));
 }
 
 /// Adding encryption (which rewrites every object) is named `EncryptionChanged`, and
@@ -686,12 +688,46 @@ fn append_only_save_refuses_a_document_whose_encryption_changed() {
     .unwrap();
     assert!(doc.encryption_changed());
     assert_eq!(append_blocker(&doc), Some(AppendBlocker::EncryptionChanged));
-    assert_eq!(write_append_only(&doc, &opts), Err(CosError::CannotAppend(AppendBlocker::EncryptionChanged)));
+    assert_eq!(write_append_only(&doc, &opts), Err(AppendOnlyError::Blocked(AppendBlocker::EncryptionChanged)));
     // The encrypted file, reopened, can be appended to until its encryption is removed.
     let saved = write_incremental(&doc, &opts).unwrap();
     let mut reopened = Document::open_with_password(Arc::new(saved), Some("owner")).unwrap();
     assert_eq!(append_blocker(&reopened), None);
     reopened.remove_encryption();
     assert_eq!(append_blocker(&reopened), Some(AppendBlocker::EncryptionChanged));
-    assert_eq!(write_append_only(&reopened, &opts), Err(CosError::CannotAppend(AppendBlocker::EncryptionChanged)));
+    assert_eq!(write_append_only(&reopened, &opts), Err(AppendOnlyError::Blocked(AppendBlocker::EncryptionChanged)));
+}
+
+/// A file whose `/Info` (object 3) has generation 0 in its cross-reference table and 1 in its
+/// object header; the catalog reaches it as `3 1 R` and the trailer as `3 0 R`.
+fn info_with_contradictory_generations() -> Vec<u8> {
+    let objects: [(u32, u16, &str); 3] =
+        [(1, 0, "<< /Type /Catalog /Pages 2 0 R /Meta 3 1 R >>"), (2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"), (3, 1, "<< /Title (Minutes) >>")];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (num, generation, value) in objects {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{num} {generation} obj\n{value}\nendobj\n").as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R /Info 3 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    bytes
+}
+
+/// Setting `/ModDate` edits `/Info`. When `/Info`'s cross-reference row and object header give
+/// different generations, that edit needs a full save, so `write_append_only` checks after it
+/// stamps the date and refuses, rather than appending a revision that serves only one of them.
+#[test]
+fn append_only_save_checks_after_stamping_the_modification_date() {
+    let original = info_with_contradictory_generations();
+    let doc = Document::open(Arc::new(original.clone())).unwrap();
+    assert!(!doc.reconstructed());
+    assert_eq!(append_blocker(&doc), None, "nothing is edited yet");
+    assert!(write_append_only(&doc, &SaveOptions::default()).unwrap().starts_with(&original));
+    let stamped = SaveOptions { mod_date: Some("D:20261123120000Z".into()), ..SaveOptions::default() };
+    assert_eq!(write_append_only(&doc, &stamped), Err(AppendOnlyError::Blocked(AppendBlocker::FullSaveRequired)));
 }

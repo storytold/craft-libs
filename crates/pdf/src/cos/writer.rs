@@ -291,9 +291,10 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
 
 /// Why a document cannot be saved by appending to its original bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AppendBlocker {
-    /// The file's cross-reference data was unusable and the document was rebuilt from object
-    /// headers, so a new revision would point into a chain other readers cannot follow.
+    /// The document has no revision chain to append to: it was rebuilt from object headers
+    /// because its cross-reference data was unusable, or it was created rather than opened.
     Reconstructed,
     /// Encryption was added or removed, which rewrites every object.
     EncryptionChanged,
@@ -304,15 +305,17 @@ pub enum AppendBlocker {
 impl std::fmt::Display for AppendBlocker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::Reconstructed => "the file was damaged and rebuilt, so it has no revision chain to append to",
+            Self::Reconstructed => "it has no revision chain to append to",
             Self::EncryptionChanged => "its encryption was added or removed, which rewrites every object",
             Self::FullSaveRequired => "an edit requires the old revision not to remain",
         })
     }
 }
 
-/// What stops `doc` from being saved by [`write_append_only`], or `None` when it can be. An editor
-/// can ask this before anyone edits.
+/// The condition that makes [`write_incremental`] rewrite the whole file and [`write_append_only`]
+/// refuse, or `None`. `None` does not promise that a save succeeds: both writers still refuse a
+/// document opened with a stream limit, or one whose embedded files' password is missing, and
+/// setting [`SaveOptions::mod_date`] can itself require a full save (see [`write_append_only`]).
 pub fn append_blocker(doc: &Document) -> Option<AppendBlocker> {
     if doc.reconstructed() {
         Some(AppendBlocker::Reconstructed)
@@ -325,25 +328,45 @@ pub fn append_blocker(doc: &Document) -> Option<AppendBlocker> {
     }
 }
 
-/// [`write_incremental`] without its fallback: the result always starts with the document's
-/// original bytes. Where `write_incremental` would rewrite the whole file, this returns
-/// [`CosError::CannotAppend`] naming the reason ([`append_blocker`]).
-pub fn write_append_only(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
-    if doc.stream_limited() {
-        return Err(CosError::ReadOnlyLimit);
-    }
-    keyless_check(doc)?;
-    if let Some(reason) = append_blocker(doc) {
-        return Err(CosError::CannotAppend(reason));
-    }
-    append_revision(doc, opts)
+/// Why [`write_append_only`] did not save.
+#[derive(Debug, thiserror::Error, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum AppendOnlyError {
+    /// Saving would rewrite the whole file, for this reason.
+    #[error("the document cannot be saved as a new version of the original file: {0}")]
+    Blocked(AppendBlocker),
+    /// Any other refusal or failure, as [`write_incremental`] reports it.
+    #[error(transparent)]
+    Cos(#[from] CosError),
 }
 
-/// The append path shared by [`write_incremental`] and [`write_append_only`], once they have
-/// checked that the document can be appended to.
+/// [`write_incremental`] without its fallback: the result always starts with the document's
+/// original bytes. Where `write_incremental` would rewrite the whole file, this returns
+/// [`AppendOnlyError::Blocked`] naming the reason ([`append_blocker`]). The check runs after
+/// [`SaveOptions::mod_date`] is applied, because editing an `/Info` dictionary whose generations
+/// disagree can itself require a full save.
+pub fn write_append_only(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, AppendOnlyError> {
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit.into());
+    }
+    keyless_check(doc)?;
+    let mut doc = doc.clone();
+    stamp_mod_date(&mut doc, opts);
+    if let Some(reason) = append_blocker(&doc) {
+        return Err(AppendOnlyError::Blocked(reason));
+    }
+    Ok(append_stamped(doc, opts)?)
+}
+
+/// [`write_incremental`]'s append path, once it has checked that the document can be appended to.
 fn append_revision(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     let mut doc = doc.clone();
     stamp_mod_date(&mut doc, opts);
+    append_stamped(doc, opts)
+}
+
+/// Append a revision to `doc`, whose `/ModDate` is already set.
+fn append_stamped(doc: Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
     let original = doc.bytes().clone();
     // The revision is written on its own and joined to the original at the end, so the result is
     // allocated once at its exact size: growing a buffer that holds a large original past a
