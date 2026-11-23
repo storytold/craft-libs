@@ -50,9 +50,9 @@ fn skewed_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// shield dims the frame outside the quad.
 #[story(PerspectiveCropQuad<'static>, covers = [], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
 fn bounded_quad(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let quad = data.value("quad", Some(PAGE));
+    let (quad, quad_at) = data.value_at("quad", Some(PAGE));
     on_canvas(ui, |ui, at| {
-        PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad))
+        PerspectiveCropQuad::new("Perspective crop", quad_at.bind(&mut *quad))
             .show_grid(false)
             .shield(CropShield::PERSPECTIVE)
             .bounds(FRAME)

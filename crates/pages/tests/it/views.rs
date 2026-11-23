@@ -829,21 +829,34 @@ fn the_preview_takes_page_keys_when_first_opened() {
     assert_eq!(*at.borrow(), 2, "Page Down steps the newly opened preview");
 }
 
-#[trial]
-fn the_preview_in_a_settled_region_takes_page_keys_when_opened() {
-    let at = Rc::new(RefCell::new(1_usize));
-    let kept = Rc::clone(&at);
+/// The memoized view that holds the Preview button and, once it was pressed, the preview.
+#[derive(craft_ui::contract::MemoProps)]
+struct PreviewRegion {}
+
+thread_local! {
+    /// What the preview region shows: whether the preview is open, and the page it is at.
+    static PREVIEW_REGION: RefCell<(bool, usize)> = const { RefCell::new((false, 1)) };
+}
+
+fn preview_region(_: &mut PreviewRegion, ui: &mut egui::Ui) {
+    if craft_ui::contract::clicked(&craft_ui::buttons::Button::new("Preview").show(ui)) {
+        PREVIEW_REGION.with(|region| region.borrow_mut().0 = true);
+    }
     let pages = DemoPages::new(5);
-    let mut open = false;
+    PREVIEW_REGION.with(|region| {
+        let (open, at) = &mut *region.borrow_mut();
+        if *open {
+            PagePreview::new(&pages, &[0, 1, 2, 3, 4], at, PAPER).show(ui);
+        }
+    });
+}
+
+/// A preview opened inside a settled memoized view (a docked panel's body) takes the page keys.
+#[trial]
+fn the_preview_in_a_settled_view_takes_page_keys_when_opened() {
+    PREVIEW_REGION.with(|region| *region.borrow_mut() = (false, 1));
     let mut fixture = Fixture::new(move |ui| {
-        craft_ui::contract::Lazy::new("region", 0.0).settles(true).show(ui, |ui| {
-            if craft_ui::contract::clicked(&craft_ui::buttons::Button::new("Preview").show(ui)) {
-                open = true;
-            }
-            if open {
-                PagePreview::new(&pages, &[0, 1, 2, 3, 4], &mut kept.borrow_mut(), PAPER).show(ui);
-            }
-        });
+        craft_ui::contract::MemoView::new("region", PreviewRegion {}, preview_region).show(ui);
     });
     fixture.room(vec2(900.0, 600.0)).settle();
     let button = fixture.by_label("Preview").expect("preview button");
@@ -851,7 +864,7 @@ fn the_preview_in_a_settled_region_takes_page_keys_when_opened() {
     // Focus entered this modal after the command board last recorded its vantage.
     craft_ui::runtime::commands::clear_focus_vantage(fixture.ctx());
     fixture.key(Key::PageDown, Modifiers::NONE);
-    assert_eq!(*at.borrow(), 2, "Page Down steps the preview in a settled region");
+    assert_eq!(PREVIEW_REGION.with(|region| region.borrow().1), 2, "Page Down steps the preview in a settled view");
 }
 
 #[trial]

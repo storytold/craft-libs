@@ -1781,7 +1781,7 @@ fn near_pages(placed: &Placed, continuous: bool, visible: &Range<usize>, count: 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::clamp_between;
     use craft_ui::testing::trial;
 

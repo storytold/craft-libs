@@ -276,7 +276,7 @@ fn a_body_hides_the_pointer_over_the_canvas_over_the_tools_cursor_while_it_asks(
         let view = CanvasView::new(room, Point::new(600.0, 450.0), 1.0);
         Canvas::new("Document").document(DOCUMENT).view(view).show_at(ui, room.shrink(40.0), |ui, body| {
             if let Some(pass) = tool_pass(&body.env) {
-                ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut());
+                let _ = ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut());
                 if asks.get() {
                     pass.hide_pointer(ui);
                 }

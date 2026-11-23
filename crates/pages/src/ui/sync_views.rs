@@ -10,7 +10,7 @@ pub(crate) mod stories;
 use super::view::{PageViewOutput, PageViewState};
 use craft_behavior::Proposal;
 use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
-use craft_ui::contract::{Bind, EditResponse, Outcome, Pad, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, EditResponse, Outcome, Pad, Show as _, ShowContainer as _};
 use craft_ui::display::{Elide, Shade, Text};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;

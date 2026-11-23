@@ -189,11 +189,6 @@ fn glyph_rects(text: &dyn PageTextSource, glyphs: &[usize]) -> Vec<Rect> {
     runs(glyphs).into_iter().flat_map(|run| text.line_rects(run)).collect()
 }
 
-/// The glyphs of a run, both ends included.
-fn run_range(anchor: usize, head: usize) -> Range<usize> {
-    anchor.min(head)..anchor.max(head).saturating_add(1)
-}
-
 /// `glyphs` as ranges of consecutive indices.
 fn runs(glyphs: &[usize]) -> Vec<Range<usize>> {
     let mut runs: Vec<Range<usize>> = Vec::new();

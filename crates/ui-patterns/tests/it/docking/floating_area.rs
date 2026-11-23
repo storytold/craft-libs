@@ -708,7 +708,7 @@ fn a_settled_collapsed_window_runs_no_more_passes_than_an_expanded_one() {
 fn a_floating_window_clears_the_top_inset_and_follows_it() {
     let inset = Rc::new(Cell::new(0.0_f32));
     let seen = Rc::clone(&inset);
-    let layout = Layout::new(Some(Node::tabs(vec![DOCKED], 0)), vec![Floating::single(vec![WINDOW], 0, Rect::from_min_size(Pos2::new(130.0, 0.0), Vec2::new(200.0, 120.0)))]);
+    let layout = Layout::new(Some(Node::tabs(vec![DOCKED], 0)), vec![Floating::single(103, vec![WINDOW], 0, Rect::from_min_size(Pos2::new(130.0, 0.0), Vec2::new(200.0, 120.0)))]);
     let held = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
     let (shown, specs) = (Rc::clone(&held), Tracked::new(Numbered));
     let mut fixture = Fixture::new(move |ui| {

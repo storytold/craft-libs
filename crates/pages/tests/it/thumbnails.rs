@@ -248,7 +248,7 @@ fn strip_drag_inserts_after_the_lower_half_of_a_page() {
 /// drag lands its move on its release as any drag does.
 #[trial]
 fn after_a_cancelled_drag_the_next_drag_lands_its_move() {
-    let id = egui::Id::new("organize");
+    let id = egui::Id::unique("organize");
     let (mut fixture, events, _) = organize_rig(4, id, 0);
     let (from, to) = (tile(&fixture, 1), tile(&fixture, 3));
     let reorders = |events: &RefCell<Vec<ThumbnailEvent>>| events.borrow().iter().filter(|event| matches!(event, ThumbnailEvent::Reorder(_))).count();
@@ -266,7 +266,7 @@ fn after_a_cancelled_drag_the_next_drag_lands_its_move() {
 #[trial]
 fn a_modified_click_on_an_empty_pick_starts_from_the_current_page() {
     for (modifiers, want) in [(egui::Modifiers::COMMAND, vec![1, 3]), (egui::Modifiers::SHIFT, vec![1, 2, 3])] {
-        let (mut fixture, _, picked) = organize_rig(5, egui::Id::new("organize"), 1);
+        let (mut fixture, _, picked) = organize_rig(5, egui::Id::unique("organize"), 1);
         let page = tile(&fixture, 4);
         fixture.hold(modifiers).click_at(page).settle();
         fixture.hold(egui::Modifiers::NONE);

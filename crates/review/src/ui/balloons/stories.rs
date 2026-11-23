@@ -25,6 +25,7 @@ fn thread(id: u64, author: &str, text: &str, locked: bool) -> CommentThread {
         text: text.into(),
         reactions: Vec::new(),
         read: true,
+        deletable: true,
     };
     CommentThread {
         id: ThreadId(id),
@@ -32,7 +33,8 @@ fn thread(id: u64, author: &str, text: &str, locked: bool) -> CommentThread {
         kind: None,
         color: None,
         messages: vec![message(author, text), message("Bo", "Agreed.")],
-        status: ReviewStatus::None,
+        statuses: Vec::new(),
+        reply_statuses: Vec::new(),
         marked: false,
         locked,
         resolved: false,

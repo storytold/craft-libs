@@ -117,7 +117,7 @@ impl NoteBody<'_, '_> {
         // The tint goes in behind the body's content, over the window's surface.
         let tint = ui.painter().add(egui::Shape::Noop);
         // The body sits on the note's pale tint, so it reads in the light palette whatever the theme: light fields, dark ink.
-        Stack::new().fill_width().theme(ThemeScope::mode(Mode::Light)).show(ui, |ui, _| {
+        Stack::new().fill_width().theme(ThemeScope::new().mode(Mode::Light)).show(ui, |ui, _| {
             if let Some(note) = messages.first() {
                 if self.allowed && note.editable {
                     self.note_text(ui, note, words);

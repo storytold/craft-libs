@@ -240,7 +240,7 @@ impl<'a> CommentBalloons<'a> {
         }
         for thread in pressed {
             if state.selected.lead != Some(thread.id) {
-                state.reveal(thread);
+                state.reveal(thread.id);
                 edits.push(CommentEdit::Select(vec![thread.id]));
             }
         }

@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use craft_text::find::FindMatches;
+use craft_ui::testing::trial;
 
 /// Ranges from `(start, end)` pairs.
 fn ranges(pairs: &[(usize, usize)]) -> Vec<Range<usize>> {
@@ -14,7 +15,7 @@ fn current(found: &FindMatches) -> Option<(usize, Range<usize>)> {
     found.current_match().map(|found| (found.page, found.range.clone()))
 }
 
-#[test]
+#[trial]
 fn following_takes_the_first_match_from_the_start_page_whatever_order_pages_arrive_in() {
     let mut found = FindMatches::new(1);
     assert!(found.set_page(2, ranges(&[(0, 6)])), "the only known match is shown while the start page is pending");
@@ -28,7 +29,7 @@ fn following_takes_the_first_match_from_the_start_page_whatever_order_pages_arri
     assert_eq!((found.len(), found.from()), (3, Some(1)), "every page's matches are listed and following goes on");
 }
 
-#[test]
+#[trial]
 fn a_step_or_pick_ends_following_and_later_pages_keep_the_users_match() {
     let mut stepped = FindMatches::new(0);
     stepped.set_page(1, ranges(&[(0, 3), (5, 8)]));

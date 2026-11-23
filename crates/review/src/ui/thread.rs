@@ -6,7 +6,7 @@
 //! ```
 
 mod mention;
-mod note_popup;
+pub(crate) mod note_popup;
 pub(crate) mod pins;
 pub(crate) mod popover;
 #[cfg(feature = "suite")]

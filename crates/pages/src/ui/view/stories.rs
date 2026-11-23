@@ -141,7 +141,7 @@ fn page_pictures(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let pages = DemoPages::new(1);
     let placed = demo_placed(1, Pos2::new(room.min.x + 20.0, room.min.y + 10.0));
     let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
-    let owner = ui.id().with("page_pictures");
+    let owner = ui.scope_id().with("page_pictures");
     let shown =
         Canvas::new("Document").view(view).show_at(ui, room, |ui, body| PagePictures::new(&pages, &placed, owner, PAPER).show_at(ui, body.rect));
     shown.inner.map(StoryOutput::from).unwrap_or_default()
