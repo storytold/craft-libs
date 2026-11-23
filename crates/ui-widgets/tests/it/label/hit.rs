@@ -145,3 +145,19 @@ fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
     frames.frame(vec![], &mut show);
     assert_eq!(picked.get(), 2, "Enter picks the focused radio");
 }
+
+/// A quiet check box (a thumbnail tile's) is a smaller box than the standard one.
+#[trial]
+fn a_quiet_check_box_is_smaller_than_the_standard_one() {
+    let side = |quiet: bool| {
+        let mut frames = Frames::new();
+        let shown = Cell::new(Rect::NOTHING);
+        let mut show = |ui: &mut Ui| {
+            shown.set(in_region(ui, REGION, |ui| Checkbox::new(Bind::given(false)).quiet(quiet).show(ui).response.rect));
+        };
+        frames.frame(vec![], &mut show);
+        frames.frame(vec![], &mut show);
+        shown.get().height()
+    };
+    assert!(side(true) < side(false), "quiet {} against standard {}", side(true), side(false));
+}

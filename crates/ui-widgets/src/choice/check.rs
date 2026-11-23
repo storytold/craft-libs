@@ -23,18 +23,31 @@ pub struct CheckboxStyle {
     side: f32,
 }
 
+/// The side of a quiet check box, against the icon side.
+const QUIET_SIDE: f32 = 0.6;
+
 /// A check box over a bool; a `Mixed` binding shows the mixed state and a click makes it checked.
 #[derive(crate::contract::Component)]
 pub struct Checkbox<'a> {
     #[common]
     common: Common,
     value: Bind<'a, bool>,
+    /// A small, dark box with a plain white mark in place of the accent fill: the check of a thumbnail tile, which
+    /// sits over a picture and must not outweigh it.
+    #[style_key]
+    quiet: bool,
 }
 
 impl<'a> Checkbox<'a> {
     /// A check box of `value`.
     pub fn new(value: Bind<'a, bool>) -> Self {
-        Checkbox { common: Common::new(), value }
+        Checkbox { common: Common::new(), value, quiet: false }
+    }
+
+    /// A small, dark box with a plain mark, for a check that sits over a picture (a thumbnail tile's).
+    pub fn quiet(mut self, on: bool) -> Self {
+        self.quiet = on;
+        self
     }
 }
 
@@ -46,8 +59,17 @@ impl Component for Checkbox<'_> {
     type Style = CheckboxStyle;
     type Output = EditResponse<bool>;
 
-    fn style(cx: &StyleCx<'_>, _: CheckboxStyleKey) -> CheckboxStyle {
+    fn style(cx: &StyleCx<'_>, key: CheckboxStyleKey) -> CheckboxStyle {
         let control = cx.control();
+        if key.quiet {
+            return CheckboxStyle {
+                metrics: Metrics::new().min_size(Vec2::new(0.0, control.icon * QUIET_SIDE)),
+                focus: cx.focus_look(),
+                well: super::quiet_indicator(cx, cx.surface(SurfaceKind::Well).radius),
+                mark: super::quiet_mark(cx),
+                side: control.icon * QUIET_SIDE,
+            };
+        }
         CheckboxStyle {
             metrics: Metrics::new().min_size(Vec2::new(0.0, control.height)),
             focus: cx.focus_look(),

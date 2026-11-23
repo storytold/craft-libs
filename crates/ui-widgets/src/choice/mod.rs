@@ -33,6 +33,22 @@ fn indicator(cx: &crate::style::StyleCx<'_>, radius: egui::CornerRadius) -> crat
     look
 }
 
+/// The well of a quiet check box: dark in either state with a thin faint edge, so the box reads over a picture and
+/// its checked state is told by the mark alone.
+fn quiet_indicator(cx: &crate::style::StyleCx<'_>, radius: egui::CornerRadius) -> crate::style::SurfaceLook {
+    use crate::style::{SurfaceKind, SurfaceLook};
+    use craft_theme::{Stateful, States};
+    let dark = cx.color(cx.tokens.color.surface.scrim);
+    let edge = cx.color(cx.tokens.color.text.faint);
+    let fill = Stateful::new(dark).off(States::new(dark, dark, dark, dark));
+    SurfaceLook::new(fill).kind(SurfaceKind::Sunken).radius(radius).border(Stateful::new(edge), cx.tokens.stroke.thin)
+}
+
+/// The mark of a quiet check box: the ink that reads on an accent, in both states.
+fn quiet_mark(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::StyleColor> {
+    craft_theme::Stateful::new(cx.color(cx.tokens.color.text.on_accent))
+}
+
 /// The fill of a check box, radio button or switch track while off: the sunken well, the state layer's press fill while
 /// pressed, and the panel while disabled, so a disabled off control is an empty frame.
 fn well(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::StyleColor> {

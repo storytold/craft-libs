@@ -782,7 +782,12 @@ impl Component for Tile<'_> {
             Stateful::new(0.0).on(States::new(thin, thin, thin, thin)).when(Flags::CURRENT, thin)
         };
         let radius = UiTokens::corner(tokens.shape.radius.control);
-        let surface = SurfaceLook::new(fill).radius(radius);
+        let mut surface = SurfaceLook::new(fill).radius(radius);
+        if key.action_place == TileActionPlace::Band {
+            // A band tile has no ring round its picture: the selected tile is outlined as a whole.
+            let (line, accent) = (c(clear), c(colors.accent.solid));
+            surface = surface.border(Stateful::new(line).on(States::new(accent, accent, accent, accent)), tokens.stroke.medium);
+        }
         let surface = if key.card { surface.kind(SurfaceKind::Raised) } else { surface };
         // A selected tile's name reads in the normal ink: the selection is the ring, not a fill under the name.
         let normal = c(text.normal);
@@ -867,7 +872,7 @@ impl Component for Tile<'_> {
         let words = cx.words::<TileWords>();
         self.pills = self.corner_badges(&words, &cx.env.units());
         let faces = Faces {
-            check: cx.face(Checkbox::new(Bind::given(Mixed::Same(false)))),
+            check: cx.face(Checkbox::new(Bind::given(Mixed::Same(false))).quiet(true)),
             stars: cx.face(Rating::new(Bind::given(0u8), STARS).compact(true)),
             pill: cx.face(Badge::new("0")).y,
             action: self
@@ -1089,7 +1094,7 @@ impl Component for Tile<'_> {
                 ToggleState::Mixed => Mixed::Mixed,
                 state => Mixed::Same(state == ToggleState::On),
             };
-            ui.face(CHECK, Checkbox::new(Bind::given(value)));
+            ui.face(CHECK, Checkbox::new(Bind::given(value)).quiet(true));
         }
         self.paint_caption(ui, cx, &placed);
         self.caption_rect = match self.caption {

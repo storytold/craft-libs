@@ -2,7 +2,7 @@
 //! shows are apart and inside the tile, and a part that does not fit is left out.
 
 use craft_theme::Srgba;
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, trial};
 use craft_ui::tile_grid::{BadgeVisibility, Tile, TileFlag};
@@ -132,4 +132,21 @@ fn a_named_action_is_exposed_by_its_own_name_while_its_tile_shows_it() {
     fixture.frame(vec![moved(over)]).settle();
     assert!(fixture.by_label(NAMES[1]).is_some(), "the hovered tile's action is named for its tile");
     assert!(fixture.by_label(NAMES[0]).is_none(), "the other tile's action stays hidden");
+}
+
+/// A selected band tile (the organize grid's) is outlined as a whole: it paints an edge that the same tile unselected
+/// does not.
+#[trial]
+fn a_selected_band_tile_is_outlined() {
+    let edges = |selected: bool| {
+        let mut frames = Frames::new();
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = frames.frame_shapes(|ui| {
+                Tile::new("Page 1").action_place(craft_ui::tile_grid::TileActionPlace::Band).selected(selected).show(ui);
+            });
+        }
+        shapes.iter().filter(|shape| matches!(shape, Shape::Rect(rect) if rect.stroke.width > 0.0 && rect.stroke.color.a() > 0)).count()
+    };
+    assert!(edges(true) > edges(false), "selected {} against unselected {}", edges(true), edges(false));
 }
