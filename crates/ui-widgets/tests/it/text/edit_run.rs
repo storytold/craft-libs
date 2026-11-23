@@ -1,6 +1,6 @@
 //! A text field's typing run across focus changes: switching to another app carries the run on; focus that arrives
 //! between passes selects a select-on-focus field's text before the next pass's typing; a pointer that brings focus
-//! keeps the caret or range it made.
+//! keeps the caret or range it made; and a run cut short by the field's removal is forgotten.
 
 use craft_behavior::{CancelReason, EditEvent};
 use craft_ui::contract::{Bind, Show as _};
@@ -18,10 +18,11 @@ enum Ended {
     Cancel(CancelReason),
 }
 
-/// A text field named "City" bound to `text`, alone in a window.
+/// A text field named "City" bound to `text`, shown while `shown` holds, alone in a window.
 struct Rig {
     fixture: Fixture,
     text: Rc<RefCell<String>>,
+    shown: Rc<Cell<bool>>,
     /// The next pass asks for the field's focus after drawing it, as a dialog does.
     focus_after: Rc<Cell<bool>>,
     field: Rc<Cell<Id>>,
@@ -30,11 +31,14 @@ struct Rig {
 
 fn rig(text: &str, select_on_focus: bool) -> Rig {
     let text = Rc::new(RefCell::new(text.to_owned()));
-    let focus_after = Rc::new(Cell::new(false));
+    let (shown, focus_after) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(false)));
     let field = Rc::new(Cell::new(Id::NULL));
     let ended = Rc::new(RefCell::new(Vec::new()));
-    let (held, asks, id, log) = (text.clone(), focus_after.clone(), field.clone(), ended.clone());
+    let (held, on, asks, id, log) = (text.clone(), shown.clone(), focus_after.clone(), field.clone(), ended.clone());
     let mut fixture = Fixture::new(move |ui| {
+        if !on.get() {
+            return;
+        }
         let mut text = held.borrow_mut();
         let mut field = TextField::new("City", Bind::bound(&mut *text));
         if select_on_focus {
@@ -52,7 +56,7 @@ fn rig(text: &str, select_on_focus: bool) -> Rig {
         }
     });
     fixture.settle();
-    Rig { fixture, text, focus_after, field, ended }
+    Rig { fixture, text, shown, focus_after, field, ended }
 }
 
 impl Rig {
@@ -100,6 +104,16 @@ impl Rig {
         self.click();
         self.select_all();
         self.type_text(text);
+    }
+
+    /// The field is not shown for a few passes, too few for its memory to go, while the app sets its text to `text`;
+    /// then it is shown again.
+    fn away_while_the_app_sets(&mut self, text: &str) {
+        self.shown.set(false);
+        self.fixture.idle(4);
+        *self.text.borrow_mut() = text.to_owned();
+        self.shown.set(true);
+        self.fixture.settle();
     }
 }
 
@@ -165,3 +179,52 @@ fn a_drag_into_a_select_on_focus_field_selects_what_it_covers() {
     assert!(text.starts_with("Lisbon") && text.ends_with('X') && text != "X", "the drag's range was replaced: {text:?}");
 }
 
+/// A field removed in the middle of a run and shown again after the app changed its text starts afresh from that text:
+/// the run cut short is not replayed as a Cancel that puts back the text from before it.
+#[trial]
+fn a_run_cut_short_by_removal_is_forgotten() {
+    let mut rig = rig("Lisbon", false);
+    rig.retype("Rome");
+    assert_eq!(rig.text(), "Rome", "the typing reached the binding");
+    rig.away_while_the_app_sets("Porto");
+    assert_eq!(rig.text(), "Porto", "the text the app set stays");
+    assert!(!rig.focused(), "no run is under way");
+    assert!(!rig.ended().contains(&Ended::Commit), "the run cut short commits nothing: {:?}", rig.ended());
+    rig.retype("Kyoto");
+    rig.escape();
+    assert_eq!(rig.text(), "Porto", "Escape gives back the text the new run began with");
+}
+
+/// A field removed in the middle of a run and shown again with its text unchanged keeps the typed text: the run is
+/// forgotten, not cancelled back to the text from before it.
+#[trial]
+fn a_run_cut_short_by_removal_keeps_the_typed_text() {
+    let mut rig = rig("Lisbon", false);
+    rig.retype("Rome");
+    rig.away_while_the_app_sets("Rome");
+    assert_eq!(rig.text(), "Rome", "the typed text stays");
+    rig.retype("Kyoto");
+    rig.escape();
+    assert_eq!(rig.text(), "Rome", "Escape gives back the text the new run began with");
+}
+
+/// A field removed while its edit menu holds the focus starts afresh too.
+#[trial]
+fn a_field_removed_with_its_edit_menu_open_starts_afresh() {
+    let mut rig = rig("Lisbon", false);
+    rig.retype("Rome");
+    rig.fixture.advance(1.0);
+    let at = rig.at();
+    rig.fixture.frame(vec![pointer::secondary(at, true)]);
+    rig.fixture.frame(vec![pointer::secondary(at, false)]);
+    rig.fixture.settle();
+    let cut = rig.fixture.by_label("Cut").expect("the edit menu's Cut").center();
+    rig.fixture.click_at(cut);
+    rig.away_while_the_app_sets("Porto");
+    assert_eq!(rig.text(), "Porto", "the text the app set stays");
+    assert!(!rig.focused(), "no run is under way");
+    assert!(!rig.ended().contains(&Ended::Commit), "the run cut short commits nothing: {:?}", rig.ended());
+    rig.retype("Kyoto");
+    rig.escape();
+    assert_eq!(rig.text(), "Porto", "Escape gives back the text the new run began with");
+}

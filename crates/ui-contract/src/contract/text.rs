@@ -36,6 +36,11 @@ pub(crate) fn held_selection(memory: &mut MemoryStage, id: egui::Id) -> Option<(
     memory.shown::<TextState>(state_id(id)).held_selection
 }
 
+/// Whether the text part of the component `id` has a typing run open, as its last pass left it.
+pub(crate) fn run_open(memory: &MemoryStage, id: egui::Id) -> bool {
+    memory.recall::<TextState>(state_id(id)).start.is_some()
+}
+
 /// The draft the text part of the component `id` holds while a typing run is open.
 pub(crate) fn draft(memory: &mut MemoryStage, id: egui::Id) -> Option<String> {
     memory.shown::<TextState>(state_id(id)).draft.clone()
@@ -559,6 +564,11 @@ pub(crate) fn run<C: Component>(
     let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
     let state_id = state_id(id);
     let mut state = std::mem::take(cx.core.memory.shown::<TextState>(state_id));
+    // A part that was not shown last pass lost its focus, and its typing run with it: the run is forgotten (step 4
+    // ended its gesture without putting back the value from before it), and the part starts afresh from its value.
+    if !crate::runtime::memory::shown_last_pass(&ctx, id) {
+        state = TextState::default();
+    }
     (decl.values.resync)(&mut state, shown_copy(cx).as_ref());
     let text = prepare(cx.core, ui, part, &mut state, AdapterSettings { keys, rtl, ink, underline }, step.commit_now);
     let PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused } = text;
