@@ -153,6 +153,26 @@ fn satin_drag_keeps_the_angle_at_zero_and_the_values_without_travel() {
     assert!(draft.shadow_drag.is_none());
 }
 
+// A press and release on a Satin whose angle and distance are not stored (they come from the spec
+// defaults) leaves its parameters empty; a drag that leaves and comes back does store them.
+#[trial]
+fn satin_press_without_travel_keeps_a_sparse_instance_sparse() {
+    let defaults = EffectSpec::photoshop(EffectKind::Satin).defaults;
+    let mut draft = LayerStyleDraft::new(style_with(&[(1, EffectKind::Satin)]));
+    draft.page = LayerStylePage::Effect(EffectId(1));
+    draft.style.effect_mut(EffectId(1)).expect("the Satin").params = StyleParams::default();
+    let before = draft.style.clone();
+    assert!(!draft.drag_satin(&defaults, true, [0.0, 0.0]));
+    assert!(!draft.drag_satin(&defaults, false, [0.0, 0.0]));
+    draft.end_drag();
+    assert_eq!(draft.style, before, "the parameter map is unchanged");
+    assert_eq!(satin_shown(&draft), (None, None));
+
+    draft.drag_satin(&defaults, true, [0.0, 0.0]);
+    assert!(draft.drag_satin(&defaults, false, [30.0, 0.0]));
+    assert!(draft.drag_satin(&defaults, false, [0.0, 0.0]), "back to the start values");
+}
+
 // Only the Satin page takes the Satin drag; it leaves Global Light and the shadow alone, and the
 // shadow drag does not take a Satin page. Shadow, Satin and Gradient Overlay pages take canvas drags.
 #[trial]

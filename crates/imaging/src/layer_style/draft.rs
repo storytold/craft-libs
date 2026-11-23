@@ -281,6 +281,11 @@ impl LayerStyleDraft {
         let Some((angle, distance)) = self.shadow_drag.and_then(|drag| drag.satin_moved(total, shown_angle)) else {
             return false;
         };
+        // The values already shown (a press, or a drag back to where the page stands): write nothing,
+        // so a sparse instance does not gain explicit parameters it never had.
+        if angle == shown_angle && distance == shown_distance {
+            return false;
+        }
         let before = self.style.clone();
         self.set_param(id, "angle", StyleValue::Number(angle));
         self.set_param(id, "distance", StyleValue::Number(distance));
