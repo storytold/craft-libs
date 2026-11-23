@@ -262,3 +262,27 @@ fn typing_50_into_w_of_a_distorted_box_equals_typing_50_once_from_the_start_box(
     let (a, b) = (once.row(), by_digit.row());
     assert!(a.state.quad.iter().zip(&b.state.quad).all(|(p, q)| p.distance(*q) < 1e-6), "{a:?} {b:?}");
 }
+
+/// A host that passes the box as it is now as the start box, so the start box moves with a scrub's own values, keeps
+/// the scrub running to its release: the field reads it against the start box it began with. Guards against a field
+/// that read the running scrub's value against each pass's start box, so the host's write-back looked like an outside
+/// change and cancelled it (`HostChanged`).
+#[trial]
+fn a_start_box_that_moves_with_a_scrub_keeps_the_scrub_running() {
+    let host = Rc::new(RefCell::new((TransformRow::new(BoxState::from_rect(START), 0.0), Vec::new())));
+    let shown = Rc::clone(&host);
+    let mut linked = true;
+    let mut fixture = Fixture::new(move |ui| {
+        let (row, events) = &mut *shown.borrow_mut();
+        let start = Rect::from_points(row.state.quad[0], row.state.quad[2]);
+        events.extend(TransformFields::new("Transform", Bind::bound(row), start, Bind::bound(&mut linked)).show(ui).events);
+    });
+    fixture.record_paint().settle();
+    let glyph = fixture.texts().iter().find(|painted| painted.text == "W").map(|painted| painted.rect.center()).expect("W's caption shows");
+    fixture.drag_at(glyph, egui::vec2(40.0, 0.0));
+    let (row, events) = &*host.borrow();
+    assert!(events.iter().any(|event| matches!(event, EditEvent::Update { .. })), "the scrub ran: {events:?}");
+    assert!(!events.iter().any(|event| matches!(event, EditEvent::Cancel { .. })), "the scrub was not cancelled: {events:?}");
+    assert!(events.iter().any(|event| matches!(event, EditEvent::Commit { .. })), "the release committed it: {events:?}");
+    assert!(row.state.quad[0].distance(row.state.quad[1]) > START.width(), "the scrub widened the box: {row:?}");
+}
