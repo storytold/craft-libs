@@ -90,7 +90,7 @@ pub use swatches::{
     MAX_GROUPS, MAX_SWATCHES, SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput,
     SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows, swatch_source,
 };
-pub use system_panel::use_system_color_panel;
+pub use system_panel::{system_color_panel_shown, use_system_color_panel};
 pub use warning::{ColorWarning, ColorWarningArrangement, ColorWarningChip, ColorWarningChipOutput, ColorWarningChipStyle};
 pub use wheel::{
     ColorWheel, ColorWheelStyle, ColorWheelWords, WheelGeometry, WheelPart, hue_at, hue_direction, triangle_corners, triangle_point, triangle_sv,

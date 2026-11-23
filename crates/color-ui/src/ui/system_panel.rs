@@ -22,6 +22,12 @@ pub fn use_system_color_panel(on: bool) {
     SYSTEM.store(on, Ordering::Relaxed);
 }
 
+/// Whether the system Colors panel is up for a colour picker dialog now. The panel is shared: an app that also takes
+/// its `changeColor:` (a font panel's text colour) ignores those while this is true, as they are the dialog's picks.
+pub fn system_color_panel_shown() -> bool {
+    imp::shown()
+}
+
 /// Whether the dialog shows as the system panel.
 pub(crate) fn wanted() -> bool {
     cfg!(target_os = "macos") && SYSTEM.load(Ordering::Relaxed)
@@ -123,6 +129,10 @@ mod imp {
         true
     }
 
+    pub(super) fn shown() -> bool {
+        PANEL.with_borrow(Option::is_some)
+    }
+
     pub(super) fn poll() -> Option<Answer> {
         PANEL.with_borrow(|shown| {
             let Panel { panel, ok, cancel } = shown.as_ref()?;
@@ -158,6 +168,10 @@ mod imp {
     use craft_theme::Srgba;
 
     pub(super) fn open(_: Srgba, _: &str, _: &str) -> bool {
+        false
+    }
+
+    pub(super) fn shown() -> bool {
         false
     }
 
