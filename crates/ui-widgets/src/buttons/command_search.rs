@@ -1,7 +1,7 @@
 //! `CommandSearch`: the command-search opener, a search field's face that fires its command.
 
 use super::ButtonOutput;
-use super::face::{self, FaceLook, FaceSpec};
+use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Pointer as _, Props as _, Role};
 use crate::display::Kbd;
 use crate::primitives::{HAlign, IconSpec};
@@ -63,7 +63,7 @@ impl CommandSearch {
     }
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
-        FaceSpec { label, role: Some(TypeRole::Body), lead: Some(&self.glyph), trail: None, loading: false, mnemonic: None, align: HAlign::Start }
+        FaceSpec { arrangement: Arrangement::Inline, label, role: Some(TypeRole::Body), lead: Some(&self.glyph), picture: None, trail: None, loading: false, mnemonic: None, align: HAlign::Start }
     }
 }
 

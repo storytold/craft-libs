@@ -86,7 +86,7 @@ fn swatch_table_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn swatch_table_trailing(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries().into_iter().step_by(21).take(12).collect::<Vec<_>>();
     let shown = SwatchTable::new("Colors", &entries)
-        .selection(Bind::bound(data.value("selected", Selection::single(0usize))))
+        .selection(data.bind("selected", Selection::single(0usize)))
         .wells(true)
         .tips(true)
         .per_row(6)

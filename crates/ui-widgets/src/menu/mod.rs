@@ -2,7 +2,7 @@
 
 pub mod bar;
 pub(crate) mod edit;
-mod icon_row;
+pub(crate) mod icon_row;
 pub(crate) mod item;
 #[doc(hidden)]
 pub mod level;

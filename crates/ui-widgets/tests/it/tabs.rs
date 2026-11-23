@@ -54,7 +54,7 @@ fn document_tabs_leave_space_between_neighbours() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
     let mut fixture = Fixture::new(|ui| {
         let tabs = [DocumentTab::new(1, "One"), DocumentTab::new(2, "Two")];
-        DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
+        let _ = DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
     });
     fixture.settle();
     let first = fixture.by_label("One").expect("first tab").rect;
@@ -101,7 +101,7 @@ fn document_tabs_reserve_space_for_the_trailing_control() {
     let seen = trailing_rect.clone();
     let mut fixture = Fixture::new(move |ui| {
         let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Long document number {i}, scanned.pdf")).closable(true)).collect();
-        DocumentTabs::new("Documents", &tabs)
+        let _ = DocumentTabs::new("Documents", &tabs)
             .selected(4)
             .trailing(|ui| {
                 seen.set(Button::new("Open").show(ui).rect);
@@ -125,7 +125,7 @@ fn the_trailing_control_follows_the_last_tab_when_they_fit() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs};
     let mut fixture = Fixture::new(|ui| {
         let tabs: Vec<_> = (0..2).map(|i| DocumentTab::new(i, format!("Doc {i}.pdf")).closable(true)).collect();
-        DocumentTabs::new("Documents", &tabs)
+        let _ = DocumentTabs::new("Documents", &tabs)
             .selected(1)
             .trailing(|ui| {
                 Button::new("Open").show(ui);

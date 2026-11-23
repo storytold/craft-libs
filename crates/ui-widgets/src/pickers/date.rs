@@ -7,7 +7,7 @@
 
 pub(crate) mod calendar;
 mod codec;
-mod popover;
+pub(crate) mod popover;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 

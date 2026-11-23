@@ -257,7 +257,7 @@ fn a_menu_opener_accepts_accessibility_activation() {
 fn a_context_menu_near_the_top_stays_inside_the_window() {
     let mut fixture = Fixture::new(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(400.0, 300.0), egui::Sense::click());
-        let target = ui.interact(rect, ui.id().with("area"), egui::Sense::click());
+        let target = ui.interact(rect, ui.scope_id().with("area"), egui::Sense::click());
         Menu::context("Page menu", &target).show(ui, |ui, _| {
             for name in ["Copy", "Paste", "Select All", "Rotate", "Delete", "Insert", "Extract", "Print", "Properties", "More"] {
                 MenuItem::new(name).show(ui);

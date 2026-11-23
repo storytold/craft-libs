@@ -25,7 +25,7 @@ fn slider_field_log(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A whole-step slider whose field keeps finer typed values.
 #[story(SliderField<'static>, covers = [], drive = Drive::Never)]
 fn slider_field_typed_precision(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    SliderField::new("Size", Bind::bound(data.value("precise_size", 36.1231)), 1.0..=100.0).step(1.0).typed_decimals(4).show(ui).into()
+    SliderField::new("Size", data.bind("precise_size", 36.1231), 1.0..=100.0).step(1.0).typed_decimals(4).show(ui).into()
 }
 
 #[story(SliderField<'static>, covers = [Mixed], drive = Drive::Never)]

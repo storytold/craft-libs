@@ -1049,7 +1049,7 @@ impl Component for Tile<'_> {
             };
             let title_layout = draw.layout(&title, title_area.width());
             let title_x =
-                if centered { title_area.center().x - title_layout.size().x / 2.0 } else { self.text_x(title_area, title_layout.size().x, cx) };
+                if centered { title_area.center().x - title_layout.size().x / 2.0 } else { Self::text_x(title_area, title_layout.size().x, cx) };
             draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
             if !centered {
                 if let Some(detail) = &self.detail {
@@ -1060,11 +1060,11 @@ impl Component for Tile<'_> {
                     if layout.galley.rows.len() > 2 {
                         layout = draw.layout(&run.elide(), picture.width());
                     }
-                    draw.galley(egui::pos2(self.text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
+                    draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), icon.bottom() + style.sizes.tight), &layout);
                 }
                 let run = TextRun::new(action.as_str()).role(style.detail.role).color(style.range).elide();
                 let layout = draw.layout(&run, picture.width());
-                draw.galley(egui::pos2(self.text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
+                draw.galley(egui::pos2(Self::text_x(picture, layout.size().x, cx), picture.bottom() - layout.size().y), &layout);
             }
             self.caption_rect = Some(title_area);
             return;

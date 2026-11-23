@@ -342,7 +342,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 if let Some(area) = trailing.as_mut() {
                     // The strip fills the row less the room the control took last pass; the control follows the last tab
                     // when every tab shows, and is the row's last item when they overflow.
-                    let memory = ui.id().with("document-tabs-trailing-width");
+                    let memory = ui.scope_id().with("document-tabs-trailing-width");
                     let held: f32 = ui.ctx().data(|data| data.get_temp(memory)).unwrap_or(0.0);
                     let slot = ui.allocate_exact_size(egui::vec2(held, strip.response.response.rect.height()), egui::Sense::hover()).0;
                     let all_show = strip.tab_rects.len() == tabs.len();

@@ -9,7 +9,7 @@ pub(crate) mod linked;
 pub(crate) mod number;
 pub(crate) mod selectable_text;
 pub(crate) mod text_field;
-mod word_run;
+pub(crate) mod word_run;
 mod words;
 pub(crate) mod zoom_field;
 
