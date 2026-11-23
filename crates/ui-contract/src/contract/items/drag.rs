@@ -455,8 +455,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let key = self.source.key(at);
         let keys = self.keys_at(&self.acted_on(at));
         let count = keys.len() as u64;
-        let preview = match props.drag_count {
+        let preview = match props.drag_count.filter(|_| props.drag_badge) {
             Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
+            None if !props.drag_badge => DragPreview::None,
             None if count > 1 => DragPreview::Badge(Label::from(count.to_string())),
             None => self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned()))),
         };

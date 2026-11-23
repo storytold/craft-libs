@@ -7,6 +7,9 @@
 
 use super::rules::{CloseSide, TabKind, close_side};
 use super::words::TabWords;
+
+/// The width, in digits of the label role, a document tab shows of its name at most.
+const MAX_NAME_DIGITS: usize = 22;
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::{MarkerStyle, paint_marker};
 use crate::contract::{
@@ -293,7 +296,14 @@ impl Component for Tab<'_> {
         }
         let width = |run: &TextRun<'_>| cx.layout_at(run, f32::INFINITY).size().x;
         let label_width = width(&self.label_run(cx.style, cx.resolved.label));
-        let mut natural = sizes.tail + label_width;
+        // A document tab never takes more than a name of `MAX_NAME_DIGITS` digits' width, as production's tabs cut a long
+        // name short so the other tabs and the Open control keep their room; the label is cut with an ellipsis.
+        let capped = if self.kind == TabKind::Document {
+            label_width.min(width(&self.label_run(cx.style, &"0".repeat(MAX_NAME_DIGITS))))
+        } else {
+            label_width
+        };
+        let mut natural = sizes.tail + capped;
         if self.icon.is_some() {
             natural += sizes.icon + sizes.gap;
         }
@@ -309,7 +319,7 @@ impl Component for Tab<'_> {
         let measured = if cx.proposal == Proposal::Min {
             let end = cx.resolved.label.char_indices().nth(12).map_or(cx.resolved.label.len(), |(index, _)| index);
             let prefix = cx.resolved.label.get(..end).unwrap_or(cx.resolved.label);
-            let readable = natural - label_width + width(&self.label_run(cx.style, prefix));
+            let readable = natural - capped + width(&self.label_run(cx.style, prefix));
             readable.max(sizes.min_content).min(natural)
         } else {
             natural

@@ -195,6 +195,7 @@ const COLLECTION: &[Forwarded] = &[
     ("deletable", "bool", "Delete and Backspace at the lead report the items to delete."),
     ("delete_target", "$ui::contract::DeleteTarget", "Where a deletable collection takes Delete and Backspace."),
     ("drag_count", "$ui::runtime::env::Counted", "The drag badge reads this count word for the dragged items, one included."),
+    ("drag_badge", "bool", "A row drag shows its badge by the pointer (default on); off, the dragged row shows alone."),
     ("natural_height", "bool", "The collection takes its full content height and owns no scroll: for a short collection inside a scrolling page."),
     ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the row height."),
     ("max_rows", "u16", "The collection shows at most this many rows and scrolls the rest, inside a scrolling body too."),

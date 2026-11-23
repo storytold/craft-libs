@@ -235,6 +235,8 @@ pub struct CollectionProps {
     /// The count word the drag badge shows for the dragged items, one item included ("1 page", "3 pages"); `None`
     /// shows the number of items for several and the item's text for one.
     pub drag_count: Option<Counted>,
+    /// Whether a row drag shows its badge by the pointer. Off, the drag carries no preview.
+    pub drag_badge: bool,
     /// The collection takes the full height of its rows and owns no scroll, so it can sit inside a scrolling page:
     /// every row is built, the wheel and the keys that move past an end act on the page's scroll owner, and moving
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
@@ -350,6 +352,7 @@ impl CollectionProps {
             delete_target: DeleteTarget::Focus,
             drag_payload: None,
             drag_count: None,
+            drag_badge: true,
             natural_height: false,
             min_rows: 0,
             max_rows: None,
@@ -393,6 +396,13 @@ impl CollectionProps {
     #[must_use]
     pub fn drag_payload<K: 'static, P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<K>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.drag_payload = Some(DragPayload::new(map));
+        self
+    }
+
+    /// Whether a row drag shows its badge by the pointer (on by default).
+    #[must_use]
+    pub const fn drag_badge(mut self, on: bool) -> Self {
+        self.drag_badge = on;
         self
     }
 

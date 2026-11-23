@@ -634,3 +634,44 @@ fn a_modified_document_tab_shows_a_dot_and_no_asterisk() {
     assert_eq!(modified.0, 0, "no asterisk is painted");
     assert!(modified.1 > plain.1, "the dot takes room beside the name: {} vs {}", modified.1, plain.1);
 }
+
+/// Production shows the held tab in the strip and no filename badge by the pointer: while a document tab is dragged, its
+/// name is painted once.
+#[trial]
+fn a_dragged_document_tab_shows_no_badge() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let tabs = [DocumentTab::new(0_usize, "Quarterly"), DocumentTab::new(1, "Other")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let one = tab_rect(&tree, "Quarterly");
+    let to = Pos2::new(one.center().x, one.center().y + 60.0);
+    frames.frame(vec![moved(one.center())], &mut show);
+    frames.frame(vec![press(one.center())], &mut show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(one.center().lerp(to, step as f32 / 4.0))], &mut show);
+    }
+    frames.idle(2, &mut show);
+    let shown = frames.texts().iter().filter(|text| text.text == "Quarterly").count();
+    assert_eq!(shown, 1, "the name is painted once, by the held tab, with no badge beside the pointer");
+}
+
+/// A very long document name does not stretch its tab across the strip: the tab stays near 22 characters wide and the
+/// next tab keeps its room.
+#[trial]
+fn a_very_long_document_name_is_cut_to_a_compact_tab() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let long = "a-very-long-synthetic-document-file-name-for-truncation-test-1234567890.pdf";
+    let tabs = [DocumentTab::new(0_usize, long), DocumentTab::new(1, "Short")];
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+    });
+    fixture.idle(6);
+    let tab = fixture.by_label(long).expect("the long tab").rect;
+    let short = fixture.by_label("Short").expect("the next tab").rect;
+    assert!(tab.width() < 320.0, "the long name is cut short, got {}", tab.width());
+    assert!(short.left() >= tab.right(), "the next tab follows it");
+}
