@@ -37,3 +37,19 @@ fn strong_accent_hover_and_pressed_are_visible_and_keep_text_contrast() {
         }
     }
 }
+
+/// A user asking why the hover fill differs from rest is told which token it starts from and how much
+/// lightness it moves at least; the floor shown is the one the colour is held to.
+#[test]
+fn explaining_strong_hover_names_its_base_and_the_lightness_floor() {
+    use craft_theme::{ColorSource, ColorToken, explain};
+    let theme = builtins().iter().find(|t| t.name != "Classic" && t.variants != Variants::LightOnly).unwrap();
+    let appearance =
+        Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Comfortable, text_size: TextSize::Small, reduced_motion: false };
+    let e = explain(theme, appearance, None);
+    let origin = e.color(ColorToken::AccentStrongHover).unwrap();
+    let ColorSource::ShiftedFrom { min, .. } = origin.source else { panic!("hover is a shifted colour: {:?}", origin.source) };
+    let words = origin.source_words();
+    assert!(words.contains(ColorToken::AccentStrong.path()), "names the base token: {words}");
+    assert!(words.contains(&min.to_string()), "names the floor {min}: {words}");
+}
