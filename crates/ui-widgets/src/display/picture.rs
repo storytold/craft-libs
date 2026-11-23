@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-/// How large a picture is: its height, from a token.
+/// How large a picture is: its height, from a token, or the room its parent gives.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PictureSize {
@@ -33,6 +33,9 @@ pub enum PictureSize {
     /// The image at its own size in device pixels, one texel to a pixel (a bitmap drawn for the screen's density).
     /// A painter or a picture made off the frame has no own size and takes the icon side.
     DevicePixels,
+    /// The full width of the room the parent gives, as high as the picture's `aspect` makes it: for a preview that
+    /// fills a dialog's slot. With no room offered it takes the icon side as its height.
+    Fill,
 }
 
 /// The style of a picture.
@@ -141,7 +144,7 @@ impl Component for Picture<'_> {
     fn style(cx: &StyleCx<'_>, key: PictureStyleKey) -> PictureStyle {
         let thumbs = &cx.tokens.size.thumb;
         let height = match key.extent {
-            PictureSize::Icon | PictureSize::DevicePixels => cx.control().icon,
+            PictureSize::Icon | PictureSize::DevicePixels | PictureSize::Fill => cx.control().icon,
             PictureSize::Thumb(step) => step.pick([thumbs.sm, thumbs.md, thumbs.lg]),
             PictureSize::Sample(step) => step.pick([thumbs.sample.sm, thumbs.sample.md, thumbs.sample.lg]),
         };
@@ -155,6 +158,12 @@ impl Component for Picture<'_> {
             let ctx = cx.ui.ctx();
             let texture = store(ctx).get_or_put(ctx, (cx.resolved.id, *key), self.revision, *image);
             return texture.size_vec2() / ctx.pixels_per_point();
+        }
+        if self.extent == PictureSize::Fill {
+            // The room less the padding the pipeline adds, so the picture shrinks to a narrower room and never overflows it.
+            // An unbounded room (a horizontal row or scroll) gives no width to fill: the icon side then sets the height.
+            let width = cx.room.filter(|room| room.is_finite()).map_or_else(|| self.aspect.of(cx.style.height), |room| room.max(0.0));
+            return Vec2::new(width, self.aspect.high(width));
         }
         let height = cx.style.height;
         Vec2::new(self.width(height), height)

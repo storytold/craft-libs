@@ -76,3 +76,9 @@ fn picture_svg_invalid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn picture_painter(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Picture::painter("Swatch", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
 }
+
+/// A painter preview that fills the room its parent gives, 4 wide to 1 high.
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_fill(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Picture::painter("Preview", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Fill).show(ui).into()
+}
