@@ -187,6 +187,40 @@ fn a_refused_first_frame_closes_the_connection() {
     assert!(rx.try_recv().is_err(), "nothing was dispatched");
 }
 
+/// A client that writes before it reads still gets its refusal and then the end of the stream. Closing a socket with
+/// unread input resets the connection, and a reset can discard the refusal before the client reads it; the server now
+/// shuts its side and reads what the client still sends first. The pauses let the refusal (and before, the reset) arrive
+/// before the client reads, so the old race fails every time here.
+#[trial]
+fn a_refusal_reaches_a_client_that_wrote_before_reading() {
+    let auth = json!({"id": 1, "method": "auth", "params": {"token": TOKEN}});
+    let connect = |addr| {
+        let stream = TcpStream::connect(addr).expect("connected");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+        let reader = BufReader::new(stream.try_clone().expect("cloned"));
+        (stream, reader)
+    };
+
+    // Past the limit: the request is already on its way when the refusal goes out.
+    let (_rx, full) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let open: Vec<TcpStream> = (0..MAX_CONNECTIONS).map(|_| connect(full.addr).0).collect();
+    let (mut extra, mut reader) = connect(full.addr);
+    writeln!(extra, "{auth}").expect("written");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(read_json(&mut reader).expect("a refusal"), json!({"id": null, "ok": false, "error": "connection limit reached"}));
+    assert!(is_closed(&mut reader), "the refused connection ends cleanly");
+    drop(open);
+
+    // A refused first frame, then a second guess written after the refusal.
+    let (_rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let (mut stream, mut reader) = connect(server.addr);
+    writeln!(stream, "not json").expect("written");
+    assert_eq!(read_json(&mut reader).expect("a refusal"), json!({"id": null, "ok": false, "error": "authentication required"}));
+    let _ = writeln!(stream, "{auth}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(is_closed(&mut reader), "the second guess is read and dropped, and the connection ends cleanly");
+}
+
 /// A web page can reach loopback: a browser `POST` whose body is a valid `auth` line is refused at its request line
 /// and the connection closed, so neither the body's `auth` nor a request after it reaches the app.
 #[trial]
