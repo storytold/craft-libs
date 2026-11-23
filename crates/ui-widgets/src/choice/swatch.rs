@@ -738,8 +738,16 @@ impl SwatchFace {
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
         let fill = SwatchFill::Color(self.color);
-        let face =
-            Face { style: &style, state: &state, fill: &fill, face: None, stroke: false, marks: CellMarks::default(), shape: SwatchShape::Square, rtl: false };
+        let face = Face {
+            style: &style,
+            state: &state,
+            fill: &fill,
+            face: None,
+            stroke: false,
+            marks: CellMarks::default(),
+            shape: SwatchShape::Square,
+            rtl: false,
+        };
         face.paint(cx, rect);
     }
 }
