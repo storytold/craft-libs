@@ -627,7 +627,11 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     fn scrub(&self) -> Option<Scrub<V>> {
         let rule = self.rule();
         let step = self.scrub_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step);
-        let drag = ValueDrag::relative(step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS)
+        let drag = ValueDrag::relative(step, rule.bounds())
+            .warp(true)
+            .hide_cursor(true)
+            .coarse(LARGE_STEPS)
+            .fine(1.0 / LARGE_STEPS)
             .modifiers(self.pointer_modifiers);
         // Rounded to the field's decimals, so a scrubbed value carries no float noise. The step is not a grid
         // here: an Alt drag moves by a share of it.

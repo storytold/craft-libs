@@ -15,7 +15,10 @@ fn typed(codec: Option<NumberCodec>, text: &str, step: f64) -> (Fixture, Rc<RefC
     let mut fixture = Fixture::new(move |ui| {
         let mut value = held.borrow_mut();
         let field = SliderField::new("Mapped", Bind::bound(&mut *value), 0.0..=100.0).step(step);
-        let field = match &codec { Some(codec) => field.number_codec(codec.clone()), None => field };
+        let field = match &codec {
+            Some(codec) => field.number_codec(codec.clone()),
+            None => field,
+        };
         field.show(ui);
     });
     fixture.motion(MotionMode::Off).settle();

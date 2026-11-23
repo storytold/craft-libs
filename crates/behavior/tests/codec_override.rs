@@ -23,10 +23,7 @@ fn codec_override_reads_complete_trimmed_values_absolutely() {
 
 #[test]
 fn codec_override_rejection_never_falls_through_to_other_readers() {
-    let codec = NumberCodec::new(Reader::new().unit("widgets", 2.0), 2)
-        .or_parse(|_| Some(999.0))
-        .zoom_typing()
-        .parse_with(absolute);
+    let codec = NumberCodec::new(Reader::new().unit("widgets", 2.0), 2).or_parse(|_| Some(999.0)).zoom_typing().parse_with(absolute);
     for text in ["1+2", "8/4", "2 widgets", "Auto", "1.2.3"] {
         assert_eq!(codec.parse(text, &Some(50.0)), Err(NotAValue), "no secondary reader may accept {text:?}");
     }

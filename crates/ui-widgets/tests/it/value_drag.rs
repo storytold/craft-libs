@@ -13,7 +13,6 @@ pub(crate) mod scalar_contracts;
 
 pub(crate) mod slider_field_scrub;
 
-
 pub(crate) mod thumb_row;
 
 use craft_behavior::{EditEvent, MotionMode};

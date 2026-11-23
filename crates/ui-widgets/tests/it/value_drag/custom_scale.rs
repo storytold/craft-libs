@@ -44,7 +44,10 @@ impl Rig {
         let mut fixture = Fixture::new(move |ui| {
             let mut value = held.borrow_mut();
             let slider = Slider::new(Bind::bound(&mut *value), range.clone()).scale(scale).label("Mapped");
-            let slider = match step { Some(step) => slider.step(step), None => slider };
+            let slider = match step {
+                Some(step) => slider.step(step),
+                None => slider,
+            };
             seen.set(slider.show_at(ui, FIELD).response.id);
         });
         fixture.motion(MotionMode::Off).settle();
@@ -142,11 +145,21 @@ fn custom_scale_slider_field_types_and_reads_model_values() {
 
 #[trial]
 fn custom_scale_bounds_and_nonfinite_results_are_contained() {
-    fn linear(value: f64, min: f64, max: f64) -> f64 { (value - min) / (max - min) }
-    fn nan(_: f64, _: f64, _: f64) -> f64 { f64::NAN }
-    fn infinity(_: f64, _: f64, _: f64) -> f64 { f64::INFINITY }
-    fn below(_: f64, _: f64, _: f64) -> f64 { -1000.0 }
-    fn above(_: f64, _: f64, _: f64) -> f64 { 1000.0 }
+    fn linear(value: f64, min: f64, max: f64) -> f64 {
+        (value - min) / (max - min)
+    }
+    fn nan(_: f64, _: f64, _: f64) -> f64 {
+        f64::NAN
+    }
+    fn infinity(_: f64, _: f64, _: f64) -> f64 {
+        f64::INFINITY
+    }
+    fn below(_: f64, _: f64, _: f64) -> f64 {
+        -1000.0
+    }
+    fn above(_: f64, _: f64, _: f64) -> f64 {
+        1000.0
+    }
     for (callback, expected) in [(nan as fn(f64, f64, f64) -> f64, 0.75), (infinity, 0.75), (below, 0.0), (above, 1.0)] {
         let mut rig = Rig::new(SliderScale::Custom { position: callback, value_at }, MIN..=MAX, None);
         rig.set(MIN + 0.75 * (MAX - MIN));
@@ -163,11 +176,9 @@ fn custom_scale_bounds_and_nonfinite_results_are_contained() {
 
 #[trial]
 fn custom_scale_does_not_change_builtin_linear_power_or_log_tracks() {
-    for (scale, range, value) in [
-        (SliderScale::Linear, 0.0..=100.0, 50.0),
-        (SliderScale::Power(2.0), 0.0..=100.0, 25.0),
-        (SliderScale::Log, 1.0..=10000.0, 100.0),
-    ] {
+    for (scale, range, value) in
+        [(SliderScale::Linear, 0.0..=100.0, 50.0), (SliderScale::Power(2.0), 0.0..=100.0, 25.0), (SliderScale::Log, 1.0..=10000.0, 100.0)]
+    {
         let mut rig = Rig::new(scale, range, None);
         rig.click(0.5);
         assert!((*rig.value.borrow() - value).abs() < 0.001, "{scale:?} midpoint");

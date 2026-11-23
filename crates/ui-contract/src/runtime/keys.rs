@@ -33,6 +33,7 @@ pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 pub(crate) use input::{claims_press, count_sent, input_hook, keys_state, queue_nav, sent, take_menu_keys, take_nav};
 #[doc(hidden)]
 pub use input::{down, keyed};
+pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
 #[cfg(feature = "suite")]
@@ -41,7 +42,6 @@ pub(crate) use intents::lent_taken;
 pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
-pub use intents::Intents;
 pub(crate) use intents::{
     Lent, context_part, context_request, context_requests, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel,
     take_every_escape, take_window_cancel,
