@@ -212,7 +212,8 @@ fn close_after_refusal(stream: &TcpStream) {
         if reader.set_read_timeout(Some(left)).is_err() {
             break;
         }
-        match reader.read(&mut buf) {
+        let want = buf.len().min(REFUSAL_DRAIN_BYTES - read);
+        match reader.read(buf.get_mut(..want).unwrap_or_default()) {
             Ok(0) | Err(_) => break,
             Ok(n) => read += n,
         }
