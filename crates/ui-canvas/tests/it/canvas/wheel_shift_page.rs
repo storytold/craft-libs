@@ -225,6 +225,17 @@ fn shift_with_a_trackpad_scroll_or_a_sideways_report_keeps_todays_pan() {
 }
 
 #[trial]
+fn a_page_unit_wheel_under_shift_keeps_todays_sideways_pan() {
+    // A device that reports whole pages is not the notched wheel production's #12029 measured: it keeps today's
+    // sideways fold, and no page of its own comes out of the new rule.
+    let options = NavigationOptions::default();
+    for os in [Platform::Windows, Platform::Linux] {
+        let sideways = classify(Vec2::new(0.0, -1.0), WheelUnit::Page, Mods::SHIFT, os, &options);
+        assert_eq!(sideways, Some(WheelAction::Pan(Vec2::new(-1.0, 0.0))), "{os:?}: a page-unit wheel under Shift keeps today's sideways pan");
+    }
+}
+
+#[trial]
 fn the_document_schemes_shift_wheel_stays_sideways() {
     let mut options = NavigationOptions::default();
     options.wheel = WheelScheme::Document;

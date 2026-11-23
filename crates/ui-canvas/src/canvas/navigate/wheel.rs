@@ -22,7 +22,7 @@ pub enum WheelAction {
     SnapZoom(i32),
     /// Move the image by this many screen points: the content follows the delta.
     Pan(Vec2),
-    /// Page the view up or down by this many whole notches: one page is the canvas's height less one wheel line
+    /// Page the view up or down by this many notches: one page is the canvas's height less one wheel line
     /// ([`WheelNavigation::LINE`]), so a page leaves one line of the page before it in sight. A page is a screen
     /// distance, like a pan, so it holds at every zoom.
     Page(f32),
@@ -178,6 +178,7 @@ impl WheelNavigation {
             && !input.os.is_mac()
             && input.scroll.x == 0.0
         {
+            // The count comes from scroll over the line the taker reads with, so a taker of another line pages by its own notch.
             return Some(WheelAction::Page(input.scroll.y / notch));
         }
         let sideways = (input.mods.shift || input.mods.cmd || input.mods.ctrl) && input.scroll.x == 0.0;
