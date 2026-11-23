@@ -229,7 +229,7 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     #[prop(flag)]
     content_cells: bool,
     /// The columns of cards a grid that takes its width from its content asks for: its width holds this many cards and
-    /// their gaps. 0 asks for none, so the content decides.
+    /// their gaps. 0 asks for one card, and the content decides the rest.
     #[prop]
     card_columns: usize,
     /// Where every tile's caption goes; `CaptionPlace::None` keeps no room for one.
@@ -864,14 +864,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
 
     /// The last layout again while the width, the rows stamp and everything the arrangement reads are the same.
     fn ideal_width(&self, item: Option<Vec2>, _rows: usize, cx: &StyleCx<'_>) -> f32 {
-        if self.card_columns == 0 {
-            return 0.0;
-        }
         let style = GridSizes::of(cx, self.card, self.card_text, self.items.row_height, self.regular_card_padding);
         let aspect = if self.aspect.is_finite() && self.aspect > 0.0 { self.aspect } else { 1.0 };
         let around = style.around.get(self.caption, self.detail_line);
         let card = style.card(self.picture_side(&style, item, around), aspect, around).x;
-        let columns = self.card_columns as f32;
+        // At least one card: in a narrower column the cards shrink, and the grid would measure shorter than it shows
+        // in the wider column it is given.
+        let columns = self.card_columns.max(1) as f32;
         // Half a point over, so the division that counts the columns back never rounds below `columns`.
         let spacing = style.spacing(self.caption);
         columns * card + (columns - 1.0) * spacing.gap + 2.0 * spacing.inset + 0.5

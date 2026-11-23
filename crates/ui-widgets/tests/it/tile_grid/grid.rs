@@ -1,11 +1,15 @@
 //! The tile grid's layout: justified rows fill the width with whole cards (picture and what the tile adds around it).
 
 use craft_behavior::keyed;
-use craft_ui::contract::ShowCollection as _;
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Show as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::display::Text;
+use craft_ui::layout_components::{Row, Stack};
+use craft_ui::list::{ThumbAspect, ToggleState};
 use craft_ui::testing::Fixture;
 use craft_ui::tile_grid::{Around, ArrangeSpacing, GridEvent, GroupHeads, Tile, TileGrid, TileGroup, Tiling, arrange};
 use egui::Vec2;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const WIDTH: f32 = 400.0;
@@ -77,4 +81,35 @@ fn rule_group_heads_take_no_title_no_tab_stop_and_never_close() {
         .iter()
         .any(|event| matches!(event, GridEvent::GroupOpen { .. } | GridEvent::GroupPicked { .. } | GridEvent::GroupMenu { .. }));
     assert!(!grouped, "a click on a rule reports no group event: {:?}", events.borrow());
+}
+
+/// A grid in a stack beside another takes its rows' height in the row's measuring run, so the stack holds the whole
+/// grid and what follows it: a button under the grid takes clicks.
+#[craft_ui::testing::trial]
+fn a_grid_in_a_measured_stack_keeps_its_rows_and_what_follows_them() {
+    let clicked = Rc::new(Cell::new(false));
+    let held = clicked.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<u64> = (0..3).collect();
+        let source = keyed(&keys, |key: &u64| *key);
+        Row::new().show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                let _ = TileGrid::new("Boards").checks(true).max_rows(3).show_items(ui, &source, &mut |key, _| {
+                    Tile::new(format!("Board {key}")).check(ToggleState::Off).thumb(ThumbAspect::SQUARE, |_, _| {})
+                });
+                if Button::new("Clear").show(ui).clicked() {
+                    held.set(true);
+                }
+            });
+            Stack::new().show(ui, |ui, _| {
+                Text::new("Options").show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::new(800.0, 600.0));
+    fixture.settle();
+    let (tile, clear) = (fixture.by_label("Board 2").expect("tile").rect, fixture.by_label("Clear").expect("button"));
+    assert!(clear.rect.top() >= tile.bottom(), "the button follows the grid's rows: {tile:?} {:?}", clear.rect);
+    fixture.click(&clear).settle();
+    assert!(clicked.get(), "the button under the grid takes a click");
 }
