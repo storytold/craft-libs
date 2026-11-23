@@ -217,7 +217,8 @@ pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app)
 }
 
-/// Called by `install`: keeps the shell, the app id, the OS services and the placement store.
+/// Called by `install`: keeps the shell, with the title-bar double click the OS services report, the app id, the OS
+/// services and the placement store.
 pub(crate) fn install(
     ctx: &Context,
     shell: ShellInfo,
@@ -227,6 +228,11 @@ pub(crate) fn install(
     app_id: String,
 ) {
     let layouts = frame.as_ref().map(LayoutWatch::new);
+    // The user's title-bar double click, where the platform keeps one; else the shell's own.
+    let shell = match system.title_bar_double_click() {
+        Some(double_click) => shell.double_click(double_click),
+        None => shell,
+    };
     let shell = match &frame {
         Some(decision) => {
             let window = (*shell.window).clone().chrome(chrome_of(&decision.frame));

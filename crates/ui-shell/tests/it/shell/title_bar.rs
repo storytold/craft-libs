@@ -1,13 +1,13 @@
 //! A title bar in an embedded shell is a picture of a window: it reports its captions and acts on no window. An action
-//! title is a button that reports its activation.
+//! title is a button that reports its activation. On macOS a double click on the bar does what the user set.
 
-use craft_host::target::ShellInfo;
+use craft_host::target::{DoubleClick, Os, ShellInfo};
 use craft_ui::contract::Role;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::env::WindowKey;
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, Title, TitleBar};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Title, TitleBar};
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::windows::NoWindows;
+use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
@@ -92,6 +92,51 @@ fn a_title_bar_in_an_embedded_shell_acts_on_no_window() {
     let (commands, clicked) = sent(false);
     assert_eq!(clicked, Some(Caption::Maximize), "the window's bar reports the caption");
     assert!(!commands.is_empty(), "the window's bar acts on the window");
+}
+
+/// The window commands a double click on the free band of a macOS title bar sends, with `setting` the user's title-bar
+/// double click as the OS services report it.
+fn mac_double_click_sends(setting: Option<DoubleClick>) -> Vec<ViewportCommand> {
+    let system = FakeSystem::new();
+    system.set_title_bar_double_click(setting);
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let decision = Decision { frame: Frame::Inset(MacInset::default()), overridden: None, desktop };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default().os(Os::Mac), Arc::new(system)).frame(decision));
+    let bar = Cell::new(Rect::NOTHING);
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            bar.set(TitleBar::new().show_titled(ui, Title::new("Landscape.psd"), |_, _| {}, |_, _| {}).response.rect);
+        })
+    };
+    frame(vec![]);
+    frame(vec![]);
+    // The title is no control: the band lies under it.
+    let band = bar.get().center();
+    let mut commands = Vec::new();
+    for events in [vec![moved(band)], vec![press(band)], vec![release(band)], vec![press(band)], vec![release(band)]] {
+        commands.extend(
+            frame(events)
+                .commands
+                .into_iter()
+                .map(|(_, command)| command)
+                .filter(|command| matches!(command, ViewportCommand::Maximized(_) | ViewportCommand::Minimized(_))),
+        );
+    }
+    commands
+}
+
+/// On macOS a double click on the free title bar follows System Settings: it zooms by default and when set to zoom,
+/// minimizes when set to minimize, and does nothing when set to do nothing.
+#[trial]
+fn a_mac_title_bar_double_click_follows_the_system_setting() {
+    let unset = mac_double_click_sends(None);
+    assert!(matches!(unset.as_slice(), [ViewportCommand::Maximized(true)]), "unset, the double click zooms: {unset:?}");
+    let zoom = mac_double_click_sends(Some(DoubleClick::Zoom));
+    assert!(matches!(zoom.as_slice(), [ViewportCommand::Maximized(true)]), "set to zoom, it zooms: {zoom:?}");
+    let minimize = mac_double_click_sends(Some(DoubleClick::Minimize));
+    assert!(matches!(minimize.as_slice(), [ViewportCommand::Minimized(true)]), "set to minimize, it minimizes: {minimize:?}");
+    let nothing = mac_double_click_sends(Some(DoubleClick::Nothing));
+    assert!(nothing.is_empty(), "set to do nothing, it sends nothing: {nothing:?}");
 }
 
 /// The shell sends the window title once after a change and not again while the viewport reports it; an embedded shell

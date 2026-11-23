@@ -3,6 +3,7 @@
 //! implementation for tests.
 
 use craft_behavior::Monitor;
+use craft_host::target::DoubleClick;
 use std::sync::Mutex;
 
 /// OS services the multi-window driver reads. Every method runs in the UI's `set_input`, outside every egui lock.
@@ -23,6 +24,23 @@ pub trait WindowSystem: Send + Sync {
 
     /// The connected monitors.
     fn monitors(&self) -> Vec<Monitor>;
+
+    /// What the user set a double click on a window's title bar to do, or `None` where the platform has no such
+    /// setting for an app-drawn bar. The runtime reads it once, at install.
+    fn title_bar_double_click(&self) -> Option<DoubleClick> {
+        None
+    }
+}
+
+/// The title-bar double click the global default `AppleActionOnDoubleClick` names (System Settings › Desktop & Dock ›
+/// "Double-click a window's title bar to"): `Minimize` minimizes and `None` does nothing. Anything else zooms: unset
+/// (never changed), `Maximize`, and `Fill`, which macOS 15 added and zooming comes closest to.
+pub fn mac_double_click(value: Option<&str>) -> DoubleClick {
+    match value.map(str::trim) {
+        Some("Minimize") => DoubleClick::Minimize,
+        Some("None") => DoubleClick::Nothing,
+        _ => DoubleClick::Zoom,
+    }
 }
 
 /// A platform with none of the services: the pointer is unknown, cannot be moved, and no monitors are listed.
@@ -106,6 +124,21 @@ impl WindowSystem for SystemWindows {
     fn monitors(&self) -> Vec<Monitor> {
         Vec::new()
     }
+
+    /// The global default `AppleActionOnDoubleClick` on macOS (with the `appkit` feature), read through
+    /// `NSUserDefaults`; elsewhere none is told.
+    fn title_bar_double_click(&self) -> Option<DoubleClick> {
+        #[cfg(all(feature = "appkit", target_os = "macos"))]
+        {
+            use objc2_foundation::{NSString, NSUserDefaults};
+            let value = NSUserDefaults::standardUserDefaults().stringForKey(&NSString::from_str("AppleActionOnDoubleClick"));
+            Some(mac_double_click(value.map(|value| value.to_string()).as_deref()))
+        }
+        #[cfg(not(all(feature = "appkit", target_os = "macos")))]
+        {
+            None
+        }
+    }
 }
 
 /// A scripted system: the pointer, the button and modifier state and the monitors are set by the test, warps are
@@ -120,6 +153,7 @@ struct FakeState {
     pointer: Option<[f32; 2]>,
     primary: Option<bool>,
     command: Option<bool>,
+    double_click: Option<DoubleClick>,
     monitors: Vec<Monitor>,
     warps: Vec<[f32; 2]>,
 }
@@ -143,6 +177,11 @@ impl FakeSystem {
     /// Sets whether the command modifier is down; `None` where the platform does not tell.
     pub fn set_command_held(&self, held: Option<bool>) {
         self.with(|state| state.command = held);
+    }
+
+    /// Sets the title-bar double click the user chose; `None` where the platform has no such setting.
+    pub fn set_title_bar_double_click(&self, double_click: Option<DoubleClick>) {
+        self.with(|state| state.double_click = double_click);
     }
 
     /// Sets the monitors.
@@ -185,5 +224,24 @@ impl WindowSystem for FakeSystem {
 
     fn monitors(&self) -> Vec<Monitor> {
         self.with(|state| state.monitors.clone())
+    }
+
+    fn title_bar_double_click(&self) -> Option<DoubleClick> {
+        self.with(|state| state.double_click)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The values System Settings writes map to their actions; macOS 15's Fill and an unset or unknown value zoom.
+    #[test]
+    fn the_mac_setting_names_its_action() {
+        assert_eq!(mac_double_click(Some("Minimize")), DoubleClick::Minimize);
+        assert_eq!(mac_double_click(Some("None")), DoubleClick::Nothing);
+        for zooms in [None, Some("Maximize"), Some("Fill"), Some("")] {
+            assert_eq!(mac_double_click(zooms), DoubleClick::Zoom, "{zooms:?} zooms");
+        }
     }
 }
