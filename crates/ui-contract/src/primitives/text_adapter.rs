@@ -492,13 +492,18 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         state.end = Some(End::Escape);
     }
     let draft_takes = state.draft.is_some() && !dialog_escape;
+    // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus.
+    let leaves = !input.options.clear_on_escape && !dialog_escape && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
     let takes_escape =
-        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
+        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() || leaves };
     let list_first = input.list_open && !input.options.clear_on_escape;
     if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
         // Escape over a composition alone ends the composition and leaves the text.
         if state.draft.is_some() || state.preedit.is_none() {
             state.end = Some(End::Escape);
+            if leaves {
+                crate::runtime::focus::apply(ctx, vec![crate::runtime::focus::Act::Surrender(widget)]);
+            }
         }
         state.preedit = None;
     }

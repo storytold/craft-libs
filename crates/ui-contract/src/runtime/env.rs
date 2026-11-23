@@ -259,6 +259,8 @@ pub struct Inherited {
     pub(crate) today: Option<CalendarDate>,
     /// `RootEnv::tab_toggles_chrome`.
     pub(crate) tab_toggles_chrome: bool,
+    /// `RootEnv::escape_leaves_fields`.
+    pub(crate) escape_leaves_fields: bool,
     /// `RootEnv::cursor_follows_zoom`: painted cursor images follow the interface zoom.
     pub(crate) cursor_follows_zoom: bool,
     /// `RootEnv::tooltips`: tooltips show.
@@ -524,7 +526,13 @@ impl Scoped {
             for id in self.commands.ids() {
                 id.key(&mut key);
             }
-            key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
+            key.feed_hash(&(
+                std::mem::discriminant(&self.motion.mode),
+                self.canvas_pattern,
+                self.tab_toggles_chrome,
+                self.escape_leaves_fields,
+                self.today,
+            ));
             (&self.format, &self.dates, &self.host).key(&mut key);
             let value_bytes = self.values.key(&mut key);
             #[cfg(feature = "testing")]
@@ -649,6 +657,7 @@ impl Env {
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
                     tab_toggles_chrome: root.tab_toggles_chrome,
+                    escape_leaves_fields: root.escape_leaves_fields,
                     cursor_follows_zoom: root.cursor_follows_zoom,
                     tooltips: root.tooltips,
                     canvas_pattern: root.canvas_pattern,

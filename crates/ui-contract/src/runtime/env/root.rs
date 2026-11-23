@@ -37,6 +37,9 @@ pub struct RootEnv {
     pub tab_all_controls: bool,
     /// Whether a bare Tab toggles the window's chrome in place of moving focus where the key stage's gate allows it.
     pub tab_toggles_chrome: bool,
+    /// Whether Escape in a focused text field also takes the focus from it, with or without typing to revert, so the
+    /// next keys go to the window. A clearing field (a search box) still clears its text first.
+    pub escape_leaves_fields: bool,
     /// Which Tab stops a dialog's Tab order visits.
     pub dialog_tab: TabReach,
     /// Whether the canvas surround shows the theme's pattern.
@@ -76,6 +79,7 @@ impl Default for RootEnv {
             scale: Scale::default(),
             tab_all_controls: true,
             tab_toggles_chrome: false,
+            escape_leaves_fields: false,
             dialog_tab: TabReach::Root,
             canvas_pattern: true,
             cursor_follows_zoom: true,
