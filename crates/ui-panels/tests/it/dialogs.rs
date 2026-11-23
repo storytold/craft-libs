@@ -396,7 +396,8 @@ fn unsaved_question_keeps_long_text_inside_its_dialog() {
     host.borrow_mut()
         .open(UnsavedChangesDialog::new(CloseScope::Close, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf"));
     fixture.idle(6);
-    let dialog = fixture.by_role(Role::DIALOG).first().expect("the question").rect;
+    // The question is an alert dialog (upstream's role for the unsaved question).
+    let dialog = fixture.by_role(Role::ALERT_DIALOG).first().expect("the question").rect;
     assert!(dialog.left() >= 0.0 && dialog.right() <= 820.0, "the question stays on screen: {dialog:?}");
     let runs = fixture.texts();
     let message = runs.iter().find(|run| run.text.contains("WWWWWWWW")).expect("the document name is painted");
