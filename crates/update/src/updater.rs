@@ -1385,13 +1385,13 @@ mod tests {
     fn a_browser_given_later_reaches_the_open_prompt() {
         let browser = std::env::temp_dir().join("some-browser");
         let mut u = updater(Ok(None));
-        u.offer(newer());
+        offer_now(&mut u);
         assert_eq!(u.browser(), None);
         let mut u = u.with_browser(Some(browser.clone()));
         assert_eq!(u.browser(), Some(browser.as_path()));
         assert_eq!(u.prompt.as_ref().and_then(|p| p.browser.clone()), Some(browser.clone()));
         u.prompt = None;
-        u.offer(newer());
+        offer_now(&mut u);
         assert_eq!(u.prompt.as_ref().and_then(|p| p.browser.clone()), Some(browser));
     }
 
