@@ -349,7 +349,9 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<SmackerFile> {
     let mut trees = vec![0u8; header.trees_size as usize];
     src.read_at(after_tables, &mut trees)?;
 
-    let mut frames = Vec::with_capacity(total);
+    let mut frames = Vec::new();
+    // A large, valid source length must not turn an allocation failure into an abort.
+    frames.try_reserve_exact(total).map_err(|_| Error::Invalid("frame index allocation"))?;
     let mut offset = data_start;
     let mut truncated = false;
     for (i, &ty) in types.iter().enumerate() {
@@ -373,7 +375,10 @@ impl SmackerFile {
         if frame.offset.saturating_add(u64::from(frame.size)) > src.len() {
             return Err(Error::Invalid("frame runs past the end of the file"));
         }
-        let mut data = vec![0u8; frame.size as usize];
+        let mut data = Vec::new();
+        // Frame sizes come from the file; report allocation failure to the caller.
+        data.try_reserve_exact(frame.size as usize).map_err(|_| Error::Invalid("frame allocation"))?;
+        data.resize(frame.size as usize, 0);
         src.read_at(frame.offset, &mut data)?;
         Ok(data)
     }
@@ -410,7 +415,8 @@ pub struct FrameParts<'a> {
     /// The chunk of each audio track, without its length field. A compressed chunk starts with
     /// the `u32` size of its decoded samples in bytes.
     pub audio: [Option<&'a [u8]>; AUDIO_TRACKS],
-    /// The video data; empty when the frame repeats the previous picture.
+    /// The video data; when empty, the previous palette indices are retained.
+    /// A palette chunk still applies and can change the displayed colours.
     pub video: &'a [u8],
 }
 

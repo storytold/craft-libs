@@ -199,3 +199,21 @@ fn hostile_input_never_panics() {
         });
     }
 }
+
+#[test]
+fn declared_size_requires_complete_sample_frames() {
+    for (channels, sixteen, seed) in
+        [(1, false, encode_u8(&[7], 1)), (2, false, encode_u8(&[7, 9], 2)), (1, true, encode_s16(&[7], 1)), (2, true, encode_s16(&[7, 9], 2))]
+    {
+        let frame_bytes = channels * if sixteen { 2 } else { 1 };
+        assert!(decode(&seed, LIMIT).is_ok());
+        for size in 0..2 * frame_bytes {
+            if size == frame_bytes {
+                continue;
+            }
+            let mut malformed = seed.clone();
+            malformed[..4].copy_from_slice(&(size as u32).to_le_bytes());
+            assert_eq!(decode(&malformed, LIMIT), Err(Error::Invalid("sample count")), "channels={channels}, sixteen={sixteen}, size={size}");
+        }
+    }
+}

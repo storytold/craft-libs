@@ -153,10 +153,14 @@ pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
     if (max_decoded_size != 0 && size > max_decoded_size) || size as usize > MAX_DECODED_SIZE {
         return Err(Error::TooLarge(size));
     }
-    let count = size as usize / if sixteen_bit { 2 } else { 1 };
-    if count < channels || !count.is_multiple_of(channels) {
+    let bytes_per_sample = if sixteen_bit { 2 } else { 1 };
+    let frame_bytes = channels * bytes_per_sample;
+    // Validate bytes before division so a partial 16-bit sample cannot be discarded.
+    if (size as usize) < frame_bytes || !(size as usize).is_multiple_of(frame_bytes) {
         return Err(Error::Invalid("sample count"));
     }
+
+    let count = size as usize / bytes_per_sample;
 
     // a tree for each byte of a sample, for each channel: left low, left high, right low, right high
     let mut trees: [Option<ByteTree>; 4] = [None, None, None, None];

@@ -425,9 +425,11 @@ impl<'a> LsbBitReader<'a> {
 
     #[inline]
     pub fn read_bit(&mut self) -> Result<bool> {
+        // Match read_bits at the representable cursor limit, including on 32-bit targets.
+        let next = self.pos.checked_add(1).ok_or(BitError::Eof)?;
         let byte = self.data.get(self.pos / 8).copied().ok_or(BitError::Eof)?;
         let bit = (byte >> (self.pos % 8)) & 1;
-        self.pos += 1;
+        self.pos = next;
         Ok(bit == 1)
     }
 
