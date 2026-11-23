@@ -151,3 +151,59 @@ fn the_size_field_reads_mixed_in_a_272_point_pane() {
     let align = fixture.by_label("Alignment").expect("the alignment menu is shown");
     assert!(align.rect.right() <= 218.5, "the alignment menu stays in the panel: {:?}", align.rect);
 }
+
+/// The paragraph spacing a host gives: its presets in the field's menu and its range, which a typed value is held to.
+/// The field sits on the line spacing row, centred on it, inside the panel (PdfCraft: 0, 6, 12, 18 and 24 pt, at most
+/// 72 pt).
+#[trial]
+fn paragraph_spacing_takes_the_hosts_presets_and_range_on_the_line_spacing_row() {
+    use craft_text::ui::character::ParagraphChange;
+    let character = CharacterValues { family: Some("Helvetica".to_owned()), size: Some(12.0), ..CharacterValues::default() };
+    let paragraph = ParagraphValues { space_after: Some(6.0), ..ParagraphValues::default() };
+    let families = vec!["Helvetica".to_owned()];
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let panel = Rc::new(RefCell::new(egui::Rect::NOTHING));
+    let (sink, panel_out) = (edits.clone(), panel.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = FormatText::new("Format text", &character, &paragraph, &families)
+            .line_spacing(LineSpacing::Multiple(1.0))
+            .paragraph_spacing_presets(&[0.0, 6.0, 12.0, 18.0, 24.0])
+            .paragraph_spacing_range(0.0..=72.0)
+            .show(ui);
+        *panel_out.borrow_mut() = out.response.rect;
+        sink.borrow_mut().extend(out.edits);
+    });
+    fixture.idle(10);
+    let line = fixture.by_label("Line spacing").expect("the line spacing select is shown").rect;
+    let spacing = fixture.by_label("Paragraph spacing").expect("the paragraph spacing field is shown").rect;
+    let panel = *panel.borrow();
+    assert!((spacing.center().y - line.center().y).abs() <= 1.0, "the field {spacing:?} is centred on the line spacing row {line:?}");
+    assert!(
+        spacing.left() >= line.right() && spacing.right() <= panel.right() + 0.5,
+        "the field {spacing:?} is beside it, inside the panel {panel:?}"
+    );
+
+    let field = fixture.by_label("Paragraph spacing").expect("the paragraph spacing field is shown");
+    fixture.click(&field).idle(2);
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("100");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(2);
+    let last = changes(&edits).into_iter().rev().find_map(|change| match change {
+        FormatTextChange::Paragraph(ParagraphChange::SpaceAfter(points)) => Some(points),
+        _ => None,
+    });
+    assert_eq!(last, Some(72.0), "a typed spacing is held to the host's range");
+
+    let texts = texts_after_opening(&mut fixture, "Paragraph spacing");
+    for preset in ["0", "12", "18", "24"] {
+        assert!(texts.iter().any(|text| text.split_whitespace().next() == Some(preset)), "the menu offers {preset} pt: {texts:?}");
+    }
+}
+
+/// The texts painted once the menu of the field named `label` is open.
+fn texts_after_opening(fixture: &mut Fixture, label: &str) -> Vec<String> {
+    let field = fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown"));
+    fixture.click(&field).idle(2);
+    // Alt+Down opens a number field's presets list.
+    fixture.key(Key::ArrowDown, Modifiers::ALT).idle(3);
+    fixture.texts().iter().map(|run| run.text.clone()).collect()
+}

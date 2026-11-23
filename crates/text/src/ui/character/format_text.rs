@@ -183,6 +183,12 @@ pub struct FormatText<'a> {
     /// The range of the character spacing field, in points.
     #[prop]
     char_spacing_range: RangeInclusive<f32>,
+    /// The paragraph spacings the paragraph spacing menu offers, in points; none by default.
+    #[prop]
+    paragraph_spacing_presets: &'a [f32],
+    /// The range of the paragraph spacing field, in points; the Paragraph dialog's by default.
+    #[prop]
+    paragraph_spacing_range: RangeInclusive<f32>,
     /// Controls the host cannot apply, each disabled with its reason.
     #[prop]
     unsupported: &'a [(FormatControl, Label)],
@@ -206,6 +212,8 @@ impl<'a> FormatText<'a> {
             scale_range: 0.0..=1000.0,
             char_spacing_presets: &[],
             char_spacing_range: -1000.0..=10000.0,
+            paragraph_spacing_presets: &[],
+            paragraph_spacing_range: *SPACE_RANGE.start() as f32..=*SPACE_RANGE.end() as f32,
             unsupported: &[],
         }
     }
@@ -228,6 +236,8 @@ impl<'a> FormatText<'a> {
 
         let size_presets = length_menu(&units, unit, self.size_presets);
         let char_spacing_presets = length_menu(&units, unit, self.char_spacing_presets);
+        let paragraph_spacing_presets = length_menu(&units, unit, self.paragraph_spacing_presets);
+        let paragraph_spacing_range = wide(&self.paragraph_spacing_range);
         let scale_presets = number_presets(&units, std::iter::once(self.scale_presets));
         let (size_range, scale_range, char_spacing_range) = (wide(&self.size_range), wide(&self.scale_range), wide(&self.char_spacing_range));
 
@@ -400,8 +410,8 @@ impl<'a> FormatText<'a> {
                     label: words.paragraph_spacing.clone(),
                     side: mark(GlyphLabel::text("¶↓"), None, FieldLayout::Inside),
                     value: paragraph.space_after,
-                    range: SPACE_RANGE,
-                    presets: &[],
+                    range: paragraph_spacing_range.clone(),
+                    presets: &paragraph_spacing_presets,
                     disabled: None,
                 };
                 let spacing = match reason(FormatControl::ParagraphSpacing) {
