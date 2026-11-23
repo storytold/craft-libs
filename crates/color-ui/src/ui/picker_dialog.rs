@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use super::system_panel::{self, Answer, Shown};
 use super::{ColorPicker, ColorPickerLayout, ColorWarning, PickedColor, ScreenPickGesture};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
 
@@ -169,6 +170,8 @@ pub struct ColorPickerDialog {
     sample: Option<Srgba>,
     host: Option<Arc<Host>>,
     started: bool,
+    /// The system Colors panel while it stands in for the dialog ([`use_system_color_panel`](super::use_system_color_panel)).
+    system: Option<Shown>,
     open: bool,
     layout: ColorPickerDialogLayout,
     /// The Standard tab's honeycomb cells and grey row.
@@ -310,6 +313,7 @@ impl ColorPickerDialog {
             sample: None,
             host: None,
             started: false,
+            system: None,
             open: true,
             layout: ColorPickerDialogLayout::default(),
             standard: None,
@@ -506,6 +510,34 @@ impl ColorPickerDialog {
         }
     }
 
+    /// A pass with the system Colors panel standing in for the dialog: it opens on the first pass, blocks the window
+    /// behind it, as the modal dialog does, and answers as OK or Cancel would. `None` when the panel can't show (off the
+    /// main thread, as in headless tests), so the dialog shows in the window.
+    fn show_system(&mut self, ui: &Ui) -> Option<Option<DialogResult<ColorPickerResult>>> {
+        if self.system.is_none() {
+            let common = Env::of(ui).words::<CommonWords>();
+            let color = self.current.or(self.opening).map_or(Srgba::rgb(0.0, 0.0, 0.0), |picked| picked.color);
+            self.system = Some(Shown::open(color, common.ok.as_str(), common.cancel.as_str())?);
+        }
+        system_panel::block_behind(ui.ctx());
+        let Some(answer) = self.system.as_ref()?.poll() else {
+            // The panel is another window: its clicks don't wake this one.
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            return Some(None);
+        };
+        self.system = None;
+        Some(match answer {
+            Answer::Ok(color) => {
+                self.current = Some(PickedColor { color, model: None });
+                self.accept(ui.ctx()).map(DialogResult::Ok)
+            }
+            Answer::Cancel => {
+                self.requests.cancel();
+                Some(DialogResult::Cancel)
+            }
+        })
+    }
+
     /// Files or withdraws the canvas eyedropper request as the dialog gains or loses the top.
     fn follow_top(&mut self, top: bool) {
         let sampling = self.canvas_samples && top && self.layout == ColorPickerDialogLayout::Full;
@@ -563,6 +595,7 @@ impl StackDialog for ColorPickerDialog {
     /// The host closed the dialog from outside: its dropper ends with it.
     fn cancelled(&mut self, _: &Context) {
         self.requests.cancel();
+        self.system = None;
     }
 
     fn show(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<DialogResult<ColorPickerResult>> {
@@ -571,6 +604,11 @@ impl StackDialog for ColorPickerDialog {
         let common = env.words::<CommonWords>();
         if !self.started {
             self.start(env.view().host());
+        }
+        if system_panel::wanted()
+            && let Some(answer) = self.show_system(ui)
+        {
+            return answer;
         }
         self.follow_top(stack.is_top(self.id));
         let answered = self.requests.take_answers().into_iter().rev().find_map(|answer| match answer {

@@ -39,6 +39,7 @@ pub(crate) mod samplers;
 pub(crate) mod screen_picker;
 pub(crate) mod strip;
 pub(crate) mod swatches;
+pub(crate) mod system_panel;
 /// The stories and trials this crate registers for the integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing;
@@ -89,6 +90,7 @@ pub use swatches::{
     MAX_GROUPS, MAX_SWATCHES, SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput,
     SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows, swatch_source,
 };
+pub use system_panel::use_system_color_panel;
 pub use warning::{ColorWarning, ColorWarningArrangement, ColorWarningChip, ColorWarningChipOutput, ColorWarningChipStyle};
 pub use wheel::{
     ColorWheel, ColorWheelStyle, ColorWheelWords, WheelGeometry, WheelPart, hue_at, hue_direction, triangle_corners, triangle_point, triangle_sv,
