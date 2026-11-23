@@ -459,6 +459,9 @@ fn parse_package(data: &[u8], pos: usize, cs: usize, global: &StringPool, table:
                 if n > available {
                     table.warnings.push(format!("package {name}: library records run past their chunk"));
                 }
+                if n > available.min(256) {
+                    table.truncated = true;
+                }
                 for i in 0..n.min(256).min(available) {
                     let e = c + ch + i * 260;
                     if let Some(lid) = r.u32_le(e) {
