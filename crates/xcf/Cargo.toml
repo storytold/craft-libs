@@ -13,3 +13,7 @@ workspace = true
 [dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 thiserror = { workspace = true }
+
+crabz2 = { version = "=0.7.0", default-features = false, features = ["std"] }
+lzma-rust2 = { version = "=0.23.0", default-features = false, features = ["std", "xz"] }
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }

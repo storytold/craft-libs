@@ -18,6 +18,7 @@
 #[cfg(test)]
 mod tests;
 mod tiles;
+pub mod transport;
 
 use std::cell::Cell;
 use std::collections::HashMap;
