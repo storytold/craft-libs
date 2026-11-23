@@ -65,7 +65,7 @@ impl Component for Checkbox<'_> {
             return CheckboxStyle {
                 metrics: Metrics::new().min_size(Vec2::new(0.0, control.icon * QUIET_SIDE)),
                 focus: cx.focus_look(),
-                well: super::quiet_indicator(cx, cx.surface(SurfaceKind::Well).radius),
+                well: super::quiet_indicator(cx, egui::CornerRadius::same(2)),
                 mark: super::quiet_mark(cx),
                 side: control.icon * QUIET_SIDE,
             };

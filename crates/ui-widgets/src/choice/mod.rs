@@ -44,9 +44,9 @@ fn quiet_indicator(cx: &crate::style::StyleCx<'_>, radius: egui::CornerRadius) -
     SurfaceLook::new(fill).kind(SurfaceKind::Sunken).radius(radius).border(Stateful::new(edge), cx.tokens.stroke.thin)
 }
 
-/// The mark of a quiet check box: the ink that reads on an accent, in both states.
+/// The mark of a quiet check box: white in both states: the well under it is the scrim, dark in every theme.
 fn quiet_mark(cx: &crate::style::StyleCx<'_>) -> craft_theme::Stateful<crate::style::StyleColor> {
-    craft_theme::Stateful::new(cx.color(cx.tokens.color.text.on_accent))
+    craft_theme::Stateful::new(cx.color(craft_theme::Rgba::WHITE))
 }
 
 /// The fill of a check box, radio button or switch track while off: the sunken well, the state layer's press fill while
