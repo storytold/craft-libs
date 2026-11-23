@@ -8,7 +8,7 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Color32, Pos2, Rect, Ui};
 
 use super::{BalloonItem, BalloonPlace, CommentBalloons};
-use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ThreadId};
+use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ThreadId};
 use crate::revisions::{Revision, RevisionKind};
 use crate::ui::comments::CommentsPanelState;
 
@@ -51,7 +51,11 @@ fn beside_page(
     place: BalloonPlace,
     read_only: bool,
 ) -> StoryOutput {
-    let state = data.value("state", CommentsPanelState { selected: selected.map_or_else(Selection::default, |id| Selection::single(ThreadId(id))), ..CommentsPanelState::default() });
+    let state = data.value("state", {
+        let mut state = CommentsPanelState::default();
+        state.selected = selected.map_or_else(Selection::default, |id| Selection::single(ThreadId(id)));
+        state
+    });
     // design: allow[raw-colour/const](the demo page is white paper, document data and not a theme colour)
     let (fill, line) = (Color32::WHITE, accent(ui, 1.0));
     let shapes = [StoryShape::filled(&DocRect::new(0.0, 0.0, PAGE.0, PAGE.1), fill).outlined(OUTLINE, line)];

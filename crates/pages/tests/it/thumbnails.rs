@@ -58,7 +58,7 @@ fn a_wide_thumbnail_strip_keeps_pages_in_one_column() {
     let pages = DemoPages::new(3);
     let mut picked = Selection::default();
     let mut fixture = Fixture::new(move |ui| {
-        PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).show(ui);
+        let _ = PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).show(ui);
     });
     fixture.room(vec2(500.0, 800.0)).settle();
     let first = fixture.by_label("Page 1").expect("first page").rect;
