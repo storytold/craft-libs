@@ -454,6 +454,13 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     }
     core.surface_slot = Some(ui.painter().add(egui::Shape::Noop));
     let menu_held = state.held_selection.is_some();
+    // Focus that arrived between passes (a request after the field was drawn, which takes effect at the end of that
+    // pass) places the caret before this pass's input is applied, so the first text typed replaces a selection. Focus
+    // back from the edit menu is no arrival.
+    let arrived_before = focused && !was_focused && !held && !menu_held && core.active_part().is_none();
+    if arrived_before {
+        arrive(&ctx, widget, decl);
+    }
     let out = adapter::run(
         state,
         adapter::AdapterIn {
@@ -490,21 +497,27 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
     let commit_now = commit_now || (was_focused && left_for_part);
     // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
     let back_from_menu = menu_held && state.held_selection.is_none();
-    if out.focused && !left_for_part && !was_focused && !back_from_menu {
-        let len = decl.shown.chars().count();
-        // A dialog that opens on this field selects its whole text whatever the codec's caret, so typing replaces it
-        // (photocraft#15540).
-        let opened = crate::runtime::focus::focused_rec(&ctx)
-            .and_then(|rec| crate::runtime::focus::origin(&ctx, &rec))
-            .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
-        match if opened { Caret::All } else { decl.caret } {
-            Caret::All => adapter::select(&ctx, widget, 0, len),
-            // A bound caret is where the app put it: focus arriving keeps it.
-            _ if decl.options.caret.is_some() => {}
-            _ => adapter::select(&ctx, widget, len, len),
-        }
+    if out.focused && !left_for_part && !was_focused && !back_from_menu && !arrived_before {
+        arrive(&ctx, widget, decl);
     }
     PreparedText { widget, out, read_only, list_open, caret_visible, commit_now, was_focused }
+}
+
+/// Places the caret of the text part's widget `widget` as focus arrives on the part: where the codec puts it, or over
+/// the whole text for `select_on_focus`.
+fn arrive(ctx: &egui::Context, widget: egui::Id, decl: &TextPart) {
+    let len = decl.shown.chars().count();
+    // A dialog that opens on this field selects its whole text whatever the codec's caret, so typing replaces it
+    // (photocraft#15540).
+    let opened = crate::runtime::focus::focused_rec(ctx)
+        .and_then(|rec| crate::runtime::focus::origin(ctx, &rec))
+        .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
+    match if opened { Caret::All } else { decl.caret } {
+        Caret::All => adapter::select(ctx, widget, 0, len),
+        // A bound caret is where the app put it: focus arriving keeps it.
+        _ if decl.options.caret.is_some() => {}
+        _ => adapter::select(ctx, widget, len, len),
+    }
 }
 
 /// Step 8b: runs the text adapter at the part's rect, then the typing run over what it recorded, and applies the

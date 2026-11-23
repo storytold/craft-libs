@@ -1,8 +1,10 @@
-//! A text field's typing run across focus changes: switching to another app carries the run on.
+//! A text field's typing run across focus changes: switching to another app carries the run on; focus that arrives
+//! between passes selects a select-on-focus field's text before the next pass's typing.
 
 use craft_behavior::{CancelReason, EditEvent};
 use craft_ui::contract::{Bind, Show as _};
-use craft_ui::testing::{Fixture, pointer, trial};
+use craft_ui::runtime::focus::{self, FocusTarget};
+use craft_ui::testing::{Fixture, input, pointer, trial};
 use craft_ui::text::TextField;
 use egui::{Event, Id, Key, Modifiers, Pos2};
 use std::cell::{Cell, RefCell};
@@ -19,15 +21,18 @@ enum Ended {
 struct Rig {
     fixture: Fixture,
     text: Rc<RefCell<String>>,
+    /// The next pass asks for the field's focus after drawing it, as a dialog does.
+    focus_after: Rc<Cell<bool>>,
     field: Rc<Cell<Id>>,
     ended: Rc<RefCell<Vec<Ended>>>,
 }
 
 fn rig(text: &str, select_on_focus: bool) -> Rig {
     let text = Rc::new(RefCell::new(text.to_owned()));
+    let focus_after = Rc::new(Cell::new(false));
     let field = Rc::new(Cell::new(Id::NULL));
     let ended = Rc::new(RefCell::new(Vec::new()));
-    let (held, id, log) = (text.clone(), field.clone(), ended.clone());
+    let (held, asks, id, log) = (text.clone(), focus_after.clone(), field.clone(), ended.clone());
     let mut fixture = Fixture::new(move |ui| {
         let mut text = held.borrow_mut();
         let mut field = TextField::new("City", Bind::bound(&mut *text));
@@ -41,9 +46,12 @@ fn rig(text: &str, select_on_focus: bool) -> Rig {
             EditEvent::Cancel { reason, .. } => Some(Ended::Cancel(*reason)),
             _ => None,
         }));
+        if asks.take() {
+            focus::request(ui.ctx(), FocusTarget::Id(out.response.id));
+        }
     });
     fixture.settle();
-    Rig { fixture, text, field, ended }
+    Rig { fixture, text, focus_after, field, ended }
 }
 
 impl Rig {
@@ -113,6 +121,22 @@ fn switching_apps_carries_on_with_the_typing_run() {
     assert_eq!(rig.text(), "Porto", "the selection carried on: typing replaced it");
     rig.escape();
     assert_eq!(rig.text(), "Lisbon", "Escape gives back the text from before the run");
+    assert_eq!(rig.ended(), [Ended::Cancel(CancelReason::Escape)]);
+}
+
+/// A dialog asks for the field's focus after drawing it, so the focus arrives at the end of the pass: the field selects
+/// its text before the next pass's input, and text typed in that pass replaces it.
+#[trial]
+fn text_typed_in_the_pass_focus_arrives_replaces_a_select_on_focus_text() {
+    let mut rig = rig("Craft Library", true);
+    rig.focus_after.set(true);
+    rig.fixture.frame(Vec::new());
+    assert!(rig.focused(), "the request moved the focus to the field for the next pass");
+    rig.fixture.frame(vec![input::text("Fresh")]);
+    rig.fixture.settle();
+    assert_eq!(rig.text(), "Fresh", "the first typed text replaced the selected text");
+    rig.escape();
+    assert_eq!(rig.text(), "Craft Library", "Escape gives back the text from before the run");
     assert_eq!(rig.ended(), [Ended::Cancel(CancelReason::Escape)]);
 }
 
