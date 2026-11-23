@@ -15,6 +15,7 @@
 //! Layer modes, colour tags and composite settings are kept as the numbers GIMP wrote; what
 //! they mean to an application is the application's to decide.
 
+pub mod records;
 pub mod samples;
 #[cfg(test)]
 mod tests;
@@ -561,6 +562,8 @@ pub struct Xcf<'a> {
     c: Cursor<'a>,
     image: Image,
     channels: Vec<usize>,
+    // Reuse the already-bounded pointer table for opt-in source-record access.
+    layer_sources: Vec<usize>,
     /// What is left of [`MAX_METADATA_BYTES`] after the layers; channel names are charged too.
     meta_budget: Cell<usize>,
 }
@@ -648,19 +651,47 @@ impl<'a> Xcf<'a> {
         image.channel_count = channels.len();
         let c = c.at(0);
         let mut meta_budget = MAX_METADATA_BYTES;
-        for ptr in layer_ptrs {
+        for &ptr in &layer_ptrs {
             if !keep_going() {
                 return Err(Error::Cancelled);
             }
             let layer = layer(c.at(ptr), &image, &mut meta_budget)?;
             image.layers.push(layer);
         }
-        Ok(Xcf { precision_code, c, image, channels, meta_budget: Cell::new(meta_budget) })
+        Ok(Xcf { precision_code, c, image, channels, layer_sources: layer_ptrs, meta_budget: Cell::new(meta_budget) })
     }
 
     /// The file's header and structure.
     pub fn image(&self) -> &Image {
         &self.image
+    }
+
+    /// Borrow ordered image properties without changing legacy metadata policy.
+    /// Reuse `budget` across owners to bound repeated optional scans.
+    pub fn image_properties(
+        &self,
+        limits: records::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::Property<'a>>> {
+        let start = MAGIC.len() + 5 + 12 + if self.image.version >= 4 { 4 } else { 0 };
+        records::properties(self.c.b, start, limits, budget, keep_going)
+    }
+
+    /// Borrow the properties of one layer, preserving duplicate records and offsets.
+    /// Invalid indices are errors; optional malformed/limited scans are explicit prefixes.
+    pub fn layer_properties(
+        &self,
+        index: usize,
+        limits: records::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::Property<'a>>> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = self.layer_sources.get(index).copied().ok_or_else(|| invalid("layer index is out of bounds"))?;
+        records::layer_properties(self.c.b, offset, limits, budget, keep_going)
     }
 
     /// Decodes the pixels of layer `index` of [`Image::layers`]; `None` for a layer that has
