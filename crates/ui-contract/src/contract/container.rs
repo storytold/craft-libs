@@ -206,17 +206,14 @@ pub enum LeastWidth {
     DialogSideButton,
     /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
     Rail(std::num::NonZeroU8),
-<<<<<<< HEAD
-    /// `size.dock.column`: a fixed side pane is as wide as a dock column.
-    DockColumn,
-=======
     /// `size.dialog.least` and `size.dialog.wrap` together: a wide dialog, as wide as a dialog's least content beside a
     /// paragraph's line (an About dialog whose tabs hold credit tables).
     WideDialog,
     /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
     /// band beside the page, not as buttons cut to their labels.
     SideMenu,
->>>>>>> origin/next
+    /// `size.dock.column`: a fixed side pane is as wide as a dock column.
+    DockColumn,
 }
 
 impl LeastWidth {
@@ -228,12 +225,9 @@ impl LeastWidth {
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
-<<<<<<< HEAD
-            LeastWidth::DockColumn => tokens.size.dock.column,
-=======
             LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
             LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
->>>>>>> origin/next
+            LeastWidth::DockColumn => tokens.size.dock.column,
         }
     }
 }

@@ -36,14 +36,10 @@ use crate::runtime::{keys, layout_memory, pointer, wheel, windows};
 use crate::style::ComponentStyle as _;
 use crate::style::{StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
-<<<<<<< HEAD
 use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, ReorderKeys, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
-=======
-use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use craft_theme::variant::Tone;
 use egui::emath::GuiRounding as _;
 use egui::layers::ShapeIdx;
->>>>>>> origin/next
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
 use std::any::Any;
 use std::sync::Arc;
@@ -557,29 +553,18 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let (by, _) = crate::contract::steps::reveal_move(rect, view);
             let rtl = cx.core.env.direction().is_rtl();
             let id = cx.core.id;
-<<<<<<< HEAD
-            let current = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
-            let mut offset = current;
-            offset.y += f64::from(by.y);
-            offset.x += f64::from(if rtl { -by.x } else { by.x });
-            // A reveal of what the view shows moves nothing: no jump, so no repeated pass.
-            if offset != current {
-                super::scroll::queue_jump(&cx.core.ctx, id, offset);
-            }
-            crate::contract::Focus::reveal(cx, shown);
-=======
             let from = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
             let mut offset = from;
             offset.y += f64::from(by.y);
             offset.x += f64::from(if rtl { -by.x } else { by.x });
             let offset = self.clamped(scroll, view.size(), offset);
+            // A reveal of what the view shows moves nothing: no jump, so no repeated pass.
             if offset != from {
                 super::scroll::queue_jump(&cx.core.ctx, id, offset);
             }
             let moved = Vec2::new((offset.x - from.x) as f32, (offset.y - from.y) as f32);
             let moved = Vec2::new(if rtl { -moved.x } else { moved.x }, moved.y);
             crate::contract::Focus::reveal(cx, rect.translate(-moved).intersect(view));
->>>>>>> origin/next
         }
         // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
         if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {

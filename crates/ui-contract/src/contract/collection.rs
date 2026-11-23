@@ -12,13 +12,8 @@ pub use events::{
     CollectionEvent, ColumnEvent, ColumnRequest, ContextMenuRequest, HeaderMenuRequest, ListDrag, OpenChange, Rename, ReorderMove, ToggleEdit,
 };
 pub use props::{
-<<<<<<< HEAD
-    ActivateOn, CollectionProps, DeleteTarget, DragPayload, ItemKeys, LeadOnOpen, LeadSource, ReorderRule, RowHeight, RowPressed, RowState,
-    SelectMode, SpaceAction,
-=======
-    ActivateOn, CollectionProps, DragPayload, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ReorderRule, RowHeight, RowPressed, RowState, SelectMode,
-    SpaceAction,
->>>>>>> origin/next
+    ActivateOn, CollectionProps, DeleteTarget, DragPayload, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ReorderRule, RowHeight, RowPressed,
+    RowState, SelectMode, SpaceAction,
 };
 pub(crate) use response::Gestures;
 pub(crate) use response::ItemsOut;

@@ -65,9 +65,6 @@ pub(crate) struct TipIn<'a> {
 }
 
 /// The text a tooltip shows for `spec`: the disabled text while disabled.
-<<<<<<< HEAD
-pub(crate) fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
-=======
 fn spec_text(ctx: &egui::Context, env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
     count_text(ctx);
     resolve_spec(env, spec, enabled)
@@ -81,9 +78,9 @@ fn count_text(ctx: &egui::Context) {
     let _ = ctx;
 }
 
-/// [`spec_text`] without the count, for a builder that counted its text already.
-fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
->>>>>>> origin/next
+/// [`spec_text`] without the count, for a builder that counted its text already, or one that is no tooltip (a
+/// component's `tooltip_text`).
+pub(crate) fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
     let label = match (&spec.disabled_text, enabled) {
         (Some(disabled), false) => disabled,
         _ => &spec.text,
@@ -92,19 +89,11 @@ fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enab
 }
 
 /// The text the component's own tooltip shows, or `None` when it has none: its validity message when no container
-<<<<<<< HEAD
 /// shows it (`message`); else a base text with the bound command's chord, and the bound command's hint on a line
 /// after it; else, with no base text, the hint alone with the chord. The base is the tooltip's text, or its disabled
 /// text while disabled; else the full label when the paint cut it, or its own label when the component declares it
-/// paints no label (`shows_label`).
-fn text_of(core: &super::CxCore<'_>, shows_label: bool, message: Option<String>) -> Option<String> {
-    if message.is_some() {
-        return message;
-=======
-/// shows it (`message`); else the tooltip's text, or its disabled text while disabled, with the bound command's
-/// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
-/// label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a hint. A
-/// bound command's hint follows on a line of its own.
+/// paints no label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a
+/// hint.
 ///
 /// A canvas control (`canvas_control`) never shows its label: its rect is the canvas it is shown over, not a face of
 /// its own, so the label would show wherever the pointer rests on the page ("Rulers margins" over a whole page). Its
@@ -113,52 +102,29 @@ fn text_of(core: &super::CxCore<'_>, shows_label: bool, canvas_control: bool, me
     count_text(&core.ctx);
     if let Some(message) = message {
         return Some(message.to_owned());
->>>>>>> origin/next
     }
     let hint = core.command.as_deref().and_then(|command| command.hint.as_deref()).filter(|hint| !hint.is_empty());
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
-<<<<<<< HEAD
-        Some(spec) => Some(spec_text(&core.env, spec, core.resolved.enabled)),
-        None => {
-            let paint = core.paint.borrow();
-            paint.elided.clone().or_else(|| (!shows_label && !core.resolved.label.is_empty()).then(|| core.resolved.label.to_owned()))
-=======
-        Some(spec) => resolve_spec(&core.env, spec, core.resolved.enabled),
+        Some(spec) => Some(resolve_spec(&core.env, spec, core.resolved.enabled)),
         None if canvas_control => return None,
         None => {
             let paint = core.paint.borrow();
             let unpainted = !shows_label || paint.label_dropped || hint.is_some();
-            match paint.elided.clone() {
-                Some(full) => full,
-                None if unpainted && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
-                None => return None,
-            }
->>>>>>> origin/next
+            paint.elided.clone().or_else(|| (unpainted && !core.resolved.label.is_empty()).then(|| core.resolved.label.to_owned()))
         }
     };
     let command = core.command.as_deref();
     let platform = crate::runtime::windows::os_of(&core.ctx);
-<<<<<<< HEAD
     let chorded = |text: &str| match command.and_then(|command| command.chord.as_ref()) {
         Some(chord) => with_chord(text, chord, platform),
         None => text.to_owned(),
     };
-    match (base, command.and_then(|command| command.hint.as_deref())) {
+    match (base, hint) {
         (Some(base), Some(hint)) => Some(format!("{}\n{hint}", chorded(&base))),
         (Some(base), None) => Some(chorded(&base)),
         (None, Some(hint)) => Some(chorded(hint)),
         (None, None) => None,
     }
-=======
-    let text = match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
-        Some(chord) => with_chord(&base, chord, platform),
-        None => base,
-    };
-    Some(match hint {
-        Some(hint) => format!("{text}\n{hint}"),
-        None => text,
-    })
->>>>>>> origin/next
 }
 
 /// A tooltip's text followed by the chord that does the same, as every tooltip shows a key: "Hide Layers (⌘,)".

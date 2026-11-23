@@ -61,14 +61,10 @@ impl BodyHooks<'_> {
             scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor((floor - 2.0 * horizontal_padding).max(0.0)));
         }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
-<<<<<<< HEAD
-        scoped.enabled &= cx.core.resolved.enabled;
+        scoped.enabled &= core.resolved.enabled;
         if let Some(collection) = props.fallback_collection {
             scoped.fallback_collection = Some(collection);
         }
-=======
-        scoped.enabled &= core.resolved.enabled;
->>>>>>> origin/next
         if let Some(window) = window {
             scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }

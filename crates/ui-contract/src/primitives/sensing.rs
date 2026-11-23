@@ -129,14 +129,11 @@ pub(crate) struct PartDecl {
     pub inactive: bool,
     /// The component holds a press on the part (`PartBuilder::held`).
     pub held: bool,
-<<<<<<< HEAD
+    /// The hit area is the shape as declared, never grown to the pointer's target size (`PartBuilder::exact_hit`).
+    pub exact: bool,
     /// The named stacking order among parts of one priority (default 0).
     pub stacking: u32,
     pub drag_to_root: bool,
-=======
-    /// The hit area is the shape as declared, never grown to the pointer's target size (`PartBuilder::exact_hit`).
-    pub exact: bool,
->>>>>>> origin/next
 }
 
 impl PartDecl {
@@ -153,12 +150,9 @@ impl PartDecl {
             flags: Flags::default(),
             inactive: false,
             held: false,
-<<<<<<< HEAD
+            exact: false,
             stacking: 0,
             drag_to_root: false,
-=======
-            exact: false,
->>>>>>> origin/next
         }
     }
 
@@ -336,14 +330,11 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
 }
 
 fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shape<Id> {
-<<<<<<< HEAD
-    let mut shape =
-        Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).stacking(part.stacking).min_across(target);
+    let mut shape = Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position)
+        .stacking(part.stacking)
+        .min_across(part.min_across(target));
     shape.drag_to_root = part.drag_to_root;
     shape
-=======
-    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).min_across(part.min_across(target))
->>>>>>> origin/next
 }
 
 /// The root's own parts but the `over` ones, at position 0.
@@ -368,18 +359,12 @@ fn over_position(count: usize) -> u32 {
 }
 
 fn member_part_shape(member: &MemberDecl, part: &PartDecl, position: u32, target: f32) -> Shape<Id> {
-<<<<<<< HEAD
     let mut shape = Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position)
         .stacking(part.stacking)
         .local(member.local)
-        .min_across(target);
+        .min_across(part.min_across(target));
     shape.drag_to_root = part.drag_to_root;
     shape
-=======
-    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position)
-        .local(member.local)
-        .min_across(part.min_across(target))
->>>>>>> origin/next
 }
 
 /// The member's root shape and its parts but the `over` ones, at its stack position.
@@ -902,12 +887,8 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     if recording {
         journal_join(ctx, arena, layer, ui.clip_rect(), &recorded);
     }
-<<<<<<< HEAD
     let mods = pointer::with_frame(ctx, |frame, _| phase_mods(frame, outcome.phase));
-    pointer::record_shapes(ctx, layer, arena.0, ui.clip_rect(), shapes);
-=======
     pointer::add_shapes_in(ctx, pass::current_viewport(ctx), layer, arena.0, ui.clip_rect(), shapes);
->>>>>>> origin/next
     specs
         .iter()
         .zip(joined)

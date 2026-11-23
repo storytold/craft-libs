@@ -907,6 +907,9 @@ struct HostStep {
     holder_widget: Option<Id>,
     text_keys: Option<focus::KeyUse>,
     own: Sense,
+    /// The sense the access node reports: an item's own, with the click the collection takes for it, so the node
+    /// still offers the redirected action.
+    report_sense: Sense,
     member: Option<crate::runtime::env::ArenaId>,
     /// The bar line whose rules wait for this member.
     line: Option<Id>,
@@ -983,11 +986,12 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, keys, &mut *e.core().memory);
     let own = own_sense(e, resolved, inert);
     // The collection handles a row's click, but its access node must still offer the redirected action.
-    let report_sense = own;
+    let unnarrowed = own;
     // An item never senses the whole row for a press: the collection's root takes the click and the focus (17.2). It
     // does sense the pointer over it, so `PartsCx::hovered` and the state step read the row's hover from the same
     // arena outcome whether the item stands alone or in a collection.
     let own = if env.item == Some(id) { own.difference(Sense::CLICK | Sense::FOCUS) | Sense::HOVER } else { own };
+    let report_sense = own | (unnarrowed & Sense::CLICK);
     let arena = e.arena();
     let member = if arena || facts.text() { None } else { env.arena };
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
@@ -1113,6 +1117,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         holder_widget,
         text_keys,
         own,
+        report_sense,
         member,
         line,
         cut,
@@ -1300,11 +1305,14 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
     let edit = e.settle_values();
     let leaf = e.shape() == ShapeKind::Leaf;
     steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
-    // Sensing used the parts before the edit. Report their new bounds alongside the value painted in this pass.
-    if !inert && declares_parts && e.parts_value_changed() {
+    // Sensing used the parts before the edit. Report their new bounds alongside the value painted in this pass. An
+    // inert run never reaches this step.
+    if (facts.parts || e.declares_parts()) && e.parts_value_changed() {
+        let flow = Flow::new(h.rect, h.rtl);
+        let content_rect = flow.inset(steps::padding(e.padding(h.rect), resolved.pad));
         let mut current = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
         let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: p.room };
-        e.parts(rect, flow, content_rect, &mut current, &input, rtl);
+        e.parts(h.rect, flow, content_rect, &mut current, &input, h.rtl);
         for decl in current.decls.parts() {
             if let Some(result) = e.core().results.get_mut(&(decl.key, decl.index)) {
                 result.rect = decl.shape.bounds();
@@ -1317,14 +1325,8 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         e,
         facts,
         &steps::ReportIn {
-<<<<<<< HEAD
-            node,
-            decls: &parts.decls,
-            sense: own | (report_sense & Sense::CLICK),
-=======
             decls: &h.parts.decls,
-            sense: h.own,
->>>>>>> origin/next
+            sense: h.report_sense,
             live: e.live(),
             scrolls: e.scrolls(),
             expanded: e.expanded(),

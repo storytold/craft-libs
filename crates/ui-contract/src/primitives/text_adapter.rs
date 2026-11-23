@@ -3,11 +3,7 @@
 
 mod completion;
 
-<<<<<<< HEAD
-use crate::primitives::{SubmitKey, TextLayout, TextOptions};
-=======
-use crate::primitives::{TabKey, TextLayout, TextOptions};
->>>>>>> origin/next
+use crate::primitives::{SubmitKey, TabKey, TextLayout, TextOptions};
 use crate::runtime::access::text::{Line, Run};
 use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, memory as egui_memory, repaint, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
@@ -472,18 +468,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         Some(DraftChange::Revert) => state.end = Some(End::Revert),
         None => {}
     }
-<<<<<<< HEAD
-    // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty. In
-    // a modal dialog a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits.
-    let draft_takes = state.draft.is_some() && !(focused_before && keys::focus_in_modal_dialog(ctx));
-    let takes_escape =
-        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
-    if focused_before && takes_escape && !state.completions.open && !input.list_open && input.intents.take(Intent::Cancel) {
-=======
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
-    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
+    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first. In any modal dialog
+    // a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits.
     let dialog_escape = focused_before
         && state.draft.is_some()
         && state.preedit.is_none()
@@ -494,12 +483,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
         state.end = Some(End::Escape);
     }
-    let draft_takes = state.draft.is_some() && !dialog_escape;
+    let draft_takes = state.draft.is_some() && !dialog_escape && !(focused_before && keys::focus_in_modal_dialog(ctx));
     let takes_escape =
         if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
     let list_first = input.list_open && !input.options.clear_on_escape;
     if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
->>>>>>> origin/next
         // Escape over a composition alone ends the composition and leaves the text.
         if state.draft.is_some() || state.preedit.is_none() {
             state.end = Some(End::Escape);
@@ -565,11 +553,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         underline: input.underline,
         galley: None,
         baseline,
-<<<<<<< HEAD
-        submit_key: input.options.submit_key,
-=======
         scroll,
->>>>>>> origin/next
+        submit_key: input.options.submit_key,
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -705,11 +690,8 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             underline: 0.0,
             galley: Some(layout.galley.clone()),
             baseline: None,
-<<<<<<< HEAD
-            submit_key: SubmitKey::default(),
-=======
             scroll: 0.0,
->>>>>>> origin/next
+            submit_key: SubmitKey::default(),
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);

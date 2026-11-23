@@ -215,19 +215,14 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if let Some(folded) = &folded {
         keys::register_node(ctx, id, folded.inner, None, focusable);
     }
-<<<<<<< HEAD
-    if let Some(facts) = core.text_access.take() {
-        crate::runtime::access::text::report_text(ctx, id, &facts, access.value.as_deref());
-=======
     let editor_record = || {
         let widget = core.editor.as_ref()?.widget;
         pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
     };
     if let Some(facts) = core.text_access.take().or_else(editor_record) {
-        crate::runtime::access::text::report_text(ctx, id, &facts);
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.value.as_deref());
     } else if let Some(editor) = &core.editor {
         crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
->>>>>>> origin/next
     }
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);

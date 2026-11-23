@@ -51,21 +51,17 @@ pub(crate) fn gesture_gate<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
 pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
     use crate::contract::cx::Edit as _;
     if cx.gesture().is_some_and(|phase| matches!(phase, GesturePhase::Begin | GesturePhase::Update)) {
-<<<<<<< HEAD
-        let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_modal_dialog(&cx.core.ctx);
-        let reason = if escapes && cx.core.intents.take(Intent::Cancel) {
-=======
         // Typing in a dialog whose Escape closes it ends with the dialog: the typing is cancelled and the Escape is
         // left for the dialog, so one Escape cancels both (`focus::escape_closes_dialog`).
         let dialog_escape = !cx.core.escape_to_list
             && matches!(C::INPUT, Input::Text)
             && cx.core.intents.untaken(&Intent::Cancel)
             && focus::escape_closes_dialog(&cx.core.ctx);
+        let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_modal_dialog(&cx.core.ctx);
         let reason = if dialog_escape {
             cx.cancel(CancelReason::Escape);
             None
-        } else if !cx.core.escape_to_list && cx.core.intents.take(Intent::Cancel) {
->>>>>>> origin/next
+        } else if escapes && cx.core.intents.take(Intent::Cancel) {
             Some(CancelReason::Escape)
         } else {
             cx.core.press_cancelled().map(|reason| match reason {
