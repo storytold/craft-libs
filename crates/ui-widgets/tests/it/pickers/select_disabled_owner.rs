@@ -46,9 +46,9 @@ fn terminal_edits(fixture: &mut Fixture) -> usize {
 fn held_popup_retires(disabled: &'static str) {
     let mut fixture = Fixture::story(&Story::new("disabled_implicit_select", select));
     fixture.room(Room::Window.size()).settle();
-    let trigger = *fixture.by_role(Role::COMBO_BOX).first().expect("the genuine current Select");
+    let trigger = *fixture.by_role(Role::COMBO_BOX).first().expect("the Select");
     fixture.click(&trigger).settle();
-    assert_eq!(fixture.tree().with_role(Role::LIST_BOX_OPTION).len(), 12, "all twelve real AX options were opened before disable");
+    assert_eq!(fixture.tree().with_role(Role::LIST_BOX_OPTION).len(), 12, "the twelve options are open before the owner is disabled");
     let option = fixture.by_label("Two").expect("the real second option");
     fixture.press(&option);
     assert!(fixture.ctx().input(|input| input.pointer.primary_down()), "the real option press is still physically held");
@@ -65,7 +65,7 @@ fn held_popup_retires(disabled: &'static str) {
         0,
         "a disabled implicit owner retires all popup options after two ordinary idle frames, before release"
     );
-    assert!(fixture.tree().with_role(Role::LIST_BOX).is_empty(), "the actual popup shell is retired too");
+    assert!(fixture.tree().with_role(Role::LIST_BOX).is_empty(), "the popup shell closes too");
     assert_eq!(value(&mut fixture), 1, "disable preserves the original bound value");
     assert_eq!(terminal_edits(&mut fixture), 0, "retirement produces no Commit or Set");
 
@@ -81,7 +81,7 @@ fn held_popup_retires(disabled: &'static str) {
     fixture.click(&recovered).settle();
     let next = fixture.by_label("Two").expect("a newly opened, real option");
     fixture.click(&next).settle();
-    assert_eq!(value(&mut fixture), 2, "a later genuine pick still works");
+    assert_eq!(value(&mut fixture), 2, "a later pick still works");
     assert_eq!(terminal_edits(&mut fixture), 1, "only the new complete pick produces a terminal edit");
 }
 
