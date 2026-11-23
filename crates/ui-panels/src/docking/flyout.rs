@@ -1,6 +1,6 @@
 //! `Flyout`: the panel an icon of an iconic column opens beside the column.
 
-use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Place, PlacementChange, ResizeEdges};
+use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Outside, Place, PlacementChange, ResizeEdges};
 use crate::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
 };
@@ -48,8 +48,9 @@ impl Outcome for FlyoutOutput {
     }
 }
 
-/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape and a press
-/// outside close it; with Auto-Collapse Iconic Panels the focus leaving it closes it too. Its body is measured at the
+/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape closes it, and
+/// a press outside it unless [`outside_closes`](Flyout::outside_closes) is off; with Auto-Collapse Iconic Panels a
+/// press outside and the focus leaving it close it too. Its body is measured at the
 /// flyout's width first: the flyout is as tall as the body measures within the room below its top, and at least its
 /// `size`'s height, and the body then shows in the rect that takes.
 ///
@@ -72,6 +73,11 @@ pub struct Flyout {
     /// The least size a resize leaves the flyout.
     #[prop(quantity = "least room a resize leaves, from the dock's measured sizes, in points")]
     least: Vec2,
+    /// Whether a press outside closes the flyout. Off, only Escape, the column's icons and, with Auto-Collapse Iconic
+    /// Panels, a press outside and the focus leaving it close it: work on the canvas leaves it open, as an application
+    /// whose flyouts stay open until the person closes them wants.
+    #[prop]
+    outside_closes: bool,
     placed: Option<PlacementChange>,
 }
 
@@ -80,7 +86,17 @@ impl Flyout {
     /// `Side::End`), closing when the focus leaves it if `auto_collapse`.
     pub fn new(opens: Side, size: Vec2, auto_collapse: bool) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
-        Flyout { common: Common::new(), props, opens, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
+        Flyout {
+            common: Common::new(),
+            props,
+            opens,
+            size,
+            auto_collapse,
+            within: Rect::EVERYTHING,
+            least: Vec2::ZERO,
+            outside_closes: true,
+            placed: None,
+        }
     }
 
     /// The layer the flyout shows in, its top left at `top_left`: placed by the caller, resizable on every edge but
@@ -96,7 +112,11 @@ impl Flyout {
             .placed_at(top_left)
             .size_limits(SizeLimits::at_least(least))
             .resize_edges(free.union(ResizeEdges::TOP).union(ResizeEdges::BOTTOM))
-            .dismiss(Dismiss::new().focus_left(self.auto_collapse))
+            .dismiss(Dismiss::new().focus_left(self.auto_collapse).outside(if self.outside_closes || self.auto_collapse {
+                Outside::Close
+            } else {
+                Outside::Keep
+            }))
             .body_scroll(false);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }

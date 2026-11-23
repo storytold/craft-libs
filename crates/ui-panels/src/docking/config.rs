@@ -88,6 +88,10 @@ pub struct DockConfig {
     /// none for its panel. Off: only a group whose shown panel has host rows (`DockPanels::panel_rows`) shows the
     /// button, and the dock's rows open from a context request on a tab.
     pub menu_button: bool,
+    /// A press outside an iconic column's open flyout closes it. Off, the flyout stays open while the person works
+    /// elsewhere, until Escape, its icon or, with Auto-Collapse Iconic Panels, a press outside or the focus leaving it
+    /// closes it.
+    pub flyout_outside_closes: bool,
 }
 
 impl Default for DockConfig {
@@ -107,6 +111,7 @@ impl Default for DockConfig {
             native_windows: true,
             group_order_items: false,
             menu_button: false,
+            flyout_outside_closes: true,
         }
     }
 }
@@ -116,6 +121,13 @@ impl DockConfig {
     #[must_use]
     pub fn menu_button(mut self, on: bool) -> Self {
         self.menu_button = on;
+        self
+    }
+
+    /// Whether a press outside an iconic column's open flyout closes it.
+    #[must_use]
+    pub fn flyout_outside_closes(mut self, on: bool) -> Self {
+        self.flyout_outside_closes = on;
         self
     }
 

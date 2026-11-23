@@ -1227,7 +1227,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .opens(opens)
                 .bar(bar)
                 .within(within)
-                .auto_collapse(scene.auto_collapse);
+                .auto_collapse(scene.auto_collapse)
+                .outside_closes(scene.config.flyout_outside_closes);
             let output = shown.show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
             self.report.flyout.extend(output.edit.events);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
