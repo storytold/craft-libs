@@ -345,6 +345,63 @@ fn a_flyout_with_an_offset_in_a_short_viewport_stays_inside_and_resizes_its_widt
     }
 }
 
+/// The names of the panels of the tall-body trial, which sets no heights.
+const TALL: [&str; 8] = ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"];
+/// What the body of a flyout in the tall-body trial measures.
+const TALL_BODY: f32 = 300.0;
+
+/// A flyout whose body measures taller than the room below its group's icons moves up to stay inside the bounds, as
+/// tall as the body (or as the bounds when those are shorter): it is not cut to the room below its top with the rest
+/// of its body laid out below the bounds. The panels set no heights, so the group's height does not give the room.
+#[trial]
+fn a_flyout_taller_than_the_room_below_its_icons_moves_up_inside_the_bounds() {
+    let (within, open, shown) = (Rc::new(Cell::new(screen())), Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (bounds, now, seen) = (Rc::clone(&within), Rc::clone(&open), Rc::clone(&shown));
+    let mut column = Column::new((0..TALL.len() as u8).map(|panel| Group::new(vec![panel], 0)).collect());
+    column.iconic = true;
+    let mut fixture = Fixture::new(move |ui| {
+        let current = now.get();
+        let mut opened = current;
+        IconicColumn::new("Panels", global("iconic column", "tall flyouts"), &column, Bind::bound(&mut opened), &|panel: &u8| {
+            PanelSpec::new(TALL[usize::from(*panel) % TALL.len()])
+        })
+        .edge(DockEdge::Start)
+        .opens(Side::End)
+        .within(bounds.get())
+        .show_flyouts_at(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(RAIL, SCREEN.y)), |group, at, ui, _| {
+            match at {
+                GroupAt::Measure(_) => return Some(TALL_BODY),
+                GroupAt::Show(rect) => {
+                    if group.active_panel().is_some_and(|panel| Some(*panel) == current) {
+                        seen.set(Some(rect));
+                    }
+                    Panel::new("Flyout").show_at(ui, rect, |_, _| ());
+                }
+            }
+            None
+        });
+        now.set(opened);
+    });
+    fixture.room(SCREEN).settle();
+    let last = TALL[TALL.len() - 1];
+    let icon = fixture.by_label(last).expect("the last group's icon").rect;
+    for height in [icon.bottom() + 8.0, 200.0] {
+        // The bounds end just below the last icon, or are shorter than the body.
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(SCREEN.x, height));
+        within.set(bounds);
+        open.set(None);
+        fixture.settle();
+        open.set(Some(TALL.len() as u8 - 1));
+        fixture.settle();
+        let rect = shown.get().expect("the last group's flyout is open");
+        let wanted = TALL_BODY.min(bounds.height());
+        assert!(bounds.bottom() - icon.top() < TALL_BODY, "the bounds leave less room below the icon than the body takes: {icon:?} in {bounds:?}");
+        assert!(bounds.contains_rect(rect), "{height}: the flyout {rect:?} stays inside {bounds:?}");
+        assert!(rect.height() >= wanted - 1.0, "{height}: the flyout {rect:?} takes the body's height {wanted}");
+        assert!(rect.top() < icon.top(), "{height}: the flyout {rect:?} moves up from its icon {icon:?}");
+    }
+}
+
 /// Each icon group's grip strip has its own room at the group's top: across the group, below the bar or the group
 /// before it and above the group's first icon, overlapping no icon. A drag that starts on a grip moves its whole
 /// group, as a drag on an icon moves its panel.
