@@ -489,6 +489,21 @@ fn stepping_the_closed_select_moves_between_sizes_and_never_picks_custom() {
 }
 
 #[trial]
+fn the_open_list_keys_only_highlight_custom_and_enter_picks_it() {
+    let (mut fixture, edits) = fields_fixture(WarpFieldValues::new("arc"));
+    let grid = fixture.by_label("Grid").expect("the Grid select");
+    fixture.click(&grid);
+    fixture.settle();
+    fixture.key(Key::ArrowUp, Modifiers::NONE);
+    fixture.settle();
+    assert!(!fixture.by_role(Role::LIST_BOX).is_empty(), "the list is still open");
+    assert!(reported(&edits).is_empty(), "Up from Default only moves the lead onto Custom…: no pick");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.settle();
+    assert_eq!(reported(&edits), vec![WarpFieldsEdit::CustomGrid], "Enter picks the highlighted Custom… row");
+}
+
+#[trial]
 fn the_listed_grids_keep_their_sizes_and_other_meshes_read_custom() {
     assert_eq!(WarpFieldValues::new("arc").grid, WarpGridChoice::Default, "a fresh warp reads Default");
     for (choice, size) in [
