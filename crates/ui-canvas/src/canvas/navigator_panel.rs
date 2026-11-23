@@ -1,15 +1,15 @@
 //! `NavigatorPanel`: the Navigator panel's body, the preview box over the zoom row, bound to one view.
 
 use crate::canvas::{NavigationOptions, Navigator, NavigatorPreview, NavigatorZoomRow, ProxyColor};
-use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use crate::layout_components::Stack;
 use crate::runtime::env::Label;
 use craft_behavior::kurbo::Size;
 use craft_behavior::{CanvasView, EditEvents};
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What the Navigator panel reports.
 #[derive(Debug)]
@@ -35,6 +35,8 @@ impl Outcome for NavigatorPanelOutput {
 /// The Navigator panel (Photoshop's Window, Navigator): the [`Navigator`] preview box over the [`NavigatorZoomRow`],
 /// both bound to one view.
 ///
+/// - The preview box takes the width and the height the panel leaves above the zoom row, never less than the plot
+///   size, so it grows and shrinks with the panel; the document is fitted inside it keeping its aspect.
 /// - Both parts edit the one bound view. Under Animated Zoom a preview zoom and the row's Zoom In and Zoom Out ease on
 ///   the active canvas: the canvas the view commands reach shows the way to the new view.
 /// - The row's Zoom In and Zoom Out are the view commands of the active canvas: the canvas steps its own view and
@@ -80,10 +82,14 @@ impl<'a> NavigatorPanel<'a> {
         let NavigatorPanel { label, mut view, document, mut preview, navigation, proxy, enabled } = self;
         let mut change = EditEvents::new();
         let mut invalid_zoom = None;
-        let shown = Stack::new().enabled(enabled).show(ui, |ui, _| {
+        let shown = Stack::new().enabled(enabled).fill().show(ui, |ui, _| {
             // The body runs for the measuring pass and again for the real one, so each run lends the picture.
-            let preview =
-                Navigator::new(label.clone(), view.reborrowed(), document).preview(preview.reborrowed()).navigation(navigation).proxy(proxy).show(ui);
+            let preview = Navigator::new(label.clone(), view.reborrowed(), document)
+                .preview(preview.reborrowed())
+                .navigation(navigation)
+                .proxy(proxy)
+                .sizing(Sizing::Fill)
+                .show(ui);
             let row = NavigatorZoomRow::new(view.reborrowed(), document).show(ui);
             invalid_zoom = row.invalid_zoom;
             change = preview.view.events.clone().into_iter().chain(row.view).collect();

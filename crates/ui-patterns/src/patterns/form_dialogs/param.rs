@@ -475,14 +475,27 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+<<<<<<< HEAD
     beside: bool,
+=======
+    beside_next: bool,
+    /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
+    options_in_row: bool,
+>>>>>>> origin/next
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
+    /// The most characters a text row takes ([`Param::max_chars`]).
+    max_chars: Option<usize>,
+    /// Whether a text row shows its text in the monospace face ([`Param::mono`]).
+    mono: bool,
+    /// The width a text row's field asks for, in characters ([`Param::field_chars`]).
+    field_chars: Option<u16>,
     units: Option<UnitChoices>,
     /// The ids of the options a choice row shows disabled.
     disabled_options: Vec<String>,
@@ -861,6 +874,30 @@ impl Param {
         self
     }
 
+    /// The most characters a [`ParamKind::Text`] row takes: the field limits its input and `accepts` refuses longer text.
+    #[must_use]
+    pub fn max_chars(mut self, chars: usize) -> Self {
+        self.options.get_or_insert_default().max_chars = Some(chars);
+        self
+    }
+
+    /// Shows a [`ParamKind::Text`] row's text in the monospace face.
+    #[must_use]
+    pub fn mono(mut self) -> Self {
+        self.options.get_or_insert_default().mono = true;
+        self
+    }
+
+    /// The width of a [`ParamKind::Text`] row's field, in characters (`TextField::width_chars`): the field asks for
+    /// `chars` times the width of a `0` in its face instead of the field length, so one row of a form can be wider or
+    /// narrower than the others (a watermark's text against a short name). A row that lacks room still narrows it.
+    /// `0` keeps the field length; other kinds, and a text row with a Browse button, are unchanged.
+    #[must_use]
+    pub fn field_chars(mut self, chars: u16) -> Self {
+        self.options.get_or_insert_default().field_chars = (chars > 0).then_some(chars);
+        self
+    }
+
     /// Hover text for the whole row, label and control, of any kind.
     #[must_use]
     pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
@@ -878,6 +915,13 @@ impl Param {
             ParamKind::Range { .. } => self.options.get_or_insert_default().range_decimals = Some(places),
             _ => {}
         }
+        self
+    }
+
+    /// Shows a Range row's slider in a linear popup opened from the number field.
+    #[must_use]
+    pub fn popup_slider(mut self) -> Self {
+        self.options.get_or_insert_default().popup_slider = true;
         self
     }
 
@@ -915,11 +959,19 @@ impl Param {
         self
     }
 
+<<<<<<< HEAD
     /// The row stands on the same line as the row before it (production's Font, Size, Underline and Colour on one
     /// line), wrapping to the next line when the form is too narrow. The first row of a form or group ignores it.
     #[must_use]
     pub fn beside_previous(mut self) -> Self {
         self.options.get_or_insert_default().beside = true;
+=======
+    /// For a [`ParamKind::Radio`] row: the options stand side by side in one row, with no caption over them; the label
+    /// still names the group for assistive technology. Other kinds are unchanged.
+    #[must_use]
+    pub fn options_in_row(mut self) -> Self {
+        self.options.get_or_insert_default().options_in_row = true;
+>>>>>>> origin/next
         self
     }
 
@@ -938,6 +990,18 @@ impl Param {
     pub fn not_remembered(mut self) -> Self {
         self.options.get_or_insert_default().not_remembered = true;
         self
+    }
+
+    /// Pairs this field with the next one in its section, wrapping when they cannot fit together.
+    /// If only one is visible, it keeps the content width it takes in a pair.
+    #[must_use]
+    pub fn beside_next(mut self) -> Self {
+        self.options.get_or_insert_default().beside_next = true;
+        self
+    }
+
+    pub(super) fn pairs_with_next(&self) -> bool {
+        self.option().beside_next
     }
 
     /// Sets the unit shown after the number.
@@ -1031,9 +1095,13 @@ impl Param {
         format!("{}.folderFiles", self.key)
     }
 
-    /// Whether `value` names no disabled option of a Radio, Choice or Blend row.
+    /// Whether `value` names no disabled option of a Radio, Choice or Blend row and is no longer than a text row's
+    /// [`max_chars`](Param::max_chars), counted in characters.
     fn option_allowed(&self, value: &FieldValue) -> bool {
         match (&self.kind, value) {
+            (ParamKind::Text { .. }, FieldValue::Text(text)) => {
+                self.options.as_deref().and_then(|options| options.max_chars).is_none_or(|max| text.chars().count() <= max)
+            }
             (ParamKind::Radio { .. } | ParamKind::Choice { .. } | ParamKind::Blend { .. }, FieldValue::Text(id)) => self.option_enabled(id),
             _ => true,
         }
@@ -1085,9 +1153,29 @@ impl RowOptions {
         self.full_width
     }
 
+    /// Whether a radio row's options stand in one row with no caption.
+    pub(crate) fn options_in_row(&self) -> bool {
+        self.options_in_row
+    }
+
     /// The lines of a multi-line text row; `None` for a single line.
     pub(crate) fn lines(&self) -> Option<usize> {
         self.lines
+    }
+
+    /// The most characters a text row takes; `None` for the field's own limit.
+    pub(crate) fn max_chars(&self) -> Option<usize> {
+        self.max_chars
+    }
+
+    /// Whether a text row shows its text in the monospace face.
+    pub(crate) fn mono(&self) -> bool {
+        self.mono
+    }
+
+    /// The width a text row's field asks for, in characters; `None` for the field length.
+    pub(crate) fn field_chars(&self) -> Option<u16> {
+        self.field_chars
     }
 
     /// Whether a choice row's select has a search field.

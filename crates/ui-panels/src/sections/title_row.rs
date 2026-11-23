@@ -20,8 +20,8 @@ use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Stateful, States};
 use egui::{Id, Rect, Response, Ui, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// How much weight a header carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -37,9 +37,14 @@ pub enum HeaderStrength {
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
+<<<<<<< HEAD
     /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
     /// dialog's group names ("PAGES TO PRINT").
     Overline,
+=======
+    /// A window's drag bar: one text row high (`size.row.text`), with label text; its action parts shrink to the row.
+    Bar,
+>>>>>>> origin/next
 }
 
 /// What a title row's action parts ask the container to do.
@@ -347,7 +352,11 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
+<<<<<<< HEAD
             HeaderStrength::Overline => (cx.control().height, TypeRole::Caption, text.faint),
+=======
+            HeaderStrength::Bar => (cx.tokens.size.row.text, TypeRole::Label, text.normal),
+>>>>>>> origin/next
         };
         let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
         let (ink, disabled) = (cx.ink(key.icon_ink), cx.color(text.disabled));

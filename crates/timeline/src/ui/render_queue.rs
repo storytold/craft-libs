@@ -1,7 +1,7 @@
 //! The render (export) queue list.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::borrow::Cow;
 use std::cell::RefCell;

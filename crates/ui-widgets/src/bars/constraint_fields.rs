@@ -16,8 +16,8 @@ use egui::{Response, Ui};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The three kinds of [`Constraint`], as the Style select lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

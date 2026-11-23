@@ -1,7 +1,12 @@
 //! The look of a row: ListRowStyle, the fill and ink rules of its flags.
 
 use super::placement::Sizes;
+<<<<<<< HEAD
 use crate::style::{ComponentStyle, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
+=======
+use crate::display::divider::SeparatorRule;
+use crate::style::{ComponentStyle, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
+>>>>>>> origin/next
 use craft_behavior::Metrics;
 use craft_theme::{Contrast, Rgba, Stateful, States, contrast_ratio, identifiable_outline, over};
 
@@ -46,6 +51,8 @@ pub struct ListRowStyle {
     /// The frame at the edge of each thumbnail's slot, around its picture: `line.frame`, `stroke.thin` wide.
     pub(super) thumb_frame: StyleColor,
     pub(super) thumb_frame_width: f32,
+    /// The rule of a separator row and its room, as a menu's separator has.
+    pub(super) separator: SeparatorRule,
     pub(super) sizes: Sizes,
 }
 

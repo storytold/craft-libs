@@ -2,22 +2,32 @@
 //! on the dialog host: the default answer and the Apply to All box.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
+<<<<<<< HEAD
 use super::{
     BlockingOverlay, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog, StandardPrompt,
     UnsavedChangesDialog,
 };
+=======
+use super::{BlockingOverlay, ButtonPlace, Dialog};
+>>>>>>> origin/next
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _};
+use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowContainer as _};
 use crate::display::Text;
+use crate::layout::GridFit;
+use crate::layout_components::Grid;
 use crate::layout_components::Row;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
-use crate::testing::relations::{apart_above, grows_with, inside, off_foot, same_column};
+use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, off_foot, same_column};
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
+<<<<<<< HEAD
 use craft_quit::{CloseAnswer, CloseScope};
+=======
+use craft_behavior::ColumnWidth;
+>>>>>>> origin/next
 use egui::{Key, Modifiers, Rect, Ui};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -221,7 +231,7 @@ fn side_buttons_stand_in_one_column_beside_the_body() {
         let (mut open, mut snap, mut preview) = (true, false, true);
         Dialog::new("Options")
             .opened(Bind::bound(&mut open))
-            .side_buttons(true)
+            .button_place(ButtonPlace::Side)
             .buttons([
                 FooterButton::new("Add to Swatches", DialogRole::Other),
                 FooterButton::new("Cancel", DialogRole::Cancel),
@@ -380,4 +390,60 @@ fn a_progress_overlay_shows_a_spinner_and_its_message_and_escape_cancels_it() {
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.settle();
     assert!(!open.get(), "Escape closed the overlay that has a Cancel button");
+}
+
+/// A dialog whose buttons stand in its body (`ButtonPlace::Body`) shows them in the slot its body keeps, in the
+/// column's role order, and keeps their keys: Enter is OK and Escape cancels.
+#[trial]
+fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
+    const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
+    let run = |key: Option<Key>| {
+        let seen = std::rc::Rc::new(Cell::new((None, None)));
+        let sink = seen.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let (mut open, mut snap, mut rulers) = (true, false, true);
+            let shown = Dialog::new("Options")
+                .opened(Bind::bound(&mut open))
+                .button_place(ButtonPlace::Body)
+                .close_on_enter(true)
+                .buttons([
+                    FooterButton::new("Add to Swatches", DialogRole::Other).stays_open(true),
+                    FooterButton::new("Cancel", DialogRole::Cancel),
+                    FooterButton::new("OK", DialogRole::Accept),
+                ])
+                .show(ui, |ui, _| {
+                    Grid::new(COLUMNS).fit(GridFit::Fixed).show(ui, |ui, _| {
+                        Text::new("Lines every 10 mm").show(ui);
+                        let _ = FooterSlot::new().show(ui);
+                        // A labelled control in a grid takes a cell for its label: each check box is a row, one cell.
+                        Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut snap)).label("Snap to the grid").show(ui));
+                        Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut rulers)).label("Show rulers").show(ui));
+                    });
+                });
+            if shown.output.closed.is_some() {
+                sink.set((shown.output.closed, shown.output.picked));
+            }
+        });
+        fixture.idle(30);
+        if let Some(key) = key {
+            fixture.key(key, Modifiers::NONE);
+            fixture.settle();
+        }
+        (fixture, seen.get())
+    };
+    let (fixture, _) = run(None);
+    let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown")).rect;
+    let (ok, cancel, other, snap, rulers) = (rect("OK"), rect("Cancel"), rect("Add to Swatches"), rect("Snap to the grid"), rect("Show rulers"));
+    let dialog = fixture.by_role(Role::DIALOG).into_iter().next().expect("the dialog is shown").rect;
+    assert!(ok.max.y <= cancel.min.y && cancel.max.y <= other.min.y, "OK, Cancel, then the other button, top to bottom");
+    for button in [cancel, other] {
+        assert!(same_column(ok, button), "one column, one width: {ok:?} {button:?}");
+    }
+    assert!(ok.min.x >= snap.max.x, "the buttons head the second column, past the first: {ok:?} {snap:?}");
+    assert!(aligned_left(ok, rulers), "the buttons start at the second column's edge: {ok:?} {rulers:?}");
+    assert!(other.max.y <= rulers.min.y, "the buttons stand over the second column's controls: {other:?} {rulers:?}");
+    assert!(inside(ok, dialog) && inside(other, dialog), "the buttons are inside the dialog");
+    assert_eq!(run(Some(Key::Enter)).1, (Some(CloseReason::Activated), Some(2)), "Enter picks OK");
+    let (escaped, _) = run(Some(Key::Escape)).1;
+    assert_eq!(escaped, Some(CloseReason::Escape), "Escape cancels");
 }

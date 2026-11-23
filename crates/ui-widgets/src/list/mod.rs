@@ -1,18 +1,18 @@
 //! `List` and its rows: `ListRow`, `FindingsList`, `EventList` and `UndoList`.
 
-mod events;
-mod findings;
+pub(crate) mod events;
+pub(crate) mod findings;
 mod predicate;
 #[doc(hidden)]
 pub mod row;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod toggle;
 mod tree;
-mod undo;
-mod view;
-#[cfg(feature = "testing")]
-mod view_stories;
+pub(crate) mod undo;
+pub(crate) mod view;
+#[cfg(feature = "suite")]
+pub(crate) mod view_stories;
 mod view_words;
 mod words;
 
@@ -21,8 +21,13 @@ pub use findings::{Finding, Findings, FindingsList, FindingsListStyle, FindingsS
 pub use predicate::{DropTest, RowTest, RowText};
 pub(crate) use row::RowThumb;
 pub use row::{
+<<<<<<< HEAD
     CellStatus, HueTarget, ListRow, ListRowStyle, RowDragSpot, RowEvent, RowInk, RowLines, RowOutput, RowStyleCx, ThumbAspect, ThumbPaint, ThumbSize,
     ThumbTarget, ThumbTargets, TrailingFace, TrailingPart, label_color_label, tree_steps,
+=======
+    ListRow, ListRowStyle, RowDragSpot, RowEvent, RowInk, RowOutput, RowStyleCx, ThumbAspect, ThumbPaint, ThumbSize, ThumbTarget, ThumbTargets,
+    TrailingFace, TrailingPart, TreeLeaves, label_color_label, tree_steps,
+>>>>>>> origin/next
 };
 pub use toggle::{ToggleCell, ToggleFace, ToggleState};
 pub use tree::OpenSet;

@@ -1,24 +1,36 @@
 //! `DockArea`: the docking pattern. It shows a workspace's docked tree, dock columns, flyouts and floating groups from
 //! the parts of `docking`, takes the drops of tab and group drags, and applies their actions to the workspace.
 
-use super::hide::{self, Shown};
+use super::hide::{self, PruneKey};
+use crate::contract::Revision;
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
+<<<<<<< HEAD
     Bind, BindMut, BodyCx, Cx, Entry, Gap, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
+=======
+    Bind, BindMut, BodyCx, Cx, Entry, MemoKey, MemoProps, MemoView, NoValue, Outbox, Outcome, Pad, Pointer as _, Props as _, Show as _,
+    ShowContainer as _, Sizing, Tracked, WordSetCx as _,
+>>>>>>> origin/next
 };
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
-use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
+<<<<<<< HEAD
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
     IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths,
     frame, move_actions, stepped,
+=======
+    DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, GroupGrip,
+    HidePanels, IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea, Titles,
+    WindowColumn, actions, column_cells, dock_states, frame, move_actions, with_area_rules,
+>>>>>>> origin/next
 };
 use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
-use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
+use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
+use crate::runtime::derived::derived;
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
@@ -30,15 +42,20 @@ use craft_behavior::dock::{
 use craft_behavior::overlay::Side;
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
 use craft_host::target::WindowKind;
+<<<<<<< HEAD
 use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2, ViewportId};
 use std::cell::{Cell, RefCell};
+=======
+use egui::{Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2, ViewportId};
+use std::cell::{Cell, OnceCell, RefCell};
+>>>>>>> origin/next
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A layout the dock cannot show: the workspace failed `Workspace::validate`. The area draws nothing for it.
 #[derive(Clone, Debug, PartialEq)]
@@ -72,7 +89,7 @@ pub struct DockAreaOutput<P> {
     /// The edits of the whole workspace this pass, in order: a split divider's size, a floating window's move, and the
     /// applied `actions` as one undo step. A workspace bound by reference takes them itself; a given one needs the host
     /// to apply them.
-    pub edit: EditEvents<Workspace<P>>,
+    pub edit: EditEvents<Arc<Workspace<P>>>,
     /// Where commands float a panel, group or column: the area's float bounds and the sizes of what it drew.
     pub float_space: Option<FloatSpace<P>>,
     /// Where each dock column was placed this pass, named by a panel of its first group, in the area's layer space.
@@ -100,7 +117,7 @@ impl<P> Outcome for DockAreaOutput<P> {
 ///   flyouts; a group is a `DockGroup`; a floating window is a `FloatingGroup` holding one column, shown as a dock's
 ///   column is, whose bar is the window's title row. The host's `DockPanels` supplies the panels.
 /// - Edits: a divider drag and every [`Action`] of the pass (menu rows, drags, drops) are written to the workspace
-///   through its binding, with the panels' [`DockPanels::permissions`] (narrowed when `locked`). The output lists the
+///   through its binding, with the panels' [`SpecSource::permissions`](crate::docking::SpecSource::permissions) (narrowed when `locked`). The output lists the
 ///   actions the workspace took, divider sizes and window moves included. A given workspace is not written.
 /// - Requests: while the pass runs, a body changes the workspace through
 ///   [`request_actions`](crate::docking::request_actions); the output returns those actions unapplied in `requested`.
@@ -110,18 +127,22 @@ impl<P> Outcome for DockAreaOutput<P> {
 ///   so does a release no spot takes, with `DockConfig::float_on_empty_drop`.
 /// - State: the open flyout (unless the host binds it with [`flyout`](DockArea::flyout)) lives in the area's root
 ///   container.
-/// - Replacement: a tab or group drag records the workspace revision it started under; when another arrangement
+/// - Replacement: a tab or group drag records the workspace generation it started under; when another arrangement
 ///   replaces the workspace ([`Workspace::replace`]), the drag ends without a drop.
+/// - Specs: the panels' specs and permissions come from the host's [`PanelSpecs`] in a `Tracked`. The area reads them
+///   only when that revision, the workspace's revision or the lock changed ([`derived`]), and keeps what it read
+///   otherwise: an idle pass reads no spec.
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 #[pattern(probe(DockArea<'static, usize>))]
 pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     label: Label,
-    workspace: Bind<'a, Workspace<P>>,
+    workspace: Bind<'a, Arc<Workspace<P>>>,
+    specs: &'a dyn SpecSource<P>,
     panels: &'a mut dyn DockPanels<P>,
     config: DockConfig,
     /// Which panels the host hides.
     #[prop]
-    hide: HidePanels<'a, P>,
+    hide: HidePanels<'a>,
     /// The panel whose frame shows alone.
     #[prop]
     maximized: Option<P>,
@@ -142,13 +163,21 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
-    /// A dock area named `label` over `workspace`, with its panels from `panels` and its behaviour from `config`. The
-    /// root's id comes from the label under the parent's id, and inside an `AppShell` from the window too, so two
-    /// windows' docks never share state.
-    pub fn new(label: impl Into<Label>, workspace: Bind<'a, Workspace<P>>, panels: &'a mut dyn DockPanels<P>, config: DockConfig) -> Self {
+    /// A dock area named `label` over `workspace`, with its panels' specs from `specs`, their views from `panels` and
+    /// its behaviour from `config`. The root's id comes from the label under the parent's id, and inside an `AppShell`
+    /// from the window too, so two windows' docks never share state. Keep one `Arc` across frames and clone the `Arc`,
+    /// not the workspace: a new workspace value each frame is a new revision, which reads every spec each frame.
+    pub fn new<S: PanelSpecs<P> + 'a>(
+        label: impl Into<Label>,
+        workspace: Bind<'a, Arc<Workspace<P>>>,
+        specs: &'a Tracked<S>,
+        panels: &'a mut dyn DockPanels<P>,
+        config: DockConfig,
+    ) -> Self {
         DockArea {
             label: label.into(),
             workspace,
+            specs,
             panels,
             config,
             hide: HidePanels::None,
@@ -161,10 +190,16 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         }
     }
 
-    /// A dock area over a layout that is only shown: a given workspace without hidden panels, locked, so nothing
-    /// moves, floats or closes.
-    pub fn read_only(label: impl Into<Label>, layout: &Layout<P>, panels: &'a mut dyn DockPanels<P>, config: DockConfig) -> Self {
-        DockArea { locked: true, ..Self::new(label, Bind::given(Workspace::new(layout.clone())), panels, config) }
+    /// A dock area that only shows `workspace`: given, and locked, so nothing moves, floats or closes. It keys what it
+    /// derives on the workspace's revision, so an idle pass reads no spec.
+    pub fn read_only<S: PanelSpecs<P> + 'a>(
+        label: impl Into<Label>,
+        workspace: &Arc<Workspace<P>>,
+        specs: &'a Tracked<S>,
+        panels: &'a mut dyn DockPanels<P>,
+        config: DockConfig,
+    ) -> Self {
+        DockArea { locked: true, ..Self::new(label, Bind::given(Arc::clone(workspace)), specs, panels, config) }
     }
 
     /// Keeps floating windows below the top `inset` points of the window: the height of the bars (notices) the
@@ -191,30 +226,36 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 struct AreaMemory<P> {
     /// The open flyout when the host binds none.
     open: Option<P>,
-    /// The running move or resize of a floating window.
+    /// The running resize or keyboard move of a floating window.
     moving: Option<Moving<P>>,
+    /// The least window id above every id the workspaces this area showed held: an undo that brings back an older
+    /// workspace keeps its new windows above it ([`Workspace::raise_window_floor`]).
+    window_floor: u64,
 }
 
 /// A floating window's move or resize as one workspace edit: its gesture and the workspace when it began.
 #[derive(Clone)]
 struct Moving<P> {
     id: GestureId,
-    before: Workspace<P>,
+    before: Arc<Workspace<P>>,
 }
 
 impl<P> Default for AreaMemory<P> {
     fn default() -> Self {
-        AreaMemory { open: None, moving: None }
+        AreaMemory { open: None, moving: None, window_floor: 0 }
     }
 }
 
-/// What the root's drop taker reads: the dock, the layout it shows, the rights and where a floating drop lands.
+/// What the root's drop taker reads: the dock, the layout it shows, the rights, where a floating drop lands and what
+/// the host hides.
 struct Drops<'a, P> {
     dock: Id,
     layout: &'a Layout<P>,
     permissions: &'a dyn Fn(&P) -> Permissions,
     config: &'a DockConfig,
     specs: &'a HashMap<P, PanelSpec>,
+    hide: HidePanels<'a>,
+    maximized: Option<&'a P>,
     rtl: bool,
     top_inset: f32,
 }
@@ -224,13 +265,23 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
     fn take(&self, cx: &mut Cx<'_, DockRoot<'_, DockDropped<P>>>) -> Option<DockDropped<P>> {
         let ctx = cx.core.ctx.clone();
         let sizes = *cx.style.sizes();
+<<<<<<< HEAD
         let bounds = inset_top(cx.env.get::<ShellEntry>().0.as_ref().map_or(cx.rect, ShellCx::float_bounds), self.top_inset);
         let space = float_space(bounds, &sizes, self.config, self.specs);
+=======
+        let shell = cx.env.get::<ShellEntry>().0;
+        let bounds = shell.as_ref().map_or(cx.rect, ShellCx::float_bounds);
+        let space = float_space(&ctx, bounds, &sizes, self.config, self.specs);
+        let spec = |panel: &P| spec_in(self.specs, panel);
+        let protected = |panel: &P| (self.permissions)(panel).is_protected();
+        let (hide, _) = hide::resolved(self.hide, shell.as_ref());
+>>>>>>> origin/next
         let mut target = DockDropTarget::new(&ctx, self.dock, self.layout, self.permissions);
         target.rtl = self.rtl;
         target.space = Some(&space);
         target.float_on_empty = self.config.float_on_empty_drop;
         target.title_bar_docks = self.config.title_bar_docks;
+        target.placing = Some(Placing::new(sizes, &spec, &protected).shown(hide, self.maximized));
         cx.drop_target::<GroupDrag<P>, _>(&target).or_else(|| cx.drop_target::<PanelDrag, _>(&target))
     }
 }
@@ -249,9 +300,19 @@ struct Report<P> {
     files: Vec<drag::OsFile>,
 }
 
+/// The inputs of the workspace's derived values: the workspace, the panels' specs and the lock.
+#[derive(Clone, Copy, crate::contract::MemoProps)]
+pub(super) struct ModelKey {
+    workspace: Revision,
+    specs: Revision,
+    locked: bool,
+}
+
 /// What every part of one pass reads.
 struct Scene<'s, P> {
     dock: Id,
+    /// The key the pruned layout was derived under: what every group's derived values follow.
+    view: u128,
     sizes: DockSizes,
     config: &'s DockConfig,
     layout: &'s Layout<P>,
@@ -267,9 +328,44 @@ struct Scene<'s, P> {
     rail_footer: Option<&'s P>,
 }
 
+/// The spec of `panel` in `specs`, or an unnamed one.
+fn spec_in<P: Eq + Hash>(specs: &HashMap<P, PanelSpec>, panel: &P) -> PanelSpec {
+    specs.get(panel).cloned().unwrap_or_else(|| PanelSpec::new(Label::default()))
+}
+
+/// What an area derives from its workspace, its panels' specs and its lock, kept while none of them changes: whether
+/// the workspace is valid, and for each panel in its layout the spec, the permissions (narrowed when locked) and the
+/// key.
+struct DockModel<P> {
+    error: Option<InvalidGeometry>,
+    specs: HashMap<P, PanelSpec>,
+    rights: HashMap<P, Permissions>,
+    keys: HashMap<PanelKey, P>,
+}
+
+impl<P: Clone + Eq + Hash> DockModel<P> {
+    fn of(workspace: &Workspace<P>, specs: &dyn SpecSource<P>, locked: bool) -> Self {
+        let error = workspace.validate().err().map(|error| InvalidGeometry { error });
+        let panels = if error.is_none() { workspace.layout().panels() } else { Vec::new() };
+        let rights = panels
+            .iter()
+            .map(|panel| {
+                let rights = specs.permissions(panel);
+                ((*panel).clone(), if locked { rights.locked() } else { rights })
+            })
+            .collect();
+        DockModel {
+            error,
+            specs: panels.iter().map(|panel| ((*panel).clone(), specs.spec(panel))).collect(),
+            rights,
+            keys: panels.iter().map(|panel| (PanelKey::of(*panel), (*panel).clone())).collect(),
+        }
+    }
+}
+
 impl<P: Clone + Eq + Hash> Scene<'_, P> {
     fn spec(&self, panel: &P) -> PanelSpec {
-        self.specs.get(panel).cloned().unwrap_or_else(|| PanelSpec::new(Label::default()))
+        spec_in(self.specs, panel)
     }
 
     fn permissions(&self, panel: &P) -> Permissions {
@@ -316,7 +412,7 @@ struct Passed<P> {
     events: Vec<DockEvent<P>>,
     focused: Option<P>,
     picked: Option<P>,
-    edit: EditEvents<Workspace<P>>,
+    edit: EditEvents<Arc<Workspace<P>>>,
     space: Option<FloatSpace<P>>,
     columns: Vec<(P, Rect)>,
     windows: Vec<(P, ViewportId)>,
@@ -330,6 +426,14 @@ struct Look {
     minimized: bool,
     section: Option<bool>,
     in_window: bool,
+}
+
+/// What a group's header shows besides its panels' bodies: the tab titles, the panel menu's rows and whether the host
+/// gave any, and the panel commands' states.
+struct GroupParts {
+    titles: Titles,
+    hosted: bool,
+    states: Vec<(DockCommands, CommandState)>,
 }
 
 /// A dock to show: its window edge, its columns and its rect.
@@ -377,7 +481,11 @@ struct Pass<'s, P> {
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// Shows the area across the room offered.
     pub fn show(self, ui: &mut Ui) -> DockAreaOutput<P> {
+<<<<<<< HEAD
         let DockArea { label, mut workspace, panels, config, hide, maximized, auto_collapse, locked, mut flyout, rail_footer, top_inset } = self;
+=======
+        let DockArea { label, mut workspace, specs, panels, config, hide, maximized, auto_collapse, locked, mut flyout } = self;
+>>>>>>> origin/next
         let ctx = ui.ctx().clone();
         let (rtl, window) = {
             let env = Env::of(ui);
@@ -386,25 +494,31 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         let id = ui.scope_id().with(("dock area", label.as_str(), window));
         let held = match workspace.reborrow().get() {
             Some(Mixed::Same(held)) => held,
-            _ => Workspace::default(),
+            _ => Arc::default(),
         };
-        let (current, error) = match held.validate() {
-            Ok(()) => (held, None),
-            Err(error) => (Workspace::default(), Some(InvalidGeometry { error })),
-        };
-        let rights: HashMap<P, Permissions> = current
-            .layout
-            .panels()
-            .into_iter()
-            .map(|panel| {
-                let rights = panels.permissions(panel);
-                (panel.clone(), if locked { rights.locked() } else { rights })
-            })
-            .collect();
+        let key = ModelKey { workspace: held.revision(), specs: specs.revision(), locked };
+        let model = derived(&ctx, id, &key, || DockModel::of(&held, specs, locked));
+        let error = model.error.clone();
+        let current = if error.is_none() { held } else { Arc::default() };
+        let rights = &model.rights;
         let policy = |panel: &P| rights.get(panel).copied().unwrap_or(Permissions::ALL);
+<<<<<<< HEAD
         let specs: HashMap<P, PanelSpec> = current.layout.panels().into_iter().map(|panel| (panel.clone(), panels.spec(panel))).collect();
         let drops = Drops { dock: id, layout: &current.layout, permissions: &policy, config: &config, specs: &specs, rtl, top_inset };
         let shows = Arrangement { dock: id, revision: current.revision() };
+=======
+        let drops = Drops {
+            dock: id,
+            layout: current.layout(),
+            permissions: &policy,
+            config: &config,
+            specs: &model.specs,
+            hide,
+            maximized: maximized.as_ref(),
+            rtl,
+        };
+        let shows = Arrangement { dock: id, generation: current.generation() };
+>>>>>>> origin/next
         end_replaced_drags::<P>(&ctx, shows);
         let dropped: RefCell<Option<Action<P>>> = RefCell::new(None);
         let root = DockRoot::new(|cx| {
@@ -419,13 +533,17 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         open_requests::<P>(&ctx);
         let shown = root.show(ui, |ui, body| {
             let Some(sizes) = body.style::<DockRoot<'_, DockDropped<P>>>().map(|style| *style.sizes()) else { return };
+            let memory = body.memory::<AreaMemory<P>>();
+            memory.window_floor = memory.window_floor.max(current.layout().window_floor());
             let input = Input {
                 id,
                 ctx: &ctx,
                 current: &current,
                 config: &config,
-                specs: &specs,
+                specs: &model.specs,
+                keys: &model.keys,
                 hide,
+                model: key,
                 maximized: maximized.as_ref(),
                 auto_collapse,
                 sizes,
@@ -433,14 +551,14 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 rail_footer: rail_footer.as_ref(),
                 top_inset,
             };
-            let mut result = show_area(ui, body, &input, &rights, &mut *panels, flyout.as_mut());
+            let mut result = show_area(ui, body, &input, rights, &mut *panels, flyout.as_mut());
             for edit in &result.edit {
                 workspace.reborrow().write(body, edit);
             }
             result.actions.extend(dropped.take());
             if !result.actions.is_empty() {
                 let proposed = std::mem::take(&mut result.actions);
-                let applied = apply_actions(body, workspace.reborrow(), &current, &*panels, locked, &label, proposed);
+                let applied = apply_actions(body, workspace.reborrow(), &current, specs, locked, &label, proposed);
                 result.actions = applied.actions;
                 result.edit.extend(applied.edit);
             }
@@ -483,27 +601,29 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
 /// What the workspace took of a pass's actions.
 struct Applied<P> {
     actions: Vec<Action<P>>,
-    edit: Option<EditEvent<Workspace<P>>>,
+    edit: Option<EditEvent<Arc<Workspace<P>>>>,
 }
 
-/// Applies `proposed` in order to the workspace the binding holds, with the panels' permissions (narrowed when
-/// `locked`). A refused action changes nothing and is left out of the result. The accepted ones are written as one
-/// edit, which a given workspace does not take. `current` is the workspace as the pass started.
+/// Applies `proposed` in order to the workspace the binding holds, with the panels' permissions from `specs` (narrowed
+/// when `locked`; an action may open a panel the layout does not hold). A refused action changes nothing and is left
+/// out of the result. The accepted ones are written as one edit, which a given workspace does not take. `current` is
+/// the workspace as the pass started. New windows take ids above every id the area has shown (`AreaMemory::window_floor`).
 fn apply_actions<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     body: &mut BodyCx<'_>,
-    mut workspace: BindMut<'_, Workspace<P>>,
-    current: &Workspace<P>,
-    panels: &dyn DockPanels<P>,
+    mut workspace: BindMut<'_, Arc<Workspace<P>>>,
+    current: &Arc<Workspace<P>>,
+    specs: &dyn SpecSource<P>,
     locked: bool,
     label: &Label,
     proposed: Vec<Action<P>>,
 ) -> Applied<P> {
     let before = match workspace.read(body) {
         Some(Mixed::Same(held)) => held,
-        _ => current.clone(),
+        _ => Arc::clone(current),
     };
-    let permissions = |panel: &P| panels.permissions(panel);
-    let mut next = before.clone();
+    let permissions = |panel: &P| specs.permissions(panel);
+    let mut next = Workspace::clone(&before);
+    next.raise_window_floor(body.memory::<AreaMemory<P>>().window_floor);
     let mut actions = Vec::new();
     for action in proposed {
         if next.apply(action.clone(), locked, permissions).is_ok() {
@@ -513,7 +633,7 @@ fn apply_actions<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     if actions.is_empty() {
         return Applied { actions, edit: None };
     }
-    let edit = EditEvent::set(Mixed::Same(before), next, Arc::from(label.as_str()), None);
+    let edit = EditEvent::set(Mixed::Same(before), Arc::new(next), Arc::from(label.as_str()), None);
     workspace.write(body, &edit);
     Applied { actions, edit: Some(edit) }
 }
@@ -522,10 +642,12 @@ fn apply_actions<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 struct Input<'i, P> {
     id: Id,
     ctx: &'i Context,
-    current: &'i Workspace<P>,
+    current: &'i Arc<Workspace<P>>,
     config: &'i DockConfig,
     specs: &'i HashMap<P, PanelSpec>,
-    hide: HidePanels<'i, P>,
+    keys: &'i HashMap<PanelKey, P>,
+    hide: HidePanels<'i>,
+    model: ModelKey,
     maximized: Option<&'i P>,
     auto_collapse: bool,
     sizes: DockSizes,
@@ -562,29 +684,44 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
+<<<<<<< HEAD
     let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl, rail_footer, top_inset } = *input;
+=======
+    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl } = *input;
+>>>>>>> origin/next
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
-    let keys: HashMap<PanelKey, P> = current.layout.panels().into_iter().map(|panel| (PanelKey::of(panel), panel.clone())).collect();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
-    let Shown { view, floating } = hide::shown(&current.layout, maximized, hide, shell.as_ref(), &protected);
+    let (hide, floating) = hide::resolved(hide, shell.as_ref());
+    let prune = PruneKey { model, hide, floating, maximized: maximized.map(PanelKey::of) };
+    let view = derived(ctx, id.with("pruned"), &prune, || frame::maximize(current.layout(), maximized, hide, &protected).into_owned());
     let layout: &Layout<P> = &view.layout;
+<<<<<<< HEAD
     let bounds = inset_top(shell.as_ref().map_or(body.rect, ShellCx::float_bounds), top_inset);
     let space = float_space(bounds, &sizes, config, specs);
+=======
+    let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
+    let space = float_space(ctx, bounds, &sizes, config, specs);
+>>>>>>> origin/next
     let scene = Scene {
         dock: id,
+        view: MemoKey::of(&prune),
         sizes,
         config,
         layout,
         specs,
         permissions: rights,
-        keys: &keys,
+        keys,
         space: &space,
         bounds,
         auto_collapse,
         rtl,
+<<<<<<< HEAD
         floated: &current.floated,
         rail_footer,
+=======
+        floated: current.floated(),
+>>>>>>> origin/next
     };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
@@ -603,43 +740,57 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         dock: id,
     };
 
+<<<<<<< HEAD
     let limits = |panel: &P| scene.spec(panel).limits;
     let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
     let stripless = |panel: &P| scene.spec(panel).canvas;
     let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless);
+=======
+    let spec_of = |panel: &P| scene.spec(panel);
+>>>>>>> origin/next
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
     let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
-    let area = SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
-        for (anchor, rect) in split.group_frames::<P>() {
-            let Some(place) = scene.layout.place(&anchor) else { continue };
-            let Some(node) = scene.layout.node_of(&place) else { continue };
-            if let PanelPlace::Node(path) = &place {
+    let area = with_area_rules(&scene.sizes, &spec_of, |rules| {
+        SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
+            DockTargets::<P>::register_room(ctx, id, split.rect);
+            for (anchor, rect) in split.group_frames::<P>() {
+                let Some(place) = scene.layout.place(&anchor) else { continue };
+                let Some(node) = scene.layout.node_of(&place) else { continue };
+                if let PanelPlace::Node(path) = &place {
+                    leaves.push((path.clone(), rect));
+                }
+                pass.leaf(ui, split, node, rect);
+            }
+            let flow = Flow::new(split.rect, rtl);
+            for (edge, rect) in split.dock_frames() {
+                let Some(path) = scene.layout.dock_path(edge) else { continue };
+                let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
                 leaves.push((path.clone(), rect));
+                if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed()) {
+                    shell.reveal_rect(ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
+                }
+                pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
             }
-            pass.leaf(ui, split, node, rect);
-        }
-        let flow = Flow::new(split.rect, rtl);
-        for (edge, rect) in split.dock_frames() {
-            let Some(path) = scene.layout.dock_path(edge) else { continue };
-            let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
-            leaves.push((path.clone(), rect));
-            if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed() && crate::runtime::measure::effect(ctx, "shell::reveal_rect")) {
-                shell.reveal_rect(if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
-            }
-            pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
-        }
+        })
     });
     let mut edit = area.output.edit.events.map(|edited| {
-        let mut next = current.clone();
-        view.write_back(&edited, &mut next.layout);
-        next
+        let mut layout = current.layout().clone();
+        view.write_back(&edited, &mut layout);
+        let resized = match (current.layout().root.as_ref(), layout.root.as_ref()) {
+            (Some(from), Some(to)) => split_changes(from, to).into_iter().map(|(path, size)| Action::resize_split(path, size)).collect(),
+            _ => Vec::new(),
+        };
+        let mut next = Workspace::clone(current);
+        // A divider drag only resizes splits, which no permission or lock refuses.
+        let _ = next.apply_all(resized, false, |_| Permissions::ALL);
+        Arc::new(next)
     });
-    let mut geometry: Vec<Action<P>> = match (current.layout.root.as_ref(), edit.landed().and_then(|landed| landed.layout.root.as_ref())) {
+    let mut geometry: Vec<Action<P>> = match (current.layout().root.as_ref(), edit.landed().and_then(|landed| landed.layout().root.as_ref())) {
         (Some(from), Some(to)) => split_changes(from, to).into_iter().map(|(path, size)| Action::resize_split(path, size)).collect(),
         _ => Vec::new(),
     };
     register_bands(&scene, ctx, body.rect, &leaves);
-    let started = memory.moving.as_ref().map(|moving| &moving.before.layout);
+    let started = memory.moving.as_ref().map(|moving| moving.before.layout());
     let moved = if floating { pass.windows(ui, body, &open, started) } else { None };
     let mut report = pass.report;
     let label: Arc<str> = Arc::from(body.words::<DockWords>().move_window.as_str());
@@ -656,7 +807,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     {
         let place_in = |layout: &Layout<P>| layout.floating.iter().find(|window| window.contains(&anchor)).map(|window| (window.rect, window.edge));
         if let Some((rect, edge)) =
-            event.landed().and_then(|landed| place_in(&landed.layout)).filter(|place| Some(*place) != place_in(&current.layout))
+            event.landed().and_then(|landed| place_in(landed.layout())).filter(|place| Some(*place) != place_in(current.layout()))
         {
             geometry.push(Action::move_floating_with_edge(anchor.clone(), rect, edge));
         }
@@ -698,36 +849,95 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 /// Registers the outer-edge bands and the new-dock bands as the dock's drop spots for the next pass, from the leaves
 /// the split area placed this pass (each as its tree path and rect). A new-dock band runs along a start or end edge
 /// that holds no dock.
-fn register_bands<P: Clone + Eq + Hash + Send + 'static>(scene: &Scene<'_, P>, ctx: &Context, area: Rect, leaves: &[(Vec<bool>, Rect)]) {
+fn register_bands<P: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
+    scene: &Scene<'_, P>,
+    ctx: &Context,
+    area: Rect,
+    leaves: &[(Vec<bool>, Rect)],
+) {
     if scene.layout.root.is_none() {
         return;
     }
     let canvas = |panel: &P| scene.spec(panel).canvas;
     let bands = frame::edge_bands(scene.layout, leaves, &canvas, scene.config, &scene.sizes, scene.rtl);
-    frame::register_edge_bands::<P>(ctx, scene.dock, &bands);
+    frame::register_edge_bands::<P>(ctx, scene.dock, &bands, scene.sizes.strip_reach);
     if scene.config.new_dock_zones {
         let flow = Flow::new(area, scene.rtl);
         let band = scene.sizes.new_dock_band;
         let start = Rect::from_min_size(area.min, Vec2::new(band, area.height()));
         let end = Rect::from_min_max(Pos2::new(area.right() - band, area.top()), area.max);
-        for (side, edge, rect) in [(DockSide::Start, DockEdge::Start, start), (DockSide::End, DockEdge::End, end)] {
+        let edge_line = |x: f32| Rect::from_x_y_ranges(x..=x, area.y_range());
+        let lines = [edge_line(area.left()), edge_line(area.right())];
+        for ((side, edge, rect), line) in [(DockSide::Start, DockEdge::Start, start), (DockSide::End, DockEdge::End, end)].into_iter().zip(lines) {
             if scene.layout.dock_path(edge).is_none() {
-                DockTargets::<P>::register(ctx, scene.dock, DockSpot::NewDock(side), flow.to_physical(rect));
+                let (rect, line) = (flow.to_physical(rect), flow.to_physical(line));
+                DockTargets::<P>::register_band(ctx, scene.dock, DockSpot::NewDock(side), rect, line, scene.sizes.strip_reach);
             }
         }
     }
 }
 
 /// Where floats land in an area whose float bounds are `bounds`: each panel at its spec's float size, else the
-/// default float size of `sizes`.
-fn float_space<P: Clone + PartialEq>(bounds: Rect, sizes: &DockSizes, config: &DockConfig, specs: &HashMap<P, PanelSpec>) -> FloatSpace<P> {
-    let mut space = FloatSpace::new(bounds, sizes).with_side_edge_zones(config.side_edge_zones);
+/// default float size of `sizes`, under the chrome of the windows the dock opens floats in.
+fn float_space<P: Clone + PartialEq>(
+    ctx: &Context,
+    bounds: Rect,
+    sizes: &DockSizes,
+    config: &DockConfig,
+    specs: &HashMap<P, PanelSpec>,
+) -> FloatSpace<P> {
+    let mut space =
+        FloatSpace::new(bounds, sizes).in_os_windows(sizes, native::opens_os_windows(ctx, config)).with_side_edge_zones(config.side_edge_zones);
     for (panel, spec) in specs {
         if let Some(size) = spec.float_size {
             space = space.with_panel_size(panel.clone(), size);
         }
     }
     space
+}
+
+/// The rows of the menu of `panel`'s group, and whether the host gave any (only then does the group show a menu
+/// button; a context request opens the menu either way): the host's rows, then the panel commands the config shows, with
+/// the Move Panel To submenu of the groups the panel can move to.
+fn panel_menu_rows<P: Clone + Eq + Hash>(
+    scene: &Scene<'_, P>,
+    panels: &mut dyn DockPanels<P>,
+    words: &MenuWords,
+    panel: &P,
+) -> (Vec<PanelRow>, bool) {
+    let config = scene.config;
+    let command = |command: DockCommands| PanelRow::Command(CommandRef::from(command));
+    let floating = matches!(scene.layout.place(panel), Some(PanelPlace::Floating { .. }));
+    let mut group = vec![command(DockCommands::FloatPanel)];
+    if floating {
+        group.push(command(DockCommands::DockPanel));
+    }
+    let targets = scene.layout.move_targets(panel, |other| scene.permissions(other));
+    if scene.permissions(panel).movable && !targets.is_empty() {
+        let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label)));
+        let name = Label::from(words.panel_move_to.as_str().to_owned());
+        group.push(PanelRow::Submenu(name, rows.collect()));
+    }
+    if config.close_menu_items {
+        group.extend([command(DockCommands::ClosePanel), command(DockCommands::CloseGroup)]);
+    }
+    if config.group_order_items && matches!(scene.layout.place(panel), Some(PanelPlace::Dock { .. })) {
+        group.extend([command(DockCommands::ToggleMinimized), command(DockCommands::StepGroupUp), command(DockCommands::StepGroupDown)]);
+    }
+    group.push(command(DockCommands::FloatGroup));
+    if config.close_others_item {
+        group.push(command(DockCommands::CloseOthers));
+    }
+    if config.maximize_item {
+        group.push(command(DockCommands::ToggleMaximize));
+    }
+    let mut rows = panels.panel_rows(panel);
+    let hosted = !rows.is_empty();
+    if hosted {
+        rows.push(PanelRow::Separator);
+    }
+    rows.extend(group);
+    (rows, hosted)
 }
 
 /// Whether `spec` is a document's: its group shows its body edge to edge. Every other docked body fills its group's
@@ -773,44 +983,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
-    /// The rows of the menu of `panel`'s group, and whether the host gave any (only then does the group show a menu
-    /// button; a context request opens the menu either way): the host's rows, then the panel commands the config shows, with
-    /// the Move Panel To submenu of the groups the panel can move to.
+    /// The rows of the menu of `panel`'s group, and whether the host gave any ([`panel_menu_rows`]).
     fn menu_rows(&mut self, body: &BodyCx<'_>, panel: &P) -> (Vec<PanelRow>, bool) {
-        let scene = self.scene;
-        let config = scene.config;
-        let command = |command: DockCommands| PanelRow::Command(CommandRef::from(command));
-        let floating = matches!(scene.layout.place(panel), Some(PanelPlace::Floating { .. }));
-        let mut group = vec![command(DockCommands::FloatPanel)];
-        if floating {
-            group.push(command(DockCommands::DockPanel));
-        }
-        let targets = scene.layout.move_targets(panel, |other| scene.permissions(other));
-        if scene.permissions(panel).movable && !targets.is_empty() {
-            let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label)));
-            let name = Label::from(body.words::<MenuWords>().panel_move_to.as_str().to_owned());
-            group.push(PanelRow::Submenu(name, rows.collect()));
-        }
-        if config.close_menu_items {
-            group.extend([command(DockCommands::ClosePanel), command(DockCommands::CloseGroup)]);
-        }
-        if config.group_order_items && matches!(scene.layout.place(panel), Some(PanelPlace::Dock { .. })) {
-            group.extend([command(DockCommands::ToggleMinimized), command(DockCommands::StepGroupUp), command(DockCommands::StepGroupDown)]);
-        }
-        group.push(command(DockCommands::FloatGroup));
-        if config.close_others_item {
-            group.push(command(DockCommands::CloseOthers));
-        }
-        if config.maximize_item {
-            group.push(command(DockCommands::ToggleMaximize));
-        }
-        let mut rows = self.panels.panel_rows(panel);
-        let hosted = !rows.is_empty();
-        if hosted {
-            rows.push(PanelRow::Separator);
-        }
-        rows.extend(group);
-        (rows, hosted)
+        panel_menu_rows(self.scene, &mut *self.panels, &body.words::<MenuWords>(), panel)
     }
 
     /// Runs a panel command on `panel`: the event of a command the host carries out, else its actions. `source` is
@@ -853,12 +1028,42 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
+    /// The grip strip on top of a tool rail the host shows itself: the dock's grip marks over a band that drags the
+    /// group, which floats at `size`, the group's size. A memoized view ([`rail_grip`]) held to the strip, so a frame
+    /// whose input is elsewhere replays it, as the column bars and the groups' tab rows replay.
+    fn rail_grip(&mut self, ui: &mut Ui, anchor: &P, shown: &P, strip: Rect, size: Vec2) {
+        let scene = self.scene;
+        let label = Label::from(scene.spec(shown).label.as_str().to_owned());
+        let mut sent = Vec::new();
+        ui.scope_builder(UiBuilder::new().max_rect(strip), |ui| {
+            let props = RailGrip {
+                unit: DragUnit::Group(anchor.clone()),
+                active: PanelKey::of(shown),
+                movable: scene.permissions(shown).movable,
+                label,
+                sent: Outbox::new(&mut sent),
+            };
+            // Keyed by the rail's group: unique among the rails a dock area shows.
+            let _ = MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui);
+        });
+        // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
+        // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
+        if !sent.is_empty() {
+            let press = ui.input(|i| i.pointer.press_origin());
+            drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
+                drag.source = Some(size);
+                drag.press = press;
+            });
+        }
+    }
+
     /// One group, by the host's `group_view` when it takes the group, else as a `DockGroup` over the host's panels:
     /// shown in a rect, or measured at a width the way it would show, returning its height.
     fn group(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, members: &[P], active: usize, look: Look, at: GroupAt) -> Option<f32> {
         let scene = self.scene;
         let anchor = members.first()?;
         let active = active.min(members.len() - 1);
+<<<<<<< HEAD
         let viewed = match at {
             // The view draws in the group's rect as a layout room of its own: it lays out in the group's room, never in
             // the room the area has left, and a view that fills takes the whole group.
@@ -879,21 +1084,55 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .caption(spec.caption)
             })
             .collect();
+=======
+        // A tool rail (a panel with a grid) that the host shows itself gets the dock's grip strip on top, under its
+        // column bar, as the references' toolbar: the host's view takes the room under it.
+        let grip = if members.get(active).is_some_and(|panel| scene.spec(panel).grid.is_some()) { scene.sizes.grip } else { 0.0 };
+        if let GroupAt::Measure(_) = at
+            && let Some(height) = self.panels.group_view(members, active, ui, at, body)
+        {
+            return Some(height + grip);
+        }
+>>>>>>> origin/next
         let shown = &members[active];
-        let (menu, hosted) = self.menu_rows(body, shown);
-        let permissions = |panel: &P| scene.permissions(panel);
-        let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
+        let words = body.words::<MenuWords>();
+        let ctx = ui.ctx().clone();
         let panels = RefCell::new(&mut *self.panels);
+        // The tab titles, the menu rows and the panel commands' states, built when the group runs.
+        // The tab titles, whether the host gives menu rows and the panel commands' states, built once per pass; the
+        // menu's rows are built only while it is open.
+        let parts: OnceCell<GroupParts> = OnceCell::new();
+        let parts_of = || {
+            parts.get_or_init(|| {
+                let key = (scene.view, PanelKey::of(anchor));
+                // Keyed by their content once built, so a group's tab row replays unless its own titles changed.
+                let titles = derived(&ctx, scene.dock.with(("titles", key.1)), &key, || {
+                    Titles::from_content(
+                        members
+                            .iter()
+                            .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
+                            .collect(),
+                    )
+                });
+                let titles = Titles::clone(&titles);
+                let hosted = !panels.borrow_mut().panel_rows(shown).is_empty();
+                let permissions = |panel: &P| scene.permissions(panel);
+                let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
+                GroupParts { titles, hosted, states }
+            })
+        };
         // The group with `members[at]` shown: as it shows, or as it is measured.
         let make = |at: usize, minimized: bool| {
             let panels = &panels;
-            let mut group = DockGroup::new(anchor.clone(), &titles, PanelKey::of(&members[at]))
+            let words = &words;
+            let GroupParts { titles, hosted, states } = parts_of();
+            let mut group = DockGroup::new(anchor.clone(), titles.clone(), PanelKey::of(&members[at]))
                 .extra(move |ui, body| panels.borrow_mut().group_header(members, at, ui, body))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
-                .menu(menu.clone())
-                .panel_menu_shown(hosted)
+                .menu(move || panel_menu_rows(scene, &mut **panels.borrow_mut(), words, shown).0)
+                .panel_menu_shown(*hosted)
                 .command_states(states.clone());
             if look.in_window {
                 group = group.in_window();
@@ -925,7 +1164,33 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             GroupAt::Show(rect) => rect,
         };
-        let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
+        // One child `Ui` held to the group's rect. It takes the parent's next id, so a change of the group's first tab
+        // keeps every id inside. The host's view runs first, held to the group's rect and clipped to it: it lays out in
+        // the group's room, never in the room the area has left. Where the host leaves the group to the dock, the
+        // group shows in its place. Both run every pass; the host memoizes inside its view, the group inside its
+        // header and its bodies.
+        let (strip, view) = if grip > 0.0 { rect.split_top_bottom_at_y(rect.top() + grip.min(rect.height())) } else { (Rect::NOTHING, rect) };
+        let output = ui
+            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                let taken = ui
+                    .scope_builder(UiBuilder::new().max_rect(view), |ui| {
+                        ui.shrink_clip_rect(view);
+                        panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body)
+                    })
+                    .inner;
+                match taken {
+                    Some(_) => None,
+                    None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output),
+                }
+            })
+            .inner;
+        // A host view took the group: a rail's grip drags the group, as the band of a group's header does.
+        let Some(output) = output else {
+            if strip.is_positive() {
+                self.rail_grip(ui, anchor, shown, strip, rect.size());
+            }
+            return None;
+        };
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
@@ -990,6 +1255,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// The columns of a dock, from the window edge inwards.
     fn dock(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, plan: DockPlan<'_, P>) {
         let scene = self.scene;
+<<<<<<< HEAD
         let widths = fit_widths(&scene.natural(plan.columns), plan.rect.width());
         let reading = plan.flow.to_physical(plan.rect);
         let start = plan.edge == DockEdge::Start;
@@ -998,16 +1264,65 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let span = if start { (cursor, cursor + width) } else { (cursor - width, cursor) };
             cursor = if start { span.1 } else { span.0 };
             let mut cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
+=======
+        let spec = |panel: &P| scene.spec(panel);
+        let cells = column_cells(plan.columns, plan.rect, plan.edge, plan.flow, &scene.sizes, &spec);
+        for (column, cell) in plan.columns.iter().zip(cells) {
+>>>>>>> origin/next
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
-            // A stepped column is as tall as its bar and content, from the top of the dock; content taller than the
-            // dock gets the dock's height and scrolls inside. The rest of its slot is the dock's empty room.
-            if let Some(content) = self.stepped_height(ui, body, column, cell.width(), false) {
-                cell.max.y = (cell.top() + scene.sizes.bar + content).min(cell.bottom());
-            }
+            // A docked column takes the dock's height, a stepped one (a tool rail) too: the references' docked
+            // toolbar keeps its column's surface down to the dock's foot, with the tools at the top
+            // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
+            // tall as its content.
             self.report.placed.push((first.clone(), cell));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
             self.column(ui, body, column, at);
         }
+    }
+
+    /// The steps a resize `change` of the floating window of the stepped `column`, whose first panel is `first`, sets,
+    /// and the window's rect at them: as wide as its steps and as tall as its chrome and its content at that width.
+    /// `fitted` is the content's size under the chrome before the change, `chrome` the height above the window's body
+    /// (`DockSizes::window_chrome`). A grip on the top or bottom edge sets the
+    /// steps by height (the fewest whose content fits), any other grip by width (the most that fit); keyboard Size
+    /// mode, which names no grip, by the side it changed. The window keeps its place: a grip on the left keeps the
+    /// right edge where it is and one on the top the bottom edge, so the window grows or shrinks that way. Reports
+    /// the steps when they change. `None` for a column without steps.
+    fn stepped_resize(
+        &mut self,
+        ui: &mut Ui,
+        body: &mut BodyCx<'_>,
+        column: &Column<P>,
+        first: &P,
+        change: &PlacementChange,
+        (fitted, chrome): (Vec2, f32),
+    ) -> Option<Rect> {
+        let scene = self.scene;
+        let spec_of = |panel: &P| scene.spec(panel);
+        let (grid, steps) = scene.sizes.stepped(column, &spec_of)?;
+        let by_height = match change.kind {
+            PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
+            _ => (change.rect.width() - fitted.x).abs() <= 0.5,
+        };
+        let to = if by_height {
+            let room = change.rect.height() - chrome;
+            grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
+        } else {
+            grid.steps_within(change.rect.width())
+        };
+        if to != steps {
+            self.report.actions.push(Action::set_column_steps(first.clone(), to));
+        }
+        let size = Vec2::new(grid.width(to), chrome + self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0));
+        let left = match change.kind {
+            PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - size.x,
+            _ => change.rect.left(),
+        };
+        let top = match change.kind {
+            PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => change.rect.bottom() - size.y,
+            _ => change.rect.top(),
+        };
+        Some(Rect::from_min_size(Pos2::new(left, top), size))
     }
 
     /// The height of the groups of an expanded stepped column ([`stepped`]) measured at `width`, the width of its
@@ -1015,7 +1330,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn stepped_height(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, width: f32, in_window: bool) -> Option<f32> {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
-        if column.iconic || stepped(column, &spec).is_none() {
+        if column.iconic || scene.sizes.stepped(column, &spec).is_none() {
             return None;
         }
         let mut height = 0.0;
@@ -1030,7 +1345,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn arrow_of(&self, column: &Column<P>) -> ColumnArrow {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
-        ColumnArrow::of(column, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
+        ColumnArrow::of(column, &scene.sizes, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
     }
 
     /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
@@ -1055,6 +1370,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let dock = self.dock;
         let ColumnAt { mut cell, edge, bar, within, open } = at;
         let in_window = bar == ColumnBar::Window;
+        if in_window {
+            DockTargets::<P>::register_room(ui.ctx(), dock, cell);
+        }
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
         // Only a docked column's icons are a rail; a floating window's open flyouts.
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
@@ -1090,11 +1408,22 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
         };
         let work = if column.iconic {
+<<<<<<< HEAD
             let Some(output) = icons(cell, open) else { return };
+=======
+            let shown = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
+                .edge(edge)
+                .opens(opens)
+                .bar(bar)
+                .within(within)
+                .auto_collapse(scene.auto_collapse);
+            let output = shown.show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
+>>>>>>> origin/next
             self.report.flyout.extend(output.edit.events);
             self.rail_work(output.front);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
         } else {
+<<<<<<< HEAD
             if !in_window && scene.rail_beside(column) {
                 // The rail keeps to the dock's window edge and the expanded column shows inward of it.
                 let rail = scene.sizes.iconic_width(column, &spec).min(cell.width());
@@ -1114,14 +1443,17 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 }
             }
             let output = DockColumn::new(name, dock, column, &spec)
+=======
+            let shown = DockColumn::new(name, dock, column, &spec)
+>>>>>>> origin/next
                 .edge(edge)
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
-                .auto_collapse(scene.auto_collapse)
-                .show_groups_at(ui, cell, |group, rect, ui, body| {
-                    self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
-                });
+                .auto_collapse(scene.auto_collapse);
+            let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
+                self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
+            });
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
         };
         self.column_work(column, work);
@@ -1148,7 +1480,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
         if let Some(width) = work.width {
-            match stepped(column, &spec) {
+            match scene.sizes.stepped(column, &spec) {
                 // The edge of a stepped column moves in whole steps: the most that fit where it is dragged.
                 Some((grid, steps)) if !column.iconic => {
                     let to = grid.steps_within(width);
@@ -1188,12 +1520,21 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
     /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
     /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
-    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect.
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. A collapsed window's sides
+    /// resize its column's width within [`DockSizes::iconic_bounds`] (`Action::ResizeIconic`, as a docked collapsed
+    /// column's inner edge does), and the window keeps its edge and its expanded rect's size. An OS window is measured
+    /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
+    /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
+    ///
+    /// A window whose every group is minimized shows its title row and their strips at its rect's place and width
+    /// ([`WindowColumn::minimized`]): its sides resize its width, and its placement keeps its expanded height, so a
+    /// restore shows it at that height again.
     ///
     /// A window whose column has steps ([`stepped`]) is as wide as its steps and as tall as its content at that
     /// width, at its rect's place: a drag of its side sets the most steps that fit the width, one of its top or
     /// bottom the fewest whose content fits the height, and the window keeps its place; a drag of its left side keeps
-    /// its right edge.
+    /// its right edge. An OS window takes that rect at once ([`native::place`]); the app runs its grips, so the OS
+    /// sizes it no other way.
     fn windows(
         &mut self,
         ui: &mut Ui,
@@ -1204,6 +1545,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let ctx = ui.ctx().clone();
         let policy = |panel: &P| scene.permissions(panel);
+        let protected = |panel: &P| scene.permissions(panel).is_protected();
         let spec_of = |panel: &P| scene.spec(panel);
         let mut moved = None;
         for window in &scene.layout.floating {
@@ -1215,10 +1557,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let dock = scene.dock.with(("floating", window.id));
             let group_id = dock.with("window");
             let opening = native::opening(&ctx, scene.config, window, &specs, group_id);
-            let mut actions = vec![HeaderAction::Menu];
-            if rights.iter().all(|rights| rights.movable) {
-                actions.push(HeaderAction::Float);
-            }
+            // An OS window lays out at its own monitor's scale, which sizes its chrome; one in the app window at the
+            // main window's.
+            let scale = opening
+                .spec
+                .as_ref()
+                .and_then(|_| WindowHost::of(&ctx).viewport_of(group_id))
+                .and_then(|viewport| native::pixels_per_point(&ctx, viewport));
+            let window_sizes = scale.map_or(scene.sizes, |scale| scene.sizes.at_scale(scale));
+            let movable = rights.iter().all(|rights| rights.movable);
+            // The title row is the column's bar: its double arrow and Close; the menu opens from a context request on
+            // its band.
+            let mut actions = Vec::new();
             if scene.config.close_button && rights.iter().all(|rights| rights.closable) {
                 actions.push(HeaderAction::Close);
             }
@@ -1230,20 +1580,26 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             target.space = Some(scene.space);
             target.float_on_empty = scene.config.float_on_empty_drop;
             target.title_bar_docks = scene.config.title_bar_docks;
+            // The scene's layout is the pruned view the windows show, so the placing hides nothing more.
+            target.placing = Some(Placing::new(scene.sizes, &spec_of, &protected).window(window.id));
             // The window is an instance of the group scope: its menu's command rows reach it, and run on its active
             // panel through the same path as a docked group's.
             let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated), &active);
             let mut commands = Vec::new();
             let spec = scene.spec(&active);
             let began = started.and_then(|layout| layout.floating.iter().find(|began| began.id == window.id));
-            let (began_rect, began_edge) = began.map_or((opening.rect, window.edge), |began| (began.rect, began.edge));
+            // The window's rect in the app window: for an OS window, where it would sit there.
+            let in_app = opening.spec.as_ref().and_then(|_| native::in_app(&ctx, opening.rect)).unwrap_or(opening.rect);
+            let (began_rect, began_edge) = began.map_or((in_app, window.edge), |began| (began.rect, began.edge));
             let edge = began_edge.unwrap_or_else(|| WindowColumn::nearer_edge(began_rect, scene.bounds, scene.rtl));
             let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
-                WindowColumn::collapsed(edge, size)
+                WindowColumn::collapsed(edge, size, scene.sizes.iconic_bounds(&window.column, &spec_of))
             } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
+            } else if let Some(strips) = scene.sizes.minimized_height(&window.column) {
+                WindowColumn::minimized(edge, strips)
             } else {
                 WindowColumn::expanded(edge)
             }
@@ -1258,6 +1614,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)
                 .id(group_id);
+            if let Some(scale) = scale {
+                group = group.scale(scale);
+            }
             group = match opening.spec.clone() {
                 Some(window_spec) => group.native(window_spec),
                 None => group.bounds(scene.bounds),
@@ -1278,7 +1637,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 while let Some((command, _)) = body.take_command::<DockCommands>() {
                     commands.push(command);
                 }
-                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within: scene.bounds, open: open.clone() };
+                // An OS window's flyouts and other layers take the room around the window (`overlay::layer_room`); an
+                // in-app window's stay in the float area.
+                let within = if opening.spec.is_some() { Rect::NOTHING } else { scene.bounds };
+                let at = ColumnAt { cell: body.rect, edge, bar: ColumnBar::Window, within, open: open.clone() };
                 self.column(ui, body, &window.column, at);
             });
             self.dock = area_dock;
@@ -1288,75 +1650,72 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
             }
+            // The height above the window's body at its scale: the title row, the rule under it, and in the app window
+            // the band over it.
+            let chrome = window_sizes.window_chrome(opening.spec.is_none());
+            // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
+            let resized = output
+                .placed
+                .filter(|change| !matches!(change.kind, PlacementKind::Move))
+                .zip(shape.fitted)
+                .and_then(|(change, fitted)| self.stepped_resize(ui, body, &window.column, &anchor, &change, (fitted, chrome)));
             if opening.spec.is_some() {
                 if let Some(viewport) = WindowHost::of(&ctx).viewport_of(output.response.id) {
+                    // The OS window takes the rect of its steps at once, so the place recorded below is that rect.
+                    if let Some(rect) = resized {
+                        native::send_to(&ctx, viewport, opening.rect, rect);
+                    }
                     self.report.windows.push((anchor.clone(), viewport));
-                    self.report.actions.extend(native::reported(&ctx, window, viewport));
+                    // A move or resize that ends records where the window would sit in the app window, and the edge it
+                    // keeps to: a collapsed window's the edge nearer its strip where it was dropped, as for a window
+                    // in the app window ([`WindowColumn::dropped`]). The window's placement keeps the rect the
+                    // collapsed column shows against that edge.
+                    let mut kept = shape;
+                    if movable
+                        && let Some(change) = output.placed.filter(|change| change.phase == GesturePhase::Commit)
+                        && let Some(rect) = native::in_app(&ctx, change.rect)
+                    {
+                        // A resize of a collapsed window keeps its edge; a move ends where its strip was dropped.
+                        let (rect, keeps) =
+                            if output.collapsed_width.is_some() { (rect, Some(edge)) } else { shape.dropped(rect, scene.bounds, scene.rtl) };
+                        kept.edge = keeps.unwrap_or(kept.edge);
+                        self.report.actions.push(Action::move_floating_with_edge(anchor.clone(), rect, keeps));
+                    }
+                    let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, chrome, scene.rtl));
+                    self.report.actions.extend(reported);
                 }
-            } else if let Some(mut change) = output.placed {
-                // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
+            } else if let Some(mut change) = output.placed.filter(|change| change.kind != PlacementKind::Move || change.phase == GesturePhase::Commit)
+            {
+                // The layer host shows a window its title row moves under the pointer, so the move reaches the workspace
+                // once, when it ends: one edit. A collapsed window keeps its edge until then, and the move ends where its
+                // strip was dropped.
                 let mut keeps = shape.collapsed.map(|_| edge);
-                if change.phase == GesturePhase::Commit {
+                if change.phase == GesturePhase::Commit && output.collapsed_width.is_none() {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
                 }
-                if !matches!(change.kind, PlacementKind::Move)
-                    && let Some(fitted) = shape.fitted
-                    && let Some((grid, steps)) = stepped(&window.column, &spec_of)
-                {
-                    let column = &window.column;
-                    // A grip on the top or bottom edge sets the steps by height, any other grip by width; keyboard Size
-                    // mode, which names no grip, by the side it changed.
-                    let by_height = match change.kind {
-                        PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
-                        _ => (change.rect.width() - fitted.x).abs() <= 0.5,
-                    };
-                    let to = if by_height {
-                        let room = change.rect.height() - scene.sizes.title_row;
-                        grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
-                    } else {
-                        grid.steps_within(change.rect.width())
-                    };
-                    if to != steps {
-                        self.report.actions.push(Action::set_column_steps(anchor.clone(), to));
-                    }
-                    // The window keeps its place and its steps set its size. A grip on the left keeps the right edge
-                    // where it is, and one on the top the bottom edge, so the window grows or shrinks that way.
-                    let left = match change.kind {
-                        PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - grid.width(to),
-                        _ => change.rect.left(),
-                    };
-                    let top = match change.kind {
-                        PlacementKind::Size(ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight) => {
-                            let content = self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0);
-                            change.rect.bottom() - scene.sizes.title_row - content
-                        }
-                        _ => change.rect.top(),
-                    };
-                    change.rect = Rect::from_min_size(Pos2::new(left, top), opening.rect.size());
+                // The window keeps the place of its steps; its size is the steps' own, whatever the rect keeps.
+                if let Some(rect) = resized {
+                    change.rect = Rect::from_min_size(rect.min, opening.rect.size());
                 }
                 if change.phase == GesturePhase::Commit {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });
                 }
                 moved = Some((anchor.clone(), change, keeps));
             }
-            match output.action {
-                // The OS close of a native window arrives here as well, also where the title row offers no Close.
-                Some(HeaderAction::Close) if rights.iter().all(|rights| rights.closable) => {
-                    self.report.actions.push(Action::close_window(anchor.clone()));
-                }
-                Some(HeaderAction::Float) => {
-                    let commands = DockScene::new(scene.layout, scene.space, false, &policy).floated(scene.floated);
-                    if let Ok(docked) = move_actions(&commands, &DragUnit::Window(anchor.clone()), DockTo::Docked) {
-                        self.report.actions.extend(docked);
-                    }
-                }
-                _ => {}
+            // The sides of a collapsed window set its column's width, as a docked collapsed column's inner edge does.
+            if let Some(width) = output.collapsed_width {
+                let work = ColumnWork { iconic: None, picked: None, resized: Vec::new(), width: Some(width), flyout: None };
+                self.column_work(&window.column, work);
+            }
+            // The OS close of a native window arrives here as well, also where the title row offers no Close.
+            if output.action == Some(HeaderAction::Close) && rights.iter().all(|rights| rights.closable) {
+                self.report.actions.push(Action::close_window(anchor.clone()));
             }
             if let Some(item) = picked.get() {
                 self.pick(&active, item);
             }
             // The window's commands run from its body, below the title row.
-            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.title_row);
+            let body = opening.rect.size() - Vec2::new(0.0, chrome);
             for command in commands {
                 self.run(&active, command, Some(body));
             }
@@ -1392,26 +1751,27 @@ fn split_changes<P>(from: &Node<P>, to: &Node<P>) -> Vec<(Vec<bool>, SplitSize)>
 
 /// The workspace edit of a floating window's move or resize, the step `phase` of a gesture that `action`
 /// (`Action::MoveFloating`) places the window by: the gesture runs from the window's `Begin` to its `Commit`, so one
-/// drag is one undo step. `moving` holds the gesture and the workspace it began on; `rights` are the panels'
-/// permissions with the lock applied, which refuse the move of a locked workspace.
+/// drag is one undo step. A move by the title row arrives only as its `Commit`, which sets the place. `moving` holds
+/// the gesture and the workspace it began on; `rights` are the panels' permissions with the lock applied, which refuse
+/// the move of a locked workspace.
 fn window_edit<P: Clone + Eq + Hash>(
     ctx: &Context,
-    current: &Workspace<P>,
+    current: &Arc<Workspace<P>>,
     rights: &HashMap<P, Permissions>,
     moving: &mut Option<Moving<P>>,
     phase: GesturePhase,
     action: Action<P>,
     label: Arc<str>,
-) -> Option<EditEvent<Workspace<P>>> {
+) -> Option<EditEvent<Arc<Workspace<P>>>> {
     let moved = || {
-        let mut next = current.clone();
+        let mut next = Workspace::clone(current);
         let policy = |panel: &P| rights.get(panel).copied().unwrap_or(Permissions::ALL);
-        next.apply(action.clone(), false, policy).ok().map(|_| next)
+        next.apply(action.clone(), false, policy).ok().map(|_| Arc::new(next))
     };
     let begin = |moving: &mut Option<Moving<P>>| {
         let id = crate::runtime::edit::next_gesture_id(ctx);
-        *moving = Some(Moving { id, before: current.clone() });
-        EditEvent::begin(id, Mixed::Same(current.clone()), Arc::clone(&label), None)
+        *moving = Some(Moving { id, before: Arc::clone(current) });
+        EditEvent::begin(id, Mixed::Same(Arc::clone(current)), Arc::clone(&label), None)
     };
     match phase {
         GesturePhase::Begin => Some(begin(moving)),
@@ -1421,19 +1781,40 @@ fn window_edit<P: Clone + Eq + Hash>(
         },
         GesturePhase::Commit => match moving.take() {
             Some(held) => Some(EditEvent::commit(held.id, Mixed::Same(held.before), moved()?)),
-            None => Some(EditEvent::set(Mixed::Same(current.clone()), moved()?, label, None)),
+            None => Some(EditEvent::set(Mixed::Same(Arc::clone(current)), moved()?, label, None)),
         },
         _ => moving.take().map(|held| EditEvent::cancel(held.id, CancelReason::Dismissed, Some(Mixed::Same(held.before)))),
     }
 }
 
-/// Shows `panel`'s body in a group's body; a panel with a content version settles (`DockPanels::content`).
+/// Shows `panel`'s body in a group's body. It runs every pass the group shows; the host memoizes inside it.
 fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, panel: &P, ui: &mut Ui, body: &mut BodyCx<'_>) {
-    let content = panels.borrow().content(panel);
-    match content {
-        Some(version) => {
-            Lazy::new(("panel", PanelKey::of(panel).0), 0.0).settles(true).content(version).show(ui, |ui| panels.borrow_mut().body(panel, ui, body));
-        }
-        None => panels.borrow_mut().body(panel, ui, body),
+    panels.borrow_mut().body(panel, ui, body);
+}
+
+/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to.
+#[derive(MemoProps)]
+struct RailGrip<'a, P> {
+    #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
+    unit: DragUnit<P>,
+    active: PanelKey,
+    movable: bool,
+    label: Label,
+    sent: Outbox<'a, ()>,
+}
+
+/// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
+fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P>, ui: &mut Ui) {
+    let strip = ui.max_rect();
+    let held = GroupGrip::new(props.unit.clone(), props.active)
+        .ticks(true)
+        .movable(props.movable)
+        .ghost(props.label.clone())
+        .label(props.label.clone())
+        .show_at(ui, strip);
+    if held.drag_started {
+        props.sent.send(());
     }
+    // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
+    ui.expand_to_include_rect(strip);
 }

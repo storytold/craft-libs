@@ -29,8 +29,8 @@ fn units(data: &mut StoryData) -> GuideUnits {
 #[story(NewGuideDialog<'static>, covers = [], drive = Drive::Never)]
 fn new_guide_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let units = units(data);
-    let values = data.value("values", NewGuideValues::default());
-    NewGuideDialog::new(units, Bind::bound(values)).opened(Bind::given(true)).show(ui).into()
+    let (values, values_at) = data.value_at("values", NewGuideValues::default());
+    NewGuideDialog::new(units, values_at.bind(values)).opened(Bind::given(true)).show(ui).into()
 }
 
 #[story(NewGuideDialog<'static>, covers = [], drive = Drive::Never)]
@@ -39,8 +39,8 @@ fn new_guide_dialog_edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let axis = if *data.value("horizontal_guide", true) { Axis::Y } else { Axis::X };
     let mut guide = Guide::new(GuideKey::new(1), axis, EDITED_AT);
     guide.color = Some(GuideColor::Magenta.rgba());
-    let values = data.value("values", NewGuideValues::of_guide(&guide, PREFERENCE));
-    NewGuideDialog::edit(units, guide, PREFERENCE, Bind::bound(values)).opened(Bind::given(true)).show(ui).into()
+    let (values, values_at) = data.value_at("values", NewGuideValues::of_guide(&guide, PREFERENCE));
+    NewGuideDialog::edit(units, guide, PREFERENCE, values_at.bind(values)).opened(Bind::given(true)).show(ui).into()
 }
 
 #[story(GuideLayoutDialog<'static>, covers = [], drive = Drive::Never)]
@@ -48,9 +48,9 @@ fn guide_layout_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let units = units(data);
     let existing = *data.value("existing_guides", false);
     let artboards = *data.value("artboards", false);
-    let values = data.value("values", GuideLayoutValues::default());
+    let (values, values_at) = data.value_at("values", GuideLayoutValues::default());
     let document = GuideRect::new(0.0, 0.0, WIDTH, HEIGHT);
-    let mut dialog = GuideLayoutDialog::new(units, document, Bind::bound(values)).opened(Bind::given(true));
+    let mut dialog = GuideLayoutDialog::new(units, document, values_at.bind(values)).opened(Bind::given(true));
     if existing {
         dialog = dialog.existing(vec![Guide::new(GuideKey::new(1), Axis::X, WIDTH / 2.0), Guide::new(GuideKey::new(2), Axis::Y, HEIGHT / 2.0)]);
     }

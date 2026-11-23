@@ -4,10 +4,19 @@
 //! per frame; past [`MAX_DOCUMENT_FACES`] the faces the previous frame did not draw are taken out again, which keeps
 //! memory to the faces on screen. Faces still on screen stay, however many there are.
 //!
+<<<<<<< HEAD
 //! A face may name a chain of other document faces ([`FaceBytes::chain`]): a font split over several subsets (Word
 //! embeds one subset per run of characters) draws each character from the first subset that has it, before the
 //! interface family. The chains are linked in the begin-pass step after a face was added or taken out, when egui has
 //! applied every face the pass before added.
+=======
+//! A face is drawn alone ([`DocumentFaces::face`]: a font sample shows what the face itself has) or over the interface
+//! fonts ([`DocumentFaces::over_interface`]: document text such as an input method's composition, whose characters
+//! the face lacks come from the interface stack, CJK included). A face over the interface fonts is installed by the
+//! begin-pass step of the frame after it is asked for, as a family whose chain is the face followed by the
+//! proportional family's: egui builds a family's chain from the definitions alone, so the chain is written into them
+//! where nothing of the pass has queued definitions of its own.
+>>>>>>> origin/next
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -25,8 +34,17 @@ pub const DOCUMENT_FACES_PER_PASS: usize = 6;
 /// The faces kept before the ones the previous frame did not draw are taken out.
 pub const MAX_DOCUMENT_FACES: usize = 64;
 
+<<<<<<< HEAD
 /// The bytes of a face, its index in a collection, its variation coordinates (axis tag, value) and the faces that
 /// draw what it lacks.
+=======
+/// The largest font file a face over the interface fonts is drawn from, in bytes (16 MiB). egui parses every face of
+/// the definitions again whenever they change, and a document's CJK fallback can be far larger (Microsoft YaHei is
+/// about 19 MB): text in a larger face is drawn in the interface fonts.
+pub const MAX_INTERFACE_FACE_BYTES: usize = 16 << 20;
+
+/// The bytes of a face, its index in a collection and its variation coordinates (axis tag, value).
+>>>>>>> origin/next
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct FaceBytes {
@@ -90,11 +108,13 @@ struct Registered {
     chain: Vec<String>,
 }
 
-/// The context's document faces.
+/// The context's document faces, by family name.
 #[derive(Default)]
 struct Registry {
     faces: HashMap<String, Registered>,
     failed: HashSet<String>,
+    /// Faces over the interface fonts waiting for the next begin-pass step: family name and face.
+    pending: Vec<(String, FontData)>,
     budget: usize,
     frame: u64,
     begun: bool,
@@ -121,12 +141,17 @@ impl Registry {
             return Vec::new();
         }
         self.evicted = Some(now);
-        let stale: Vec<String> = self.faces.iter().filter(|(_, face)| face.used + 1 < now).map(|(key, _)| key.clone()).collect();
-        for key in &stale {
-            self.faces.remove(key);
+        let stale: Vec<String> = self.faces.iter().filter(|(_, face)| face.used + 1 < now).map(|(name, _)| name.clone()).collect();
+        for name in &stale {
+            self.faces.remove(name);
         }
+<<<<<<< HEAD
         self.relink |= !stale.is_empty();
         stale.iter().map(|key| family_name(key)).collect()
+=======
+        self.pending.retain(|(name, _)| !stale.contains(name));
+        stale
+>>>>>>> origin/next
     }
 
     /// The family of every face with a chain, with the families of its chain's registered faces in order.
@@ -155,8 +180,23 @@ impl Registry {
     }
 }
 
-fn family_name(key: &str) -> String {
-    format!("face:{key}")
+/// How a face's family is built.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The face alone.
+    Alone,
+    /// The face, then the proportional family's chain.
+    OverInterface,
+}
+
+impl Kind {
+    /// The family (and face) name of `key`: one per key and kind.
+    fn family_name(self, key: &str) -> String {
+        match self {
+            Kind::Alone => format!("face:{key}"),
+            Kind::OverInterface => format!("face+ui:{key}"),
+        }
+    }
 }
 
 /// What the registry knew of a key.
@@ -166,6 +206,7 @@ enum Known {
     New,
 }
 
+<<<<<<< HEAD
 /// The begin-pass step: starts the frame, evicts the faces past the cap and, after a face was added or taken out,
 /// links the chains. Both happen only here, before any install of the pass can queue its definitions, because they
 /// rebuild them from the applied ones; egui has applied the faces the previous pass added before this step runs.
@@ -178,6 +219,20 @@ fn begin_pass(ctx: &Context) {
     });
     if let Some((stale, chains)) = changed {
         egui_fonts::set_document_faces(ctx, &stale, &chains);
+=======
+/// The begin-pass step: starts the frame, evicts the faces past the cap and installs the faces over the interface fonts
+/// the last frame loaded. Both happen only here, in one edit, before any install of the pass can queue its
+/// definitions, because they rebuild them from the applied ones.
+fn begin_pass(ctx: &Context) {
+    let now = pass::root_frame_nr(ctx);
+    let (stale, pending) = memory::with::<Registry, _>(ctx, |registry| {
+        registry.begin(now);
+        let stale = registry.evict(now);
+        (stale, std::mem::take(&mut registry.pending))
+    });
+    if !stale.is_empty() || !pending.is_empty() {
+        egui_fonts::edit_faces(ctx, &stale, pending);
+>>>>>>> origin/next
     }
 }
 
@@ -200,14 +255,33 @@ impl DocumentFaces {
     /// that returns `None` marks the key unavailable for as long as the context lives. Every call marks the face drawn
     /// in this frame.
     pub(crate) fn face(ctx: &Context, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState {
+        Self::register(ctx, key, Kind::Alone, load)
+    }
+
+    /// The face registered under `key` as a family of its own whose characters the face lacks come from the interface
+    /// fonts (the proportional family's chain, CJK included). As [`face`](Self::face), with two differences: the face
+    /// is ready from the frame after the one that loaded it, and a file larger than [`MAX_INTERFACE_FACE_BYTES`] marks
+    /// the key unavailable. Its keys are apart from `face`'s: the same key may name a face drawn alone too.
+    pub(crate) fn over_interface(ctx: &Context, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState {
+        Self::register(ctx, key, Kind::OverInterface, load)
+    }
+
+    fn register(ctx: &Context, key: &str, kind: Kind, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState {
         begin(ctx);
-        let family = FontRef::named(&family_name(key));
+        let name = kind.family_name(key);
+        let family = FontRef::named(&name);
         let (now, known) = memory::with::<Registry, _>(ctx, |registry| {
-            let known = if registry.failed.contains(key) {
+            let known = if registry.failed.contains(&name) {
                 Known::Failed
+<<<<<<< HEAD
             } else if let Some(added) = registry.faces.get(key).map(|face| face.added) {
                 registry.mark_drawn(key);
                 Known::Added(added)
+=======
+            } else if let Some(face) = registry.faces.get_mut(&name) {
+                face.used = registry.frame;
+                Known::Added(face.added)
+>>>>>>> origin/next
             } else {
                 Known::New
             };
@@ -231,17 +305,30 @@ impl DocumentFaces {
         if !allowed {
             return FaceState::Loading;
         }
-        let Some(bytes) = load() else {
+        let loaded = load().filter(|bytes| kind == Kind::Alone || bytes.bytes.len() <= MAX_INTERFACE_FACE_BYTES);
+        let Some(bytes) = loaded else {
             memory::with::<Registry, _>(ctx, |registry| {
-                registry.faces.remove(key);
-                registry.failed.insert(key.to_owned());
+                registry.faces.remove(&name);
+                registry.failed.insert(name.clone());
             });
             return FaceState::Unavailable;
         };
+<<<<<<< HEAD
         egui_fonts::add_family_face(ctx, &family, bytes.data());
         memory::with::<Registry, _>(ctx, |registry| {
             registry.faces.insert(key.to_owned(), Registered { used: now, added: now, chain: bytes.chain });
             registry.relink = true;
+=======
+        if kind == Kind::Alone {
+            egui_fonts::add_family_face(ctx, &family, bytes.data());
+        }
+        memory::with::<Registry, _>(ctx, |registry| {
+            if kind == Kind::OverInterface {
+                registry.pending.retain(|(pending, _)| *pending != name);
+                registry.pending.push((name.clone(), bytes.data()));
+            }
+            registry.faces.insert(name.clone(), Registered { used: now, added: now })
+>>>>>>> origin/next
         });
         FaceState::Loading
     }

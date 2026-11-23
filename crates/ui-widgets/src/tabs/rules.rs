@@ -15,6 +15,9 @@ pub enum TabKind {
     /// Text tabs: only the labels, the selected one in the text colour and the others dimmed, no tab surface,
     /// divider or close button. Whole titles, every tab in the overflow menu (a row of categories in a dialog).
     Text,
+    /// Ribbon tabs: label-only tabs, the shown tab in semibold, one sliding accent underline. Whole titles, overflow
+    /// at the end of the strip.
+    Ribbon,
 }
 
 /// How tab widths are fitted to the strip.
@@ -23,17 +26,23 @@ pub enum TabKind {
 pub enum FitMode {
     /// Whole widths; only an active tab wider than the strip is cut.
     Whole,
-    /// The widest tabs shrink to the minimum width, then the rest overflow.
-    Shrink,
+    /// The widest tabs shrink to the minimum width, then the rest overflow. With `keep_selected` the selected tab is
+    /// not among the tabs that shrink, and the overflow takes the last tabs first.
+    #[non_exhaustive]
+    Shrink {
+        /// Whether the selected tab keeps its natural width.
+        keep_selected: bool,
+    },
 }
 
 impl FitMode {
-    /// Fits tabs of the `natural` widths into `available`, keeping the `selected` tab. `minimum` is the narrowest a
-    /// shrinking tab becomes and `overflow` the width of the overflow button.
-    pub fn fit(self, natural: &[f32], selected: usize, available: f32, minimum: f32, overflow: f32) -> TabFit {
+    /// Fits tabs of the `natural` widths into `available`, keeping the `selected` tab. Whole widths give the tabs
+    /// marked in `kept` the room before the other tabs (`fit_whole`); shrinking tabs have no kept tabs. `minimum` is
+    /// the narrowest a shrinking tab becomes and `overflow` the width of the overflow button.
+    pub fn fit(self, natural: &[f32], selected: usize, kept: &[bool], available: f32, minimum: f32, overflow: f32) -> TabFit {
         match self {
-            FitMode::Whole => fit_whole(natural, selected, available, overflow),
-            FitMode::Shrink => fit(natural, selected, available, minimum, overflow),
+            FitMode::Whole => fit_whole(natural, selected, kept, available, overflow),
+            FitMode::Shrink { keep_selected } => fit(natural, selected, available, minimum, overflow, keep_selected),
         }
     }
 }
@@ -59,19 +68,38 @@ pub enum OverflowMenu {
 }
 
 impl TabKind {
+<<<<<<< HEAD
     /// How tab widths are fitted: whole titles for text tabs, shrinking for document and panel tabs.
     pub fn fit_mode(self) -> FitMode {
         match self {
             Self::Text => FitMode::Whole,
             Self::Document | Self::Panel => FitMode::Shrink,
+=======
+    /// How tab widths are fitted: whole titles for document, text and ribbon tabs, shrinking for panel tabs.
+    pub fn fit_mode(self) -> FitMode {
+        match self {
+            Self::Document | Self::Text | Self::Ribbon => FitMode::Whole,
+            Self::Panel => FitMode::Shrink { keep_selected: self.keeps_active_width() },
+>>>>>>> origin/next
         }
+    }
+
+    /// Whether the shown tab keeps its whole title while the other tabs shrink: panel tabs.
+    pub fn keeps_active_width(self) -> bool {
+        self == Self::Panel
+    }
+
+    /// Whether a label too long for its tab is clipped at the tab's edge (panel tabs, which shrink to their first
+    /// letters) instead of ending in an ellipsis.
+    pub fn clips_label(self) -> bool {
+        self == Self::Panel
     }
 
     /// Where the overflow button sits: at the strip's end for document and text tabs, after the last tab for panel
     /// tabs.
     pub fn overflow_place(self) -> OverflowPlace {
         match self {
-            Self::Document | Self::Text => OverflowPlace::StripEnd,
+            Self::Document | Self::Text | Self::Ribbon => OverflowPlace::StripEnd,
             Self::Panel => OverflowPlace::AfterTabs,
         }
     }
@@ -79,7 +107,7 @@ impl TabKind {
     /// Which tabs the overflow menu lists: every tab for document and text tabs, the hidden ones for panel tabs.
     pub fn overflow_menu(self) -> OverflowMenu {
         match self {
-            Self::Document | Self::Text => OverflowMenu::AllTabs,
+            Self::Document | Self::Text | Self::Ribbon => OverflowMenu::AllTabs,
             Self::Panel => OverflowMenu::HiddenOnly,
         }
     }
@@ -89,9 +117,14 @@ impl TabKind {
         self == Self::Document
     }
 
-    /// Whether tabs draw only their label, with no surface, indicator or strip fill.
+    /// Whether tabs draw only their label, with no surface, indicator or strip fill: text and ribbon tabs.
     pub fn text_only(self) -> bool {
-        self == Self::Text
+        matches!(self, Self::Text | Self::Ribbon)
+    }
+
+    /// Whether the shown tab is marked by one accent underline that slides to the newly shown tab (ribbon tabs).
+    pub fn slides_underline(self) -> bool {
+        self == Self::Ribbon
     }
 
     /// Whether a middle click closes a closable tab.

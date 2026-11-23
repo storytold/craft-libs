@@ -8,6 +8,7 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::placement::capped;
 use craft_behavior::{Monitor, MonitorKey};
 use craft_host::target::{Caps, ShellInfo};
+use craft_ui::contract::MAX_EXTENT;
 use craft_ui::contract::{Props as _, ShowContainer as _, SizeLimits};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::shell::{DocumentWindow, Wrapped};
@@ -153,4 +154,57 @@ fn a_wrapped_document_window_takes_the_document_between_its_minimum_and_the_scre
     let fallback = wrap_frame(&layered, normal(inner), Some((body_canvas, vec2(800.0, 500.0))));
     assert_eq!(fallback.wrapped, None, "the fallback layer has no OS window to size");
     assert_eq!(fallback.size, None, "nothing goes out without OS windows");
+}
+
+/// A body that fills its room gets the window's room, not a scroll region's unbounded extent, in the OS window and
+/// on the fallback layer.
+#[trial]
+fn a_document_window_body_fills_the_windows_room_and_does_not_scroll() {
+    let inner = Rect::from_min_size(pos2(100.0, 100.0), vec2(600.0, 400.0));
+    let layered_shell = {
+        let shell = ShellInfo::default();
+        shell.clone().caps(shell.caps.difference(Caps::VIEWPORTS))
+    };
+    let system = FakeSystem::new();
+    system.set_monitors(vec![Monitor::new(MonitorKey::new("DP-1", [1920, 1080]), [0, 0], [1920, 1080], 1.0)]);
+    for (mount, windows) in [
+        ("OS window", Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(system)))),
+        ("fallback layer", Windows::with(InstallSpec::new(layered_shell, Arc::new(FakeSystem::new())))),
+    ] {
+        let mut height = f32::NAN;
+        for _ in 0..4 {
+            windows.child_info(normal(inner));
+            windows.frame(vec![], vec![], |ui| {
+                DocumentWindow::new("Landscape.psd").id_salt("landscape").show(ui, |ui, _| {
+                    height = ui.max_rect().height();
+                });
+            });
+        }
+        assert!(height < MAX_EXTENT / 2.0, "{mount}: the body's height is the window's room, got {height}");
+    }
+}
+
+/// A document window at the palette level stands above the app's main window while the app is active (photocraft
+/// floating documents, as the references keep them); without a level it is an ordinary window.
+#[trial]
+fn a_document_window_at_the_palette_level_stands_above_the_main_window() {
+    let level = |palette: bool| {
+        let windows = Windows::new();
+        windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+        let mut seen = None;
+        for _ in 0..3 {
+            let out = windows.frame(vec![], vec![], |ui| {
+                windows.child_info(ViewportInfo { focused: Some(false), ..ViewportInfo::default() });
+                let window = DocumentWindow::new("Landscape.psd");
+                let window = if palette { window.level(craft_ui::runtime::windows::WindowLevel::Palette) } else { window };
+                window.show(ui, |_, _| {});
+            });
+            if let Some((_, builder)) = out.builders.iter().find(|(_, builder)| builder.title.as_deref() == Some("Landscape.psd")) {
+                seen = builder.window_level.or(seen);
+            }
+        }
+        seen
+    };
+    assert_eq!(level(true), Some(egui::WindowLevel::AlwaysOnTop), "a palette-level document window stands above the main window");
+    assert_ne!(level(false), Some(egui::WindowLevel::AlwaysOnTop), "an ordinary document window does not");
 }

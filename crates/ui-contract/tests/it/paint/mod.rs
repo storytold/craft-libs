@@ -1,11 +1,15 @@
-mod backdrop;
+pub(crate) mod backdrop;
 
+<<<<<<< HEAD
 mod draw_place;
 
 mod painters;
+=======
+pub(crate) mod painters;
+>>>>>>> origin/next
 
-mod surround;
+pub(crate) mod surround;
 
-mod text_place;
+pub(crate) mod text_place;
 
-mod texture_store;
+pub(crate) mod texture_store;

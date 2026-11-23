@@ -31,11 +31,19 @@ fn icon_limits() -> Limits {
 /// 10,000 nodes and the nesting at 32 levels; an `<image>` resolves to nothing, so a document reads no other file and
 /// embeds no raster or nested SVG.
 pub fn parse(svg: &[u8]) -> Result<usvg::Tree, String> {
+    parse_styled(svg, None)
+}
+
+/// The render tree of `svg` under the injected style sheet `style_sheet`, or why it was refused: the one bounded
+/// parser, so a layer by class is read by the SVG engine's own selectors.
+#[doc(hidden)]
+pub fn parse_styled(svg: &[u8], style_sheet: Option<&str>) -> Result<usvg::Tree, String> {
     if svg.starts_with(&GZIP_MAGIC) {
         return Err("compressed SVG".to_owned());
     }
     let options = usvg::Options {
         image_href_resolver: usvg::ImageHrefResolver { resolve_data: Box::new(|_, _, _| None), resolve_string: Box::new(|_, _| None) },
+        style_sheet: style_sheet.map(str::to_owned),
         ..usvg::Options::default()
     };
     tree::parse(svg, &icon_limits(), &options).map_err(|e| e.to_string())

@@ -20,8 +20,8 @@ use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::{NumberField, RangeAlert};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use words::PaintBarWords;
@@ -30,7 +30,7 @@ pub use words::PaintBarWords;
 const PRESSURE: &str = "target";
 
 /// The painting tools the bar serves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PaintTool {
     /// The Brush tool.
@@ -43,14 +43,10 @@ pub enum PaintTool {
     MixerBrush,
 }
 
-/// The bar's values.
-#[derive(Clone, Debug, PartialEq)]
+/// The bar's values. The size and the hardness are the preset picker's, which comes before the bar.
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PaintValues<M> {
-    /// The brush size.
-    pub size: f64,
-    /// The brush hardness.
-    pub hardness: f64,
     /// The opacity.
     pub opacity: f64,
     /// The flow.
@@ -78,8 +74,6 @@ impl<M> PaintValues<M> {
     /// options overwrites every field.
     pub fn new(mode: M) -> Self {
         PaintValues {
-            size: 30.0,
-            hardness: 0.5,
             opacity: 1.0,
             flow: 1.0,
             smoothing: Smoothing::default(),
@@ -95,7 +89,7 @@ impl<M> PaintValues<M> {
 }
 
 /// The stroke smoothing options.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Smoothing {
     /// The amount, 0 to 1.
@@ -118,7 +112,7 @@ impl Default for Smoothing {
 }
 
 /// The Mixer Brush's values.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct MixerValues {
     /// Load the brush after each stroke.
@@ -162,7 +156,7 @@ impl Default for MixerValues {
 }
 
 /// What the Eraser tool erases with.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum EraserMode {
     /// A brush.

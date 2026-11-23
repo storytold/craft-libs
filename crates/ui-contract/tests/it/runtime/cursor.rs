@@ -6,7 +6,7 @@ use craft_host::target::{Backend, Os, Runtime, ShellInfo};
 use craft_ui::runtime::cursor;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Frames, install_spec, trial};
-use egui::{CustomCursorImage, Pos2, Vec2, ViewportId};
+use egui::{CustomCursorImage, Pos2, Rect, Vec2, ViewportId};
 use std::sync::Arc;
 
 const AT: Pos2 = Pos2::new(300.0, 300.0);
@@ -235,4 +235,150 @@ fn the_cursor_image_draws_the_pointer_around_its_centre_pixel() {
         assert_eq!(alpha(&image, hot[0], hot[1]), 0, "{scale}: the hotspot shows what is under it");
         assert_eq!(alpha(&image, 0, 0), 0, "{scale}: the corners are clear");
     }
+}
+
+/// The straight RGBA of the pixel at (`x`, `y`).
+fn pixel(image: &CustomCursorImage, x: i32, y: i32) -> [u8; 4] {
+    let at = (y as usize * usize::from(image.size[0]) + x as usize) * 4;
+    [image.rgba[at], image.rgba[at + 1], image.rgba[at + 2], image.rgba[at + 3]]
+}
+
+/// The I-beam is two colours, so it shows on light and dark grounds, and its stem and serifs lie on whole device pixels
+/// at every scale: a stroke is never split over two pixels, which would show as grey fringes of its own.
+#[trial]
+fn the_painted_i_beam_shows_on_light_and_dark_and_keeps_whole_pixel_strokes() {
+    for scale in [1.0, 1.25, 1.5] {
+        let mut frames = frames(linux(), scale);
+        let beam = painted(&mut frames, PaintedCursor::IBeam).image.expect("the I-beam is a window image");
+        let [hx, hy] = beam.hotspot.map(i32::from);
+        let side = i32::from(beam.size[0]);
+        // The stem, across the middle row: one run of pixels with the stroke between halo on both sides.
+        let row: Vec<[u8; 4]> = (0..side).map(|x| pixel(&beam, x, hy)).collect();
+        let first = row.iter().position(|p| p[3] > 0).expect("the stem is drawn") as i32;
+        let last = row.iter().rposition(|p| p[3] > 0).expect("the stem is drawn") as i32;
+        assert!(first < hx && hx < last, "{scale}: halo on both sides of the stem: {first}..{last} about {hx}");
+        assert!(row[first as usize..=last as usize].iter().all(|p| p[3] > 0), "{scale}: the stem is one run");
+        assert_eq!(hx - first, last - hx, "{scale}: the halo is as wide on the left as on the right");
+        assert_ne!(row[hx as usize][..3], row[first as usize][..3], "{scale}: the stroke and its halo differ in colour");
+        assert_eq!(row[first as usize], row[last as usize], "{scale}: the halo is the same on both sides");
+        let mut alphas: Vec<u8> = row.iter().map(|p| p[3]).filter(|a| *a > 0).collect();
+        alphas.sort_unstable();
+        alphas.dedup();
+        assert!(alphas.len() <= 2, "{scale}: no partly covered column across the stem: {alphas:?}");
+        // The serifs, down a column beside the stem: two runs, each of whole pixels.
+        let x = hx + (2.0 * scale).round() as i32;
+        let column: Vec<[u8; 4]> = (0..side).map(|y| pixel(&beam, x, y)).collect();
+        let runs = column.windows(2).filter(|w| w[0][3] == 0 && w[1][3] > 0).count() + usize::from(column[0][3] > 0);
+        assert_eq!(runs, 2, "{scale}: a serif at each end");
+        let mut alphas: Vec<u8> = column.iter().map(|p| p[3]).filter(|a| *a > 0).collect();
+        alphas.sort_unstable();
+        alphas.dedup();
+        assert!(alphas.len() <= 2, "{scale}: no partly covered row across a serif: {alphas:?}");
+        // The path-text pointer with no grabbable end is the beam alone, and the type pointer draws the same stem.
+        let bare = painted(&mut frames, PaintedCursor::path_text(false, false)).image.unwrap();
+        assert_eq!((bare.size, &bare.rgba), (beam.size, &beam.rgba), "{scale}: path text shares the beam");
+        let typed = painted(&mut frames, PaintedCursor::type_on(false)).image.unwrap();
+        let [tx, ty] = typed.hotspot.map(i32::from);
+        for dx in -2..=2 {
+            assert_eq!(pixel(&typed, tx + dx, ty), pixel(&beam, hx + dx, hy), "{scale}: the type pointer's stem at {dx}");
+        }
+    }
+}
+
+/// An arrow turned toward a direction keeps its tip on the hotspot and its body behind the tip, along the opposite
+/// direction, whichever way it points.
+#[trial]
+fn a_turned_arrow_points_along_its_direction_about_the_hotspot() {
+    let mut frames = frames(linux(), 1.0);
+    let mut seen: Vec<CustomCursorImage> = Vec::new();
+    for dir in [Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0), Vec2::new(-1.0, -1.0)] {
+        let image = painted(&mut frames, PaintedCursor::arrow_toward(dir)).image.expect("the arrow is a window image");
+        let [hx, hy] = image.hotspot.map(i32::from);
+        let side = i32::from(image.size[0]);
+        assert!(pixel(&image, hx, hy)[3] > 0, "{dir:?}: the tip is on the hotspot");
+        // The centroid of what is drawn, from the hotspot.
+        let (mut sum, mut count) = (Vec2::ZERO, 0.0f32);
+        for y in 0..side {
+            for x in 0..side {
+                if pixel(&image, x, y)[3] > 0 {
+                    sum += Vec2::new((x - hx) as f32, (y - hy) as f32);
+                    count += 1.0;
+                }
+            }
+        }
+        let behind = (sum / count).normalized().dot(-dir.normalized());
+        assert!(behind > 0.9, "{dir:?}: the body lies behind the tip, cosine {behind}");
+        assert!(seen.iter().all(|other| other.rgba != image.rgba), "{dir:?}: the art differs from the other directions");
+        seen.push(image);
+    }
+}
+
+/// A brush tip outline requested within a region (a canvas's view on the canvas's layer) is a mark on that canvas:
+/// the window takes it whole only while it lies inside the region with no layer over it. At the region's edge, or
+/// under a layer above the region's, its ring paints on the region's layer clipped to the region, under that layer,
+/// and the window takes only its marks.
+#[trial]
+fn a_tip_outline_shows_only_inside_its_region() {
+    const RADIUS: f32 = 40.0;
+    let canvas = egui::LayerId::background();
+    let cover = egui::Id::unique("cover");
+    // One frame with the pointer at `AT`, the tip requested within `clip`, and an area over `over` when given: the
+    // cursor image, and each painted shape's clip with whether it is the ring or the area's fill, in paint order.
+    let run = |frames: &mut Frames, clip: Rect, over: Option<Rect>| {
+        frames.frame_in_viewport(ViewportId::ROOT, vec![moved(AT)], |ui| {
+            let region = cursor::CursorRegion::new(canvas, clip);
+            cursor::request_within(ui.ctx(), Cursor::Painted(PaintedCursor::circle(RADIUS).marked(true, None)), CursorPriority::Tool, region);
+            if let Some(over) = over {
+                egui::Area::new(cover).fixed_pos(over.min).show(ui.ctx(), |ui| {
+                    ui.allocate_space(over.size());
+                    ui.painter().rect_filled(over, 0.0, egui::Color32::RED);
+                });
+            }
+        });
+        let mut paint = frames.take_paint().expect("the frames record their paint");
+        paint.textures_delta.clear();
+        let shapes: Vec<(Rect, Option<bool>)> = paint
+            .shapes
+            .iter()
+            .map(|clipped| {
+                let kind = match &clipped.shape {
+                    egui::Shape::Circle(circle) if circle.radius > RADIUS / 2.0 => Some(true),
+                    // The area fades in, so its red fill is scaled down.
+                    egui::Shape::Rect(rect) if rect.fill.r() > 0 && rect.fill.g() == 0 && rect.fill.b() == 0 => Some(false),
+                    _ => None,
+                };
+                (clipped.clip_rect, kind)
+            })
+            .collect();
+        (frames.cursor_image().cloned(), shapes)
+    };
+    let rings = |shapes: &[(Rect, Option<bool>)]| shapes.iter().filter(|(_, kind)| *kind == Some(true)).map(|(clip, _)| *clip).collect::<Vec<_>>();
+    let mut frames = frames(linux(), 1.0);
+
+    // Inside the region with nothing over it: the whole outline moves with the hardware pointer.
+    let room = Rect::from_center_size(AT, Vec2::splat(400.0));
+    let (image, shapes) = run(&mut frames, room, None);
+    let whole = image.expect("the whole outline is the window's image").size[0];
+    assert!(rings(&shapes).is_empty(), "the image is not painted as well");
+
+    // The region's edge runs under the ring: the ring paints clipped to the region; the window takes the marks.
+    let edge = Rect::from_min_max(Pos2::new(AT.x - RADIUS / 2.0, AT.y - 200.0), Pos2::new(AT.x + 200.0, AT.y + 200.0));
+    let (image, shapes) = run(&mut frames, edge, None);
+    assert!(image.expect("the marks still move with the hardware pointer").size[0] < whole, "the image holds only the marks");
+    let clips = rings(&shapes);
+    assert!(!clips.is_empty() && clips.iter().all(|clip| edge.contains_rect(*clip)), "the ring is cut off at the region's edge: {clips:?}");
+
+    // A layer over part of the ring: the ring paints under it.
+    let over = Rect::from_min_size(Pos2::new(AT.x + RADIUS / 2.0, AT.y - 100.0), Vec2::new(100.0, 200.0));
+    // egui shows a new area from its second frame.
+    run(&mut frames, room, Some(over));
+    let (image, shapes) = run(&mut frames, room, Some(over));
+    assert!(image.expect("the marks").size[0] < whole, "a covered outline is not the window's image");
+    let ring_at = shapes.iter().position(|(_, kind)| *kind == Some(true)).expect("the ring is painted");
+    let cover_at = shapes.iter().position(|(_, kind)| *kind == Some(false)).expect("the area is painted");
+    assert!(ring_at < cover_at, "the ring lies under the layer above the canvas");
+
+    // A request with no region keeps the pointer's own path at any position.
+    let seen = painted(&mut frames, PaintedCursor::circle(RADIUS));
+    assert!(seen.image.is_some() && seen.shapes == 0, "an outline with no region is the window's image");
 }

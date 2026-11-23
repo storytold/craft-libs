@@ -3,8 +3,8 @@
 //! preferences; the default colour is the canvas surround. Artboards show their names above them, and a click on a
 //! name selects the artboard.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
@@ -391,7 +391,7 @@ impl Component for Pasteboard<'_> {
             }
         };
         let shown = |page: &PageFrame| page.name.is_some() || bounds(&view.quad(page.rect)).intersects(view.rect);
-        for page in self.pages.iter().filter(|page| shown(*page)) {
+        for page in self.pages.iter().filter(|page| shown(page)) {
             let quad = view.quad(page.rect);
             if self.border == PageBorder::DropShadow {
                 if aligned {
@@ -412,7 +412,7 @@ impl Component for Pasteboard<'_> {
         if artboards {
             surround();
         }
-        for (at, page) in self.pages.iter().enumerate().filter(|(_, page)| shown(*page)) {
+        for (at, page) in self.pages.iter().enumerate().filter(|(_, page)| shown(page)) {
             let quad = view.quad(page.rect);
             if self.border == PageBorder::Line {
                 edge(&quad, style.outline);

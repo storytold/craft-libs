@@ -27,5 +27,6 @@ pub use outside::outside_pieces;
 pub use quad::{BoxAllow, BoxDrag, BoxHandles, BoxPart, BoxRules, BoxState, Homography, Parts, SKEW_LIMIT, ScaleRule, TransformMode, drag};
 pub use selection_op::SelectionOperation;
 pub use snap::{
-    SNAP_PX, SnapGesture, SnapKind, SnapKinds, SnapLine, SnapOptions, SnapTarget, SnapTargets, across_axis, coordinate_across, motion_across,
+    SNAP_PX, SnapGesture, SnapKind, SnapKinds, SnapLine, SnapOptions, SnapSuspend, SnapTarget, SnapTargets, across_axis, coordinate_across,
+    motion_across,
 };

@@ -18,7 +18,7 @@ use super::session::{FillLimit, FillLimits, FillSession, FillStrokeEvent, Sampli
 use crate::ui::select_mask::EditMode;
 
 /// The tools of Content-Aware Fill's strip: Sampling Brush (B), Lasso (L), Hand (H), Zoom (Z).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum FillTool {
     /// The Sampling Brush.

@@ -56,11 +56,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             let at = xf.map_or(at, |map| map.to_layer(at)) - rect.min.to_vec2();
             if layout.mirrors() && rtl { flow.to_physical(Rect::from_min_size(at, Vec2::ZERO)).min } else { at }
         };
-        let mods_now = crate::runtime::pointer::frame(&ctx).mods;
+        let mods_now = crate::runtime::pointer::frame_raw(&ctx).mods;
         // A click on a row the collection does not take (a caption, a disabled row) is no pick: the layers around the
         // collection (a dropdown's list) stay open.
         if cx.core.activation.as_ref().is_some_and(|activation| !activation.by_key)
-            && let Some(pos) = crate::runtime::pointer::frame(&ctx).pos
+            && let Some(pos) = crate::runtime::pointer::frame_raw(&ctx).pos
             && local(pos).y >= 0.0
             && layout
                 .hit(local(pos), offset)
@@ -102,8 +102,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     // A command on the row, reported when the press ends as a click; the selection stays.
                     self.drags.command = Some(self.source.key(at));
                     self.move_lead(at, LeadSource::Pointer);
+<<<<<<< HEAD
                 } else if !secondary_on_toggle && (primary || !props.primary_picks) {
                     let mods = crate::runtime::pointer::frame(&ctx).mods;
+=======
+                } else if !secondary_on_toggle {
+                    let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
+>>>>>>> origin/next
                     let key = self.source.key(at);
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
@@ -213,7 +218,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
         {
             // A modified click is a command on the thumbnail (load as selection, and so on), not a pick.
-            let mods = crate::runtime::pointer::frame(&ctx).mods;
+            let mods = crate::runtime::pointer::frame_raw(&ctx).mods;
             if !(mods.shift || mods.cmd || mods.alt) {
                 if !self.keeps_pick(at, start.clicks) {
                     self.pick(comp, at, false, false);
@@ -293,7 +298,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // Something over the collection, or a part of a row or of the collection that takes the secondary click itself
         // (its own menu, L-198) and is under the pointer, keeps the request away; a part that picks its item (a thumbnail) is the row's, and the request names
         // it.
-        let released = crate::runtime::pointer::frame(&ctx);
+        let released = crate::runtime::pointer::frame_raw(&ctx);
         let hover = crate::primitives::sensing::read_outcome(&ctx, ArenaId::new(cx.core.id)).hover;
         let menu_at = if released.release == Some(craft_behavior::PointerButton::Secondary)
             && cx.core.response.hovered()
@@ -368,33 +373,37 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.events.push(CollectionEvent::ContextMenu(request));
     }
 
-    /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`): the part's click this pass
-    /// and its rect, the rect the press was hit-tested against.
+    /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`).
     pub(super) fn item_openers(&self, ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<ItemOpener>) -> Vec<(ItemOpener, egui::Response)> {
-        if openers.is_empty() {
-            return Vec::new();
-        }
-        let outcome = crate::primitives::sensing::read_outcome(ctx, ArenaId::new(id));
-        openers
-            .into_iter()
-            .filter_map(|opener| {
-                let rect = crate::runtime::pointer::part_bounds(ctx, opener.item, opener.part)?;
-                let on_part =
-                    |hit: Option<crate::primitives::sensing::Hit>| hit.is_some_and(|hit| hit.owner == opener.item && hit.part == Some(opener.part));
-                let view = response::MemberView {
-                    hovered: outcome.hover.find(|hit| on_part(Some(*hit))).is_some(),
-                    press: response::PressView {
-                        pressed: on_part(outcome.target) && outcome.phase.is_some_and(|phase| phase.button_down()),
-                        clicked: on_part(outcome.activated),
-                        ..response::PressView::default()
-                    },
-                    pointer: ctx.pointer_latest_pos(),
-                };
-                let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
-                Some((opener, response))
-            })
-            .collect()
+        item_openers(ui, ctx, id, enabled, openers)
     }
+}
+
+/// Resolves the item opener responses without duplicating the sensing and response code per collection type.
+fn item_openers(ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<ItemOpener>) -> Vec<(ItemOpener, egui::Response)> {
+    if openers.is_empty() {
+        return Vec::new();
+    }
+    let outcome = crate::primitives::sensing::read_outcome(ctx, ArenaId::new(id));
+    openers
+        .into_iter()
+        .filter_map(|opener| {
+            let rect = crate::runtime::pointer::part_bounds(ctx, opener.item, opener.part)?;
+            let on_part =
+                |hit: Option<crate::primitives::sensing::Hit>| hit.is_some_and(|hit| hit.owner == opener.item && hit.part == Some(opener.part));
+            let view = response::MemberView {
+                hovered: outcome.hover.find(|hit| on_part(Some(*hit))).is_some(),
+                press: response::PressView {
+                    pressed: on_part(outcome.target) && outcome.phase.is_some_and(|phase| phase.button_down()),
+                    clicked: on_part(outcome.activated),
+                    ..response::PressView::default()
+                },
+                pointer: ctx.pointer_latest_pos(),
+            };
+            let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
+            Some((opener, response))
+        })
+        .collect()
 }
 
 /// The id of the response `CollectionResponse::opener` gives for the part `part` of the item `item`.

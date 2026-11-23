@@ -31,17 +31,39 @@ pub struct Opening {
     pub spec: Option<WindowSpec>,
 }
 
-/// Whether the groups of panels with `specs` may open OS windows: the dock's `config` turns them on, the platform
-/// opens them and reports where they are, and every panel allows it.
+/// Whether the groups of panels with `specs` open OS windows: the dock's `config` turns them on, the platform opens
+/// them over the dock's window this pass (the rule the group's mount falls back to a layer by) and reports where they
+/// are, and every panel allows it.
 pub(crate) fn allowed(ctx: &Context, config: &DockConfig, specs: &[PanelSpec]) -> bool {
+    opens_os_windows(ctx, config) && specs.iter().all(|spec| spec.allow_native)
+}
+
+/// Whether the dock opens its floating windows in OS windows: `config` asks for them, and the window host opens OS
+/// windows and reports where they are. A panel may still keep to the app window (`PanelSpec::allow_native`).
+#[doc(hidden)]
+pub fn opens_os_windows(ctx: &Context, config: &DockConfig) -> bool {
     let host = WindowHost::of(ctx);
-    config.native_windows && host.viewports_available() && host.positions_reported() && specs.iter().all(|spec| spec.allow_native)
+    config.native_windows && host.opens_windows() && host.positions_reported()
+}
+
+/// The display scale the OS window `viewport` lays out at: its monitor's scale with the app's zoom, as the window
+/// reported it (`WindowHost::facts`). `None` before it reported one.
+pub fn pixels_per_point(ctx: &Context, viewport: ViewportId) -> Option<f32> {
+    WindowHost::of(ctx).facts(viewport)?.scale.map(|scale| scale * ctx.zoom_factor())
 }
 
 /// The window a group of panels with `specs` opens: a document window when any panel is a document, else a tool
 /// window (a palette level, no taskbar entry).
 pub fn spec_for(specs: &[PanelSpec]) -> WindowSpec {
     if specs.iter().any(|spec| spec.window_kind == WindowKind::Document) { WindowSpec::document() } else { WindowSpec::tool() }
+}
+
+/// The rect in the main window's points of `desktop`, a rect in desktop points: where a window at `desktop` would sit
+/// in the app window, as [`restore`] opens a window from its rect there. `None` while the main window has not
+/// reported its place.
+pub fn in_app(ctx: &Context, desktop: Rect) -> Option<Rect> {
+    let main = WindowHost::of(ctx).facts(ViewportId::ROOT)?;
+    Some(desktop.translate(-main.inner.min.to_vec2()))
 }
 
 /// Where `window` opens on the desktop, in desktop points: its saved placement [`place`]d against the connected
@@ -79,12 +101,20 @@ pub fn opening<P>(ctx: &Context, config: &DockConfig, window: &Floating<P>, spec
 }
 
 /// The action that records where the OS put the native window `window`, shown in `viewport`: its placement, as an
-/// app window's is recorded. `None` while the model already holds what the OS reports, so a window at rest costs no
-/// action.
+/// app window's is recorded, with the rect `kept` gives for the rect the OS shows the window at (outer top-left corner
+/// and inner size, in desktop points), so a collapsed window keeps its expanded rect
+/// ([`WindowColumn::kept`](super::WindowColumn::kept)). `None` while the model already holds what the OS reports, so a
+/// window at rest costs no action.
 #[doc(hidden)]
-pub fn reported<P: Clone>(ctx: &Context, window: &Floating<P>, viewport: ViewportId) -> Option<Action<P>> {
+pub fn reported<P: Clone>(ctx: &Context, window: &Floating<P>, viewport: ViewportId, kept: impl FnOnce(Rect) -> Rect) -> Option<Action<P>> {
     let panel = window.panels().next()?;
-    let next = WindowHost::of(ctx).placement(viewport, window.native.clone())?;
+    let mut next = WindowHost::of(ctx).placement(viewport, window.native.clone())?;
+    if let (false, false, Some(at)) = (next.maximized, next.fullscreen, next.position()) {
+        let rect = kept(Rect::from_min_size(Pos2::from(at), Vec2::from(next.normal.size)));
+        next.normal.size = rect.size().into();
+        next.normal.pos = rect.min.into();
+        next.position_px = Some([(rect.min.x * next.scale).round() as i32, (rect.min.y * next.scale).round() as i32]);
+    }
     let settled = window.native.as_ref().is_some_and(|saved| {
         let near = (0..2).all(|i| (saved.normal.size[i] - next.normal.size[i]).abs() <= SETTLED);
         let mut next = next.clone();
@@ -92,6 +122,21 @@ pub fn reported<P: Clone>(ctx: &Context, window: &Floating<P>, viewport: Viewpor
         near && next == *saved
     });
     (!settled).then(|| Action::set_native(panel.clone(), Some(next)))
+}
+
+/// Sends the native window shown in `viewport`, which the dock model records at `recorded` (its outer top-left
+/// corner and inner size), to `rect` where it differs by more than rounding: the place the dock gives a window it
+/// sizes itself (a column with steps). The window's next report is that place, which [`reported`] records.
+#[doc(hidden)]
+pub fn send_to(ctx: &Context, viewport: ViewportId, recorded: Rect, rect: Rect) {
+    let differs = |delta: Vec2| delta.x.abs() > SETTLED || delta.y.abs() > SETTLED;
+    let host = WindowHost::of(ctx);
+    if differs(rect.min - recorded.min) {
+        host.act(viewport, WindowAction::SetOuterPosition(rect.min));
+    }
+    if differs(rect.size() - recorded.size()) {
+        host.act(viewport, WindowAction::SetInnerSize(rect.size()));
+    }
 }
 
 /// Raises the window of the native group that `output` reports on when the user began moving or resizing it this
@@ -112,12 +157,4 @@ pub(crate) fn fade(ctx: &Context, output: &FloatingGroupOutput) {
     let Some(viewport) = host.viewport_of(output.response.id) else { return };
     let highlighted = drag::moves(ctx, viewport) && drag::mark(ctx).is_some();
     host.act(viewport, WindowAction::SetOpacity(if highlighted { craft_theme::Opacity::MOVING } else { 1.0 }));
-}
-
-/// Tells the window host that the native window of the group `id` is dragged by its title row from the app (the group
-/// docks its window), so the Windows hit test leaves that row to the app.
-pub(crate) fn keeps_app_drag(ctx: &Context, id: egui::Id) {
-    if let Some(viewport) = WindowHost::of(ctx).viewport_of(id) {
-        crate::runtime::windows::keeps_app_drag(ctx, viewport);
-    }
 }

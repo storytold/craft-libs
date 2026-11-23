@@ -4,20 +4,30 @@
 //! request slots and the rows an edit changed, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
+<<<<<<< HEAD
 use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{
     DialogFields, FieldValue, HostedParamDialog, PagerStep, PanePager, Param, ParamDialog, ParamKind, ParamLayout, ParamResult, PreviewState,
 };
 use craft_ui::patterns::presets::PresetRow;
+=======
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
+use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
+use craft_ui::patterns::form_dialogs::{
+    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult,
+};
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
+>>>>>>> origin/next
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::testing::relations::{above, left_of};
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
 use egui::{Key, Modifiers, TextureId, Vec2, vec2};
 use serde_json::json;
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -250,6 +260,112 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     fixture.idle(4);
     let answered = host.borrow_mut().take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::ok);
     assert_eq!(answered.map(|result| result.fields), Some(filed.fields), "the accepted OK closes the dialog with the held values");
+
+    // A form that stays open after an accepted answer (Symbol Insert): the accepted OK hands the values out once, the
+    // held state returns to idle and the dialog is still open with OK enabled.
+    let held = Rc::new(RefCell::new(HeldAnswer::<bool>::new()));
+    let (state, accepted, closed) = (Rc::clone(&held), Rc::new(Cell::new(0)), Rc::new(Cell::new(false)));
+    let (count, ended) = (Rc::clone(&accepted), Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = state.borrow_mut();
+        let shown = FormDialog::own("Insert").held(&mut held).accept_stays_open(true).show(ui, |ui, _, value: &mut bool| {
+            Checkbox::new(Bind::bound(value)).label("Wide").show(ui);
+            true
+        });
+        if shown.accepted.is_some() {
+            count.set(count.get() + 1);
+        }
+        if shown.closed.is_some() {
+            ended.set(true);
+        }
+    });
+    fixture.idle(10);
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.idle(4);
+    assert!(held.borrow().is_waiting(), "Enter files the values and waits");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK waits disabled while the answer is out");
+    assert!(held.borrow_mut().answer(Ok(())), "an answer was filed");
+    fixture.idle(4);
+    assert_eq!(accepted.get(), 1, "the accepted answer comes out once");
+    assert!(!closed.get(), "an accepted answer leaves the dialog open");
+    assert_eq!(held.borrow().state(), None, "the held state is idle again");
+    let ok = fixture.by_label("OK").expect("the dialog is still open");
+    assert!(!fixture.tree().is_disabled_key(ok.node), "OK is enabled again");
+}
+
+// The body's activation is the OK press: under `held`, a double click on a cell that calls `FormCx::accept` files the
+// values once, in a frame that runs twice too, and the dialog stays open waiting with OK disabled.
+#[trial]
+fn a_body_accept_files_a_held_ok_once_and_waits() {
+    let (held, twice, filed, closed) =
+        (Rc::new(RefCell::new(HeldAnswer::<String>::new())), Rc::new(Cell::new(false)), Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(false)));
+    let (state, again, files, ended) = (Rc::clone(&held), Rc::clone(&twice), Rc::clone(&filed), Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = state.borrow_mut();
+        let shown = FormDialog::own("Insert Symbol").held(&mut held).show(ui, |ui, cx, value: &mut String| {
+            let cell = Button::new("Sun").show(ui);
+            if clicked(&cell) {
+                *value = "Sun".to_owned();
+            }
+            if cell.clicks == 2 {
+                cx.accept();
+            }
+            !value.is_empty()
+        });
+        if let Some(values) = held.take() {
+            files.borrow_mut().push(values);
+        }
+        if shown.closed.is_some() {
+            ended.set(true);
+        }
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the frame runs twice");
+        }
+    });
+    fixture.idle(10);
+    let cell = fixture.by_label("Sun").expect("the body's cell");
+    fixture.click(&cell);
+    assert!(filed.borrow().is_empty(), "a single click files nothing");
+    twice.set(true);
+    fixture.click(&cell);
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    twice.set(false);
+    fixture.idle(4);
+    assert_eq!(*filed.borrow(), ["Sun"], "the double click files the values once");
+    assert!(held.borrow().is_waiting(), "the filed values wait for the app's answer");
+    assert!(!closed.get(), "a held accept keeps the dialog open");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK waits disabled for the answer");
+}
+
+// A form without OK shows none, and Enter picks its one Accept-role extra, which keeps its index after Close.
+#[trial]
+fn a_form_without_ok_shows_none_and_enter_picks_its_accept_extra() {
+    let (picked, closed) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(false)));
+    let (picks, ended) = (Rc::clone(&picked), Rc::clone(&closed));
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = FormDialog::own("Mark Entry")
+            .buttons(FormButtons::Close)
+            .extra_buttons([FooterButton::new("Mark All", DialogRole::Other), FooterButton::new("Mark", DialogRole::Accept)])
+            .show(ui, |ui, _, value: &mut bool| {
+                Checkbox::new(Bind::bound(value)).label("Bold").show(ui);
+                true
+            });
+        picks.borrow_mut().extend(shown.picked);
+        if shown.closed.is_some() {
+            ended.set(true);
+        }
+    });
+    fixture.idle(10);
+    assert!(fixture.by_label("OK").is_none(), "a form without OK shows none");
+    assert!(fixture.by_label("Close").is_some(), "its one closing button is Close");
+    // Focus on the check box, so Enter goes to the footer's default button rather than a focused one.
+    let bold = fixture.by_label("Bold").expect("the body's check box");
+    fixture.click(&bold).idle(2);
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert_eq!(*picked.borrow(), [3], "Enter picks Mark, the second extra");
+    assert!(!closed.get(), "the extra keeps the dialog open");
 }
 
 /// A note the host's job gives the dialog.
@@ -490,12 +606,11 @@ fn filter_params(narrow: bool) -> Vec<Param> {
 
 /// A remembering filter dialog; `narrow` offers fewer patterns.
 fn filter(fields: &mut DialogFields, narrow: bool) -> ParamDialog<'_> {
-    let ids: &[&str] = if narrow { &["dots"] } else { &["dots", "stripes"] };
-    let patterns: Vec<PresetRow<String>> = ids.iter().map(|id| PresetRow::item((*id).to_owned(), *id, 0)).collect();
+    let ids: &'static [&'static str] = if narrow { &["dots"] } else { &["dots", "stripes"] };
     ParamDialog::new("filter", "Filter", filter_params(narrow))
         .values(Bind::bound(fields))
         .remember(SaveKey::new("trial.filter"))
-        .patterns(Cow::Owned(patterns))
+        .patterns(PresetSource::new(ids, PresetFns::new(|ids, _| ids.iter().map(|id| PresetRow::item((*id).to_owned(), *id, 0)).collect())))
 }
 
 fn wide_filter(fields: &mut DialogFields) -> ParamDialog<'_> {
@@ -568,6 +683,29 @@ fn enter_on_a_focused_cancel_cancels_the_form() {
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     let closed = seen.get();
     assert!(matches!(closed, Some((reason, false)) if !matches!(reason, CloseReason::Activated | CloseReason::Enter)), "Enter cancels: {closed:?}");
+}
+
+// One Escape in a number field holding typed text cancels the dialog, as in Word and the old apps: the draft does
+// not take the Escape first, and the dialog answers no OK, so the typing goes with it.
+#[trial]
+fn one_escape_over_a_typed_draft_cancels_the_dialog() {
+    let seen = Rc::new(Cell::new(None::<(CloseReason, bool)>));
+    let out = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).show(ui);
+        if let Some(closed) = dialog.closed {
+            out.set(Some((closed, dialog.result.is_some())));
+        }
+    });
+    fixture.settle();
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the radius row has a number field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text("55").settle();
+    let typed = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().and_then(|field| fixture.tree().value_of(field.node).map(str::to_owned));
+    assert_eq!(typed.as_deref(), Some("55"), "the field shows the typing as a draft");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(matches!(seen.get(), Some((CloseReason::Escape, false))), "one Escape cancels the dialog: {:?}", seen.get());
 }
 
 // Alt turns Cancel into Reset, which restores the opening values with the `reset_to` ones over them: a key `reset_to`

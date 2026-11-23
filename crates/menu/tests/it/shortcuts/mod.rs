@@ -1,5 +1,6 @@
 //! The Keyboard Shortcuts dialog, driven pass by pass through `craft_ui::testing::Fixture`.
 mod fixture;
+<<<<<<< HEAD
 mod import_offer;
 mod recorder;
 mod rows;
@@ -18,3 +19,11 @@ fn a_read_only_dialog_opens_at_a_moderate_height() {
     let close = rig.fixture.by_label("Close").expect("the close button");
     assert!(close.rect.bottom() < 560.0, "the dialog's footer sits within a moderate height, not the 700-point window: {:?}", close.rect);
 }
+=======
+pub(crate) mod import_offer;
+pub(crate) mod lists;
+pub(crate) mod recorder;
+pub(crate) mod rows;
+pub(crate) mod sets;
+pub(crate) mod tabs;
+>>>>>>> origin/next

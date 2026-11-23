@@ -11,7 +11,11 @@ use craft_ui::runtime::env::Message;
 use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::load::SizedTexture;
+<<<<<<< HEAD
 use egui::{Color32, ColorImage, Pos2, Rect, TextureId, Ui, Vec2, pos2};
+=======
+use egui::{Color32, ColorImage, Rect, Ui, Vec2, pos2};
+>>>>>>> origin/next
 
 fn printers() -> Vec<Printer> {
     vec![
@@ -30,12 +34,12 @@ fn office() -> Settings {
 fn print_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { duplex: Some(Duplex::LongEdge), ..office() };
     let printers = printers();
-    PrintPanel::new(Bind::bound(data.value("settings", start)), &printers).show(ui).into()
+    PrintPanel::new(data.bind("settings", start), &printers).show(ui).into()
 }
 
 #[story(PrintPanel<'static>, covers = [], drive = Drive::Never)]
 fn print_panel_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PrintPanel::new(Bind::bound(data.value("settings", Settings::default())), &[]).discovering(true).show(ui).into()
+    PrintPanel::new(data.bind("settings", Settings::default()), &[]).discovering(true).show(ui).into()
 }
 
 /// Collate unchecked beside Copies, and Properties… after Refresh.
@@ -78,6 +82,7 @@ fn image_box(sheet: &PrintSheet) -> Rect {
 #[story(PrintPreview<'static>, covers = [Default])]
 fn print_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = preview_sheet(ui);
+<<<<<<< HEAD
     let position = data.value("position", image_box(&sheet).min);
     PrintPreview::new("Print preview", &sheet, Bind::bound(position)).show(ui).into()
 }
@@ -96,6 +101,10 @@ fn print_preview_message(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = PrintSheet::message(LETTER, "The page range selects no pages.".into(), "No pages".into());
     let position = data.value("position", image_box(&sheet).min);
     PrintPreview::new("Print preview", &sheet, Bind::bound(position)).show(ui).into()
+=======
+    let (position, position_at) = data.value_at("position", sheet.image.min);
+    PrintPreview::new("Print preview", &sheet, position_at.bind(position)).show(ui).into()
+>>>>>>> origin/next
 }
 
 /// The image box hangs over the paper's right edge, a position the host refuses.
@@ -103,12 +112,20 @@ fn print_preview_message(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn print_preview_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = preview_sheet(ui);
     let paper = Rect::from_min_size(pos2(0.0, 0.0), sheet.paper);
+<<<<<<< HEAD
     let size = image_box(&sheet).size();
     let on_paper = move |at: &Pos2| {
         if paper.contains_rect(Rect::from_min_size(*at, size)) { Validity::Ok } else { Validity::Refuse(Message::new("Off the paper")) }
     };
     let position = data.value("position", pos2(400.0, 156.0));
     PrintPreview::new("Print preview", &sheet, Bind::bound(position).check(on_paper)).show(ui).into()
+=======
+    let size = sheet.image.size();
+    let position = data.bind("position", pos2(400.0, 156.0)).check_with((paper, size), |(paper, size), at| {
+        if paper.contains_rect(Rect::from_min_size(*at, *size)) { Validity::Ok } else { Validity::Refuse(Message::new("Off the paper")) }
+    });
+    PrintPreview::new("Print preview", &sheet, position).show(ui).into()
+>>>>>>> origin/next
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
@@ -116,22 +133,20 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { duplex: Some(Duplex::LongEdge), ..office() };
     let printers = printers();
     let sheet = sheet(ui, true);
-    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()), &sheet).ready(true).show(ui).into()
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet).ready(true).show(ui).into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = sheet(ui, false);
-    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()), &sheet)
-        .discovering(true)
-        .show(ui)
-        .into()
+    PrintDialog::new(data.bind("settings", Settings::default()), &[], Bind::given(DialogFields::default()), &sheet).discovering(true).show(ui).into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = sheet(ui, false);
+<<<<<<< HEAD
     PrintDialog::new(Bind::bound(data.value("settings", office())), &printers, Bind::given(DialogFields::default()), &sheet)
         .busy(true)
         .show(ui)
@@ -330,4 +345,7 @@ fn print_dialog_section_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
         .ready(true)
         .show(ui)
         .into()
+=======
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet).busy(true).show(ui).into()
+>>>>>>> origin/next
 }

@@ -1,13 +1,15 @@
 //! `PreferencesWindow`: the preferences body in an app-modal `Dialog` that opens in its own OS window where windows
 //! exist.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
-use super::body::{self, BodyOut};
-use super::model::{Closed, PreferencesModel, PreferencesOutput};
+#[cfg(doc)]
+use super::model::PreferencesModel;
+use super::model::{Closed, PreferencesDraft, PreferencesOutput};
+use super::page::PreferencesPage;
 use super::words::PreferencesWords;
-use crate::contract::{Bind, Props as _, Remember, SaveKey, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Props as _, SaveKey, Show as _, ShowContainer as _};
 use crate::dialog::{Dialog, DialogOutput};
 use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::env::{Env, Label};
@@ -16,13 +18,13 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use craft_behavior::{EditEvent, Mixed};
-use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
 use egui::{Ui, Vec2, vec2};
 use std::cell::RefCell;
 use std::sync::Arc;
 
 /// The size the window opens at until the user resizes it.
+<<<<<<< HEAD
 pub const DEFAULT_SIZE: Vec2 = vec2(640.0, 720.0); // design: allow[literal-size/vec2](the window's own opening size in points)
 /// The least size the window may be resized to.
 pub const MIN_SIZE: Vec2 = vec2(420.0, 320.0); // design: allow[literal-size/vec2](the window's own least size in points)
@@ -37,6 +39,11 @@ pub enum PreferencesMode {
     /// Apply changes as they happen; OK closes the window.
     Live,
 }
+=======
+pub const DEFAULT_SIZE: Vec2 = vec2(1040.0, 800.0);
+/// The least size the window may be resized to.
+pub const MIN_SIZE: Vec2 = vec2(560.0, 400.0);
+>>>>>>> origin/next
 
 /// What the window keeps between passes; the host owns it and binds it with [`PreferencesWindow::new`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -55,7 +62,8 @@ pub struct PreferencesState {
 
 /// The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them.
 ///
-/// The host keeps the model ([`PreferencesModel`]) and calls [`show`](PreferencesWindow::show) on every pass the window
+/// The body is a [`PreferencesPage`] over the window's state. The host keeps the model ([`PreferencesModel`] and
+/// [`PreferencesDraft`]) and calls [`show`](PreferencesWindow::show) on every pass the window
 /// should exist; it stops calling to close the window, and does so when the output says `closed`.
 ///
 /// - **Pages and search.** The host builds the pages each pass; the window lists the pages that match the search (the
@@ -104,18 +112,15 @@ struct Session<'h, 'b, H: ?Sized> {
     applied: bool,
 }
 
-impl<H: PreferencesModel + ?Sized> Session<'_, '_, H> {
-    /// Reads the state at the start of the body. A window that has just opened starts with no search and no error.
-    fn begin(&mut self, cx: &mut (impl StageAccess + Remember)) {
+impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
+    /// Reads the state at the start of the body. The page clears the search and the error of a window that has just
+    /// opened.
+    fn begin(&mut self, cx: &mut impl StageAccess) {
         self.before = match self.state.reborrow().read(cx) {
             Some(Mixed::Same(held)) => held,
             _ => PreferencesState::default(),
         };
         self.work = self.before.clone();
-        if cx.appeared() {
-            self.work.search.clear();
-            self.work.error = None;
-        }
     }
 
     /// Writes the state the pass changed through the binding.
@@ -157,12 +162,16 @@ impl<'a> PreferencesWindow<'a> {
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
+<<<<<<< HEAD
     pub fn show<H: PreferencesModel + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
         let PreferencesWindow { state, title, embedded, remember, mode } = self;
+=======
+    pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
+        let PreferencesWindow { state, title, embedded, remember } = self;
+>>>>>>> origin/next
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
-        let units = env.units();
 
         let nested = host.nested_open();
         let can_ok = host.can_ok() && !nested;
@@ -219,6 +228,7 @@ impl<'a> PreferencesWindow<'a> {
                 let mut guard = session.borrow_mut();
                 let session = &mut *guard;
                 session.begin(cx);
+<<<<<<< HEAD
                 let matcher = Matcher::new(&env.folder(), session.work.search.trim());
                 let snap = body::snapshot(&*session.host, &matcher);
                 let mut out = BodyOut::default();
@@ -242,6 +252,14 @@ impl<'a> PreferencesWindow<'a> {
                 }
                 let selected = session.work.selected.clone();
                 session.page = snap.shown.iter().find(|page| page.id == selected).or(snap.shown.first()).map(|page| page.id.clone());
+=======
+                let shown = PreferencesPage::new(Bind::bound(&mut session.work)).show(ui, &mut *session.host);
+                if let Some(request) = shown.pick_color {
+                    pick_color = Some(request);
+                }
+                session.host.nested(ui.ctx());
+                session.page = shown.page;
+>>>>>>> origin/next
                 session.commit(cx);
             });
 

@@ -1,19 +1,32 @@
 //! Save for Web's values: formats, palettes, dither, metadata, views, options, presets, variants, the result and animations.
 
-use super::Last;
 use super::panes::WebPane;
+use super::{Last, percent_of};
 #[cfg(doc)]
 use super::{SaveForWebDialog, four_up_variants};
 use crate::patterns::form_dialogs::host_requests::PreviewRequest;
-use crate::patterns::form_dialogs::sizing::Resample;
+use crate::patterns::form_dialogs::{LinkedSize, MAX_DOCUMENT_SIDE, Resample, resize_from_scale};
 use crate::runtime::env::Label;
+use crate::runtime::env::UnitKind;
 use crate::runtime::memory::SaveKey;
-use craft_behavior::{Selection, SelectionChange, SelectionModel};
+use craft_behavior::{PixelSize, Selection, SelectionChange, SelectionModel};
 use egui::Context;
 use egui::load::SizedTexture;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// Loads both sides in pixels without changing the unit shown in the fields.
+pub(super) fn set_pixels(link: &mut LinkedSize, size: PixelSize) {
+    let unit = link.unit();
+    let linked = link.is_linked();
+    link.set_unit(UnitKind::Pixels);
+    link.lock(false);
+    link.set_width(f64::from(size.width));
+    link.set_height(f64::from(size.height));
+    link.lock(linked);
+    link.set_unit(unit);
+}
 
 /// The formats of Save for Web.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -179,6 +192,12 @@ pub struct SaveForWebOptions {
     pub metadata: WebMetadata,
     /// The output size in percent of the document, 1 to 1000 with two decimals.
     pub percent: f64,
+    /// Exact output dimensions after editing either side, when those take precedence over percent.
+    #[serde(default)]
+    pub size: Option<PixelSize>,
+    /// Makes the other side follow the document's proportions when one side is edited.
+    #[serde(default = "constrain_default")]
+    pub constrain_proportions: bool,
     /// How the pixels are made when the size differs from the document's.
     pub resample: Resample,
     /// The palette colours the user edited, by index, as red, green and blue.
@@ -190,6 +209,10 @@ pub struct SaveForWebOptions {
     /// Whether the export writes an HTML file beside the images.
     #[serde(default = "html_default")]
     pub html: bool,
+}
+
+fn constrain_default() -> bool {
+    true
 }
 
 /// The serde default of [`SaveForWebOptions::html`]: on.
@@ -269,6 +292,8 @@ impl Default for SaveForWebOptions {
             convert_srgb: true,
             metadata: WebMetadata::Copyright,
             percent: 100.0,
+            size: None,
+            constrain_proportions: true,
             resample: Resample::Bicubic,
             palette_edits: BTreeMap::new(),
             slices: WebSlices::All,
@@ -278,10 +303,59 @@ impl Default for SaveForWebOptions {
 }
 
 impl SaveForWebOptions {
-    /// The options as the next open remembers them: the slices and palette edits belong to one document, so they
-    /// are left at their defaults.
+    /// The output size of the current document, including percent-only settings from existing callers.
+    pub(super) fn output_size(&self, original: PixelSize) -> PixelSize {
+        self.size.or_else(|| resize_from_scale(original, self.percent).ok()).unwrap_or(original)
+    }
+
+    /// Keeps supplied exact dimensions within the same bounds as the width and height fields.
+    pub(super) fn clamp_exact_size(&mut self, original: PixelSize) {
+        let Some(size) = self.size else { return };
+        let clamp = |side: u32| side.clamp(1, MAX_DOCUMENT_SIDE as u32);
+        let clamped = PixelSize::new(clamp(size.width), clamp(size.height));
+        if clamped != size {
+            self.size = Some(clamped);
+            self.percent = percent_of(clamped, original);
+        }
+    }
+
+    pub(super) fn apply_size(&mut self, link: &mut LinkedSize) {
+        self.clamp_exact_size(link.original());
+        let size = self.output_size(link.original());
+        if size != link.pixels() {
+            set_pixels(link, size);
+        }
+        link.lock(self.constrain_proportions);
+    }
+
+    pub(super) fn set_exact_size(&mut self, link: &LinkedSize) {
+        self.size = Some(link.pixels());
+        self.percent = percent_of(link.pixels(), link.original());
+    }
+
+    pub(super) fn constrain(&mut self, link: &mut LinkedSize, constrain: bool) {
+        self.constrain_proportions = constrain;
+        link.lock(constrain);
+        if constrain {
+            let unit = link.unit();
+            link.set_unit(UnitKind::Pixels);
+            let width = f64::from(link.pixels().width);
+            link.set_width(width);
+            link.set_unit(unit);
+            self.set_exact_size(link);
+        }
+    }
+
+    /// Starts on the next document's full size with proportions linked.
     pub(super) fn without_document_fields(&self) -> Self {
-        SaveForWebOptions { slices: WebSlices::default(), palette_edits: BTreeMap::new(), ..self.clone() }
+        SaveForWebOptions {
+            percent: 100.0,
+            size: None,
+            constrain_proportions: true,
+            slices: WebSlices::default(),
+            palette_edits: BTreeMap::new(),
+            ..self.clone()
+        }
     }
 
     /// Whether the matte row shows: the matte fills the transparency of formats that cannot keep it.
@@ -318,7 +392,14 @@ impl WebPreset {
     /// Whether the preset is what `current` shows apart from the size, the slices and the palette edits.
     pub fn is_set_in(&self, current: &SaveForWebOptions) -> bool {
         let own = &self.options;
-        own == &SaveForWebOptions { percent: own.percent, slices: own.slices.clone(), palette_edits: own.palette_edits.clone(), ..current.clone() }
+        own == &SaveForWebOptions {
+            percent: own.percent,
+            size: own.size,
+            constrain_proportions: own.constrain_proportions,
+            slices: own.slices.clone(),
+            palette_edits: own.palette_edits.clone(),
+            ..current.clone()
+        }
     }
 }
 

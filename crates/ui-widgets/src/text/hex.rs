@@ -1,8 +1,8 @@
 //! `HexField`: a text field over a colour's hex digits, the `#` side label its row shows before it, and `HexCodec`,
 //! the codec behind it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::TextField;
 use crate::contract::{Bind, GlyphLabel, LabelKind, SideLabel};
@@ -119,9 +119,12 @@ impl<'a> TextField<'a, HexCodec> {
         field
     }
 
+    /// The text before a hex field.
+    pub const HASH: &'static str = "#";
+
     /// The `#` before a hex field: the glyph side label of the `Field` that holds it, in every place a hex field shows.
     pub fn hash_label() -> SideLabel {
-        SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("#")))
+        SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(Self::HASH)))
     }
 
     /// Digits per channel: 2 (`RRGGBB`, the default) or 1 (`RGB`, a web colour).

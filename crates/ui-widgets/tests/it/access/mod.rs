@@ -1,5 +1,6 @@
 //! The accessibility emitter: the label scope and merge rule, announcements, modal inertness, viewports.
 
+<<<<<<< HEAD
 mod scroll_into_view;
 mod step_ends;
 
@@ -21,3 +22,7 @@ fn a_field_help_line_describes_its_control() {
     let field = fixture.by_label("Limit").expect("the field's control");
     assert_eq!(fixture.tree().description_of(field.node), Some(HINT));
 }
+=======
+pub(crate) mod scroll_into_view;
+pub(crate) mod step_ends;
+>>>>>>> origin/next

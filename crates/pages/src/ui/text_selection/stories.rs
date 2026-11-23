@@ -5,10 +5,10 @@ use std::ops::Range;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Show as _, ShowContainer as _};
-use craft_ui::testing::{StoryData, StoryOutput, story};
+use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Pos2, Ui};
 
-use super::{PageTextSource, PageTexts, TextMark, TextMarks, TextSelection, TextSpan};
+use super::{MarkArea, MarkKind, PageTextSource, PageTexts, TextMark, TextMarks, TextSelection, TextSpan};
 use crate::ui::fixtures::demo_placed;
 
 const LINES: [&str; 3] = ["The quick brown fox", "jumps over the lazy dog", "and keeps running"];
@@ -137,6 +137,21 @@ fn run_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(TextMarks<'static>, covers = [Default])]
 fn across_two_pages(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     on_page(ui, 2, &[], Some(TextSelection::new(0, TextSpan::run(40, 1, 12))))
+}
+
+#[story(TextMarks<'static>, covers = [], drive = Drive::Never)]
+fn areas_of_each_kind(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let pages = demo_placed(1, Pos2::new(24.0, 24.0));
+    let areas = [
+        MarkArea::new(0, Rect::new(0.0, 0.0, 90.0, LINE_HEIGHT), MarkKind::Selection),
+        MarkArea::new(0, Rect::new(0.0, LINE_HEIGHT, 90.0, 2.0 * LINE_HEIGHT), MarkKind::Found),
+        MarkArea::new(0, Rect::new(0.0, 2.0 * LINE_HEIGHT, 90.0, 3.0 * LINE_HEIGHT), MarkKind::Current),
+        MarkArea::new(0, Rect::new(0.0, 3.0 * LINE_HEIGHT, 90.0, 4.0 * LINE_HEIGHT), MarkKind::Spoken),
+    ];
+    let mut control = Some(TextMarks::over(&pages).areas(&areas));
+    let stage = craft_ui::testing::stage(ui);
+    let shown = Canvas::new("Page").show_at(ui, stage, |ui, body| control.take().map(|control| control.show_at(ui, body.rect)));
+    shown.inner.flatten().map(StoryOutput::from).unwrap_or_default()
 }
 
 #[story(TextMarks<'static>, covers = [Default])]

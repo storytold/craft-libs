@@ -84,6 +84,12 @@ impl WheelInput {
 ///   Shift + wheel scrolls sideways; there is no ladder step.
 /// - A trackpad pinch zooms about the pointer (Zoom with Trackpad Pinch).
 ///
+/// That is [`WheelScheme::Photoshop`]. Under [`WheelScheme::Document`], a document editor's scheme:
+///
+/// - The wheel scrolls up and down; Shift + wheel scrolls sideways.
+/// - Ctrl or Cmd + wheel (without Alt) steps the zoom ladder one rung a notch about the pointer.
+/// - A pinch zooms as in the Photoshop scheme; Zoom with Scroll Wheel does not apply.
+///
 /// The value keeps the part of a ladder-step notch a trackpad has not finished, so slow scrolling still steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WheelNavigation {
@@ -137,6 +143,9 @@ impl WheelNavigation {
             return Some(WheelAction::Zoom(f64::from(factor)));
         }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
+        if options.wheel == WheelScheme::Document {
+            return self.classify_document(input, notch, scroll_finite);
+        }
         let plain = !input.mods.cmd && !input.mods.ctrl;
         // Whether the modifiers zoom, the zoom factor of one line, and whether Shift turns the zoom into ladder steps.
         let (zooms, line_factor, ladder) = match options.wheel {
@@ -156,6 +165,24 @@ impl WheelNavigation {
             return None;
         }
         let sideways = (input.mods.shift || input.mods.cmd || input.mods.ctrl) && input.scroll.x == 0.0;
+        let scroll = if sideways { Vec2::new(input.scroll.y, 0.0) } else { input.scroll };
+        Some(WheelAction::Pan(scroll))
+    }
+
+    /// The Document scheme's wheel: Ctrl or Cmd without Alt steps whole ladder rungs (a trackpad's partial notches add
+    /// up in the residual); Shift scrolls sideways; anything else scrolls. `plain` is not used for the zoom test because
+    /// it excludes the very keys that zoom here. Every pass that does not zoom drops the residual, so a scroll between
+    /// two half notches never completes a rung.
+    fn classify_document(&mut self, input: WheelInput, notch: f32, scroll_finite: bool) -> Option<WheelAction> {
+        let zooms = (input.mods.cmd || input.mods.ctrl) && !input.mods.alt;
+        if zooms {
+            return scroll_finite.then(|| self.snap(input.along(), notch)).flatten().map(WheelAction::SnapZoom);
+        }
+        self.residual = 0.0;
+        if !scroll_finite || input.scroll == Vec2::ZERO {
+            return None;
+        }
+        let sideways = input.mods.shift && input.scroll.x == 0.0;
         let scroll = if sideways { Vec2::new(input.scroll.y, 0.0) } else { input.scroll };
         Some(WheelAction::Pan(scroll))
     }
@@ -198,5 +225,15 @@ impl WheelNavigation {
             WheelAction::Pan(delta) => super::pan(view, delta),
         }
         *view != before
+    }
+
+    /// The screen point [`apply`](Self::apply) keeps still when `action` zooms `view` with the pointer at `pointer`, for
+    /// a document of `size`; `None` for a pan.
+    pub fn zoom_anchor(view: &CanvasView, action: WheelAction, pointer: Pos2, size: Size) -> Option<Pos2> {
+        match action {
+            WheelAction::Zoom(_) => Some(zoom::wheel_anchor(view, pointer, size)),
+            WheelAction::SnapZoom(_) => Some(pointer),
+            WheelAction::Pan(_) => None,
+        }
     }
 }

@@ -23,6 +23,10 @@ pub(crate) fn save_placement(ctx: &Context, key: &str, placement: &Placement) {
 /// Keeps the window's placement in the store, as [`placement_of`] records it. A minimized window keeps the last
 /// placement it was shown at: Windows reports it as 0 × 0 far off screen, which would reopen at egui's size floor.
 pub(super) fn record_placement(ctx: &Context, viewport: ViewportId, key: &str, facts: &viewports::Facts) {
+<<<<<<< HEAD
+=======
+    // Some systems report a parked rectangle for a minimized window.
+>>>>>>> origin/next
     if facts.minimized {
         return;
     }

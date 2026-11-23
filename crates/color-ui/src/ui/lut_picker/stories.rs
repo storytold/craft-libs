@@ -1,7 +1,7 @@
 //! Stories of the LUT picker.
 
 use super::{LutChoice, LutPicker};
-use craft_ui::contract::{Bind, Props as _, Role, Show as _, Validity};
+use craft_ui::contract::{Props as _, Role, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};
@@ -19,14 +19,14 @@ fn pick_second(fixture: &mut Fixture) {
 
 #[story(LutPicker<'static>, covers = [Default], drive = Drive::Custom(pick_second))]
 fn lut_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = LutPicker::new(Bind::bound(data.value("lut", LutChoice::Builtin("warm")))).label("3D LUT File").show(ui);
+    let shown = LutPicker::new(data.bind("lut", LutChoice::Builtin("warm"))).label("3D LUT File").show(ui);
     let chosen = format!("Chosen: {:?}", data.value("lut", LutChoice::Builtin("warm")));
     StoryOutput::from(shown).readout(chosen)
 }
 
 #[story(LutPicker<'static>, covers = [], drive = Drive::Never)]
 fn lut_picker_loaded(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = LutPicker::new(Bind::bound(data.value("lut", LutChoice::loaded("Film", 33)))).label("3D LUT File").show(ui);
+    let shown = LutPicker::new(data.bind("lut", LutChoice::loaded("Film", 33))).label("3D LUT File").show(ui);
     let chosen = format!("Chosen: {:?}", data.value("lut", LutChoice::loaded("Film", 33)));
     StoryOutput::from(shown).readout(chosen)
 }
@@ -37,7 +37,7 @@ fn lut_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         LutChoice::Builtin(_) => Validity::Refuse(Message::new("Load a file")),
         _ => Validity::Ok,
     };
-    let shown = LutPicker::new(Bind::bound(data.value("lut", LutChoice::Builtin("warm"))).check(refuse_builtin)).label("3D LUT File").show(ui);
+    let shown = LutPicker::new(data.bind("lut", LutChoice::Builtin("warm")).check(refuse_builtin)).label("3D LUT File").show(ui);
     let chosen = format!("Chosen: {:?}", data.value("lut", LutChoice::Builtin("warm")));
     StoryOutput::from(shown).readout(chosen)
 }

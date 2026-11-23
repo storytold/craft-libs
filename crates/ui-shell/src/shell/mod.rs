@@ -17,34 +17,40 @@ mod regions;
 pub use regions::{Slot, SlotSize};
 
 // App shell, canvas panel, screen modes and reveal.
-mod app_shell;
-mod canvas_shell;
-mod opening;
+pub(crate) mod app_shell;
+pub(crate) mod canvas_shell;
+pub(crate) mod opening;
 mod reveal;
 mod screen_mode;
-mod screen_mode_button;
+pub(crate) mod screen_mode_button;
 
 pub use app_shell::{AppShell, AppShellOutput, ShellDialogsCx, ShellRegion, ShellRegionOutput, WindowDialogs};
 pub use canvas_shell::{CanvasPanel, CanvasPanelOutput, slots};
 pub use opening::{OpeningCard, OpeningCardOutput};
-pub use screen_mode::{ScreenMode, ScreenModeCommands};
+pub use screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeSet};
 pub use screen_mode_button::{ScreenModeButton, ScreenModeButtonOutput};
 pub use words::ShellWords;
 
 // Start screen and app windows.
 mod recent;
-mod start;
-mod viewport_window;
+pub(crate) mod recent_list;
+pub(crate) mod start;
+pub(crate) mod viewport_window;
 
 pub use recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
+<<<<<<< HEAD
 pub use start::{
     FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, StartAction, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands,
     StartPlace, StartRecentCommands, StartScreen,
 };
+=======
+pub use recent_list::RecentList;
+pub use start::{StartAction, StartLayout, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands, StartRecentCommands, StartScreen};
+>>>>>>> origin/next
 pub use viewport_window::{ViewportWindow, ViewportWindowOutput};
 
 // Caption buttons: the four families' button, its slot layout and the icon-theme glyphs.
-mod caption_button;
+pub(crate) mod caption_button;
 mod caption_icons;
 
 pub use caption_button::{CaptionButton, CaptionEnd, CaptionPlan, CaptionSlot};
@@ -52,7 +58,7 @@ pub use caption_icons::{CaptionIcon, CaptionIcons, CaptionMask, RenderIconFn};
 pub use craft_window::policy::{CaptionFamily, Captions, Frame, MacInset};
 
 // A document's window: a container in its own OS viewport.
-mod document_window;
+pub(crate) mod document_window;
 
 pub use document_window::{DocumentWindow, DocumentWindowOutput, DocumentWindowStyle, Wrapped};
 

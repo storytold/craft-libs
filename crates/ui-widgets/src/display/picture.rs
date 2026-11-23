@@ -4,6 +4,7 @@
 use super::display_sense;
 use crate::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use crate::list::{ThumbAspect, ThumbSize};
+<<<<<<< HEAD
 use crate::primitives::{ContentPainterCx, Revision, TextureState, TextureStore, TextureStoreOptions, fit_rect, svg_tree};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
@@ -11,9 +12,18 @@ use craft_behavior::{Metrics, Sense};
 use egui::{Color32, ColorImage, Id, Pos2, Rect, Response, Vec2};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+=======
+use crate::primitives::{
+    ContentPainterCx, Priority, Revision, TextureStore, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails, fit_rect,
+};
+use crate::runtime::env::Label;
+use crate::style::{ComponentStyle, StyleCx};
+use craft_behavior::{Metrics, Sense};
+use egui::{ColorImage, Id, Rect, Response, Vec2};
+>>>>>>> origin/next
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// How large a picture is: its height, from a token.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -27,6 +37,9 @@ pub enum PictureSize {
     /// The sample of a thumbnail step in a panel's options dialog (`size.thumb.sample.*`); `ThumbSize::None` shows no
     /// picture.
     Sample(ThumbSize),
+    /// The image at its own size in device pixels, one texel to a pixel (a bitmap drawn for the screen's density).
+    /// A painter or a picture made off the frame has no own size and takes the icon side.
+    DevicePixels,
 }
 
 /// The style of a picture.
@@ -48,8 +61,13 @@ enum Source<'a> {
     Image { key: u64, image: &'a dyn Fn() -> ColorImage },
     /// A content painter that paints into the picture's rect.
     Painter(Paint<'a>),
+<<<<<<< HEAD
     /// An SVG asset, rasterised at the picture's drawn size.
     Svg(&'static [u8]),
+=======
+    /// A picture rendered off the frame by a thumbnail source, shown pending until it arrives.
+    Rendered { key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64> },
+>>>>>>> origin/next
 }
 
 /// A picture of an image the caller makes (`new`), of what a content painter paints (`painter`) or of an SVG asset
@@ -90,10 +108,20 @@ impl<'a> Picture<'a> {
         Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
     }
 
+<<<<<<< HEAD
     /// A picture of the SVG asset `svg`, rasterised through `craft-svg` at the picture's drawn size; a malformed or
     /// oversized SVG draws nothing. `label` names it for a screen reader; an empty one leaves it decorative.
     pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
         Picture::from_source(label, Source::Svg(svg))
+=======
+    /// A picture made off the frame by `source` for `key`: pending, with the framework's placeholder, until the
+    /// source's picture arrives, then fitted as `new`'s texture is. `label` names it for a screen reader.
+    /// The source's picture is asked through [`Thumbnails::state`] at the picture's rect and the screen's density,
+    /// so a `ThumbRender::Later` render runs on the loader's lanes and no pass waits for it; its revision is the
+    /// source's, not the `revision` prop.
+    pub fn rendered(label: impl Into<Label>, key: u64, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64>) -> Self {
+        Picture::from_source(label, Source::Rendered { key, thumbnails, source })
+>>>>>>> origin/next
     }
 
     fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
@@ -124,7 +152,7 @@ impl Component for Picture<'_> {
     fn style(cx: &StyleCx<'_>, key: PictureStyleKey) -> PictureStyle {
         let thumbs = &cx.tokens.size.thumb;
         let height = match key.extent {
-            PictureSize::Icon => cx.control().icon,
+            PictureSize::Icon | PictureSize::DevicePixels => cx.control().icon,
             PictureSize::Thumb(step) => step.pick([thumbs.sm, thumbs.md, thumbs.lg]),
             PictureSize::Sample(step) => step.pick([thumbs.sample.sm, thumbs.sample.md, thumbs.sample.lg]),
         };
@@ -132,6 +160,13 @@ impl Component for Picture<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if let (PictureSize::DevicePixels, Source::Image { key, image }) = (self.extent, &self.source) {
+            // The texture is the measured content: its size is known only once the image is made, so it is made here
+            // and `paint` finds it at this revision and makes nothing.
+            let ctx = cx.ui.ctx();
+            let texture = store(ctx).get_or_put(ctx, (cx.resolved.id, *key), self.revision, *image);
+            return texture.size_vec2() / ctx.pixels_per_point();
+        }
         let height = cx.style.height;
         Vec2::new(self.width(height), height)
     }
@@ -152,13 +187,13 @@ impl Component for Picture<'_> {
         }
         match &self.source {
             Source::Image { key, image } => {
-                let store = TextureStore::<(Id, u64)>::in_context(&cx.ctx, "picture", TextureStoreOptions::thumbnails());
-                let texture = store.get_or_put(&cx.ctx, (cx.resolved.id, *key), self.revision, *image);
+                let texture = store(&cx.ctx).get_or_put(&cx.ctx, (cx.resolved.id, *key), self.revision, *image);
                 let target = fit_rect(cx.content_rect, texture.size_vec2());
-                let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-                ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
+                // The store packs, so the texture is the picture's part of a shared page.
+                ui.content_painter(cx).picture(texture.id, target, texture.uv(), 0.0);
             }
             Source::Painter(paint) => paint(&ui.content_painter(cx), cx.content_rect),
+<<<<<<< HEAD
             Source::Svg(svg) => {
                 let ppp = cx.ctx.pixels_per_point();
                 let size = cx.content_rect.size() * ppp;
@@ -185,6 +220,13 @@ impl Component for Picture<'_> {
                 let target = fit_rect(cx.content_rect, texture.size_vec2());
                 let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
                 ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
+=======
+            Source::Rendered { key, thumbnails, source } => {
+                let rect = cx.content_rect;
+                let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.ctx.pixels_per_point());
+                let state = thumbnails.state(&cx.ctx, *source, key, &request, Priority::VISIBLE);
+                thumbnails.paint(&ui.content_painter(cx), rect, &state, &ThumbPaint::default());
+>>>>>>> origin/next
             }
         }
     }
@@ -194,6 +236,7 @@ impl Component for Picture<'_> {
     }
 }
 
+<<<<<<< HEAD
 /// The longest side, in physical pixels, an SVG picture rasterises at; past it the picture draws nothing.
 const MAX_SVG_SIDE: u32 = 4096;
 /// Bytes drawing one SVG picture may allocate, its target included.
@@ -243,4 +286,10 @@ fn rasterise_svg(svg: &[u8], width: u32, height: u32) -> Option<ColorImage> {
     }))
     .ok()
     .flatten()
+=======
+/// The pictures' store of `ctx`: packed, so many small pictures (style tiles, font samples) share a few page
+/// textures; a larger picture takes a texture of its own.
+fn store(ctx: &egui::Context) -> TextureStore<(Id, u64)> {
+    TextureStore::in_context(ctx, "picture", TextureStoreOptions::thumbnails().packed_small())
+>>>>>>> origin/next
 }

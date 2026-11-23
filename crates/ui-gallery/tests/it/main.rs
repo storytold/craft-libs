@@ -1,11 +1,13 @@
 //! The viewer's integration tests: one binary, run by `libtest-mimic` over the registered trials.
 
-mod mock;
-mod overview;
-mod viewer;
+pub(crate) mod mock;
+pub(crate) mod overview;
+pub(crate) mod panels;
+pub(crate) mod registry;
+pub(crate) mod viewer;
 
-use craft_ui_gallery::testing::registered;
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registered());
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register, craft_ui_gallery::register_all]));
 }

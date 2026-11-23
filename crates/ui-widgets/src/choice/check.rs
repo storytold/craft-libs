@@ -71,7 +71,8 @@ impl Component for Checkbox<'_> {
             };
         }
         CheckboxStyle {
-            metrics: Metrics::new().min_size(Vec2::new(0.0, control.height)),
+            // In a ribbon, the look's row height (`RibbonLook::row`), so check boxes stand at its buttons' pitch.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, crate::buttons::row_height(cx, control.height))),
             focus: cx.focus_look(),
             well: super::indicator(cx, cx.surface(SurfaceKind::Well).radius),
             mark: super::mark(cx),
@@ -84,7 +85,7 @@ impl Component for Checkbox<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS
+        Sense::CLICK | Sense::DRAG | Sense::FOCUS
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, bool>> {
@@ -92,9 +93,13 @@ impl Component for Checkbox<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if cx.activation().is_some() {
-            let on = cx.value().copied().unwrap_or(false);
-            cx.set(!on);
+        let on = cx.value().copied();
+        if let Some(swept) = cx.swept_toggle(on) {
+            if on != Some(swept) {
+                cx.set(swept);
+            }
+        } else if cx.activation().is_some() {
+            cx.set(!on.unwrap_or(false));
         }
     }
 
@@ -114,5 +119,5 @@ impl Component for Checkbox<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;

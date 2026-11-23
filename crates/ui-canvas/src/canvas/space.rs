@@ -40,7 +40,11 @@ pub struct CanvasSpace {
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
+<<<<<<< HEAD
     wheel: Option<craft_behavior::Wheel>,
+=======
+    zoom_anchor: Option<Pos2>,
+>>>>>>> origin/next
 }
 
 impl CanvasSpace {
@@ -61,7 +65,11 @@ impl CanvasSpace {
             pasteboard: PasteboardColor::Default,
             precise: false,
             picture: None,
+<<<<<<< HEAD
             wheel: None,
+=======
+            zoom_anchor: None,
+>>>>>>> origin/next
         }
     }
 
@@ -225,7 +233,26 @@ impl CanvasSpace {
         self.easing
     }
 
+<<<<<<< HEAD
     /// The page keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
+=======
+    /// The screen point the wheel or a pinch zoomed about in this pass, in the canvas root's screen space; `None` when
+    /// neither zoomed (a view command zooms about the centre). A body that keeps its own view state anchors its zoom
+    /// here: the canvas clamps the zoomed view to the document after, which can move the centre (a document no wider
+    /// than the view stays centred), so the change of centre no longer tells which point stayed still.
+    pub fn zoom_anchor(&self) -> Option<Pos2> {
+        self.zoom_anchor
+    }
+
+    /// This space with the point a zoom of this pass kept still ([`zoom_anchor`](Self::zoom_anchor)).
+    #[must_use]
+    pub fn with_zoom_anchor(mut self, anchor: Option<Pos2>) -> Self {
+        self.zoom_anchor = anchor;
+        self
+    }
+
+    /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
+>>>>>>> origin/next
     pub fn keys(&self) -> BodyKeys {
         self.keys
     }
@@ -381,13 +408,37 @@ pub(crate) fn context_menu<C: Component>(cx: &mut Cx<'_, C>, part: impl Into<Par
 
 /// The env value that carries the space of the innermost canvas; `None` outside a canvas and inside a canvas that
 /// has no view.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InCanvas(Option<CanvasSpace>);
 
 impl EnvValue for InCanvas {
     fn root() -> Self {
         InCanvas(None)
     }
+}
+
+/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass: a view under the
+/// canvas runs in every pass of the drag (`GuideDrag` keys in every pass), and replays when no drag is placing one.
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+struct InRulerGuide(Option<super::GuideDrag>);
+
+impl EnvValue for InRulerGuide {
+    fn root() -> Self {
+        InRulerGuide(None)
+    }
+}
+
+/// Publishes the ruler guide of this pass (or none) to a canvas's body.
+pub(super) fn publish_ruler_guide(values: &mut AppValues, guide: Option<super::GuideDrag>) {
+    values.set(InRulerGuide(guide));
+}
+
+/// The guide a drag out of the rulers of the innermost `Canvas` around the component is placing in this pass, as the
+/// rulers report it ([`RulersOutput::guide`](super::RulersOutput::guide)); `Guides` shows and commits it. `None`
+/// outside a canvas, when the canvas shows no rulers, and while no drag runs.
+pub fn ruler_guide(env: &EnvView<'_>) -> Option<super::GuideDrag> {
+    env.get::<InRulerGuide>().0
 }
 
 /// Publishes `space` (or none) to a canvas's body.

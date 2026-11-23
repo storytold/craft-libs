@@ -17,8 +17,8 @@ use craft_theme::{Stateful, States};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The face: the circle the pointer points at.
 const FACE: PartKey = PartKey::new("face");

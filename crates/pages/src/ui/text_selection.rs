@@ -17,8 +17,8 @@ use egui::{CornerRadius, Pos2, Response, Vec2, pos2};
 
 use super::view::PlacedPage;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// A page's text as the selection reads it, glyph by glyph in reading order. Rectangles are page points (origin
 /// top-left).
@@ -268,6 +268,7 @@ struct MarkLook {
     radius: CornerRadius,
     /// How far the current match grows past its glyphs.
     current_grow: f32,
+    /// The accent stroke: the column selection's outline and the underline of spoken text.
     column_outline: StyleColor,
 }
 
@@ -285,29 +286,56 @@ impl MarkLook {
     }
 }
 
-/// Paints the selection and find marks of one placed page: the selection fill, the match fills, the current match
-/// grown. The one painter of both: [`TextMarks`] paints the matches and the tool the selection through it.
+/// One filled mark, `rect` grown by `grow`: the one fill of every mark.
+fn fill_mark(draw: &Draw<'_>, look: &MarkLook, rect: egui::Rect, fill: StyleColor, grow: f32) {
+    draw.fill(&PaintShape::Rect(rect.expand(grow), look.radius), fill);
+}
+
+/// Paints the selection, find and area marks of one placed page: the selection fill, the match fills, the current match
+/// grown. The one painter of all: [`TextMarks`] paints the matches and areas and the tool the selection through it.
+/// Without `text` (a page whose text is not there, or none at all) only the `areas` paint.
 fn paint_marks(
     draw: &Draw<'_>,
     look: &MarkLook,
     placed: &PlacedPage,
-    text: &dyn PageTextSource,
+    text: Option<&dyn PageTextSource>,
     selection: Option<&TextSelection>,
     marks: &[TextMark],
+    areas: &[MarkArea],
 ) {
     let (top, bottom) = placed.band;
     let band = egui::Rect::from_min_max(pos2(placed.rect.min.x, placed.rect.min.y + top), pos2(placed.rect.max.x, placed.rect.min.y + bottom));
     let screen = |r: Rect| egui::Rect::from_two_pos(placed.to_screen(Point::new(r.x0, r.y0)), placed.to_screen(Point::new(r.x1, r.y1)));
     draw.clipped(band, |draw| {
-        for mark in marks.iter().filter(|mark| mark.page == placed.page) {
-            let (fill, grow) = if mark.current { (look.current, look.current_grow) } else { (look.found, 0.0) };
-            for rect in text.line_rects(mark.glyphs.clone()) {
-                draw.fill(&PaintShape::Rect(screen(rect).expand(grow), look.radius), fill);
+        if let Some(text) = text {
+            for mark in marks.iter().filter(|mark| mark.page == placed.page) {
+                let (fill, grow) = if mark.current { (look.current, look.current_grow) } else { (look.found, 0.0) };
+                for rect in text.line_rects(mark.glyphs.clone()) {
+                    fill_mark(draw, look, screen(rect), fill, grow);
+                }
             }
         }
+<<<<<<< HEAD
         if let Some(selection) = selection {
             for rect in selection.rects_on(placed.page, text) {
                 draw.fill(&PaintShape::Rect(screen(rect), look.radius), look.selection);
+=======
+        for area in areas.iter().filter(|area| area.page == placed.page) {
+            let rect = screen(area.rect);
+            let (fill, grow) = match area.kind {
+                MarkKind::Selection => (look.selection, 0.0),
+                MarkKind::Found => (look.found, 0.0),
+                MarkKind::Current | MarkKind::Spoken => (look.current, look.current_grow),
+            };
+            fill_mark(draw, look, rect, fill, grow);
+            if area.kind == MarkKind::Spoken {
+                draw.stroke(&PaintShape::Path(vec![pos2(rect.min.x, rect.max.y), rect.max]), StrokeWidth::Thin, look.column_outline);
+            }
+        }
+        if let (Some(text), Some(selection)) = (text, selection.filter(|selection| selection.page == placed.page)) {
+            for rect in selection.rects(text) {
+                fill_mark(draw, look, screen(rect), look.selection, 0.0);
+>>>>>>> origin/next
             }
         }
     });
@@ -605,7 +633,7 @@ impl CanvasTool for TextSelectTool<'_> {
         let look = MarkLook::of(style);
         for placed in self.pages {
             let Some(text) = self.texts.page(placed.page) else { continue };
-            paint_marks(draw, &look, placed, text, self.state.selection.as_ref(), &[]);
+            paint_marks(draw, &look, placed, Some(text), self.state.selection.as_ref(), &[], &[]);
         }
         if let (Some((page, _)), Some(TextSelection { page: selected, span: TextSpan::Column { from, to } })) =
             (self.state.gesture, self.state.selection)
@@ -667,12 +695,62 @@ pub struct TextMarks<'a> {
     /// The text selection to paint with the marks.
     #[prop]
     selection: Option<TextSelection>,
+    /// The areas to mark, in page points: selection, find and Read Aloud marks that are not glyph ranges.
+    #[prop]
+    areas: &'a [MarkArea],
+}
+
+/// What a [`MarkArea`] marks; each kind has its `MarkLook` fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarkKind {
+    /// A selection.
+    Selection,
+    /// A find match.
+    Found,
+    /// The current find match.
+    Current,
+    /// The text Read Aloud speaks.
+    Spoken,
+}
+
+/// A rectangle of a page to mark, in page points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MarkArea {
+    /// The page index, 0-based.
+    pub page: usize,
+    /// The area in page points.
+    pub rect: craft_behavior::kurbo::Rect,
+    /// What it marks.
+    pub kind: MarkKind,
+}
+
+impl MarkArea {
+    /// The area `rect` of `page`, marking `kind`.
+    pub fn new(page: usize, rect: craft_behavior::kurbo::Rect, kind: MarkKind) -> Self {
+        MarkArea { page, rect, kind }
+    }
+}
+
+/// No page has text: what [`TextMarks::over`] reads, so only its areas paint.
+struct NoTexts;
+
+impl PageTexts for NoTexts {
+    fn page(&self, _: usize) -> Option<&dyn PageTextSource> {
+        None
+    }
 }
 
 impl<'a> TextMarks<'a> {
     /// The `marks` over the placed `pages`, whose text `texts` gives.
     pub fn new(pages: &'a [PlacedPage], texts: &'a dyn PageTexts, marks: &'a [TextMark]) -> Self {
-        TextMarks { common: Common::new(), pages, texts, marks, selection: None }
+        TextMarks { common: Common::new(), pages, texts, marks, selection: None, areas: &[] }
+    }
+
+    /// Marks for [`areas`](Self::areas) alone over the placed `pages`, with no text source.
+    pub fn over(pages: &'a [PlacedPage]) -> Self {
+        TextMarks { common: Common::new(), pages, texts: &NoTexts, marks: &[], selection: None, areas: &[] }
     }
 }
 
@@ -701,8 +779,7 @@ impl Component for TextMarks<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let draw = ui.draw();
         for placed in self.pages {
-            let Some(text) = self.texts.page(placed.page) else { continue };
-            paint_marks(&draw, &cx.style.look, placed, text, self.selection.as_ref(), self.marks);
+            paint_marks(&draw, &cx.style.look, placed, self.texts.page(placed.page), self.selection.as_ref(), self.marks, self.areas);
         }
     }
 

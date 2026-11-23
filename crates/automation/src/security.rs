@@ -508,4 +508,4 @@ impl std::io::Read for AuthDeadlineStream {
 
 #[cfg(test)]
 #[path = "security_tests.rs"]
-mod security_tests;
+pub(crate) mod security_tests;

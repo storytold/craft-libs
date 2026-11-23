@@ -27,7 +27,7 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
     Bind, CollectionEvent, NoValue, Outcome, Pad, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::list::{List, ListRow};
@@ -41,8 +41,8 @@ use egui::{Context, Response, Ui};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The dialog's words, English by default.
@@ -254,7 +254,7 @@ impl CheckSpellingDialog {
         ];
         let buttons = std::iter::once(FooterButton::new(words.done.clone(), DialogRole::Accept))
             .chain(actions.iter().map(|(label, _)| FooterButton::new((*label).clone(), DialogRole::Other).stays_open(true).enabled(has_item)));
-        let dialog = Dialog::new(words.title.clone()).side_buttons(true).buttons(buttons).opened(Bind::bound(open));
+        let dialog = Dialog::new(words.title.clone()).button_place(ButtonPlace::Side).buttons(buttons).opened(Bind::bound(open));
         let shown = dialog.show(ui, |ui, _| {
             let word = item.as_ref().map_or_else(String::new, |i| i.word.clone());
             Field::new(words.not_in_dictionary.clone()).id_salt("word").show(ui, |ui, _| {

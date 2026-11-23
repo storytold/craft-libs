@@ -164,8 +164,6 @@ pub struct NoticeStyle {
     /// The icon's side and colour.
     #[style(icon)]
     icon: IconLook,
-    /// The width of every card, padding included, where the room allows.
-    card_width: f32,
     /// The widest column of the centred layout.
     reading_width: f32,
 }
@@ -173,6 +171,9 @@ pub struct NoticeStyle {
 /// The widest column of a centred notice, in body text sizes: about 460 at the 12 point body, the empty states'
 /// column in the source apps.
 const READING_IN_BODY_SIZES: f32 = 38.5;
+
+/// The width of every card of a toast stack, padding included, where the room allows, in points, in every density.
+const CARD_WIDTH: f32 = 360.0;
 
 /// A message in a tone. The tone picks the icon and the colours; the neutral tone reads muted and has no icon. The
 /// message is the label; a title above it is optional. A centred notice can host the app's own leaves under its
@@ -352,7 +353,7 @@ impl<'a> Notice<'a> {
         self.actions
             .iter()
             .map(|action| match &action.command {
-                Some(command) => cx.resolve_command(command.clone()).map_or(Label::Empty, |resolved| Label::from(resolved.label)),
+                Some(command) => cx.resolve_command(command.clone()).map_or(Label::Empty, |resolved| Label::from(resolved.label.clone())),
                 None => action.label.clone(),
             })
             .collect()
@@ -589,6 +590,7 @@ impl Component for Notice<'_> {
             detail,
             line,
             more,
+<<<<<<< HEAD
             icon: if key.layout == NoticeLayout::Centred {
                 // An empty state's picture: large and quiet above its message.
                 IconLook::new(cx.tokens.size.icon.lg * EMPTY_ICON_IN_LARGE, stateful(muted))
@@ -596,6 +598,9 @@ impl Component for Notice<'_> {
                 IconLook::new(control.icon, stateful(tone))
             },
             card_width: cx.tokens.size.notice.width,
+=======
+            icon: IconLook::new(control.icon, stateful(tone)),
+>>>>>>> origin/next
             reading_width: cx.tokens.typography.get(TypeRole::Body).size * READING_IN_BODY_SIZES,
         }
     }
@@ -609,8 +614,12 @@ impl Component for Notice<'_> {
             // that hosts content (a progress bar) has no text width of its own and takes the card width.
             (NoticeLayout::Card | NoticeLayout::Toast, room) => {
                 let padding = cx.style.metrics.padding;
+<<<<<<< HEAD
                 let cap = cx.style.card_width - padding.start - padding.end;
                 let width = if self.content_sizes.is_empty() { natural.min(cap) } else { cap };
+=======
+                let width = CARD_WIDTH - padding.start - padding.end;
+>>>>>>> origin/next
                 room.map_or(width, |room| width.min(room))
             }
             (NoticeLayout::Centred, None) => natural.min(cx.style.reading_width),

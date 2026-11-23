@@ -2,6 +2,7 @@ Craft App Libraries
 ===================
 
 <a href="https://sonarcloud.io/project/overview?id=storytold_craft-libs"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+<a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/craft-libs?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 
 This repo contains libraries used by the various Craft Apps. It's a Rust monorepo workspace, and the libraries can be included by any Craft Apps that need them.
 
@@ -288,7 +289,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
   (`isobmff`), Matroska/WebM (`matroska`) and MXF (`mxf`) demuxers and muxers, Ogg (`ogg`), AVI (`avi`) and
-  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
+  MPEG-TS/PS (`mpegts`) demuxers, from FilmCraft, a Sierra VMD (`vmd`) demuxer, and an ISO BMFF box reader. Containers only; codecs are in `craft-audio`, and
   video codecs will go in a separate crate.
 - [`craft-lottie`](crates/lottie/README.md): Lottie (Bodymovin) JSON: the document model of
   lottie-spec 1.0 (animation, assets, layers by type, shape items, masks, effects, text, markers)
@@ -341,6 +342,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-plotter`](crates/plotter/README.md): cutter and pen-plotter command languages: HP-GL,
   DMPL and GP-GL (plain and the Silhouette dialect, three generations, registration marks) from a
   job in millimetres, plus the Silhouette device queries and reply parsers. No I/O.
+- [`craft-ppt-binary`](crates/ppt-binary/README.md): the PowerPoint 97-2003 binary format (`.ppt`, `.pot`, `.pps`;
+  [MS-PPT], [MS-ODRAW]) read into `craft-pptx`, on `craft-cfb`. Import only. DeckCraft's reader.
 - [`craft-pptx`](crates/pptx/README.md): PresentationML, the model of a `.pptx` presentation:
   masters, layouts, slides, shapes, placeholders and their inheritance, transitions and animations,
   comments, sections, media and kept parts. From DeckCraft. DrawingML comes from `craft-drawingml`.
@@ -445,7 +448,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-kra`](crates/kra/README.md): Krita documents (`.kra`, `.krz`), read: the ZIP archive, the `maindoc.xml` node tree as written, and the tiled pixel files with their LZF compression, a tile at a time. From PhotoCraft.
 - [`craft-xcf`](crates/xcf/README.md): GIMP XCF images (`.xcf`, `.xcf.gz`), read: header, properties, parasites, layers with their item paths, channels, and tiled pixels (uncompressed, RLE, zlib) at every precision, under a caller's byte budget. From PhotoCraft.
 - [`craft-xml`](crates/xml/README.md): bounded XML for hostile input: an owned element tree with limits on size, depth, nodes and attributes, streaming of repeated elements, namespace handling (as written, by local name, or canonical prefixes by URI), escaping and a writer. No DTDs and no entity expansion.
-- [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats.
+- [`craft-zip`](crates/zip/README.md): ZIP archives from untrusted files: an entry-count check before the archive is indexed (ZIP64 included), entry reads within per-entry and total budgets that count real bytes, duplicate-name detection, a strict structure preflight, and a deterministic stored/deflate writer. The shared ZIP layer for the package formats. With the `lenient` feature, also a reader of the raw bytes without the `zip` crate, from Craft Anything, for inspectors that must describe damaged archives rather than refuse them: the central-directory listing with ZIP64, prepended-stub and multi-volume checks, CP437 and Info-ZIP Unicode Path names, and entry reads (stored, DEFLATE, and bzip2, LZMA, XZ and Zstandard behind `lenient-*` features) checked against the declared size and CRC-32.
 
 ## Craft framework
 

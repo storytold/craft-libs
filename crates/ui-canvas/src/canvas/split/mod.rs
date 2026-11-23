@@ -11,8 +11,8 @@
 //! With [`SplitViews::takes_tabs`] the views take a dragged document strip tab: an unsplit body offers its reading-end
 //! half, a split body each whole pane, and the drop comes back in [`SplitViewsOutput::tab_drop`].
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::SplitWords;
 use crate::contract::{

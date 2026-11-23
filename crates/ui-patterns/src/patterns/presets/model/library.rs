@@ -7,7 +7,7 @@ use super::PresetRow;
 /// A group or folder by its names from the top group down: `["Brushes", "Dry Media"]`. The empty
 /// path is the library's root, which holds the ungrouped presets and the top groups. Names are
 /// unique among siblings, so a path names one group.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[serde(transparent)]
 pub struct GroupPath(Vec<String>);
 
@@ -55,7 +55,7 @@ impl GroupPath {
 /// key never collide (PhotoCraft's `"group:{name}"` strings, the private key of
 /// `SwatchesPanel`). `I` is the preset's id: [`PresetId`] in a [`PresetLibrary`]; PhotoCraft's
 /// engine library uses the preset's name (`PresetKey<String>`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PresetKey<I> {
     /// A group or folder.
@@ -77,7 +77,7 @@ impl<I> PresetKey<I> {
 }
 
 /// One preset of a [`PresetLibrary`], unique by id; ids are never reused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[serde(transparent)]
 pub struct PresetId(u64);
 
@@ -399,13 +399,12 @@ impl<T> PresetLibrary<T> {
     /// Why `name` cannot be a new preset's name, if it cannot: blank, or taken ignoring case.
     /// For a named row's `check_name`.
     pub fn name_error(&self, name: &str) -> Option<PresetError> {
-        if name.trim().is_empty() {
-            Some(PresetError::EmptyName)
-        } else if self.is_taken(name.trim()) {
-            Some(PresetError::NameTaken)
-        } else {
-            None
-        }
+        self.names().name_error(name)
+    }
+
+    /// The presets' names, as the inputs of a name check in a binding or a named row (`check_with`).
+    pub fn names(&self) -> PresetNames<'_> {
+        PresetNames(&self.root)
     }
 
     /// The number of presets.
@@ -440,7 +439,7 @@ impl<T> PresetLibrary<T> {
     }
 
     fn is_taken(&self, name: &str) -> bool {
-        self.items().iter().any(|i| same_name(&i.name, name))
+        self.root.each(&mut |taken| same_name(taken, name))
     }
 
     /// `base`, or "base 2", "base 3", … so the name is free across the library.
@@ -449,6 +448,65 @@ impl<T> PresetLibrary<T> {
             return base.to_owned();
         }
         (2..).map(|i| format!("{base} {i}")).find(|n| !self.is_taken(n)).unwrap_or_else(|| base.to_owned())
+    }
+}
+
+/// The names of a library's presets (`PresetLibrary::names`): what a check of a new name reads. It borrows the
+/// library and walks its names when a check or a memoized view's key reads them.
+#[derive(Clone, Copy)]
+pub struct PresetNames<'l>(&'l dyn EachName);
+
+impl PresetNames<'_> {
+    /// Why `name` cannot be a new preset's name: blank, or taken ignoring case.
+    pub fn name_error(&self, name: &str) -> Option<PresetError> {
+        let name = name.trim();
+        if name.is_empty() {
+            Some(PresetError::EmptyName)
+        } else if self.0.each(&mut |taken| same_name(taken, name)) {
+            Some(PresetError::NameTaken)
+        } else {
+            None
+        }
+    }
+
+    /// How many presets there are.
+    pub fn len(&self) -> usize {
+        let mut count = 0;
+        self.0.each(&mut |_| {
+            count += 1;
+            false
+        });
+        count
+    }
+
+    /// Whether there are none.
+    pub fn is_empty(&self) -> bool {
+        !self.0.each(&mut |_| true)
+    }
+}
+
+/// Every name, in display order, and their count.
+impl craft_ui::contract::MemoProps for PresetNames<'_> {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        let mut count: u64 = 0;
+        self.0.each(&mut |name| {
+            craft_ui::contract::MemoProps::key(name, key);
+            count += 1;
+            false
+        });
+        craft_ui::contract::MemoProps::key(&count, key);
+    }
+}
+
+/// A walk over the names of a group's presets, its folders' included.
+trait EachName {
+    /// Calls `f` with each name until it returns `true`; whether it did.
+    fn each(&self, f: &mut dyn FnMut(&str) -> bool) -> bool;
+}
+
+impl<T> EachName for PresetGroup<T> {
+    fn each(&self, f: &mut dyn FnMut(&str) -> bool) -> bool {
+        self.items.iter().any(|item| f(&item.name)) || self.groups.iter().any(|group| group.each(f))
     }
 }
 

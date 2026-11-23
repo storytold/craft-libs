@@ -23,8 +23,8 @@
 
 mod commands;
 mod edits;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::ops::Range;
 
@@ -41,7 +41,7 @@ use craft_ui::fonts::{FaceBytes, FaceState};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::ClipItem;
 use craft_ui::runtime::env::Label;
-use craft_ui::runtime::focus::KeyUse;
+use craft_ui::runtime::focus::{FocusPolicy, KeyUse};
 use craft_ui::runtime::pending::Pending;
 use craft_ui::style::{ComponentStyle, StyleColor, StyleCx};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -534,6 +534,14 @@ fn char_at(lines: &[HostLine], pos: TextPos) -> usize {
     line.chars.start + line.text[..byte].chars().count()
 }
 
+/// The I-beam is the editor's over its text and while its own press is held; elsewhere the canvas's tool or the rest
+/// of the UI sets the pointer.
+fn show_i_beam(cx: &mut Cx<'_, TextEditor<'_>>, phase: &PressPhase, vertical: bool) {
+    if !matches!(phase, PressPhase::Idle) {
+        cx.cursor(if vertical { CursorIcon::VerticalText } else { CursorIcon::Text }, CursorPriority::Hover);
+    }
+}
+
 /// The clipboard's text when the pass's input asks to paste and the clipboard has it ready.
 fn pasted_text(cx: &mut Cx<'_, TextEditor<'_>>, inputs: &[EditorInput]) -> Option<std::sync::Arc<str>> {
     if !inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))) {
@@ -549,7 +557,13 @@ impl Component for TextEditor<'_> {
     const ROLE: Role = Role::MULTILINE_TEXT_INPUT;
     const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
     /// Escape always ends the session, so the editor keeps it from its row and from the shortcuts while focused.
+<<<<<<< HEAD
     const KEYS: KeyUse = KeyUse::CODE.with_claims(&[ESCAPE]).with_holds_drafts();
+=======
+    const KEYS: KeyUse = KeyUse::CODE.with_claims(&[ESCAPE]);
+    /// When the session ends, focus goes back to the stop it came from (the canvas), not to the stop before the editor.
+    const FOCUS_SCOPE: FocusPolicy = FocusPolicy::TAB_LAYER;
+>>>>>>> origin/next
     type Style = TextEditorStyle;
     type Output = TextEditorOutput;
 
@@ -731,7 +745,7 @@ impl Component for TextEditor<'_> {
         if let Some(text) = copied {
             cx.clipboard().put(&[ClipItem::Text(text.into())]);
         }
-        cx.cursor(if vertical { CursorIcon::VerticalText } else { CursorIcon::Text }, CursorPriority::Hover);
+        show_i_beam(cx, &press.phase, vertical);
         if done.changed {
             cx.propose(selection);
         } else if selection != before {

@@ -50,6 +50,7 @@ pub struct Expect<'a> {
 }
 
 impl<'a> Expect<'a> {
+    /// What the app inside `release`'s download must prove: the team's signature, the version, and a quit app.
     pub fn release(release: &'a Release) -> Self {
         Self { team: Some(TEAM_ID), version: release.version.as_ref(), quit_first: true }
     }
@@ -103,7 +104,9 @@ static SIGNATURE_CHECKS: Queue = Queue::new();
 /// How a job waits for its turn at the signature check: `phase` hears of the wait, and `stop`
 /// can cancel it.
 pub struct CheckTurn<'a> {
+    /// Cancels the wait.
     pub stop: &'a Stop,
+    /// Told of the wait.
     pub phase: &'a mut dyn FnMut(JobPhase),
 }
 
@@ -116,6 +119,7 @@ const CODESIGN: &str = "/usr/bin/codesign";
 /// Stops a `codesign` that hangs.
 const CODESIGN_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Installs the app in `dmg`, replacing `existing` or placing it at `destination`; checks it against `expect` first.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dmg(
     app: &App,

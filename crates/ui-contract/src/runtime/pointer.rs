@@ -7,6 +7,7 @@ use crate::runtime::drag;
 use crate::runtime::egui::areas::{self, Layer};
 use crate::runtime::egui::{input, pass};
 use crate::runtime::frame::{PerViewport, Stamped};
+use crate::runtime::inputs::{self, Input};
 use craft_behavior::{
     Buttons, MultiTouch, PartRef, PointerButton, PointerEvent, PointerKind, PointerSample, PressCancel, PressStart, ResolveFor, Shape, Winner,
     count_clicks, resolve,
@@ -167,9 +168,15 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
     // modifiers from its own (event-free) input and counts no press twice.
     let mods = with_latched(read.mods, latched);
+<<<<<<< HEAD
     let press_mods = read.press_mods.map(|mods| with_latched(mods, latched));
     // A drag that started in another window reaches this one through the desktop pointer (8.4).
     if read.pos.is_none() {
+=======
+    // A drag that started in another window reaches this one through the desktop pointer (8.4), never at the place
+    // this window saw the pointer last: the source window holds the pointer, and the window may have had no exit.
+    if drag::runs_elsewhere(ctx, viewport) {
+>>>>>>> origin/next
         read.pos = drag::cross_window_pointer(ctx, viewport);
     }
     let wheel = input::wheel_read(ctx, WHEEL_LINE_POINTS, WHEEL_PAGE_POINTS);
@@ -224,6 +231,29 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         stirred: read.stirred,
     };
     let hover_at = pass_pointer.hover;
+    // The pointer and the modifiers are tracked inputs: their generations move when the held facts change or the pass
+    // brings pointer events.
+    if let Some(frame) = &pass_pointer.frame {
+        inputs::observe(ctx, Input::Modifiers, frame.mods);
+        inputs::observe(ctx, Input::Pointer, (frame.pos, frame.buttons, pass_pointer.hover, pass_pointer.primary_down));
+        let events = frame.delta != Vec2::ZERO
+            || frame.press.is_some()
+            || frame.release.is_some()
+            || frame.scroll != Vec2::ZERO
+            || frame.zoom != 1.0
+            || frame.rotation != 0.0
+            || frame.multi_touch.is_some()
+            || pass_pointer.stirred
+            || pass_pointer.focus_lost
+            || !pass_pointer.events.is_empty();
+        if events {
+            inputs::bump(ctx, Input::Pointer);
+        }
+        // A press or release, or an outside press the layer stack's input hook took before egui saw it.
+        if frame.press.is_some() || frame.release.is_some() || crate::runtime::overlay::absorbed_press_raw(ctx).is_some() {
+            inputs::bump(ctx, Input::Press);
+        }
+    }
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.last = std::mem::take(&mut shapes.this);
@@ -267,9 +297,17 @@ pub(crate) fn pass_pointer(ctx: &Context) -> Arc<PassPointer> {
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass::pass_nr(ctx, viewport), |_, _| {}, |record| Arc::clone(record))
 }
 
-/// Reads what the begin hook read of the running pass in place, without cloning its events.
+/// Reads what the begin hook read of the running pass in place, without cloning its events. A tracked input
+/// (`runtime::inputs`): a memoized view that reads it runs when the pointer changes.
 #[doc(hidden)]
 pub fn with_pass_pointer<R>(ctx: &Context, f: impl FnOnce(&PassPointer) -> R) -> R {
+    crate::runtime::replay::note_input(ctx, Input::Pointer);
+    with_pass_raw(ctx, f)
+}
+
+/// `with_pass_pointer` without noting the read: for the hit sensing, press and drag steps of the component under the
+/// pointer, which the pointer engages, and for the pass machinery.
+pub(crate) fn with_pass_raw<R>(ctx: &Context, f: impl FnOnce(&PassPointer) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| f(record))
@@ -288,12 +326,33 @@ pub(crate) fn buttons_of(ctx: &Context, viewport: ViewportId) -> Buttons {
 
 /// Reads the running pass's pointer frame, `None` before the begin hook, and its hover position in place.
 pub(crate) fn with_frame<R>(ctx: &Context, f: impl FnOnce(Option<&PointerFrame>, Option<Pos2>) -> R) -> R {
-    with_pass_pointer(ctx, |pointer| f(pointer.frame.as_ref(), pointer.hover))
+    with_pass_raw(ctx, |pointer| f(pointer.frame.as_ref(), pointer.hover))
 }
 
-/// The running pass's pointer input.
+/// The running pass's pointer input. A tracked input (`runtime::inputs`): a memoized view that reads it runs when the
+/// pointer changes. A view that reads only the modifiers reads [`mods`].
 pub fn frame(ctx: &Context) -> PointerFrame {
-    with_pass_pointer(ctx, |pointer| pointer.frame.clone()).unwrap_or_else(|| PointerFrame {
+    crate::runtime::replay::note_input(ctx, Input::Pointer);
+    frame_raw(ctx)
+}
+
+/// The modifiers held in the running pass, with the latched ones (`PointerFrame::mods`). A tracked input: a memoized
+/// view that reads them runs when they change, and only then.
+pub fn mods(ctx: &Context) -> Mods {
+    crate::runtime::replay::note_input(ctx, Input::Modifiers);
+    with_pass_raw(ctx, |pointer| pointer.frame.as_ref().map_or(Mods::NONE, |frame| frame.mods))
+}
+
+/// Where the primary press of the running pass started. A tracked input (`Input::Press`): a layer's dismissal decides by
+/// it, so a memoized view that shows a layer runs on a press anywhere, and a pointer move leaves it alone.
+pub(crate) fn primary_press(ctx: &Context) -> Option<Pos2> {
+    crate::runtime::replay::note_input(ctx, Input::Press);
+    frame_raw(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
+}
+
+/// `frame` without noting the read: for the steps of the component under the pointer and the pass machinery.
+pub(crate) fn frame_raw(ctx: &Context) -> PointerFrame {
+    with_pass_raw(ctx, |pointer| pointer.frame.clone()).unwrap_or_else(|| PointerFrame {
         pos: None,
         delta: Vec2::ZERO,
         buttons: Buttons::empty(),
@@ -365,7 +424,7 @@ pub(crate) fn cancel_of_pass(ctx: &Context) -> Option<PressCancel> {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     let requested = PerViewport::<Memory>::with(ctx, viewport, |memory| memory.requested.filter(|(nr, _)| *nr == pass_nr).map(|(_, reason)| reason));
-    requested.or_else(|| with_pass_pointer(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
+    requested.or_else(|| with_pass_raw(ctx, |pointer| pointer.focus_lost).then_some(PressCancel::FocusLost))
 }
 
 /// Writes `shapes` of the arena rooted at `root`, shown through `clip` (layer space), into the running pass's shape
@@ -378,10 +437,17 @@ pub(crate) fn record_shapes(ctx: &Context, layer: Layer, root: Id, clip: Rect, s
 /// `record_shapes` for a caller that already read the running viewport.
 pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: impl IntoIterator<Item = Shape<Id>>) {
     let shapes: Vec<Shape<Id>> = shapes.into_iter().collect();
-    crate::runtime::replay::journal(ctx, || {
-        let shapes = shapes.clone();
-        move |ctx: &Context| record_shapes(ctx, layer, root, clip, shapes.iter().cloned())
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (layer, root, crate::runtime::Clip::new(clip), shapes.clone()),
+        |ctx, (layer, root, clip, shapes)| record_shapes(ctx, *layer, *root, clip.rect(), shapes.iter().cloned()),
+    );
+    add_shapes_in(ctx, viewport, layer, root, clip, shapes);
+}
+
+/// `record_shapes_in` with no note in the run records, for a caller whose own note makes the shapes again: shapes at
+/// stack positions a replay takes from the arena it joins (`sensing`), not from the recorded run.
+pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: Vec<Shape<Id>>) {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
@@ -394,7 +460,7 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
 /// Records the egui widget `widget` that the component `owner` made for its own text (a field's text, a selection
 /// part): a press egui gives it is the widget's own and goes to no root, and the hover goes to `owner`.
 pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_text_widget(ctx, widget, owner));
+    crate::runtime::replay::journal(ctx, || (widget, owner), |ctx, &(widget, owner)| record_text_widget(ctx, widget, owner));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_texts.insert(widget, owner);
     });
@@ -404,6 +470,7 @@ pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
 /// it the press where no widget on the layer is, and the press and hover there go to the layer's shapes as if egui
 /// had named no target.
 pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
+    crate::runtime::replay::journal(ctx, || widget, |ctx, &widget| record_layer_widget(ctx, widget));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_grounds.insert(widget);
     });
@@ -412,7 +479,7 @@ pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
 /// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
 /// the body layer reaches the root's own shapes beneath the body's.
 pub(crate) fn record_body_layer(ctx: &Context, layer: Layer, parent: Layer, root: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_body_layer(ctx, layer, parent, root));
+    crate::runtime::replay::journal(ctx, || (layer, parent, root), |ctx, &(layer, parent, root)| record_body_layer(ctx, layer, parent, root));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_bodies.insert(layer, (root, parent));
     });
@@ -426,10 +493,11 @@ pub(crate) fn record_widgets(ctx: &Context, layer: Layer, root: Id, widgets: &[I
 
 /// `record_widgets` for a caller that already read the running viewport.
 pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, widgets: &[Id], click: bool) {
-    crate::runtime::replay::journal(ctx, || {
-        let widgets = widgets.to_vec();
-        move |ctx: &Context| record_widgets(ctx, layer, root, &widgets, click)
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (layer, root, widgets.to_vec(), click),
+        |ctx, (layer, root, widgets, click)| record_widgets(ctx, *layer, *root, widgets, *click),
+    );
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.widgets.extend_from_slice(widgets);
@@ -520,7 +588,7 @@ pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRe
 }
 
 /// Whether the part `part` of `owner` (the arena root or a member) senses all of `sense` in last pass's shape record.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn part_senses(ctx: &Context, owner: Id, part: craft_behavior::PartRef, sense: craft_behavior::Sense) -> bool {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
@@ -555,7 +623,7 @@ fn owned_part_bounds(ctx: &Context, owner: impl Fn(Id) -> bool, part: craft_beha
 /// The bounds of the part `part` that senses `sense`, on a component other than `subject` and lying inside the
 /// subject's own shapes in last pass's shape record: where a component's child keeps the part a drive acts on. When
 /// several children match, the first by top edge, then start edge, then root id.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn child_part_bounds(ctx: &Context, subject: Id, part: craft_behavior::PartRef, sense: craft_behavior::Sense) -> Option<egui::Rect> {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
@@ -701,6 +769,19 @@ pub(crate) fn with_hover<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(
     PerViewport::<Shapes>::with(ctx, viewport, |record| f(record.hover.as_ref().map(|(_, _, under)| under), record.captured))
 }
 
+/// Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
+/// what lies under the pointer: it takes the press there, or it is the topmost shape and takes none. A
+/// container reads it for the components in its body before they run. While a press is open it holds for none: only
+/// the press's target hovers, and that target reads it from its press.
+pub fn hovers(ctx: &Context, id: Id) -> bool {
+    with_hover(ctx, pass::current_viewport(ctx), |under, captured| {
+        !captured
+            && under.is_some_and(|under| {
+                [under.press.click, under.press.drag, under.hover_top].into_iter().flatten().any(|(winner, _)| winner.owner == id)
+            })
+    })
+}
+
 /// The resolutions of what lies under a point the running viewport's latest pass made.
 #[cfg(feature = "testing")]
 pub(crate) fn resolutions(ctx: &Context) -> u32 {
@@ -834,11 +915,21 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
     })
 }
 
+/// A candidate shape under a point: its rank, the winner it makes, its root and whether the root takes clicks
+/// anywhere.
+type Ranked = ((u8, u32), Winner<Id>, Id, bool);
+
 /// The press winners among `ranked`, each root's topmost shape under a point that takes a press with its rank and
+<<<<<<< HEAD
 /// whether the root takes clicks anywhere, and under a top shape that passes its drag the root's next shape that drags:
 /// by the per-kind rule of [`PressWinners`].
 fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinners {
     ranked.sort_by(|a, b| b.0.cmp(&a.0));
+=======
+/// whether the root takes clicks anywhere: by the per-kind rule of [`PressWinners`].
+fn winners_of(mut ranked: Vec<Ranked>) -> PressWinners {
+    ranked.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+>>>>>>> origin/next
     let mut winners = PressWinners::default();
     for (_, winner, root, root_clicks) in ranked {
         let (clicks, drags) = (winner.sense.contains(craft_behavior::Sense::CLICK), winner.sense.contains(craft_behavior::Sense::DRAG));
@@ -961,13 +1052,13 @@ pub(crate) fn arena_clip(ctx: &Context, component: Id) -> Option<Rect> {
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         [&record.this, &record.last].into_iter().find_map(|layers| {
             let holds = |root: Id, entry: &RootRecord| root == component || entry.shapes.iter().any(|shape| shape.owner == component);
-            let root = layers.values().find_map(|roots| roots.iter().find(|(root, entry)| holds(**root, *entry)).map(|(root, _)| *root))?;
+            let root = layers.values().find_map(|roots| roots.iter().find(|(root, entry)| holds(**root, entry)).map(|(root, _)| *root))?;
             let background =
                 |shape: &Shape<Id>| shape.owner == root && shape.part.is_none() && shape.priority.level == craft_behavior::HitLevel::Background;
             layers
                 .values()
                 .filter_map(|roots| roots.get(&root))
-                .find_map(|entry| entry.shapes.iter().zip(&entry.placed).find(|(shape, _)| background(*shape)).map(|(_, placed)| placed.clip))
+                .find_map(|entry| entry.shapes.iter().zip(&entry.placed).find(|(shape, _)| background(shape)).map(|(_, placed)| placed.clip))
         })
     })
 }

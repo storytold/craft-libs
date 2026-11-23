@@ -7,13 +7,12 @@
 //! out), with a markup column beside each page and Hide White Space. [`PageDisplay`] holds both,
 //! and [`LayoutOptions`] carries each app's switches ([`LayoutOptions::ACROBAT`],
 //! [`LayoutOptions::WORD`]). The screen spacing ([`PageSpacing`]: gap, margin, side gutter, Hide
-//! White Space's pad and seam) is not a constant here: the page view reads it from the `pages.*`
-//! size tokens (`PageView::style`), which an app overrides in its `sizes.json` (WordCraft's wider
-//! gap and no side gutter).
+//! White Space's pad and seam) is not a constant here: the page view derives it from the scope's
+//! semantic tokens and `ComponentSet` (`Creative` keeps the tool-rail side gutter; `Productivity`
+//! uses a wider gap and matching margin/side without the rail gutter).
 //!
 //! ```ignore
 //! let sizes: Vec<Size> = doc.pages.iter().map(|p| p.size()).collect();
-//! let spacing = PageView::style(&tokens).spacing;
 //! let scale = fit_scale(&sizes, viewport, view.fit, &options, &spacing, view.current).unwrap_or(view.zoom * SCREEN_POINTS_PER_POINT);
 //! let laid = place_pages(&sizes, scale, viewport, &options, &spacing);
 //! let shown = if options.continuous { 0..sizes.len() } else { shown_row(sizes.len(), view.current, &options) };
@@ -118,9 +117,9 @@ impl LayoutOptions {
 }
 
 /// The spacing of a page layout: screen points, except [`white_space_pad`](Self::white_space_pad),
-/// which is in points at 100 % zoom and is multiplied by the zoom. The page view takes it from the `pages.*` size tokens
-/// (`craft_pages::ui::PageView::style`); this crate's core has no tokens, so the layout functions
-/// take it as a value.
+/// which is in points at 100 % zoom and is multiplied by the zoom. The page view derives it from the
+/// scope's semantic tokens and `ComponentSet`; this crate's core has no tokens, so the layout
+/// functions take it as a value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PageSpacing {
     /// Between pages, and between rows (the page view's gap); unused with

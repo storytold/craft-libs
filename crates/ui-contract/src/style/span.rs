@@ -1,5 +1,6 @@
 //! `Span`: one styled stretch of a text run.
 
+use craft_theme::variant::Tone;
 use std::borrow::Cow;
 
 /// One styled stretch of a run.
@@ -26,6 +27,8 @@ pub struct Span<'a> {
     pub strikethrough: bool,
     /// The role's semibold face, at the role's size.
     pub strong: bool,
+    /// Underlined in the ink of this tone.
+    pub flag: Option<Tone>,
 }
 
 impl<'a> Span<'a> {
@@ -42,7 +45,14 @@ impl<'a> Span<'a> {
             underline: false,
             strikethrough: false,
             strong: false,
+            flag: None,
         }
+    }
+
+    /// Underlines the span in the ink of `tone` (spelling `Bad`, grammar `Info`).
+    pub fn flag(mut self, tone: Tone) -> Self {
+        self.flag = Some(tone);
+        self
     }
 
     /// Italic.

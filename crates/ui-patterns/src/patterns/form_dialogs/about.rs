@@ -1,10 +1,10 @@
 //! `AboutDialog`: Help > About in one window for every app, with the app's own data. Tabs About, Contributors and
-//! Models.
+//! Models, then the app's own tabs.
 
 mod contributors;
 mod credits;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
 pub use credits::{AboutImage, AboutInfo, AboutLink, Contributor, Credits, ModelCredit};
@@ -13,8 +13,8 @@ use crate::buttons::{Button, IconButton, Link};
 use crate::choice::Segmented;
 use crate::contract::Gap;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, clicked,
+    Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, LeastWidth, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode,
+    Show as _, ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use crate::display::{Divider, Picture, PictureSize, Shade, Text};
@@ -45,6 +45,8 @@ craft_ui::words! {
         about_tab: "aboutDialog.tab" = "About";
         contributors_tab: "aboutDialog.contributors" = "Contributors";
         models_tab: "aboutDialog.models" = "Models";
+        /// The footer button of the listed layout ([`AboutLayout::Listed`]).
+        close: "aboutDialog.close" = "Close";
         version: template "aboutDialog.version" = "Version {version}";
         show: "aboutDialog.show" = "Show";
         username: "aboutDialog.username" = "Username";
@@ -105,6 +107,38 @@ pub enum AboutTab {
     Contributors,
     /// The credited AI models.
     Models,
+    /// The app's own tab at this position in the app's tabs, shown after Models.
+    App(u8),
+}
+
+/// How the About tab lays out the app's [`AboutInfo`], and the dialog's footer button.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AboutLayout {
+    /// The blurb and the version, then the community button and the link row centred, then the built-with line faint,
+    /// the blocks set apart by the section gap; OK closes.
+    #[default]
+    Centred,
+    /// From the start edge, one item to a line: the app's name as a heading, the version, the blurb, the community
+    /// link and then the other links in their order, the built-with line as a faint caption, the links set apart from
+    /// the lines above and below them by the item gap; Close closes.
+    Listed,
+}
+
+/// A tab the app adds after Models: a name for the hosted dialog's `tab` field, a title and a body.
+///
+/// The body is `Send` because a [`HostedAbout`] lives on the dialog stack, which needs its dialogs `Send`.
+pub struct AboutAppTab {
+    name: &'static str,
+    title: Label,
+    body: Box<dyn FnMut(&mut Ui) + Send>,
+}
+
+impl AboutAppTab {
+    /// A tab named `name` in the hosted dialog's `tab` field, titled `title`, whose content `body` draws.
+    pub fn new(name: &'static str, title: impl Into<Label>, body: impl FnMut(&mut Ui) + Send + 'static) -> Self {
+        AboutAppTab { name, title: title.into(), body: Box::new(body) }
+    }
 }
 
 /// What the dialog keeps while it is open, in its container's slot.
@@ -195,14 +229,21 @@ impl Outcome for AboutOutput {
 
 /// Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button.
 ///
+<<<<<<< HEAD
 /// - **About.** The app's mark when it has one, the blurb, the version, the community button and the link row
 ///   centred, then "Part of" with the suite's logo when it has one, the built-with line faint.
+=======
+/// - **About.** The blurb, the version, the community button and the link row centred, the built-with line faint; or,
+///   with [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
+>>>>>>> origin/next
 /// - **Contributors.** Show (Username, Display name, Real name), Sort (the list, with a button to reverse) and View
 ///   (Grab bag or Table). The grab bag flows the names as links: a click reports the contributor's profile URL as the
 ///   link (nothing for one without a profile), and the link's tooltip is the summary. The table has every figure; a
 ///   header press sorts by its column, activating a row (Enter or a double click) reports the profile URL, and the
 ///   row's tooltip is the summary.
 /// - **Models.** A table of the credited models with their commits, share of all commits and lines.
+/// - **App tabs.** The app's own [`AboutAppTab`]s ([`app_tabs`](AboutDialog::app_tabs)) follow Models, each body in a
+///   vertically scrolling stack.
 ///
 /// The name mode, the sort order and the view are kept in the dialog's container while it is open, and so is the tab
 /// unless [`tab`](AboutDialog::tab) binds it. Links are reported
@@ -218,32 +259,47 @@ pub struct AboutDialog<'a> {
     /// Binds the shown tab to `tab`; the dialog opens on it.
     #[prop]
     tab: Option<Bind<'a, AboutTab>>,
+    /// The app's own tabs, shown after Models.
+    #[prop]
+    app_tabs: Option<&'a mut [AboutAppTab]>,
+    /// How the About tab lays out the info, and the footer button that goes with it.
+    #[prop]
+    layout: AboutLayout,
 }
 
 impl<'a> AboutDialog<'a> {
     /// The dialog over `info` and `credits`, opening on the About tab.
     pub fn new(info: &'a AboutInfo, credits: &'a Credits) -> Self {
-        AboutDialog { info, credits, open: None, tab: None }
+        AboutDialog { info, credits, open: None, tab: None, app_tabs: None, layout: AboutLayout::default() }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> AboutOutput {
-        let AboutDialog { info, credits, open, tab } = self;
+        let AboutDialog { info, credits, open, tab, mut app_tabs, layout } = self;
+        // The strip shows the titles while the body draws a tab, so it reads its own copy of them.
+        let app_titles: Vec<Label> = app_tabs.as_deref().unwrap_or_default().iter().map(|app| app.title.clone()).collect();
         let env = Env::of(ui);
         let words = env.words::<AboutWords>();
         let common = env.words::<CommonWords>();
         let dates = env.dates();
         let writer = Writer { format: env.format(), dates: &dates, words: &words };
         let title = Label::from(words.title.fill(&[("app", info.app_name.as_str())]));
-        let shown = Shown { words: &words, writer: &writer, info, credits };
+        let shown = Shown { words: &words, writer: &writer, info, credits, layout };
 
         let mut tab = tab;
         let view = RefCell::new(View::default());
         let link = RefCell::new(None);
-        let mut dialog =
-            Dialog::new(title.clone()).collection_body().close_on_enter(true).buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept)]);
+        let button = match layout {
+            AboutLayout::Centred => common.ok.clone(),
+            AboutLayout::Listed => words.close.clone(),
+        };
+        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(true).buttons([FooterButton::new(button, DialogRole::Accept)]);
         if let Some(open) = open {
             dialog = dialog.opened(open);
+        }
+        // The listed layout is a wide dialog, as WordCraft's About, whose tabs hold the credit tables.
+        if layout == AboutLayout::Listed {
+            dialog = dialog.least_width(LeastWidth::WideDialog);
         }
         let shown_dialog = dialog.show(ui, |ui, cx| {
             let mut kept = if cx.appeared() { View::default() } else { cx.memory::<View>().clone() };
@@ -255,12 +311,20 @@ impl<'a> AboutDialog<'a> {
             }
             let before = kept.tab;
             *view.borrow_mut() = kept;
-            Stack::new().header(|ui, _| shown.tabs(ui, &title, &view)).show(ui, |ui, _| {
+            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).fill_width().show(ui, |ui, _| {
                 let tab = view.borrow().tab;
-                match tab {
-                    AboutTab::About => shown.about(ui, &link),
-                    AboutTab::Contributors => shown.contributors(ui, &view, &link),
-                    AboutTab::Models => shown.models(ui),
+                let app = match tab {
+                    AboutTab::App(at) => app_tabs.as_deref_mut().and_then(|tabs| tabs.get_mut(usize::from(at))),
+                    _ => None,
+                };
+                match (tab, app) {
+                    (AboutTab::Contributors, _) => shown.contributors(ui, &view, &link),
+                    (AboutTab::Models, _) => shown.models(ui),
+                    (AboutTab::App(_), Some(app)) => {
+                        Stack::new().scroll(Scroll::vertical()).fill().show(ui, |ui, _| (app.body)(ui));
+                    }
+                    // An app tab past the given ones shows About.
+                    _ => shown.about(ui, &link),
                 }
             });
             let picked = view.borrow().tab;
@@ -283,22 +347,30 @@ struct Shown<'s> {
     writer: &'s Writer<'s>,
     info: &'s AboutInfo,
     credits: &'s Credits,
+    layout: AboutLayout,
 }
 
 impl Shown<'_> {
-    /// The tab strip; a pick of a tab is kept in `view`.
-    fn tabs(&self, ui: &mut Ui, title: &Label, view: &RefCell<View>) {
+    /// The tab strip: the three built in, then one per app tab titled `app`. A pick of a tab is kept in `view`.
+    fn tabs(&self, ui: &mut Ui, title: &Label, app: &[Label], view: &RefCell<View>) {
         let words = self.words;
-        let tabs = [
+        let mut tabs = vec![
             (AboutTab::About, words.about_tab.clone()),
             (AboutTab::Contributors, words.contributors_tab.clone()),
             (AboutTab::Models, words.models_tab.clone()),
         ];
+        tabs.extend(app.iter().enumerate().filter_map(|(at, title)| u8::try_from(at).ok().map(|at| (AboutTab::App(at), title.clone()))));
         let source = keyed(&tabs[..], |tab: &(AboutTab, Label)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let shown = view.borrow().tab;
-        // The strip sits in the stack's header, which is as tall as what it holds: it takes its tabs' height.
+        // The strip sits in the stack's header, which is as tall as what it holds: it takes its tabs' height. The listed
+        // layout's tabs are a strip of tab faces over a rule, as WordCraft's About had them; the centred layout's are
+        // its text.
+        let kind = match self.layout {
+            AboutLayout::Listed => TabKind::Panel,
+            AboutLayout::Centred => TabKind::Text,
+        };
         let out =
-            TabStrip::new(title.clone()).kind(TabKind::Text).shown(shown).natural_height(true).show_items(ui, &source, &mut |key, _| {
+            TabStrip::new(title.clone()).kind(kind).shown(shown).natural_height(true).show_items(ui, &source, &mut |key, _| {
                 Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
             });
         for event in out.response.events {
@@ -310,9 +382,10 @@ impl Shown<'_> {
         }
     }
 
-    /// The About tab.
+    /// The About tab, laid out as [`AboutLayout`] says.
     fn about(&self, ui: &mut Ui, link: &RefCell<Option<String>>) {
         let (words, info) = (self.words, self.info);
+<<<<<<< HEAD
         let dark = Env::of(ui).view().mode() == Mode::Dark;
         Stack::new().show(ui, |ui, _| {
             if let Some(mark) = &info.mark {
@@ -348,6 +421,52 @@ impl Shown<'_> {
                 Row::new().align(RowAlign::Center).show(ui, |ui, _| {
                     Text::new(words.part_of.clone()).shade(Shade::Muted).show(ui);
                     Picture::svg(logo.label.clone(), logo.source(dark)).show(ui);
+=======
+        if self.layout == AboutLayout::Listed {
+            // Three blocks set apart by the item gap, as WordCraft's About spaced them: the name, version and blurb; the
+            // links; the built-with line.
+            Stack::new().gap(Gap::Item).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Text::new(info.app_name.clone()).role(TypeRole::Heading).show(ui);
+                    Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
+                    Text::new(info.blurb.clone()).show(ui);
+                });
+                Stack::new().show(ui, |ui, _| {
+                    for (at, item) in info.community.iter().chain(info.links.iter()).enumerate() {
+                        if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
+                            *link.borrow_mut() = Some(item.url.clone());
+                        }
+                    }
+                });
+                Text::new(info.built_with.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+            });
+            return;
+        }
+        // Four blocks set apart by the section gap: the blurb and version at the start edge, the community button and
+        // the link row each centred across the body, the built-with line at the start edge.
+        Stack::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                Text::new(info.blurb.clone()).show(ui);
+                Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
+            });
+            if let Some(community) = &info.community {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    if clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui)) {
+                        *link.borrow_mut() = Some(community.url.clone());
+                    }
+                });
+            }
+            if !info.links.is_empty() {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    for (at, item) in info.links.iter().enumerate() {
+                        if at > 0 {
+                            Text::new("·").shade(Shade::Faint).show(ui);
+                        }
+                        if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
+                            *link.borrow_mut() = Some(item.url.clone());
+                        }
+                    }
+>>>>>>> origin/next
                 });
             }
             Text::new(info.built_with.clone()).shade(Shade::Faint).show(ui);
@@ -508,6 +627,8 @@ pub struct HostedAbout {
     tab: AboutTab,
     link: Option<String>,
     open: bool,
+    app_tabs: Vec<AboutAppTab>,
+    layout: AboutLayout,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -522,15 +643,31 @@ impl HostedAbout {
             tab: AboutTab::default(),
             link: None,
             open: true,
+            app_tabs: Vec::new(),
+            layout: AboutLayout::default(),
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
+    }
+
+    /// Adds an app tab after Models.
+    #[must_use]
+    pub fn app_tab(mut self, tab: AboutAppTab) -> Self {
+        self.app_tabs.push(tab);
+        self
     }
 
     /// The tab the dialog opens on.
     #[must_use]
     pub fn tab(mut self, tab: AboutTab) -> Self {
         self.tab = tab;
+        self
+    }
+
+    /// How the About tab lays out the info ([`AboutDialog::layout`]).
+    #[must_use]
+    pub fn layout(mut self, layout: AboutLayout) -> Self {
+        self.layout = layout;
         self
     }
 
@@ -546,8 +683,26 @@ const ABOUT_KEY: &str = "help.about";
 /// The tabs' names in the hosted dialog's `tab` field.
 const TAB_NAMES: [(AboutTab, &str); 3] = [(AboutTab::About, "about"), (AboutTab::Contributors, "contributors"), (AboutTab::Models, "models")];
 
-fn tab_name(tab: AboutTab) -> &'static str {
-    TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+impl HostedAbout {
+    /// The name of `tab` in the dialog's `tab` field: the app tabs' names as well as the three built in. An app tab
+    /// past the given ones shows About, so it is named so.
+    fn tab_name(&self, tab: AboutTab) -> &str {
+        if let AboutTab::App(at) = tab
+            && let Some(app) = self.app_tabs.get(usize::from(at))
+        {
+            return app.name;
+        }
+        TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+    }
+
+    /// The tab named `name` in the dialog's `tab` field; a name built in wins over an app tab's of the same name.
+    fn tab_named(&self, name: &str) -> Option<AboutTab> {
+        if let Some((tab, _)) = TAB_NAMES.iter().find(|(_, known)| *known == name) {
+            return Some(*tab);
+        }
+        let at = self.app_tabs.iter().position(|app| app.name == name)?;
+        u8::try_from(at).ok().map(AboutTab::App)
+    }
 }
 
 impl StackDialog for HostedAbout {
@@ -558,14 +713,14 @@ impl StackDialog for HostedAbout {
     }
 
     fn json_fields(&self) -> Option<Value> {
-        Some(json!({ "tab": tab_name(self.tab) }))
+        Some(json!({ "tab": self.tab_name(self.tab) }))
     }
 
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: Value) -> Result<(), String> {
         if field != "tab" {
             return Err(FieldRefusal::Unknown.message(field));
         }
-        let picked = value.as_str().and_then(|name| TAB_NAMES.iter().find(|(_, known)| *known == name)).map(|(tab, _)| *tab);
+        let picked = value.as_str().and_then(|name| self.tab_named(name));
         let Some(picked) = picked else { return Err(FieldRefusal::Rejects(&value).message(field)) };
         self.tab = picked;
         Ok(())
@@ -576,9 +731,15 @@ impl StackDialog for HostedAbout {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<()>> {
-        let shown =
-            AboutDialog { info: &self.info, credits: &self.credits, open: Some(Bind::bound(&mut self.open)), tab: Some(Bind::bound(&mut self.tab)) }
-                .show(ui);
+        let shown = AboutDialog {
+            info: &self.info,
+            credits: &self.credits,
+            open: Some(Bind::bound(&mut self.open)),
+            tab: Some(Bind::bound(&mut self.tab)),
+            app_tabs: Some(&mut self.app_tabs[..]),
+            layout: self.layout,
+        }
+        .show(ui);
         #[cfg(feature = "testing")]
         {
             self.facts = crate::contract::Outcome::story_facts(&shown);

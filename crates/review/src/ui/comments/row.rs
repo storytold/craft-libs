@@ -5,10 +5,14 @@ use std::sync::Arc;
 use craft_behavior::{IconId, Metrics, PartKey, Proposal, Sense};
 use craft_theme::variant::{Emphasis, Tone as BadgeTone, Variant};
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _, clicked};
+use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Remember as _, Role, WordSetCx as _, clicked};
 use craft_ui::controls::disclosure::DisclosureGlyph;
+<<<<<<< HEAD
 use craft_ui::display::Badge;
 use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, SubmitKey, TextRun, Wrap};
+=======
+use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
+>>>>>>> origin/next
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::style::{ComponentStyle, DataColor, Ink, StyleColor, StyleCx, TypeRole};
@@ -31,6 +35,10 @@ pub(crate) struct CommentRowStyle {
     muted: StyleColor,
     highlight: StyleColor,
     bar: StyleColor,
+    /// The surface of a balloon card.
+    card: StyleColor,
+    /// The border of a balloon card.
+    border: StyleColor,
     avatar: StyleColor,
     avatar_ink: StyleColor,
     /// The line that joins a card's avatars.
@@ -56,6 +64,12 @@ struct Heading {
     plain: bool,
 }
 
+/// What a revision card shows: a tracked change's heading and its detail lines.
+struct Note {
+    heading: String,
+    details: Vec<String>,
+}
+
 /// How a text or icon is inked.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tone {
@@ -77,6 +91,15 @@ impl Spec {
         Spec { role, tone, wrap, end: false }
     }
 
+    /// Limits the text to `rows` rows, if any: the text layout cuts what is beyond (`Wrap::Clamp`, S-L173), so a long
+    /// body never pushes the next card out of view.
+    fn max_rows(mut self, rows: Option<usize>) -> Self {
+        if let Some(rows) = rows {
+            self.wrap = Wrap::Clamp(u8::try_from(rows).unwrap_or(u8::MAX));
+        }
+        self
+    }
+
     const fn end(mut self) -> Self {
         self.end = true;
         self
@@ -93,9 +116,21 @@ enum Slot {
     EditCancel,
     ReplyField,
     ReplyPost,
+<<<<<<< HEAD
     /// The badge of the reviewer status at this index of the thread's statuses.
     Status(usize),
+=======
+    /// The balloon button that puts the focus in the reply field.
+    Reply,
+    /// The balloon button that resolves or reopens the thread.
+    Resolve,
+    /// The balloon button that deletes the thread.
+    Delete,
+>>>>>>> origin/next
 }
+
+/// How many push buttons a row sizes: `push_index` gives each its place.
+const PUSH_BUTTONS: usize = 6;
 
 /// Where `CommentRow::lay` puts the parts of a row: the measuring pass sizes them, the paint pass shows them.
 /// Rects are relative to the row's top left, laid out left to right; the sink mirrors them.
@@ -133,8 +168,24 @@ trait Sink {
 /// The "..." button of message `index` of a card: a part of the row that opens the message's menu.
 pub(super) const MORE: PartKey = PartKey::new("more");
 
+<<<<<<< HEAD
 /// Reply `index` of a card: the access node that names it.
 const REPLY: PartKey = PartKey::new("reply");
+=======
+/// What a card offers for acting on its thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CardActions {
+    /// The "..." menu of each message.
+    #[default]
+    Menu,
+    /// Production's balloon buttons on the selected card: Reply, Delete, and Resolve or Reopen.
+    Buttons,
+}
+
+/// The message whose inline editor a row showed at its last pass, if any.
+#[derive(Clone, Copy, Default)]
+struct EditShown(Option<usize>);
+>>>>>>> origin/next
 
 /// A card or a heading of the card collection.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
@@ -143,6 +194,8 @@ pub(crate) struct CommentRow<'r> {
     common: Common,
     thread: Option<&'r CommentThread>,
     heading: Option<Heading>,
+    /// A revision card's text, which takes the row's own colours.
+    note: Option<Note>,
     selected: bool,
     /// The card is the selection's lead: it shows the reply box and the editing buttons.
     lead: bool,
@@ -153,18 +206,34 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
+<<<<<<< HEAD
     /// The inline editor takes the focus this pass, when the card shows one.
     #[prop]
     focus_editor: bool,
     /// The key that submits the reply box.
     submit_key: SubmitKey,
+=======
+    /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
+    /// first click that opens an edit is enough to type.
+    focus_edit: bool,
+    /// Picks the card's buttons: [`CardActions::Buttons`] shows production's balloon buttons on the selected card.
+    #[prop(vis = "pub(crate)")]
+    actions: CardActions,
+    /// Limits each message's text to `rows` rows.
+    #[prop(vis = "pub(crate)")]
+    body_rows: Option<usize>,
+>>>>>>> origin/next
     words: Option<Arc<CommentsWords>>,
     /// The heights the editor field and the reply field measured, for the paint of the same pass.
     heights: [f32; 2],
     /// The sizes the push buttons measured, for the paint of the same pass.
+<<<<<<< HEAD
     buttons: [Vec2; 3],
     /// The sizes the status badges measured, in the order of the thread's statuses, for the paint of the same pass.
     badges: Vec<Vec2>,
+=======
+    buttons: [Vec2; PUSH_BUTTONS],
+>>>>>>> origin/next
     /// The messages whose "..." button the parts step declared.
     mores: Vec<usize>,
     /// Each reply's index and its rect on the screen, from the parts step.
@@ -178,6 +247,7 @@ impl<'r> CommentRow<'r> {
             common: Common::new(),
             thread,
             heading,
+            note: None,
             selected: false,
             lead: false,
             editable: false,
@@ -185,12 +255,21 @@ impl<'r> CommentRow<'r> {
             editing: None,
             reply: "",
             focus_reply: false,
+<<<<<<< HEAD
             focus_editor: false,
             submit_key: SubmitKey::default(),
             words: None,
             heights: [0.0; 2],
             buttons: [Vec2::ZERO; 3],
             badges: Vec::new(),
+=======
+            focus_edit: false,
+            actions: CardActions::default(),
+            body_rows: None,
+            words: None,
+            heights: [0.0; 2],
+            buttons: [Vec2::ZERO; PUSH_BUTTONS],
+>>>>>>> origin/next
             mores: Vec::new(),
             replies: Vec::new(),
             events: Vec::new(),
@@ -202,6 +281,14 @@ impl<'r> CommentRow<'r> {
     pub(crate) fn heading(title: String, count: String, open: bool, plain: bool) -> Self {
         let name = title.clone();
         Self::bare(None, Some(Heading { title, count, open, plain }), name)
+    }
+
+    /// A revision card: `heading` over its `details`, in the row's colours, so balloons have one card style.
+    pub(crate) fn revision(heading: String, details: Vec<String>) -> Self {
+        let name = heading.clone();
+        let mut row = Self::bare(None, None, name);
+        row.note = Some(Note { heading, details });
+        row
     }
 
     /// The card of `thread`, named `name`.
@@ -296,12 +383,27 @@ impl CommentRow<'_> {
             sink.text(strip(Pos2::new(width - pad - count, pad), count), count_spec, &heading.count);
             return h + 2.0 * pad;
         }
+        if let Some(note) = &self.note {
+            let mut y = pad;
+            let title = Spec::new(TypeRole::BodyStrong, Tone::Normal, Wrap::Wrap);
+            y += sink.text(strip(Pos2::new(pad, y), room), title, &note.heading).y;
+            for detail in &note.details {
+                y += gap;
+                y += sink.text(strip(Pos2::new(pad, y), room), Spec::new(TypeRole::Body, Tone::Muted, Wrap::Wrap), detail).y;
+            }
+            return y + pad;
+        }
         let Some(thread) = self.thread else { return h };
         let y = pad;
         let first = thread.messages.first();
         sink.kind(square(Pos2::new(pad, y), h), kind_icon(thread.kind), thread.color);
         let mut end = width - pad;
+<<<<<<< HEAD
         if self.lead && self.editable {
+=======
+        let menu = self.actions == CardActions::Menu;
+        if self.selected && self.editable && menu {
+>>>>>>> origin/next
             end -= h;
             sink.button(Slot::More(0), square(Pos2::new(end, y), h), "more", &words.more, false);
         }
@@ -364,7 +466,9 @@ impl CommentRow<'_> {
                 let author_size = sink.text(strip(Pos2::new(x, y), name_room), author_spec, &message.author);
                 author_size.y + sink.text(strip(Pos2::new(x, y + author_size.y), name_room), caption, &when).y
             };
-            sink.button(Slot::More(index), square(Pos2::new(width - pad - h, y), h), "more", &words.more, false);
+            if menu {
+                sink.button(Slot::More(index), square(Pos2::new(width - pad - h, y), h), "more", &words.more, false);
+            }
             y += h.max(head) + gap;
             let bottom = self.message(index, thread, st, Line { at: Pos2::new(x, y), room: width - pad - x }, &words, sink);
             sink.reply(index, Rect::from_min_max(Pos2::new(pad, top), Pos2::new(width - pad, bottom)));
@@ -377,6 +481,18 @@ impl CommentRow<'_> {
             let post = Rect::from_min_size(Pos2::new(width - pad - button.x, y), button);
             sink.push(Slot::ReplyPost, post, &words.post, !self.reply.trim().is_empty());
             y += button.y + gap;
+            if !menu {
+                let resolve = if thread.resolved { &words.reopen } else { &words.resolve };
+                let mut x = pad;
+                let mut tallest = 0.0_f32;
+                for (slot, label) in [(Slot::Reply, &words.reply_button), (Slot::Resolve, resolve), (Slot::Delete, &words.delete)] {
+                    let size = sink.push_size(slot, label);
+                    sink.push(slot, Rect::from_min_size(Pos2::new(x, y), size), label, true);
+                    x += size.x + gap;
+                    tallest = tallest.max(size.y);
+                }
+                y += tallest + gap;
+            }
         }
         y - gap + pad
     }
@@ -423,7 +539,7 @@ impl CommentRow<'_> {
             }
             _ => {
                 let body = Spec::new(TypeRole::Body, Tone::Normal, Wrap::Wrap);
-                at.y + sink.text(strip(at, room), body, &message.text).y
+                at.y + sink.text(strip(at, room), body.max_rows(self.body_rows), &message.text).y
             }
         }
     }
@@ -433,7 +549,7 @@ impl CommentRow<'_> {
 struct Measure<'a, 'b, 'r> {
     cx: &'a MeasureCx<'b, CommentRow<'r>>,
     fields: [f32; 2],
-    buttons: [Vec2; 3],
+    buttons: [Vec2; PUSH_BUTTONS],
     /// The message index and left-to-right rect of each "..." button.
     more: Vec<(usize, Rect)>,
     /// The size of each status badge, in the order the row lays them.
@@ -500,6 +616,9 @@ fn push_index(slot: Slot) -> usize {
     match slot {
         Slot::EditPost => 0,
         Slot::EditCancel => 1,
+        Slot::Reply => 3,
+        Slot::Resolve => 4,
+        Slot::Delete => 5,
         _ => 2,
     }
 }
@@ -512,13 +631,26 @@ struct Paint<'a, 'b> {
     width: f32,
     rtl: bool,
     thread: Option<ThreadId>,
+    resolved: bool,
     heights: [f32; 2],
+<<<<<<< HEAD
     buttons: [Vec2; 3],
     badges: &'a [Vec2],
     reply_submit: SubmitKey,
     /// The field that takes the focus as it shows (the reply box or the inline editor), and the context the request
     /// goes to.
     focus: Option<(Slot, &'a egui::Context)>,
+=======
+    buttons: [Vec2; PUSH_BUTTONS],
+    /// The context focus requests go to.
+    ctx: &'a egui::Context,
+    /// Set when the reply box takes the focus as it shows.
+    focus_reply: bool,
+    /// Set when the inline editor's field takes the focus as it shows.
+    focus_edit: bool,
+    /// The reply field's id once it is shown, for the Reply button to focus.
+    reply_id: Option<egui::Id>,
+>>>>>>> origin/next
     events: &'a mut Vec<CardEvent>,
 }
 
@@ -560,7 +692,8 @@ impl Sink for Paint<'_, '_> {
         if spec.end {
             run = run.align(HAlign::End);
         }
-        self.ui.draw().text(self.place(at), &run).size()
+        let rect = self.place(at);
+        self.ui.draw().text(rect, &run).size()
     }
 
     fn icon(&mut self, rect: Rect, id: &'static str, tone: Tone) {
@@ -623,10 +756,20 @@ impl Sink for Paint<'_, '_> {
         if out.escaped && slot == Slot::EditField {
             self.events.push(CardEvent::EditCancel);
         }
+<<<<<<< HEAD
         if let Some((focused, ctx)) = self.focus
             && focused == slot
         {
             focus::request(ctx, FocusTarget::Id(out.response.id));
+=======
+        if slot == Slot::ReplyField {
+            self.reply_id = Some(out.response.id);
+            if self.focus_reply {
+                focus::request(self.ctx, FocusTarget::Id(out.response.id));
+            }
+        } else if self.focus_edit {
+            focus::request(self.ctx, FocusTarget::Id(out.response.id));
+>>>>>>> origin/next
         }
         height
     }
@@ -637,14 +780,23 @@ impl Sink for Paint<'_, '_> {
 
     fn push(&mut self, slot: Slot, rect: Rect, label: &Label, enabled: bool) {
         let button = Button::new(label.clone()).enabled(enabled);
-        let button = if slot == Slot::EditCancel { button } else { button.variant(Variant::PRIMARY) };
+        let button = if matches!(slot, Slot::EditPost | Slot::ReplyPost) { button.variant(Variant::PRIMARY) } else { button };
         let response = self.ui.child(slot, self.place(rect), button);
-        if clicked(&response) {
-            self.events.push(match slot {
-                Slot::EditPost => CardEvent::EditPost,
-                Slot::EditCancel => CardEvent::EditCancel,
-                _ => CardEvent::ReplyPost,
-            });
+        if !clicked(&response) {
+            return;
+        }
+        match (slot, self.thread) {
+            (Slot::EditPost, _) => self.events.push(CardEvent::EditPost),
+            (Slot::EditCancel, _) => self.events.push(CardEvent::EditCancel),
+            (Slot::Reply, _) => {
+                if let Some(id) = self.reply_id {
+                    focus::request(self.ctx, FocusTarget::Id(id));
+                }
+            }
+            (Slot::Resolve, Some(thread)) => self.events.push(CardEvent::Resolve { thread, resolved: !self.resolved }),
+            (Slot::Delete, Some(thread)) => self.events.push(CardEvent::Delete { thread }),
+            (Slot::ReplyPost, _) => self.events.push(CardEvent::ReplyPost),
+            _ => {}
         }
     }
 
@@ -667,6 +819,11 @@ impl Component for CommentRow<'_> {
     const ROLE: Role = Role::TREE_ITEM;
     type Style = CommentRowStyle;
     type Output = RowOut;
+
+    /// A balloon card is selected by a click on it: nothing around it senses the press as a collection does.
+    fn sense(&self) -> Sense {
+        if self.actions == CardActions::Buttons { Sense::HOVER | Sense::CLICK } else { Sense::HOVER }
+    }
 
     fn access(&self, access: &mut craft_ui::contract::Access, cx: &Cx<'_, Self>) {
         if let Some(words) = &self.words {
@@ -705,9 +862,17 @@ impl Component for CommentRow<'_> {
             muted: cx.color(color.text.muted),
             highlight: cx.color(color.surface.raised),
             bar: cx.color(color.accent.solid),
+<<<<<<< HEAD
             avatar: cx.color(color.line.border),
             avatar_ink: cx.color(color.text.normal),
             thread_line: cx.color(color.line.divider),
+=======
+            card: cx.color(color.surface.raised),
+            border: cx.color(color.line.border),
+            avatar: cx.color(color.accent.strong),
+            avatar_ink: cx.color(color.text.on_strong),
+            sunken: cx.color(color.surface.sunken),
+>>>>>>> origin/next
             kind_icon: cx.tokens.size.icon.sm,
             glyph: cx.glyph(),
             bar_width: cx.tokens.stroke.thick,
@@ -726,7 +891,11 @@ impl Component for CommentRow<'_> {
         self.words = Some(cx.words::<CommentsWords>());
         let now = self.now;
         let age = |then: i64| age_text(&cx.env, then, now);
+<<<<<<< HEAD
         let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; 3], more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
+=======
+        let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; PUSH_BUTTONS], more: Vec::new() };
+>>>>>>> origin/next
         let height = self.lay(cx.style, width, &age, &mut sink);
         self.heights = sink.fields;
         self.buttons = sink.buttons;
@@ -749,6 +918,15 @@ impl Component for CommentRow<'_> {
         }
     }
 
+    /// Notes whether the inline editor opened this pass: the row remembers which message's editor it showed, and an
+    /// editor it did not show the pass before takes the keyboard.
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let editing = self.editing.map(|(index, _)| index);
+        let shown = cx.memory::<EditShown>();
+        self.focus_edit = editing.is_some() && shown.0 != editing;
+        shown.0 = editing;
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         self.words = Some(cx.words::<CommentsWords>());
         let st = cx.style;
@@ -756,6 +934,12 @@ impl Component for CommentRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         let now = self.now;
         let age = |then: i64| age_text(&cx.env, then, now);
+        // A balloon card sits over the page, so it carries its own surface and border.
+        if self.actions == CardActions::Buttons {
+            let shape = PaintShape::Rect(rect, CornerRadius::ZERO);
+            ui.draw().fill(&shape, st.card);
+            ui.draw().stroke(&shape, StrokeWidth::Thin, st.border);
+        }
         if self.selected {
             ui.draw().fill(&PaintShape::Rect(rect, CornerRadius::ZERO), st.highlight);
             let bar = if rtl {
@@ -773,11 +957,19 @@ impl Component for CommentRow<'_> {
             width: rect.width(),
             rtl,
             thread: self.thread.map(|t| t.id),
+            resolved: self.thread.is_some_and(|t| t.resolved),
             heights: self.heights,
             buttons: self.buttons,
+<<<<<<< HEAD
             badges: &self.badges,
             reply_submit: self.submit_key,
             focus: if self.focus_editor { Some((Slot::EditField, &cx.ctx)) } else { self.focus_reply.then_some((Slot::ReplyField, &cx.ctx)) },
+=======
+            ctx: &cx.ctx,
+            focus_reply: self.focus_reply,
+            focus_edit: self.focus_edit,
+            reply_id: None,
+>>>>>>> origin/next
             events: &mut events,
         };
         self.lay(st, rect.width(), &age, &mut sink);

@@ -36,8 +36,13 @@ fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLay
     let preview = *data.value("preview", preview);
     let layout = *data.choice("layout", layout, &LAYOUTS);
     let comparing = *data.value("comparing", false);
+<<<<<<< HEAD
     let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true).layout(layout);
     let dialog = if preview { dialog.previews(true).preview(PreviewState::Ready(picture(ui, comparing))) } else { dialog };
+=======
+    let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(data.bind("open", true)).history(true).layout(layout);
+    let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)) } else { dialog };
+>>>>>>> origin/next
     let shown = dialog.show(ui);
     *data.value("comparing", false) = shown.comparing;
     shown.into()
@@ -67,7 +72,7 @@ fn param_dialog_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_close_without_reset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::new("blur", "Blur", Param::parse_list(SPEC))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .cancel_label(Label::from("Close"))
         .alt_resets(false)
         .show(ui)
@@ -79,7 +84,7 @@ const COMMAND_SPEC: &str = r#"{"name":text,"size":1..100=10,"method":"fit|fill",
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn param_dialog_with_footer_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     ParamDialog::new("color-table", "Color Table", Param::parse_list(SPEC))
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .extra_buttons(vec![("load".to_owned(), Label::from("Load…")), ("save".to_owned(), Label::from("Save…"))])
         .footer_note("About 1.2 MB")
         .show(ui)
@@ -135,7 +140,7 @@ fn hosted_param_dialog_with_host_notes(ui: &mut Ui, data: &mut StoryData) -> Sto
 
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn command_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ParamDialog::command("fit-image", "Fit Image", Param::parse_list(COMMAND_SPEC)).opened(Bind::bound(data.value("open", true))).show(ui).into()
+    ParamDialog::command("fit-image", "Fit Image", Param::parse_list(COMMAND_SPEC)).opened(data.bind("open", true)).show(ui).into()
 }
 
 /// The rows of the tabbed stories' first tab.

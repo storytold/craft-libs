@@ -24,12 +24,18 @@ pub(crate) fn pinned_layout() -> Layout {
 /// Runs `body` in a child `Ui` with an explicit layout and returns what it produced with the rect the child
 /// took in `ui`. `rect` bounds the child; `None` gives it the rest of the parent.
 pub(crate) fn block<R>(ui: &mut Ui, rect: Option<Rect>, layout: Layout, body: impl FnOnce(&mut Ui) -> R) -> (R, Rect) {
-    let mut builder = UiBuilder::new().layout(layout);
-    if let Some(rect) = rect {
-        builder = builder.max_rect(rect);
-    }
-    let out = ui.scope_builder(builder, body);
+    let out = ui.scope_dyn(block_builder(rect, layout), Box::new(body));
     (out.inner, out.response.rect)
+}
+
+/// The builder of a `block`'s child, made outside the generic `block` so a body nested in blocks keeps one builder
+/// per level on the stack.
+fn block_builder(rect: Option<Rect>, layout: Layout) -> UiBuilder {
+    let builder = UiBuilder::new().layout(layout);
+    match rect {
+        Some(rect) => builder.max_rect(rect),
+        None => builder,
+    }
 }
 
 /// The physical layout of a `Stack` or `Grid` body for `right_to_left`.
@@ -37,10 +43,14 @@ pub(crate) fn column_layout(right_to_left: bool) -> Layout {
     stack_layout(right_to_left)
 }
 
-/// Runs `body` in a child `Ui`. `disabled` disables the child and everything below it. `direction` gives the
-/// child a cloned style carrying that direction and an explicit layout, never the parent's.
-pub(crate) fn scope<R>(ui: &mut Ui, disabled: bool, direction: Option<bool>, body: impl FnOnce(&mut Ui) -> R) -> R {
+/// Runs `body` in a child `Ui`, with the id salt `id_salt` when given. `disabled` disables the child and everything
+/// below it. `direction` gives the child a cloned style carrying that direction and an explicit layout, never the
+/// parent's.
+pub(crate) fn scope<R>(ui: &mut Ui, id_salt: Option<egui::Id>, disabled: bool, direction: Option<bool>, body: impl FnOnce(&mut Ui) -> R) -> R {
     let mut builder = UiBuilder::new();
+    if let Some(salt) = id_salt {
+        builder = builder.id_salt(salt);
+    }
     if let Some(right_to_left) = direction {
         let mut style = (**ui.style()).clone();
         style.right_to_left = right_to_left;

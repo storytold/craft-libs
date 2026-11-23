@@ -1,7 +1,7 @@
 //! Painting the crop overlay: shield, frame line, guides, corner brackets, edge bars, focus and the Straighten line.
 
 use super::gesture::{Drag, Kind};
-use super::{BAR_SHARE, CropOverlay, GRID_MAX, screen_corners};
+use super::{BAR_SHARE, CropOverlay, CropScope, GRID_MAX, screen_corners};
 use crate::canvas::CanvasSpace;
 use crate::contract::{Cx, PaintUi};
 use crate::primitives::{Draw, PaintShape, StrokeWidth};
@@ -54,7 +54,14 @@ fn paint_frame(draw: &Draw<'_>, cx: &Cx<'_, CropOverlay<'_>>, scene: &Scene<'_, 
     if scene.started
         && let Some(fill) = overlay.shield.fill_on(scene.space, style.canvas.egui(), editing)
     {
-        let corners = [area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()];
+        // A picture's crop dims only its own source, so the shield's outer quad is the source on screen, not the canvas.
+        let corners = match overlay.scope {
+            CropScope::Object { source } => {
+                let at = |x: f64, y: f64| view.to_screen(Point::new(x, y));
+                [at(source.x0, source.y0), at(source.x1, source.y0), at(source.x1, source.y1), at(source.x0, source.y1)]
+            }
+            _ => [area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()],
+        };
         super::paint_outside(draw, corners, &q, DataColor::new(fill));
     }
     if let Some(cut) = overlay.cut_area(view) {

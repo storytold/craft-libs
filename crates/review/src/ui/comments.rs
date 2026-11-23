@@ -11,11 +11,11 @@
 //! }
 //! ```
 
-mod list;
+pub(crate) mod list;
 mod menus;
-mod row;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod row;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::collections::BTreeMap;
 
@@ -35,10 +35,17 @@ use super::annotate::{AnnotateWords, PALETTE};
 use crate::annotate::AnnotationKind;
 use crate::comments::{CommentFilter, CommentSort, CommentThread, PageOrder, ReviewStatus, ThreadId, matches, sort_threads};
 
-use list::{CardEvent, CardKey, CommentList, RowEntry, Rows};
+use list::{CardKey, CommentList, RowEntry, Rows};
 use menus::{card_menu, filter_menu, pages_menu, sort_menu};
+<<<<<<< HEAD
 pub use menus::{comments_filter_menu, comments_more_menu};
 use row::{CommentRow, MORE};
+=======
+use row::MORE;
+
+pub(super) use list::CardEvent;
+pub(super) use row::{CardActions, CommentRow};
+>>>>>>> origin/next
 
 /// Ages under this many seconds (one week) read relative; older ones read as a date.
 pub(crate) const AGE_SHOWN_AS_DATE: u64 = 7 * 24 * 60 * 60;
@@ -71,6 +78,9 @@ craft_ui::words! {
         edit: "comments.edit" = "Edit";
         set_status: "comments.setStatus" = "Set status";
         delete: "comments.delete" = "Delete";
+        reply_button: "comments.replyButton" = "Reply";
+        resolve: "comments.resolve" = "Resolve";
+        reopen: "comments.reopen" = "Reopen";
         copy_text: "comments.copyText" = "Copy text";
         mark: "comments.mark" = "Mark with checkmark";
         unmark: "comments.unmark" = "Remove checkmark";
@@ -277,6 +287,7 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 /// - Cards in one collection, grouped under headings by [`sort_threads`]; under the Page sort a
 ///   heading names the page, shows the count of the page's comments before filtering and folds its
 ///   cards. A card shows the kind's icon, author, age (relative under a week, then the date), the
+<<<<<<< HEAD
 ///   text, a badge per reviewer's status, the checkmark, a lock icon and the replies, each with its own "..." menu.
 /// - Selected cards have the highlight; the lead (the first selected) has the accent bar, the reply box and "..."
 ///   (Edit, Set status, Delete, then the host's [`card_rows`](CommentsPanel::card_rows)). Locked threads and
@@ -284,6 +295,16 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 /// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the lead card's reply box,
 ///   the [`reply_submit`](CommentsPanel::reply_submit) key in the reply box and Cmd+Enter (Ctrl+Enter off macOS) in
 ///   an inline editor post, Escape in a control of a card returns to the card.
+=======
+///   text, a status icon, the checkmark, a lock icon and the replies, each with its own "..." menu.
+/// - The selected card has the accent bar, the reply box and "..." (Edit, Set status, Delete).
+///   Locked threads and `read_only` hide the editing items. An inline editor takes the keyboard in
+///   the pass it opens. Selecting another card drops the reply draft and the edit of another
+///   thread; a card selected again keeps its own edit draft.
+/// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the selected
+///   card's reply box, Cmd+Enter (Ctrl+Enter off macOS) in the reply box or an inline editor posts,
+///   Escape in a control of a card returns to the card.
+>>>>>>> origin/next
 ///
 /// ```ignore
 /// let out = CommentsPanel::new("Comments", &threads, &mut state).now(now).show(ui);
@@ -461,6 +482,7 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, value: T) {
     }
 }
 
+<<<<<<< HEAD
 /// Makes `next` the selection; true when its threads changed. A new lead drops the reply draft and the inline edit,
 /// which belong to the old lead's card.
 fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> bool {
@@ -469,6 +491,19 @@ fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> b
         state.reply.clear();
         state.editing = None;
         state.focus_editor = false;
+=======
+/// Makes `thread` the selected one; false when it already was. The reply draft and an edit of another thread go; an
+/// edit of `thread` itself stays, so a draft the app could not write back (a document that refused it) is there again
+/// when its card is selected again.
+fn select_thread(state: &mut CommentsPanelState, thread: ThreadId) -> bool {
+    let changed = state.selected != Some(thread);
+    if changed {
+        state.selected = Some(thread);
+        state.reply.clear();
+        if state.editing.as_ref().is_some_and(|(editing, ..)| *editing != thread) {
+            state.editing = None;
+        }
+>>>>>>> origin/next
     }
     state.selected = next;
     changed
@@ -765,9 +800,12 @@ impl<H: Value> CommentsPanel<'_, H> {
 }
 
 /// Applies what a card reported.
-fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
+pub(super) fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
     match event {
         CardEvent::Mark { thread, marked } => edits.push(CommentEdit::Mark { thread, marked }),
+        CardEvent::Resolve { thread, resolved } => edits.push(CommentEdit::Resolve { thread, resolved }),
+        // Index 0 deletes the whole thread.
+        CardEvent::Delete { thread } => edits.push(CommentEdit::Delete { thread, index: 0 }),
         CardEvent::EditText(text) => {
             if let Some((_, _, draft)) = state.editing.as_mut() {
                 *draft = text;

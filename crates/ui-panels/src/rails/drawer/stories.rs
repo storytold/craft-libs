@@ -1,6 +1,11 @@
 //! Stories of `ToolbarDrawer`.
 
+<<<<<<< HEAD
 use super::{DrawerGroup, DrawerKind, ToolbarDrawer};
+=======
+use super::{DrawerGroup, ToolbarDrawer};
+use crate::contract::Tracked;
+>>>>>>> origin/next
 use crate::rails::tool::stories::{BRUSH, tools};
 use crate::rails::tool::{LastUsed, ToolRail, ToolSlot};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -10,8 +15,8 @@ use egui::Ui;
 /// are off the toolbar, so the drawer has tools to drag onto it.
 fn beside_rail(ui: &mut Ui, data: &mut StoryData, kind: DrawerKind, open_at_start: bool) -> StoryOutput {
     let groups = [DrawerGroup::new("Drawing", tools(&[0, 1, 2])), DrawerGroup::new("Retouching", tools(&[3, 4]))];
-    let slots = [ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1]))];
-    let last = LastUsed::default();
+    let slots = Tracked::new(vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1]))]);
+    let last = Tracked::new(LastUsed::default());
     let rail = ToolRail::new("Tools", &slots, &BRUSH, &last).edit_toolbar("Edit Toolbar").show_rail(ui, |_, _| {});
     let open = data.value("open", open_at_start);
     let Some(opener) = rail.edit_toolbar.as_ref() else { return rail.into() };

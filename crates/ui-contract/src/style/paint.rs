@@ -171,9 +171,21 @@ pub(crate) fn marker_look(tokens: &UiTokens) -> MarkerLook {
     }
 }
 
-/// A scroll bar's track and thumb: one floating indicator for every scroll area, over the content at its edge. At rest
-/// the thumb is a thin dim line along the track's outer edge and the track is clear; under the pointer or while pressed
-/// the thumb takes the track's whole thickness over a tinted track.
+/// Which of the two scroll bar looks a bar has.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScrollBarKind {
+    /// The indicator of a scroll area, over the content at its edge. At rest the thumb is a thin dim line along the
+    /// track's outer edge and the track is clear; under the pointer or while pressed the thumb takes the track's whole
+    /// thickness over a tinted track.
+    #[default]
+    Floating,
+    /// The bar beside a canvas view, always shown: the thumb has the track's whole thickness in every state, on a
+    /// `surface.chrome` track, quiet at rest (`line.control_edge`).
+    Docked,
+}
+
+/// A scroll bar's track and thumb, of a [`ScrollBarKind`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ScrollBarLook {
@@ -188,8 +200,6 @@ pub struct ScrollBarLook {
     pub thumb_width: Stateful<f32>,
     /// The shortest the thumb gets along the bar.
     pub min_thumb: f32,
-    /// The length of the fade at an edge past which content is hidden.
-    pub fade: f32,
 }
 
 /// The shortest a scroll bar's thumb gets along the bar, whatever the bar's kind.
@@ -198,24 +208,45 @@ pub(crate) fn min_thumb(tokens: &UiTokens) -> f32 {
 }
 
 pub(crate) fn scroll_bar_look(tokens: &UiTokens) -> ScrollBarLook {
+    scroll_bar_look_of(tokens, ScrollBarKind::Floating)
+}
+
+pub(crate) fn scroll_bar_look_of(tokens: &UiTokens, kind: ScrollBarKind) -> ScrollBarLook {
     let c = &tokens.color;
     let clear = style_color(Rgba::TRANSPARENT);
-    let thumb = Stateful::new(style_color(c.text.faint)).off(craft_theme::States::new(
-        style_color(c.text.faint),
-        style_color(c.text.muted),
-        style_color(c.text.normal),
-        style_color(c.state.disabled_fill),
-    ));
+    let disabled = style_color(c.state.disabled_fill);
+    let thumb = match kind {
+        ScrollBarKind::Floating => Stateful::new(style_color(c.text.faint)).off(craft_theme::States::new(
+            style_color(c.text.faint),
+            style_color(c.text.muted),
+            style_color(c.text.normal),
+            disabled,
+        )),
+        ScrollBarKind::Docked => Stateful::new(style_color(c.line.control_edge)).off(craft_theme::States::new(
+            style_color(c.line.control_edge),
+            style_color(c.text.faint),
+            style_color(c.text.muted),
+            disabled,
+        )),
+    };
     let hover = style_color(c.state.hover);
-    let track = Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear));
-    let (thickness, rest) = (tokens.size.handle.sm, tokens.stroke.thick);
+    let (thickness, thin) = match kind {
+        ScrollBarKind::Floating => (tokens.size.handle.sm, tokens.stroke.thick),
+        ScrollBarKind::Docked => (tokens.size.icon.md, tokens.size.icon.md),
+    };
+    let (track, rest) = match kind {
+        ScrollBarKind::Floating => (Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear)), thin),
+        ScrollBarKind::Docked => {
+            let chrome = style_color(c.surface.chrome);
+            (Stateful::new(chrome).off(craft_theme::States::new(chrome, hover, hover, chrome)), thickness)
+        }
+    };
     ScrollBarLook {
         track,
         thumb,
         thickness,
         thumb_width: Stateful::new(rest).off(craft_theme::States::new(rest, thickness, thickness, rest)),
         min_thumb: min_thumb(tokens),
-        fade: tokens.size.scroll_fade,
     }
 }
 

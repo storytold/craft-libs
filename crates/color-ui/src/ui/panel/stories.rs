@@ -2,7 +2,6 @@
 
 use super::{ColorPanel, ColorPanelMode, ColorPanelRamp, ColorPanelState};
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -10,7 +9,7 @@ use egui::Ui;
 const COLORS: [Srgba; 2] = [Srgba::rgb(0.07, 0.65, 0.58), Srgba::rgb(1.0, 1.0, 1.0)];
 
 fn panel(ui: &mut Ui, data: &mut StoryData, state: ColorPanelState) -> StoryOutput {
-    ColorPanel::new(Bind::bound(data.value("state", state)), COLORS).show(ui).into()
+    ColorPanel::new(data.bind("state", state), COLORS).show(ui).into()
 }
 
 #[story(ColorPanel<'static>, covers = [], drive = Drive::Never)]

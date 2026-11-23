@@ -14,7 +14,7 @@ use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::windows::Windows;
-use egui::{Pos2, Rect, Response, Ui, Vec2, ViewportBuilder, ViewportId, ViewportInfo};
+use egui::{Pos2, Rect, Response, Shape, Ui, Vec2, ViewportBuilder, ViewportId, ViewportInfo};
 use std::cell::RefCell;
 use std::sync::Arc;
 
@@ -25,6 +25,9 @@ const CHIP: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(60.0, 40.0)
 const SLOT: Rect = Rect { min: Pos2::new(200.0, 10.0), max: Pos2::new(300.0, 60.0) };
 
 const BADGE: &str = "3 files";
+
+/// The name a named drag shows.
+const NAME: &str = "Layers";
 
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -84,7 +87,8 @@ impl Component for Chip<'_> {
     }
 }
 
-struct Accepts;
+/// Takes every drop and marks it with its mark.
+struct Accepts(DropMark);
 
 impl DropTarget<Payload> for Accepts {
     type Drop = (u32, DropOperation);
@@ -94,16 +98,17 @@ impl DropTarget<Payload> for Accepts {
     }
 
     fn mark(&self, _: &Self::Drop) -> DropMark {
-        DropMark::Into(SLOT)
+        self.0
     }
 }
 
-/// Takes drops of the payload.
+/// Takes drops of the payload, and marks them with `mark`.
 #[derive(Component)]
 struct Slot<'a> {
     #[common]
     common: Common,
     seen: &'a RefCell<Seen>,
+    mark: DropMark,
 }
 
 impl Component for Slot<'_> {
@@ -120,7 +125,7 @@ impl Component for Slot<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if let Some(drop) = cx.drop_target(&Accepts) {
+        if let Some(drop) = cx.drop_target(&Accepts(self.mark)) {
             self.seen.borrow_mut().dropped.push(drop);
         }
     }
@@ -128,6 +133,38 @@ impl Component for Slot<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
+}
+
+/// A drag whose preview names its payload shows nothing away from every target, and its name once, inside the region a
+/// target marks.
+#[trial]
+fn a_named_drag_shows_its_name_inside_a_region_mark_and_nothing_without_a_mark() {
+    let seen = RefCell::new(Seen::default());
+    let mut show = |ui: &mut Ui| {
+        Chip { common: Common::new(), seen: &seen, preview: DragPreview::Named(Label::Static(NAME)) }.id_salt("chip").show_at(ui, CHIP);
+        Slot { common: Common::new(), seen: &seen, mark: DropMark::region(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+    };
+    let mut frames = Frames::new();
+    let (from, open) = (CHIP.center(), Pos2::new(120.0, 200.0));
+    frames.frame(vec![moved(from)], &mut show);
+    frames.frame(vec![press(from)], &mut show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(from + (open - from) * (step as f32 / 4.0))], &mut show);
+    }
+    assert!(drag::mark(&frames.ctx).is_none(), "no target takes the drag in open room");
+    let away = texts(&frames.frame_shapes(&mut show));
+    assert!(away.is_empty(), "nothing shows beside the pointer without a mark: {away:?}");
+    frames.frame(vec![moved(SLOT.center())], &mut show);
+    frames.idle(1, &mut show);
+    assert!(matches!(drag::mark(&frames.ctx), Some(DropMark::Region { .. })), "the slot marks the region a drop takes");
+    let over = texts(&frames.frame_shapes(&mut show));
+    assert!(over.len() == 1 && SLOT.contains_rect(over[0]), "the name shows once, inside the region: {over:?}");
+    frames.frame(vec![release(SLOT.center())], &mut show);
+}
+
+/// The bounds of the text shapes among `shapes`.
+fn texts(shapes: &[Shape]) -> Vec<Rect> {
+    shapes.iter().filter(|shape| matches!(shape, Shape::Text(_))).map(Shape::visual_bounding_rect).collect()
 }
 
 /// A drag that starts in one window and ends over a target in another: the session maps the pointer to desktop
@@ -145,7 +182,7 @@ fn a_drag_crosses_windows_and_the_target_in_the_other_window_takes_the_drop() {
         windows.frame(events, vec![], |ui| {
             Chip { common: Common::new(), seen: &seen, preview: DragPreview::Badge(Label::Static(BADGE)) }.id_salt("chip").show_at(ui, CHIP);
             ui.ctx().show_viewport_immediate(other, ViewportBuilder::default(), |other_ui, _| {
-                Slot { common: Common::new(), seen: &seen }.id_salt("slot").show_at(other_ui, SLOT);
+                Slot { common: Common::new(), seen: &seen, mark: DropMark::Into(SLOT) }.id_salt("slot").show_at(other_ui, SLOT);
             });
         });
     };

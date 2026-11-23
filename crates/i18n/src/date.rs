@@ -281,6 +281,8 @@ pub struct DateFormat {
     week_start: Option<Weekday>,
     /// Formatters and names, built on first use and shared by clones.
     cache: Arc<Cache>,
+    /// Unique per format built; a clone keeps it (`generation`).
+    generation: u64,
 }
 
 /// One ICU formatter per field set the styles need.
@@ -379,13 +381,29 @@ impl PartsWrite for Spliced {
 impl DateFormat {
     /// The format for `region`'s time locale and clock.
     pub fn new(region: &Region) -> DateFormat {
+<<<<<<< HEAD
         Self { locale: region.time.clone(), hour_cycle: region.hour_cycle, latin_digits: false, week_start: None, cache: Arc::default() }
+=======
+        Self {
+            locale: region.time.clone(),
+            hour_cycle: region.hour_cycle,
+            latin_digits: false,
+            cache: Arc::default(),
+            generation: crate::words::next_generation(),
+        }
+>>>>>>> origin/next
     }
 
     /// This format writing `0`–`9` for [`Digits::Latin`], else the locale's own digits. Formatters
     /// are rebuilt on first use.
     pub fn with_digits(self, digits: Digits) -> DateFormat {
-        DateFormat { latin_digits: digits == Digits::Latin, cache: Arc::default(), ..self }
+        DateFormat { latin_digits: digits == Digits::Latin, cache: Arc::default(), generation: crate::words::next_generation(), ..self }
+    }
+
+    /// Which format this is: a format and its clones write every date the same, and one built anew gets a new
+    /// generation. What keys on the dates a format writes keys on this.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// This format with weeks starting on `day` in place of the region's.

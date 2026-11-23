@@ -1,59 +1,60 @@
 //! The screen tests of craft-draw, folded into the lib's test target.
 
 // draw-shape
-mod add_beside;
-mod corner;
-mod shape_cells;
+pub(crate) mod add_beside;
+pub(crate) mod corner;
+pub(crate) mod shape_cells;
 
 // draw-gradient-b
-mod gradient_fill;
-mod gradient_overlay;
+pub(crate) mod gradient_fill;
+pub(crate) mod gradient_map;
+pub(crate) mod gradient_overlay;
 
 // draw-connector
-mod connector;
-mod shape_drag;
+pub(crate) mod connector;
+pub(crate) mod shape_drag;
 
 // draw-paths
-mod paths_panel;
+pub(crate) mod paths_panel;
 
 // draw-pen-a
-mod bezier;
+pub(crate) mod bezier;
 
 // draw-pen-b
-mod pen;
+pub(crate) mod pen;
 
 // draw-crop-b
-mod crop_size;
-mod crop_tool;
-mod perspective_crop;
+pub(crate) mod crop_size;
+pub(crate) mod crop_tool;
+pub(crate) mod perspective_crop;
 
 // draw-artboard
-mod artboard;
+pub(crate) mod artboard;
 
 // draw-bars
-mod measure;
-mod slice;
-mod slice_divide;
+pub(crate) mod measure;
+pub(crate) mod slice;
+pub(crate) mod slice_divide;
 
 // draw-stroke
-mod stroke_button;
-mod stroke_editor;
+pub(crate) mod stroke_button;
+pub(crate) mod stroke_editor;
 
 // draw-brush-presets
-mod brush_presets;
-mod brush_size;
-mod paint_bar;
+pub(crate) mod brush_presets;
+pub(crate) mod brush_size;
+pub(crate) mod paint_bar;
 
 // draw-transform-a
-mod transform_box;
-mod transform_session;
+pub(crate) mod transform_box;
+pub(crate) mod transform_session;
 
 // draw-transform-b
-mod symmetry;
-mod transform_fields;
+pub(crate) mod symmetry;
+pub(crate) mod transform_fields;
 
 // draw-presets
-mod presets;
+pub(crate) mod presets;
 
 // dialogs-w13
-mod pattern_fill;
+pub(crate) mod pattern_fill;

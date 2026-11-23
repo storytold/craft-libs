@@ -1,5 +1,6 @@
 //! The command board: registry, state, the gate, firing and scoped delivery.
 
+<<<<<<< HEAD
 mod panel_scope;
 
 use craft_behavior::IconId;
@@ -58,3 +59,6 @@ fn a_bound_commands_hint_is_the_tooltips_second_line() {
     let text = tooltip_of(HintCommand::Open, CommandState::new().hint(OPENS), |ui| Button::new("Open").command(HintCommand::Open).show(ui).rect);
     assert!(text.starts_with(&format!("{OPENS} (")) && text.ends_with(')') && !text.contains('\n'), "the hint alone, with the chord: {text:?}");
 }
+=======
+pub(crate) mod panel_scope;
+>>>>>>> origin/next

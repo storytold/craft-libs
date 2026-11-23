@@ -3,6 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+<<<<<<< HEAD
+=======
+
+use web_time::Instant;
+>>>>>>> origin/next
 
 use toml_edit::DocumentMut;
 use web_time::Instant;
@@ -10,10 +15,17 @@ use web_time::Instant;
 use crate::Settings;
 use crate::document::{self, merge_changes, merge_into, set_schema_version};
 use crate::error::{LoadReport, ReadOnlyReason, SaveStatus, SettingsError, Source, TickResult};
+<<<<<<< HEAD
 #[cfg(target_arch = "wasm32")]
 use crate::files::BrowserFiles;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::files::DiskFiles;
+=======
+#[cfg(not(target_arch = "wasm32"))]
+use crate::files::DiskFiles;
+#[cfg(target_arch = "wasm32")]
+use crate::files::LocalStorageFiles;
+>>>>>>> origin/next
 use crate::files::SettingsFiles;
 use crate::migrate::{self, LegacyFile, Upgrade};
 use crate::paths::{self, Location};
@@ -66,7 +78,12 @@ impl<T> Default for OpenOptions<T> {
     /// Native: [`Location::Auto`] on the disk.
     #[cfg(not(target_arch = "wasm32"))]
     fn default() -> Self {
-        Self { location: Location::Auto, legacy: Vec::new(), debounce: DEFAULT_DEBOUNCE, probe: Probe::default(), files: Arc::new(DiskFiles) }
+        #[cfg(not(target_arch = "wasm32"))]
+        let files: Arc<dyn SettingsFiles> = Arc::new(DiskFiles);
+        // localStorage holds about 5 MB per site.
+        #[cfg(target_arch = "wasm32")]
+        let files: Arc<dyn SettingsFiles> = Arc::new(LocalStorageFiles::new(4 << 20));
+        Self { location: Location::Auto, legacy: Vec::new(), debounce: DEFAULT_DEBOUNCE, probe: Probe::default(), files }
     }
 
     /// Web: browser storage, in memory until the app names its key root with [`Location::Dir`]
@@ -292,6 +309,25 @@ impl<T: Settings> SettingsStore<T> {
         true
     }
 
+    /// Changes the settings as loaded rather than as edited: for values that come from another file
+    /// this process reads (a custom dictionary's words), not from the user. The change applies to the
+    /// value and to the merge base alike, so it schedules no save, leaves [`SettingsStore::is_dirty`]
+    /// as it was, and a later save does not count it as this store's change: another instance's edit
+    /// of the same keys is kept. Returns true only if the value changed.
+    pub fn update_loaded(&mut self, f: impl FnOnce(&mut T)) -> bool {
+        let mut next = self.value.clone();
+        f(&mut next);
+        if next == self.value {
+            return false;
+        }
+        // Only the keys this change touched move in the base; a pending edit of other keys stays ours.
+        if let (Some(before), Some(after)) = (value_document(&self.value), value_document(&next)) {
+            merge_changes::<T>(&before, &after, &mut self.base);
+        }
+        self.value = next;
+        true
+    }
+
     /// Like [`SettingsStore::update`] with an explicit clock, for tests.
     pub fn update_at(&mut self, now: Instant, f: impl FnOnce(&mut T)) -> bool {
         let mut next = self.value.clone();
@@ -386,7 +422,7 @@ impl<T: Settings> SettingsStore<T> {
         match self.files.read(path) {
             Ok(Some(text)) => self.load_text(path, &text, damaged, report),
             Ok(None) => {
-                if let Some((value, errors, from)) = migrate::import_legacy(legacy) {
+                if let Some((value, errors, from)) = migrate::import_legacy(&*self.files, legacy) {
                     self.value = value;
                     self.dirty = true;
                     report.source = Source::Legacy(from);
@@ -445,6 +481,9 @@ impl<T: Settings> SettingsStore<T> {
             self.dirty = false;
             return Ok(());
         };
+        // Held from the disk check to the write, so another process saving at the same moment waits instead of
+        // writing over the changes this save merges in. An early return releases it.
+        let lock = self.files.lock(&path);
         let (backup, theirs) = self.check_disk(&path)?;
         if let Some(on_disk) = backup {
             self.files.write_backup(&path, &on_disk)?;
@@ -465,6 +504,7 @@ impl<T: Settings> SettingsStore<T> {
         }
         let text = document::render(&self.doc);
         self.files.write(&path, &text)?;
+        drop(lock);
         self.base = self.doc.clone();
         self.seen_text = Some(text);
         self.dirty = false;
@@ -478,9 +518,10 @@ impl<T: Settings> SettingsStore<T> {
     /// (it parses and is not blank), and its document, upgraded to this build's schema, when
     /// another instance or a hand edit changed it since this store last read or wrote it.
     ///
-    /// The contract is best effort, not multi-process locking: `save` merges this store's changes
-    /// since its base into that document ([`merge_changes`]), so the other writer's comments,
-    /// unknown keys and settings survive. A file that no longer parses is moved aside (the edit
+    /// `save` holds the files' lock ([`SettingsFiles::lock`]) around this check and its write, so two
+    /// processes saving at once take turns, and merges this store's changes since its base into that
+    /// document ([`merge_changes`]), so the other writer's comments, unknown keys and settings survive.
+    /// The lock is advisory and waits a bounded time; past that the save goes ahead. A file that no longer parses is moved aside (the edit
     /// is kept, the previous backup stays), and a file from a newer build, or one whose migration
     /// fails, makes the store read-only instead of overwriting it, the same as at startup.
     fn check_disk(&mut self, path: &Path) -> Result<(Option<String>, Option<DocumentMut>), SettingsError> {
@@ -553,6 +594,13 @@ fn default_document<T: Settings>() -> DocumentMut {
     // Defaults that don't serialize leave the base empty, which makes every key ours.
     let _ = merge_into(&mut doc, &T::default());
     doc
+}
+
+/// `value` serialised as a fresh document; `None` when it does not serialise.
+fn value_document<T: Settings>(value: &T) -> Option<DocumentMut> {
+    let mut doc = document::new_document(T::SCHEMA_VERSION);
+    merge_into(&mut doc, value).ok()?;
+    Some(doc)
 }
 
 /// Exponential backoff: 1 s, 2 s, 4 s, … capped at [`MAX_RETRY_DELAY`].

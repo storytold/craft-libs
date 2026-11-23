@@ -2,7 +2,7 @@ use super::*;
 use crate as spool;
 use craft_ui::testing::trial;
 
-mod windows_native;
+pub(crate) mod windows_native;
 
 /// Set on the child process when a test runs this test binary as a stand-in for `lp`.
 const STAND_IN_LP: &str = "CRAFT_STAND_IN_LP";
@@ -210,7 +210,7 @@ fn macos_offers_auto_select_where_the_driver_would_pick_its_default_tray() {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-mod lpstat_limits {
+pub(crate) mod lpstat_limits {
     use super::*;
     use craft_ui::testing::trial;
     use std::process::Command;

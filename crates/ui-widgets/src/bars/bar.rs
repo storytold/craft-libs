@@ -11,7 +11,7 @@ use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, GlyphRole, StyleCx, SurfaceKind};
 use craft_behavior::{IconId, Metrics, NavShape, Roving, Sense};
 use craft_theme::ControlSize;
 use egui::{Response, Ui};
@@ -21,7 +21,7 @@ use std::num::NonZeroU8;
 type TrailingFn<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 
 /// What a bar is for; it picks the bar's role, spacing and name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum BarKind {
     /// A strip of tools or commands.
@@ -81,13 +81,18 @@ impl Outcome for BarOutput {
 /// and its members sit on the line's middle, with its padding at the start and end only. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the
 /// caller makes with `Row`. A member that fills (a leaf with `Sizing::FillWidth`, a fill-width `Row`) takes the room the view
 /// leaves. A row too long for the bar first narrows its selects and elidable text, the last first, down to their
-/// readable least (`TextRun::READABLE_CHARACTERS`), then scrolls, so a member past the edge is reached by Tab and
+/// readable least (`TextRun::READABLE_CHARACTERS`), then scrolls under an overlay bar (`Scroll::overlay`), so a member
+/// past the edge is reached by Tab and
 /// revealed. A member the view shows only in part (a control, or a captioned
 /// field with its caption) is not shown until a scroll brings it in whole. Under right-to-left the bar is the mirror of
 /// left-to-right. A select in a bar fits its widest entry, up to a field length. A rule between groups of members is a
 /// `Divider::vertical()`; it shows only with the member after it. A bar with `commit_cancel` ends with a
 /// cancel and a commit button in its end region, outside the scroll, `space.gap.stack` from the body and on the
 /// members' line; they run `BarCommands`.
+///
+/// The bar is a plain container; its members are the host's. A host memoizes them with a `MemoView` inside the body
+/// closure, over props that hold what the members read (`BarItem`, `StatusMessage`, `StatusProgress` and the other
+/// member types derive `MemoProps`), and sends the members' events through an `Outbox`.
 #[derive(crate::contract::Component)]
 #[component(container)]
 pub struct Bar<'a> {
@@ -120,9 +125,12 @@ impl<'a> Bar<'a> {
             .child_size(size)
             .roving(Roving::new(NavShape::Flat))
             .layout(BodyLayout::row())
-            .scroll(Scroll::horizontal());
+            .scroll(Scroll::horizontal().overlay());
         if kind == BarKind::Status {
             props = props.live(Politeness::Polite);
+        }
+        if kind == BarKind::Options {
+            props = props.child_glyphs(GlyphRole::Tool);
         }
         Bar { common: Common::new(), props, kind, commit_cancel: None, committed: false, cancelled: false, trailing: None }.label(label)
     }
@@ -149,6 +157,14 @@ impl<'a> Bar<'a> {
     #[must_use]
     pub fn tab_stops(mut self) -> Self {
         self.props.roving = None;
+        self
+    }
+
+    /// Paints `kind` behind the bar instead of the chrome: a bar that floats on its own, as a canvas's task bar does,
+    /// is a floating surface with its corners and shadow.
+    #[must_use]
+    pub fn surface(mut self, kind: SurfaceKind) -> Self {
+        self.props = self.props.surface(kind);
         self
     }
 

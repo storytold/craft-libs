@@ -52,10 +52,6 @@ impl Decls {
         &self.parts
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.parts.is_empty()
-    }
-
     pub(crate) fn iter(&self) -> std::iter::Zip<std::slice::Iter<'_, PartDecl>, std::slice::Iter<'_, PartExtras>> {
         self.parts.iter().zip(&self.extras)
     }
@@ -201,6 +197,14 @@ impl PartBuilder<'_> {
     /// The part sits above the body or items in the stacking order and is painted by `paint_over`.
     pub fn over(self) -> Self {
         self.decl.over = true;
+        self
+    }
+
+    /// The part's hit area is its shape as declared, never grown to the pointer's target size (`size.hit.target`): a
+    /// frame's resize grip, whose band is sized as its reach and whose neighbours (a title row, the content) own every
+    /// point beside it.
+    pub fn exact_hit(self) -> Self {
+        self.decl.exact = true;
         self
     }
 

@@ -20,8 +20,8 @@
 //! }
 //! ```
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::view::PageSource;
 use craft_behavior::{CopyKeys, EditEvent, IconId, MiddleButton, Selection, SelectionChange, SelectionModel as _, keyed};

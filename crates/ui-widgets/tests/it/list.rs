@@ -322,6 +322,60 @@ fn hosted_items_take_their_own_width_and_an_optional_one_drops_first() {
     assert!(field.right() <= row_rect.right() + 0.5, "the row's items stay inside it: {field:?} in {row_rect:?}");
 }
 
+/// A leaf that measures far taller than any row, to show the height a row gives its hosted fields.
+#[derive(craft_ui::contract::Component)]
+struct Tall {
+    #[common]
+    common: craft_ui::contract::Common,
+}
+
+impl craft_ui::contract::Component for Tall {
+    const ROLE: craft_ui::contract::Role = craft_ui::contract::Role::IMAGE;
+    const SHOWS_LABEL: bool = false;
+    type Style = super::label::kit::PlainStyle;
+    type Output = egui::Response;
+
+    fn style(_: &craft_ui::style::StyleCx<'_>, _: TallStyleKey) -> super::label::kit::PlainStyle {
+        super::label::kit::PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &craft_ui::contract::MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(40.0, 1000.0)
+    }
+
+    fn sense(&self) -> craft_behavior::Sense {
+        craft_behavior::Sense::empty()
+    }
+
+    fn finish(self, cx: craft_ui::contract::Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// A hosted field, required or optional, takes its own height up to its row's, as a cell field does: in a row taller
+/// than the base row (a large thumbnail) it gets the whole row, centred, not one base row.
+#[trial]
+fn hosted_fields_take_their_own_height_up_to_the_row() {
+    use craft_ui::list::ThumbSize;
+    let tall = |key: usize| {
+        ListRow::new(NAMES[key])
+            .thumb(ThumbSize::Large, |_, _| {})
+            .trailing_field(Tall { common: craft_ui::contract::Common::new() }.label(format!("Field {key}")), |_| {})
+            .optional_field(Tall { common: craft_ui::contract::Common::new() }.label(format!("Optional {key}")), |_| {})
+    };
+    let (fixture, _) = rows_rig(Vec2::new(800.0, 600.0), tall);
+    let (plain, _) = rows_rig(Vec2::new(800.0, 600.0), |key| ListRow::new(NAMES[key]));
+    let base = plain.by_label(NAMES[0]).expect("the plain row").rect.height();
+    let row = fixture.by_label(NAMES[0]).expect("the tall row").rect;
+    assert!(row.height() > base, "the thumbnail row is taller than the base row: {row:?}, base {base}");
+    for name in ["Field 0", "Optional 0"] {
+        let field = fixture.by_label(name).unwrap_or_else(|| panic!("{name} shows")).rect;
+        assert!((field.height() - row.height()).abs() < 0.5, "{name} takes the row's height: {field:?} in {row:?}");
+        assert!(field.top() >= row.top() - 0.5 && field.bottom() <= row.bottom() + 0.5, "{name} stays in its row");
+        assert!((field.center().y - row.center().y).abs() < 0.5, "{name} is centred on its row");
+    }
+}
+
 /// A list sized to its content makes room for each row's optional item and shows its label whole, whether the label
 /// is shorter or longer than its least width.
 #[trial]
@@ -1032,6 +1086,41 @@ fn a_thumbnails_frame_is_square_and_lies_outside_its_picture() {
     assert!(row.contains_rect(frame.rect), "the row holds the frame: {row:?} {frame:?}");
 }
 
+/// A row whose label comes from styled spans draws its match, and nothing else of the label, on the highlight, and the
+/// joined text names the row. A row that dropped the spans would draw the label as one plain span.
+#[trial]
+fn a_row_labelled_from_spans_highlights_only_its_match_and_is_named_by_the_joined_text() {
+    use craft_ui::primitives::Span;
+    const JOINED: &str = "over the harbour at dusk";
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|_| std::borrow::Cow::Borrowed(JOINED));
+        let _ = List::new("Results").show_items(ui, &source, &mut |_, _| {
+            let spans = vec![Span::new("over the "), Span::new("harbour").highlight(), Span::new(" at dusk")];
+            ListRow::new(JOINED).label_spans(spans)
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    assert!(fixture.by_label(JOINED).is_some(), "the joined text names the row");
+    let shapes = fixture.frame_shapes();
+    let galley = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(shown) if shown.galley.text() == JOINED => Some(shown.galley.clone()),
+            _ => None,
+        })
+        .expect("the row draws its label whole");
+    let marked: Vec<&str> = galley
+        .job
+        .sections
+        .iter()
+        .filter(|section| section.format.background != egui::Color32::TRANSPARENT)
+        .filter_map(|section| galley.job.text.get(section.byte_range.start.0..section.byte_range.end.0))
+        .collect();
+    assert_eq!(marked, ["harbour"], "only the match is drawn on the highlight");
+}
+
 /// What a double click on the second row of a list with `select` and `allow_empty`, nothing selected, reports, and the
 /// selection it leaves with a host that keeps every selection the list reports.
 fn double_clicked(
@@ -1178,6 +1267,7 @@ fn a_row_dragged_to_the_edge_scrolls_the_list_and_rests_without_frames() {
     fixture.release_at(Pos2::new(grab.x, list.center().y));
 }
 
+<<<<<<< HEAD
 /// A right click on a row's button asks for the row's menu, as a right click elsewhere on the row does, and does not
 /// press the button: an attachment's Save button opens the attachment's menu.
 #[trial]
@@ -1520,4 +1610,92 @@ fn a_revealed_part_is_exposed_only_while_its_row_shows_it() {
     fixture.frame(vec![pointer::moved(over)]).settle();
     assert!(fixture.by_label(MOVES[1]).is_some(), "the hovered row's part is exposed");
     assert!(fixture.by_label(MOVES[0]).is_none() && fixture.by_label(MOVES[2]).is_none(), "the other rows' parts stay hidden");
+=======
+/// Auto rows place by their measure in the first frame. In a column sized from its content along the height, where
+/// each pass runs the list's measuring run and its real run, the first frame runs once, measures each row once, builds each row at most
+/// twice, and places the rows and the list where the settled list has them. A click that selects a row and a rename
+/// request change a state the row's size reads after the pass measured it: the frame shows the row, and the list
+/// around it, at the new size.
+#[trial]
+fn auto_rows_are_measured_once_per_pass_and_a_restated_row_takes_its_new_size_in_the_same_frame() {
+    use craft_ui::contract::{ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Stack;
+    use craft_ui::list::ThumbSize;
+    use craft_ui::testing::pointer::{moved, press, release};
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            let keys = [0_usize, 1, 2];
+            let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+            List::new("Artboards").id(list_id()).rename(true).show_items(ui, &source, &mut |key, icx| {
+                let size = if icx.row.selected || icx.row.renaming { ThumbSize::Large } else { ThumbSize::Medium };
+                ListRow::new(NAMES[*key]).thumb(size, |_, _| {})
+            });
+        });
+    });
+    fixture.room(Vec2::new(300.0, 400.0));
+    let list = |fixture: &Fixture| fixture.by_label("Artboards").expect("the list's node").rect;
+    let row = |fixture: &Fixture, at: usize| fixture.by_label(NAMES[at]).expect("the row's node").rect;
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let runs = craft_ui::testing::last_pass_runs(fixture.ctx());
+    assert!(runs.iter().any(|(name, count)| name.contains("::List<") && *count >= 2), "the list has a measuring run and a real run: {runs:?}");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == NAMES.len() && measures.iter().all(|(_, count)| *count == 1), "each row is measured once: {measures:?}");
+    let builds = craft_ui::testing::row_builds(fixture.ctx());
+    assert!(builds.len() == NAMES.len() && builds.iter().all(|(_, count)| *count <= 2), "each row is built at most twice: {builds:?}");
+    let first = (list(&fixture), [row(&fixture, 0), row(&fixture, 1), row(&fixture, 2)]);
+    fixture.idle(3);
+    let settled = (list(&fixture), [row(&fixture, 0), row(&fixture, 1), row(&fixture, 2)]);
+    assert_eq!(first, settled, "the first frame places the rows and the list as the settled list does");
+
+    let at = settled.1[1].center();
+    fixture.frame(vec![moved(at)]);
+    fixture.frame(vec![press(at), release(at)]);
+    let clicked = (list(&fixture), row(&fixture, 1));
+    assert!(clicked.1.height() > settled.1[1].height(), "the selected row takes its taller size in the frame of the click");
+    fixture.idle(2);
+    assert_eq!(clicked, (list(&fixture), row(&fixture, 1)), "the frame of the click shows the list and the row at their settled sizes");
+
+    let below = row(&fixture, 1).top();
+    request_rename(fixture.ctx(), list_id(), &0_usize);
+    fixture.idle(1);
+    let renamed = (list(&fixture), row(&fixture, 1).top());
+    assert!(renamed.1 > below, "the renaming row takes its taller size in the frame the rename starts");
+    fixture.idle(2);
+    assert_eq!(renamed, (list(&fixture), row(&fixture, 1).top()), "the frame the rename starts shows the list and the rows settled");
+}
+
+/// PageDown on a segmented control in a row of a capped list, whose own roving group leaves the key untaken, pages the
+/// list's rows: the list is the scroll owner of its rows, and the move comes to it.
+#[trial]
+fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
+    use craft_ui::choice::Segmented;
+    use craft_ui::contract::{Bind, Entry, Sizing};
+    use craft_ui::testing::focus::AccessActionKind;
+    use egui::{Key, Modifiers};
+    const ROWS: usize = 40;
+    let list_id = Id::NULL.with("paged-rows");
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..ROWS).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let sizes: Vec<Vec<Entry<u8>>> =
+            keys.iter().map(|key| vec![Entry::new(1, format!("Small {key}")), Entry::new(2, format!("Large {key}"))]).collect();
+        let list = List::new("Layers").id(list_id).sizing(Sizing::Content).max_rows(6);
+        list.show_items(ui, &source, &mut |key, _| {
+            let size = Segmented::new(format!("Size {key}"), Bind::given(1_u8), &sizes[*key]);
+            ListRow::new(format!("Layer {key}")).trailing_field(size, |_| {})
+        });
+    });
+    fixture.room(Vec2::new(400.0, 400.0)).settle();
+    let in_view = |fixture: &Fixture, name: &str| {
+        let list = fixture.node_of(list_id).expect("the list's node").rect;
+        fixture.by_label(name).is_some_and(|row| list.expand(0.5).contains_rect(row.rect))
+    };
+    assert!(in_view(&fixture, "Layer 0") && !in_view(&fixture, "Layer 8"), "the list starts at its first rows");
+    let segment = fixture.by_label("Small 0").expect("the first row's segment");
+    fixture.access(AccessActionKind::Focus, &segment).settle();
+    assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), segment.node, "the first row's segment took the focus");
+    fixture.key(Key::PageDown, Modifiers::NONE).settle();
+    assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
+>>>>>>> origin/next
 }

@@ -2,15 +2,15 @@
 //! corners, edges, reference point, inside and outside are parts in the canvas's arena; the value is the box in
 //! document units.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
-use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine};
+use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine, SnapSuspend};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
-    Axis, CancelReason, CanvasView, Cursor, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor,
-    PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
+    Axis, CancelReason, CanvasView, Cursor, CursorIcon, CursorPriority, GesturePhase, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape,
+    PaintedCursor, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasSpace, GestureSnap, Snap, canvas_snap, canvas_space, readout};
@@ -76,6 +76,18 @@ const OVERFLOW_IN_HANDLES: f32 = 1.5;
 /// The keyboard path of a rotation by the outside parts: the options bar's angle field, which the host shows beside the box.
 const ROTATE_BY_KEY: &str = "the angle field in the options bar";
 
+/// The rotate handle of [`RotateZone::Handle`]: the zone's one rotating part, a knob on a stem off the middle of side 0.
+const ROTATE_HANDLE: PartKey = PartKey::new("rotateHandle");
+
+/// The length of the rotate handle's stem, from the side to the knob's centre, in standard handle sides.
+const STEM_IN_HANDLES: f32 = 3.0;
+
+/// The ends of a line in [`LineEnds::Free`]: `LINE_END.at(0)` its start, `LINE_END.at(1)` its end.
+const LINE_END: PartKey = PartKey::new("lineEnd");
+
+/// The keyboard path of a free line end: the host commits the ends, through its own fields for them.
+const LINE_END_BY_KEY: &str = "the line's end fields in the options bar";
+
 /// The part the keyboard picked, as the box remembers it between passes.
 #[derive(Clone, Copy, Default)]
 struct KeyPicked(Option<BoxPart>);
@@ -117,6 +129,9 @@ pub enum RotateZone {
         /// The reach outside the sides, in screen points.
         points: f32,
     },
+    /// Only the rotate handle on its stem (Office's rotate handle); Alt is not the pivot key when snapping suspends on
+    /// Alt.
+    Handle,
 }
 
 impl RotateZone {
@@ -130,7 +145,13 @@ impl RotateZone {
     fn rotates_at(self, quad: &[Point; 4], pointer: Pos2) -> bool {
         match self {
             RotateZone::Border { points } => border_distance(quad, pointer) <= points,
+<<<<<<< HEAD
             RotateZone::Outside | RotateZone::Band | RotateZone::Knob => true,
+=======
+            RotateZone::Outside | RotateZone::Band => true,
+            // The handle is the zone's only outside part, so a press that reaches the outside is on it.
+            RotateZone::Handle => true,
+>>>>>>> origin/next
         }
     }
 }
@@ -152,6 +173,41 @@ pub enum TransformReach {
     },
 }
 
+/// What a line's two end controls are ([`LineLook::ends`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineEnds {
+    /// Each end stands for a handle of the box aligned with the segment.
+    #[default]
+    Box,
+    /// Each end moves as a free point, reported for the host to commit.
+    Free,
+}
+
+/// Which end of a line is dragged ([`LineEndDrag::end`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineEnd {
+    /// The line's start.
+    From,
+    /// The line's end.
+    To,
+}
+
+/// A drag of one end of a line in [`LineEnds::Free`], for the host to commit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LineEndDrag {
+    /// Where the drag stands in this pass.
+    pub phase: GesturePhase,
+    /// The end dragged.
+    pub end: LineEnd,
+    /// Where the end is, in document units.
+    pub at: Point,
+    /// The modifier keys held.
+    pub mods: Mods,
+}
+
 /// The box drawn as a live line's controls ([`TransformBox::line`]), in document units: a square at each end of the
 /// segment and the round widget at its middle, with no frame. `outline`, for a line with an arrowhead, is the box
 /// aligned with the segment that holds the arrowheads, drawn with a square at the middle of each side.
@@ -164,12 +220,24 @@ pub struct LineLook {
     pub to: Point,
     /// The box aligned with the segment, corner by corner around it.
     pub outline: Option<[Point; 4]>,
+    /// What the two ends are: box handles, or free points the host commits.
+    pub ends: LineEnds,
+}
+
+impl LineEnd {
+    /// The repeat of [`LINE_END`] the end is declared under.
+    const fn index(self) -> u64 {
+        match self {
+            LineEnd::From => 0,
+            LineEnd::To => 1,
+        }
+    }
 }
 
 impl LineLook {
-    /// The controls of the line from `from` to `to`, with no outline.
+    /// The controls of the line from `from` to `to`, with no outline, each end a box handle.
     pub fn new(from: Point, to: Point) -> Self {
-        LineLook { from, to, outline: None }
+        LineLook { from, to, outline: None, ends: LineEnds::Box }
     }
 
     /// These controls with the segment-aligned box `outline`.
@@ -179,10 +247,24 @@ impl LineLook {
         self
     }
 
+    /// These controls with `ends`: whether the ends are box handles or free points reported for the host to commit.
+    #[must_use]
+    pub fn ends(mut self, ends: LineEnds) -> Self {
+        self.ends = ends;
+        self
+    }
+
     /// Each end that stands for a box handle, with the handle: the corner the end points to, away from the other end
-    /// (on a level or upright line, the side). A line of no length has none.
-    fn ends(&self) -> impl Iterator<Item = (BoxPart, Point)> {
-        [(self.from, self.to), (self.to, self.from)].into_iter().filter_map(|(end, other)| Some((end_part(end, other)?, end)))
+    /// (on a level or upright line, the side). A line of no length, or one with free ends, has none.
+    fn end_parts(&self) -> impl Iterator<Item = (BoxPart, Point)> {
+        let boxed = self.ends == LineEnds::Box;
+        [(self.from, self.to), (self.to, self.from)].into_iter().filter(move |_| boxed).filter_map(|(end, other)| Some((end_part(end, other)?, end)))
+    }
+
+    /// Each free end with its point, in [`LineEnds::Free`]; none when the ends are box handles.
+    fn free_ends(&self) -> impl Iterator<Item = (LineEnd, Point)> {
+        let free = self.ends == LineEnds::Free;
+        [(LineEnd::From, self.from), (LineEnd::To, self.to)].into_iter().filter(move |_| free)
     }
 }
 
@@ -248,6 +330,10 @@ pub struct TransformBoxStyle {
     band_outer: f32,
     pivot_radius: f32,
     pivot_arm: f32,
+    /// The rotate handle's stem, from the side to the knob's centre.
+    rotate_stem: f32,
+    /// The radius of the rotate handle's knob.
+    rotate_knob: f32,
     /// The round widget at a live line's middle: the corner widgets' look.
     widget: CornerStyle,
 }
@@ -278,6 +364,7 @@ struct Report {
     picked: Option<BoxPart>,
     held: Option<BoxPart>,
     snapped: Vec<SnapLine>,
+    line_end: Option<LineEndDrag>,
 }
 
 /// The press the box is dragging a part with, kept from the press to its release.
@@ -315,6 +402,21 @@ impl Default for Grip {
             pressed: none,
             last: none,
         }
+    }
+}
+
+/// The press dragging a free line end, kept from the press to its release.
+#[derive(Clone, Copy, Debug)]
+struct EndGrip {
+    end: LineEnd,
+    /// From the press to the end, in document units: the end keeps it, so a press off the end's point does not jump.
+    offset: DocVec,
+    began: bool,
+}
+
+impl Default for EndGrip {
+    fn default() -> Self {
+        EndGrip { end: LineEnd::From, offset: DocVec::ZERO, began: false }
     }
 }
 
@@ -357,7 +459,10 @@ fn slop_sense(part: BoxPart) -> Sense {
 ///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer).
 /// - A [centre mark](Self::centre_mark) draws the reference point's glyph at the middle of the box and takes no press.
 ///   A [live line's look](Self::line) declares only the line's two ends, each standing for the box handle it points
-///   to, and draws the line's controls in place of the frame.
+///   to, and draws the line's controls in place of the frame. With [free ends](LineEnds::Free) each end is a point of
+///   its own: its drag reports [`TransformBoxOutput::line_end`] for the host to commit and leaves the box alone.
+/// - In [`RotateZone::Handle`] only the rotate handle, a knob on a stem off the middle of the top side, rotates, and
+///   the rest of the outside is the tool's. While Alt is the canvas's snap suspend key, the drag never reads Alt.
 /// - Nothing mirrors in a right-to-left interface: the box is the document's.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -485,7 +590,7 @@ impl<'a> TransformBox<'a> {
             return Vec::new();
         }
         if let Some(line) = &self.line {
-            return line.ends().map(|(part, _)| part).filter(|&part| self.rules.allows(part)).collect();
+            return line.end_parts().map(|(part, _)| part).filter(|&part| self.rules.allows(part)).collect();
         }
         let corners = (0..4u8).map(BoxPart::Corner);
         let edges = (0..4u8).map(BoxPart::Edge);
@@ -497,7 +602,7 @@ impl<'a> TransformBox<'a> {
     /// Where `part` is drawn and taken, in document units: a live line's end, else [`handle_point`].
     fn part_point(&self, state: &BoxState, part: BoxPart) -> Option<Point> {
         match &self.line {
-            Some(line) => line.ends().find(|(end_part, _)| *end_part == part).map(|(_, end)| end),
+            Some(line) => line.end_parts().find(|(end_part, _)| *end_part == part).map(|(_, end)| end),
             None => handle_point(state, part),
         }
     }
@@ -522,15 +627,17 @@ impl<'a> TransformBox<'a> {
     /// - The reference point snaps to the nine points of the box at the press (corners, edge midpoints, centre) and
     ///   to nothing else, with or without the canvas's snap, the Control key held or not.
     /// - In [`TransformMode::Distort`] only the corners snap, and to guides only. The outside (rotating) never snaps.
-    /// - The Control key suspends the snapping unless the drag reads it (off macOS Ctrl is ⌘): where it changes what
-    ///   the drag does (a corner distorts, an edge skews) or on a corner that distorts.
+    /// - The canvas's suspend key (Control by default) suspends the snapping unless the drag reads it
+    ///   ([`reads_suspend_key`](Self::reads_suspend_key)). The snap reads the keys as held; the drag acts on them as
+    ///   [`drag_mods`] leaves them, so with Alt as the suspend key Alt only suspends.
     fn proposal(&self, space: &CanvasSpace, snap: Option<&Snap>, grip: &Grip, pos: Pos2, mods: Mods) -> (BoxState, Vec<SnapLine>) {
         let to = space.view.to_doc(pos);
-        let kind = self.rules.drag_kind(grip.part, mods);
-        let reads_control = mods.cmd && (kind != self.rules.drag_kind(grip.part, Mods { cmd: false, ..mods }) || kind == Some(BoxDrag::Distort));
+        let suspend = suspend_key(snap);
+        let acting = drag_mods(mods, suspend);
+        let kind = self.rules.drag_kind(grip.part, acting);
         let distort_mode = self.rules.effective_mode() == TransformMode::Distort;
         let kinds = if distort_mode { SnapKinds::only(SnapKind::Guide) } else { SnapKinds::ALL };
-        let gesture = GestureSnap::default().reads_control(reads_control).kinds(kinds);
+        let gesture = GestureSnap::default().reads_suspend_key(self.reads_suspend_key(grip.part, acting, suspend)).kinds(kinds);
         let grabbed = handle_point(&grip.start, grip.part);
         let (to, mut lines) = match (grip.part, snap, grabbed) {
             (BoxPart::Pivot, _, Some(grabbed)) if !distort_mode => {
@@ -551,7 +658,7 @@ impl<'a> TransformBox<'a> {
             }
             _ => (to, Vec::new()),
         };
-        let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, mods, &self.rules);
+        let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, acting, &self.rules);
         // The canvas's pixel grid rounds an upright box and its corners to whole document units; keys are not rounded.
         let dragged = if snap.is_some_and(Snap::rounds_to_pixels) { on_pixel_grid(dragged) } else { dragged };
         if kind == Some(BoxDrag::Distort)
@@ -565,6 +672,20 @@ impl<'a> TransformBox<'a> {
         (dragged, lines)
     }
 
+    /// Whether a drag of `part` with `mods` (as the drag acts on them, [`drag_mods`]) reads the snap's `suspend` key
+    /// itself, so the key does not suspend the snapping. Control: where ⌘ (Ctrl off macOS) changes what the drag
+    /// does (a corner distorts, an edge skews) or on a corner that distorts. Alt: never, since the drag does not
+    /// see Alt while Alt is the suspend key.
+    fn reads_suspend_key(&self, part: BoxPart, mods: Mods, suspend: SnapSuspend) -> bool {
+        match suspend {
+            SnapSuspend::Alt => false,
+            _ => {
+                let kind = self.rules.drag_kind(part, mods);
+                mods.cmd && (kind != self.rules.drag_kind(part, Mods { cmd: false, ..mods }) || kind == Some(BoxDrag::Distort))
+            }
+        }
+    }
+
     /// The pointer for `part` at `pointer`, `dragging` during its drag.
     fn cursor(&self, look: &CursorLook<'_>, part: BoxPart, pointer: Pos2, mods: Mods, dragging: bool) -> Cursor {
         let Some(kind) = self.rules.drag_kind(part, mods) else { return CursorIcon::Default.into() };
@@ -573,9 +694,15 @@ impl<'a> TransformBox<'a> {
         let turn = || Cursor::from(PaintedCursor::turn(quad::bisector(screen, corner)));
         let along = |from: usize| vec2_of(screen.quad[(from + 1) % 4] - screen.quad[from % 4]);
         match (kind, part) {
+<<<<<<< HEAD
             // The knob is a handle the pointer takes hold of and swings, not a stretch of the outside.
             (BoxDrag::Rotate, BoxPart::Outside) if self.rotate_zone == RotateZone::Knob => {
                 if dragging { CursorIcon::Grabbing } else { CursorIcon::Grab }.into()
+=======
+            // The rotate handle turns the cursor with the box: it points in across the side the handle stands on.
+            (BoxDrag::Rotate, BoxPart::Outside) if self.rotate_zone == RotateZone::Handle => {
+                Cursor::from(PaintedCursor::turn(-outward_normals(&screen.quad.map(pos))[0]))
+>>>>>>> origin/next
             }
             (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
@@ -645,8 +772,13 @@ impl<'a> TransformBox<'a> {
     }
 
     /// The parts that take a press, with the box part each stands for. Mirrors what [`parts`](Component::parts)
+<<<<<<< HEAD
     /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside (the knob in
     /// [`RotateZone::Knob`]); or only the move strips.
+=======
+    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside or the
+    /// rotate handle; or only the move strips.
+>>>>>>> origin/next
     fn pointer_parts(&self) -> Vec<(PartRef, BoxPart)> {
         if self.move_only().is_some() {
             let parts = if self.ring_reach().is_some() { 0..8 } else { 0..0 };
@@ -665,6 +797,7 @@ impl<'a> TransformBox<'a> {
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
         }
+<<<<<<< HEAD
         if matches!(self.rotate_zone, RotateZone::Knob) {
             if self.has_knob() {
                 parts.push((KNOB.at(0), BoxPart::Outside));
@@ -672,6 +805,10 @@ impl<'a> TransformBox<'a> {
         } else if self.rules.allows(BoxPart::Outside) {
             parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
         }
+=======
+        parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
+        parts.push((ROTATE_HANDLE.at(0), BoxPart::Outside));
+>>>>>>> origin/next
         parts
     }
 
@@ -681,15 +818,17 @@ impl<'a> TransformBox<'a> {
         let style = cx.style;
         let mut held: Option<Grip> = *cx.press_slot::<Grip>();
         let snap = canvas_snap(&cx.env);
+        let suspend = suspend_key(snap.as_ref());
         for (reference, part) in self.pointer_parts() {
             let Some(result) = cx.part_if_declared(reference) else { continue };
             let (press, hover) = (result.press, result.hover_pos.filter(|_| result.hovered));
             let mods = self.mods.unwrap_or(press.mods);
+            let acting = drag_mods(mods, suspend);
             if let Some(pos) = hover
                 && held.is_none()
             {
                 self.report.hovered = Some(part);
-                let cursor = self.cursor(&CursorLook { space, screen: &screen, style }, part, pos, mods, false);
+                let cursor = self.cursor(&CursorLook { space, screen: &screen, style }, part, pos, acting, false);
                 cx.cursor(cursor, CursorPriority::Part);
             }
             match press.phase {
@@ -697,10 +836,17 @@ impl<'a> TransformBox<'a> {
                 PressPhase::Down { start, .. } if part == BoxPart::Outside && !self.rotate_zone.rotates_at(&screen.quad, start.origin) => {}
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let from = space.view.to_doc(start.origin);
+<<<<<<< HEAD
                     let knob = reference.key == KNOB;
                     // The move reach only moves: an Alt press there is a move too. The knob is a handle, so an Alt
                     // press on it turns the box rather than moving the reference point onto it.
                     let moves_pivot = mods.alt && self.move_only().is_none() && !knob && matches!(part, BoxPart::Inside | BoxPart::Outside);
+=======
+                    // The move reach only moves: an Alt press there is a move too. The rotate handle is a handle, so
+                    // an Alt press on it rotates.
+                    let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle);
+                    let moves_pivot = acting.alt && self.move_only().is_none() && away_from_handles;
+>>>>>>> origin/next
                     let follows = follows_in_slop(part);
                     let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
                     held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, knob, pressed: *shown, last: *shown });
@@ -753,7 +899,11 @@ impl<'a> TransformBox<'a> {
                         cx.cancel(CancelReason::Unchanged);
                     } else if grip.began {
                         cx.commit();
+<<<<<<< HEAD
                     } else if grip.part == BoxPart::Outside && !grip.knob && click && start.clicks <= 1 {
+=======
+                    } else if grip.part == BoxPart::Outside && reference.key == OUTSIDE && click && start.clicks <= 1 {
+>>>>>>> origin/next
                         self.report.apply = Some(ApplyBy::ClickOutside { at: space.view.to_doc(start.origin) });
                     } else if grip.moves_pivot && click {
                         cx.set(grip.start);
@@ -776,8 +926,60 @@ impl<'a> TransformBox<'a> {
         cx.propose(next);
         let rows = self.readout_rows(cx, space, grip.part, &next, &grip.start);
         readout(&*cx, pos, &rows);
-        let cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, mods, true);
+        let acting = drag_mods(mods, suspend_key(snap));
+        let cursor = self.cursor(&CursorLook { space, screen: &on_screen(&space.view, &next), style }, grip.part, pos, acting, true);
         cx.cursor(cursor, CursorPriority::Drag);
+    }
+
+    /// The pointer on a line's free ends: a drag of an end reports [`LineEndDrag`] (`Begin` with its first position
+    /// once the press passes the slop, `Update`, `Commit` on the release, `Cancel` when the press is cancelled) with
+    /// the end snapped through the canvas's snap, and leaves the box's value alone: the host moves the end. A click
+    /// moves nothing.
+    fn run_line_ends(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, line: &LineLook) {
+        let snap = canvas_snap(&cx.env);
+        let mut held: Option<EndGrip> = *cx.press_slot::<EndGrip>();
+        for (end, at) in line.free_ends() {
+            let Some(result) = cx.part_if_declared(LINE_END.at(end.index())) else { continue };
+            let (press, hovered) = (result.press, result.hovered);
+            let mods = self.mods.unwrap_or(press.mods);
+            if hovered && held.is_none() {
+                cx.cursor(Cursor::System(CursorIcon::Move), CursorPriority::Part);
+            }
+            let ours = held.filter(|grip| grip.end == end);
+            let (phase, pos, grip) = match (press.phase, ours) {
+                (PressPhase::Down { start, .. }, _) if start.button == PointerButton::Primary => {
+                    held = Some(EndGrip { end, offset: at - space.view.to_doc(start.origin), began: false });
+                    continue;
+                }
+                (PressPhase::DragStart { pos, .. }, Some(grip)) => (GesturePhase::Begin, pos, grip),
+                (PressPhase::Drag { pos, .. }, Some(grip)) if grip.began => (GesturePhase::Update, pos, grip),
+                (PressPhase::Release { pos, .. }, Some(grip)) => {
+                    held = None;
+                    if !grip.began {
+                        continue;
+                    }
+                    (GesturePhase::Commit, pos, grip)
+                }
+                (PressPhase::Cancel { .. }, Some(grip)) => {
+                    held = None;
+                    if grip.began {
+                        self.report.line_end = Some(LineEndDrag { phase: GesturePhase::Cancel, end, at, mods });
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            let to = space.view.to_doc(pos) + grip.offset;
+            let (to, lines) = match &snap {
+                Some(snap) => snap.point(to, mods, GestureSnap::default()),
+                None => (to, Vec::new()),
+            };
+            self.report.snapped = lines;
+            self.report.line_end = Some(LineEndDrag { phase, end, at: to, mods });
+            held = (phase != GesturePhase::Commit).then_some(EndGrip { began: true, ..grip });
+            cx.cursor(Cursor::System(CursorIcon::Move), CursorPriority::Drag);
+        }
+        *cx.press_slot::<EndGrip>() = held;
     }
 
     /// The session keys: the arrows nudge the picked part (the whole box when no part has focus), Enter applies and
@@ -831,10 +1033,14 @@ impl TransformBox<'_> {
     fn paint_handle(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, part: BoxPart, at: Pos2, enlarged: bool) {
         let look = &cx.style.handle;
         let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
+<<<<<<< HEAD
         let square = self.handle_shape(at, side);
         let fill = if self.rules.allows(part) { cx.resolve_part(BOX.at(part.index()), &look.fill) } else { cx.resolve(&look.fill) };
         draw.fill(&square, fill);
         draw.stroke(&square, StrokeWidth::Thin, look.stroke);
+=======
+        paint_square(draw, cx, at, side, self.rules.allows(part).then(|| BOX.at(part.index())));
+>>>>>>> origin/next
         if enlarged {
             Handle::plus(draw, look, at, side);
         }
@@ -847,19 +1053,58 @@ impl TransformBox<'_> {
         if let Some(outline) = line.outline {
             let corners = outline.map(|corner| view.to_screen(corner));
             paint_frame(draw, style, corners);
-            let look = &style.handle;
             for k in 0..4 {
+<<<<<<< HEAD
                 let middle = corners[k].lerp(corners[(k + 1) % 4], 0.5);
                 let square = self.handle_shape(middle, look.side);
                 draw.fill(&square, cx.resolve(&look.fill));
                 draw.stroke(&square, StrokeWidth::Thin, look.stroke);
+=======
+                paint_square(draw, cx, corners[k].lerp(corners[(k + 1) % 4], 0.5), style.handle.side, None);
+>>>>>>> origin/next
             }
         }
-        for (part, end) in line.ends() {
+        for (part, end) in line.end_parts() {
             self.paint_handle(draw, cx, part, view.to_screen(end), false);
+        }
+        for (end, at) in line.free_ends() {
+            paint_square(draw, cx, view.to_screen(at), style.handle.side, Some(LINE_END.at(end.index())));
         }
         paint_widget(draw, view.to_screen(line.from.midpoint(line.to)), &style.widget);
     }
+}
+
+/// A handle square of `side` centred on `at`, filled as the state of `part` shows, or at rest without one.
+fn paint_square(draw: &Draw<'_>, cx: &Cx<'_, TransformBox<'_>>, at: Pos2, side: f32, part: Option<PartRef>) {
+    let look = &cx.style.handle;
+    let square = PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO);
+    let fill = match part {
+        Some(part) => cx.resolve_part(part, &look.fill),
+        None => cx.resolve(&look.fill),
+    };
+    draw.fill(&square, fill);
+    draw.stroke(&square, StrokeWidth::Thin, look.stroke);
+}
+
+/// The rotate handle of [`RotateZone::Handle`] on the box whose corners are `quad` on the screen: its stem from the
+/// middle of side 0 over its halo, and the round knob at its end, filled as the handle's state shows.
+fn paint_rotate_handle(draw: &Draw<'_>, cx: &Cx<'_, TransformBox<'_>>, quad: &[Pos2; 4]) {
+    let style = cx.style;
+    let (base, knob) = rotate_handle(quad, style.rotate_stem);
+    let stem = PaintShape::Path(vec![base, knob]);
+    draw.stroke(&stem, StrokeWidth::Thick, style.halo);
+    draw.stroke(&stem, StrokeWidth::Medium, style.line);
+    let look = &style.handle;
+    let circle = PaintShape::Circle(knob, style.rotate_knob);
+    draw.fill(&circle, cx.resolve_part(ROTATE_HANDLE.at(0), &look.fill));
+    draw.stroke(&circle, StrokeWidth::Thin, look.stroke);
+}
+
+/// The rotate handle of the box whose corners are `quad` on the screen: the middle of side 0 (corners 0 to 1) and the
+/// knob's centre, `stem` out from it across the side, so the handle turns with the box.
+fn rotate_handle(quad: &[Pos2; 4], stem: f32) -> (Pos2, Pos2) {
+    let base = quad[0].lerp(quad[1], 0.5);
+    (base, base + outward_normals(quad)[0] * stem)
 }
 
 /// The outline of a box whose corners are `corners` on the screen: the line over its halo.
@@ -982,6 +1227,8 @@ impl Component for TransformBox<'_> {
             band_outer: handle.md * BAND_OUTER_IN_HANDLES,
             pivot_radius: cx.tokens.size.handle.sm / 2.0,
             pivot_arm: hit.target,
+            rotate_stem: handle.md * STEM_IN_HANDLES,
+            rotate_knob: handle.sm / 2.0,
             widget: CornerStyle::from_cx(cx),
         }
     }
@@ -1012,7 +1259,8 @@ impl Component for TransformBox<'_> {
     /// alike, so the nearest wins where they overlap on a small box;
     /// they rank above a side, which ranks above the inside, which ranks above the outside. Every part takes a press's
     /// click with its drag, so a press on the box is the box's alone, not split with what lies under it (8.3). A live
-    /// line's controls declare its two ends only.
+    /// line's controls declare its two ends only; free ends as points of their own. In [`RotateZone::Handle`] the
+    /// rotate handle ranks with the handles and is the only outside part.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let (Some(space), Some(state)) = (canvas_space(&cx.env), cx.value().copied()) else { return };
         let style = cx.style;
@@ -1050,7 +1298,13 @@ impl Component for TransformBox<'_> {
             cx.part(BOX.at(part.index()), shape).sense(sense | slop_sense(part)).priority(priority).focus_shape(focus).focusable();
             any = true;
         }
-        if self.line.is_some() {
+        if let Some(line) = self.line {
+            for (end, at) in line.free_ends() {
+                cx.part(LINE_END.at(end.index()), HitShape::circle(space.view.to_screen(at), style.handle_reach))
+                    .sense(Sense::DRAG | Sense::CLICK)
+                    .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
+                    .pointer_only(LINE_END_BY_KEY);
+            }
             if any {
                 cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
             }
@@ -1103,6 +1357,7 @@ impl Component for TransformBox<'_> {
                         .pointer_only(ROTATE_BY_KEY);
                 }
             }
+<<<<<<< HEAD
             RotateZone::Outside | RotateZone::Border { .. } | RotateZone::Band => {}
             // The knob alone turns the box; the rest of the outside is the tool's.
             RotateZone::Knob => {
@@ -1114,17 +1369,31 @@ impl Component for TransformBox<'_> {
                         .pointer_only(ROTATE_BY_KEY);
                 }
             }
+=======
+            RotateZone::Band => {}
+            RotateZone::Handle if self.rules.allows(BoxPart::Outside) => {
+                let (_, knob) = rotate_handle(&quad, style.rotate_stem);
+                cx.part(ROTATE_HANDLE.at(0), HitShape::circle(knob, style.handle_reach))
+                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                    .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
+                    .pointer_only(ROTATE_BY_KEY);
+            }
+            RotateZone::Handle => {}
+>>>>>>> origin/next
         }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let (Some(space), Some(shown)) = (canvas_space(&cx.env), cx.value().copied()) else { return };
-        let held = cx.press_slot::<Grip>().is_some();
+        let held = cx.press_slot::<Grip>().is_some() || cx.press_slot::<EndGrip>().is_some();
         self.run_pointer(cx, &space, &shown);
+        if let Some(line) = self.line.filter(|line| line.ends == LineEnds::Free) {
+            self.run_line_ends(cx, &space, &line);
+        }
         self.pivot_held = cx.press_slot::<Grip>().is_some_and(|grip| grip.part == BoxPart::Pivot);
         self.dragging = cx.press_slot::<Grip>().is_some_and(|grip| grip.began);
         self.report.held = cx.press_slot::<Grip>().map(|grip| grip.part);
-        let pressing = held || cx.press_slot::<Grip>().is_some();
+        let pressing = held || cx.press_slot::<Grip>().is_some() || cx.press_slot::<EndGrip>().is_some();
         if self.move_only().is_none() {
             self.run_keys(cx, &space, &shown, pressing);
         }
@@ -1145,6 +1414,9 @@ impl Component for TransformBox<'_> {
             Some(line) => self.paint_line(&draw, cx, &space.view, &line),
             None => {
                 paint_frame(&draw, style, screen.quad.map(pos));
+                if self.rotate_zone == RotateZone::Handle && self.rules.allows(BoxPart::Outside) {
+                    paint_rotate_handle(&draw, cx, &screen.quad.map(pos));
+                }
                 if self.centre_mark {
                     let centre = screen.quad.iter().fold(Vec2::ZERO, |sum, corner| sum + pos(*corner).to_vec2()) / 4.0;
                     paint_centre_glyph(&draw, centre.to_pos2(), style);
@@ -1190,8 +1462,13 @@ impl Component for TransformBox<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TransformBoxOutput {
+<<<<<<< HEAD
         let Report { apply, clicked, discard, hovered, picked, held, snapped } = self.report;
         TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, clicked }
+=======
+        let Report { apply, discard, hovered, picked, held, snapped, line_end } = self.report;
+        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, line_end }
+>>>>>>> origin/next
     }
 }
 
@@ -1216,6 +1493,8 @@ pub struct TransformBoxOutput {
     pub held: Option<BoxPart>,
     /// The snap lines of the point being dragged, for the host's one drawing site.
     pub snapped: Vec<craft_behavior::geometry::SnapLine>,
+    /// The drag of a line end, in [`LineEnds::Free`].
+    pub line_end: Option<LineEndDrag>,
 }
 
 impl Outcome for TransformBoxOutput {
@@ -1238,6 +1517,17 @@ fn pos(p: Point) -> Pos2 {
 
 fn vec2_of(v: DocVec) -> Vec2 {
     Vec2::new(v.x as f32, v.y as f32)
+}
+
+/// The suspend key of the canvas's snap, Control without one.
+fn suspend_key(snap: Option<&Snap>) -> SnapSuspend {
+    snap.map_or_else(SnapSuspend::default, |snap| snap.options().suspend)
+}
+
+/// The keys a drag acts on, from the keys held: while Alt suspends the canvas's snapping, Alt is the snap's alone, so
+/// it neither scales about the reference point nor moves it.
+fn drag_mods(mods: Mods, suspend: SnapSuspend) -> Mods {
+    if suspend == SnapSuspend::Alt { Mods { alt: false, ..mods } } else { mods }
 }
 
 /// The position of a corner, an edge's midpoint or the reference point; `None` for the inside and the outside.

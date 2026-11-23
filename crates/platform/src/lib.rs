@@ -8,6 +8,10 @@ pub mod autosave;
 mod autosave_tests;
 #[cfg(all(feature = "browser", target_arch = "wasm32"))]
 pub mod browser;
+#[cfg(all(feature = "browser", target_arch = "wasm32"))]
+pub mod browser_files;
+#[cfg(all(test, feature = "browser", target_arch = "wasm32"))]
+mod browser_files_tests;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 #[cfg(all(test, feature = "clipboard"))]

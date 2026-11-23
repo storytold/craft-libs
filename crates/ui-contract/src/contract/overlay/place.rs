@@ -18,25 +18,45 @@ pub enum Anchor {
     /// A corner or edge of a rect in the opener's layer space, inset by the panel padding and kept inside the safe
     /// rect: the body a toast stack sits in.
     Corner(Rect, Align2),
+    /// The placed panel rect of the parent layer the overlay opened from.
+    Parent,
 }
 
 /// Where a floating layer sits.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct FloatPlace {
-    /// A position for the layer's left-top, in the layer's parent space; `None` centres it in the viewport.
+    /// Where the layer's `corner` sits, in the layer's parent space; `None` centres it in the viewport.
     pub pos: Option<Pos2>,
+    /// The corner of the layer that sits at `pos`.
+    pub corner: Align2,
+}
+
+impl Default for FloatPlace {
+    fn default() -> Self {
+        FloatPlace::centred()
+    }
 }
 
 impl FloatPlace {
     /// Centred in the viewport.
     pub const fn centred() -> Self {
-        FloatPlace { pos: None }
+        FloatPlace { pos: None, corner: Align2::LEFT_TOP }
     }
 
-    /// At `pos`.
+    /// With its left-top at `pos`.
     pub const fn at(pos: Pos2) -> Self {
-        FloatPlace { pos: Some(pos) }
+        FloatPlace { pos: Some(pos), corner: Align2::LEFT_TOP }
+    }
+
+    /// With its `corner` at `pos`.
+    pub const fn corner_at(pos: Pos2, corner: Align2) -> Self {
+        FloatPlace { pos: Some(pos), corner }
+    }
+
+    /// The top left of a layer `size` large whose `corner` sits at `pos`; `None` for a centred layer.
+    pub(crate) fn top_left(&self, size: Vec2) -> Option<Pos2> {
+        self.pos.map(|pos| pos - self.corner.pos_in_rect(&Rect::from_min_size(Pos2::ZERO, size)).to_vec2())
     }
 }
 
@@ -112,17 +132,21 @@ pub struct Resize {
     /// The edges whose grips resize the layer; a corner grip needs both its edges. A placement that holds an edge
     /// still keeps its grip away.
     pub edges: ResizeEdges,
+    /// The caller turns each resize into a size of its own (a window as large as its content in whole steps). In an
+    /// OS window the app runs the grips' drag, reports each step, and the OS offers no resize of its own; the window
+    /// takes the size the caller places. A layer resizes as any other and reports the same steps.
+    pub by_caller: bool,
 }
 
 impl Resize {
     /// The layer keeps its size.
-    pub const NONE: Resize = Resize { edges: ResizeEdges::NONE };
+    pub const NONE: Resize = Resize { edges: ResizeEdges::NONE, by_caller: false };
     /// Grips on every free edge and corner.
-    pub const GRIPS: Resize = Resize { edges: ResizeEdges::ALL };
+    pub const GRIPS: Resize = Resize { edges: ResizeEdges::ALL, by_caller: false };
 
     /// Grips on the given edges only.
     pub fn edges(edges: ResizeEdges) -> Resize {
-        Resize { edges }
+        Resize { edges, by_caller: false }
     }
 }
 
@@ -160,7 +184,7 @@ impl ResizeEdges {
 /// producing inverted rects. A maximum constrains a pane when its sibling can take the remainder. A tab group takes
 /// the largest minimum and the largest maximum of its panels, so a panel without a maximum lifts the maximum of the
 /// panels it joins.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 pub struct SizeLimits {
     /// Smallest size.
     pub min: Vec2,
@@ -190,6 +214,11 @@ impl SizeLimits {
     /// The limits of a frame that holds a size with these limits and `extra` around it: both ends grow by `extra`.
     pub fn around(self, extra: Vec2) -> Self {
         SizeLimits { min: self.min + extra, max: self.max.map(|max| max + extra) }
+    }
+
+    /// `size` within these limits; the minimum wins over a smaller maximum.
+    pub fn clamp(self, size: Vec2) -> Vec2 {
+        size.min(self.max.unwrap_or(Vec2::INFINITY)).max(self.min)
     }
 
     /// Whether every value is finite and non-negative, the maximum is no less than the minimum and no value is

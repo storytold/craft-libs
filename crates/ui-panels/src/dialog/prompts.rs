@@ -80,7 +80,11 @@ impl PromptChoice {
     fn role(self) -> DialogRole {
         match self {
             PromptChoice::Proceed => DialogRole::Accept,
+<<<<<<< HEAD
             PromptChoice::Alternate => DialogRole::Alternative,
+=======
+            PromptChoice::Alternate => DialogRole::Alternate,
+>>>>>>> origin/next
             PromptChoice::Cancel => DialogRole::Cancel,
         }
     }
@@ -398,11 +402,19 @@ impl StandardPrompt {
             .offered()
             .into_iter()
             .map(|(choice, enabled)| {
+<<<<<<< HEAD
                 let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| (label.clone(), choice.role()));
                 let (label, role) = own.unwrap_or_else(|| match choice {
                     PromptChoice::Proceed => (proceed.clone(), role),
                     PromptChoice::Alternate => (alternate.clone(), DialogRole::Alternative),
                     PromptChoice::Cancel => (common.cancel.clone(), DialogRole::Cancel),
+=======
+                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| Reply::new(label.clone(), choice.role()));
+                let reply = own.unwrap_or_else(|| match choice {
+                    PromptChoice::Proceed => Reply::new(proceed.clone(), role),
+                    PromptChoice::Alternate => Reply::new(words.discard.clone(), DialogRole::Alternate),
+                    PromptChoice::Cancel => Reply::new(common.cancel.clone(), DialogRole::Cancel),
+>>>>>>> origin/next
                 });
                 let role = match role {
                     _ if default == PromptChoice::Proceed => role,

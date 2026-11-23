@@ -114,6 +114,29 @@ fn a_distort_corner_stops_before_the_box_folds() {
 }
 
 #[test]
+fn a_corners_box_keeps_a_corner_proportional_until_shift_and_stretches_an_edge_on_one_axis() {
+    let linked = BoxRules::default().with_scale(ScaleRule::Corners);
+    let unlinked = linked.with_aspect_linked(false);
+    for rules in [&linked, &unlinked] {
+        // A plain corner keeps the proportions along the diagonal, whatever the aspect link says.
+        let kept = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::NONE, rules);
+        assert!(corners_are(&kept, 0.0, 0.0, 184.0, 92.0), "{:?}", kept.quad);
+        // ⇧ frees them.
+        let freed = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::SHIFT, rules);
+        assert!(corners_are(&freed, 0.0, 0.0, 200.0, 60.0), "{:?}", freed.quad);
+        // The right edge's middle stretches only x, with ⇧ or without.
+        for mods in [Mods::NONE, Mods::SHIFT] {
+            let edge = dragged(p(100.0, 25.0), p(150.0, 40.0), mods, rules);
+            assert!(corners_are(&edge, 0.0, 0.0, 150.0, 50.0), "{mods:?}: {:?}", edge.quad);
+        }
+    }
+    // A ⌘ corner distorts as it does under the default rule: the gesture is left alone.
+    let distorted = dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::CMD, &linked);
+    assert_eq!(distorted, dragged(p(100.0, 50.0), p(200.0, 60.0), Mods::CMD, &BoxRules::default()));
+    assert!(near(distorted.quad[2], p(200.0, 60.0)) && near(distorted.quad[0], p(0.0, 0.0)), "{:?}", distorted.quad);
+}
+
+#[test]
 fn a_shape_box_scales_corners_by_the_diagonal_and_edges_on_one_axis() {
     // The reference measurement: the bounds 100,98–723,451, the bottom-right handle dragged by
     // (−100, −60), give about 100,98–621,394.

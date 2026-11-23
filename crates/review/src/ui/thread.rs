@@ -6,11 +6,18 @@
 //! ```
 
 mod mention;
+<<<<<<< HEAD
 mod note_popup;
 mod pins;
 mod popover;
 #[cfg(feature = "screen-testing")]
 mod stories;
+=======
+pub(crate) mod pins;
+pub(crate) mod popover;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+>>>>>>> origin/next
 
 pub use mention::{insert_mention, mention_matches, mention_query};
 pub use note_popup::{NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage, NotePopupOutput};

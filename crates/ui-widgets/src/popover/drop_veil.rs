@@ -13,8 +13,8 @@ use craft_behavior::{Metrics, Proposal, Sense};
 use egui::{Rect, Response, Ui};
 use std::sync::{Arc, Mutex, PoisonError};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a drop veil: the scrim comes from the surface kind; the card is a child.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

@@ -1,7 +1,13 @@
-//! Stories of `AboutDialog`: the About tab and the Contributors tab with a PR-only contributor.
+//! Stories of `AboutDialog`: the About tab (centred and listed), the Contributors tab with a PR-only contributor, and an app tab.
 
+<<<<<<< HEAD
 use super::{AboutDialog, AboutImage, AboutInfo, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+=======
+use super::{AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use crate::contract::Show as _;
+>>>>>>> origin/next
 use crate::dialog::stories::hosted;
+use crate::display::Text;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -39,6 +45,7 @@ fn about_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     hosted(ui, data, (tab, community), || HostedAbout::new(info(community), CREDITS.clone()).tab(tab))
 }
 
+<<<<<<< HEAD
 /// The story's app mark: a rounded square with a page corner folded down.
 const MARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="4" y="4" width="40" height="40" rx="10" fill="#3b6fd8"/><path d="M16 12h12l8 8v16H16z" fill="#ffffff"/><path d="M28 12v8h8z" fill="#c9d8f7"/></svg>"##;
 
@@ -64,6 +71,26 @@ fn about_dialog_icon_links(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             AboutLink::new("Source", "https://example.org/source").icon(craft_behavior::IconId::new("file")),
         ];
         HostedAbout::new(info(false).links(links), CREDITS.clone())
+=======
+/// The About tab in the listed layout: name, version, blurb and links one to a line, and Close.
+#[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
+fn about_dialog_listed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let community = *data.value("community_link", true);
+    hosted(ui, data, community, || HostedAbout::new(info(community), CREDITS.clone()).layout(AboutLayout::Listed))
+}
+
+/// The dialog with one app tab after Models, open on it.
+#[story(AboutDialog<'static>, covers = [], drive = Drive::Never)]
+fn about_dialog_app_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let community = *data.value("community_button", true);
+    hosted(ui, data, community, || {
+        let languages = AboutAppTab::new("languageData", "Languages", |ui: &mut Ui| {
+            Text::new("English (built in)").show(ui);
+            Text::new("Français 1.2 · 98% translated").show(ui);
+            Text::new("Deutsch 1.1 · 91% translated").show(ui);
+        });
+        HostedAbout::new(info(community), CREDITS.clone()).app_tab(languages).tab(AboutTab::App(0))
+>>>>>>> origin/next
     })
 }
 

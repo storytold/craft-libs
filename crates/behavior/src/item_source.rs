@@ -183,6 +183,10 @@ impl<K> NavOutline for Outline<'_, K> {
         self.layout.and_then(|layout| layout.row_len(row))
     }
 
+    fn column_shift(&self, from: usize, to: usize) -> isize {
+        self.layout.map_or(0, |layout| layout.column_shift(from, to))
+    }
+
     fn columns(&self) -> usize {
         self.columns
     }

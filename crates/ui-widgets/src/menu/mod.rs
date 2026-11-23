@@ -1,23 +1,31 @@
 //! Menu presets with `MenuItem` rows, menu-bar keys and mnemonics.
 
 pub mod bar;
+<<<<<<< HEAD
 mod edit;
 mod icon_row;
+=======
+pub(crate) mod edit;
+>>>>>>> origin/next
 pub(crate) mod item;
 #[doc(hidden)]
 pub mod level;
-mod panel;
-mod popup;
+pub(crate) mod panel;
+pub(crate) mod popup;
 pub mod search;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use bar::{MenuBar, MenuBarOutput, MenuBarStyle, MenuHelp, MenuTitle};
 pub(crate) use edit::text_menu;
 pub use edit::{EditMenu, EditMenuOutput};
+<<<<<<< HEAD
 pub use icon_row::{MenuIcon, MenuIconRow, MenuIconRowOutput};
 pub use item::{MenuItem, MenuItemOutput, MenuItemStyle};
+=======
+pub use item::{MenuItem, MenuItemOutput, MenuItemStyle, MenuSamplePaint, MenuShortcut};
+>>>>>>> origin/next
 pub use panel::{GroupItem, PanelMenu, PanelMenuOutput, PanelRow};
 #[doc(hidden)]
 pub use popup::entry_rows;

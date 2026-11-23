@@ -2,16 +2,25 @@
 
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
+<<<<<<< HEAD
 use craft_behavior::{Axis, CanvasView, GESTURE_GAP, MiddleButton, MotionMode, ZoomLadder};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, ViewCommands, ViewRequest,
     WheelNavigation, WheelScheme,
+=======
+use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhase, WheelUnit, ZoomLadder};
+use craft_keymap::{Mods, Platform};
+use craft_ui::canvas::{
+    Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleButton, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions,
+    ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, TouchpadGlide, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
+>>>>>>> origin/next
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::commands::{self, CommandRef, FirePhase, FireSource};
+use craft_ui::runtime::commands::{self, AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, FirePhase, FireSource, Scope};
 use craft_ui::runtime::frame;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::NumberField;
@@ -640,6 +649,58 @@ fn the_view_commands_a_canvas_runs_are_in_the_frame_output_whatever_fired_them()
     );
 }
 
+/// The app command the zoom-chord trials bind to Cmd/Ctrl+=, as a word processor's Subscript.
+const SUBSCRIPT: &str = "canvasTrial.subscript";
+
+/// What Cmd/Ctrl+= does with a focused canvas, over a document with `document` (without one the canvas offers no view
+/// command), under an app catalog binding it to `SUBSCRIPT` that drops Zoom In's default chords with `dropped`: the app
+/// commands it fired, and whether the canvas zoomed in.
+fn ctrl_equals(document: bool, dropped: bool) -> (Vec<String>, bool) {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").view(given);
+        let canvas = if document { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+        shown.set(canvas.show(ui, |_, _| {}).output.view.unwrap_or(given));
+    });
+    fixture.os(Platform::Linux);
+    let binding = Binding::parse("Cmd+=").expect("the trial's chord parses");
+    let catalog =
+        AppCatalog::new(vec![CommandDef::new(SUBSCRIPT, "Subscript", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
+    let catalog = if dropped { catalog.replace_defaults(ViewCommands::ZoomIn.id(), Vec::new()) } else { catalog };
+    fixture.commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    frame::take_output(fixture.ctx());
+    let before = view.get().zoom;
+    fixture.key(Key::Equals, Modifiers::COMMAND);
+    fixture.frame(vec![]);
+    let fired = frame::take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+    (fired, view.get().zoom > before)
+}
+
+/// By default a focused canvas's Zoom In takes Cmd/Ctrl+= from the app's binding of it: its scope is around the focus.
+#[trial]
+fn a_focused_canvas_zooms_in_on_its_chord_by_default() {
+    assert_eq!(ctrl_equals(true, false), (Vec::new(), true));
+}
+
+/// An app whose own command owns the chord (Word's Ctrl+= is Subscript) drops Zoom In's default through its catalog:
+/// the chord is the app's while the canvas has the focus, and the canvas's Zoom In stays for menus and buttons.
+#[trial]
+fn an_app_catalog_drops_the_canvas_s_zoom_chord_for_its_own_command() {
+    assert_eq!(ctrl_equals(true, true), (vec![SUBSCRIPT.to_owned()], false));
+}
+
+/// A canvas that offers no Zoom In (no document) leaves its chord to the app's binding instead of swallowing it.
+#[trial]
+fn a_canvas_s_unavailable_view_command_leaves_its_chord_to_the_app() {
+    assert_eq!(ctrl_equals(false, false), (vec![SUBSCRIPT.to_owned()], false));
+}
+
 #[trial]
 fn a_canvas_runs_the_view_commands_its_app_queues_before_the_fired_ones_and_reports_only_the_fired() {
     const DOCUMENT: Size = Size::new(4000.0, 4000.0);
@@ -1040,4 +1101,261 @@ fn autoscroll_stops_at_the_shown_image_edge() {
     assert!(Autoscroll::scroll(&mut oblique, Vec2::new(100.0, 50.0), wide).is_some(), "the wide axis scrolls");
     let shift = oblique.to_screen(centre) - rect.center();
     assert!((shift.x + 100.0).abs() < 1e-3 && shift.y.abs() < 1e-3, "along the screen's x, and the fitting axis stays: {shift:?}");
+}
+
+#[trial]
+fn the_document_scheme_zooms_by_rungs_on_ctrl_or_cmd_wheel_and_drops_the_residual_on_a_scroll() {
+    const DOCUMENT: Size = Size::new(4000.0, 4000.0);
+    let mut options = NavigationOptions::default();
+    options.wheel = WheelScheme::Document;
+    options.overscroll = true;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(DOCUMENT).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.os(Platform::Linux);
+    // As an app that gives Ctrl + wheel to the canvas sets egui: no wheel modifier is egui's own zoom.
+    fixture.ctx().options_mut(|options| options.input_options.zoom_modifier = Modifiers::NONE);
+    fixture.settle();
+    let ppp = fixture.ctx().pixels_per_point();
+    let device = |view: &Cell<CanvasView>| zoom::device(&view.get(), ppp);
+
+    let start = device(&view);
+    wheel_line(&mut fixture, &view, 1.0, Modifiers::COMMAND);
+    let one_in = ZoomLadder::step(start, 1, DOCUMENT);
+    assert!((device(&view) / one_in - 1.0).abs() < 1e-6, "Ctrl + one notch steps one rung in: {start} -> {}", device(&view));
+    wheel_line(&mut fixture, &view, -1.0, Modifiers::COMMAND);
+    assert!((device(&view) / ZoomLadder::step(one_in, -1, DOCUMENT) - 1.0).abs() < 1e-6, "and one notch back steps one rung out");
+
+    let before = view.get();
+    wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
+    let scrolled = view.get();
+    assert_eq!(scrolled.zoom, before.zoom, "a plain wheel does not zoom");
+    assert!(scrolled.center.y != before.center.y && scrolled.center.x == before.center.x, "it scrolls up and down: {before:?} -> {scrolled:?}");
+    wheel_line(&mut fixture, &view, -1.0, Modifiers::SHIFT);
+    let sideways = view.get();
+    assert_eq!(sideways.zoom, scrolled.zoom, "Shift + wheel does not zoom");
+    assert!(sideways.center.x != scrolled.center.x && sideways.center.y == scrolled.center.y, "it scrolls sideways: {sideways:?}");
+
+    // Half notches with Ctrl add up only while nothing else comes between them.
+    let at = device(&view);
+    wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
+    assert_eq!(device(&view), at, "half a notch steps nothing");
+    wheel_line(&mut fixture, &view, -1.0, Modifiers::NONE);
+    wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
+    assert_eq!(device(&view), at, "the scroll between them dropped the first half");
+    wheel_line(&mut fixture, &view, 0.5, Modifiers::COMMAND);
+    assert!((device(&view) / ZoomLadder::step(at, 1, DOCUMENT) - 1.0).abs() < 1e-6, "two halves in a row step one rung");
+}
+
+type ScrollRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<Pos2>>>, Rc<RefCell<Vec<Point>>>, Rc<Cell<bool>>, Rc<Cell<bool>>);
+
+/// A canvas filling a 400 by 300 room over a 1000-unit square document at zoom 1, its middle button set to autoscroll:
+/// the fixture, the view it shows, the autoscroll mark it reported, the view centre of each pass, and whether the next
+/// frame runs a second pass, and whether any pass reported a press to the tool since the flag was last cleared.
+fn autoscroll_rig() -> ScrollRig {
+    let mut options = NavigationOptions::default();
+    options.middle_button = MiddleButton::Autoscroll;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(500.0, 500.0), 1.0)));
+    let mark = Rc::new(Cell::new(None));
+    let passes = Rc::new(RefCell::new(Vec::new()));
+    let rerun = Rc::new(Cell::new(false));
+    let reached = Rc::new(Cell::new(false));
+    let (shown, marked, seen, again, tool) = (Rc::clone(&view), Rc::clone(&mark), Rc::clone(&passes), Rc::clone(&rerun), Rc::clone(&reached));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(1000.0, 1000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        let now = canvas.output.view.unwrap_or(given);
+        shown.set(now);
+        marked.set(canvas.output.autoscroll);
+        if canvas.output.press.phase.start().is_some() {
+            tool.set(true);
+        }
+        seen.borrow_mut().push(now.center);
+        if again.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs the frame twice");
+        }
+    });
+    fixture.room(Vec2::new(400.0, 300.0));
+    // The window's focus is stated, not left to the input's default: losing it ends an autoscroll.
+    fixture.frame(vec![egui::Event::WindowFocused(true)]);
+    fixture.settle();
+    (fixture, view, mark, passes, rerun, reached)
+}
+
+/// A middle click at `at`: hover, press and release in separate frames.
+fn middle_click(fixture: &mut Fixture, at: Pos2) {
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::middle(at, true)]);
+    fixture.frame(vec![pointer::middle(at, false)]);
+}
+
+#[trial]
+fn a_middle_click_starts_autoscroll_that_scrolls_toward_the_pointer_and_any_input_ends_it() {
+    let (mut fixture, view, mark, passes, rerun, reached) = autoscroll_rig();
+    let start = view.get();
+    let at = start.rect.center();
+    let (below, above) = (at + Vec2::new(0.0, 100.0), at - Vec2::new(0.0, 100.0));
+
+    middle_click(&mut fixture, at);
+    assert!(mark.get().is_some_and(|mark| mark.distance(at) < 0.5), "a middle click sets the mark where it came up: {:?}", mark.get());
+    assert_eq!(view.get().center, start.center, "the click itself moves nothing");
+    fixture.frame(vec![pointer::moved(at + Vec2::new(0.0, 10.0))]).idle(2);
+    assert_eq!(view.get().center, start.center, "inside the dead zone nothing scrolls");
+
+    fixture.frame(vec![pointer::moved(below)]).idle(1);
+    let down = view.get();
+    assert!(down.center.y > start.center.y && down.center.x == start.center.x, "the pointer below the mark scrolls down: {down:?}");
+
+    // A second pass of one frame has no time of its own: it scrolls zero.
+    passes.borrow_mut().clear();
+    rerun.set(true);
+    fixture.frame(Vec::new());
+    rerun.set(false);
+    assert_eq!(fixture.passes(), 2, "the frame ran twice");
+    let seen = passes.borrow().clone();
+    assert_eq!(seen.len(), 2, "one view per pass");
+    assert!(seen[0].y > down.center.y, "the frame's first pass scrolls");
+    assert_eq!(seen[1], seen[0], "its second pass does not");
+
+    // On to the image's edge, where it stops and keeps running.
+    fixture.idle(120);
+    let edge = view.get();
+    let bottom = edge.center.y + f64::from(edge.rect.height()) / 2.0 / edge.zoom;
+    assert!((bottom - 1000.0).abs() < 0.5, "the view stops at the image's bottom edge: {bottom}");
+    assert!(mark.get().is_some(), "the autoscroll still runs at the edge");
+
+    // A key ends it: the pointer above the mark then scrolls nothing.
+    fixture.key(Key::Escape, Modifiers::NONE);
+    assert_eq!(mark.get(), None, "a key ends the autoscroll");
+    fixture.frame(vec![pointer::moved(above)]).idle(3);
+    assert_eq!(view.get().center, edge.center, "an ended autoscroll scrolls nothing");
+
+    // A press ends it, a middle press too, and that press's release starts nothing.
+    fixture.advance(1.0);
+    middle_click(&mut fixture, at);
+    fixture.frame(vec![pointer::moved(above)]).idle(1);
+    let up = view.get();
+    assert!(up.center.y < edge.center.y, "the pointer above the mark scrolls up");
+    reached.set(false);
+    fixture.frame(vec![pointer::press(above)]);
+    assert_eq!(mark.get(), None, "a primary press ends the autoscroll");
+    fixture.frame(vec![pointer::release(above)]).idle(3);
+    assert!(!reached.get(), "the press that stopped the autoscroll reaches no tool");
+    let pressed = view.get();
+    fixture.idle(3);
+    assert_eq!(view.get().center, pressed.center, "nothing scrolls after the press");
+    fixture.advance(1.0);
+    middle_click(&mut fixture, at);
+    assert!(mark.get().is_some(), "a middle click starts it again");
+    fixture.advance(1.0);
+    middle_click(&mut fixture, at);
+    assert_eq!(mark.get(), None, "a second middle click ends it and does not start another");
+
+    // The pointer leaving the window ends it.
+    fixture.advance(1.0);
+    middle_click(&mut fixture, at);
+    assert!(mark.get().is_some());
+    fixture.frame(vec![pointer::gone()]);
+    assert_eq!(mark.get(), None, "the pointer leaving the window ends the autoscroll");
+    let left = view.get();
+    fixture.frame(vec![pointer::moved(above)]).idle(3);
+    assert_eq!(view.get().center, left.center, "the pointer back above the mark scrolls nothing");
+
+    // A middle drag under Autoscroll scrolls at the autoscroll speed, does not pan, and its release ends it.
+    fixture.advance(1.0);
+    let before = view.get();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::middle(at, true)]);
+    assert!(mark.get().is_some_and(|mark| mark.distance(at) < 0.5), "the press starts it where it came down: {:?}", mark.get());
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(at - Vec2::new(0.0, 25.0 * step as f32))]);
+    }
+    fixture.idle(2);
+    let dragged = view.get();
+    assert!(dragged.center.y < before.center.y, "the held drag above the mark scrolls up: {before:?} -> {dragged:?}");
+    assert_eq!(dragged.center.x, before.center.x, "and does not pan sideways");
+    fixture.frame(vec![pointer::middle(above, false)]);
+    assert_eq!(mark.get(), None, "letting go after a drag ends it");
+    let ended = view.get();
+    fixture.idle(3);
+    assert_eq!(view.get().center, ended.center, "nothing scrolls after the release");
+}
+
+/// A tool that records where its drag samples fall in the document, through the canvas space of the pass that took them.
+#[derive(Default)]
+struct Trace {
+    drags: Vec<Point>,
+}
+
+impl CanvasTool for Trace {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if let Some(space) = cx.space() {
+            self.drags.push(space.view.to_doc(pointer.pos));
+        }
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the trace only follows the pointer")
+    }
+}
+
+#[trial]
+fn the_wheel_scrolls_during_a_tool_drag_and_the_drag_follows_the_new_view() {
+    let tool = Rc::new(RefCell::new(Trace::default()));
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let (shown_tool, shown) = (Rc::clone(&tool), Rc::clone(&view));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let mut reply = None;
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).view(given).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *shown_tool.borrow_mut()));
+            }
+        });
+        let reply = reply.unwrap_or_default();
+        shown.set(reply.view.or(canvas.output.view).unwrap_or(given));
+    });
+    fixture.settle();
+    let at = view.get().rect.center();
+    let to = at + Vec2::new(60.0, 0.0);
+    fixture.drag_hold_at(at, to - at);
+    assert!(!tool.borrow().drags.is_empty(), "the tool's drag runs");
+
+    let before = view.get();
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, -1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    }]);
+    let after = view.get();
+    assert!(
+        (after.center.y - before.center.y - f64::from(WheelNavigation::LINE)).abs() < 1e-3,
+        "a wheel line scrolls the view while the drag runs: {before:?} -> {after:?}"
+    );
+
+    let next = to + Vec2::new(1.0, 0.0);
+    fixture.frame(vec![pointer::moved(next)]);
+    let last = *tool.borrow().drags.last().expect("the drag goes on");
+    assert!((last - after.to_doc(next)).hypot() < 1e-3, "the drag's point is read through the scrolled view: {last:?}");
+    assert!((last - before.to_doc(next)).hypot() > 1.0, "not through the view before the wheel");
+    fixture.release_at(next);
 }

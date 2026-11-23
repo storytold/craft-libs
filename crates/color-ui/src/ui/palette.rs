@@ -14,8 +14,8 @@ use craft_ui::style::TypeRole;
 use egui::{Response, Ui};
 use std::sync::Arc;
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// What a [`SwatchPalette`] reports.
 #[derive(Debug)]

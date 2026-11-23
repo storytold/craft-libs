@@ -10,6 +10,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+dunce = "1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 serde = { workspace = true }

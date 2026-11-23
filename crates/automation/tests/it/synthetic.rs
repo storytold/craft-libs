@@ -32,9 +32,14 @@ struct Rig {
     passes: Rc<RefCell<Vec<Seen>>>,
 }
 
-/// Document points are screen points doubled, as a canvas at 50 % shows them.
-fn map(at: Pos2) -> Option<Pos2> {
-    Some(pos2(at.x / 2.0, at.y / 2.0))
+/// Screen points between one page's top and the next's, in a canvas that stacks its pages down the screen.
+const PAGE_STEP: f32 = 200.0;
+
+/// Document points are screen points doubled, as a canvas at 50 % shows them, with each page [`PAGE_STEP`] below
+/// the one before.
+fn map(page: usize, at: Pos2) -> Option<Pos2> {
+    let page = u16::try_from(page).ok()?;
+    Some(pos2(at.x / 2.0, at.y / 2.0 + f32::from(page) * PAGE_STEP))
 }
 
 impl Rig {
@@ -109,6 +114,8 @@ fn a_held_press_stays_down_until_its_release() {
     assert_eq!(rig.now().pos, Some(pos2(100.0, 50.0)), "the document point is mapped");
     rig.send("ui.move", json!({"x": 300, "y": 100, "coordinates": "document"}));
     assert!(rig.now().primary_down && rig.now().pos == Some(pos2(150.0, 50.0)), "a move while held drags");
+    rig.send("ui.move", json!({"x": 300, "y": 100, "coordinates": "document", "page": 1}));
+    assert_eq!(rig.now().pos, Some(pos2(150.0, 50.0 + PAGE_STEP)), "a document point is mapped on the page it names");
     rig.send("ui.release", json!({}));
     assert!(!rig.now().primary_down, "the release lets it go");
     rig.send("ui.click", json!({"x": 10, "y": 10}));
@@ -179,6 +186,74 @@ fn injected_caps_lock_holds_until_cleared() {
     assert_eq!(rig.host().injected_caps_lock(), None);
 }
 
+/// Per pass: whether the waiter had its reply by the pass's end, and the pointer position the pass saw.
+type PassLog = Rc<RefCell<Vec<(bool, Option<Pos2>)>>>;
+
+/// A fixture whose UI polls `channel` at the end of each pass, as an application does after its UI, with `discard`
+/// asking egui to run the pass again on the passes it is true for; `answered` records, per pass, whether the waiter
+/// had its reply by the pass's end and the pointer position the pass saw.
+fn polling_fixture(
+    channel: Rc<RefCell<craft_automation::control::ControlChannel>>,
+    reply: Rc<std::sync::mpsc::Receiver<craft_automation::control::ControlResponse>>,
+    discard: impl Fn(usize) -> bool + 'static,
+) -> (Fixture, PassLog) {
+    let answered = Rc::new(RefCell::new(Vec::new()));
+    let seen = answered.clone();
+    let fx = Fixture::new(move |ui| {
+        let pass = seen.borrow().len();
+        if discard(pass) {
+            ui.ctx().request_discard("the test runs this pass again");
+        }
+        channel.borrow_mut().poll_input(&WindowHost::of(ui.ctx()));
+        let pos = ui.input(|i| i.pointer.latest_pos());
+        seen.borrow_mut().push((reply.try_recv().is_ok(), pos));
+    });
+    (fx, answered)
+}
+
+/// A waiter on a move is answered at the end of the pass that ran the move, not a pass later: the application polls
+/// after its UI, where the running pass has not ended yet.
+#[trial]
+fn a_waiter_is_answered_by_the_pass_that_ran_its_step() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (req, reply) = ControlRequest::new("ui.move", json!({"x": 30, "y": 20}));
+    let (mut fx, answered) = polling_fixture(channel.clone(), Rc::new(reply), |_| false);
+    fx.idle(2);
+    answered.borrow_mut().clear();
+    let host = WindowHost::of(fx.ctx());
+    input_method("ui.move", &json!({"x": 30, "y": 20}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    channel.borrow_mut().settle(req, Reply::AfterInput, None, 0.0);
+    fx.frame(Vec::new());
+    let passes = answered.borrow().clone();
+    assert_eq!(passes, vec![(true, Some(pos2(30.0, 20.0)))], "the pass that saw the move answered it");
+}
+
+/// A pass egui runs again (`request_discard`) does not answer: the pass that runs again, and draws what the step
+/// did, does.
+#[trial]
+fn a_pass_run_again_leaves_the_answer_to_its_rerun() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (req, reply) = ControlRequest::new("ui.move", json!({"x": 30, "y": 20}));
+    let start = Rc::new(Cell::new(usize::MAX));
+    let first = start.clone();
+    let (mut fx, answered) = polling_fixture(channel.clone(), Rc::new(reply), move |pass| pass == first.get());
+    fx.idle(2);
+    start.set(answered.borrow().len());
+    let host = WindowHost::of(fx.ctx());
+    input_method("ui.move", &json!({"x": 30, "y": 20}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    channel.borrow_mut().settle(req, Reply::AfterInput, None, 0.0);
+    fx.frame(Vec::new());
+    assert_eq!(fx.passes(), 2, "egui ran the discarded pass again");
+    let passes: Vec<bool> = answered.borrow()[start.get()..].iter().map(|(done, _)| *done).collect();
+    assert_eq!(passes, vec![false, true], "the rerun answers, the discarded pass does not");
+}
+
 /// A move with `rest` counts as processed only once the pointer has rested that long.
 #[trial]
 fn a_hover_rest_holds_the_reply_until_it_has_passed() {
@@ -208,7 +283,7 @@ fn injected_passes_are_the_passes_that_carry_a_step() {
 fn document_points_need_a_canvas() {
     let rig = Rig::new();
     let host = rig.host();
-    let none = |_: Pos2| None;
+    let none = |_: usize, _: Pos2| None;
     let refused = input_method("ui.move", &json!({"x": 1, "y": 1, "coordinates": "document"}), &host, ViewportId::ROOT, &none);
     assert_eq!(refused, Some(Err(NO_DOCUMENT.to_owned())));
     assert!(host.injected_idle());
@@ -411,11 +486,11 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
 #[trial]
 fn a_point_that_is_not_finite_is_refused() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0))] {
-            assert_eq!(at.resolve(&|p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
+        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0), 0)] {
+            assert_eq!(at.resolve(&|_, p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
         }
     }
-    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None), Ok(pos2(3.0, 4.0)));
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_, _| None), Ok(pos2(3.0, 4.0)));
 }
 
 /// `ui.move` requires both `x` and `y`: omitting either coordinate refuses the request before anything is queued

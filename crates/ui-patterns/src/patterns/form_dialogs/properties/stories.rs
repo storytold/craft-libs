@@ -43,12 +43,18 @@ fn shown(
 #[story(PropertiesDialog<'static>, covers = [], drive = Drive::Never)]
 fn properties_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let read_only = *data.value("read_only", false);
+<<<<<<< HEAD
     shown(ui, data, tabs(), |dialog| dialog.read_only(read_only))
+=======
+    let (values, values_at) = data.value_at("values", DialogFields::new());
+    PropertiesDialog::new("Properties", tabs(), values_at.bind(values)).read_only(read_only).opened(Bind::given(true)).show(ui).into()
+>>>>>>> origin/next
 }
 
 #[story(PropertiesDialog<'static>, covers = [], drive = Drive::Never)]
 fn properties_dialog_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let read_only = *data.value("read_only", true);
+<<<<<<< HEAD
     shown(ui, data, tabs(), |dialog| dialog.read_only(read_only))
 }
 
@@ -70,4 +76,8 @@ fn properties_dialog_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     shown(ui, data, tabs(), |dialog| {
         dialog.shared(shared).shared_rows(SharedRows::Below).extra_buttons(vec![("metadata".to_owned(), Label::from("Additional Metadata…"))])
     })
+=======
+    let (values, values_at) = data.value_at("values", DialogFields::new());
+    PropertiesDialog::new("Properties", tabs(), values_at.bind(values)).read_only(read_only).opened(Bind::given(true)).show(ui).into()
+>>>>>>> origin/next
 }

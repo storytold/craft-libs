@@ -6,8 +6,13 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story}
 use egui::Ui;
 
 use super::list::{CardKey, CommentList, RowEntry, Rows};
+<<<<<<< HEAD
 use super::row::CommentRow;
 use super::{CommentsHeader, CommentsPanel, CommentsPanelState};
+=======
+use super::row::{CardActions, CommentRow};
+use super::{CommentsPanel, CommentsPanelState};
+>>>>>>> origin/next
 use crate::annotate::AnnotationKind;
 use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus, ReviewerStatus, ThreadId};
 
@@ -162,4 +167,14 @@ fn comment_row_reviewer_statuses(ui: &mut Ui, _: &mut StoryData) -> StoryOutput 
     let mut thread = thread(2, 1, "Use the brand colour here.", 0);
     thread.statuses = reviewed();
     show_as_only_item(ui, CommentRow::card(&thread, "Ana: Use the brand colour here.".into()).state(false, true, NOW).drafts(None, "")).into()
+}
+
+#[story(CommentRow<'static>, covers = [], drive = Drive::Never)]
+fn comment_row_selected_card_with_buttons(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let thread = thread(1, 1, "The margin is too narrow on this page.", 1);
+    let row = CommentRow::card(&thread, "Ana: The margin is too narrow on this page.".into())
+        .state(true, true, NOW)
+        .actions(CardActions::Buttons)
+        .drafts(None, "");
+    show_as_only_item(ui, row).into()
 }

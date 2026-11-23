@@ -16,8 +16,13 @@ use crate::popover::Popover;
 use crate::primitives::{ContentPainterCx, IconSpec, Span};
 use crate::runtime::env::{Env, Label};
 use crate::style::{Corners, SurfaceKind};
+<<<<<<< HEAD
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
+=======
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
+use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection};
+>>>>>>> origin/next
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Rect, Ui};
 use std::borrow::Cow;
@@ -228,7 +233,7 @@ fn list_layers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .rename(true)
         .rename_column(NAME)
         .columns(columns)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
+        .selection(data.bind("selection", Selection::single(0_usize)))
         .show_items(ui, &Layers(&rows), &mut |key, icx| {
             let layer = &rows[*key];
             let row = ListRow::new(layer.name.clone())
@@ -302,10 +307,10 @@ fn mask_thumb(cx: &ContentPainterCx, rect: Rect) {
 fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let linked = *data.value("linked", [true; 2]);
     let target = *data.value("target", ThumbTarget::Extra(0));
-    let out = List::<usize>::new("Layers")
-        .natural_height(true)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
-        .show_items(ui, &Labels(&MASK_ROWS), &mut |key, icx| {
+    let out = List::<usize>::new("Layers").natural_height(true).selection(data.bind("selection", Selection::single(0_usize))).show_items(
+        ui,
+        &Labels(&MASK_ROWS),
+        &mut |key, icx| {
             let row = ListRow::new(MASK_ROWS[*key]).state(icx.row.clone()).thumb(ThumbSize::Medium, layer_thumb);
             match *key {
                 0 => row
@@ -317,7 +322,8 @@ fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 1 => row.clipped(true),
                 _ => row.italic(true),
             }
-        });
+        },
+    );
     for event in &out.events {
         match event {
             CollectionEvent::Item(0, RowEvent::LinkToggled { thumb, linked: on, .. }) => {
@@ -420,11 +426,10 @@ impl ItemSource<usize> for TreeNodes<'_> {}
 fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let open = data.value("open", first_open()).clone();
     let shown = shown_nodes(&open);
-    let out = List::<usize>::new("Layers")
-        .tree(true)
-        .natural_height(true)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
-        .show_items(ui, &TreeNodes { shown: &shown, open: &open }, &mut |key, _| {
+    let out = List::<usize>::new("Layers").tree(true).natural_height(true).selection(data.bind("selection", Selection::single(0_usize))).show_items(
+        ui,
+        &TreeNodes { shown: &shown, open: &open },
+        &mut |key, _| {
             let (name, depth) = TREE[*key];
             let row = ListRow::new(name).depth(depth);
             if is_group(*key) {
@@ -432,7 +437,8 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             } else {
                 row.icon(IconSpec::svg(IconId::new("check")))
             }
-        });
+        },
+    );
     let groups: Vec<usize> = (0..TREE.len()).filter(|&at| is_group(at)).collect();
     for event in &out.events {
         if let CollectionEvent::Open(change) = event {
@@ -448,12 +454,27 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = names(4);
+<<<<<<< HEAD
     let out = List::<usize>::new("Layers")
         .rename(true)
         .row_menu()
         .selection(Bind::bound(data.value("selection", Selection::single(1_usize))))
         .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
     if let Some(row) = out.menu.as_ref().map(|request| request.key) {
+=======
+    let out = List::<usize>::new("Layers").rename(true).row_menu().selection(data.bind("selection", Selection::single(1_usize))).show_items(
+        ui,
+        &Names(&names),
+        &mut |key, _| ListRow::new(names[*key].clone()),
+    );
+    let menu_row = data.value("menu", None::<usize>);
+    for event in &out.events {
+        if let CollectionEvent::ContextMenu(request) = event {
+            *menu_row = Some(request.key);
+        }
+    }
+    if let Some(row) = *menu_row {
+>>>>>>> origin/next
         let entries = [
             Entry::new(String::from("rename"), "Rename"),
             Entry::new(String::from("duplicate"), "Duplicate"),
@@ -612,11 +633,10 @@ fn event_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 /// An undo list of `count` actions, "Step 1" the oldest, starting with `mark`, and its footer as the readout: the
 /// actions a pick undoes, or Cancel while none is marked.
-fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) -> StoryOutput {
+fn undo_list(ui: &mut Ui, mark: &mut UndoMark, mark_at: ValueAt<'_>, count: usize) -> StoryOutput {
     let labels: Vec<String> = (1..=count).rev().map(|n| format!("Step {n}")).collect();
-    let mark = data.value("mark", mark);
     let rows = UndoRows::new(&labels);
-    let out = UndoList::new("Undo History").selection(Bind::bound(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
+    let out = UndoList::new("Undo History").selection(mark_at.bind(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
     let env = Env::of(ui);
     let words = env.words::<UndoWords>();
     let footer = footer_text(&words, env.format(), mark).map_or_else(|| words.cancel.clone(), Label::from);
@@ -626,7 +646,8 @@ fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) ->
 /// WordCraft's undo list: 30 actions, the newest three marked.
 #[story(UndoList<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn undo_list_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 30, UndoMark::at(2))
+    let (mark, mark_at) = data.value_at("mark", UndoMark::at(2));
+    undo_list(ui, mark, mark_at, 30)
 }
 
 /// The drive of the popover story: a click on its button.
@@ -637,24 +658,25 @@ fn open_undo_history(fixture: &mut Fixture) {
 }
 
 /// The list as WordCraft hosts it: a button opens it in a popover.
-#[story(UndoList<'static>, covers = [], drive = Drive::Custom(open_undo_history))]
+#[story(UndoList<'static>, covers = [Open], drive = Drive::Custom(open_undo_history))]
 fn undo_list_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let opener = Button::new("Undo History").show(ui);
-    let mut open = *data.value("open", false);
+    let ((open, open_at), (mark, mark_at)) = data.pair_at(("open", false), ("mark", UndoMark::at(2)));
     let mut shown = None;
-    let popover = Popover::new("Undo History", Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
-        shown = Some(undo_list(ui, data, 30, UndoMark::at(2)));
+    let popover = Popover::new("Undo History", open_at.bind(open)).opened_by(&opener).show(ui, |ui, _| {
+        shown = Some(undo_list(ui, mark, mark_at, 30));
     });
-    *data.value("open", false) = open;
     shown.unwrap_or_else(|| popover.output.into())
 }
 
 #[story(UndoList<'static>, covers = [One], drive = Drive::Never)]
 fn undo_list_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 1, UndoMark::default())
+    let (mark, mark_at) = data.value_at("mark", UndoMark::default());
+    undo_list(ui, mark, mark_at, 1)
 }
 
 #[story(UndoList<'static>, covers = [Empty], drive = Drive::Never)]
 fn undo_list_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 0, UndoMark::default())
+    let (mark, mark_at) = data.value_at("mark", UndoMark::default());
+    undo_list(ui, mark, mark_at, 0)
 }

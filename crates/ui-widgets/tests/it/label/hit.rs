@@ -146,6 +146,7 @@ fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
     assert_eq!(picked.get(), 2, "Enter picks the focused radio");
 }
 
+<<<<<<< HEAD
 /// A quiet check box (a thumbnail tile's) is a smaller box than the standard one.
 #[trial]
 fn a_quiet_check_box_is_smaller_than_the_standard_one() {
@@ -160,4 +161,41 @@ fn a_quiet_check_box_is_smaller_than_the_standard_one() {
         shown.get().height()
     };
     assert!(side(true) < side(false), "quiet {} against standard {}", side(true), side(false));
+=======
+/// A click on a field's label focuses its one control when the control sits in an unlabelled row beside text that
+/// takes no focus (a unit after a number field). The row makes its node by its type's role but reports none, so the
+/// label scope must still see the number field. Before that, the scope saw no control and the click did nothing.
+#[trial]
+fn a_click_on_a_label_focuses_its_control_inside_an_unlabelled_row() {
+    use craft_ui::display::Text;
+    use craft_ui::form::Field;
+    use craft_ui::layout_components::Row;
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::access::NodeKey;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::text::{NumberField, UnitPlacement};
+    use std::rc::Rc;
+
+    let field = Rc::new(Cell::new(egui::Id::NULL));
+    let seen = field.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Field::new("Turn").id_salt("turn").show(ui, |ui, _| {
+            Row::new().show(ui, |ui, _| {
+                let mut value = Some(90.0);
+                let out = NumberField::new("Angle", Bind::bound(&mut value)).unit_placement(UnitPlacement::After).show(ui);
+                seen.set(out.response.id);
+                Text::new("deg").show(ui);
+            });
+        });
+    });
+    fixture.settle();
+    let control = NodeKey::of(field.get());
+    let tree = fixture.tree();
+    // The field's group is named "Turn" too and is labelled by the label: the label is the "Turn" node that no other
+    // node labels. Picking the first "Turn" node clicked the group whenever the tree listed it first.
+    let label = tree.keys().into_iter().find(|key| *key != control && tree.name_of(*key) == Some("Turn") && tree.labelled_by_key(*key).is_empty());
+    let label = label.and_then(|key| fixture.target(key)).expect("the field's label node");
+    fixture.access(AccessActionKind::Click, &label).settle();
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(field.get()), "the click on the label focuses the number field");
+>>>>>>> origin/next
 }

@@ -7,8 +7,8 @@
 //!
 //! [`SweepApply`] is the one host-side reader of those events: it turns each into the step the host applies.
 
-use super::ItemsHooks;
 use super::marquee::MarqueeDrag;
+use super::{ItemsHooks, Placement};
 use crate::contract::collection::{
     CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove,
     ToggleColumn, ToggleEdit,
@@ -16,13 +16,99 @@ use crate::contract::collection::{
 use crate::contract::reorder;
 use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer as _};
 use crate::runtime::drag;
+use crate::runtime::egui::areas;
 use crate::runtime::env::Label;
+use crate::runtime::toggle_sweep::{self, Segment, Travel};
 use craft_behavior::{
     Axis, CancelReason, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton,
     PressCancel, PressPhase, ScrollPos,
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
+
+/// Maps a point to layout coordinates once for every collection type.
+fn logical_point(layout: &dyn ItemLayout, rect: Rect, rtl: bool, at: Pos2) -> Pos2 {
+    let at = at - rect.min.to_vec2();
+    if layout.mirrors() && rtl {
+        Flow::new(Rect::from_min_size(Pos2::ZERO, rect.size()), true).to_physical(Rect::from_min_size(at, Vec2::ZERO)).min
+    } else {
+        at
+    }
+}
+
+/// Resolves a row's cells and sub-row indentation independently of the collection type.
+fn row_cells(
+    layout: &dyn ItemLayout,
+    at: usize,
+    offset: ScrollPos,
+    sub_row: &dyn Fn() -> Option<usize>,
+    header: &super::header::Header,
+    indent_step: f32,
+) -> Vec<(ColumnKey, Rect)> {
+    let mut cells = Vec::new();
+    layout.cells(at, offset, &mut cells);
+    if let Some(steps) = sub_row() {
+        let toggles: Vec<ColumnKey> = header.toggle_columns().map(|(key, _)| key).collect();
+        craft_behavior::sub_row_cells(&mut cells, |key| toggles.contains(key), steps as f32 * indent_step, false);
+    }
+    cells
+}
+
+/// Finds the toggle and its geometry under a point in the row.
+fn toggle_cell_at(props: &CollectionProps, cells: Vec<(ColumnKey, Rect)>, point: Pos2) -> Option<(ColumnKey, ToggleColumn, Rect)> {
+    let (key, cell) = cells.into_iter().find(|(_, cell)| cell.contains(point))?;
+    props.columns.iter().find(|spec| spec.key == key).and_then(|spec| match spec.kind {
+        ColumnKind::Toggle(toggle) => Some((key.clone(), toggle, cell)),
+        _ => None,
+    })
+}
+
+/// The screen rect of a row in the layout's view.
+fn screen_row(layout: &dyn ItemLayout, view: Rect, at: usize, offset: ScrollPos, rtl: bool) -> Rect {
+    let local = layout.rect(at, offset);
+    let local = if rtl && layout.mirrors() { Flow::new(Rect::from_min_size(Pos2::ZERO, view.size()), true).to_physical(local) } else { local };
+    local.translate(view.min.to_vec2())
+}
+
+/// Resolves a row drop's geometry independently of the collection and its key type.
+fn drop_spot(
+    layout: &dyn ItemLayout,
+    outline: &dyn craft_behavior::NavOutline,
+    len: &dyn Fn() -> usize,
+    xf: Option<crate::runtime::egui::areas::LayerMap>,
+    (rect, offset, rtl): (Rect, ScrollPos, bool),
+    groups: Option<f32>,
+    at: Pos2,
+) -> Option<Spot> {
+    let to_screen = |point: Pos2| xf.map_or(point, |map| map.to_screen(point));
+    let nav = layout.nav();
+    let hit = layout.hit(logical_point(layout, rect, rtl, at), offset);
+    let across = !matches!(nav, NavShape::Flat | NavShape::Tree);
+    // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
+    // row-wise layout that is beyond the last item's end edge on its row, or below its row.
+    let past = hit.is_none() && {
+        let last = screen_row(layout, rect, len() - 1, offset, rtl);
+        let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
+        !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
+    };
+    let over = hit.or_else(|| past.then(|| len() - 1))?;
+    let row = screen_row(layout, rect, over, offset, rtl);
+    if matches!(nav, NavShape::Spatial) {
+        let (low, high) = (to_screen(row.min), to_screen(row.max));
+        return Some(Spot { over, insert: over, parent: None, mark: DropMark::Into(Rect::from_min_max(low, high)) });
+    }
+    if let Some(step) = groups {
+        let gap = reorder::tree_gap_at(outline, over, row, rtl, step, at);
+        let parent = gap.parent;
+        return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(to_screen) });
+    }
+    // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
+    // right-to-left the physical end is the earlier place in reading order.
+    let at = if past && across { Pos2::new(if rtl { row.min.x } else { row.max.x }, row.center().y) } else { at };
+    let gap = reorder::gap_at(&[row], if across { Axis::X } else { Axis::Y }, at)?;
+    let after = (gap.insert == 1) != (across && rtl);
+    Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(to_screen) })
+}
 
 /// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
 pub(super) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
@@ -35,6 +121,7 @@ struct Sweep<K> {
     /// The modifiers held at the first press, which every flip of the sweep carries.
     mods: craft_keymap::Mods,
     crossed: Vec<usize>,
+    travel: Travel,
     /// Where the cell the sweep began in lies across the rows (logical): it flips the crossed rows whose cell of the
     /// column lies there too, so a sweep down a toggle column passes sub-rows by and one down sub-rows passes rows by.
     span: egui::Rangef,
@@ -321,24 +408,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// `at` in the layout's logical coordinates, relative to the rows' rect.
     pub(super) fn logical(layout: &C::ItemLayout, rect: Rect, rtl: bool, at: Pos2) -> Pos2 {
-        let at = at - rect.min.to_vec2();
-        if layout.mirrors() && rtl {
-            Flow::new(Rect::from_min_size(Pos2::ZERO, rect.size()), true).to_physical(Rect::from_min_size(at, Vec2::ZERO)).min
-        } else {
-            at
-        }
+        logical_point(layout, rect, rtl, at)
     }
 
     /// The cells of row `at` (logical): the layout's, with a sub-row's toggle cells at its indent in its content
     /// (`sub_row_cells`), where the row draws them. A press acts on the cell it lands in.
     pub(super) fn row_cells(&self, layout: &C::ItemLayout, at: usize, offset: ScrollPos) -> Vec<(ColumnKey, Rect)> {
-        let mut cells = Vec::new();
-        layout.cells(at, offset, &mut cells);
-        if let Some(steps) = self.source.sub_row(at) {
-            let toggles: Vec<ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
-            craft_behavior::sub_row_cells(&mut cells, |key| toggles.contains(key), steps as f32 * self.indent_step, false);
-        }
-        cells
+        row_cells(layout, at, offset, &|| self.source.sub_row(at), &self.header, self.indent_step)
     }
 
     /// The toggle cell under `point` (logical) in row `at`: its column, how it toggles and its rect.
@@ -350,11 +426,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         offset: ScrollPos,
         point: Pos2,
     ) -> Option<(ColumnKey, ToggleColumn, Rect)> {
-        let (key, cell) = self.row_cells(layout, at, offset).into_iter().find(|(_, cell)| cell.contains(point))?;
-        props.columns.iter().find(|spec| spec.key == key).and_then(|spec| match spec.kind {
-            ColumnKind::Toggle(toggle) => Some((key.clone(), toggle, cell)),
-            _ => None,
-        })
+        toggle_cell_at(props, self.row_cells(layout, at, offset), point)
     }
 
     fn emit_toggle(&mut self, cx: &mut Cx<'_, C>, at: usize, column: &ColumnKey, on: bool, mods: craft_keymap::Mods) {
@@ -382,9 +454,19 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// exclusive column, turning a cell on turns the column's other cells off. A cell that is not open to toggling
     /// does nothing and starts no sweep.
     pub(super) fn begin_toggle(&mut self, cx: &mut Cx<'_, C>, at: usize, (column, toggle, cell): (ColumnKey, ToggleColumn, Rect)) {
-        if toggle.sweepable {
-            let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
-            self.drags.sweep = Some(Sweep { column: column.clone(), on: false, mods, crossed: vec![at], span: cell.x_range(), open: Vec::new() });
+        if toggle.sweepable
+            && let Some(start) = cx.core.press.phase.start()
+        {
+            let mods = crate::runtime::pointer::frame_raw(&cx.core.ctx).mods;
+            self.drags.sweep = Some(Sweep {
+                column: column.clone(),
+                on: false,
+                mods,
+                crossed: vec![at],
+                travel: Travel::new(start.origin),
+                span: cell.x_range(),
+                open: Vec::new(),
+            });
         }
         match self.flip_toggle(cx, at, column, toggle) {
             Some(on) => {
@@ -403,7 +485,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return None;
         }
         let on = !self.source.toggled(at, &column);
-        let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
+        let mods = crate::runtime::pointer::frame_raw(&cx.core.ctx).mods;
         self.emit_toggle(cx, at, &column, on, mods);
         if toggle.exclusive && on {
             // Collected first: emitting needs `self` mutably while the source is read through it.
@@ -415,24 +497,53 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         Some(on)
     }
 
-    fn sweep_to(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, rect: Rect, offset: ScrollPos, rtl: bool, pos: Pos2) {
-        let Some(sweep) = self.drags.sweep.clone() else { return };
-        if pos.y < rect.min.y {
-            return;
+    fn sweep_to(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: Placement, phase: PressPhase) {
+        let Some(sweep) = &mut self.drags.sweep else { return };
+        let input = crate::runtime::pointer::pass_pointer(&cx.ctx);
+        let events = match phase {
+            PressPhase::Down { start, .. } => toggle_sweep::after_press(&input.events, start),
+            _ => &input.events,
+        };
+        let mut path = Vec::new();
+        sweep.travel.advance(events, input.frame.as_ref().map_or(0.0, |frame| frame.slop), &mut path);
+        for segment in path {
+            self.sweep_segment(cx, layout, place, segment);
         }
-        let Some(now) = layout.hit(Self::logical(layout, rect, rtl, pos), offset) else { return };
-        let Some(&last) = sweep.crossed.last() else { return };
-        let rows: Vec<usize> = if now >= last { (last + 1..=now).collect() } else { (now..last).rev().collect() };
+    }
+
+    fn sweep_segment(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: Placement, segment: Segment) {
+        let Placement { rect, offset, rtl } = place;
+        let Some(sweep) = &self.drags.sweep else { return };
+        let (column, on, mods, span) = (sweep.column.clone(), sweep.on, sweep.mods, sweep.span);
+        let parent = cx.response.layer_id;
+        let layer = self.xf.map_or(parent, |_| areas::body_layer(parent, cx.id));
+        let clip = rect.intersect(cx.visible);
+        let clip = self.xf.map_or(clip, |map| Rect::from_min_max(map.to_layer(clip.min), map.to_layer(clip.max)));
+        let mut rows = Vec::new();
+        layout.visible(offset, rect.size(), &mut rows);
+        if segment.1.y < segment.0.y {
+            rows.reverse();
+        }
         for at in rows {
-            if let Some(held) = &mut self.drags.sweep {
-                held.crossed.push(at);
+            if self.drags.sweep.as_ref().is_some_and(|sweep| sweep.crossed.contains(&at))
+                || !self.source.enabled(at)
+                || !self.toggle_open(at, &column)
+                || self.source.toggled(at, &column) == on
+            {
+                continue;
             }
-            let in_span = self
+            let below_frozen = Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y + layout.frozen_band(at)), rect.max);
+            let crossed = self
                 .row_cells(layout, at, offset)
                 .into_iter()
-                .any(|(key, cell)| key == sweep.column && cell.min.x < sweep.span.max && cell.max.x > sweep.span.min);
-            if in_span && self.source.enabled(at) && self.toggle_open(at, &sweep.column) && self.source.toggled(at, &sweep.column) != sweep.on {
-                self.emit_toggle(cx, at, &sweep.column, sweep.on, sweep.mods);
+                .filter(|(key, cell)| *key == column && cell.min.x < span.max && cell.max.x > span.min)
+                .map(|(_, cell)| self.to_screen(layout, rect, cell, rtl).intersect(clip).intersect(below_frozen))
+                .any(|cell| toggle_sweep::crosses_visible(&cx.ctx, layer, cell, &[segment]));
+            if crossed {
+                if let Some(sweep) = &mut self.drags.sweep {
+                    sweep.crossed.push(at);
+                }
+                self.emit_toggle(cx, at, &column, on, mods);
             }
         }
     }
@@ -481,6 +592,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if at.y < rect.min.y || self.source.is_empty() {
             return None;
         }
+<<<<<<< HEAD
         let nav = layout.nav();
         let hit = layout.drop_hit(Self::logical(layout, rect, rtl, at), offset);
         let across =
@@ -509,6 +621,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let gap = reorder::gap_at(&[row], if across { Axis::X } else { Axis::Y }, at)?;
         let after = (gap.insert == 1) != (across && rtl);
         Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(|point| self.on_screen(point)) })
+=======
+        let outline = Outline::new(self.source);
+        drop_spot(layout, &outline, &|| self.source.len(), self.xf, (rect, offset, rtl), groups, at)
+>>>>>>> origin/next
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
@@ -611,6 +727,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.drags.pending = None;
         let free = matches!(layout.nav(), NavShape::Spatial);
         let phase = cx.core.press.phase;
+        if phase.is_press() && !matches!(phase, PressPhase::Cancel { .. }) {
+            self.sweep_to(cx, layout, Placement { rect, offset, rtl }, phase);
+        }
         // The pointer comes in screen space; the rows and a move's offset are in the rows' own space.
         let xf = self.xf;
         let layer = |point: Pos2| xf.map_or(point, |map| map.to_layer(point));
@@ -621,9 +740,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     .then(|| layout.hit(Self::logical(layout, rect, rtl, origin), offset))
                     .flatten()
                     .filter(|&at| self.source.enabled(at) && !self.source.section_stop(at) && comp.can_drag(&self.source.key(at)));
-                if self.drags.sweep.is_some() {
-                    self.sweep_to(cx, layout, rect, offset, rtl, layer(pos));
-                } else if let Some(at) = hit {
+                if self.drags.sweep.is_none()
+                    && let Some(at) = hit
+                {
                     if free {
                         self.free_move(cx, origin, layer(pos));
                     } else if (props.reorder.is_some() || props.drag_payload.is_some()) && self.drags.grabbed.is_none() {

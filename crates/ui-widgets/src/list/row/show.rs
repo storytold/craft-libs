@@ -88,7 +88,8 @@ impl Component for ListRow<'_> {
         let muted = if key.ink == RowInk::Dimmed { text.faint } else { text.muted };
         ListRowStyle {
             surface,
-            metrics: Metrics::new().min_size(Vec2::new(0.0, sizes.row)).gap(sizes.gap),
+            // A separator is as high as its rule and the room around it.
+            metrics: Metrics::new().min_size(Vec2::new(0.0, if key.separator { 0.0 } else { sizes.row })).gap(sizes.gap),
             text: TextLook::new(role, ink(base)),
             icon: IconLook::new(
                 sizes.icon,
@@ -112,6 +113,7 @@ impl Component for ListRow<'_> {
 
             thumb_frame: c(colors.line.frame),
             thumb_frame_width: tokens.stroke.thin,
+            separator: crate::display::divider::SeparatorRule::of(cx),
             sizes,
         }
     }
@@ -119,6 +121,9 @@ impl Component for ListRow<'_> {
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         self.adopt_facts(&cx.env, cx.resolved.id);
         let sizes = &cx.style.sizes;
+        if self.separator {
+            return Vec2::new(0.0, cx.style.separator.height(cx.ui.ctx().pixels_per_point()));
+        }
         if self.spacer {
             return Vec2::ZERO;
         }
@@ -175,7 +180,11 @@ impl Component for ListRow<'_> {
         if cx.proposal == Proposal::Min {
             return Vec2::new(probe_min, height);
         }
+<<<<<<< HEAD
         let label = document.map_or_else(|| cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().x, |size| size.x);
+=======
+        let label = cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x;
+>>>>>>> origin/next
         // The label band holds the detail line under the label, so it is as wide as the wider of the two.
         let label = match self.detail.as_ref().filter(|_| self.detail_line()) {
             Some(detail) => label.max(cx.layout(&TextRun::new(detail.as_str()).role(cx.style.detail.role)).size().x),
@@ -382,7 +391,7 @@ impl Component for ListRow<'_> {
             let phase = result.press.phase;
             if let (PressPhase::DragStart { .. }, Some(payload)) = (phase, self.drag_at(RowDragSpot::Thumb(target))) {
                 let preview = DragPreview::frame(self.thumb_size(&cx.style.sizes), None);
-                crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
+                crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
                 self.event = Some(RowEvent::PartDrag(RowDragSpot::Thumb(target)));
             } else if let Some(source) = cx.part_activated(target.part()) {
                 let clicks = part_clicks(source, phase);
@@ -409,7 +418,7 @@ impl Component for ListRow<'_> {
                     && matches!(result.press.phase, PressPhase::DragStart { .. })
                 {
                     let preview = DragPreview::frame(result.rect.size(), None);
-                    crate::runtime::drag::start(&cx.ctx, cx.id, payload.clone(), None, preview);
+                    crate::runtime::drag::start(&cx.ctx, cx.id, &cx.env, payload.clone(), None, preview);
                     self.event = Some(RowEvent::PartDrag(RowDragSpot::Trailing(*part)));
                 }
                 continue;
@@ -549,6 +558,10 @@ impl Component for ListRow<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.separator {
+            ui.draw().rule(RuleKind::Divider, cx.rect.left_center(), cx.rect.right_center());
+            return;
+        }
         if self.spacer {
             return;
         }
@@ -561,7 +574,7 @@ impl Component for ListRow<'_> {
         self.label_rect = placed.label;
         {
             let draw = ui.draw();
-            if self.rule || (self.layer && self.divider_below) {
+            if self.layer && self.divider_below {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
             if self.layer {

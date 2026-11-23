@@ -39,7 +39,7 @@ impl DockSides {
 
 /// How a dock behaves. The sizes of its drop bands and zones are `DockSizes`; the
 /// look is the dock's style; the words are `DockWords`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct DockConfig {
     /// The picture-frame profile: a group's side zones are `DockSizes::zone_depth` deep and the outer edge band

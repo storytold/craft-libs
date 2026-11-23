@@ -70,10 +70,16 @@ pub(super) struct Rules {
     pub image: bool,
     pub auto_center: bool,
     pub fills_uncovered: bool,
+<<<<<<< HEAD
     /// The smallest side a resize may leave, in document units: a step that would go under it keeps the last frame.
     pub min_side: f64,
     /// The quad the frame is bounded to: a step that would leave the frame outside it keeps the last frame.
     pub area: Option<[Point; 4]>,
+=======
+    /// An edge or corner drag, and a move, may take the frame past `bounds`, turned or not: the crop grows the canvas
+    /// there, as in the reference application (a document crop, not one bounded by a placed picture's source).
+    pub resize_grows: bool,
+>>>>>>> origin/next
     /// The canvas's snapping, with this pass's tolerance.
     pub snap: Option<Snap>,
     pub os: Platform,
@@ -93,6 +99,7 @@ impl Rules {
     /// as it was (a draw not yet sized) or cannot be kept inside.
     pub fn proposal(&self, drag: &mut Drag, to: Point, mods: Mods, space: bool) -> Option<CropBox> {
         let at = drag.at_press;
+        let mut grows = false;
         let (next, resizing, held) = match &mut drag.kind {
             Kind::Draw { anchor, cur, last } => {
                 if space {
@@ -109,8 +116,13 @@ impl Rules {
                 }
                 (CropBox::upright(drawn(*anchor, *cur, self.ratio, mods)), true, self.ratio.is_some() || mods.shift)
             }
-            Kind::Move if self.image => (at.moved(drag.from - to), false, false),
-            Kind::Move => (at.moved(to - drag.from), false, false),
+            Kind::Move => {
+                // A moved document crop may take in the area past the canvas, as an edge drag does (photocraft#16404),
+                // also once turned (photocraft#16460): only the turn itself keeps the frame inside the image (#10869).
+                grows = self.resize_grows;
+                let by = if self.image { drag.from - to } else { to - drag.from };
+                (at.moved(by), false, false)
+            }
             Kind::Resize(part) => {
                 let by = to - drag.from;
                 let hold = self.hold(mods);
@@ -119,11 +131,15 @@ impl Rules {
                 } else {
                     at.resized(*part, by, hold, mods.alt)
                 };
+<<<<<<< HEAD
                 // A step that would leave a side under the minimum keeps the last frame, as a step the bounds refuse
                 // does: the resize stops there instead of crossing it.
                 if !next.size_ok(self.min_side) {
                     return Some(drag.last);
                 }
+=======
+                grows = self.resize_grows;
+>>>>>>> origin/next
                 (next, true, self.ratio.is_some() || mods.shift)
             }
             Kind::Turn { grab } => {
@@ -146,8 +162,13 @@ impl Rules {
         if !next.is_finite() {
             return None;
         }
+<<<<<<< HEAD
         let kept = match self.bounds {
             Some(bounds) => next.within(bounds, resizing, held),
+=======
+        match self.bounds.filter(|_| !grows) {
+            Some(bounds) => next.within(bounds, resizing, held).or(Some(drag.last)),
+>>>>>>> origin/next
             None => Some(next),
         };
         kept.filter(|kept| self.area.is_none_or(|area| inside_quad(kept, &area))).or(Some(drag.last))
@@ -185,7 +206,7 @@ impl Rules {
                 if corner && !lines.is_empty() && self.hold(mods) != AspectHold::Free {
                     // The reach at the press view: the rule `Snap::at` sets the tolerance with; a crop drag never
                     // changes the zoom.
-                    let Some(reach) = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, false) else {
+                    let Some(reach) = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, snap.options().suspend, false) else {
                         return (to, Vec::new());
                     };
                     match slid_along(point, point - candidate.center(), lines, reach) {

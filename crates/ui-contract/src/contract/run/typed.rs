@@ -12,7 +12,7 @@ use crate::contract::{
 use crate::primitives::{FaceRecord, face_id};
 use crate::runtime::access::{Politeness, SetPosition};
 use crate::runtime::commands::{self, ResolvedCommand};
-use crate::runtime::env::{AppValues, Env, Message};
+use crate::runtime::env::{AppValues, Env, Message, ThemeScope};
 use crate::runtime::focus;
 use crate::runtime::layout_memory::Inputs;
 use crate::runtime::memory::{MemoryStage, sub};
@@ -25,10 +25,18 @@ use egui::{Context, Id, Rect, Ui, Vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The component a `Typed` holds: its own for a show, which `finish` consumes, or the caller's for a measure.
+/// The component a `Typed` holds: the show's slot, which `finish` empties, or the caller's for a measure. The show
+/// keeps the slot in its own frame, so the component is on the stack once while its children run.
 enum Held<'c, C> {
-    Owned(Option<C>),
+    Owned(&'c mut Option<C>),
     Lent(&'c mut C),
+}
+
+/// The component in a show's slot. The caller of a show makes the slot from the component it shows, so the component
+/// is on the stack once while its children run; `finish` takes it out.
+#[expect(clippy::expect_used, reason = "a show's slot holds the component until `finish`")]
+fn held<C>(slot: &mut Option<C>) -> &mut C {
+    slot.as_mut().expect("the show's slot holds the component")
 }
 
 /// The style step 2 stored for the later steps of the run.
@@ -77,6 +85,38 @@ struct Typed<'c, 'h, C: Component> {
 impl<'c, 'h, C: Component> Typed<'c, 'h, C> {
     fn new(comp: Held<'c, C>, hooks: &'h mut dyn ShapeHooks<C>) -> Self {
         Typed { comp, hooks, style: None, shown: None, mixed: false, cancelled: Vec::new(), output: None }
+    }
+
+    /// The `Typed` of a show, whose `finish` takes the component out of `slot`.
+    fn owned(slot: &'c mut Option<C>, hooks: &'h mut dyn ShapeHooks<C>) -> Self {
+        Self::new(Held::Owned(slot), hooks)
+    }
+
+    /// The output `finish` made.
+    #[expect(clippy::expect_used, reason = "`super::run` runs every step, and the last one sets the output")]
+    fn output(self) -> C::Output {
+        self.output.expect("the pipeline finishes every run")
+    }
+
+    /// The component's `Cx` over the run's `core`, with the value step 4 found.
+    #[expect(clippy::expect_used, reason = "`Erased::style` produced the style this pipeline now hands back, so its type is `C::Style`")]
+    fn cx<'a>(&mut self, core: &'a mut CxCore<'a>, style: &'a dyn StyleView) -> Cx<'a, C> {
+        let style = style.as_any().downcast_ref::<C::Style>().expect("the pipeline holds the style `Erased::style` gave");
+        let events = std::mem::take(&mut self.cancelled);
+        // A cancel step 4 raised over a document that moved is reported, not applied: the app's value stays. One that
+        // carries the value the gesture began with restores it at step 11.
+        let applied = if events.iter().any(|event| matches!(event, EditEvent::Cancel { before: Some(_), .. })) { 0 } else { events.len() };
+        Cx { core, style, shown: self.shown.take(), mixed: self.mixed, events, applied, validity: Validity::Ok }
+    }
+
+    /// Step 17's `finish`: the component leaves `Typed` only now, after its children ran.
+    // Takes the component out after the children ran; opt-level 2 inlines it into `with_cx`, whose frame then holds a copy during them.
+    #[inline(never)]
+    fn finish(&mut self, cx: Cx<'_, C>, real: bool) {
+        let id = cx.core.id;
+        let output = self.comp.take().finish(cx);
+        debug_assert!(!real || crate::contract::Outcome::response(&output).id == id, "an output's Response is the component's own");
+        self.output = Some(output);
     }
 }
 
@@ -148,6 +188,7 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         self.hooks.pass_extent(self.comp.get(), at, style, self.shown.clone())
     }
 
+<<<<<<< HEAD
     #[expect(clippy::expect_used, reason = "`Erased::style` produced the style this pipeline now hands back, so its type is `C::Style`")]
     fn with_cx<'a>(&mut self, core: CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool) {
         let style = style.as_any().downcast_ref::<C::Style>().expect("the pipeline holds the style `Erased::style` gave");
@@ -162,6 +203,12 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         let output = comp.finish(cx);
         debug_assert!(!real || crate::contract::Outcome::response(&output).id == id, "an output's Response is the component's own");
         self.output = Some(output);
+=======
+    fn with_cx<'a>(&mut self, core: &'a mut CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool) {
+        let mut cx = self.cx(core, style);
+        let real = rest(&mut TypedPass { comp: self.comp.get(), hooks: &mut *self.hooks, cx: &mut cx });
+        self.finish(cx, real);
+>>>>>>> origin/next
     }
 
     fn shape(&self) -> ShapeKind {
@@ -178,6 +225,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
 
     fn instance_scope(&self) -> Option<commands::CommandScope> {
         self.hooks.instance_scope(self.comp.get_ref())
+    }
+
+    fn theme_scope(&self) -> Option<ThemeScope> {
+        self.hooks.theme_scope(self.comp.get_ref())
     }
 
     fn memory_owner(&self) -> Option<Id> {
@@ -231,11 +282,11 @@ struct TypedPass<'r, 'a, C: Component> {
 
 impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     fn core(&mut self) -> &mut CxCore<'a> {
-        &mut self.cx.core
+        self.cx.core
     }
 
     fn core_ref(&self) -> &CxCore<'a> {
-        &self.cx.core
+        self.cx.core
     }
 
     fn shown_state(&mut self) -> &mut steps::ShownState {
@@ -347,18 +398,20 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn paint(&mut self, ui: &mut Ui, env: &Env) {
-        self.comp.paint(&mut paint_ui(ui, env, &self.cx.core, self.cx.style), self.cx);
+        self.comp.paint(&mut paint_ui(ui, env, self.cx.core, self.cx.style), self.cx);
     }
 
     fn paint_over(&mut self, ui: &mut Ui, env: &Env) {
-        self.comp.paint_over(&mut paint_ui(ui, env, &self.cx.core, self.cx.style), self.cx);
+        self.comp.paint_over(&mut paint_ui(ui, env, self.cx.core, self.cx.style), self.cx);
     }
 
     fn settle_values(&mut self) -> steps::ValueEdit {
-        steps::settle(self.comp, self.cx)
+        steps::settle(self.comp, self.cx, self.hooks.in_flow(self.comp))
     }
 
     fn access(&self) -> (Access, Option<String>) {
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_access_build(&self.cx.core.ctx);
         let mut access = Access::default();
         self.comp.access(&mut access, self.cx);
         (access, self.comp.value_text(self.cx))
@@ -485,13 +538,6 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 }
 
-#[expect(clippy::expect_used, reason = "`super::run` runs every step, and the last one sets the output")]
-fn run<C: Component>(comp: C, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, hooks: &mut dyn ShapeHooks<C>) -> C::Output {
-    let mut typed = Typed::new(Held::Owned(Some(comp)), hooks);
-    super::run(&mut typed, ui, at, tip);
-    typed.output.expect("the pipeline finishes every run")
-}
-
 fn measure_shape<C: Component>(
     comp: &mut C,
     ui: &Ui,
@@ -499,41 +545,45 @@ fn measure_shape<C: Component>(
     proposal: Proposal,
     under: Option<&crate::contract::cx::Under>,
     hooks: &mut dyn ShapeHooks<C>,
+    purpose: super::MeasureFor,
 ) -> Vec2 {
-    super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under)
+    super::measure_shape(&mut Typed::new(Held::Lent(comp), hooks), ui, id, proposal, under, purpose)
 }
 
 pub(crate) fn show_leaf<C: Component + Meta<Shape = crate::contract::shape::Leaf>>(
-    comp: C,
+    slot: &mut Option<C>,
     ui: &mut Ui,
     at: ShowAt,
     tip: Option<TipFn<'_>>,
 ) -> C::Output {
-    let scope = comp.common(Internal::new()).command_scope;
-    run(comp, ui, at, tip, &mut LeafHooks { scope })
+    let mut hooks = LeafHooks { scope: held(slot).common(Internal::new()).command_scope };
+    let mut typed = Typed::owned(slot, &mut hooks);
+    super::run(&mut typed, ui, at, tip);
+    typed.output()
 }
 
 /// Shows a container at `rect` and takes the rect's room in the flow of `ui`, through the one helper that moves a
 /// parent's flow past a rect, so a sibling shown after it lies past it.
 pub(crate) fn show_container_taking<C: Container, R>(
-    comp: C,
+    slot: &mut Option<C>,
     ui: &mut Ui,
     rect: Rect,
-    body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
-    let shown = show_container(comp, ui, ShowAt::Rect(rect), body, None);
+    let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
+    crate::layout::close_flow_start_in(ui);
     crate::runtime::egui::alloc::advance_past(ui, rect);
     shown
 }
 
 pub(crate) fn show_container<C: Container, R>(
-    mut comp: C,
+    slot: &mut Option<C>,
     ui: &mut Ui,
     at: ShowAt,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     tip: Option<TipFn<'_>>,
 ) -> Inner<C::Output, R> {
-    if let Some(output) = unshown(&mut comp, ui) {
+    if let Some(output) = unshown(held(slot), ui) {
         return Inner { output, inner: None, settle: None };
     }
     let mut inner: Option<R> = None;
@@ -543,11 +593,12 @@ pub(crate) fn show_container<C: Container, R>(
         ran |= !cx.memory.is_peek();
         inner = Some(body(ui, cx));
     };
-    let ctx = ui.ctx().clone();
-    let props = Arc::new(comp.props(Internal::new()).clone());
-    let output = run(comp, ui, at, tip, &mut crate::contract::body::BodyHooks::new(&mut call, props));
+    let mut hooks = crate::contract::body::BodyHooks::of(held(slot), &mut call);
+    let mut typed = Typed::owned(slot, &mut hooks);
+    super::run(&mut typed, ui, at, tip);
+    let output = typed.output();
     let id = crate::contract::Outcome::response(&output).id;
-    let settle = ran.then(|| crate::contract::settle::SettleAt { ctx, body: sub(id, "body"), owner: id });
+    let settle = ran.then(|| crate::contract::settle::SettleAt { ctx: ui.ctx().clone(), body: sub(id, "body"), owner: id });
     Inner { output, inner, settle }
 }
 
@@ -586,8 +637,23 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     Some(output)
 }
 
+<<<<<<< HEAD
 pub(crate) fn show_items<'r, C: Collection>(comp: C, ui: &mut Ui, source: &dyn ItemSource<C::Key>, item: &mut ItemFn<'r, C>) -> C::Output {
     run(comp, ui, ShowAt::Flow, None, &mut crate::contract::items::ItemsHooks::<C>::new(source, item))
+=======
+pub(crate) fn show_items<'r, C: Collection>(
+    slot: &mut Option<C>,
+    ui: &mut Ui,
+    source: &dyn ItemSource<C::Key>,
+    item: &mut ItemFn<'r, C>,
+) -> C::Output {
+    let view = held(slot).filtered(source, &Env::of(ui));
+    let source = view.as_deref().unwrap_or(source);
+    let mut hooks = crate::contract::items::ItemsHooks::<C>::new(source, item);
+    let mut typed = Typed::owned(slot, &mut hooks);
+    super::run(&mut typed, ui, ShowAt::Flow, None);
+    typed.output()
+>>>>>>> origin/next
 }
 
 /// Measures `comp` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would use next. It
@@ -600,7 +666,13 @@ pub(crate) fn measure_under<C: Component>(
     proposal: Proposal,
     under: Option<&crate::contract::cx::Under>,
 ) -> Vec2 {
-    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None })
+    measure_shape(comp, ui, id, proposal, under, &mut LeafHooks { scope: None }, super::MeasureFor::Component)
+}
+
+/// Measures `face` as `PaintUi::face` will show it, as part of the measure call of the composite whose `under` it
+/// takes: as [`measure_under`], with no transcript leaf of its own.
+pub(crate) fn measure_face<C: Component>(face: &mut C, ui: &Ui, id: Id, proposal: Proposal, under: &crate::contract::cx::Under) -> Vec2 {
+    measure_shape(face, ui, Some(id), proposal, Some(under), &mut LeafHooks { scope: None }, super::MeasureFor::Face)
 }
 
 /// Measures a container with `body` as `show` will show it: steps 1 to 5, with the body, header, footer and end
@@ -609,13 +681,13 @@ pub(crate) fn measure_container<C: Container, R>(
     comp: &mut C,
     ui: &Ui,
     proposal: Proposal,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Vec2 {
     let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
         body(ui, cx);
     };
-    let props = Arc::new(comp.props(Internal::new()).clone());
-    measure_shape(comp, ui, None, proposal, None, &mut crate::contract::body::BodyHooks::new(&mut call, props))
+    let mut hooks = crate::contract::body::BodyHooks::of(comp, &mut call);
+    measure_shape(comp, ui, None, proposal, None, &mut hooks, super::MeasureFor::Component)
 }
 
 /// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the
@@ -629,8 +701,8 @@ pub(crate) fn measured_extent<C: Component>(
     shown: Option<Arc<ValueOf<C>>>,
 ) -> (Vec2, Option<Arc<ValueOf<C>>>) {
     let response = steps::inert_response(at.ui, at.resolved.id);
-    let core = blank_core(at.env.view(), at.resolved, stage, at.ui.ctx().clone(), at.env.ink, response, at.command.clone());
-    let mut cx = Cx::<C> { core, style, shown, mixed: at.mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    let mut core = blank_core(at.env.view(), at.resolved, stage, at.ui.ctx().clone(), at.env.ink, response, at.command.clone());
+    let mut cx = Cx::<C> { core: &mut core, style, shown, mixed: at.mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
     let ctx = at.ui.ctx();
     let extent = reads::measuring(ctx, at.resolved.id, || steps::measuring(ctx, || hooks.measured_extent(comp, at, &mut cx)));
     (extent, cx.shown.take())
@@ -638,8 +710,15 @@ pub(crate) fn measured_extent<C: Component>(
 
 /// A face run is steps 1, 2, 4 (read only), 12 and 13 of the face component, inside the composite's step 13, under
 /// the composite's `env`. It registers no id, senses nothing, opens no memory stage and fires nothing. Returns the
-/// record step 16 fills the part's sub-node from, and the facts the face's `access` declared.
-pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSource<'_>, part: PartRef, mut face: C) -> FaceRecord {
+/// face's first text baseline and, for a reported face (`FaceSource::reported`), the record step 16 fills the part's
+/// sub-node from, with the facts the face's `access` declared.
+pub(crate) fn paint_face<C: Show>(
+    ui: &mut Ui,
+    env: &Env,
+    source: &super::FaceSource<'_>,
+    part: PartRef,
+    mut face: C,
+) -> (Option<f32>, Option<FaceRecord>) {
     let ctx = ui.ctx().clone();
     let common = std::mem::take(face.common_mut(Internal::new()));
     debug_assert!(common.tooltip.is_none(), "a face instance carries no tooltip; use `PartBuilder::tooltip`");
@@ -667,7 +746,7 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     core.content_rect = flow.inset(face.padding(rect, &style));
     core.flow = flow;
     core.visible = rect;
-    let mut cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    let cx = Cx::<C> { core: &mut core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
     // A face shows its own inputs as `steps::state` reads them for a component: a checked check box takes the on
     // look, a selected face the selected one.
     let flags = part_state.flags | source.flags | steps::value_flags(&face, &cx);
@@ -676,7 +755,7 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
     cx.core.state = state;
     cx.core.stated = true;
     cx.core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
-    steps::paint_surface(ui, env, &cx.core, &*style);
+    steps::paint_surface(ui, env, cx.core, &*style);
     {
         let results = HashMap::new();
         let mut pui = PaintUi {
@@ -698,19 +777,22 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
             size: step1.size,
             selections: &[],
             fade: None,
+            node: false,
             kids: None,
         };
         face.paint(&mut pui, &cx);
     }
-    let (elided, baseline) = {
-        let paint = cx.core.paint.borrow();
-        (paint.elided.clone(), paint.baseline)
-    };
-    let name = elided.unwrap_or_else(|| step1.label.as_str().to_owned());
+    let baseline = cx.core.paint.borrow().baseline;
+    if !source.reported {
+        return (baseline, None);
+    }
+    let name = cx.core.paint.borrow().elided.clone().unwrap_or_else(|| step1.label.as_str().to_owned());
     // The face's own `access` adds its facts; the composite's step 16 fills the part's sub-node from the record.
     let mut access = Access::default();
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_access_build(&ctx);
     face.access(&mut access, &cx);
-    FaceRecord {
+    let record = FaceRecord {
         part,
         name,
         flags,
@@ -721,7 +803,8 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
         baseline,
         value: access.value,
         color: access.color,
-    }
+    };
+    (baseline, Some(record))
 }
 
 /// A member of a collection's run (`Collection::MEMBERS`) after steps 1, 2, 4 (read only) and 7: what the batch join
@@ -792,6 +875,8 @@ pub(crate) struct MemberNode {
     pub enabled: bool,
     /// The member's sense as an item: whether its sub-node takes AccessKit focus and clicks, which the collection serves.
     pub item_sense: Sense,
+    /// The collection has a node this pass: the member's sub-node is written under it.
+    pub reported: bool,
 }
 
 /// What a member's show leaves for the collection: its output, and its tooltip while the pointer rests on it.
@@ -843,8 +928,9 @@ pub(crate) fn member_show<C: Show>(
     core.results = sensed.parts;
     core.press = sensed.press;
     core.member_of = Some(node.owner);
+    core.node = node.reported;
     core.intents = crate::runtime::keys::intents_of(&ctx, Some(id), rtl);
-    let mut cx = Cx::<C> { core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
+    let mut cx = Cx::<C> { core: &mut core, style: &style, shown, mixed, events: Vec::new(), applied: 0, validity: Validity::Ok };
     let flags = part_state.flags | steps::value_flags(&item, &cx);
     let on = f32::from(u8::from(flags.intersects(Flags::ON)));
     let state = StateSet::new(part_state.state, flags, crate::style::StateMix::new(part_state.t.hover, part_state.t.press, on));
@@ -855,22 +941,24 @@ pub(crate) fn member_show<C: Show>(
     // Paint stays inside the row grown by the type's declared outset, as a run's does; a faded member's veil fills it.
     let outer_clip = ui.clip_rect();
     ui.set_clip_rect(row.expand(C::paint_outset(&env.tokens)).intersect(outer_clip));
-    let fade = steps::fade(ui, env, &mut cx.core);
-    steps::paint_surface(ui, env, &cx.core, &*style);
-    steps::paint_part_layers(ui, env, &cx.core);
-    item.paint(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
-    item.paint_over(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
-    steps::unfade(ui, &mut cx.core, fade);
+    let fade = steps::fade(ui, env, cx.core);
+    steps::paint_surface(ui, env, cx.core, &*style);
+    steps::paint_part_layers(ui, env, cx.core);
+    item.paint(&mut super::paint_ui(ui, env, cx.core, &*style), &cx);
+    item.paint_over(&mut super::paint_ui(ui, env, cx.core, &*style), &cx);
+    steps::unfade(ui, cx.core, fade);
     ui.set_clip_rect(outer_clip);
-    let mut access = Access::default();
-    item.access(&mut access, &cx);
-    let member_node = report_member(&cx.core, &access, node, C::ROLE);
-    {
+    if node.reported {
+        let mut access = Access::default();
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_access_build(&ctx);
+        item.access(&mut access, &cx);
+        let member_node = report_member(cx.core, &access, node, C::ROLE);
         let paint = cx.core.paint.borrow();
-        steps::report_parts(&cx.core, &decls, &access.nodes, &paint.faces, member_node);
+        steps::report_parts(cx.core, &decls, &access.nodes, &paint.faces, member_node);
     }
-    crate::contract::cx::write_cursor(&cx.core);
-    let tip = member_tip(&cx.core, &decls, node.part, tooltip, row);
+    crate::contract::cx::write_cursor(cx.core);
+    let tip = member_tip(cx.core, &decls, node.part, tooltip, row);
     MemberShown { output: item.finish(cx), tip }
 }
 

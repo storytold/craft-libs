@@ -4,13 +4,15 @@ use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Rol
 use crate::primitives::{DocRun, DocText, Span, TextRun, Wrap};
 use crate::runtime::access::{Access, Numeric};
 use crate::runtime::env::Label;
+use std::borrow::Cow;
+
 use crate::style::{ComponentStyle, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Metrics, Proposal, Sense};
 use craft_theme::{Stateful, States, variant::Tone};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// How strongly the text reads against its surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -77,7 +79,9 @@ pub struct Text {
     elide: Elide,
     /// The styled spans that replace the label's text; empty for plain text.
     spans: Vec<DocRun<'static>>,
-    /// The label's text is set in italics.
+    /// The interface spans that replace the label's text, in the type role, shade and tone of the text; empty for plain text.
+    styled: Vec<Span<'static>>,
+    /// Whether every span is italic, a value set apart from the words around it.
     italic: bool,
     /// The number the text stands for, reported to assistive technology next to the text.
     numeric: Option<f64>,
@@ -93,8 +97,13 @@ impl Text {
             role: TypeRole::Body,
             elide: Elide::Off,
             spans: Vec::new(),
+<<<<<<< HEAD
             italic: false,
             numeric: None,
+=======
+            styled: Vec::new(),
+            italic: false,
+>>>>>>> origin/next
         }
         .label(text)
     }
@@ -109,7 +118,17 @@ impl Text {
         text
     }
 
-    /// Sets the text in italics: a value set apart from the words around it.
+    /// Interface text from styled `spans`; the joined text is its accessible name. The spans take the type role, shade
+    /// and tone of the text, as plain text does; each span adds its own emphasis (italic, strong, a flag underline).
+    pub fn styled(spans: Vec<Span<'static>>) -> Self {
+        let label: String = spans.iter().map(|span| span.text.as_ref()).collect();
+        let mut text = Text::new(label);
+        text.styled = spans;
+        text
+    }
+
+    /// Sets the text in italics: a value set apart from the words around it. The resolved label is what is set, so a
+    /// catalogue word shows in its own language.
     pub fn italic(mut self) -> Self {
         self.italic = true;
         self
@@ -128,7 +147,35 @@ impl Text {
         if self.elide == Elide::Off { doc } else { doc.elide() }
     }
 
+    /// The spans of the text: its styled spans when it has them, else `label` as one, each italic under `italic`.
+    fn spans_of<'a>(&self, label: &'a str) -> Vec<Span<'a>> {
+        let mut spans: Vec<Span<'a>> = if self.styled.is_empty() { vec![Span::new(label)] } else { self.styled.clone() };
+        if self.italic {
+            spans.iter_mut().for_each(|span| span.italic = true);
+        }
+        spans
+    }
+
+    /// The run of the whole text.
     fn run<'a>(&self, role: TypeRole, label: &'a str) -> TextRun<'a> {
+        let run = if self.styled.is_empty() && !self.italic { TextRun::new(label) } else { TextRun::spans(self.spans_of(label)) };
+        self.shaped(run, role)
+    }
+
+    /// One run per word of the text, each in the style of the span it is in, to find the narrowest the text can wrap to.
+    fn word_runs<'a>(&self, role: TypeRole, label: &'a str) -> Vec<TextRun<'a>> {
+        let mut runs = Vec::new();
+        for span in self.spans_of(label) {
+            for word in span.text.split_whitespace() {
+                let mut one = span.clone();
+                one.text = Cow::Owned(word.to_owned());
+                runs.push(self.shaped(TextRun::spans(vec![one]), role));
+            }
+        }
+        runs
+    }
+
+    fn shaped<'a>(&self, run: TextRun<'a>, role: TypeRole) -> TextRun<'a> {
         let wrap = match self.elide {
             Elide::Off => Wrap::Wrap,
             Elide::End => Wrap::Elide,
@@ -136,7 +183,6 @@ impl Text {
             Elide::Start => Wrap::ElideStart,
             Elide::Path => Wrap::ElidePath,
         };
-        let run = if self.italic { TextRun::spans(vec![Span::new(label).italic()]) } else { TextRun::new(label) };
         run.role(role).wrap(wrap)
     }
 }
@@ -174,6 +220,7 @@ impl Component for Text {
             };
         }
         let role = cx.style.text.role;
+<<<<<<< HEAD
         // Rows reserve the widest word, up to an enclosing reading-width cap.
         let widest = || {
             cx.resolved
@@ -183,6 +230,10 @@ impl Component for Text {
                 .fold(0.0, f32::max)
                 .min(cx.wrap_limit().unwrap_or(f32::INFINITY))
         };
+=======
+        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
+        let widest = || self.word_runs(role, cx.resolved.label).iter().map(|word| cx.layout_at(word, f32::INFINITY).size().x).fold(0.0, f32::max);
+>>>>>>> origin/next
         if cx.proposal == Proposal::Min && self.elide == Elide::Off {
             let widest = widest();
             return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
@@ -190,7 +241,7 @@ impl Component for Text {
         // At its least an elided line is at its readable least.
         if cx.proposal == Proposal::Min {
             let run = self.run(role, cx.resolved.label);
-            return Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y);
+            return cx.least(&run).size();
         }
         let band = wrap.unwrap_or(f32::INFINITY);
         let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);

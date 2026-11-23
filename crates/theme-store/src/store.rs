@@ -112,7 +112,10 @@ pub enum StoreError {
     InUse(ThemeId),
     /// No library theme has this id.
     NotFound(ThemeId),
-    /// Built-in themes can't be deleted.
+    /// The library theme's file changed since the caller loaded it: another app saved over it.
+    /// Offer to reload it, to overwrite it, or to save as a new theme.
+    Changed(ThemeId),
+    /// Built-in themes can't be changed or deleted.
     BuiltIn(ThemeId),
     /// The watch no longer had the result of this change when the client looked, and the
     /// suite's state doesn't show it. Retry.
@@ -257,6 +260,17 @@ pub struct Imported {
     /// The stored theme; for a copy, with its new id.
     pub record: ThemeRecord,
     /// The selection after the import.
+    pub accepted: Accepted,
+}
+
+/// A successful save.
+#[derive(Clone, Debug)]
+pub struct Saved {
+    /// The stored theme.
+    pub record: ThemeRecord,
+    /// The new file's stamp: the `expected` stamp for the next save.
+    pub stamp: FileStamp,
+    /// The selection after the save.
     pub accepted: Accepted,
 }
 
@@ -455,6 +469,48 @@ impl Store {
             }
         }
         Err(StoreError::IdExists(id))
+    }
+
+    /// Replaces library theme `id` with `bytes`, keeping them exactly, when its file still has
+    /// the stamp `expected` it had when the caller loaded it; otherwise [`StoreError::Changed`]
+    /// and the file stays as it is. The file's `id` must be `id`. Built-ins are refused. Like an
+    /// import, a save bumps `library_revision`, so watchers list the new file.
+    pub fn save_theme(&mut self, id: &ThemeId, bytes: &[u8], expected: FileStamp) -> Result<Saved, StoreError> {
+        if id.is_builtin() {
+            return Err(StoreError::BuiltIn(id.clone()));
+        }
+        let stem = user_stem(id)?;
+        let record = self.parse_theme_counted(bytes).map_err(StoreError::Format)?;
+        if record.theme.id != *id {
+            return Err(StoreError::FileName { id: record.theme.id });
+        }
+        let _lock = self.lock()?;
+        let base = self.accepted.clone();
+        let disk = self.read_for_write(&base)?;
+        match self.backend.theme_stamp(stem)? {
+            None => return Err(StoreError::NotFound(id.clone())),
+            Some(stamp) if stamp != expected => return Err(StoreError::Changed(id.clone())),
+            Some(_) => {}
+        }
+        let old = self.backend.read_theme(stem, MAX_THEME_BYTES)?.ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        // The file goes first, so a watcher that sees the new library revision lists it.
+        let stamp = match self.backend.replace_theme(stem, &record.bytes, expected) {
+            Ok(stamp) => stamp,
+            Err(WriteError::Raced) => return Err(StoreError::Changed(id.clone())),
+            Err(WriteError::Io(e)) => return Err(e.into()),
+        };
+        match self.commit(&disk, library_bump(&disk.accepted)) {
+            Ok(accepted) => Ok(Saved { record, stamp, accepted }),
+            Err(e) => {
+                // The old bytes go back as a new file, so on disk its stamp is not `expected`
+                // any more (it includes the inode): a retry with that stamp gets `Changed`. A
+                // file over the size limit was read only in part and is left replaced.
+                if old.len() <= MAX_THEME_BYTES {
+                    let _ = self.backend.replace_theme(stem, &old, stamp);
+                }
+                Err(e)
+            }
+        }
     }
 
     /// Removes a library theme. A theme in either slot of the suite selection can't be deleted;
@@ -681,7 +737,8 @@ impl fmt::Display for StoreError {
             StoreError::IdExists(id) => write!(f, "a theme with the id {id} is already installed"),
             StoreError::InUse(id) => write!(f, "{id} is a suite theme; choose another theme before deleting it"),
             StoreError::NotFound(id) => write!(f, "there is no theme {id}"),
-            StoreError::BuiltIn(id) => write!(f, "{id} is a built-in theme and can't be deleted"),
+            StoreError::Changed(id) => write!(f, "{id} was changed in another Craft app since it was opened"),
+            StoreError::BuiltIn(id) => write!(f, "{id} is a built-in theme; it can't be changed or deleted"),
             StoreError::Lost => f.write_str("the result of this change was lost; it may not have been saved"),
         }
     }

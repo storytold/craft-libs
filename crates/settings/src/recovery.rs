@@ -3,8 +3,10 @@
 //! The names ([`broken_path`], [`backup_path`]) are the same for every
 //! [`SettingsFiles`](crate::SettingsFiles); the file operations here are the disk's.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::io;
 use std::path::{Path, PathBuf};
+<<<<<<< HEAD
 
 // `std::time::SystemTime::now` panics on wasm32-unknown-unknown; `web_time` is std's on native.
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -15,6 +17,15 @@ const MAX_BROKEN_COPIES: u32 = 1000;
 /// The `n`th name for a damaged `config.toml` set aside at unix time `ts`, beside it:
 /// `config.broken-<ts>.toml`, then `config.broken-<ts>-<n>.toml`.
 pub fn broken_path(path: &Path, ts: u64, n: u32) -> PathBuf {
+=======
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Renames a damaged `config.toml` to `config.broken-<unix-ts>.toml` beside it and returns the
+/// new path. Never overwrites: a name that exists gets a `-<n>` suffix.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn move_aside(path: &Path) -> io::Result<PathBuf> {
+>>>>>>> origin/next
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("config");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("toml");
     let dir = path.parent().unwrap_or_else(|| Path::new("."));

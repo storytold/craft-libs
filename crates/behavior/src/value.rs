@@ -521,21 +521,16 @@ impl<'a, T> IntoIterator for &'a EditEvents<T> {
 /// What one pass did to a live preview a component shows beside its value (the family under the pointer in a font
 /// list): only the pass that starts, moves or ends the preview reports it, so a second control that previews nothing
 /// never ends the preview of another. A preview is not an edit: the component's value stays.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Preview<V> {
     /// The preview did not change this pass.
+    #[default]
     Unchanged,
     /// The preview starts, or moves to this value.
     Shows(V),
     /// The preview ended; the host shows the committed value again.
     Ended,
-}
-
-impl<V> Default for Preview<V> {
-    fn default() -> Self {
-        Preview::Unchanged
-    }
 }
 
 impl<V> Preview<V> {

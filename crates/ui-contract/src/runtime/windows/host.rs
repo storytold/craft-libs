@@ -78,6 +78,13 @@ impl WindowHost {
         base_shell(&self.ctx).caps.contains(Caps::VIEWPORTS) && viewports::available(&self.ctx)
     }
 
+    /// Whether a viewport mount opened in the running viewport's pass shows in an OS window of its own, and not in
+    /// its fallback layer: OS viewports are available and the running window is neither full screen nor, on Wayland,
+    /// maximized.
+    pub fn opens_windows(&self) -> bool {
+        super::opens_over(&self.ctx, pass::current_viewport(&self.ctx))
+    }
+
     /// Whether the platform reports where windows are on the desktop and moves them there; false on Wayland.
     pub fn positions_reported(&self) -> bool {
         base_shell(&self.ctx).window_positions()
@@ -109,6 +116,12 @@ impl WindowHost {
     /// What a screenshot of `viewport` measures this pass; `None` when the viewport is not running.
     pub fn screenshot_facts(&self, viewport: ViewportId) -> Option<ScreenshotFacts> {
         screenshot::facts(&self.ctx, viewport)
+    }
+
+    /// The viewport's latest settled AccessKit update, a host fact of the window as its screenshot facts are; `None`
+    /// while AccessKit is off.
+    pub fn access_tree(&self, viewport: ViewportId) -> Option<crate::runtime::egui::access::TreeUpdate> {
+        crate::runtime::egui::access::settled_tree(&self.ctx, viewport)
     }
 
     /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
@@ -280,6 +293,12 @@ impl WindowHost {
         injected::idle(&self.ctx)
     }
 
+    /// [`injected_idle`](Self::injected_idle) asked at the end of a pass, after its UI ran: the step the running pass
+    /// carried counts as run, unless egui runs the pass again. Outside a pass it is `injected_idle`.
+    pub fn injected_idle_at_pass_end(&self) -> bool {
+        injected::idle_at_pass_end(&self.ctx)
+    }
+
     /// Whether an injected step was withdrawn since the last call.
     pub fn take_injected_withdrawn(&self) -> bool {
         injected::take_withdrawn(&self.ctx)
@@ -351,13 +370,32 @@ impl WindowHost {
         monitors(&self.ctx)
     }
 
+    /// The monitor `viewport`'s window lies on: the one its top-left corner is on, the rule its scale
+    /// ([`WindowFacts::scale`]) falls back to. `None` before the window has reported its rect, or where the platform
+    /// lists no monitor under the corner.
+    pub fn monitor_of(&self, viewport: ViewportId) -> Option<Monitor> {
+        let facts = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts)?;
+        monitor_of(&self.ctx, &facts)
+    }
+
     /// Places `viewport`'s outer rect at `outer`: its position, and the inner size that leaves the window's
-    /// decoration as it is. False when a command could not go out.
+    /// decoration as it is. A minimized window is restored first, and a placement below the window's smallest inner
+    /// size lowers that size to the placed one, so the window takes the place it is given. False when a command could
+    /// not go out.
     pub fn set_outer(&self, viewport: ViewportId, outer: Rect) -> bool {
-        let decoration = self.facts(viewport).and_then(|facts| facts.outer.map(|current| current.size() - facts.inner.size())).unwrap_or(Vec2::ZERO);
-        let moved = act(&self.ctx, viewport, WindowAction::SetOuterPosition(outer.min));
-        let sized = act(&self.ctx, viewport, WindowAction::SetInnerSize((outer.size() - decoration).max(Vec2::ZERO)));
-        moved && sized
+        let facts = self.facts(viewport);
+        let decoration = facts.and_then(|facts| facts.outer.map(|current| current.size() - facts.inner.size())).unwrap_or(Vec2::ZERO);
+        let inner = (outer.size() - decoration).max(Vec2::ZERO);
+        let mut sent = true;
+        if facts.is_some_and(|facts| facts.state == WindowState::Minimized) {
+            sent &= act(&self.ctx, viewport, WindowAction::Restore);
+        }
+        let least = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.min_size);
+        if let Some(least) = least.filter(|least| inner.x < least.x || inner.y < least.y) {
+            sent &= act(&self.ctx, viewport, WindowAction::SetMinInnerSize(least.min(inner)));
+        }
+        sent &= act(&self.ctx, viewport, WindowAction::SetOuterPosition(outer.min));
+        sent & act(&self.ctx, viewport, WindowAction::SetInnerSize(inner))
     }
 
     /// The viewport of the container `id` while its window is open.
@@ -441,13 +479,16 @@ pub(super) fn monitors(ctx: &Context) -> Vec<Monitor> {
     system.map(|system| system.monitors()).unwrap_or_default()
 }
 
-/// The scale of a window with `facts`: the platform's report, else the scale of the monitor the window's top-left
-/// corner lies on. A corner is on a monitor when its pixel position at that monitor's scale is inside the monitor.
+/// The monitor the top-left corner of a window with `facts` lies on. A corner is on a monitor when its pixel position
+/// at that monitor's scale is inside the monitor.
+pub(super) fn monitor_of(ctx: &Context, facts: &viewports::Facts) -> Option<Monitor> {
+    let corner = facts.outer.or(facts.inner)?.min;
+    monitors(ctx).into_iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale))
+}
+
+/// The scale of a window with `facts`: the platform's report, else the scale of its monitor ([`monitor_of`]).
 pub(super) fn scale_of(ctx: &Context, facts: &viewports::Facts) -> Option<f32> {
-    facts.native_scale.or_else(|| {
-        let corner = facts.outer.or(facts.inner)?.min;
-        monitors(ctx).iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale)).map(|monitor| monitor.scale)
-    })
+    facts.native_scale.or_else(|| monitor_of(ctx, facts).map(|monitor| monitor.scale))
 }
 
 /// Records the pointer of the viewport a drag runs in, `local` in that viewport's coordinates, as a desktop
@@ -462,6 +503,13 @@ pub(crate) fn note_source_pointer(ctx: &Context, viewport: ViewportId, local: Op
 
 /// Records the desktop pointer of a move the app runs of `viewport`'s window: the pressed point of the window where the
 /// move last put it. `None` once the move ends.
+/// The system's pointer in desktop points as the pass began, `None` where the platform does not tell it. Unlike
+/// [`WindowHost::desktop_pointer`] it never falls back to a drag's own pointer, so a window moved after it does not
+/// feed its own place back into the move.
+pub(crate) fn system_pointer(ctx: &Context) -> Option<Pos2> {
+    shared(ctx, |shared| shared.system_pointer)
+}
+
 pub(crate) fn note_moved_pointer(ctx: &Context, viewport: ViewportId, desktop: Option<Pos2>) {
     PerViewport::<Record>::with(ctx, viewport, |record| record.moved_pointer = desktop);
 }

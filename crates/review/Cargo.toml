@@ -17,11 +17,16 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The review widgets (`craft_review::ui`).
+<<<<<<< HEAD
 ui = ["dep:craft-keymap", "dep:craft-ui", "dep:craft-host", "dep:craft-theme", "dep:egui"]
+=======
+ui = ["dep:craft-keymap", "dep:craft-pages", "craft-pages/ui", "dep:craft-ui", "dep:craft-host", "dep:craft-theme", "dep:egui", "dep:image"]
+>>>>>>> origin/next
 # The stories and the integration tests (`tests/it`).
-screen-testing = ["ui", "craft-ui/testing"]
+screen-testing = ["ui", "craft-ui/testing", "craft-pages/screen-testing"]
 
 [dependencies]
 # Saved signature images are stored as base64 PNG text.
@@ -30,6 +35,7 @@ craft-behavior = { workspace = true }
 craft-host = { workspace = true, optional = true, features = ["ui"] }
 craft-i18n = { workspace = true }
 craft-keymap = { workspace = true, optional = true }
+craft-pages = { workspace = true, optional = true }
 craft-theme = { workspace = true, optional = true }
 craft-ui = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
@@ -38,6 +44,6 @@ kurbo = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

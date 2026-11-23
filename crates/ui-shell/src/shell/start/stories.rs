@@ -1,12 +1,17 @@
 //! Stories of `StartScreen`.
 
+<<<<<<< HEAD
 use super::{FolderListing, PinnedFile, PinnedFolder, StartLink, StartPlace, StartScreen};
 use crate::buttons::Button;
 use crate::contract::{Bind, Props as _, Show as _};
 use crate::notices::Notice;
+=======
+use super::{StartLayout, StartLink, StartScreen};
+use crate::contract::Bind;
+>>>>>>> origin/next
 use crate::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::runtime::env::Label;
-use crate::shell::{RecentFile, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
+use crate::shell::{RecentFile, RecentList, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use craft_theme::variant::Tone;
@@ -113,9 +118,9 @@ fn screen(
     templates: &[Template],
     extras: Extras<'_>,
 ) -> StoryOutput {
-    let mut choice = data.value("choice", choice).clone();
+    let (choice, choice_at) = data.value_at("choice", choice);
     let thumbnails = Thumbnails::<ThumbKey>::in_context(ui.ctx(), "start-stories", ThumbnailOptions::new());
-    let mut start = StartScreen::new(Bind::bound(&mut choice.view), Bind::bound(&mut choice.sort), files)
+    let mut start = StartScreen::new(choice_at.bind(&mut choice.view), choice_at.bind(&mut choice.sort), files)
         .pinned(pinned)
         .templates(templates)
         .now(NOW)
@@ -127,6 +132,7 @@ fn screen(
     if let Some(hint) = extras.drop_hint {
         start = start.drop_hint(Label::from(hint.to_owned()));
     }
+<<<<<<< HEAD
     if extras.host_sections {
         start = start
             .section(StartPlace::BeforeRecent, |ui, _| {
@@ -139,6 +145,9 @@ fn screen(
     let shown = start.show(ui).into();
     *data.value("choice", Choice::default()) = choice;
     shown
+=======
+    start.show(ui).into()
+>>>>>>> origin/next
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
@@ -165,6 +174,32 @@ fn start_screen_list_sorted_by_name(ui: &mut Ui, data: &mut StoryData) -> StoryO
 fn start_screen_without_files(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let extras = Extras { drop_hint: Some("Drop a file here or click to open one"), ..Extras::default() };
     screen(ui, data, Choice::default(), &[], &[], &picture_templates(), extras)
+}
+
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_greeting(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let (files, templates) = (plain_files(), plain_templates());
+    let (mut view, mut sort) = (RecentView::default(), RecentSort::default());
+    StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files)
+        .templates(&templates)
+        .now(NOW)
+        .layout(StartLayout::Greeting)
+        .title("Good afternoon")
+        .more_templates("More templates")
+        .show(ui)
+        .into()
+}
+
+#[story(RecentList<'static>, covers = [], drive = Drive::Never)]
+fn recent_list(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let files = plain_files();
+    RecentList::new(&files).now(Some(NOW)).empty("No recent files").show(ui).into()
+}
+
+/// No recent files: the muted line under the heading, at the reading start.
+#[story(RecentList<'static>, covers = [], drive = Drive::Never)]
+fn recent_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    RecentList::new(&[]).empty("Documents you open will show up here.").show(ui).into()
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]

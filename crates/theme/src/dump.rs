@@ -6,10 +6,10 @@
 use std::fmt::Write as _;
 
 use crate::{
-    BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
-    HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet,
-    RailSizes, RampSizes, Rgba, RowSizes, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSamples,
-    ThumbSizes, Tokens, TypeStyle, TypeTokens, WellShape, WindowSizes,
+    BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps, GripMark,
+    GripShape, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, Pads, PaneSizes, PlotSizes, RadiusSet,
+    RailSizes, RampSizes, Rgba, RowSizes, ShapeTokens, SizeTokens, SpaceTokens, StrokeTokens, ThumbSamples, ThumbSizes, Tokens, TypeStyle,
+    TypeTokens, WellShape, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -66,7 +66,7 @@ fn edge(e: Edge) -> String {
 }
 
 fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
-    let ShapeTokens { radius, edge: e, knob, wells } = shape;
+    let ShapeTokens { radius, edge: e, knob, wells, grip } = shape;
     let RadiusSet { sm, control, surface, window, panel, button, pill } = radius;
     for (k, v) in [("sm", sm), ("control", control), ("surface", surface), ("window", window), ("panel", panel), ("button", button), ("pill", pill)] {
         out.line(&format!("shape.radius.{k}"), len(*v));
@@ -75,6 +75,12 @@ fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
 
     out.line("shape.knob", if *knob == KnobShape::Round { "round" } else { "tab" });
     out.line("shape.wells", if *wells == WellShape::Square { "square" } else { "round" });
+    let GripShape { mark, count, length, width, gap } = grip;
+    out.line("shape.grip.mark", if *mark == GripMark::Ticks { "ticks" } else { "dots" });
+    out.line("shape.grip.count", count.to_string());
+    for (k, v) in [("length", length), ("width", width), ("gap", gap)] {
+        out.line(&format!("shape.grip.{k}"), len(*v));
+    }
 }
 
 fn stroke_lines(out: &mut Lines, stroke: &StrokeTokens) {
@@ -119,7 +125,6 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         bar,
         panel_header,
         popup_min,
-        scroll_fade,
         thumb: thumbs,
         handle,
         hit,
@@ -133,11 +138,8 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
         float,
         window,
         pane,
-        ruler,
         dock,
-        notice,
         dialog,
-        story,
     } = size;
     let ControlSizes { sm, md } = control;
     out.line("size.control.sm", len(*sm));
@@ -157,7 +159,6 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     }
     out.line("size.panel_header", len(*panel_header));
     out.line("size.popup_min", len(*popup_min));
-    out.line("size.scroll_fade", len(*scroll_fade));
     let ThumbSizes { sm, md, lg, card, sample } = thumbs;
     out.line("size.thumb.sm", len(*sm));
     out.line("size.thumb.md", len(*md));
@@ -201,23 +202,13 @@ fn size_lines(out: &mut Lines, size: &SizeTokens) {
     out.line("size.window.cascade", len(*cascade));
     let PaneSizes { least } = pane;
     out.line("size.pane.least", len(*least));
-    let RulerSizes { tick } = ruler;
-    let RulerTickSizes { mid, minor } = tick;
-    out.line("size.ruler.tick.mid", len(*mid));
-    out.line("size.ruler.tick.minor", len(*minor));
     let DockColumnSizes { column } = dock;
     out.line("size.dock.column", len(*column));
-    let NoticeSizes { width } = notice;
-    out.line("size.notice.width", len(*width));
     let DialogSizes { least, wrap, button, side_button } = dialog;
     out.line("size.dialog.least", len(*least));
     out.line("size.dialog.wrap", len(*wrap));
     out.line("size.dialog.button", len(*button));
     out.line("size.dialog.side_button", len(*side_button));
-    let StorySizes { height, width_min, width_max } = story;
-    out.line("size.story.height", len(*height));
-    out.line("size.story.width_min", len(*width_min));
-    out.line("size.story.width_max", len(*width_max));
 }
 
 fn slot(s: FontSlot) -> &'static str {
@@ -269,7 +260,9 @@ fn easing(e: Easing) -> &'static str {
 }
 
 fn motion_lines(out: &mut Lines, m: &MotionTokens) {
-    let MotionTokens { hover, open, r#move, caret, outline, reduced } = m;
+    // PLAN: `motion.slide` is not dumped: a dump line changes every golden file under `tests/dumps/tokens`, which need
+    // regenerating with the line `out.line("motion.slide", slide)` added below; owner: the lead (a blessed rerun).
+    let MotionTokens { hover, open, r#move, caret, outline, slide: _, reduced } = m;
     for (k, motion) in [("hover", hover), ("open", open), ("move", r#move), ("caret", caret), ("outline", outline)] {
         let Motion { millis, easing: e } = motion;
         out.line(&format!("motion.{k}.millis"), millis);

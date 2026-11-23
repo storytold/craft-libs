@@ -5,8 +5,8 @@
 mod gesture;
 mod paint;
 mod shield;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::words::CanvasWords;
 use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space, context_click, readout};
@@ -167,7 +167,8 @@ pub struct CropOverlay<'a> {
     #[prop(flag)]
     straighten: bool,
     /// The area the frame may not leave, in document units. An image-mode turn moves or shrinks the frame to keep it
-    /// inside (Command keeps it as it was at the press).
+    /// inside (Command keeps it as it was at the press). An edge or corner drag of a document crop may still take it
+    /// past them: the crop grows the canvas.
     #[prop]
     bounds: Option<DocRect>,
     /// Image mode: the frame stays upright on screen and a move or turn moves or turns the view instead.
@@ -184,6 +185,7 @@ pub struct CropOverlay<'a> {
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
+<<<<<<< HEAD
     /// What a press outside the frame does: turns it, applies the crop, or draws a new frame.
     #[prop]
     outside: CropOutside,
@@ -210,6 +212,34 @@ pub enum CropOutside {
     Apply,
     /// The press draws a new frame.
     NewFrame,
+=======
+    /// What the crop is bounded by: the document, or one placed picture's source.
+    #[prop]
+    scope: CropScope,
+    report: Report,
+}
+
+/// What a crop is of.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum CropScope {
+    /// The document.
+    #[default]
+    Document,
+    /// One placed picture, bounded by its source.
+    #[non_exhaustive]
+    Object {
+        /// The picture's source rectangle, in document units; it bounds the drag rules.
+        source: DocRect,
+    },
+}
+
+impl CropScope {
+    /// One placed picture bounded by `source`.
+    pub const fn object(source: DocRect) -> Self {
+        CropScope::Object { source }
+    }
+>>>>>>> origin/next
 }
 
 impl<'a> CropOverlay<'a> {
@@ -230,9 +260,13 @@ impl<'a> CropOverlay<'a> {
             auto_center: false,
             fills_uncovered: false,
             hidden: false,
+<<<<<<< HEAD
             outside: CropOutside::default(),
             area: None,
             min_side: MIN_SIDE,
+=======
+            scope: CropScope::default(),
+>>>>>>> origin/next
             report: Report::default(),
         }
         .label(label)
@@ -242,16 +276,35 @@ impl<'a> CropOverlay<'a> {
     fn rules(&self, env: &EnvView<'_>) -> Rules {
         Rules {
             ratio: self.ratio.filter(|k| k.is_finite() && *k > 0.0),
-            bounds: self.bounds,
+            bounds: self.limit(),
             turn_step: self.turn_step,
             image: self.image_mode,
             auto_center: self.auto_center,
             fills_uncovered: self.fills_uncovered,
+<<<<<<< HEAD
             min_side: self.min_side,
             area: self.area,
+=======
+            resize_grows: matches!(self.scope, CropScope::Document),
+>>>>>>> origin/next
             snap: canvas_snap(env),
             os: env.shell().os,
         }
+    }
+
+    /// The area the frame may not leave: the picture's source in `Object` scope, else `bounds`. The one place that rule
+    /// lives; the drag rules, the key clamp and the default frame all read it.
+    fn limit(&self) -> Option<DocRect> {
+        match self.scope {
+            CropScope::Object { source } => Some(source),
+            _ => self.bounds,
+        }
+    }
+
+    /// Whether the frame can be turned and straightened: not in `Object` scope, where a picture's crop only resizes and
+    /// moves the frame inside its source.
+    fn turns(&self) -> bool {
+        !matches!(self.scope, CropScope::Object { .. })
     }
 
     /// Whether the crop has started: anything but the untouched default frame in image mode, or a drag that changed
@@ -268,7 +321,7 @@ impl<'a> CropOverlay<'a> {
 
     /// The frame to show: the value, or the whole document while the value is mixed.
     fn shown(&self, value: Option<&CropBox>, view: &CanvasView) -> CropBox {
-        value.copied().unwrap_or_else(|| CropBox::upright(self.bounds.unwrap_or_else(|| view.visible())))
+        value.copied().unwrap_or_else(|| CropBox::upright(self.limit().unwrap_or_else(|| view.visible())))
     }
 
     /// With [`CropOutside::Apply`], the cut-away area's corners on screen: the area, else the bounds. `None` in the
@@ -450,7 +503,7 @@ impl CropOverlay<'_> {
         }
         // Escape drops an armed Straighten first; else it discards a started crop. The untouched default frame has
         // nothing to discard and leaves Escape to the window.
-        if self.straighten && cx.intents().take(Intent::Cancel) {
+        if self.straighten && self.turns() && cx.intents().take(Intent::Cancel) {
             self.report.straighten_ended = true;
         } else if self.started(None) && cx.intents().take(Intent::Cancel) {
             self.report.discard = true;
@@ -478,7 +531,7 @@ impl CropOverlay<'_> {
             next = Some(swapped);
         }
         let Some(next) = next.filter(CropBox::is_finite) else { return };
-        let next = match self.bounds {
+        let next = match self.limit() {
             Some(bounds) => next.within(bounds, next.rect.size() != frame.rect.size(), self.ratio.is_some()).unwrap_or(*frame),
             None => next,
         };
@@ -595,7 +648,7 @@ impl Component for CropOverlay<'_> {
         let space = space_of(&cx.env, rect);
         let view = space.view;
         let frame = self.shown(cx.value(), &view);
-        if self.straighten {
+        if self.straighten && self.turns() {
             cx.part(STRAIGHTEN, HitShape::Rect(rect))
                 .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, u8::MAX))
@@ -652,6 +705,7 @@ impl Component for CropOverlay<'_> {
             }
             let _ = declared;
         }
+<<<<<<< HEAD
         let outside = HitPriority::new(HitLevel::Background, u8::MAX);
         match self.outside {
             CropOutside::Turn => {
@@ -681,6 +735,14 @@ impl Component for CropOverlay<'_> {
                     .cursor(CursorIcon::Crosshair)
                     .pointer_only("the options bar's size fields set the frame");
             }
+=======
+        // Outside a picture's frame there is no turn part, so a press there reaches the picture beneath.
+        if self.turns() {
+            cx.part(TURN, HitShape::Rect(rect))
+                .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
+                .priority(HitPriority::new(HitLevel::Background, u8::MAX))
+                .pointer_only("the options bar's angle field sets the frame's angle");
+>>>>>>> origin/next
         }
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
     }

@@ -49,7 +49,7 @@ impl ListRow<'_> {
                 }
                 TrailingItem::Hosted(hosted) => {
                     if let Some(item) = hosted.item.take() {
-                        let height = hosted.size.map_or(cx.style.sizes.row, |size| size.ideal.y.min(cx.style.sizes.row));
+                        let height = hosted.size.map_or(slot.height(), |size| size.ideal.y.min(slot.height()));
                         item.show(ui, field_key(at), Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
                     }
                 }
@@ -97,7 +97,7 @@ impl ListRow<'_> {
                 ToggleFace::Icons { on, off } => {
                     let shown = match toggle.state {
                         ToggleState::On | ToggleState::Mixed => Some(on),
-                        ToggleState::Off if toggle.always_visible || cx.part(part).hovered => Some(off),
+                        ToggleState::Off if toggle.shows_off(cx.part(part).hovered) => Some(off),
                         ToggleState::Off => None,
                     };
                     if let Some(id) = shown {
@@ -186,6 +186,7 @@ impl ListRow<'_> {
         if !self.renaming && !self.label_has_field() {
             let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
             let look = if muted { &style.cell_muted } else { &style.text };
+<<<<<<< HEAD
             let ink = hue.unwrap_or_else(|| cx.resolve(&look.color));
             let width = (label.width() - beside).max(0.0);
             match (self.document_run(cx.resolved.label, ink.egui()), document, &self.document) {
@@ -203,6 +204,10 @@ impl ListRow<'_> {
                     draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(width, sizes.label_line)), &run);
                 }
             }
+=======
+            let run = self.label_run(cx.resolved.label).role(look.role).color(cx.resolve(&look.color)).elide();
+            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line)), &run);
+>>>>>>> origin/next
         }
         top += sizes.label_line;
         if let Some(detail) = self.detail.as_ref().filter(|_| !self.heading) {
@@ -219,6 +224,16 @@ impl ListRow<'_> {
 }
 
 impl ListRow<'_> {
+    /// The label as a run without its role and colour: its styled spans (`label_spans`) when it has them, else `label`
+    /// as one span, every span italic under `italic`.
+    pub(super) fn label_run<'s>(&'s self, label: &'s str) -> TextRun<'s> {
+        let mut spans: Vec<Span<'s>> = if self.label_spans.is_empty() { vec![Span::new(label)] } else { self.label_spans.clone() };
+        if self.italic {
+            spans.iter_mut().for_each(|span| span.italic = true);
+        }
+        TextRun::spans(spans)
+    }
+
     /// The text cells, inset and centred on the row's height, each aligned as its column says.
     /// The text cell `at` as a run in its column's look, without its colour.
     pub(super) fn cell_run(&self, style: &ListRowStyle, at: usize) -> TextRun<'_> {

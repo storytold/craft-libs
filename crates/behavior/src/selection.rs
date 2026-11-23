@@ -193,7 +193,7 @@ pub trait SelectionModel<K>: Value + Default {
 }
 
 /// A set of keys with a lead and an anchor.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 #[non_exhaustive]
 pub struct Selection<K> {
     /// The selected keys.

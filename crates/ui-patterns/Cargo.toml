@@ -15,6 +15,7 @@ test = false
 workspace = true
 
 [features]
+suite = ["testing", "craft-ui-panels/suite"]
 default = []
 # `craft_ui::testing`.
 testing = ["craft-ui-panels/testing"]
@@ -40,10 +41,10 @@ craft-pdf = { path = "../pdf", version = "=0.1.0", default-features = false }
 zeroize = "1.9"
 
 [dev-dependencies]
-craft-ui-patterns = { path = ".", features = ["testing"] }
+craft-ui-patterns = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 serde = { workspace = true }
 

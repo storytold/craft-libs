@@ -28,11 +28,13 @@ pub struct BodyCx<'a> {
     gate: Option<&'a mut bool>,
     gate_mixed: bool,
     close: Option<CloseReason>,
+    exiting: bool,
     field_message: Option<(Message, craft_theme::variant::Tone)>,
     owner: Option<BodyOwner<'a>>,
 }
 
 impl<'a> BodyCx<'a> {
+    #[allow(clippy::too_many_arguments, reason = "one argument per field the region's context starts from")]
     pub(crate) fn new(
         id: Id,
         env: EnvView<'a>,
@@ -41,9 +43,12 @@ impl<'a> BodyCx<'a> {
         memory: &'a mut MemoryStage,
         open: &'a mut bool,
         gate: Option<&'a mut bool>,
+        shared: Option<RegionShare<'a>>,
     ) -> Self {
         memory.claim(id);
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed: false, close: None, field_message: None, owner: None }
+        let (gate_mixed, field_message, owner) =
+            shared.map_or((false, None, None), |shared| (shared.gate_mixed, shared.field_message, Some(shared.owner)));
+        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, exiting: false, field_message, owner }
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set: the opener
@@ -61,14 +66,15 @@ impl<'a> BodyCx<'a> {
         self.env.host()?.files().take_answer(ticket)
     }
 
-    pub(crate) fn with_gate_mixed(mut self, mixed: bool) -> Self {
-        self.gate_mixed = mixed;
+    pub(crate) fn with_exiting(mut self, exiting: bool) -> Self {
+        self.exiting = exiting;
         self
     }
 
-    pub(crate) fn with_field_message(mut self, message: Option<(Message, craft_theme::variant::Tone)>) -> Self {
-        self.field_message = message;
-        self
+    /// Whether the container has closed and its body only stays on screen while it fades out. `is_open` reads true
+    /// then; a region that belongs to the open container (a companion layer) is not shown.
+    pub fn is_exiting(&self) -> bool {
+        self.exiting
     }
 
     /// The validity message of the first control in the container's label scope, recorded last frame, with the
@@ -147,11 +153,23 @@ impl<'a> BodyCx<'a> {
             Some(&super::Under::new(under.0, under.1)),
         );
         let show = Box::new(move |ui: &mut Ui, rect: Rect| {
-            let _ =
-                crate::contract::run::show_leaf(crate::contract::Props::id(content, content_id), ui, crate::contract::run::ShowAt::Rect(rect), None);
+            let _ = crate::contract::run::show_leaf(
+                &mut Some(crate::contract::Props::id(content, content_id)),
+                ui,
+                crate::contract::run::ShowAt::Rect(rect),
+                None,
+            );
         });
         label::flow_leaf(ui, (id, self.resolved.id), under, label, side, child, Some(label::Trailing { size, show }))
     }
+}
+
+/// What a container's regions share in their `BodyCx`: whether its gate is mixed (the header's only), its field's
+/// message and the container that owns them.
+pub(crate) struct RegionShare<'a> {
+    pub gate_mixed: bool,
+    pub field_message: Option<(Message, craft_theme::variant::Tone)>,
+    pub owner: BodyOwner<'a>,
 }
 
 /// What a container's body reads of its container: the style step 2 resolved for this pass, and the body gap.
@@ -169,11 +187,6 @@ impl<'a> BodyOwner<'a> {
 }
 
 impl<'a> BodyCx<'a> {
-    pub(crate) fn with_owner(mut self, owner: BodyOwner<'a>) -> Self {
-        self.owner = Some(owner);
-        self
-    }
-
     /// The style of the container `C` whose body this is, as step 2 resolved it for this pass: the one way a body
     /// reads what its container's style holds (a dock root's docking sizes). `None` when the body's container has
     /// another style type, and for a body with no container: a popup's body or a collection's empty state.
@@ -190,6 +203,12 @@ impl<'a> BodyCx<'a> {
 }
 
 impl BodyCx<'_> {
+    /// The value this body derives from `key`: kept while `key` is unchanged, else built by `build`
+    /// ([`runtime::derived`](crate::runtime::derived::derived), under the body's id).
+    pub fn derived<K: crate::contract::MemoProps, V: Send + Sync + 'static>(&self, key: &K, build: impl FnOnce() -> V) -> std::sync::Arc<V> {
+        crate::runtime::derived::derived(self.memory.ctx(), self.id, key, build)
+    }
+
     /// Takes the Escape of this pass that no component took: a field that clears on Escape passes it on once it
     /// is empty. `true` once per Escape; the enclosing scope (a dialog, a popover) then does not act on it.
     /// Components shown earlier in the body have run by the time the body asks.

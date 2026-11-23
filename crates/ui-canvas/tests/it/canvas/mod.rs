@@ -1,35 +1,41 @@
 //! `Canvas` (20.6): a press away from every canvas control's parts reaches the tool.
 
-mod crop;
+pub(crate) mod crop;
 
+<<<<<<< HEAD
 mod modal_wheel;
 
 mod navigate;
+=======
+pub(crate) mod editor;
+>>>>>>> origin/next
 
-mod navigator;
+pub(crate) mod navigate;
 
-mod opacity_keys;
+pub(crate) mod navigator;
 
-mod press_focus;
+pub(crate) mod opacity_keys;
 
-mod pasteboard;
+pub(crate) mod press_focus;
 
-mod raster;
+pub(crate) mod pasteboard;
 
-mod rulers;
+pub(crate) mod raster;
 
-mod scrollbars;
+pub(crate) mod rulers;
 
-mod snap;
+pub(crate) mod scrollbars;
 
-mod split;
+pub(crate) mod snap;
 
-mod story_canvas;
+pub(crate) mod split;
 
-mod tool;
+pub(crate) mod story_canvas;
 
-mod tool_keys;
+pub(crate) mod tool;
 
-mod tool_story;
+pub(crate) mod tool_keys;
 
-mod tools;
+pub(crate) mod tool_story;
+
+pub(crate) mod tools;

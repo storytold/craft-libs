@@ -18,6 +18,7 @@ testing = []
 [dependencies]
 craft-atomic = { workspace = true }
 craft-host = { workspace = true }
+log = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
@@ -27,10 +28,21 @@ web-time = "1.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7"
 
+<<<<<<< HEAD
 # `BrowserFiles`: the web build's settings in localStorage.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["Window", "Storage"] }
+=======
+# `LocalStorageFiles`: the browser's localStorage.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Storage", "Window"] }
+>>>>>>> origin/next
 
 [dev-dependencies]
 craft-settings = { path = ".", features = ["testing"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

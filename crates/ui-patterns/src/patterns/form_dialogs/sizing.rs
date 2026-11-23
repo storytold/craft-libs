@@ -1,14 +1,13 @@
 //! The size dialogs `ImageSize` and `CanvasSize`: the rows, the readouts and the dialog around them that the two share,
 //! and the `Resample` and `CanvasExtension` choices.
 
+use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
-use super::{FormDialog, ResetFooter, ResetPick};
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
-use crate::dialog::{DialogResult, FieldRefusal};
+use crate::contract::{Bind, Bracket, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
+use crate::dialog::{DialogResult, FieldRefusal, HeldAnswer};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
-use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::UnitSelect;
 use crate::runtime::env::{Env, Label, UnitKind, Units};
 use crate::runtime::overlay::CloseReason;
@@ -20,10 +19,10 @@ use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-mod canvas;
-mod image;
-#[cfg(feature = "testing")]
-mod stories;
+pub(crate) mod canvas;
+pub(crate) mod image;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use canvas::{CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize};
 pub use image::{HostedImageSize, ImageSize, ImageSizeOutput, ImageSizeResult, ImageSizeValues};
@@ -139,11 +138,11 @@ impl Resample {
         }
     }
 
-    /// The list entries of the methods in `allowed`, in the order of [`Resample::ALL`]; all of them when `allowed` names
-    /// none.
+    /// The list entries of the methods in `allowed`, in the order given; all of them in the order of
+    /// [`Resample::ALL`] when `allowed` names none.
     pub fn entries(words: &SizingWords, allowed: &[Resample]) -> Vec<Entry<Resample>> {
-        let listed = |method: &Resample| allowed.is_empty() || allowed.contains(method);
-        Resample::ALL.iter().copied().filter(listed).map(|method| Entry::new(method, method.label(words))).collect()
+        let methods = if allowed.is_empty() { &Resample::ALL[..] } else { allowed };
+        methods.iter().map(|&method| Entry::new(method, method.label(words))).collect()
     }
 }
 
@@ -213,8 +212,6 @@ pub struct SizingOutput<R> {
     pub closed: Option<CloseReason>,
     /// The answer, the pass the dialog closed as OK.
     pub result: Option<R>,
-    /// The answer OK filed in this pass for the host to judge, from a dialog that holds its OK ([`Hold`]).
-    pub held: Option<R>,
 }
 
 impl<R> SizingOutput<R> {
@@ -285,60 +282,30 @@ fn set_size_json(size: &mut LinkedSize, field: &str, value: &serde_json::Value) 
     })
 }
 
-/// The held OK of a hosted size dialog, as `ParamDialog` holds its own: with `on`, OK files its answer for the host
-/// instead of closing; `waiting` keeps OK disabled until the host answers; `finish` closes the dialog with the answer
-/// the host accepted; `refusal` is the host's reason, shown under the rows until a value changes.
-pub(super) struct Hold<S> {
-    pub(super) on: bool,
-    pub(super) finish: bool,
-    pub(super) waiting: bool,
-    pub(super) refusal: Option<(Label, S)>,
-}
-
-impl<S> Default for Hold<S> {
-    fn default() -> Self {
-        Hold { on: false, finish: false, waiting: false, refusal: None }
-    }
-}
-
 /// A size dialog on `FormDialog`: `rows` edits the values and `answer` makes the result from them at OK. OK, Cancel
-/// and Alt-for-Reset follow `ParamDialog`; OK is refused while the pixel size is empty or over the limit.
+/// and Alt-for-Reset follow `ParamDialog`; OK is refused while the pixel size is empty or over the limit. With `held`,
+/// OK files the values there for the host and the form shows the host's refusal ([`FormDialog::held`]).
 pub(super) fn show_form<'a, S: SizeForm + Default, R>(
     ui: &mut Ui,
     title: Label,
     open: Option<Bind<'a, bool>>,
     values: Bind<'a, S>,
-    hold: Hold<S>,
+    held: Option<&'a mut HeldAnswer<S>>,
     mut rows: impl FnMut(&mut Ui, &mut S),
     answer: impl Fn(&S) -> R,
 ) -> SizingOutput<R> {
-    // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
-    let footer = ResetFooter::new(ui, None, true);
-    let mut dialog = FormDialog::new(title.clone(), values).outer_gesture(true).accept_stays_open(hold.on);
-    if hold.waiting {
-        dialog = dialog.ok_enabled(false);
+    let mut dialog = FormDialog::new(title.clone(), values).outer_gesture(true);
+    if let Some(held) = held {
+        dialog = dialog.held(held);
     }
     if let Some(open) = open {
         dialog = dialog.opened(open);
     }
-    let mut latest: Option<S> = None;
-    let shown = dialog.show(ui, |ui, form, state| {
-        // A measuring run closes nothing: the real run of the pass makes the close.
-        if hold.finish && !crate::runtime::measure::active(ui.ctx()) {
-            form.request_close_as(CloseReason::Activated);
-        }
+    let shown = dialog.show(ui, |ui, _, state| {
         FieldGroup::new(title.clone()).show(ui, |ui, _| rows(ui, state));
-        if let Some((reason, _)) = hold.refusal.as_ref().filter(|(_, refused)| *refused == *state) {
-            Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
-        }
-        latest = Some(state.clone());
         size_valid(state.pixels())
     });
-    let held = match (footer.pick(shown.picked), latest) {
-        (Some(ResetPick::Accept), Some(state)) if hold.on && size_valid(state.pixels()) => Some(answer(&state)),
-        _ => None,
-    };
-    SizingOutput { response: shown.response, closed: shown.closed, result: shown.accepted.map(|state| answer(&state)), held }
+    SizingOutput { response: shown.response, closed: shown.closed, result: shown.accepted.map(|state| answer(&state)) }
 }
 
 /// The rows both dialogs show, with the words and units they need.
@@ -352,9 +319,13 @@ pub(super) struct Kit {
     resolutions: Vec<Entry<UnitKind>>,
 }
 
-/// The units the width and height are shown in.
+/// The length units in Canvas Size order.
 const LENGTH_UNITS: [UnitKind; 7] =
     [UnitKind::Pixels, UnitKind::Percent, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
+
+/// Image Size lists Percent first in both dimension menus.
+const IMAGE_LENGTH_UNITS: [UnitKind; 7] =
+    [UnitKind::Percent, UnitKind::Pixels, UnitKind::Inches, UnitKind::Centimetres, UnitKind::Millimetres, UnitKind::Points, UnitKind::Picas];
 
 /// The units the resolution is shown in.
 const RESOLUTION_UNITS: [UnitKind; 2] = [UnitKind::PixelsPerInch, UnitKind::PixelsPerCentimetre];
@@ -368,11 +339,21 @@ enum Dimension {
 }
 
 impl Kit {
+    /// The rows of Image Size.
     pub(super) fn new(ui: &Ui) -> Self {
+        Self::with_length_order(ui, &IMAGE_LENGTH_UNITS)
+    }
+
+    /// The rows of Canvas Size.
+    pub(super) fn for_canvas(ui: &Ui) -> Self {
+        Self::with_length_order(ui, &LENGTH_UNITS)
+    }
+
+    fn with_length_order(ui: &Ui, length_order: &[UnitKind]) -> Self {
         let env = Env::of(ui);
         let units = env.units();
         let entries = |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, units.name(*kind))).collect() };
-        let lengths = entries(&LENGTH_UNITS);
+        let lengths = entries(length_order);
         let mut widths = lengths.clone();
         widths.extend(entries(&[UnitKind::Columns]));
         Kit {
@@ -431,10 +412,11 @@ impl Kit {
         }
     }
 
-    /// The width and height rows, with the chain beside them when the model draws one.
+    /// The width and height rows, with the chain bracketed to them when the model draws one.
     pub(super) fn sides(&self, ui: &mut Ui, size: &mut LinkedSize) {
         let chain = size.has_chain();
-        Row::new().show(ui, |ui, _| {
+        let row = if chain { Row::new().bracket(if size.is_linked() { Bracket::Linked } else { Bracket::Unlinked }) } else { Row::new() };
+        row.show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 self.row(ui, size, Dimension::Width);
                 self.row(ui, size, Dimension::Height);
@@ -484,6 +466,7 @@ impl Kit {
                 .range(range.clone())
                 .unit_label(unit_name.clone())
                 .number_enabled(editable)
+                .sizing(Sizing::Content)
                 .id_salt("field")
                 .show(ui);
             if let Some(number) = shown.edit.value().copied().flatten() {

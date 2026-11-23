@@ -30,13 +30,13 @@ match store.update(&base, SelectionChange::pick_theme(&picked)) {
 | Item | What it is |
 |---|---|
 | `SuiteDir` | `CRAFT_SUITE_DIR` (empty: in memory), in memory for isolated apps, else `ArtCraft/themes` in the local config folder |
-| `Store` | `load_selection`, `update`, `import`, `delete`, `export`, `library`, `load_theme`, `theme` (a `resolve` lookup) |
+| `Store` | `load_selection`, `update`, `import`, `save_theme`, `delete`, `export`, `library`, `load_theme`, `theme` (a `resolve` lookup) |
 | `SelectionChange` | the fields the user changed (`theme_light`, `theme_dark`, `mode`, `contrast`, `size`, `text_size`); only these are written, each merged on its own |
 | `Accepted` | `suite` (craft-theme's `SuiteChoice`: each field `None` until a user chooses it), `revision`, `library_revision`; serde, for the copy apps keep in their preferences |
-| `StoreError` | `Busy`, `Conflict { disk }`, `IdExists`, `InUse`, … ; nothing on disk changed |
+| `StoreError` | `Busy`, `Conflict { disk }`, `Changed` (a library file another app saved over), `IdExists`, `InUse`, … ; nothing on disk changed |
 | `Problem` | damaged, too new or unreadable files; the store keeps its last accepted state |
 | `ThemeRecord`, `ThemeEntry`, `format` | a parsed user theme file (`craft-design-theme` v1, craft-theme's `format`) with its stored bytes, unknown keys included; the library skips files in another format, such as the pilot's `craft-theme` |
-| `SuiteClient` | what an app calls: per-frame `sync`, the optimistic `shown` choice, `change`, conflict and failure notices with `apply_mine` and `retry`, the `theme` lookup, `preview` for any theme's picker card |
+| `SuiteClient` | what an app calls: per-frame `sync`, the optimistic `shown` choice, `change`, conflict and failure notices with `apply_mine` and `retry`, the `theme` lookup, `preview` for any theme's picker card, `save_theme` and `take_saved` for a theme editor |
 | `SuiteWatch`, `Snapshot`, `Op`, `OpOutput` | the store on a worker thread: snapshots by generation, queued operations with results |
 | `ui` (feature `ui`) | the Preferences appearance page `AppearancePage` (modes, light and dark theme rows of `ThemeChip`s with favorites, Size, UI Font Size, Contrast and Motion, where an app leaves out favorites and the rows it does not keep; tokens `theme_chip.*`); feature `screen-testing` adds egui_kittest input tests of the page |
 | `FileStamp`, `library_files`, `selection_stamp`, `theme_stamp`, `parse_counts` | cheap change checks for a watcher |

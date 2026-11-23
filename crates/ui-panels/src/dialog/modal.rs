@@ -6,9 +6,10 @@ use crate::contract::Remember as _;
 use crate::contract::overlay::{FloatPlace, OverlayFit, Place};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, FooterPlace, FooterRegion, HeaderRegion, Mount, Overlay, Pad,
-    Props as _, Role, SaveKey, ShowContainer as _,
+    Props as _, Role, SaveKey, Show as _, ShowContainer as _,
 };
 use crate::edit::outer::{self, OuterEnd};
+use crate::notices::{Notice, NoticeLayout};
 use crate::runtime::access::Access;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
@@ -20,7 +21,8 @@ use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{CancelRule, Metrics, Sense};
 use craft_host::target::WindowState;
-use egui::{Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
+use craft_theme::variant::Tone;
+use egui::{Align2, Context, Id, Pos2, Rangef, Rect, Response, Ui, ViewportId};
 
 /// The style of a dialog: the surface and padding come from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
@@ -36,6 +38,24 @@ type OnPickFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) + 'a>;
 
 type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 
+type RefusalFn<'a> = Box<dyn FnMut() -> Option<Label> + 'a>;
+
+/// Where a dialog's buttons stand. Wherever they stand, the dialog shows them: their roles, the platform's order,
+/// Enter and Escape, access keys, the close guard and `on_pick` are the dialog's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ButtonPlace {
+    /// Across the dialog's foot, in a row at the end edge.
+    #[default]
+    Foot,
+    /// In a column at the end edge, beside the whole body and at its top: `Accept`, `Cancel`, then the others, each as
+    /// wide as the widest, with the footer content under them.
+    Side,
+    /// In a column at the cell the body keeps for them with a `FooterSlot`, as wide as the cell: the Color Picker's
+    /// buttons above its second field group. The body shows exactly one slot.
+    Body,
+}
+
 /// A dialog on its own layer. It opens in the middle of the window, moves by its title band, scrolls its body when the
 /// window is smaller and traps the keyboard focus while it is open.
 ///
@@ -43,7 +63,9 @@ type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 ///   session slot that starts open. The close action, Escape and `BodyCx::request_close` write `false`.
 /// - Placement and size: saved across runs under [`remember`](Dialog::remember); a resizable dialog also saves the
 ///   size the user left it at.
-/// - A modal dialog blocks input below it in every window; a press outside does nothing.
+/// - A modal dialog blocks input below it in every window; a press outside nudges it (a short damped shake, or two
+///   accent edge flashes under reduced motion) and changes nothing else.
+/// - A refusal ([`refusal`](Dialog::refusal)) shows as a bad-tone notice under the body, above the footer.
 /// - Escape closes a modal dialog, and a modeless one with a footer; a modeless tool window without one ignores it.
 /// - Focus starts on the body's first text or number field, else on the default button, else nowhere.
 /// - A [`title_note`](Dialog::title_note) runs on after the title in muted text ("· 3 comments selected"), and is
@@ -79,6 +101,7 @@ pub struct Dialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
+<<<<<<< HEAD
     /// A muted note after the title.
     #[prop(into)]
     title_note: Option<Label>,
@@ -90,11 +113,20 @@ pub struct Dialog<'a> {
     /// OK and Cancel pair.
     #[prop]
     close_unchanged: bool,
+=======
+    /// Where the buttons stand.
+    place: ButtonPlace,
+>>>>>>> origin/next
     closed: Option<CloseReason>,
     picked: Option<usize>,
     /// The body ran in this pass: the header region marks it.
     body_shown: bool,
     alert: bool,
+    /// Shows the label `reason` gives as an inline bad-tone notice in the body-end hook, above the footer: the one
+    /// display of a held answer's refusal. The closure is called in that hook in every run that shows it, after the
+    /// body ran, so a notice never trails an edit by a pass; `None` shows no notice.
+    #[prop(boxed = "FnMut() -> Option<Label> + 'a")]
+    refusal: Option<RefusalFn<'a>>,
 }
 
 impl<'a> Dialog<'a> {
@@ -126,14 +158,19 @@ impl<'a> Dialog<'a> {
             buttons: Vec::new(),
             enter: false,
             closable: true,
+<<<<<<< HEAD
             title_note: None,
             title_icon: None,
             side: false,
             close_unchanged: false,
+=======
+            place: ButtonPlace::Foot,
+>>>>>>> origin/next
             closed: None,
             picked: None,
             body_shown: false,
             alert: false,
+            refusal: None,
         }
         .label(title)
     }
@@ -193,11 +230,11 @@ impl<'a> Dialog<'a> {
         })
     }
 
-    /// Where the dialog first opens, as a screen position of its top-left corner; the middle of the window without
-    /// it. A saved placement comes first.
+    /// Where the dialog first opens, as a screen position of its `corner`; the middle of the window without it. A saved
+    /// placement comes first.
     #[must_use]
-    pub fn first_place(self, at: Pos2) -> Self {
-        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::at(at))))
+    pub fn first_place(self, at: Pos2, corner: Align2) -> Self {
+        self.overlay(|overlay| overlay.place(Place::Float(FloatPlace::corner_at(at, corner))))
     }
 
     /// Saves the placement and size under `key`, so a reopened dialog sits where the user left it.
@@ -243,6 +280,14 @@ impl<'a> Dialog<'a> {
         self
     }
 
+    /// The least width of the dialog's content from the size role `least`, in place of `size.dialog.least`: a wide
+    /// dialog (`LeastWidth::WideDialog`) whose tabs hold tables.
+    #[must_use]
+    pub fn least_width(mut self, least: crate::contract::LeastWidth) -> Self {
+        self.props = self.props.least_width(least);
+        self
+    }
+
     /// The dialog reports the alert-dialog role instead of the dialog role.
     #[must_use]
     pub(super) fn alert(mut self) -> Self {
@@ -268,8 +313,8 @@ impl<'a> Dialog<'a> {
         self.route_enter()
     }
 
-    /// The footer's content: the closure fills the start of the buttons' line (under the buttons with
-    /// [`side_buttons`](Dialog::side_buttons)), or a line of its own when there are no buttons.
+    /// The footer's content: the closure fills the start of the buttons' line (under the buttons' column with
+    /// [`ButtonPlace::Side`] and [`ButtonPlace::Body`]), or a line of its own when there are no buttons.
     #[must_use]
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_, '_>) + 'a) -> Self {
         let region = self.footer_region();
@@ -278,13 +323,11 @@ impl<'a> Dialog<'a> {
         self.overlay(|overlay| overlay)
     }
 
-    /// The footer stands in a column at the end edge, beside the whole body and at its top, instead of across the
-    /// dialog's foot: the buttons go `Accept`, `Cancel`, then the others, each as wide as the widest, and the footer
-    /// content sits under them.
+    /// Where the buttons and the footer content stand; across the foot by default.
     #[must_use]
-    pub fn side_buttons(mut self, on: bool) -> Self {
-        self.side = on;
-        self.props.end = on.then_some(SIDE_BUTTONS);
+    pub fn button_place(mut self, place: ButtonPlace) -> Self {
+        self.place = place;
+        self.props.end = (place == ButtonPlace::Side).then_some(SIDE_BUTTONS);
         if self.props.footer.is_some() {
             let region = self.footer_region();
             self.props = self.props.footer(region);
@@ -292,6 +335,7 @@ impl<'a> Dialog<'a> {
         self
     }
 
+<<<<<<< HEAD
     /// Reports from the body whether the dialog's fields differ from the ones it opened with; read by a dialog that
     /// [`close_unchanged`](Dialog::close_unchanged).
     pub fn report_changed(cx: &mut BodyCx<'_>, changed: bool) {
@@ -299,8 +343,15 @@ impl<'a> Dialog<'a> {
     }
 
     /// The footer region: in the end region's column, else across the foot.
+=======
+    /// The footer region: in the end region's column, in the body's slot, or across the foot.
+>>>>>>> origin/next
     fn footer_region(&self) -> FooterRegion {
-        if self.side { FooterRegion::new().place(FooterPlace::EndTop) } else { FOOTER }
+        match self.place {
+            ButtonPlace::Foot => FOOTER,
+            ButtonPlace::Side => FooterRegion::new().place(FooterPlace::EndTop),
+            ButtonPlace::Body => FooterRegion::new().place(FooterPlace::Body),
+        }
     }
 }
 
@@ -503,6 +554,13 @@ impl Container for Dialog<'_> {
         self.keep_window_draggable(ui);
     }
 
+    /// The refusal notice, under the body and above the footer: the reason is read in every run, after the body ran.
+    fn body_end(&mut self, ui: &mut Ui, _cx: &mut BodyCx<'_>) {
+        if let Some(reason) = self.refusal.as_mut().and_then(|reason| reason()) {
+            Notice::new(Tone::Bad, reason).layout(NoticeLayout::Inline).show(ui);
+        }
+    }
+
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         // An unchanged dialog has nothing to accept: one Close button answers as the Cancel button would.
         let cancel_at = self.buttons.iter().position(|button| button.role() == DialogRole::Cancel);
@@ -523,7 +581,7 @@ impl Container for Dialog<'_> {
             buttons,
             self.enter,
             frame::FooterHost { picked: &mut self.picked, guard: &mut self.guard, on_pick: &mut self.on_pick, settle: &mut self.settle },
-            self.side,
+            self.place != ButtonPlace::Foot,
         );
         if let (Some(at), Some(0)) = (close, self.picked) {
             self.picked = Some(at);

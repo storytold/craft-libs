@@ -38,8 +38,11 @@ pub mod dock;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
+<<<<<<< HEAD
 // The native client reads `REPLY_DEADLINE` without `ui`; the control channel reads the validators on every target.
 #[cfg(any(feature = "ui", not(target_arch = "wasm32")))]
+=======
+>>>>>>> origin/next
 pub mod protocol;
 #[cfg(feature = "ui")]
 pub mod screenshot;
@@ -69,16 +72,19 @@ pub use security::AutomationError;
 /// The trials this crate registers, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(all(test, feature = "screen-testing"))]
 extern crate self as craft_automation;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

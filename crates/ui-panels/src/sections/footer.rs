@@ -25,8 +25,8 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a footer bar. A bar of panel actions sits under a divider rule along its top edge, with the control
 /// padding above and under its buttons; other bars have no look of their own.
@@ -237,7 +237,7 @@ impl<P> Outcome for DropActionOutput<P> {
 }
 
 /// Whether an accepted drag is over the enclosing drop slot, which the slot's body reads to show its child enabled.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 struct Accepting(bool);
 
 impl EnvValue for Accepting {
@@ -376,10 +376,14 @@ impl FooterDrop {
 pub enum DialogRole {
     /// The default outcome: the primary look, last in the row (first on Windows).
     Accept,
-    /// An outcome that destroys something: the danger look.
+    /// An outcome that destroys something (Delete, Replace): the danger look. It proceeds, so Windows puts it with the
+    /// accepting button, before Cancel.
     Destructive,
     /// Leaves without an outcome.
     Cancel,
+    /// Another answer that closes the question: No, Don't Save, Discard. It stands with the other outcomes on macOS
+    /// and Linux and next to the accepting button on Windows.
+    Alternate,
     /// Any other outcome.
     Other,
     /// A second answer to the question the dialog asks ("Save as…" beside "Save anyway"): between Cancel and the
@@ -388,9 +392,11 @@ pub enum DialogRole {
 }
 
 impl DialogRole {
-    /// The position in the row: later roles stand nearer the end. Windows puts the accepting button first and the
-    /// others after it; macOS and Linux put it last.
+    /// The position in the row: later roles stand nearer the end. Windows puts the committing buttons first (the
+    /// accepting one, then a destructive proceed) and the answers that close the question after them, before Cancel;
+    /// macOS and Linux put the accepting button last.
     fn rank(self, windows: bool) -> u8 {
+<<<<<<< HEAD
         let rank = match self {
             DialogRole::Other => 0,
             DialogRole::Destructive => 1,
@@ -399,6 +405,19 @@ impl DialogRole {
             DialogRole::Accept => 4,
         };
         if windows { 4 - rank } else { rank }
+=======
+        match (windows, self) {
+            (false, DialogRole::Other | DialogRole::Alternate) => 0,
+            (false, DialogRole::Destructive) => 1,
+            (false, DialogRole::Cancel) => 2,
+            (false, DialogRole::Accept) => 3,
+            (true, DialogRole::Accept) => 0,
+            (true, DialogRole::Destructive) => 1,
+            (true, DialogRole::Alternate) => 2,
+            (true, DialogRole::Cancel) => 3,
+            (true, DialogRole::Other) => 4,
+        }
+>>>>>>> origin/next
     }
 }
 
@@ -489,7 +508,7 @@ impl FooterButton {
     }
 
     /// Whether the button can be activated.
-    pub(crate) const fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 }
@@ -520,14 +539,19 @@ enum Content {
 }
 
 /// The indexes of `roles` in display order: by role rank, and in the given order within a rank. A column puts
-/// `Accept` on top and `Cancel` under it on every platform, then the others.
+/// `Accept` on top, `Alternate` and `Cancel` under it on every platform, then the others.
 pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..roles.len()).collect();
     if column {
         order.sort_by_key(|&at| match roles[at] {
             DialogRole::Accept => 0,
+<<<<<<< HEAD
             DialogRole::Cancel => 1,
             DialogRole::Alternative => 2,
+=======
+            DialogRole::Alternate => 1,
+            DialogRole::Cancel => 2,
+>>>>>>> origin/next
             DialogRole::Destructive | DialogRole::Other => 3,
         });
     } else {
@@ -552,7 +576,7 @@ impl FooterBar {
     }
 
     /// The members stand in a column at the top of the bar, each as wide as the widest: the buttons of a dialog whose
-    /// footer stands beside the body. Buttons go `Accept`, `Cancel`, then the others in the given order.
+    /// footer stands beside the body. Buttons go `Accept`, `Alternate`, `Cancel`, then the others in the given order.
     #[must_use]
     pub fn column(mut self) -> Self {
         self.props = self.props.layout(BodyLayout::stack());
@@ -635,14 +659,22 @@ impl FooterBar {
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let place = |ui: &mut Ui, shown: &mut Shown| {
+<<<<<<< HEAD
                     for at in display_order(&roles, os == Os::Windows, column) {
+=======
+                    for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
+>>>>>>> origin/next
                         let button = &buttons[at];
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
+<<<<<<< HEAD
                             // Production shows Cancel as plain text beside the accented answer.
                             DialogRole::Cancel => Variant::GHOST,
                             DialogRole::Other | DialogRole::Alternative => Variant::SECONDARY,
+=======
+                            DialogRole::Cancel | DialogRole::Alternate | DialogRole::Other => Variant::SECONDARY,
+>>>>>>> origin/next
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {
@@ -695,7 +727,7 @@ impl FooterBar {
             }
         });
         let inner = shown.inner.unwrap_or_default();
-        let mods = if inner.picked.is_some() { crate::runtime::pointer::frame(ui.ctx()).mods } else { craft_keymap::Mods::NONE };
+        let mods = if inner.picked.is_some() { crate::runtime::pointer::mods(ui.ctx()) } else { craft_keymap::Mods::NONE };
         let output = FooterOutput {
             response: shown.output,
             picked: inner.picked,

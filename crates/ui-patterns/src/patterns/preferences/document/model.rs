@@ -4,7 +4,7 @@ use super::draft::{SettingsDraft, insert, lookup};
 use super::rules::RuleKind;
 use super::texts::OPEN_RANGE;
 use super::{CustomSettings, SettingsDocument, table_of};
-use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesModel};
+use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesModel};
 use craft_theme::Rgba;
 use egui::Ui;
 use serde::Serialize;
@@ -91,7 +91,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
             (PrefValue::Int(n), Value::Float(_)) => Value::Float(clamp_float(n as f64)),
             (PrefValue::Float(x), Value::Float(_)) if x.is_finite() => Value::Float(clamp_float(x)),
             (PrefValue::Float(x), Value::Integer(_)) if x.is_finite() => Value::Integer(clamp_int(x.round() as i64)),
-            (PrefValue::Text(text), Value::String(_)) if matches!(kind, None | Some(RuleKind::Custom)) => Value::String(text),
+            (PrefValue::Text(text), Value::String(_)) if matches!(kind, None | Some(RuleKind::Custom | RuleKind::CustomRows)) => Value::String(text),
             (PrefValue::Choice(id), Value::String(_) | Value::Integer(_)) => match kind {
                 Some(RuleKind::Choice(options)) if options.iter().any(|(option, _)| *option == id) => match id.parse::<i64>() {
                     Ok(n) if self.rules.get(key).is_some_and(|rule| rule.integer) => Value::Integer(n),
@@ -118,6 +118,33 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         self.custom.page(ui, page, &mut self.draft) || self.draft != before
     }
 
+    fn reset_page(&mut self, page: &str) {
+        if let Some(toml::Value::Table(defaults)) = self.defaults.get(page) {
+            // The page is replaced, so a key the defaults leave out (an `Option` that is `None`) goes too; only the
+            // `keep_on_reset` keys survive.
+            let mut reset = defaults.clone();
+            if let Some(toml::Value::Table(current)) = self.draft.table.get(page) {
+                for (key, value) in current {
+                    if self.rules.get(&format!("{page}.{key}")).is_some_and(|rule| rule.keep_on_reset) {
+                        reset.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            self.draft.table.insert(page.to_owned(), toml::Value::Table(reset));
+        }
+        self.custom.reset_page(page);
+    }
+
+    fn nested(&mut self, ui: &mut Ui) {
+        self.custom.nested(ui.ctx(), &mut self.draft); // P3(pdf-dialogs-w8): L-176
+    }
+
+    fn nested_open(&self) -> bool {
+        self.custom.nested_open()
+    }
+}
+
+impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSettings<T>> PreferencesDraft for SettingsDocument<T, C> {
     fn differs(&self) -> bool {
         self.draft.table != self.saved_table || self.custom.differs()
     }
@@ -143,30 +170,5 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
     fn cancel(&mut self) {
         self.draft = SettingsDraft { table: self.saved_table.clone() };
         self.custom.cancel();
-    }
-
-    fn reset_page(&mut self, page: &str) {
-        if let Some(toml::Value::Table(defaults)) = self.defaults.get(page) {
-            // The page is replaced, so a key the defaults leave out (an `Option` that is `None`) goes too; only the
-            // `keep_on_reset` keys survive.
-            let mut reset = defaults.clone();
-            if let Some(toml::Value::Table(current)) = self.draft.table.get(page) {
-                for (key, value) in current {
-                    if self.rules.get(&format!("{page}.{key}")).is_some_and(|rule| rule.keep_on_reset) {
-                        reset.insert(key.clone(), value.clone());
-                    }
-                }
-            }
-            self.draft.table.insert(page.to_owned(), toml::Value::Table(reset));
-        }
-        self.custom.reset_page(page);
-    }
-
-    fn nested(&mut self, ui: &mut Ui) {
-        self.custom.nested(ui.ctx(), &mut self.draft); // P3(pdf-dialogs-w8): L-176
-    }
-
-    fn nested_open(&self) -> bool {
-        self.custom.nested_open()
     }
 }

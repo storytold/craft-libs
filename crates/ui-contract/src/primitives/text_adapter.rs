@@ -3,12 +3,16 @@
 
 mod completion;
 
+<<<<<<< HEAD
 use crate::primitives::{SubmitKey, TextLayout, TextOptions};
+=======
+use crate::primitives::{TabKey, TextLayout, TextOptions};
+>>>>>>> origin/next
 use crate::runtime::access::text::{Line, Run};
-use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, text_edit};
+use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, memory as egui_memory, repaint, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use crate::runtime::keys::{self, Intents};
-use crate::runtime::{commands, ime};
+use crate::runtime::{commands, ime, wheel};
 use craft_behavior::{EditCommand, EditorInput, Intent, PartKey, TextPos};
 use craft_keymap::Mods;
 use egui::{Context, Id, Pos2, Rect, Ui};
@@ -30,7 +34,7 @@ pub(crate) enum End {
     /// Escape ends it, but the Escape is not the field's.
     Revert,
     /// The draft becomes the codec's normal form of its value and is selected; nothing applies and the run stays
-    /// open. `refuses` for a Tab on a `tab_rewrites` part, which alerts; a press that holds the draft does not.
+    /// open. `refuses` for a Tab on a `TabKey::Rewrites` part, which alerts; a press that holds the draft does not.
     Rewrite {
         /// The rewrite alerts through `frame::refuse`.
         refuses: bool,
@@ -95,15 +99,16 @@ pub(crate) fn text_id(id: Id, key: PartKey) -> Id {
 }
 
 /// The keys the text part keeps, from its options and the selection of its widget `widget`: with no selection Cut,
-/// Copy and Delete are inactive, so their keys and menu picks still reach the part (which does nothing with them, and
-/// never lets them reach the app) and the edit menu shows them disabled. The board reads the keys the stop registered;
-/// a selection change repaints, which registers them again. The selection is the one the part acts on: `held`, the
-/// one it kept while its edit menu has the focus (egui collapses the selection of a widget without focus), else its
-/// widget's.
-pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, base: KeyUse, options: &TextOptions) -> KeyUse {
-    debug_assert!(!(options.tab_inserts && options.tab_rewrites), "a text part either inserts or rewrites on Tab");
-    // A rewriting part keeps Tab so the focus service never moves focus on it.
-    let keys = if options.tab_inserts || options.tab_rewrites {
+/// Copy and Delete are inactive, and so are Undo and Redo while the widget has no step for them, so their keys and menu
+/// picks still reach the part and the edit menu shows them disabled. Cut, Copy and Delete then do nothing and never
+/// reach the app; an Undo or Redo with no step goes on to the app command (`commands::fall_through`), which the board
+/// resolves it to. The board reads the keys the stop registered; a selection or text change repaints, which registers
+/// them again. The selection is the one the part acts on: `held`, the one it kept while its edit menu has the focus
+/// (egui collapses the selection of a widget without focus), else its widget's. `text` is the part's current text, which
+/// the widget's undo steps are judged against.
+pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, text: &str, base: KeyUse, options: &TextOptions) -> KeyUse {
+    // A part whose Tab inserts, rewrites or reports keeps Tab, so the focus service never moves focus on it.
+    let keys = if options.tab != TabKey::Moves {
         base.with_keep(KeepKeys::Tab)
     } else if options.multiline() {
         base.with_keep(KeepKeys::BlockArrows)
@@ -113,12 +118,18 @@ pub(crate) fn keys_of(ctx: &Context, widget: Id, held: Option<(usize, usize)>, b
     let keys = keys.with_value(base.value || options.steps_value);
     let keys = if options.holds_drafts { keys.with_holds_drafts() } else { keys };
     let selected = held.or_else(|| selection(ctx, widget)).is_some_and(|(caret, anchor)| caret != anchor);
-    let keys = if selected {
-        keys
-    } else {
-        let idle = [EditCommand::Cut, EditCommand::Copy, EditCommand::Delete].into_iter().filter(|command| base.edits.contains(*command));
-        keys.with_inactive(idle.fold(EditSet::NONE, EditSet::with))
-    };
+    let (undo, redo) = text_edit::history(ctx, widget, text);
+    let idle = [
+        (EditCommand::Cut, !selected),
+        (EditCommand::Copy, !selected),
+        (EditCommand::Delete, !selected),
+        (EditCommand::Undo, !undo),
+        (EditCommand::Redo, !redo),
+    ]
+    .into_iter()
+    .filter(|(command, idle)| *idle && base.edits.contains(*command))
+    .map(|(command, _)| command);
+    let keys = keys.with_inactive(idle.fold(base.inactive, EditSet::with));
     // A multi-line part makes a plain Enter a line break.
     if options.submits || options.multiline() { keys.with_submits() } else { keys }
 }
@@ -146,7 +157,8 @@ pub(crate) struct AdapterIn<'a> {
     pub held: bool,
     pub ink: egui::Color32,
     pub intents: &'a mut Intents,
-    /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's.
+    /// A list the component opened on the text is shown (a dropdown, the completions): Escape is the list's, except
+    /// in a clearing field that still shows text.
     pub list_open: bool,
     pub placeholder: Option<&'a str>,
     /// Whether the caret stroke shows, from the blink.
@@ -154,11 +166,15 @@ pub(crate) struct AdapterIn<'a> {
     /// The width of the preedit underline.
     pub underline: f32,
     pub now: f64,
+    /// The app placed the caret this pass ([`place_caret`]): a multi-line part scrolls it into view.
+    pub caret_placed: bool,
 }
 
 pub(crate) struct AdapterOut {
     pub layout: TextLayout,
     pub focused: bool,
+    /// A `TabKey::Reports` part took Tab (`Some(true)`) or Shift+Tab (`Some(false)`) this pass.
+    pub tab: Option<bool>,
     /// A primary click on the text ended this pass.
     pub clicked: bool,
     /// The screen y of the first row's baseline; `None` while the text is empty.
@@ -204,6 +220,92 @@ impl Rows {
 
 fn byte_of(text: &str, chars: usize) -> usize {
     text.char_indices().nth(chars).map_or(text.len(), |(byte, _)| byte)
+}
+
+/// The character index of byte offset `byte` in `text`: an offset past the end is the end, and one inside a character
+/// is that character's start.
+fn char_of_byte(text: &str, byte: usize) -> usize {
+    let mut at = byte.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    text.get(..at).map_or(0, |head| head.chars().count())
+}
+
+/// The caret of the text widget `widget` showing `text`, as a byte offset into `text`; `None` while the widget has
+/// none. It is what a part reports as its caret (`EditResponse::caret`).
+pub(crate) fn caret_byte(ctx: &Context, widget: Id, text: &str) -> Option<usize> {
+    selection(ctx, widget).map(|(caret, _)| byte_of(text, caret))
+}
+
+/// Places the bound caret `bound` (a byte offset into `text`) in the text widget `widget` when it differs from the
+/// widget's own caret: the part reported its caret through the binding last pass, so a different bound value is one
+/// the app wrote. The caret lands on the character boundary at or before it and the selection collapses there. Returns
+/// whether it moved the caret. The adapter keeps no caret of its own: the widget's caret is the record.
+pub(crate) fn place_caret(ctx: &Context, widget: Id, text: &str, bound: Option<usize>) -> bool {
+    let Some(bound) = bound else { return false };
+    let at = char_of_byte(text, bound);
+    // Compared at the boundary the caret would land on, so a bound offset inside a character is placed once.
+    if selection(ctx, widget).is_some_and(|(caret, _)| caret == at) {
+        return false;
+    }
+    select(ctx, widget, at, at);
+    true
+}
+
+// PLAN: S-L186: this multi-line scroll (a private offset in temp data with its own wheel taker) is interim; hosting the
+// text part in the scrolling container body is the phase-8 open item.
+/// The key of a multi-line part's scroll in its widget's state: the offset, and the most it can scroll as its last
+/// pass found it.
+fn scroll_key(widget: Id) -> Id {
+    widget.with("craft_text_scroll")
+}
+
+/// The offset a multi-line part runs its widget at this pass: last pass's, moved by this pass's wheel share and kept
+/// inside the text. The share comes only with a frame's first pass (`wheel::begin` splits only the input that pass
+/// carries), so a second pass of the frame moves nothing.
+fn scroll_before(ctx: &Context, widget: Id) -> f32 {
+    let (offset, max) = egui_memory::peek_copy::<(f32, f32)>(ctx, scroll_key(widget)).unwrap_or((0.0, 0.0));
+    // A positive wheel moves the offset back, as a scroll region's does.
+    let moved = wheel::take(ctx, widget).map_or(0.0, |share| share.scroll.y);
+    (offset - moved).clamp(0.0, max)
+}
+
+/// After the widget ran at `ran`: the offset is kept inside the text it showed and, when `reveal` (the caret moved,
+/// text was typed or the app placed the caret), moves just enough for the caret's line to show in `view`. A pass that
+/// moves the offset repaints, so the next pass shows the text where the offset now puts it. While the text is taller
+/// than `view` the part is the wheel's scroll owner over `view`, with the room it has left either way; a wheel at an
+/// end passes on to the region around the field.
+fn scroll_after(ui: &Ui, widget: Id, view: Rect, shown: &text_edit::Shown, ran: f32, reveal: bool) {
+    let ctx = ui.ctx();
+    let max = (shown.content - view.height()).max(0.0);
+    let mut next = ran;
+    if let Some(caret) = shown.caret.filter(|_| reveal) {
+        if caret.min.y < view.min.y {
+            next -= view.min.y - caret.min.y;
+        } else if caret.max.y > view.max.y {
+            next += caret.max.y - view.max.y;
+        }
+    }
+    let next = next.clamp(0.0, max);
+    egui_memory::put(ctx, scroll_key(widget), (next, max));
+    if next != ran {
+        repaint::request(ctx);
+    }
+    if max > 0.0 {
+        let rows = shown.galley.rows.len().max(1);
+        let line = shown.galley.size().y / rows as f32;
+        let gated = crate::runtime::env::Env::of(ui).wheel == crate::runtime::env::WheelScope::Gated;
+        wheel::register(
+            ctx,
+            craft_behavior::WheelTaker::new(widget, view)
+                .vertical(true)
+                .scrolls(true)
+                .gated(gated)
+                .notch(craft_behavior::WheelNotch::Points(line))
+                .room(craft_behavior::WheelRoom::new(egui::vec2(0.0, next), egui::vec2(0.0, max - next))),
+        );
+    }
 }
 
 /// Inserts `insert` over the selection `(a, b)` (characters) of `text`; returns the caret after it.
@@ -370,12 +472,34 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         Some(DraftChange::Revert) => state.end = Some(End::Revert),
         None => {}
     }
+<<<<<<< HEAD
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty. In
     // a modal dialog a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits.
     let draft_takes = state.draft.is_some() && !(focused_before && keys::focus_in_modal_dialog(ctx));
     let takes_escape =
         if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
     if focused_before && takes_escape && !state.completions.open && !input.list_open && input.intents.take(Intent::Cancel) {
+=======
+    // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
+    // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
+    // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
+    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
+    let dialog_escape = focused_before
+        && state.draft.is_some()
+        && state.preedit.is_none()
+        && !input.options.clear_on_escape
+        && input.intents.untaken(&Intent::Cancel)
+        && crate::runtime::focus::escape_closes_dialog(ctx);
+    if dialog_escape {
+        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
+        state.end = Some(End::Escape);
+    }
+    let draft_takes = state.draft.is_some() && !dialog_escape;
+    let takes_escape =
+        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
+    let list_first = input.list_open && !input.options.clear_on_escape;
+    if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
+>>>>>>> origin/next
         // Escape over a composition alone ends the composition and leaves the text.
         if state.draft.is_some() || state.preedit.is_none() {
             state.end = Some(End::Escape);
@@ -393,14 +517,27 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     let separated = input.focused && !input.read_only && state.preedit.is_none() && egui_input::take_separator(ctx, input.options.commit_on);
     // The part keeps Tab (`keys_of`), so the focus service left it here; it is taken before the widget would insert it.
-    if input.focused && input.options.tab_rewrites && !input.read_only && state.preedit.is_none() && egui_input::take_tab(ctx) {
-        state.end = Some(End::Rewrite { refuses: true });
+    // Shift+Tab is `Some(false)` from the take itself, never read from held modifiers. The take reads the frame's
+    // events, which only its first pass carries, so a second pass takes no Tab.
+    let mut tab = None;
+    if input.focused && state.preedit.is_none() {
+        match input.options.tab {
+            TabKey::Rewrites if !input.read_only => {
+                if egui_input::take_tab(ctx).is_some() {
+                    state.end = Some(End::Rewrite { refuses: true });
+                }
+            }
+            TabKey::Reports => tab = egui_input::take_tab(ctx),
+            _ => {}
+        }
     }
+    let env = crate::runtime::env::Env::of(input.ui);
+    let multiline = input.options.multiline();
+    let scroll = if multiline { scroll_before(ctx, widget) } else { 0.0 };
     let filter = egui_focus::event_filter(input.keys.keep, false);
     // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
     // the body text's.
     let baseline = (!input.options.multiline()).then(|| {
-        let env = crate::runtime::env::Env::of(input.ui);
         let text_env = super::text::TextEnv { tokens: &env.tokens, direction: env.direction, ink: input.ink, fonts: crate::fonts::stack_facts(ctx) };
         super::text::line_baseline(ctx, &text_env, input.options.role, input.rect.center().y)
     });
@@ -428,18 +565,30 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         underline: input.underline,
         galley: None,
         baseline,
+<<<<<<< HEAD
         submit_key: input.options.submit_key,
+=======
+        scroll,
+>>>>>>> origin/next
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
-    let secondary = crate::runtime::pointer::frame(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
+    let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
-    let shown = text_edit::show(input.ui, edit);
+    let shown = text_edit::show(input.ui, &env, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);
     if let Some((caret, anchor)) = kept
         && selection(ctx, widget).is_some_and(|(at, _)| (caret.min(anchor)..=caret.max(anchor)).contains(&at))
     {
         select(ctx, widget, anchor, caret);
+    }
+    // A single line keeps its caret in view through egui's own line offset; a multi-line part scrolls its text itself.
+    // The caret is revealed only when it moved (against last pass's, `state.caret`), so a wheel that scrolled it out of
+    // view stays where it put the text.
+    if multiline {
+        let moved = selection(ctx, widget).map(|(caret, _)| caret) != state.caret;
+        let reveal = input.caret_placed || shown.changed || edited || moved;
+        scroll_after(input.ui, widget, input.rect, &shown, scroll, reveal);
     }
     // egui's own IME output is dropped: the engine writes the pass's.
     if let Some(caret) = shown.caret.filter(|_| shown.focused) {
@@ -493,8 +642,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     state.focused = shown.focused || input.held;
     let full = display;
     let layout = TextLayout::new(shown.galley, false, full);
-    let baseline = (!layout.full.is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
-    AdapterOut { layout, focused: shown.focused, clicked: shown.clicked, baseline }
+    let baseline = (!layout.full().is_empty()).then_some(shown.galley_pos.y + layout.first_baseline);
+    AdapterOut { layout, focused: shown.focused, tab, clicked: shown.clicked, baseline }
 }
 
 /// What [`show_selectable`] shows: the read-only text of a selection part.
@@ -521,7 +670,8 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     let ctx = ui.ctx().clone();
     let multiline = run.wrap == crate::primitives::Wrap::Wrap;
     let keep = if multiline { KeepKeys::BlockArrows } else { KeepKeys::InlineArrows };
-    let mut shown = layout.full.clone();
+    let mut shown = layout.full().to_owned();
+    let env = crate::runtime::env::Env::of(ui);
     // A line longer than its room is cut at the room's edge, as a field's is.
     let mut cut = (layout.size().x > rect.width()).then(|| {
         let mut cut = crate::runtime::egui::alloc::child(ui, egui::UiBuilder::new().max_rect(rect));
@@ -530,6 +680,7 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
     });
     text_edit::show(
         cut.as_mut().unwrap_or(&mut *ui),
+        &env,
         text_edit::Edit {
             id: widget,
             rect: layout.galley.rect.translate(at.to_vec2()),
@@ -554,7 +705,11 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             underline: 0.0,
             galley: Some(layout.galley.clone()),
             baseline: None,
+<<<<<<< HEAD
             submit_key: SubmitKey::default(),
+=======
+            scroll: 0.0,
+>>>>>>> origin/next
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);

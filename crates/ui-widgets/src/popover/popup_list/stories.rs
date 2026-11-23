@@ -2,9 +2,13 @@
 
 use super::{PopupList, PopupListKind};
 use crate::buttons::Button;
+<<<<<<< HEAD
 use crate::contract::overlay::Anchor;
 use crate::contract::{Bind, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use crate::fonts::FontRef;
+=======
+use crate::contract::{Props as _, Show as _, ShowCollection as _, ShowContainer as _};
+>>>>>>> origin/next
 use crate::layout_components::Stack;
 use crate::list::{DocumentRows, List, ListRow};
 use crate::primitives::HAlign;
@@ -41,10 +45,12 @@ fn popup_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = ["Round", "Square", "Chisel", "Fan"];
     let shown = Stack::new().fill().show(ui, |ui, _| {
         let opener = Button::new("Brush tip").show(ui);
-        PopupList::new("Brush tips", Bind::bound(data.value("open", true)))
+        let list = opener.id.with("tips");
+        PopupList::new("Brush tips", data.bind("open", true))
             .opened_by(&opener)
+            .list(list)
             .show(ui, |ui, _| {
-                List::<usize>::options("Brush tips").show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key]).option());
+                List::<usize>::options("Brush tips").id(list).show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key]).option());
             })
             .output
             .response

@@ -8,6 +8,7 @@ use crate::testing::bypass;
 use crate::testing::fixture::Fixture;
 use crate::testing::story::Required;
 use craft_behavior::Input;
+use craft_host::target::Os;
 
 pub(super) const CASES: &[Case] = &[
     Case::new("required-states", ANY, every_required_state_has_a_story),
@@ -86,6 +87,9 @@ fn every_required_state_has_a_story(subject: &Subject) -> Result<(), String> {
 fn stories_show_and_hold_still(subject: &Subject) -> Result<(), String> {
     for story in &subject.stories {
         let mut fixture = Fixture::story(story);
+        // These checks hold on every OS, so they run on one: on macOS the menu bar moves to the system menu and a
+        // MenuBar story draws nothing in the window.
+        fixture.os(Os::Linux);
         fixture.settle();
         let found = bypass::findings(&fixture);
         if !found.is_empty() {

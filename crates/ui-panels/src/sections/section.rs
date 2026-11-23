@@ -15,8 +15,8 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, PointerButton, PressPhase, Sense};
 use egui::{Id, Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a section: no surface or padding of its own; the header and body carry the look.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]

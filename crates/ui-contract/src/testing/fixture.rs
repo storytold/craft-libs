@@ -2,8 +2,9 @@
 
 use super::Frames;
 use super::story::{Story, StoryData, StoryOutput};
+use crate::contract::Tracked;
 use crate::runtime::access::Role;
-use crate::runtime::commands::{CommandGate, CommandInput, CommandRef, CommandState};
+use crate::runtime::commands::{CommandGate, CommandInput, CommandRef, CommandState, CommandStates};
 use crate::runtime::egui::access::{AccessTree, NodeKey};
 use crate::runtime::egui::fixture::{self, AccessActionKind};
 use crate::runtime::egui::injected;
@@ -114,6 +115,8 @@ pub struct Fixture {
     show: Box<dyn FnMut(&mut Ui)>,
     root: RootEnv,
     commands: CommandInput,
+    /// The app-scope command states, held as an app holds them.
+    states: Tracked<CommandStates>,
     room: Vec2,
     tree: AccessTree,
     shown: Rect,
@@ -153,6 +156,7 @@ impl Fixture {
             show: Box::new(show),
             root: RootEnv::default(),
             commands: CommandInput::new(),
+            states: Tracked::default(),
             room: Vec2::new(400.0, 300.0),
             tree: AccessTree::none(),
             shown: Rect::NOTHING,
@@ -206,8 +210,28 @@ impl Fixture {
         fixture.data = data;
         fixture.outputs = outputs;
         fixture.root_id = root_id;
-        fixture.commands = Story::command_input([story]);
+        fixture.states = Tracked::new(Story::command_states([story]));
+        fixture.commands = CommandInput::new().states(&fixture.states);
         fixture.frames.commands(fixture.commands.clone());
+        fixture
+    }
+
+    /// A fixture that shows a story through `show`, which hosts it and keeps its values: a viewer's story body in its
+    /// shell. `show` returns the story's output in a pass that ran the story, which [`Fixture::take_outputs`] and
+    /// [`Fixture::root_id`] then give as for [`Fixture::story`], and `None` in a pass that did not. The values live
+    /// with the host, so [`Fixture::data`] is empty; the host's command states come through [`Fixture::commands`].
+    pub fn hosted(mut show: impl FnMut(&mut Ui) -> Option<StoryOutput> + 'static) -> Self {
+        let outputs = Rc::new(RefCell::new(Vec::new()));
+        let root_id = Rc::new(Cell::new(None));
+        let (shared_outputs, shared_root) = (outputs.clone(), root_id.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            if let Some(output) = show(ui) {
+                shared_root.set(output.id);
+                shared_outputs.borrow_mut().push(output);
+            }
+        });
+        fixture.outputs = outputs;
+        fixture.root_id = root_id;
         fixture
     }
 
@@ -230,12 +254,42 @@ impl Fixture {
         self
     }
 
+    /// The root values of every following frame, whole: the env an app's settings restore.
+    pub fn root(&mut self, root: RootEnv) -> &mut Self {
+        self.set_root(|held| *held = root)
+    }
+
+    /// The command input of every following pass, whole, as an app's `FrameInput.commands` gives it: the states and
+    /// gate a runner folds from the stories it shows ([`Story::command_states`]).
+    pub fn commands(&mut self, commands: CommandInput) -> &mut Self {
+        self.commands = commands;
+        self.frames.commands(self.commands.clone());
+        self
+    }
+
+    /// The pixels per point of every following frame.
+    pub fn pixels_per_point(&mut self, pixels_per_point: f32) -> &mut Self {
+        self.frames.pixels_per_point(pixels_per_point);
+        self
+    }
+
+    /// Keeps what every following frame paints, for [`Fixture::take_paint`].
+    pub fn record_paint(&mut self) -> &mut Self {
+        self.frames.record_paint();
+        self
+    }
+
+    /// What the frames painted since the last call, as a renderer takes it: the latest frame's shapes and every texture
+    /// change since. `None` unless [`Fixture::record_paint`] was called.
+    pub fn take_paint(&mut self) -> Option<fixture::FullOutput> {
+        self.frames.take_paint()
+    }
+
     /// Gives app-scope `command` this state in every following pass, as an app's `FrameInput.commands` does; a later
     /// call for the same command replaces the earlier one.
     pub fn command_state(&mut self, command: impl Into<CommandRef>, state: CommandState) -> &mut Self {
-        let command = command.into();
-        self.commands.states.retain(|(held, _)| *held != command);
-        self.commands.states.push((command, state));
+        self.states.set(command, state);
+        self.commands = self.commands.clone().states(&self.states);
         self.frames.commands(self.commands.clone());
         self
     }
@@ -243,6 +297,14 @@ impl Fixture {
     /// Sets the app's one gate over commands for every following pass, as an app's `FrameInput.commands` does.
     pub fn gate(&mut self, gate: CommandGate) -> &mut Self {
         self.commands.gate = Some(gate);
+        self.frames.commands(self.commands.clone());
+        self
+    }
+
+    /// Sets the user's binding overrides for every following pass, as an app's `FrameInput.commands` does: the keymap is
+    /// rebuilt when the `Arc` is another one.
+    pub fn overrides(&mut self, overrides: std::sync::Arc<craft_keymap::Overrides>) -> &mut Self {
+        self.commands = self.commands.clone().overrides(overrides);
         self.frames.commands(self.commands.clone());
         self
     }
@@ -290,6 +352,11 @@ impl Fixture {
     /// The density preset.
     pub fn density(&mut self, density: Size) -> &mut Self {
         self.set_root(|root| root.density = density)
+    }
+
+    /// The component set.
+    pub fn set(&mut self, set: craft_theme::ComponentSet) -> &mut Self {
+        self.root_value(set)
     }
 
     /// The interface scale.
@@ -396,9 +463,16 @@ impl Fixture {
         self.frames.repaint_requested()
     }
 
+<<<<<<< HEAD
     /// The system cursor the latest frame's output asked for.
     pub fn cursor_icon(&self) -> egui::CursorIcon {
         self.frames.cursor_icon()
+=======
+    /// The wait the latest frame asked for before the next pass: `Duration::ZERO` for an immediate repaint, `None` when
+    /// it asked for none.
+    pub fn repaint_delay(&self) -> Option<std::time::Duration> {
+        self.frames.repaint_delay()
+>>>>>>> origin/next
     }
 
     /// The IME output of the latest frame.
@@ -444,8 +518,28 @@ impl Fixture {
 
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
     pub fn frame_shapes(&mut self) -> Vec<egui::Shape> {
+        self.frame_shapes_with(Vec::new())
+    }
+
+    /// One frame with no events; returns the shapes it painted, nested shapes flattened, each with the clip it paints under.
+    pub fn frame_clipped_shapes(&mut self) -> Vec<(Rect, egui::Shape)> {
         self.frames.record_paint();
         self.frame(Vec::new());
+        let mut out = Vec::new();
+        let Some(paint) = self.frames.take_paint() else { return out };
+        for clipped in paint.shapes {
+            let mut shapes = Vec::new();
+            fixture::flatten(clipped.shape, &mut shapes);
+            out.extend(shapes.into_iter().map(|shape| (clipped.clip_rect, shape)));
+        }
+        out
+    }
+
+    /// One frame with `events`; returns the shapes it painted, nested shapes flattened. What the frame that took the
+    /// input paints, not the one after it.
+    pub fn frame_shapes_with(&mut self, events: Vec<Event>) -> Vec<egui::Shape> {
+        self.frames.record_paint();
+        self.frame(events);
         let mut shapes = Vec::new();
         let Some(mut paint) = self.frames.take_paint() else { return shapes };
         // Only the shapes are asked for: the texture changes since the first recorded frame go unrendered.

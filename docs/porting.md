@@ -65,9 +65,9 @@ Before marking a part `missing component`, walk this ladder and stop at the firs
 
 1. **An existing component as is.** Search components-index.md by purpose and by shape, and look at the component's stories in the gallery.
 2. **An existing component with a new story or variant.** If the component already does the job and only lacks a shown state, add the story (authoring.md, "Stories"). A story is a state of an existing type, not a new type.
-3. **A builder option on an existing component.** A structural difference gets a new option on the component, not a new component (craft-framework.md 4.6, step 4).
-4. **Density, size overrides or component tokens.** Visual differences an app needs are tokens and size overrides, never component-specific theme values (craft-framework.md 4.6, steps 1–3).
-5. **Per-app colour overrides** in the theme file (craft-framework.md 4.6, step 5).
+3. **A builder option on an existing component.** A structural difference gets a new option on the component, not a new component (craft-framework.md 4.6, step 3).
+4. **Density or size overrides.** Visual differences an app needs are tokens and size overrides, never a theme value for one component (craft-framework.md 4.6, steps 1–2).
+5. **Per-app colour overrides** in the theme file (craft-framework.md 4.6, step 4).
 6. **A family component** in the crate that owns the document concept, when the part names one (layer, colour model, path): craft-framework.md 4.3.
 7. **A new library component**, when its inputs are general data and no existing component fits. Place it in the lowest crate of its layer (craft-framework.md 4.3).
 8. **A one-off app component**, built from shared pieces, as a last resort.
@@ -179,17 +179,24 @@ use egui::ViewportId;
 // Logic phase.
 let Some(mut channel) = self.control.take() else { return };
 let document = self.document_identity(); // None when the app has no document identity
-channel.captures.note_geometry(CaptureGeometry::from_facts(WindowHost::of(ctx).screenshot_facts(), document));
-let observed = channel.captures.last_geometry();
-let finished = channel.captures.drain(motion::now(), observed, document);
+let host = WindowHost::of(ctx);
+let viewport = host.current();
+if let Some(facts) = host.screenshot_facts(viewport) {
+    channel.captures.note_geometry(viewport, CaptureGeometry::from_facts(facts, document));
+}
+let finished = channel.captures.drain(motion::now(), document);
 channel.finish_captures(finished, &mut |path, bytes| self.write_automation_file(path, bytes));
 let settle = settle_ms(ctx.global_style().animation_time);
 while let Some(req) = channel.next_request() {
     let reply = match req.method.as_str() {
+<<<<<<< HEAD
         "ui.screenshot" => match ScreenshotParams::from_params(&req.params) {
             Ok(params) => Reply::screenshot(self.next_capture_token(), params, ViewportId::ROOT),
             Err(e) => Reply::from_result(Err(e)),
         },
+=======
+        "ui.screenshot" => Reply::screenshot(self.next_capture_token(), path_param(&req.params), viewport),
+>>>>>>> origin/next
         "ui.resize" => { /* send ViewportCommand::InnerSize */ Reply::from_result(Ok(json!(null))) }
         "ui.set" => Reply::from_result(self.ui_set(&req.params)),
         other => Reply::from_result(Err(format!("unknown method {other}"))),

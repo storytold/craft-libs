@@ -1,6 +1,13 @@
 //! [`SettingsFiles`]: the file access a [`SettingsStore`](crate::SettingsStore) goes through, so an
 //! app can route its settings elsewhere (PhotoCraft's `Services` file closures, browser storage).
 
+#[cfg(target_arch = "wasm32")]
+mod local_storage;
+
+#[cfg(target_arch = "wasm32")]
+pub use local_storage::LocalStorageFiles;
+
+use std::any::Any;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +35,12 @@ pub trait SettingsFiles: Send + Sync {
     }
     /// Whether `dir` accepts a new file.
     fn check_writable(&self, dir: &Path) -> io::Result<()>;
+    /// Takes a `.lock` file beside the settings file at `path`, held from the disk check to the write; dropping the
+    /// box releases it. Files with nothing to lock keep the default, which holds none.
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let _ = path;
+        None
+    }
 }
 
 /// The file system, through `craft-atomic` and [`recovery`](crate::recovery): what the store does
@@ -69,8 +82,35 @@ impl SettingsFiles for DiskFiles {
     fn check_writable(&self, dir: &Path) -> io::Result<()> {
         crate::recovery::check_writable(dir)
     }
+
+    /// An advisory lock on `.<file>.lock` beside `path`, so two processes saving at once (logging out closes every
+    /// window together) take turns at checking, merging and replacing the file instead of one losing the other's
+    /// changes. `None` (save unlocked) when the lock file cannot be opened or is not free within `LOCK_WAIT`.
+    fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
+        let name = path.file_name().map_or_else(|| "config.toml".into(), |n| n.to_string_lossy().into_owned());
+        let lock = path.with_file_name(format!(".{name}.lock"));
+        let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) {
+            Ok(file) => file,
+            Err(e) => {
+                log::warn!("settings: cannot open {}, saving without it: {e}", lock.display());
+                return None;
+            }
+        };
+        let start = std::time::Instant::now();
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Some(Box::new(file)),
+                Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < LOCK_WAIT => std::thread::sleep(LOCK_POLL),
+                Err(e) => {
+                    log::warn!("settings: {} is held, saving without it: {e}", lock.display());
+                    return None;
+                }
+            }
+        }
+    }
 }
 
+<<<<<<< HEAD
 /// Settings kept in the browser's localStorage, keyed by path: the files of a web build.
 ///
 /// Open the store with a [`Location::Dir`](crate::Location::Dir) naming the key root
@@ -133,6 +173,16 @@ impl SettingsFiles for BrowserFiles {
 fn js_error(e: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("browser storage: {e:?}"))
 }
+=======
+/// How long a save waits for another process's save to finish before going ahead anyway: a save takes
+/// milliseconds, and a process stuck holding the lock must not stop this one from saving.
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How often a waiting save tries the lock again.
+#[cfg(not(target_arch = "wasm32"))]
+const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+>>>>>>> origin/next
 
 /// New files are owner-only; on a replace `craft-atomic` keeps the existing file's mode.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
