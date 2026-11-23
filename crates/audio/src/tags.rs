@@ -336,8 +336,10 @@ fn sylt(d: &[u8], r: &mut Reader) {
         lyrics.lines.push(SyncedLine { ms, text: decode(enc, text) });
         r.lines += 1;
     }
-    // A frame without lines carries nothing worth keeping.
-    if !lyrics.lines.is_empty() {
+    // A frame without lines carries nothing worth keeping, and its descriptor is not kept either.
+    if lyrics.lines.is_empty() {
+        r.budget += desc.len();
+    } else {
         r.out.synced.push(lyrics);
     }
 }
@@ -766,6 +768,17 @@ mod tests {
         empty.extend([2, 1, 0]);
         let t = read(&tag(3, 0, &frame23(b"SYLT", &empty).repeat(1_000)));
         assert!(t.synced.is_empty() && !t.limited);
+        // Dropped frames with long descriptors do not use up the budget for lyrics after them.
+        let mut long = vec![0];
+        long.extend(b"eng");
+        long.extend([2, 1]);
+        long.extend(vec![b'd'; MAX_TEXT_BYTES]);
+        long.push(0);
+        let mut body = frame23(b"SYLT", &long).repeat(MAX_TEXT_TOTAL_BYTES / MAX_TEXT_BYTES + 1);
+        body.extend(frame23(b"USLT", &uslt));
+        let t = read(&tag(3, 0, &body));
+        assert_eq!(t.lyrics.first().map(|l| l.text.as_str()), Some("late"));
+        assert!(!t.limited);
         // An untitled chapter's element id over the text cap is cut.
         let mut chap = vec![b'c'; MAX_TEXT_BYTES + 10];
         chap.push(0);
