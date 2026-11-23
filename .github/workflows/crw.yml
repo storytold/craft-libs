@@ -12,41 +12,13 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
-  # always gets to save the cache.
-  group: shared-crw-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-crw-${{ github.ref }}
+  cancel-in-progress: true
 
+# fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
 jobs:
-  native:
-    timeout-minutes: 20
-    name: CRW lint and tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@v7.0.1
-        with:
-          persist-credentials: false
-      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-crw-${{ matrix.os }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p craft-crw --check
-      - run: cargo clippy -p craft-crw --all-targets --locked -- -D warnings
-      - run: cargo test -p craft-crw --locked
-
   wasm:
     timeout-minutes: 10
     name: CRW WASM
@@ -63,10 +35,6 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-crw-wasm
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p craft-crw --locked --target wasm32-unknown-unknown
 
   samples:
@@ -84,10 +52,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-crw-samples
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Cache the CC0 sample files
         uses: actions/cache@v6.1.0
         with:

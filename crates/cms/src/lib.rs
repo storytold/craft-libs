@@ -19,6 +19,7 @@
 //! CIE 15, and Adobe's published black point compensation paper.
 #![forbid(unsafe_code)]
 
+pub mod black;
 pub mod builtin;
 mod builtin_v2;
 pub mod clut;
@@ -30,6 +31,7 @@ pub mod lutfile;
 pub mod math;
 pub mod named;
 mod normalize;
+pub mod palette;
 pub mod pipeline;
 pub mod profile;
 pub mod sony_lut;
@@ -39,6 +41,7 @@ pub mod transform;
 mod write;
 pub mod write_v2;
 
+pub use black::BlackPreserving;
 pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;

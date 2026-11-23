@@ -42,12 +42,17 @@ Consuming workspaces need a `hayro-cmap` patch entry beside the other Hayro entr
 
 `hayro-postscript` 0.1.0 is the crates.io package (upstream revision
 a2354aebaf86f5ab13e5fd6b6b0521306488bf9d), the PostScript token scanner `hayro-cmap` uses
-to parse the CMap streams PDFs embed. One local patch: the scanner, which does not parse
+to parse the CMap streams PDFs embed. Two local patches. The scanner, which does not parse
 dictionaries yet, skips runs of `<<` and `>>` in a loop and returns the next object, instead
 of recursing once per delimiter, so a long run of `<` or `>` bytes no longer overflows the
 stack. Tests: `object::tests::long_open_dict_run_does_not_overflow`,
 `object::tests::long_close_dict_run_does_not_overflow`, `object::tests::dict_delimiters_are_skipped`
-and `object::tests::nested_dict_delimiters_are_skipped`. Its `SOURCE.json` records the
+and `object::tests::nested_dict_delimiters_are_skipped`. A literal string's `\ddd` escape keeps
+the low eight bits of its value, as ISO 32000-2 §7.3.4.2 asks ("high-order overflow shall be
+ignored"), so `\737` decodes to `0xDF` instead of being dropped; code comments label it
+`Craft patch (octal overflow, craft-libs #2321)`. Tests:
+`string::tests::literal_octal_overflow_keeps_the_low_eight_bits` and
+`string::tests::literal_octal_short_escape_stops_at_a_non_octal_byte`. Its `SOURCE.json` records the
 registry hashes. Consuming workspaces need a `hayro-postscript` patch entry beside the other
 Hayro entries.
 

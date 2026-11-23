@@ -16,3 +16,6 @@ serde = { workspace = true, optional = true }
 
 [features]
 serde = ["dep:serde"]
+
+[dev-dependencies]
+craft-testkit = { workspace = true }

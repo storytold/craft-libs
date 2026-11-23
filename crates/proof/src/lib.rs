@@ -42,6 +42,9 @@
 //!   existing English fallback.
 //! - **German** ([`ProofLang::De`]): hyphenation by `hyph-utf8`'s German patterns (reformed
 //!   spelling, MIT); no spelling or grammar marks yet.
+//! - **French** (a [`ProofLang::Pack`] locale; module [`fr`]): the pack dictionary with French
+//!   elisions and accent-oriented suggestions, plus conservative typography and basic checks.
+//!   France and Canada retain their regional tags; Quebec uses its own punctuation spacing.
 //! - **Any other language** ([`ProofLang::Pack`], module [`packs`]): spelling and suggestions
 //!   from its Hunspell dictionary (an installed Language pack, the dictionaries folder or the
 //!   system's) with default tuning, hyphenation from its pack, no grammar rules; without a
@@ -73,6 +76,7 @@ pub mod dict;
 pub mod en_variants;
 mod english;
 pub mod es;
+pub mod fr;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -976,6 +980,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
     match lang {
         ProofLang::En => grammar_en(text, capital_first),
         ProofLang::EnGb | ProofLang::EnAu | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
+        ProofLang::Pack(locale) if locale.primary() == "fr" => fr::grammar::check_in(text, lang),
         // `pt-pt` shares Portuguese's rules, its issues in its own language.
         _ => language(lang.built_in())
             .map_or_else(Vec::new, |l| (l.grammar)(text, lang, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect()),

@@ -11,17 +11,22 @@ on:
 permissions:
   contents: read
 
+# A fraction of the fuzz-style cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  CRAFT_HOSTILE_DIVISOR: "8"
+  PROPTEST_CASES: "64"
+
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
-  # always gets to save the cache.
-  group: shared-media-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-media-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
     timeout-minutes: 10
-    name: Media lint, feature sets, WASM
+    # fmt, and clippy with default and with all features, run in the Workspace gate on every OS.
+    name: Media feature sets, WASM
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
@@ -34,20 +39,12 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: clippy
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-media-lint
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fmt -p craft-media --check
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features bitstream -- -D warnings
-      - run: cargo clippy -p craft-media --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features matroska -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features ogg -- -D warnings
-      - run: cargo clippy -p craft-media --all-targets --locked --all-features -- -D warnings
-      - run: cargo clippy -p craft-media-testkit --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-media --all-targets --locked --no-default-features --features serde -- -D warnings
       - run: cargo check -p craft-media --all-features --locked --target wasm32-unknown-unknown
   test:
@@ -65,10 +62,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-media-test
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tests while installing ffmpeg
         run: |
           # The man-db index rebuild after dpkg is slow on hosted runners.

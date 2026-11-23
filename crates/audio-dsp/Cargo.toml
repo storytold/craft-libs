@@ -1,0 +1,14 @@
+[package]
+name = "craft-audio-dsp"
+description = "Real-time and offline audio DSP for the Craft apps: BS.1770 / EBU R128 loudness metering, audio effects with a common effect trait, panning, test signals and resampling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# No dependencies: planar `&mut [f32]` slices in, planar slices out.
+[dependencies]
