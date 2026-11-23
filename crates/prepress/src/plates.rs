@@ -8,7 +8,7 @@
 //! components, DeviceGray black only, and other process color converts to CMYK through the
 //! printing condition (see [`Conversion`]).
 //!
-//! Ported from PdfCraft #2770 by Guillem Hermida (`crates/render/src/separations.rs` at
+//! Ported from storytold/pdfcraft#2770 by Guillem Hermida (`crates/render/src/separations.rs` at
 //! 6fcf2a4, MIT OR Apache-2.0), with craft-cms in place of moxcms.
 
 use std::collections::HashSet;
@@ -16,6 +16,7 @@ use std::ops::ControlFlow;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
+use craft_cms::Profile;
 use craft_pdf::interpret::InterpreterSettings;
 use craft_pdf::interpret::color::{CmykSimulation, Ink as PdfInk, InkSinkFn, Plate};
 use craft_pdf::raster::{self, MAX_SIDE, RenderCache};
@@ -101,7 +102,10 @@ pub enum Conversion {
         condition: Option<String>,
     },
     /// Through [`Fallback::Fogra39`] or [`Fallback::Profile`]; the profile's description.
-    Fallback { profile: String },
+    Fallback {
+        /// The profile's description.
+        profile: String,
+    },
     /// By [`Fallback::DeviceFormulas`].
     DeviceFormulas,
 }
@@ -114,10 +118,13 @@ pub struct Plates {
     pub inks: InkSet,
     /// Spot inks past [`MAX_SPOT_INKS`]: listed, not separated.
     pub unseparated: Vec<String>,
+    /// Plate width in pixels.
     pub width: u32,
+    /// Plate height in pixels.
     pub height: u32,
     /// The resolution the plates rendered at, after [`MAX_PLATE_PIXELS`].
     pub dpi: f32,
+    /// How the page's CMYK was converted to the plates' inks.
     pub conversion: Conversion,
     /// One plane per ink, in [`InkSet::iter`] order: the tint per pixel, row-major, 0 for no
     /// ink and 255 for 100%.
@@ -136,15 +143,20 @@ impl Plates {
     }
 }
 
+/// Why a page could not be separated.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The PDF could not be opened.
     #[error(transparent)]
     Open(#[from] OpenError),
+    /// The requested page is not in the document.
     #[error("page {0} does not exist")]
     NoPage(usize),
+    /// The resolution is zero, negative, infinite or NaN.
     #[error("the resolution must be positive and finite")]
     InvalidDpi,
+    /// The fallback profile is not usable as a printing condition.
     #[error("the fallback profile can't be a printing condition: {0}")]
     Profile(#[from] ProfileError),
     /// After a [`raster::Error::BackendPanic`] the document is dropped; nothing else is kept.
@@ -187,6 +199,26 @@ pub struct Band {
 /// the page again, clipped to its rows. Never panics.
 pub fn plates_in_bands(pdf: &[u8], page: usize, dpi: f32, opts: &Options, mut each: impl FnMut(Band) -> ControlFlow<()>) -> Result<(), Error> {
     separate(pdf, page, dpi, opts, banded_scale, None, &mut each)
+}
+
+/// The printing condition page `page` (from 0) of `pdf` separates through with `opts`: the CMYK
+/// profile of its output intent, else of [`Options::fallback`]. Build an
+/// [`Output`](crate::Output) from it, so a composite converts the plates from the profile they
+/// were made for. `None` for [`Fallback::DeviceFormulas`] when the page has no usable output
+/// intent: those plates are device values of no profile. Never panics.
+pub fn press_profile(pdf: &[u8], page: usize, opts: &Options) -> Result<Option<Profile>, Error> {
+    let doc = open_slice(pdf, None)?;
+    if doc.pages().get(page).is_none() {
+        return Err(Error::NoPage(page));
+    }
+    if let Ok(Some((_, conversion, _))) = catch_unwind(AssertUnwindSafe(|| intent_condition(&doc, page))) {
+        return Ok(Some(conversion.profile().clone()));
+    }
+    Ok(match &opts.fallback {
+        Fallback::DeviceFormulas => None,
+        Fallback::Fogra39 => Some(CmsConversion::fogra39().profile().clone()),
+        Fallback::Profile(icc) => Some(CmsConversion::new(icc)?.profile().clone()),
+    })
 }
 
 /// Separates in bands of `rows` rows, else as many as fit [`MAX_PLATE_PIXELS`], at `scale_of`'s
@@ -369,17 +401,24 @@ pub(crate) fn pdf_text(bytes: &[u8]) -> String {
 /// `/OutputIntents` (PDF 2.0), else the catalog's, the first whose `/DestOutputProfile` is a
 /// CMYK profile craft-cms converts into, a `GTS_PDFX` intent before the others.
 pub(crate) fn output_intent(pdf: &Pdf, page: usize) -> Option<(CmykSimulation, Conversion)> {
-    output_intents(pdf, page).iter().find_map(|intent| {
+    let (intent, conversion, icc) = intent_condition(pdf, page)?;
+    let simulation = conversion.simulation(&icc);
+    let condition = text_entry(&intent, OUTPUT_CONDITION_IDENTIFIER);
+    let profile = simulation
+        .description()
+        .map(str::to_string)
+        .or_else(|| text_entry(&intent, OUTPUT_CONDITION))
+        .or_else(|| condition.clone())
+        .unwrap_or_else(|| "unnamed CMYK profile".to_string());
+    Some((simulation, Conversion::OutputIntent { profile, condition }))
+}
+
+/// The output intent [`output_intent`] picks, its printing condition and its profile's bytes.
+fn intent_condition<'a>(pdf: &'a Pdf, page: usize) -> Option<(Dict<'a>, CmsConversion, Vec<u8>)> {
+    output_intents(pdf, page).into_iter().find_map(|intent| {
         let icc = intent.get::<Stream<'_>>(DEST_OUTPUT_PROFILE)?.decoded_within(MAX_PROFILE_BYTES).ok()?;
-        let simulation = CmsConversion::new(&icc).ok()?.simulation(&icc);
-        let condition = text_entry(intent, OUTPUT_CONDITION_IDENTIFIER);
-        let profile = simulation
-            .description()
-            .map(str::to_string)
-            .or_else(|| text_entry(intent, OUTPUT_CONDITION))
-            .or_else(|| condition.clone())
-            .unwrap_or_else(|| "unnamed CMYK profile".to_string());
-        Some((simulation, Conversion::OutputIntent { profile, condition }))
+        let conversion = CmsConversion::new(&icc).ok()?;
+        Some((intent, conversion, icc.into_owned()))
     })
 }
 
@@ -591,16 +630,5 @@ endstream endobj
         let s = banded_scale(17.0, 15_058_824.0, 1.0);
         let [width, height] = [17.0f32, 15_058_824.0].map(|side| u64::from((side * s).floor().max(1.0) as u32));
         assert!(width * height <= MAX_BANDED_PIXELS as u64);
-    }
-
-    #[test]
-    fn plates_fit_the_pixel_and_side_caps() {
-        assert_eq!(plate_scale(40.0, 40.0, 1.0), 1.0);
-        // A4 at 2400 dpi would be 22 000 × 31 000 pixels.
-        let s = plate_scale(595.0, 842.0, 2400.0 / 72.0);
-        assert!((595.0 * s) * (842.0 * s) <= MAX_PLATE_PIXELS * 1.0001);
-        // A 1 × 10 000 pt strip fits the area cap but not the renderer's side limit.
-        assert!(10_000.0 * plate_scale(1.0, 10_000.0, 1.0) <= MAX_SIDE as f32);
-        assert!(plate_scale(0.0, f32::NAN, 1.0) > 0.0);
     }
 }

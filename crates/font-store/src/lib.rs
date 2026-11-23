@@ -43,6 +43,20 @@ pub use pin::{IndexPin, PINNED_INDEX};
 pub use sources::{SourceEntry, SourcesFile};
 pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
 
+/// A source the user added: an index file at an https URL, never curated. Plain data, so it builds on every target
+/// for the interfaces that list the sources.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UserSource {
+    /// The index file (format 1.x, JSON or gzipped JSON).
+    pub url: String,
+    /// When it was added, in seconds since 1970.
+    pub added_at: u64,
+    /// The sha256 of the file first fetched from it. A different file later shows as
+    /// [`FontSource::changed`].
+    #[serde(default)]
+    pub last_sha256: Option<String>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{Cancel, Client, FetchError, Timeouts, USER_AGENT};
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,7 +65,7 @@ pub use language_packs::{
     MAX_PACK_INDEX_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, PackIndex, PackIndexPin, language_pack_index_overridden,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress, UserSource};
+pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress};
 
 #[cfg(test)]
 mod tests;

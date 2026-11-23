@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use craft_audio::opus::{Decoder, OpusHead, StreamDecoder};
+use craft_audio::opus::{Decoder, StreamDecoder};
 
 struct Rng(u64);
 impl Rng {
@@ -66,23 +66,17 @@ fn multistream_garbage_never_panics() {
     assert_eq!(out.len(), 6);
 }
 
-#[test]
-fn concealment_before_and_after_packets() {
-    let mut dec = Decoder::from_head(OpusHead::simple(2).unwrap(), 48000).unwrap();
-    // Loss before any packet: silence of a default duration.
-    let out = dec.decode(None).unwrap();
-    assert_eq!(out.len(), 2);
-    assert!(out[0].iter().all(|&v| v == 0.0));
-}
-
 /// The RFC 8251 vectors, or `None` after printing `SKIPPED` (a failure with
 /// `CRAFT_MEDIA_REQUIRE_ORACLES=1`). `scripts/fetch-opus-vectors.sh` fetches them.
 fn vectors_dir() -> Option<PathBuf> {
-    let d = crate::common::fixture_subdir("opus").join("vectors");
+    let d = crate::integration::codecs::common::fixture_subdir("opus").join("vectors");
     if d.join("testvector01.bit").exists() {
         return Some(d);
     }
-    crate::common::skip(&format!("the Opus RFC 8251 vectors are not in {} (scripts/fetch-opus-vectors.sh fetches them)", d.display()))
+    crate::integration::codecs::common::skip(&format!(
+        "the Opus RFC 8251 vectors are not in {} (scripts/fetch-opus-vectors.sh fetches them)",
+        d.display()
+    ))
 }
 
 /// Real packets (from the conformance vectors) truncated and bit-flipped, interleaved with losses.

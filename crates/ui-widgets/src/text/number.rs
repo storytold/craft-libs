@@ -1,0 +1,708 @@
+//! `NumberField`: a text part over [`NumberCodec`] with a range, a step, a unit, presets and a popup slider.
+//!
+//! Typing, expressions, unit spellings and locale digits are the codec's (`quantity::Reader`); the field adds the
+//! range every written value stays in and the step that arrows, the wheel and a scrub move by. A drag on a field that
+//! is not in edit scrubs it; a click enters edit, where a drag selects text.
+
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
+
+use super::adorn::{Adornment, Placed, place, reserve};
+use super::words::TextWords;
+use super::{FieldStyle, text_part};
+use crate::buttons::IconButton;
+use crate::contract::{
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, Overlays as _, PaintUi,
+    PartsCx, Pointer as _, Props as _, Role, Scrub, Sizing, Styled as _, WordSetCx as _,
+};
+use crate::primitives::{TextOptions, TextRun};
+use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
+use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
+use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
+use craft_behavior::{
+    Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
+};
+use craft_theme::{Rgba, Stateful, States};
+use egui::{CornerRadius, Rect, Vec2};
+use std::borrow::Cow;
+use std::marker::PhantomData;
+use std::ops::RangeInclusive;
+
+mod popups;
+mod rule;
+mod value;
+
+pub use rule::NumberStepper;
+use rule::{Rule, Ruled, key_scale, round_to};
+pub use value::{NamedOr, NumberName, NumberOutput, NumberPick, NumberValue, RangeAlert};
+
+/// The step of an arrow press, the wheel and a scrub when the field sets none.
+const DEFAULT_STEP: f64 = 1.0;
+
+/// The columns content-sized fields share in a column group (a `FieldGroup`): the widest value and the widest unit,
+/// so their values and units line up across the group's fields.
+const VALUES: ColumnKey = ColumnKey::new("number_values");
+const UNITS: ColumnKey = ColumnKey::new("number_units");
+
+/// Where a number field shows its unit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnitPlacement {
+    /// Inside the field, after the number.
+    #[default]
+    Inside,
+    /// After the field, outside its box: the field draws no unit and keeps the unit's spellings for typed text and its
+    /// decimals, and the host draws the unit text beside it (a column of units in a grid of fields).
+    After,
+}
+
+/// The placeholder of a mixed field.
+const BLANK: &str = "\u{2014}";
+
+/// The decimals a field writes when neither a codec nor a unit kind says.
+const DEFAULT_DECIMALS: usize = 3;
+/// How far a value may sit off a multiple of the step and still count as on it.
+const ON_GRID: f64 = 1e-9;
+
+/// Whether the value is a number that is not finite; the field shows the dash for it, as for a mixed value.
+fn non_finite<V: NumberValue>(value: Option<&V>) -> bool {
+    value.is_some_and(|v| v.named().is_none() && v.number().is_some_and(|number| !number.is_finite()))
+}
+
+/// Whether the host sized the field to its content (`Sizing::Content`).
+fn content_sized<C: Component>(cx: &MeasureCx<'_, C>) -> bool {
+    cx.resolved.sizing() == Some(Sizing::Content)
+}
+
+/// The chevron that opens the presets list.
+const PRESETS: PartKey = PartKey::new("presets");
+/// The chevron that opens the popup slider.
+const SLIDER: PartKey = PartKey::new("slider");
+
+/// The style of a number field: the field look, which the chevrons are laid out by, and the unit's text.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct NumberStyle {
+    #[style(surface)]
+    surface: SurfaceLook,
+    #[style(metrics)]
+    metrics: Metrics,
+    /// The unit shown after the number.
+    #[style(text)]
+    unit: TextLook,
+    /// The field look the adornments are placed by; `surface` and `metrics` are its own.
+    field: FieldStyle,
+    /// The colour of the inside label's glyph, a scrub handle.
+    handle: Stateful<StyleColor>,
+    /// The width of one number cell at the control's size (`size.length.number`), padding included.
+    cell: f32,
+}
+
+/// A number field: a text part over [`NumberCodec`]; empty text is `None`.
+#[derive(crate::contract::Component, crate::contract::Props)]
+#[component(overlay, probe(NumberField<'static, Option<f64>>))]
+pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
+    #[common]
+    common: Common,
+    value: Bind<'a, V>,
+    /// The codec, to read another locale's separators or units, or to read words such as "Auto" (`or_parse`).
+    /// Without one the field reads and writes with the env's locale and the spellings of `unit_kind`.
+    #[prop]
+    codec: Option<NumberCodec>,
+    /// What the number counts: typed text may carry this kind's unit spellings ("12 mm") in the user's language or
+    /// English, and the field shows at most the kind's decimals.
+    #[prop]
+    unit_kind: Option<UnitKind>,
+    /// The range typed, stepped and scrubbed values stay in.
+    #[prop]
+    range: Option<RangeInclusive<f64>>,
+    /// What one arrow press, one wheel notch and one point of scrub change unless overridden. The default is 1.
+    #[prop(quantity = "step")]
+    step: Option<f64>,
+    /// The change per point of scrub, in shown units. An omitted, non-positive or non-finite rate uses the field step.
+    #[prop(quantity = "step")]
+    scrub_step: Option<f64>,
+    /// Where an arrow press, a Page key and a wheel notch go from the current value, for values on a ladder (the zoom
+    /// ladder); the step is ignored for them. The range still holds the result.
+    #[prop(func = "Fn(f64, i32) -> f64")]
+    stepper: Option<NumberStepper<'a>>,
+    /// A unit shown after the number.
+    #[prop(into)]
+    unit: Option<Label>,
+    /// Whether the unit is drawn inside the field or left to the host to draw after it.
+    #[prop]
+    unit_placement: UnitPlacement,
+    #[style_key]
+    status_zoom: bool,
+    /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
+    #[prop]
+    presets: Option<&'a [Entry<NumberPick>]>,
+    /// A chevron after the field opens a slider over `range` below it; pressing the chevron and dragging moves the
+    /// value at once, as far as the slider would, and the release closes the slider.
+    #[prop]
+    popup_slider: Option<RangeInclusive<f64>>,
+    /// Whether the popup slider snaps to the configured step; defaults to true.
+    #[prop]
+    snap_popup_slider: bool,
+    /// A typed value goes to the nearest multiple of the step when it commits.
+    #[prop]
+    snap_typed: bool,
+    /// The decimals a committed value is rounded to; the display keeps the codec's.
+    #[prop]
+    commit_decimals: Option<usize>,
+    /// An empty field means automatic: it shows the "Auto" word as its placeholder.
+    #[prop]
+    automatic: bool,
+    /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
+    #[prop]
+    fixed_decimals: Option<usize>,
+    /// The lengths a length field keeps and shows (`NumberField::length`).
+    lengths: Option<LengthUnits>,
+    /// How many shown units make one stored unit, read from the env in measure and parts; 1 for a plain field.
+    scale: f64,
+    options: TextOptions,
+    scrub: bool,
+    /// The popup slider's track length, read from the tokens in parts: a drag on its chevron moves the value as far
+    /// as a drag on the slider would.
+    track: f32,
+    picked: Option<NumberPick>,
+    /// The inside label's glyph before the text (`EnvView::inside_label`), measured in measure and parts for paint.
+    leading: Vec<Adornment>,
+    /// The unit and the chevrons after the text, measured in measure and parts for paint.
+    trailing: Vec<Adornment>,
+}
+
+impl<'a> NumberField<'a, Option<f64>> {
+    /// A number field named `label`; empty text is `None`.
+    pub fn new(label: impl Into<Label>, value: Bind<'a, Option<f64>>) -> Self {
+        Self::of(label, value)
+    }
+
+    /// A number field over a length the binding keeps in `lengths.stored` (the document's unit) and shows in
+    /// `lengths.shown` (the user's unit), after the shown unit's symbol. Typed text reads any pixel or length unit
+    /// spelling ("10 mm" in a field that shows inches) and a bare number in the shown unit; the binding, its check
+    /// and its edit events are in the stored unit. `range` is in the stored unit and `popup_slider` and presets
+    /// numbers too; the step is in the shown unit and defaults to the shown unit's own.
+    pub fn length(label: impl Into<Label>, value: Bind<'a, Option<f64>>, lengths: LengthUnits) -> Self {
+        Self::of(label, value).lengths(lengths)
+    }
+}
+
+impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
+    /// A number field named `label` over a value of another type, such as [`NamedOr`].
+    pub fn named(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
+        Self::of(label, value)
+    }
+
+    /// The lengths the field keeps and shows, as [`NumberField::length`] gives them: a named-number field reads and
+    /// shows lengths through the one units path.
+    #[must_use]
+    pub fn lengths(mut self, lengths: LengthUnits) -> Self {
+        self.lengths = Some(lengths);
+        self.unit_kind = Some(lengths.shown);
+        self.step = Some(lengths.shown.step());
+        self
+    }
+
+    fn of(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
+        NumberField {
+            common: Common::new(),
+            value,
+            codec: None,
+            unit_kind: None,
+            range: None,
+            step: None,
+            scrub_step: None,
+            stepper: None,
+            unit: None,
+            unit_placement: UnitPlacement::Inside,
+            status_zoom: false,
+            presets: None,
+            popup_slider: None,
+            snap_popup_slider: true,
+            snap_typed: false,
+            automatic: false,
+            commit_decimals: None,
+            fixed_decimals: None,
+            lengths: None,
+            scale: 1.0,
+            options: TextOptions::default(),
+            scrub: false,
+            track: 0.0,
+            picked: None,
+            leading: Vec::new(),
+            trailing: Vec::new(),
+        }
+        .label(label)
+    }
+
+    /// The caller hangs a context menu of its own on the field (`Menu::context` over its response, a unit menu): a
+    /// right click opens that menu instead of the field's edit menu.
+    #[must_use]
+    pub fn own_context_menu(mut self) -> Self {
+        self.options.own_menu = true;
+        self
+    }
+
+    /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
+    #[must_use]
+    pub(super) fn zoom_typing(mut self) -> Self {
+        self.options.tab = crate::primitives::TabKey::Rewrites;
+        self.options.holds_drafts = true;
+        self
+    }
+
+    /// Keeps the entire zoom percentage together in an unframed well in the status bar.
+    #[must_use]
+    pub(super) fn status_zoom(mut self) -> Self {
+        self.status_zoom = true;
+        self.sizing(Sizing::Content)
+    }
+
+    /// A drag on the field's side label scrubs the value too, with or without the focus in the field.
+    #[must_use]
+    pub fn scrub_by_label(mut self) -> Self {
+        self.scrub = true;
+        self
+    }
+
+    /// The range and step in the shown unit.
+    fn rule(&self) -> Rule {
+        let range = self.range.as_ref().map(|range| range.start() * self.scale..=range.end() * self.scale);
+        Rule::new(range.as_ref(), self.step)
+    }
+
+    /// Reads a length field's scale from stored to shown from the env.
+    fn settle_lengths(&mut self, units: &Units) {
+        if let Some(lengths) = self.lengths {
+            self.scale = units.length_scale(lengths).unwrap_or(1.0);
+        }
+    }
+
+    /// The unit drawn inside the field after the number: the field's own, else the symbol of its unit kind; none when
+    /// the host draws it after the field.
+    fn shown_unit(&self, units: &Units) -> Option<Label> {
+        if self.status_zoom || self.unit_placement == UnitPlacement::After {
+            return None;
+        }
+        self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
+    }
+
+    /// `stored` in the shown unit.
+    fn to_shown(&self, stored: f64) -> f64 {
+        stored * self.scale
+    }
+
+    /// `shown` in the stored unit.
+    fn to_stored(&self, shown: f64) -> f64 {
+        shown / self.scale
+    }
+
+    /// `stored` kept in the range.
+    fn settle_stored(&self, stored: f64) -> f64 {
+        self.to_stored(self.rule().settle(self.to_shown(stored)))
+    }
+
+    /// The number the field holds, in the shown unit.
+    fn shown_number(&self, value: Option<&V>) -> Option<f64> {
+        value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
+    }
+
+    /// Whether the field uses the dash for a missing or invalid value.
+    fn shows_blank(&self, shown: Option<&V>) -> bool {
+        shown.is_none() || non_finite(shown) || (self.status_zoom && shown.and_then(NumberValue::number).is_none())
+    }
+
+    /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
+    /// reads every length spelling).
+    fn number_codec(&self, units: &Units) -> NumberCodec {
+        self.codec.clone().unwrap_or_else(|| {
+            let reader = match self.lengths {
+                Some(lengths) => units.length_reader(lengths),
+                None => units.reader(self.unit_kind),
+            };
+            let codec = NumberCodec::new(reader, self.decimals());
+            if self.fixed_decimals.is_some() { codec.fixed() } else { codec }
+        })
+    }
+
+    /// The decimals the field shows: its codec's, else its fixed decimals, else its unit kind's.
+    fn shown_decimals(&self) -> RangeInclusive<usize> {
+        match (&self.codec, self.fixed_decimals, self.unit_kind) {
+            (Some(codec), _, _) => 0..=codec.decimals(),
+            (None, Some(fixed), _) => fixed..=fixed,
+            (None, None, Some(kind)) => kind.decimals(),
+            (None, None, None) => 0..=DEFAULT_DECIMALS,
+        }
+    }
+
+    /// The most decimals the field writes.
+    fn decimals(&self) -> usize {
+        *self.shown_decimals().end()
+    }
+
+    /// The names the presets list holds that a value of this type can be: the labels of its `Choice` rows.
+    fn names(&self, label: impl Fn(&Entry<NumberPick>) -> Label) -> Vec<(u32, String)> {
+        let rows = self.presets.unwrap_or_default();
+        rows.iter()
+            .filter_map(|row| match row.value() {
+                Some(NumberPick::Choice(id)) if V::from_name(*id).is_some() => Some((*id, label(row).as_str().to_owned())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn ruled(&self, units: &Units, mixed: bool, names: Vec<(u32, String)>) -> Ruled<V> {
+        Ruled {
+            inner: self.number_codec(units),
+            rule: self.rule(),
+            snap: self.snap_typed,
+            decimals: self.commit_decimals,
+            mixed,
+            names,
+            suffix: self.status_zoom.then(|| units.symbol(UnitKind::Percent)),
+            scale: self.scale,
+            value: PhantomData,
+        }
+    }
+
+    /// The chevrons after the text, in order, with their parts and accessible names.
+    fn chevrons(&self, words: &TextWords) -> Vec<(PartKey, Label)> {
+        let mut chevrons = Vec::new();
+        if self.presets.is_some() {
+            chevrons.push((PRESETS, words.presets.clone()));
+        }
+        if self.popup_slider.is_some() {
+            chevrons.push((SLIDER, words.slider.clone()));
+        }
+        chevrons
+    }
+
+    /// The unit, measured, then the chevrons: what sits after the text. The unit stands apart at the end of the value
+    /// area, so units line up in a column of fields and the number centres in the room before its unit. A
+    /// content-sized field's unit is as wide as the widest of its column group's.
+    fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
+        let shared = content_sized(cx);
+        let unit = self.shown_unit(&cx.env.units()).map(|unit| {
+            let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
+            if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
+        });
+        let chevrons =
+            chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
+        unit.into_iter().chain(chevrons).collect()
+    }
+
+    /// The inside label's glyph, measured: what sits before the text.
+    fn before_text(cx: &MeasureCx<'_, Self>) -> Vec<Adornment> {
+        let Some(inside) = cx.env.inside_label() else { return Vec::new() };
+        let glyph = match (inside.icon(), inside.text()) {
+            (Some(icon), _) => Adornment::glyph(icon.clone()),
+            (None, Some(text)) => Adornment::text(text.clone(), TypeRole::Body).apart().measured(cx),
+            (None, None) => return Vec::new(),
+        };
+        vec![glyph]
+    }
+
+    /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
+    fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
+        place(rect, &style.field, &self.leading, &self.trailing, rtl)
+    }
+
+    /// The alert for `typed`, a typed number the rule held to its range, in shown units; `kept` is the committed
+    /// value, in shown units too.
+    fn range_alert(&self, typed: f64, kept: Option<f64>) -> RangeAlert {
+        let rule = self.rule();
+        RangeAlert {
+            typed,
+            kept: kept.unwrap_or_else(|| rule.settle(typed)),
+            range: rule.bounds(),
+            whole: self.commit_decimals == Some(0) || self.decimals() == 0,
+            unit: self.unit.clone(),
+            unit_kind: self.unit_kind,
+            decimals: self.shown_decimals(),
+        }
+    }
+}
+impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
+    const ROLE: Role = Role::SPIN_BUTTON;
+    const INPUT: Input = Input::Text;
+    const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Text).with_moves();
+    type Style = NumberStyle;
+    type Output = NumberOutput<V>;
+
+    fn style(cx: &StyleCx<'_>, key: NumberFieldStyleKey<V>) -> NumberStyle {
+        let field = FieldStyle::at(cx);
+        let mut surface = field.surface.clone();
+        if key.status_zoom {
+            surface.kind = None;
+            surface.radius = CornerRadius::ZERO;
+            // Use the theme's recessed field color; focus and invalid states still use the usual borders.
+            surface.fill = Stateful::new(cx.color(cx.tokens.color.surface.sunken));
+            let clear = cx.color(Rgba::TRANSPARENT);
+            if let Some(border) = &mut surface.border {
+                border.off = States::new(clear, clear, clear, clear);
+            }
+        }
+        let faint = cx.color(cx.tokens.color.text.faint);
+        let muted = cx.color(cx.tokens.color.text.muted);
+        NumberStyle {
+            surface,
+            // The width is the value area, at most a number cell, and the adornments beside it, at least a cell
+            // (`measure`); the style's minimum is only the height.
+            metrics: field.clone().sized_by_content().metrics,
+            unit: TextLook::new(
+                TypeRole::Caption,
+                Stateful::new(faint).off(States::new(faint, faint, faint, cx.color(cx.tokens.color.text.disabled))),
+            ),
+            handle: Stateful::new(muted).off(States::new(muted, muted, muted, cx.color(cx.tokens.color.text.disabled))),
+            cell: cx.control().number,
+            field,
+        }
+    }
+
+    /// A drag on the body scrubs a field that is not in edit; the wheel steps the value.
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS | Sense::WHEEL_Y
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        self.settle_lengths(&cx.env.units());
+        let codec = self.ruled(&cx.env.units(), false, self.names(|row| cx.env.resolve(&row.label().clone())));
+        // The value area holds the widest value the field shows (the range's ends at the codec's precision, or at the
+        // places it commits when it rounds what it commits, or the value when the range is open) with the caret and the unit, at most one number cell; a longer value scrolls
+        // inside it. The inside label and the chevrons take their own room beside it, each as `place` gives it. The
+        // field is never narrower than a cell, so a column of short fields ends at one edge. A content-sized field
+        // takes its whole value and has no floor; in a column group its value area is the group's widest.
+        let content = content_sized(cx);
+        // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
+        let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
+        let shown = cx.value();
+        let no_zoom_value = self.status_zoom && self.shows_blank(shown);
+        let (sample, role) = if no_zoom_value {
+            // Text editors draw their hint in the proportional face.
+            (Cow::Borrowed(BLANK), self.options.role)
+        } else {
+            (codec.sample(shown.unwrap_or(&blank)), TypeRole::Mono)
+        };
+        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(role));
+        if content {
+            text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
+        }
+        let chevrons = self.chevrons(&cx.words::<TextWords>());
+        self.leading = Self::before_text(cx);
+        self.trailing = self.after_text(cx, &chevrons);
+        let unit = &self.trailing[..self.trailing.len() - chevrons.len()];
+        let value = text.x + reserve(&cx.style.field, &[], unit);
+        let beside = reserve(&cx.style.field, &self.leading, &self.trailing) - reserve(&cx.style.field, &[], unit);
+        if content {
+            return Vec2::new(value + beside, text.y);
+        }
+        let field = cx.style.field.metrics();
+        let cell = cx.style.cell - field.padding.start - field.padding.end;
+        Vec2::new((value.min(cell) + beside).max(cell), text.y)
+    }
+
+    fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        self.settle_lengths(&cx.env.units());
+        self.track = cx.tokens.size.length.track;
+        let rtl = cx.flow.is_rtl();
+        let chevrons = self.chevrons(&cx.words::<TextWords>());
+        self.leading = Self::before_text(cx);
+        self.trailing = self.after_text(cx, &chevrons);
+        let placed = self.laid_out(cx.style, cx.content_rect, rtl);
+        if let Some(slot) = placed.leading.first() {
+            cx.label_part(*slot);
+        }
+        let text = placed.text;
+        self.options.centred = true;
+        self.options.mono = true;
+        self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
+        let shown = cx.value();
+        if self.options.placeholder.is_none() {
+            if self.shows_blank(shown) {
+                self.options.placeholder = Some(BLANK.into());
+            } else if self.automatic {
+                self.options.placeholder = Some(cx.words::<TextWords>().automatic.clone());
+            }
+        }
+        let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
+        cx.text(text_part::<V>(), text, &self.ruled(&cx.env.units(), shown.is_none(), names), shown.unwrap_or(&blank), &self.options);
+        let slider_reason =
+            if self.presets.is_some() { "Alt+Down opens the presets list; the slider opens by pointer" } else { "Alt+Down opens the slider" };
+        let chevron_rects = &placed.trailing[placed.trailing.len() - chevrons.len()..];
+        for ((key, _), at) in chevrons.iter().zip(chevron_rects) {
+            let reason = if *key == PRESETS { "Alt+Down opens the list" } else { slider_reason };
+            let popup = if *key == PRESETS { "presets" } else { "slider" };
+            cx.part(*key, *at)
+                .sense(Sense::CLICK | Sense::DRAG | Sense::KEEP_FOCUS)
+                .priority(HitPriority::new(HitLevel::Handle, 0))
+                .pointer_only(reason)
+                .toggles(popup);
+        }
+    }
+
+    fn bind(&mut self) -> Option<BindMut<'_, V>> {
+        Some(self.value.reborrow())
+    }
+
+    /// A write-back equal to the proposal at the field's decimals is the gesture's own write.
+    fn same_value(&self, proposed: &V, host: &V) -> bool {
+        let decimals = self.decimals();
+        let at_precision = |value: &V| value.number().map(|number| round_to(number * self.scale, decimals));
+        proposed == host || (proposed.named() == host.named() && at_precision(proposed) == at_precision(host))
+    }
+
+    /// A drag on the body of a field not in edit, or on its side label with `scrub_by_label`, moves by the scrub step per point;
+    /// a drag on the popup slider's chevron moves the value as far as the same drag on the slider.
+    fn scrub(&self) -> Option<Scrub<V>> {
+        let rule = self.rule();
+        let step = self.scrub_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step);
+        let drag = ValueDrag::relative(step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
+        // Rounded to the field's decimals, so a scrubbed value carries no float noise. The step is not a grid
+        // here: an Alt drag moves by a share of it.
+        let decimals = self.decimals();
+        let scale = self.scale;
+        let mut scrub =
+            Scrub::new(drag, move |value: &V| value.number().unwrap_or(0.0) * scale, move |number| V::of_number(round_to(number, decimals) / scale))
+                .on_field();
+        if self.scrub {
+            scrub = scrub.by_label();
+        }
+        if let Some(range) = self.popup_slider.as_ref().filter(|_| self.track > 0.0) {
+            let shown = range.start() * scale..=range.end() * scale;
+            let rate = (shown.end() - shown.start()) / f64::from(self.track);
+            scrub = scrub.part(SLIDER, ValueDrag::relative(rate, shown));
+        }
+        Some(scrub)
+    }
+
+    /// Arrows, Page keys, the wheel and AccessKit Increment and Decrement step the value, AccessKit sets it, and the
+    /// chevrons open the popups. Up and Down step by the step, with Shift by `LARGE_STEPS` steps and, on a field
+    /// without a dropdown, with Alt by a tenth where the decimals show it (else by the step); on a field with presets
+    /// or a popup slider Alt+Down opens the dropdown instead, so it has no fine key step, and the wheel keeps its Alt
+    /// fine step. A step starts from the applied value (the text part applies a typed draft first), or from 0 kept in
+    /// the range while the field is blank. A wheel run is one edit gesture that the wheel gesture's end commits; a key
+    /// or an AccessKit set during the run commits it first and steps from the value it showed.
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        // A drag from the slider's chevron is one gesture with the slider it opened: its release closes the slider.
+        if cx.part_if_declared(SLIDER).is_some_and(|part| matches!(part.press.phase, PressPhase::Release { click: false, .. })) {
+            cx.popup("slider").close(cx);
+        }
+        let rule = self.rule();
+        let fine_shows = self.decimals() >= decimals_for_step(rule.step / LARGE_STEPS);
+        while let Some((mv, mods)) = cx.intents().take_move() {
+            let (notches, scale) = match mv {
+                NavMove::Up => (1, key_scale(mods, fine_shows)),
+                NavMove::Down => (-1, key_scale(mods, fine_shows)),
+                NavMove::PageUp => (1, LARGE_STEPS),
+                NavMove::PageDown => (-1, LARGE_STEPS),
+                // AccessKit Increment and Decrement: the text keeps the horizontal arrows, so only those arrive.
+                NavMove::Forward => (1, 1.0),
+                NavMove::Back => (-1, 1.0),
+                _ => continue,
+            };
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
+            let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
+            let next = match &self.stepper {
+                Some(stepper) => rule.settle(stepper.next(from, notches)),
+                None => rule.stepped(from, notches, scale),
+            };
+            cx.set(V::of_number(self.to_stored(next)));
+        }
+        if let Some(wheel) = cx.take_wheel() {
+            let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
+            let steps = ValueSteps::new(from, rule.low, rule.high, rule.step, rule.step * LARGE_STEPS).fine(rule.step / LARGE_STEPS);
+            // A notch that changes the value proposes it; the runtime's zero-scroll end share changes none and ends
+            // the run.
+            let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
+                StepResult::Set(next) => {
+                    let next = match &self.stepper {
+                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }),
+                        _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
+                    };
+                    let next = rule.settle(next);
+                    (next != from).then(|| V::of_number(self.to_stored(next)))
+                }
+                _ => None,
+            };
+            cx.wheel_run(wheel.phase, next);
+        }
+        if let Some(next) = cx.intents().take_set_value() {
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
+            cx.set(V::of_number(self.to_stored(rule.settle(next))));
+        }
+    }
+
+    /// The edit menu, the presets list and the popup slider.
+    fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        crate::menu::text_menu(ui, cx, &self.options);
+        if let Some(rows) = self.presets {
+            self.show_presets(ui, cx, rows);
+        }
+        if let Some(range) = self.popup_slider.clone() {
+            self.show_slider(ui, cx, &range);
+        }
+    }
+
+    /// The numeric value, and a button node per chevron named by its word (the painted face). The text part adds the
+    /// text value, the selection and the text actions to the same node.
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        let rule = self.rule();
+        // A value that is not finite shows the dash, as a mixed one does, and has no number to read.
+        let numeric = match self.shown_number(cx.value()).filter(|value| value.is_finite()) {
+            Some(value) => Numeric::new(value, rule.bounds()),
+            None => Numeric::empty(rule.bounds()),
+        };
+        access.numeric(numeric.step(rule.step));
+        for (key, shown) in [(PRESETS, self.presets.is_some()), (SLIDER, self.popup_slider.is_some())] {
+            if shown {
+                access.node(key, Role::BUTTON);
+            }
+        }
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let rtl = cx.flow.is_rtl();
+        let chevrons = self.chevrons(&cx.words::<TextWords>());
+        let placed = self.laid_out(cx.style, cx.content_rect, rtl);
+        // A mixed value shows the dash alone: a unit beside it would claim a measure the selection does not have.
+        if self.shown_unit(&cx.env.units()).is_some()
+            && cx.value().is_some_and(|value| !non_finite(Some(value)))
+            && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
+        {
+            unit.paint(ui, *at, cx.resolve(&cx.style.unit.color), self.options.role);
+        }
+        if let (Some(glyph), Some(at)) = (self.leading.first(), placed.leading.first()) {
+            glyph.paint(ui, *at, cx.resolve(&cx.style.handle), self.options.role);
+        }
+        for (key, name) in chevrons {
+            ui.face(key, IconButton::new(crate::controls::disclosure::DisclosureGlyph::dropdown()).label(name));
+        }
+    }
+
+    /// The value as the field shows it: its ruled codec's text, in the shown unit, a name as its presets row's label.
+    fn word_value(&self, value: &V, cx: &Cx<'_, Self>) -> Option<String> {
+        let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        Some(self.ruled(&cx.env.units(), false, names).format(value))
+    }
+
+    /// The edit, the preset picked, and what the committed text's parse learned: its unit, whether the range held it
+    /// (only a typed commit carries a note, so steps, the wheel and a scrub never report out of range) and whether
+    /// the text was cut.
+    fn finish(self, cx: Cx<'_, Self>) -> NumberOutput<V> {
+        let committed = cx.text(&text_part::<V>()).and_then(|outcome| outcome.committed);
+        let out_of_range = committed.and_then(|note| note.held).map(|typed| self.range_alert(typed, self.shown_number(cx.value())));
+        NumberOutput {
+            edit: cx.edit_response(),
+            preset: self.picked,
+            typed_unit: committed.and_then(|note| note.unit).and_then(UnitKind::from_tag),
+            out_of_range,
+            cut: committed.is_some_and(|note| note.cut),
+        }
+    }
+}

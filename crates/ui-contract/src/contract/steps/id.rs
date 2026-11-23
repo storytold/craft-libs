@@ -1,0 +1,113 @@
+//! Step 3, id: the `Auto` ordinals and the ids a pass registers.
+
+use crate::contract::IdSource;
+use crate::runtime::egui::pass;
+use crate::runtime::frame::{PerViewport, Stamped};
+use crate::runtime::inspect;
+use egui::{Context, Id, IdMap, IdSet, Ui};
+use std::any::TypeId;
+
+/// The `Auto` ordinals and the ids registered in one pass of one viewport.
+#[derive(Default)]
+pub(crate) struct IdPass {
+    /// Under the scope's id joined with the component type's.
+    next: IdMap<u32>,
+    seen: IdSet,
+}
+
+/// Runs `f` as a measuring run that leaves the `Auto` ordinals as it found them, so the run that follows in the same
+/// pass gives every component the id the measuring run gave it.
+pub(in crate::contract) fn measuring<R>(ctx: &Context, f: impl FnOnce() -> R) -> R {
+    keeping_ids(ctx, || (crate::runtime::measure::run(ctx, f), true))
+}
+
+/// Runs the measuring run `run` as a draft (`layout_memory::draft`) whose `Auto` ordinals go with it: taken back, it leaves
+/// the pass's records, transcripts, contributions and ordinals as it found them, so a run that replaces it gives every
+/// component the id it gave. `keep` decides from the result; returns it and whether it was kept.
+pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce(&R) -> bool) -> (R, bool) {
+    keeping_ids(ctx, || {
+        let (out, kept) = crate::runtime::layout_memory::draft(ctx, run, keep);
+        ((out, kept), !kept)
+    })
+}
+
+/// Runs `f` and, when it returns `true` beside its result, leaves the `Auto` ordinals as it found them, so what runs
+/// next in the same pass gives every component the id `f`'s run gave it.
+pub(crate) fn keeping_ids<R>(ctx: &Context, f: impl FnOnce() -> (R, bool)) -> R {
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let ordinals = |take: Option<IdMap<u32>>| {
+        PerViewport::<Stamped<IdPass>>::with_pass(
+            ctx,
+            viewport,
+            pass_nr,
+            |pass, _| *pass = IdPass::default(),
+            |pass| match take {
+                Some(next) => {
+                    pass.next = next;
+                    None
+                }
+                None => Some(pass.next.clone()),
+            },
+        )
+    };
+    let kept = ordinals(None);
+    let (out, restore) = f();
+    if restore {
+        ordinals(kept);
+    }
+    out
+}
+
+/// Step 3, id.
+///
+/// `register` is false for `measure_in`, which peeks, in a sizing pass, and for a container that shows nothing, which
+/// claims its id with `claim_id`. `advance` is false only for
+/// `measure_in`: a sizing pass advances the ordinals, so its ids equal those of the pass that follows it.
+/// `ty` is the component's style key type and `name` its type name.
+pub(crate) fn id(ui: &Ui, source: &IdSource, register: bool, advance: bool, ty: TypeId, name: &'static str) -> Id {
+    let ctx = ui.ctx();
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let scope = ui.scope_id();
+    let id = match source {
+        IdSource::Id(id) => *id,
+        IdSource::Salt(salt) => scope.with(*salt),
+        _ => {
+            let n = PerViewport::<Stamped<IdPass>>::with_pass(
+                ctx,
+                viewport,
+                pass_nr,
+                |pass, _| *pass = IdPass::default(),
+                |pass| {
+                    let slot = pass.next.entry(scope.with(ty)).or_insert(0);
+                    let n = *slot;
+                    if advance {
+                        *slot += 1;
+                    }
+                    n
+                },
+            );
+            scope.with((ty, n))
+        }
+    };
+    if register {
+        crate::runtime::memory::register_owner(ctx, id);
+        claim_id(ui, id, name);
+    }
+    id
+}
+
+/// Records `id` as taken in this pass and reports a second taker as a duplicate. Step 3 claims every id it registers;
+/// a container that shows nothing claims its id without registering it.
+pub(crate) fn claim_id(ui: &Ui, id: Id, name: &'static str) {
+    let ctx = ui.ctx();
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let repeated =
+        PerViewport::<Stamped<IdPass>>::with_pass(ctx, viewport, pass_nr, |pass, _| *pass = IdPass::default(), |pass| !pass.seen.insert(id));
+    if repeated {
+        log::warn!("{name} was shown twice with the id {id:?} in one pass");
+        inspect::finding(ctx, inspect::Finding { rule: "duplicate-id", component: name, subject: format!("{id:?}") });
+    }
+}

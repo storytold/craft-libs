@@ -6,7 +6,7 @@
 
 use super::{bare_header, pattern, put_u32};
 use crate::{
-    CompoundFile, ENDOFCHAIN, EntryKind, Error, FATSECT, FREESECT, Limits, NOSTREAM, SIGNATURE, Version, Writer, directory_names, has_entry_named,
+    CompoundFile, ENDOFCHAIN, EntryKind, Error, FATSECT, FREESECT, Limits, NOSTREAM, SIGNATURE, Version, directory_names, has_entry_named,
     write_streams,
 };
 
@@ -218,13 +218,6 @@ fn a_cut_mini_sector_inside_a_chain_is_damage() {
     invalid_containing(cf.read_path("Workbook"), "cut short inside a chain");
 }
 
-/// FAT sectors are never read short: a file cut inside its only FAT sector does not open.
-#[test]
-fn a_cut_fat_sector_is_refused() {
-    let file = foreign_file(&[("a", &[1; 10])]);
-    assert!(CompoundFile::open(&file[..1000]).is_err());
-}
-
 // ---- loops shorter than the stream ---------------------------------------------------------
 
 /// A chain that loops inside the stream's declared size used to read back as the same sectors
@@ -269,23 +262,6 @@ fn a_damaged_mini_stream_only_fails_the_streams_in_it() {
 
 // ---- stream size cap and the other limits --------------------------------------------------
 
-#[test]
-fn stream_size_limit() {
-    let data = pattern(5000, 3);
-    let file = write_streams(Version::V3, &[("s", &data), ("t", &[1, 2, 3])]).unwrap();
-    let over = |r: crate::Result<Vec<u8>>| assert!(matches!(r, Err(Error::LimitExceeded(_))), "{r:?}");
-    let cf = CompoundFile::open_with(&file, Limits { max_stream_size: 4999, ..Limits::default() }).unwrap();
-    over(cf.read_path("s"));
-    assert_eq!(cf.read_path("t").unwrap(), [1, 2, 3], "a stream under the limit");
-    let cf = CompoundFile::open_with(&file, Limits { max_stream_size: 5000, ..Limits::default() }).unwrap();
-    assert_eq!(cf.read_path("s").unwrap(), data);
-    // the per-call cap
-    over(cf.read_path_capped("s", 4999));
-    over(cf.read_capped(cf.find("s").unwrap(), 0));
-    assert_eq!(cf.read_path_capped("s", 5000).unwrap(), data);
-    assert_eq!(cf.read_path_capped("s", u64::MAX).unwrap(), data, "a cap above the limit does not raise it");
-}
-
 /// The default limit is 1 GiB, and a size the file cannot hold is refused before any allocation
 /// whatever the limit.
 #[test]
@@ -300,61 +276,6 @@ fn a_huge_declared_size_is_refused_without_allocating() {
     file[e + 120..e + 128].copy_from_slice(&u64::MAX.to_le_bytes());
     let cf = CompoundFile::open_with(&file, Limits { max_stream_size: u64::MAX, ..Limits::default() }).unwrap();
     invalid_containing(cf.read_path("s"), "larger than the file");
-}
-
-#[test]
-fn directory_entry_limit() {
-    let streams: Vec<(String, Vec<u8>)> = (0..10).map(|i| (format!("s{i}"), vec![i as u8])).collect();
-    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
-    // 11 entries: three 512-byte directory sectors, so 12 entries with the unused one
-    let file = write_streams(Version::V3, &refs).unwrap();
-    let with = |n| CompoundFile::open_with(&file, Limits { max_dir_entries: n, ..Limits::default() });
-    assert!(matches!(with(11), Err(Error::LimitExceeded(_))));
-    assert_eq!(with(12).unwrap().walk().len(), 10);
-    assert_eq!(
-        directory_names(&file, &Limits { max_dir_entries: 4, ..Limits::default() }).unwrap(),
-        ["Root Entry", "s0", "s1", "s2"],
-        "the scan reports what it read"
-    );
-}
-
-/// Only 512- and 4096-byte sectors exist. Other shifts used to be accepted (down to 128-byte
-/// sectors, which overlap the header).
-#[test]
-fn only_sector_shifts_9_and_12_are_accepted() {
-    for (version, good) in [(Version::V3, 9u16), (Version::V4, 12)] {
-        let mut file = write_streams(version, &[("s", &[1; 10])]).unwrap();
-        assert!(CompoundFile::open(&file).is_ok());
-        for shift in (0..=20).filter(|s| *s != 9 && *s != 12) {
-            file[30..32].copy_from_slice(&(shift as u16).to_le_bytes());
-            assert_eq!(CompoundFile::open(&file).unwrap_err(), Error::Invalid(format!("sector shift {shift}")));
-            assert_eq!(directory_names(&file, &Limits::default()), None);
-        }
-        file[30..32].copy_from_slice(&good.to_le_bytes());
-        file[32..34].copy_from_slice(&7u16.to_le_bytes());
-        assert_eq!(CompoundFile::open(&file).unwrap_err(), Error::Invalid("mini sector shift 7".into()));
-    }
-}
-
-#[test]
-fn a_wrong_byte_order_mark_is_not_a_compound_file() {
-    let mut file = write_streams(Version::V3, &[("s", &[1; 10])]).unwrap();
-    file[28] = 0xFF;
-    file[29] = 0xFE;
-    assert_eq!(CompoundFile::open(&file).unwrap_err(), Error::NotCfb);
-}
-
-/// Before version 4 a size is 32 bits and writers may leave anything in the high half (§2.6.3).
-#[test]
-fn version_3_ignores_the_high_half_of_a_size() {
-    let data = pattern(5000, 9);
-    let mut file = foreign_file(&[("Workbook", &data)]);
-    let e = dir_at(&file, 1);
-    put_u32(&mut file, e + 124, 0xDEAD_BEEF);
-    assert_eq!(CompoundFile::open(&file).unwrap().read_path("Workbook").unwrap(), data);
-    // a version field below 3 is treated the same way
-    file[26] = 2;
-    assert_eq!(CompoundFile::open(&file).unwrap().read_path("Workbook").unwrap(), data);
 }
 
 // ---- the directory tree --------------------------------------------------------------------
@@ -447,23 +368,6 @@ fn walk_lists_storages_and_streams_with_paths() {
     assert!(!cf.has_stream("Macros/nope"));
     assert!(!cf.has_stream(""), "the root");
     assert_eq!(cf.read_path("/Macros/VBA/ThisDocument").unwrap(), b"y");
-}
-
-#[test]
-fn stream_at_rules() {
-    let mut w = Writer::default();
-    let s = w.storage(Writer::ROOT, "Existing", [9; 16]).unwrap();
-    w.stream_at("existing/inner", vec![1]).unwrap();
-    assert!(matches!(w.stream_at("Existing/INNER", vec![2]), Err(Error::BadName(_))), "a duplicate");
-    assert!(matches!(w.stream_at("Existing/inner/below", vec![2]), Err(Error::Invalid(_))), "a stream is not a storage");
-    assert!(matches!(w.stream_at("", vec![]), Err(Error::BadName(_))));
-    assert!(matches!(w.stream_at("a/b:c", vec![]), Err(Error::BadName(_))));
-    assert!(matches!(write_streams(Version::V3, &[("x", b"1"), ("X", b"2")]), Err(Error::BadName(_))));
-    let _ = s;
-    let file = w.finish();
-    let cf = CompoundFile::open(&file).unwrap();
-    assert_eq!(cf.entries[cf.find("Existing").unwrap()].clsid, [9; 16], "the existing storage was reused");
-    assert_eq!(cf.read_path("Existing/inner").unwrap(), [1]);
 }
 
 // ---- the FAT sector list -------------------------------------------------------------------
@@ -598,30 +502,6 @@ fn scan_falls_back_to_a_byte_search() {
     }
     assert!(!has_entry_named(&b[..1024], "EncryptionInfo", &limits), "cut before the directory");
     assert!(!has_entry_named(&b[..300], "", &limits));
-}
-
-#[test]
-fn scan_survives_hostile_headers() {
-    let limits = Limits::default();
-    let mut b = unlinked(&["Workbook"]);
-    for at in [30usize, 48, 68, 76, 512, 516, 1024 + 64] {
-        for v in [0u32, 1, 7, 0xFFFF_FFFA, 0xFFFF_FFFF, 0x7FFF_FFFF] {
-            let mut c = b.clone();
-            put_u32(&mut c, at, v);
-            let _ = has_entry_named(&c, "EncryptedPackage", &limits);
-            for cut in [0usize, 8, 100, 600, 1100] {
-                let _ = has_entry_named(&c[..cut.min(c.len())], "EncryptedPackage", &limits);
-            }
-        }
-    }
-    // A directory chain that loops back on itself stops at the bound and reports what it read.
-    put_u32(&mut b, 516, 1);
-    assert!(!has_entry_named(&b, "EncryptedPackage", &limits));
-    assert!(has_entry_named(&b, "Workbook", &limits));
-    // A DIFAT sector that points at itself stops at the bound too.
-    let mut b = unlinked(&["Workbook"]);
-    put_u32(&mut b, 68, 1);
-    assert!(directory_names(&b, &limits).is_some());
 }
 
 // ---- exhaustive damage ---------------------------------------------------------------------

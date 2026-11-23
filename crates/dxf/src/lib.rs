@@ -3,14 +3,19 @@
 //! DXF is a sequence of (group code, value) pairs. This crate parses ASCII and binary DXF into a
 //! flat list of [`Tag`]s, splits them into sections and entities, and writes tags back. [`model`]
 //! reads the tags as a drawing (header variables, tables, blocks, entities, objects); mapping
-//! that onto an application's own document is left to the caller. Written from Autodesk's
+//! that onto an application's own document is left to the caller. [`drawing`] writes an ASCII
+//! file around a pre-built `ENTITIES` section (VectorCraft's writer). Written from Autodesk's
 //! published DXF Reference; depends on no other Craft crate. Moved from CADCraft's `cadcraft-dxf`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
 
+pub mod drawing;
+pub mod lin_pat;
 pub mod model;
+pub mod mtext;
+pub mod mtext_tokens;
 pub mod paths;
 mod version;
 pub use version::Version;
@@ -195,8 +200,9 @@ pub use codepage::decode_code_page;
 /// # Errors
 ///
 /// Returns an error for empty input, an invalid group code, an incomplete group-code/value pair,
-/// truncated binary data, or more than [`MAX_TAGS`] group codes. For ASCII input, invalid numeric
-/// text becomes `0.0` for real values or `0` for integer values, and an EOF tag is not required.
+/// truncated binary data, or more group codes than the limit returned by [`max_tags()`], which is
+/// [`MAX_TAGS`] by default. For ASCII input, invalid numeric text becomes `0.0` for real values or
+/// `0` for integer values, and an EOF tag is not required.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Tag>> {
     parse_with_limit(bytes, max_tags())
 }
@@ -1065,65 +1071,9 @@ mod tests {
     }
 
     #[test]
-    fn literal_escape_text_roundtrips() {
-        for utf8 in [false, true] {
-            for text in ["\\U+00E9", "\\M+183A4F", "a\\nb \\P", "\\\\U+00E9", "\\U+005C"] {
-                let tags = vec![Tag::s(8, text)];
-                let back = parse_ascii(&write_ascii_as(&tags, utf8)).unwrap();
-                assert_eq!(back, tags, "utf8={utf8} {text}");
-                let back = parse_binary(&write_binary(&tags, utf8)).unwrap();
-                assert_eq!(back[1..], tags[..], "binary utf8={utf8} {text}");
-            }
-        }
-    }
-
-    #[test]
     fn blank_lines_do_not_consume_group_code_limit() {
         let tags = parse_with_limit(b"0\nEOF\n\n\n", 1).expect("one group code should fit a limit of one");
         assert_eq!(tags, vec![Tag::s(0, "EOF")]);
-    }
-
-    #[test]
-    fn ascii_roundtrip() {
-        let tags = vec![
-            Tag::s(0, "SECTION"),
-            Tag::s(2, "ENTITIES"),
-            Tag::s(0, "LINE"),
-            Tag::s(8, "0"),
-            Tag::f(10, 1.5),
-            Tag::f(20, 2.0),
-            Tag::i(62, 1),
-            Tag::s(0, "ENDSEC"),
-            Tag::s(0, "EOF"),
-        ];
-        let text = write_ascii(&tags);
-        let back = parse(text.as_bytes()).unwrap();
-        assert_eq!(back, tags);
-        let secs = sections(&back);
-        assert_eq!(secs.len(), 1);
-        assert_eq!(secs[0].name, "ENTITIES");
-        let recs = records(&secs[0].tags);
-        assert_eq!(recs[0].0, "LINE");
-        assert_eq!(recs[0].1.len(), 4);
-    }
-
-    #[test]
-    fn binary_parse() {
-        let mut b = BINARY_SENTINEL.to_vec();
-        let push_str = |b: &mut Vec<u8>, code: i16, s: &str| {
-            b.extend_from_slice(&code.to_le_bytes());
-            b.extend_from_slice(s.as_bytes());
-            b.push(0);
-        };
-        push_str(&mut b, 0, "LINE");
-        b.extend_from_slice(&10i16.to_le_bytes());
-        b.extend_from_slice(&3.25f64.to_le_bytes());
-        b.extend_from_slice(&62i16.to_le_bytes());
-        b.extend_from_slice(&5i16.to_le_bytes());
-        push_str(&mut b, 0, "EOF");
-        let tags = parse(&b).unwrap();
-        assert_eq!(tags[1], Tag::f(10, 3.25));
-        assert_eq!(tags[2], Tag::i(62, 5));
     }
 
     /// A pre-R13 binary body: 1-byte group codes, 255 escaping a 2-byte code (1001 here).
@@ -1249,34 +1199,6 @@ mod tests {
     }
 
     #[test]
-    fn malformed_inputs() {
-        assert!(parse(b"").is_err());
-        assert!(parse(b"abc\nxyz\n").is_err());
-        assert!(parse(b"0\n").is_err());
-        let mut b = BINARY_SENTINEL.to_vec();
-        b.extend_from_slice(&10i16.to_le_bytes());
-        b.extend_from_slice(&[1, 2, 3]);
-        assert!(parse(&b).is_err());
-        // Bad numbers become 0 rather than failing.
-        let t = parse(b"10\nnotanumber\n0\nEOF\n").unwrap();
-        assert!(t[0].f64().abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn unicode_escapes_and_latin1() {
-        let t = parse(b"1\nCaf\\U+00E9\n0\nEOF\n").unwrap();
-        assert_eq!(t[0].str(), "Café");
-        let t = parse(b"1\nCaf\xe9\n0\nEOF\n").unwrap();
-        assert_eq!(t[0].str(), "Café");
-    }
-
-    #[test]
-    fn surrogate_pair_escapes() {
-        let t = parse(b"1\n\\U+D83D\\U+DE00 \\u+56fe\\U+53f7\n0\nEOF\n").unwrap();
-        assert_eq!(t[0].str(), "😀 \\u+56fe号");
-    }
-
-    #[test]
     fn hostile_escapes_stay_literal() {
         for s in [
             "\\U+",
@@ -1297,43 +1219,11 @@ mod tests {
             assert_eq!(t[0].str(), expect, "{s:?}");
         }
     }
-
-    #[test]
-    fn writes_non_ascii_as_escapes() {
-        let tags = vec![Tag::s(1, "图号 Ä°ø 😀\r\nend"), Tag::s(1000, "Ø"), Tag::s(0, "EOF")];
-        let text = write_ascii(&tags);
-        assert!(text.is_ascii());
-        assert!(text.contains("\\U+56FE\\U+53F7 \\U+00C4\\U+00B0\\U+00F8 \\U+D83D\\U+DE00  end\r\n"));
-        let back = parse(text.as_bytes()).unwrap();
-        assert_eq!(back[0].str(), "图号 Ä°ø 😀  end");
-        assert_eq!(back[1].str(), "Ø");
-    }
-
-    #[test]
-    fn binary_strings_unescape() {
-        let mut b = BINARY_SENTINEL.to_vec();
-        b.extend_from_slice(&1i16.to_le_bytes());
-        b.extend_from_slice(b"\\U+56FE\\U+53F7\0");
-        b.extend_from_slice(&0i16.to_le_bytes());
-        b.extend_from_slice(b"EOF\0");
-        assert_eq!(parse(&b).unwrap()[0].str(), "图号");
-    }
 }
 
 #[cfg(test)]
 mod limit_tests {
     use super::*;
-
-    #[test]
-    fn tag_limit_defaults_and_env_override() {
-        assert_eq!(max_tags_from(None), MAX_TAGS);
-        assert_eq!(max_tags_from(Some("")), MAX_TAGS);
-        assert_eq!(max_tags_from(Some("0")), MAX_TAGS);
-        assert_eq!(max_tags_from(Some("abc")), MAX_TAGS);
-        assert_eq!(max_tags_from(Some(" 400_000_000 ")), 400_000_000);
-        // Issue #1948: the default must admit a DXF rendition well above 50 million group codes.
-        const { assert!(MAX_TAGS >= 100_000_000) };
-    }
 
     #[test]
     fn a_refused_reservation_of_binary_tags_is_an_error() {

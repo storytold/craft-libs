@@ -1,0 +1,25 @@
+//! Stories of `ReportDialog`.
+
+use super::{ReportDialog, ReportNote};
+use crate::runtime::env::Label;
+use crate::testing::{Drive, StoryData, StoryOutput, story};
+use craft_theme::variant::Tone;
+use egui::Ui;
+
+#[story(ReportDialog<'static>, covers = [], drive = Drive::Never)]
+fn report_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let count = *data.ranged("notes", 3_usize, 0.0..=40.0);
+    let plain = *data.choice("body", false, &[("Notes", false), ("Lines", true)]);
+    let notes: Vec<ReportNote> = (0..count)
+        .map(|n| match n % 3 {
+            0 => ReportNote::new(Tone::Warn, format!("Font on page {} was substituted", n + 1)),
+            1 => ReportNote::new(Tone::Info, format!("Page {} has no bleed", n + 1)),
+            _ => ReportNote::new(Tone::Bad, format!("Image on page {} could not be read", n + 1)),
+        })
+        .collect();
+    let mut dialog = ReportDialog::new("Import Report", "Imported 12 pages.", notes);
+    if plain {
+        dialog = dialog.lines((0..count).map(|n| Label::from(format!("page-{:03}.png: 2 layers merged", n + 1))).collect());
+    }
+    dialog.opened(data.bind("open", true)).show(ui).into()
+}

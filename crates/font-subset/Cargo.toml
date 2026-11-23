@@ -1,0 +1,24 @@
+[package]
+name = "craft-font-subset"
+description = "The font subsetter: HarfBuzz closure, CFF and CFF2, variable-font instancing, licence-aware renaming and WOFF2. Native only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+brotli = { version = "9.1", default-features = false, features = ["std"] }
+harfbuzz-subset-sys = { workspace = true }
+skrifa = "0.49"
+thiserror = { workspace = true }
+unicode-normalization = "0.1.26"
+write-fonts = { version = "0.55", features = ["read"] }
+
+[dev-dependencies]
+rustybuzz = "0.20.1"
+serde_json = "1"
+wuff = "0.2.9"
+
+[lints]
+workspace = true

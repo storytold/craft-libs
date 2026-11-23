@@ -29,6 +29,7 @@ pub enum InstallSource {
 }
 
 impl InstallSource {
+    /// The name shown to the user.
     pub fn label(self) -> &'static str {
         match self {
             Self::Launcher => "ArtCraft Launcher",
@@ -55,10 +56,28 @@ impl InstallSource {
 pub struct Installed {
     /// `None` when the copy is there but its version couldn't be read.
     pub version: Option<Version>,
+    #[allow(missing_docs)]
     pub source: InstallSource,
     /// Where it lives: the `.app`, the exe, the AppImage, or the binary of a package.
     pub location: String,
     /// The package that installed it, for package-manager installs (`photocraft-bin`).
     #[serde(default)]
     pub package: Option<String>,
+    /// Whether this copy is managed externally (such as a Flatpak from FlatPark) and
+    /// will not be replaced with a downloaded bundle.
+    #[serde(default)]
+    pub externally_managed: bool,
+    /// The remote repository or origin (`flatpark`, `<app>-origin`), when known.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// The installation scope or name (`user`, `system`, or a named installation), for Flatpak installs.
+    #[serde(default)]
+    pub installation: Option<String>,
+}
+
+impl Installed {
+    /// Whether this copy is managed externally and should not be replaced by a downloaded bundle.
+    pub fn is_externally_managed(&self) -> bool {
+        self.externally_managed
+    }
 }

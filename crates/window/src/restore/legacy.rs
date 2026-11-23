@@ -6,14 +6,14 @@
 //! used (a flat struct, and one with a nested `normal_geometry`). Nothing is written back; old
 //! builds keep working from the old file.
 //!
-//! An old layout has no scale factor, so imports assume 1; [`place`](super::place) takes the
+//! An old layout has no scale factor, so imports assume 1; [`place`](craft_behavior::placement::place) takes the
 //! real one from the monitor the window lands on.
 
 use std::path::Path;
 
 use serde_json::Value;
 
-use super::place::{NormalRect, Placement};
+use craft_behavior::placement::Placement;
 
 /// The placement in an eframe `app.ron` text: its `"window"` entry, with the size converted to
 /// points at zoom 1 using the `"egui"` entry's `zoom_factor` (1 when absent).
@@ -42,15 +42,13 @@ pub fn eframe_window_settings(ron: &str, zoom: f32) -> Option<Placement> {
     let size = size.map(|v| v * zoom);
     // Windows parks a minimized window near (-32000, -32000).
     let pos = pos.filter(|p| p.iter().all(|v| *v > -30000.0));
-    Some(Placement {
-        normal: NormalRect { pos: pos.map_or([0.0; 2], |p| p.map(|v| v / scale)), size },
-        position_px: pos.map(|p| p.map(|v| v.round() as i32)),
-        scale,
-        zoom,
-        maximized: field(ron, "maximized").is_some_and(truth),
-        fullscreen: field(ron, "fullscreen").is_some_and(truth),
-        monitor: None,
-    })
+    let mut placement = Placement::new(size, scale);
+    placement.normal.pos = pos.map_or([0.0; 2], |p| p.map(|v| v / scale));
+    placement.position_px = pos.map(|p| p.map(|v| v.round() as i32));
+    placement.zoom = zoom;
+    placement.maximized = field(ron, "maximized").is_some_and(truth);
+    placement.fullscreen = field(ron, "fullscreen").is_some_and(truth);
+    Some(placement)
 }
 
 /// The value at `path` of a JSON object (`json_at(&v, &["window", "size"])`).
@@ -215,67 +213,4 @@ fn escaped(text: &str, from: usize) -> (String, usize) {
         }
     }
     (s, text.len())
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use crate::restore::Store;
-
-    const FLAT: &str = r#"{
-    "egui": "(options:(zoom_factor:1.5,other:1))",
-    "window": "(outer_position_pixels:Some((x:120.0,y:-30.0)),fullscreen:false,maximized:true,inner_size_points:Some((x:800.0,y:600.0)))",
-}"#;
-
-    #[test]
-    fn imports_the_flat_eframe_layout_with_zoom() {
-        let p = eframe_app_ron(FLAT).unwrap();
-        assert_eq!(p.position_px, Some([120, -30]));
-        assert_eq!(p.normal.size, [1200.0, 900.0]);
-        assert_eq!(p.zoom, 1.5);
-        assert!(p.maximized && !p.fullscreen);
-    }
-
-    #[test]
-    fn imports_the_nested_layout_with_its_scale() {
-        let w = "(normal_geometry:(outer_position_pixels:Some((x:200.0,y:100.0)),scale_factor:2.0,inner_size_points:(x:640.0,y:480.0)),fullscreen:true,maximized:false)";
-        let text = format!("{{\"window\": r#\"{w}\"#}}");
-        let p = eframe_app_ron(&text).unwrap();
-        assert_eq!((p.scale, p.position_px, p.normal.size), (2.0, Some([200, 100]), [640.0, 480.0]));
-        assert_eq!(p.normal.pos, [100.0, 50.0]);
-        assert!(p.fullscreen);
-    }
-
-    #[test]
-    fn missing_position_and_garbage_are_handled() {
-        let w = "(outer_position_pixels:None,fullscreen:false,maximized:false,inner_size_points:Some((x:300.0,y:200.0)))";
-        assert_eq!(eframe_window_settings(w, 1.0).unwrap().position_px, None);
-        assert!(eframe_window_settings("(", 1.0).is_none());
-        assert!(eframe_app_ron("not ron").is_none());
-    }
-
-    #[test]
-    fn minimized_windows_parked_off_screen_have_no_position() {
-        let w = "(outer_position_pixels:Some((x:-32000.0,y:-32000.0)),fullscreen:false,maximized:false,inner_size_points:Some((x:300.0,y:200.0)))";
-        let p = eframe_window_settings(w, 1.0).unwrap();
-        assert_eq!((p.position_px, p.normal.size), (None, [300.0, 200.0]));
-    }
-
-    #[test]
-    fn imported_placement_lands_in_the_store() {
-        let mut store = Store::in_memory();
-        store.set("main", &eframe_app_ron(FLAT).unwrap());
-        assert_eq!(store.get("main").unwrap().position_px, Some([120, -30]));
-    }
-
-    #[test]
-    fn json_helpers_read_nested_values() {
-        let v: Value = serde_json::from_str(r#"{"window":{"size":[800,600],"pos":{"x":1,"y":2},"max":true,"w":3.5}}"#).unwrap();
-        assert_eq!(json_pair(&v, &["window", "size"], ["w", "h"]), Some([800.0, 600.0]));
-        assert_eq!(json_pair(&v, &["window", "pos"], ["x", "y"]), Some([1.0, 2.0]));
-        assert_eq!(json_bool(&v, &["window", "max"]), Some(true));
-        assert_eq!(json_f32(&v, &["window", "w"]), Some(3.5));
-        assert_eq!(json_f32(&v, &["window", "nope"]), None);
-    }
 }

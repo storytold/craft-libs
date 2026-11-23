@@ -1,0 +1,426 @@
+# API map of the "Tile grids" family: old path to new path and setter renames.
+# Filled in by the family track; the codemods and the app scan read it.
+
+family = "Tile grids"
+new_module = "craft_ui::tile_grid"
+
+# One entry per public type: `old` is the path an app calls today, `new` the path after migration.
+# `status` is "pending", "same" (path unchanged), "moved", "replaced" (use `note`) or "removed".
+
+[[type]]
+name = "TileGrid"
+old = "craft_ui::list::tiles::TileGrid"
+new = "craft_ui::tile_grid::TileGrid"
+status = "moved"
+note = "A collection of `Tile`s: `TileGrid::<K>::new(label)` then `show_items(ui, &source, |key, cx| Tile::new(..))`. The source is an `ItemSource<K>` (justified rows read `size_hint` as `SizeHint::Aspect`); the output is `TileGridOutput<K>`."
+
+[[type]]
+name = "ThumbnailSlider"
+old = "craft_ui::list::tiles::zoom::ThumbnailSlider"
+new = "craft_ui::tile_grid::ThumbnailSlider"
+status = "moved"
+note = "A leaf over Bind<f64> that composes two IconButton faces and a Slider; the value is f64."
+
+[[type]]
+name = "TileZoom"
+old = "craft_ui::list::tiles::TileZoom"
+new = "craft_ui::tile_grid::TileZoom"
+status = "moved"
+note = "Values are f64. A continuous zoom is built with TileZoom::bounded(min, max, step, default). TileZoom::step takes and returns f64; default_value() reads the Reset value."
+
+[[type]]
+name = "ZoomStep"
+old = "craft_ui::list::tiles::ZoomStep"
+new = "craft_ui::tile_grid::ZoomStep"
+status = "moved"
+
+[[type]]
+name = "TileStyle"
+old = "craft_ui::list::tiles::TileStyle"
+new = "craft_ui::tile_grid::TileStyle"
+status = "moved"
+note = "The tile's look as a component style: its fields are no public contract; sizes and colours come from tokens."
+
+[[type]]
+name = "TileLook"
+old = "craft_ui::list::tiles::TileLook"
+new = ""
+status = "removed"
+note = "Replaced by the Tile component: its picture, caption, check, rating and flags are Tile setters, and selection, hover and focus come from the item step."
+
+[[type]]
+name = "TileFace"
+old = "craft_ui::list::tiles::TileFace"
+new = ""
+status = "removed"
+note = "Replaced by Tile::folder(); the picture is the content painter given to Tile::thumb."
+
+[[type]]
+name = "paint_tile"
+old = "craft_ui::list::tiles::paint_tile"
+new = ""
+status = "removed"
+note = "Replaced by the Tile component, shown as a collection item or on its own."
+
+[[type]]
+name = "stack_text"
+old = "craft_ui::list::tiles::stack_text"
+new = ""
+status = "removed"
+note = "The stack badge is Tile::stack(n); its text comes from Units::times."
+
+[[type]]
+name = "show_tile_rename"
+old = "craft_ui::list::tiles::show_tile_rename"
+new = ""
+status = "removed"
+note = "Rename is the item step's lifecycle: the tile reports its caption band through TileOutput::caption and the collection shows its rename editor there."
+
+[[type]]
+name = "TileRename"
+old = "craft_ui::list::tiles::TileRename"
+new = ""
+status = "removed"
+note = "The collection keeps the open rename."
+
+[[type]]
+name = "TileRenameOutcome"
+old = "craft_ui::list::tiles::TileRenameOutcome"
+new = ""
+status = "removed"
+note = "The collection reports how a rename ended."
+
+[[type]]
+name = "TileContent"
+old = "craft_ui::list::tiles::TileContent"
+new = ""
+status = "removed"
+note = "Replaced by Tile setters: name is the label, detail, accessible_name, rating, flag, label_color, label_name, status, range, enabled (Props::enabled), dimmed, rejected, hidden, stack, badge and mark. The tile's tooltip is Props::tooltip."
+
+[[type]]
+name = "TileFlag"
+old = "craft_ui::list::tiles::TileFlag"
+new = "craft_ui::tile_grid::TileFlag"
+status = "moved"
+
+[[type]]
+name = "BadgeKind"
+old = "craft_ui::list::tiles::BadgeKind"
+new = "craft_ui::tile_grid::BadgeKind"
+status = "moved"
+note = "Glyph takes an IconId and Text a Label."
+
+[[type]]
+name = "BadgeSlot"
+old = "craft_ui::list::tiles::BadgeSlot"
+new = "craft_ui::tile_grid::BadgeSlot"
+status = "moved"
+
+[[type]]
+name = "TileBadge"
+old = "craft_ui::list::tiles::TileBadge"
+new = "craft_ui::tile_grid::TileBadge"
+status = "moved"
+note = "Built with TileBadge::new(slot, kind, tone, tip); the tone is craft_theme::variant::Tone and the tip an Option<Label>."
+
+[[type]]
+name = "TileStatus"
+old = "craft_ui::list::tiles::TileStatus"
+new = "craft_ui::tile_grid::TileStatus"
+status = "moved"
+note = "Offline holds an Option<Label>: None shows the word Offline."
+
+[[type]]
+name = "BadgeVisibility"
+old = "craft_ui::list::tiles::BadgeVisibility"
+new = "craft_ui::tile_grid::BadgeVisibility"
+status = "moved"
+note = "Set with Tile::bar(..). Auto shows the bar on hover or when a value is set."
+
+[[type]]
+name = "CaptionPlace"
+old = "craft_ui::list::tiles::CaptionPlace"
+new = "craft_ui::tile_grid::CaptionPlace"
+status = "moved"
+note = "New variant None: no caption."
+
+[[type]]
+name = "TileMark"
+old = "craft_ui::list::tiles::TileMark"
+new = "craft_ui::tile_grid::TileMark"
+status = "moved"
+note = "Built with TileMark::new(icon: IconId, tip)."
+
+[[type]]
+name = "fit_name"
+old = "craft_ui::list::tiles::fit_name"
+new = ""
+status = "removed"
+note = "The caption cuts its name in the middle through TextRun with Wrap::ElidePath."
+
+[[type]]
+name = "card_size"
+old = "craft_ui::list::tiles::card_size"
+new = ""
+status = "removed"
+note = "A grid sizes a card as its picture plus Tile::around_picture."
+
+[[type]]
+name = "TileSource"
+old = "craft_ui::list::tiles::TileSource"
+new = ""
+status = "replaced"
+note = "`craft_behavior::ItemSource<K>`: `key`, `len`, `index_of`, `text` (type-ahead and rename) and `size_hint` returning `SizeHint::Aspect(w / h)` replace `aspect`; `revision()` replaces `aspects_revision`. What `content(at, ..)` filled in is the `Tile` the show closure returns."
+
+[[type]]
+name = "TileLayout"
+old = "craft_ui::list::tiles::TileLayout"
+new = ""
+status = "replaced"
+note = "`TileGrid::justified()` for `Justified`; cards are the default with `.aspect(w / h)`. The size is `.zoom(factor)`, a multiple of the medium thumbnail side that the app's `ThumbnailSlider` binds; `Cards { caption }` is `.caption(CaptionPlace::Below)`, or `.captionless()`. `Tiling` holds the sizes in points for `arrange`."
+
+[[type]]
+name = "TileArrangement"
+old = "craft_ui::list::tiles::TileArrangement"
+new = "craft_ui::tile_grid::TileArrangement"
+status = "moved"
+note = "`rows`, `tiles`, `headers` and `height` keep their meaning; `tiles` is `Rect::NOTHING` for a tile of a closed group."
+
+[[type]]
+name = "TileGroup"
+old = "craft_ui::list::tiles::TileGroup"
+new = "craft_ui::tile_grid::TileGroup"
+status = "moved"
+note = "Built with `TileGroup::new(key, start, count, title)`, `.detail(..)` and `.open(bool)`; `TileGroup<K>` carries the key of the header row, which differs from every tile key. The open state replaces `group_disclosure(&[bool])`."
+
+[[type]]
+name = "TileRow"
+old = "craft_ui::list::tiles::TileRow"
+new = "craft_ui::tile_grid::TileRow"
+status = "moved"
+
+[[type]]
+name = "ArrangeSpacing"
+old = "craft_ui::list::tiles::ArrangeSpacing"
+new = "craft_ui::tile_grid::ArrangeSpacing"
+status = "moved"
+note = "`ArrangeSpacing::new(gap, inset, group_header)`; the caption band is part of `Tiling::Cards`."
+
+[[type]]
+name = "arrange"
+old = "craft_ui::list::tiles::arrange"
+new = "craft_ui::tile_grid::arrange"
+status = "moved"
+note = "`arrange(aspects, groups, width, tiling, spacing, start)`: `Tiling` replaces `TileLayout` and `start` is the width of a start-placed caption column; `arrange_closed` and `arrange_strip` are the same function, closed groups come from `TileGroup::open`."
+
+[[type]]
+name = "TileEvent"
+old = "craft_ui::list::tiles::TileEvent"
+new = "craft_ui::tile_grid::TileEvent"
+status = "replaced"
+note = "Split by who reports it. `Selection`, `Clicked`, `LeadMoved`, `Activate`, `ContextPicked`, `ContextMenu`, `Drag`, `Reorder`, `Renamed`, `RenameEnded` and `EmptyActivated` are `CollectionEvent` variants of `TileGridOutput::response`; `Rate`, `GroupPicked`, `GroupOpen` and `GroupContextMenu` are `GridEvent`s of `TileGridOutput::events`; `Scrub` and a click on the stars are `TileEvent` (`CollectionEvent::Item(key, ..)`). `Preview` is `Activate`, `Remove` is the app's delete command, `Zoom` is the zoom control's, `NewItem` is not built."
+
+[[type]]
+name = "TileGridOutput"
+old = "craft_ui::list::tiles::TileGridOutput"
+new = "craft_ui::tile_grid::TileGridOutput"
+status = "moved"
+note = "`response: CollectionResponse<K, TileEvent>` and `events: Vec<GridEvent<K>>`; `drop_target` and `file_gap` are drop marks the item step draws, and files arrive as `CollectionEvent::FilesDropped { insert, files }`."
+
+[[type]]
+name = "RatingKeys"
+old = "craft_ui::list::tiles::RatingKeys"
+new = "craft_ui::tile_grid::RatingKeys"
+status = "moved"
+note = "`None` and `Digits` stay; `CommandDigits` is the app's `rate` command bound to Cmd or Ctrl with a digit in its keymap."
+
+[[type]]
+name = "SpaceAction"
+old = "craft_ui::list::tiles::SpaceAction"
+new = ""
+status = "removed"
+note = "Space is `Intent::Activate` and Ctrl+Space `Intent::Toggle`; an app that wants Space to toggle binds it in its keymap."
+
+[[type]]
+name = "FakeTiles"
+old = "craft_ui::list::tiles::FakeTiles"
+new = ""
+status = "removed"
+note = "The stories hold their own source (`Photos` in `tile_grid/grid/stories.rs`)."
+
+# One entry per renamed, removed or reshaped setter or constructor.
+[[setter]]
+type = "ThumbnailSlider"
+old = "new(id_salt, value: f32, zoom)"
+new = "new(label, Bind<f64>, zoom)"
+
+[[setter]]
+type = "ThumbnailSlider"
+old = "labels(&TileLabels)"
+new = "removed: the words are TileWords, read from the scope"
+
+[[setter]]
+type = "ThumbnailSlider"
+old = "width(f32)"
+new = "removed: the slider is size.length.track long"
+
+[[setter]]
+type = "ThumbnailSlider"
+old = "extent(ui)"
+new = "removed: a footer fits the control by its measured size"
+
+[[setter]]
+type = "ThumbnailSlider"
+old = "show(ui) -> EditResponse<f64>"
+new = "show(ui) -> EditResponse<f64> through Show"
+
+[[setter]]
+type = "TileZoom"
+old = "Range { min, max, step, default }"
+new = "bounded(min, max, step, default)"
+
+
+
+[[setter]]
+type = "TileGrid"
+old = "new(id_salt, &source)"
+new = "new(label)"
+note = "The source goes to `show_items`; the id salt is the label's id."
+
+[[setter]]
+type = "TileGrid"
+old = "layout(TileLayout)"
+new = "justified() / aspect(f32) / zoom(f32) / caption(CaptionPlace) / captionless()"
+note = "See `TileLayout`."
+
+[[setter]]
+type = "TileGrid"
+old = "groups(&[TileGroup])"
+new = "groups(&[TileGroup<K>])"
+note = "Unchanged."
+
+[[setter]]
+type = "TileGrid"
+old = "selection(&mut Selection<K>)"
+new = "selection(Bind<Selection<K>>)"
+
+[[setter]]
+type = "TileGrid"
+old = "thumbnails(&Thumbnails, &dyn ThumbSource)"
+new = ""
+note = "Each `Tile` paints its own picture: `Tile::thumb(aspect, paint)`."
+
+[[setter]]
+type = "TileGrid"
+old = "badges(BadgeVisibility)"
+new = ""
+note = "`Tile::badge(TileBadge)` per tile; the grid has no visibility setting."
+
+[[setter]]
+type = "TileGrid"
+old = "rating_keys(RatingKeys)"
+new = "rating_keys(RatingKeys)"
+
+[[setter]]
+type = "TileGrid"
+old = "space(SpaceAction)"
+new = ""
+note = "Keymap: Space is `Intent::Activate`, Ctrl+Space `Intent::Toggle`."
+
+[[setter]]
+type = "TileGrid"
+old = "check_mode(bool)"
+new = ""
+note = "`Tile::check(ToggleState)` per tile."
+
+[[setter]]
+type = "TileGrid"
+old = "reorder(Reorder)"
+new = "reorder(ReorderRule)"
+note = "Alt with the arrow keys and drag move tiles; the move arrives as `CollectionEvent::Reorder`."
+
+[[setter]]
+type = "TileGrid"
+old = "hover_scrub(bool)"
+new = ""
+note = "A tile reports `TileEvent::Scrub` when its range is set."
+
+[[setter]]
+type = "TileGrid"
+old = "type_ahead(bool)"
+new = ""
+note = "Type-ahead matches `ItemSource::text`; with `RatingKeys::Digits` typed text rates instead."
+
+[[setter]]
+type = "TileGrid"
+old = "label(impl Into<String>)"
+new = "new(label)"
+
+[[setter]]
+type = "TileGrid"
+old = "card_overlay(FnMut)"
+new = ""
+note = "Per-tile content is the `Tile` the show closure returns."
+
+[[setter]]
+type = "TileGrid"
+old = "renamable(bool)"
+new = "rename(bool)"
+
+[[setter]]
+type = "TileGrid"
+old = "can_rename(Fn(&K) -> bool)"
+new = "can_rename(Fn(&K) -> bool)"
+
+[[setter]]
+type = "TileGrid"
+old = "start_rename(K)"
+new = ""
+note = "F2 or the rename command starts it on the lead."
+
+[[setter]]
+type = "TileGrid"
+old = "labels(TileLabels)"
+new = ""
+note = "Words come from the environment."
+
+[[setter]]
+type = "TileGrid"
+old = "current(K)"
+new = "current(Option<K>)"
+note = "`CollectionProps::current`, forwarded by every collection: the current item shows the accent ring through the state layer and its node reports itself as the current one of its set. It is not the lead or the selection."
+
+[[setter]]
+type = "TileGrid"
+old = "caption_place(CaptionPlace)"
+new = "caption(CaptionPlace) / captionless()"
+
+[[setter]]
+type = "TileGrid"
+old = "group_disclosure(&[bool])"
+new = "collapsible()"
+note = "The open state is `TileGroup::open`; a click reports `GridEvent::GroupOpen`."
+
+[[setter]]
+type = "TileGrid"
+old = "group_menus(bool)"
+new = ""
+note = "Every header reports a secondary click as `GridEvent::GroupMenu`."
+
+[[setter]]
+type = "TileGrid"
+old = "new_item_row(impl Into<String>)"
+new = ""
+note = "Not built: see the report (page-panel features)."
+
+[[setter]]
+type = "TileGrid"
+old = "file_drops(bool)"
+new = "takes_files(bool)"
+note = "A drop reports `CollectionEvent::FilesDropped`."
+
+[[setter]]
+type = "TileGrid"
+old = "GroupPicked / GroupContextMenu by pointer only"
+new = "GridEvent::GroupPicked / GridEvent::GroupMenu from the keyboard"
+note = "A group header is a section row of the item step that holds the lead (`DisplayOrder::section_stop`): Up and Down reach it; Left and Right close and open a collapsible group, Enter picks it, the context-menu key and Shift+F10 open its menu."

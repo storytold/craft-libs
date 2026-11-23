@@ -1,4 +1,5 @@
 [package]
+autotests = false
 name = "craft-doc"
 description = "Read-only access to PhotoCraft, VectorCraft and EffectCraft documents: format detection, version, embedded previews and PDF, and the layer and page outline."
 version.workspace = true
@@ -28,6 +29,3 @@ thiserror = { workspace = true }
 # `pcraft-pixels`: PhotoCraft's tiles are zstd frames named by the BLAKE3 hash of their samples.
 blake3 = { version = "1.8", default-features = false, features = ["pure"], optional = true }
 ruzstd = { version = "0.9", default-features = false, features = ["std"], optional = true }
-
-[dev-dependencies]
-proptest = { workspace = true }

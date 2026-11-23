@@ -1,0 +1,113 @@
+//! Stories of `Field`.
+
+use super::Help;
+use super::{Field, FieldGroup};
+use crate::choice::Swatch;
+use crate::contract::{FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::layout_components::Row;
+use crate::runtime::env::Message;
+use crate::testing::{Drive, StoryData, StoryOutput, story};
+use crate::text::NumberField;
+use craft_behavior::IconId;
+use craft_theme::Srgba;
+use craft_theme::variant::Tone;
+use egui::Ui;
+
+const SIZE: f64 = 12.0;
+
+#[story(Field, covers = [Default], drive = Drive::Never)]
+fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Field::new("Size").help(Help::Text("In points".into())).show(ui, |ui, _| NumberField::new("Size", data.bind("size", Some(SIZE))).show(ui)).into()
+}
+
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_above_with_status(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Field::new("Size")
+        .layout(FieldLayout::Above)
+        .help(Help::Status(Tone::Warn, "Large sizes slow the preview".into()))
+        .show(ui, |ui, _| NumberField::new("Size", data.bind("above", Some(SIZE))).show(ui))
+        .into()
+}
+
+#[story(Field, covers = [LongText], drive = Drive::Never)]
+fn field_long_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Field::new("A label much longer than the column a form usually gives it")
+        .help(Help::Text("A help text much longer than the room under the control, so it wraps onto more than one line".into()))
+        .show(ui, |ui, _| NumberField::new("Size", data.bind("long", Some(SIZE))).show(ui))
+        .into()
+}
+
+/// A glyph label: the icon shows, the text only names the control.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_icon_label(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Field::new("Width")
+        .side(SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("list")))))
+        .show(ui, |ui, _| NumberField::new("Width", data.bind("width", Some(SIZE))).show(ui))
+        .into()
+}
+
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_with_refused_value(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let refuse_negative = |size: &Option<f64>| match size {
+        Some(size) if *size < 0.0 => Validity::Refuse(Message::new("Size cannot be negative")),
+        _ => Validity::Ok,
+    };
+    Field::new("Size")
+        .help(Help::Text("In points".into()))
+        .show(ui, |ui, _| NumberField::new("Size", data.bind("refused", Some(-SIZE)).check(refuse_negative)).show(ui))
+        .into()
+}
+
+/// An error that needs two fields: the end day may not come before the start day, and the line under the end field
+/// says so.
+#[story(Field, covers = [], drive = Drive::Never)]
+fn field_with_cross_field_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let start = *data.value("start_day", Some(20.0));
+    let end_before_start = |start: &Option<f64>, end: &Option<f64>| match end {
+        Some(end) if start.is_some_and(|start| *end < start) => Validity::Refuse(Message::new("The end day comes before the start day")),
+        _ => Validity::Ok,
+    };
+    let mut out = None;
+    FieldGroup::new("Period").show(ui, |ui, _| {
+        Field::new("Start day").show(ui, |ui, _| NumberField::new("Start day", data.bind("start_day", Some(20.0))).show(ui));
+        out = Some(
+            Field::new("End day")
+                .show(ui, |ui, _| NumberField::new("End day", data.bind("end_day", Some(5.0)).check_with(start, end_before_start)).show(ui)),
+        );
+    });
+    out.map(StoryOutput::from).unwrap_or_default()
+}
+
+#[story(FieldGroup, covers = [Default], drive = Drive::Never)]
+fn field_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = [("Width", "width"), ("Corner radius", "radius"), ("Maximum number of layers", "layers")];
+    FieldGroup::new("Shape")
+        .show(ui, |ui, _| {
+            for (label, name) in rows {
+                Field::new(label).show(ui, |ui, _| NumberField::new(label, data.bind(name, Some(SIZE))).show(ui));
+            }
+        })
+        .into()
+}
+
+/// The rows of an inspector: glyph labels W and H sharing a row, word labels at the row's start without a colon, and
+/// controls that fill the rest of the row.
+#[story(FieldGroup, covers = [], drive = Drive::Never)]
+fn field_inspector_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const FILL: Srgba = Srgba { r: 0.80, g: 0.32, b: 0.24, a: 1.0 };
+    FieldGroup::new("Properties")
+        .labels(LabelScheme::Inspector)
+        .show(ui, |ui, _| {
+            Row::new().fill_width().show(ui, |ui, _| {
+                for (glyph, name, key, value) in [("W", "Width", "w", 640.0), ("H", "Height", "h", 480.0)] {
+                    let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph))).scrub(true);
+                    Field::new(name).side(side).show(ui, |ui, _| NumberField::new(name, data.bind(key, Some(value))).show(ui));
+                }
+            });
+            for (label, key, value) in [("Opacity", "opacity", 100.0), ("Angle", "angle", 0.0)] {
+                Field::new(label).side(SideLabel::new().scrub(true)).show(ui, |ui, _| NumberField::new(label, data.bind(key, Some(value))).show(ui));
+            }
+            Field::new("Fill").show(ui, |ui, _| Swatch::new("Fill", FILL).show(ui));
+        })
+        .into()
+}

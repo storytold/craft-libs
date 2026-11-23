@@ -203,11 +203,14 @@ pub struct SmartArtItem {
     /// Fill of the item's shape in place of the style's colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Rgb>,
+    /// Percent of `color` that shows (100 or none: solid). Needs `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<u8>,
 }
 
 impl SmartArtItem {
     pub fn new(text: impl Into<String>, level: u8) -> SmartArtItem {
-        SmartArtItem { text: text.into(), level, color: None }
+        SmartArtItem { text: text.into(), level, color: None, opacity: None }
     }
 }
 
@@ -256,6 +259,7 @@ impl SmartArtSpec {
         let mut prev: Option<u8> = None;
         for it in &mut self.items {
             it.text = clean_text(&it.text);
+            it.opacity = it.opacity.filter(|_| it.color.is_some()).map(|o| o.min(100));
             let most = prev.map_or(0, |p| p.saturating_add(1)).min(MAX_LEVEL);
             it.level = it.level.min(most);
             prev = Some(it.level);
@@ -271,6 +275,7 @@ impl SmartArtSpec {
     pub fn clear_custom_colors(&mut self) {
         for it in &mut self.items {
             it.color = None;
+            it.opacity = None;
         }
     }
 

@@ -1,0 +1,239 @@
+# API map of the "Form dialogs 3: guides and properties" family: old path to new path and setter renames.
+
+family = "Form dialogs 3: guides and properties"
+new_module = "craft_ui::patterns::form_dialogs"
+
+[[type]]
+name = "NewGuideDialog"
+old = "craft_ui::dialog::guides::NewGuideDialog"
+new = "craft_ui::patterns::form_dialogs::NewGuideDialog"
+status = "moved"
+note = "A pattern on `Dialog`: `NewGuideDialog::new(units, Bind<NewGuideValues>)` or `NewGuideDialog::edit(units, guide, preference, values)` (Edit Selected Guides), `.key(GuideKey)`, `.error(Label)`; `.answers(Vec<HostAnswer>)`; `show(ui) -> NewGuideOutput { response, closed, result: Option<Guide>, requests: HostRequests }`. It is a `FormDialog<NewGuideValues>`; a `DialogHost` owns it as `HostedNewGuideDialog`."
+
+[[type]]
+name = "HostedNewGuideDialog"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostedNewGuideDialog"
+status = "replaced"
+note = "The `StackDialog` form of `NewGuideDialog`: `new(values, build)` with `build: Fn(Bind<NewGuideValues>) -> NewGuideDialog`, `values()` and `requests() -> &mut HostRequests` (take the colour request, `answer_color`); the host's cancel drops the pending request."
+
+[[type]]
+name = "NewGuideValues"
+old = ""
+new = "craft_ui::patterns::form_dialogs::NewGuideValues"
+status = "replaced"
+note = "What New Guide edits: `along: Axis`, `position_px`, `color: canvas::GuideColor`. The app keeps the last guide`s values for the next open (the `Remembered` scope is gone)."
+
+[[type]]
+name = "NewGuideOptions"
+old = "craft_ui::dialog::guides::NewGuideOptions"
+new = ""
+status = "removed"
+note = "The dialog answers with a `canvas::Guide` (`NewGuideOutput.result`); `color_changed` is the guide`s `color` being `None` while an edited guide keeps the preference colour."
+
+[[type]]
+name = "NewGuideOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::NewGuideOutput"
+status = "replaced"
+note = "`show(ui)` returns `response`, `closed`, `result: Option<Guide>` and `requests: HostRequests`."
+
+[[type]]
+name = "GuideLayoutDialog"
+old = "craft_ui::dialog::guides::GuideLayoutDialog"
+new = "craft_ui::patterns::form_dialogs::GuideLayoutDialog"
+status = "moved"
+note = "A pattern on `Dialog`: `GuideLayoutDialog::new(units, document, Bind<GuideLayoutValues>)`, `.artboards(Vec<GuideRect>)`, `.existing(Vec<Guide>)`, `.first_key(u64)`; `.answers(Vec<HostAnswer>)`; `show(ui) -> GuideLayoutOutput { response, closed, result: Option<GuideLayoutResult>, preview: Option<Vec<Guide>>, requests: HostRequests }`. It is a `FormDialog<GuideLayoutValues>`; a `DialogHost` owns it as `HostedGuideLayoutDialog`."
+
+[[type]]
+name = "HostedGuideLayoutDialog"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostedGuideLayoutDialog"
+status = "replaced"
+note = "The `StackDialog` form of `GuideLayoutDialog`: `new(values, build)`, `values()`, `preview()` and `requests() -> &mut HostRequests`."
+
+[[type]]
+name = "GuideLayoutValues"
+old = ""
+new = "craft_ui::patterns::form_dialogs::GuideLayoutValues"
+status = "replaced"
+note = "What New Guide Layout edits: `options`, `color: canvas::GuideColor` and `preview`."
+
+[[type]]
+name = "GuideLayoutResult"
+old = "craft_ui::dialog::guides::GuideLayoutResult"
+new = "craft_ui::patterns::form_dialogs::GuideLayoutResult"
+status = "moved"
+note = "`options`, `guides: Vec<Guide>` (the existing guides unless cleared, plus the layout`s) and `color: Rgba`."
+
+[[type]]
+name = "GuideLayoutOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::GuideLayoutOutput"
+status = "replaced"
+note = "`show(ui)` returns `response`, `closed`, `result`, `preview` and `requests: HostRequests`."
+
+[[type]]
+name = "GuideLayoutOptions"
+old = "craft_ui::dialog::guides::GuideLayoutOptions"
+new = "craft_ui::patterns::form_dialogs::GuideLayoutOptions"
+status = "moved"
+note = "`lines(targets, existing: &[Guide], units, first_key, color) -> Result<Vec<Guide>, GuideLayoutError>` returns the guides OK commits as `canvas::Guide`s; lengths are `GuideLength` and the groups `GuideGroup`."
+
+[[type]]
+name = "GuideRect"
+old = "craft_ui::dialog::guides::GuideRect"
+new = "craft_ui::patterns::form_dialogs::GuideRect"
+status = "moved"
+note = "`GuideRect::new(x0, y0, x1, y1)`; the fields stay readable."
+
+[[type]]
+name = "GuideTarget"
+old = "craft_ui::dialog::guides::GuideTarget"
+new = "craft_ui::patterns::form_dialogs::GuideTarget"
+status = "moved"
+
+[[type]]
+name = "GuideLayoutPreset"
+old = "craft_ui::dialog::guides::GuideLayoutPreset"
+new = "craft_ui::patterns::form_dialogs::GuideLayoutPreset"
+status = "moved"
+
+[[type]]
+name = "GuideLayoutError"
+old = "craft_ui::dialog::guides::GuideLayoutError"
+new = "craft_ui::patterns::form_dialogs::GuideLayoutError"
+status = "moved"
+note = "The reason text is the dialog`s `GuideDialogWords`; `message` is not public."
+
+[[type]]
+name = "GuideUnits"
+old = "craft_ui::dialog::guides::GuideUnits"
+new = "craft_ui::patterns::form_dialogs::GuideUnits"
+status = "moved"
+note = "`GuideUnits::new(ruler: UnitKind, width_px, height_px, pixels_per_inch)` with `.points_per_inch(f64)`; `to_pixels(GuideLength, extent)`, `from_pixels(px, unit, extent)` and `reader(&Units, extent)` for the fields."
+
+[[type]]
+name = "GuideColor"
+old = "craft_ui::dialog::guides::GuideColor"
+new = "craft_ui::canvas::GuideColor"
+status = "moved"
+note = "Colours are `craft_theme::Rgba` (`Custom(Rgba)`, `rgba()`, `from_rgba`); `NAMED` keeps the list. The dialogs hold it directly; the Custom entry stands for the current colour and the host's answer sets it."
+
+[[type]]
+name = "GuideLength"
+old = ""
+new = "craft_ui::patterns::form_dialogs::GuideLength"
+status = "replaced"
+note = "A length in a `UnitKind` (`Percent` is of the target`s extent): `new`, `pixels`, `percent`. Replaces the legacy `Length` in the guide dialogs."
+
+[[type]]
+name = "GuideGroup"
+old = ""
+new = "craft_ui::patterns::form_dialogs::GuideGroup"
+status = "replaced"
+note = "The Columns or Rows group of a layout: `enabled`, `number`, `size`, `gutter`. Replaces the legacy `GuideAxis` group."
+
+[[type]]
+name = "GuidesLabels"
+old = "craft_ui::dialog::guides::GuidesLabels"
+new = ""
+status = "removed"
+note = "Replaced by `GuideDialogWords`."
+
+[[type]]
+name = "GuideDialogWords"
+old = ""
+new = "craft_ui::patterns::form_dialogs::GuideDialogWords"
+status = "replaced"
+note = "The words of the New Guide and New Guide Layout dialogs and of the guide colour list, with ids `newGuideDialog.*`, `guideLayoutDialog.*` and `guideColor.*`; the canvas guides' names are `CanvasControlWords`."
+
+[[type]]
+name = "GuideLines"
+old = "craft_ui::dialog::guides::GuideLines"
+new = ""
+status = "removed"
+note = "A layout`s lines are `canvas::Guide` values (`GuideLayoutOptions::lines`); `GuideLines::guides` is gone."
+
+[[type]]
+name = "GuideLayoutLines"
+old = "craft_ui::dialog::guides::GuideLayoutLines"
+new = ""
+status = "removed"
+note = "`GuideLayoutOptions::lines` returns the guides OK commits as one `Vec<Guide>`."
+
+[[type]]
+name = "GuidePreview"
+old = "craft_ui::dialog::guides::GuidePreview"
+new = ""
+status = "removed"
+note = "`GuideLayoutOutput.preview` is the `Vec<Guide>` the app draws, in each guide`s own colour."
+
+[[type]]
+name = "GuideAxis"
+old = "craft_ui::dialog::guides::GuideAxis"
+new = ""
+status = "removed"
+note = "A guide`s direction is `craft_behavior::Axis` (`along`); the Columns or Rows group is `GuideGroup`."
+
+[[type]]
+name = "PropertiesDialog"
+old = "craft_ui::dialog::properties::PropertiesDialog"
+new = "craft_ui::patterns::form_dialogs::PropertiesDialog"
+status = "moved"
+note = "A `FormDialog<DialogFields>`: `PropertiesDialog::new(title, tabs, Bind<DialogFields>)` with `.read_only(bool)`; `show(ui) -> PropertiesOutput { response, closed, result, rows }`. The tab is kept while the dialog is open; Alt turns Cancel into Reset."
+
+[[type]]
+name = "PropertiesOutput"
+old = ""
+new = "craft_ui::patterns::form_dialogs::PropertiesOutput"
+status = "replaced"
+note = "`result` is the edited values at OK, or empty values when the dialog is read-only."
+
+[[type]]
+name = "PropertiesTab"
+old = "craft_ui::dialog::properties::PropertiesTab"
+new = "craft_ui::patterns::form_dialogs::PropertiesTab"
+status = "moved"
+note = "`PropertiesTab::new(title: impl Into<Label>, rows)`."
+
+[[type]]
+name = "PropertyRow"
+old = "craft_ui::dialog::properties::PropertyRow"
+new = "craft_ui::patterns::form_dialogs::PropertyRow"
+status = "moved"
+note = "`Value { label, text }` and `Heading(Label)` as before, `Field(Box<Param>)`; build with `PropertyRow::{value, field, heading}`. `Space` is gone: sections space themselves."
+
+[[setter]]
+type = "PropertiesDialog"
+old = "new(key, title, tabs)"
+new = "new(title, tabs, Bind<DialogFields>)"
+
+[[setter]]
+type = "PropertiesDialog"
+old = "values(DialogFields)"
+new = "new(title, tabs, Bind<DialogFields>)"
+note = "The values are the binding passed to `new`."
+
+[[setter]]
+type = "PropertiesDialog"
+old = "width(Width)"
+new = ""
+
+[[setter]]
+type = "GuideLayoutDialog"
+old = "artboards(Vec<GuideRect>)"
+new = "artboards(Vec<GuideRect>)"
+
+[[setter]]
+type = "NewGuideDialog"
+old = "error(String)"
+new = "error(Label)"
+
+# l4z-dlg
+[[type]]
+name = "HostedPropertiesDialog"
+old = ""
+new = "craft_ui::patterns::form_dialogs::HostedPropertiesDialog"
+status = "replaced"
+note = "The `StackDialog` form of `PropertiesDialog`: the `DialogHost` owns the `DialogFields` and `build` makes the dialog over them each pass; it answers `DialogFields`."

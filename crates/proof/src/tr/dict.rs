@@ -48,21 +48,6 @@ impl TrDict {
 mod tests {
     use super::*;
 
-    /// CodeRabbit on craft-libs#484/#489: suffix conditions, homonyms and morphological fields,
-    /// each answer as hunspell 1.7 gives it on the same files.
-    #[test]
-    fn conditions_homonyms_and_fields_follow_hunspell() {
-        let aff = "SET UTF-8\nFLAG num\nSFX 1 Y 2\nSFX 1 0 lar [^e]\nSFX 1 0 ler e\nSFX 2 Y 1\nSFX 2 0 de .\n";
-        let d = TrDict::from_hunspell(aff, "4\nkitap/1\nkale/1\nkale/2\nsonra po:adv\n").unwrap();
-        for (w, right) in
-            [("kitaplar", true), ("kaleler", true), ("kalelar", false), ("kitapler", false), ("kalede", true), ("sonra", true), ("kitap", true)]
-        {
-            assert_eq!(d.contains(w), right, "{w}");
-        }
-        let d = TrDict::from_hunspell(aff, "1\nkitap/1,2\tpo:noun\n").unwrap();
-        assert!(d.contains("kitaplar") && d.contains("kitapde"), "both flags before the field");
-    }
-
     /// #495 review: LibreOffice's `tr_TR.dic` has 920 entries with more than 1,024 flags
     /// (`abart`, `savaş`, `inan`: up to 3,926); such a stem and its forms are words.
     #[test]

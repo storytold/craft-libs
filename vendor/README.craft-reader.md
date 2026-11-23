@@ -42,12 +42,17 @@ Consuming workspaces need a `hayro-cmap` patch entry beside the other Hayro entr
 
 `hayro-postscript` 0.1.0 is the crates.io package (upstream revision
 a2354aebaf86f5ab13e5fd6b6b0521306488bf9d), the PostScript token scanner `hayro-cmap` uses
-to parse the CMap streams PDFs embed. One local patch: the scanner, which does not parse
+to parse the CMap streams PDFs embed. Two local patches. The scanner, which does not parse
 dictionaries yet, skips runs of `<<` and `>>` in a loop and returns the next object, instead
 of recursing once per delimiter, so a long run of `<` or `>` bytes no longer overflows the
 stack. Tests: `object::tests::long_open_dict_run_does_not_overflow`,
 `object::tests::long_close_dict_run_does_not_overflow`, `object::tests::dict_delimiters_are_skipped`
-and `object::tests::nested_dict_delimiters_are_skipped`. Its `SOURCE.json` records the
+and `object::tests::nested_dict_delimiters_are_skipped`. A literal string's `\ddd` escape keeps
+the low eight bits of its value, as ISO 32000-2 §7.3.4.2 asks ("high-order overflow shall be
+ignored"), so `\737` decodes to `0xDF` instead of being dropped; code comments label it
+`Craft patch (octal overflow, craft-libs #2321)`. Tests:
+`string::tests::literal_octal_overflow_keeps_the_low_eight_bits` and
+`string::tests::literal_octal_short_escape_stops_at_a_non_octal_byte`. Its `SOURCE.json` records the
 registry hashes. Consuming workspaces need a `hayro-postscript` patch entry beside the other
 Hayro entries.
 
@@ -59,6 +64,7 @@ where noted below.
 |---|---|---|---|---|
 | [#2770](https://github.com/storytold/pdfcraft/pull/2770) | Guillem Hermida (guillehr2) | [6fcf2a4](https://github.com/guillehr2/pdfcraft/commit/6fcf2a4aca29e943e28cb69017ff8f87d00656c6) | hayro-interpret `color.rs`, `interpret/mod.rs`, `interpret/path.rs`, `interpret/state.rs`, `pattern.rs`, `shading.rs`, `soft_mask.rs`, `x_object.rs` | Patches 35 and 36, plate mode: `InterpreterSettings::plate` draws one ink's separation as a gray film (`color::Plate`, `ColorSpace::ink_use`/`ink_tint`); the graphics state reads `OP`, `op` and `OPM` and an overprinting paint that doesn't specify the plate's ink leaves the plate as it is (ISO 32000-2 §8.6.7); `InterpreterSettings::ink_sink` reports spot inks; `color::CmykSimulation` converts process color to an output intent's CMYK. Only the vendored interpreter part is ported; PdfCraft's `separations.rs` and Output Preview UI are not |
 | [#2974](https://github.com/storytold/pdfcraft/pull/2974) | mtlcl410 | [bae6981](https://github.com/mtlcl410/pdfcraft/commit/bae69819594a6385a027fec1f67e6b3c36c259b4) | hayro-interpret `device.rs`, `x_object.rs`; hayro `renderer.rs` | Knockout groups (`/K true`) knock out: while one is innermost, fills, strokes, glyph outlines and shadings are drawn with `Compose::Copy` (weighted by coverage); an unmasked image's rectangle (`Device::knockout_image`) and a nested group's shape (an erase pass between `Device::begin_knockout_erase` and `end_knockout_erase`) are cleared before their layer composites; a transparency group drawn in a knockout group always gets a layer of its own. Masked images and stencils composite as before |
+| [#4898](https://github.com/storytold/pdfcraft/pull/4898) | KenM76 | [6a76d28](https://github.com/KenM76/pdfcraft/commit/6a76d280168ebad42198de184d03ac11bf31f647) | hayro-interpret `device.rs`, `ocg.rs`, `x_object.rs`; hayro `renderer.rs` | A non-isolated knockout group entered at full opacity, without a soft mask and with Normal blending, composites each element with the backdrop in the element's own blend mode: the group is drawn once per blend mode its elements use (`Device::begin_knockout_pass`, `end_knockout_pass`), each pass a layer composited in its mode, in which elements of other modes clear their shape; a shading in a knockout group clears only where it paints (`Compose::DestOut`), so a mesh or a `/BBox` no longer clears its whole path |
 
 Code comments label #2974's changes `Knockout patch (pdfcraft #2974)` instead of a number: the
 pull request numbers them hayro-interpret patch 39 and hayro patch 19, and PdfCraft may
@@ -66,6 +72,11 @@ renumber them when it merges. `crates/pdf/tests/knockout.rs` adapts its test; a 
 test in `crates/pdf/tests/plates.rs` checks that a knockout group separates with only the top
 object where two objects overlap. The erase pass resolves the group's resources with
 `Resources::from_scope`, as the group's own draw does in this tree.
+
+#4898 was merged in PdfCraft (b0555cb) after this tree's snapshot. Its comments keep the label
+`Knockout patch (pdfcraft #4898)`, beside #2974's. `crates/pdf/tests/knockout_backdrop.rs`
+adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the case of craft-libs
+#870, a Multiply knockout group over a yellow page.
 
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
@@ -97,6 +108,16 @@ The syntax manifest pins JBIG2 exactly to 0.3.0 so a newer registry release cann
 the transferred decoder patches.
 Synthetic unit tests cover these boundaries; two version tests and the introductory doctest
 use synthetic PDFs so they do not rely on the absent upstream corpus. No corpus is copied.
+
+`DecodeLimits` also carries the two image limits: `with_max_decoded_image` sets the most bytes
+the last filter of an image of known size may produce (1 GiB by default), and
+`with_max_image_pixels` sets the most pixels an image or mask may have for the interpreter to
+decode it (2^28 by default, at most 2^32), before and after its codec decodes it. With 64-bit
+pointers a caller may raise either one; elsewhere a raise is clamped to the default.
+`image_size_ok` keeps the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
+RGB data instead of copying them into a second buffer. Tests:
+`decode_limits_tests::image_limits_default_and_caller_figures` in hayro-syntax and
+`image_limits` in `crates/pdf/tests/interpretation.rs`.
 
 Compatibility patches follow the resource scopes and text-showing order in
 [Hayro 0.8.0, revision ea9c81dc70cde40c64205986fdcfcd481fe934d8](https://github.com/LaurenzV/hayro/tree/ea9c81dc70cde40c64205986fdcfcd481fe934d8),

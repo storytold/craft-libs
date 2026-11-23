@@ -1,7 +1,7 @@
 //! OMF Interchange 2.0 for audio post: written, and the same structures read.
 //!
 //! Written from the public *OMF Interchange Specification Version 2.0* (Avid Technology, 1995/97)
-//! and Apple's *Bento Specification* revision 1.0d5 for the container ([`bento`]).
+//! and Apple's *Bento Specification* revision 1.0d5 for the container.
 //!
 //! The file holds a composition mob (`CMOB`) with a timecode slot and one sound slot per audio
 //! track (one per channel when broken out to mono): sequences (`SEQU`) of fillers (`FILL`), source
@@ -21,7 +21,7 @@
 //! transition's name) are not in the specification; they were first written by FilmCraft and keep
 //! their names so that existing files read back.
 
-pub(crate) mod bento;
+pub mod bento;
 mod read;
 mod write;
 
@@ -33,7 +33,7 @@ pub fn write(doc: &Document, identity: &Identity<'_>, report: &mut Report) -> Re
     write::write(doc, identity, report)
 }
 
-/// Read an OMF 2.0 file (as written by [`write`] and by applications using the same structures).
+/// Read an OMF 2.0 file (as written by [`fn@write`] and by applications using the same structures).
 pub fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
     read::read(bytes, report)
 }

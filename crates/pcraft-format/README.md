@@ -5,7 +5,7 @@ references, the entry paths, the limits for reading a manifest, and the runner f
 migrations. The document model stays in PhotoCraft and is a type parameter here. The crate
 does not read ZIP archives, open files or decode tiles. No `unsafe`, no panics on malformed
 input, and it builds for `wasm32-unknown-unknown`. The dependencies are `serde`, `serde_json`
-and `thiserror`.
+`thiserror`, and `flate2`.
 
 ```toml
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
@@ -102,21 +102,27 @@ limits.max_manifest_bytes = 16 << 20;
 
 `cargo test -p craft-pcraft-format` runs:
 
-- `tests/manifest.rs`: a manifest with and without previews serializes with
-  `serde_json::to_vec_pretty` to JSON written by hand in the test, byte for byte, and reads
-  back equal; missing previews and unknown members; entry names, hash checks, and no entry name
-  for an invalid hash.
-- `tests/read.rs`: `read_manifest` and `read_manifest_with` read the envelope and the document,
-  refuse a newer version with the writer's `generator`, refuse a manifest past the limits, run
-  the steps first, and report missing or mistyped members as a struct with a derived
-  `Deserialize` reports them, in the same order; a missing or invalid `format_version` is
-  `Corrupt`, and so is a preview that names another entry, such as `../x` or an absolute path.
-- Doc tests: `Manifest` and `TileRef` are not built by struct literal, `Manifest` has no
-  `Deserialize`, and `Error::TooNew` is matched with `..`.
-- `tests/limits.rs`: the default limits, nesting at and past `max_depth`, items at and past
-  `max_items`, brackets inside strings, the manifest size, JSON errors and the messages.
-- `tests/migrate.rs`: steps in order, partial chains, the current version, newer, missing,
-  zero and out-of-range versions, a missing step, and steps that return the caller's error type.
+- `tests/manifest.rs`: a manifest with and without previews reads back equal to the one built
+  in the test, and no entry name is built from an invalid hash.
+- `tests/read.rs`: `read_manifest` refuses a newer version with the writer's `generator`, runs
+  the steps before reading the document, and reports a preview that names another entry, such
+  as `../x` or an absolute path, as `Corrupt`.
+- Doc tests: the example of reading a manifest.
+- `tests/limits.rs`: nesting at and past `max_depth`, a manifest deeper than serde_json's 128
+  levels, and brackets and commas inside strings.
+- `tests/migrate.rs`: steps run in order from the file's version.
 
 `.github/workflows/pcraft-format.yml` runs fmt, clippy and the tests on Linux and Windows, and
 a `wasm32-unknown-unknown` check.
+
+## Brush-tip envelope
+
+`tip::encode`, `tip::decode` and `tip::decode_with_max_side` share PhotoCraft's PCTIP1
+brush-tip codec: a six-byte magic, one-byte depth, little-endian width/height and zlib
+samples. Eight-bit-compatible samples use 8 bits, otherwise 16-bit little-endian.
+Dimensions, sample count, exact inflated length and caller preview side limits are checked.
+Preset group schemas, tip hashes and storage policy remain application-owned.
+
+Ported from `storytold/photocraft` commit `19aec5eb44131de44361189d64910e7b3e19e57c`,
+`crates/engine/src/preset_store.rs`. Original codec by Brandon Thomas (PhotoCraft #82),
+with later bounds/backend/storage changes by David Mann and FinnNk, under MIT OR Apache-2.0.

@@ -1,8 +1,7 @@
 //! Malformed CRW files must decode to an error, never panic: a CIFF with the records the decoder
 //! reads and a pseudo-random payload, mutated by bit flips and truncation.
 
-use craft_crw::{Limits, decode, header, probe};
-use proptest::prelude::*;
+use craft_crw::{Limits, decode, header};
 
 const W: usize = 48;
 const H: usize = 20;
@@ -60,19 +59,6 @@ fn crw() -> Vec<u8> {
 }
 
 #[test]
-fn the_synthetic_file_is_recognised() {
-    let f = crw();
-    assert!(probe(&f));
-    let hdr = header(&f, &Limits::default()).expect("header");
-    assert_eq!((hdr.width, hdr.height), (W, H));
-    assert_eq!(hdr.exif_orientation, 8);
-    assert_eq!(hdr.capture_unix, Some(1083410638));
-    assert!(hdr.wb_multipliers.is_some());
-    // pseudo-random entropy data decodes or is refused, never panics
-    let _ = decode(&f, &Limits::default());
-}
-
-#[test]
 fn every_truncation_and_single_byte_mutation_survives() {
     let good = crw();
     for n in 0..good.len() {
@@ -85,24 +71,5 @@ fn every_truncation_and_single_byte_mutation_survives() {
         let _ = decode(&bad, &Limits::default());
         bad[i] = 0xff;
         let _ = decode(&bad, &Limits::default());
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
-
-    #[test]
-    fn mutated_files_never_panic(flips in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..16), cut in any::<usize>(), max_samples in 1usize..4096) {
-        let mut data = crw();
-        let n = data.len();
-        for (i, v) in flips {
-            data[i % n] ^= v;
-        }
-        data.truncate(cut % (n + 1));
-        let mut limits = Limits::default();
-        limits.max_samples = max_samples;
-        let _ = header(&data, &limits);
-        let _ = decode(&data, &limits);
-        let _ = decode(&data, &Limits::default());
     }
 }

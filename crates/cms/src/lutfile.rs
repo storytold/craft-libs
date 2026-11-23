@@ -11,7 +11,9 @@
 /// A parsed 3D LUT.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LutFile {
+    /// Title from the file, or empty when it has none.
     pub title: String,
+    /// Edge length of the cube: the table has `size` points per axis.
     pub size: usize,
     /// `size`³ × 3 values, red fastest.
     pub data: Vec<f32>,
@@ -27,6 +29,7 @@ pub struct LutFile {
     /// saturating outside. `[0, 1]` is the identity default; applying a table with any other
     /// domain is rejected upstream until Color Lookup carries it through.
     pub domain_min: [f32; 3],
+    /// Upper end of the input domain per channel; see [`domain_min`](Self::domain_min).
     pub domain_max: [f32; 3],
 }
 
@@ -34,6 +37,7 @@ pub struct LutFile {
 /// keeping the GPU table within texture limits).
 pub const MAX_SIZE: usize = 129;
 
+/// Why a LUT file could not be read; the string is a message for the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LutError(pub String);
 
@@ -129,6 +133,34 @@ impl Format {
     }
 }
 
+/// Most files [`list_folder`] lists.
+const MAX_FILES: usize = 500;
+/// Largest file [`list_folder`] lists: a 129³ `.cube` is about 60 MB.
+const MAX_BYTES: u64 = 64 << 20;
+
+/// The `.cube`, `.3dl` and `.look` files directly in `dir` as (file name, path), sorted by name
+/// without regard to case. An unreadable folder lists nothing; hidden files, subfolders and files
+/// too large to be a LUT are skipped, and a symlink to a LUT file is listed.
+pub fn list_folder(dir: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<(String, std::path::PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let extension = name.rsplit_once('.')?.1.to_ascii_lowercase();
+            if name.starts_with('.') || !matches!(extension.as_str(), "cube" | "3dl" | "look") {
+                return None;
+            }
+            let path = entry.path();
+            let meta = std::fs::metadata(&path).ok()?;
+            (meta.is_file() && meta.len() <= MAX_BYTES).then_some((name, path))
+        })
+        .collect();
+    out.sort_by_key(|(name, _)| name.to_lowercase());
+    out.truncate(MAX_FILES);
+    out
+}
+
 /// Parses a LUT, picking the format from `file_name`'s extension (falls back to sniffing).
 pub fn parse(file_name: &str, bytes: &[u8]) -> Result<LutFile, LutError> {
     parse_as(Format::detect(file_name, bytes), bytes)
@@ -159,62 +191,142 @@ fn decode_text(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// Adobe / Resolve `.cube`. 1D LUTs (`LUT_1D_SIZE`) are expanded to a 33³ table.
-pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
-    let mut title = String::new();
-    let (mut size3, mut size1) = (0usize, 0usize);
-    let (mut dmin, mut dmax) = ([0.0f32; 3], [1.0f32; 3]);
-    let mut rows: Vec<f32> = Vec::new();
-    for line in text.lines() {
-        // Only a quote at the beginning of a TITLE value protects '#'. Quotes inside an
-        // unquoted title's comment must not turn that comment into part of the title.
-        if let Some(quoted) = line
-            .trim_start()
-            .strip_prefix("TITLE")
-            .filter(|rest| rest.starts_with(char::is_whitespace))
-            .and_then(|rest| rest.trim_start().strip_prefix('"'))
+/// A bounded, three-dimensional Cube profile with RGB rows in file order.
+/// Unlike [`parse_cube`], this preserves the optional title and does not resample 1D curves.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cube3d {
+    pub title: Option<String>,
+    pub size: usize,
+    pub data: Vec<[f32; 3]>,
+    pub domain_min: [f32; 3],
+    pub domain_max: [f32; 3],
+}
+
+/// Read the simple 3D profile dialect used by camera-profile consumers.
+///
+/// `max_size` must be in 2..=256; the row budget is checked before each allocation.
+/// Whole-line comments and literal titles are preserved. Unknown alphabetic directives
+/// are ignored; 1D tables are refused. Finite domains are returned unchanged so the
+/// consumer retains its existing policy for equal or reversed endpoints.
+/// Numeric fields must consist of exactly three finite numbers (never silently skip tokens).
+pub fn parse_cube_3d(text: &str, max_size: usize) -> Result<Cube3d, LutError> {
+    let p = read_cube(text, Some(max_size))?;
+    if p.size3 == 0 {
+        return err("not a 3D .cube LUT (no LUT_3D_SIZE)");
+    }
+    let expected = p.size3.checked_pow(3).ok_or_else(|| LutError("LUT size overflow".into()))?;
+    if p.rows.len() != expected {
+        return err(format!("expected {expected} entries, found {}", p.rows.len()));
+    }
+    Ok(Cube3d { title: p.title, size: p.size3, data: p.rows, domain_min: p.min, domain_max: p.max })
+}
+
+struct CubeRows {
+    title: Option<String>,
+    size3: usize,
+    size1: usize,
+    min: [f32; 3],
+    max: [f32; 3],
+    rows: Vec<[f32; 3]>,
+}
+
+fn cube_triplet(text: &str) -> Result<[f32; 3], LutError> {
+    let mut it = text.split_whitespace();
+    let mut row = [0.0; 3];
+    for value in &mut row {
+        *value = it.next().and_then(|s| s.parse::<f32>().ok()).filter(|v| v.is_finite()).ok_or_else(|| LutError(format!("bad line `{text}`")))?;
+    }
+    if it.next().is_some() {
+        return err(format!("bad line `{text}`"));
+    }
+    Ok(row)
+}
+
+fn read_cube(text: &str, profile_max: Option<usize>) -> Result<CubeRows, LutError> {
+    if profile_max.is_some_and(|n| !(2..=256).contains(&n)) {
+        return err("3D profile size limit must be in 2..=256");
+    }
+    let mut p = CubeRows { title: None, size3: 0, size1: 0, min: [0.0; 3], max: [1.0; 3], rows: Vec::new() };
+    let row_limit = profile_max.unwrap_or(256).checked_pow(3).ok_or_else(|| LutError("LUT size overflow".into()))?;
+    for raw in text.lines() {
+        let profile = profile_max.is_some();
+        let line = if profile { raw.trim() } else { raw.split('#').next().unwrap_or("").trim() };
+        // The standard dialect protects '#' inside quoted titles; profile titles are literal.
+        if !profile
+            && let Some(quoted) =
+                raw.trim_start().strip_prefix("TITLE").filter(|r| r.starts_with(char::is_whitespace)).and_then(|r| r.trim_start().strip_prefix('"'))
         {
-            let Some((value, _)) = quoted.split_once('"') else { return err("unterminated quoted TITLE") };
-            title = value.to_string();
+            let Some((title, _)) = quoted.split_once('"') else { return err("unterminated quoted TITLE") };
+            p.title = Some(title.to_string());
             continue;
         }
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let mut it = line.split_whitespace();
-        let key = it.next().unwrap_or("");
-        let nums = |it: std::str::SplitWhitespace<'_>| -> Result<[f32; 3], LutError> {
-            let v: Vec<f32> = it.filter_map(|s| s.parse().ok()).collect();
-            if v.len() == 3 { Ok([v[0], v[1], v[2]]) } else { err(format!("bad line `{line}`")) }
+        let (key, rest) = if profile {
+            ["TITLE", "LUT_3D_SIZE", "LUT_1D_SIZE", "DOMAIN_MIN", "DOMAIN_MAX"]
+                .into_iter()
+                .find_map(|key| line.strip_prefix(key).map(|rest| (key, rest.trim())))
+                .unwrap_or_else(|| line.split_once(char::is_whitespace).unwrap_or((line, "")))
+        } else {
+            line.split_once(char::is_whitespace).map_or((line, ""), |(key, rest)| (key, rest.trim()))
         };
         match key {
-            "TITLE" => title = line[5..].trim().trim_matches('"').to_string(),
-            "LUT_3D_SIZE" => size3 = it.next().and_then(|s| s.parse().ok()).ok_or_else(|| LutError("bad LUT_3D_SIZE".into()))?,
-            "LUT_1D_SIZE" => size1 = it.next().and_then(|s| s.parse().ok()).ok_or_else(|| LutError("bad LUT_1D_SIZE".into()))?,
-            "DOMAIN_MIN" => dmin = nums(it)?,
-            "DOMAIN_MAX" => dmax = nums(it)?,
-            "LUT_3D_INPUT_RANGE" | "LUT_1D_INPUT_RANGE" => {
-                let v: Vec<f32> = it.filter_map(|s| s.parse().ok()).collect();
-                if v.len() == 2 {
-                    dmin = [v[0]; 3];
-                    dmax = [v[1]; 3];
+            "TITLE" => p.title = Some(rest.trim_matches('"').to_string()),
+            "LUT_3D_SIZE" => {
+                let value = if profile { rest } else { rest.split_whitespace().next().unwrap_or("") };
+                p.size3 = value.parse().map_err(|_| LutError(format!("bad LUT_3D_SIZE `{value}`")))?;
+                let limit = profile_max.unwrap_or(MAX_SIZE);
+                if !(2..=limit).contains(&p.size3) {
+                    return err(format!("LUT_3D_SIZE {} out of range", p.size3));
                 }
             }
-            k if k.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.') => {
-                let mut v = vec![k.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?];
-                for value in it {
-                    v.push(value.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?);
+            "LUT_1D_SIZE" => {
+                if profile {
+                    return err("1D LUTs are not supported (only 3D .cube files)");
                 }
-                if v.len() != 3 {
-                    return err(format!("bad data line `{line}`"));
+                p.size1 = rest.split_whitespace().next().and_then(|s| s.parse().ok()).ok_or_else(|| LutError("bad LUT_1D_SIZE".into()))?;
+                if p.size1 > row_limit {
+                    return err("1D LUT exceeds row budget");
                 }
-                rows.extend(v);
             }
-            // Unknown keywords (e.g. Resolve's LUT_IN_VIDEO_RANGE) are ignored, as the spec allows.
-            _ => {}
+            "DOMAIN_MIN" => p.min = cube_triplet(rest).map_err(|_| LutError("bad DOMAIN_MIN".into()))?,
+            "DOMAIN_MAX" => p.max = cube_triplet(rest).map_err(|_| LutError("bad DOMAIN_MAX".into()))?,
+            "LUT_3D_INPUT_RANGE" | "LUT_1D_INPUT_RANGE" if !profile => {
+                let mut it = rest.split_whitespace();
+                let min = it.next().and_then(|s| s.parse::<f32>().ok());
+                let max = it.next().and_then(|s| s.parse::<f32>().ok());
+                if let (Some(min), Some(max), None) = (min, max, it.next()) {
+                    p.min = [min; 3];
+                    p.max = [max; 3];
+                }
+            }
+            _ => {
+                let numeric = key.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.');
+                let nonfinite = key.parse::<f32>().is_ok();
+                if numeric || nonfinite || (profile && !key.starts_with(|c: char| c.is_ascii_alphabetic())) {
+                    let row = cube_triplet(line)?;
+                    if p.rows.len() >= row_limit {
+                        return err("LUT exceeds row budget");
+                    }
+                    // Explicit fallible growth prevents capacity growth past the configured budget.
+                    if p.rows.len() == p.rows.capacity() {
+                        let grow = (p.rows.capacity().max(1)).min(row_limit - p.rows.len());
+                        p.rows.try_reserve_exact(grow).map_err(|_| LutError("LUT allocation failed".into()))?;
+                    }
+                    p.rows.push(row);
+                }
+            }
         }
     }
+    Ok(p)
+}
+
+/// Adobe / Resolve `.cube`. 1D LUTs (`LUT_1D_SIZE`) are expanded to a 33³ table.
+pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
+    let p = read_cube(text, None)?;
+    let (title, size3, size1, dmin, dmax) = (p.title.unwrap_or_default(), p.size3, p.size1, p.min, p.max);
+    let rows: Vec<f32> = p.rows.into_iter().flatten().collect();
     let domain_ok = (0..3).all(|k| dmin[k] < dmax[k] && dmin[k].is_finite() && dmax[k].is_finite());
     if (size3 > 0 || size1 >= 2) && !domain_ok {
         return err(format!("DOMAIN_MIN {:?} must lie below DOMAIN_MAX {:?}", dmin, dmax));
@@ -532,7 +644,28 @@ pub fn write_cube(l: &LutFile) -> String {
         s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
     }
     s.push_str(&format!("LUT_3D_SIZE {}\n", l.size));
-    for c in l.data.as_chunks::<3>().0 {
+    cube_rows(s, l.data.as_chunks::<3>().0.iter().copied())
+}
+
+/// Writes a `.cube` file with a creator comment, section comments and an explicit input domain.
+///
+/// This layout is useful for exported LUTs; [`write_cube`] keeps its compact layout for embedded
+/// tables. Values retain six decimal places, and their order and quantisation belong to the
+/// caller. A default domain is written as `0.0` and `1.0` for compatibility with export consumers.
+pub fn write_cube_commented(l: &LutFile, creator: &str) -> String {
+    let mut s = format!("#Created by: {creator}\nTITLE \"{}\"\n\n#LUT size\nLUT_3D_SIZE {}\n\n#data domain\n", l.title.replace('"', "'"), l.size);
+    if l.domain_is_default() {
+        s.push_str("DOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n");
+    } else {
+        s.push_str(&format!("DOMAIN_MIN {} {} {}\n", l.domain_min[0], l.domain_min[1], l.domain_min[2]));
+        s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
+    }
+    s.push_str("\n#LUT data points\n");
+    cube_rows(s, l.data.as_chunks::<3>().0.iter().copied())
+}
+
+fn cube_rows(mut s: String, rows: impl Iterator<Item = [f32; 3]>) -> String {
+    for c in rows {
         s.push_str(&format!("{:.6} {:.6} {:.6}\n", c[0], c[1], c[2]));
     }
     s
@@ -636,6 +769,25 @@ fn shaper_row(knots: &[f32], size: usize) -> Result<String, LutError> {
         err("the .3dl shaper has no unambiguous scale")
     }
 }
+/// Annotated identity-domain CUBE export, streamed in red-fastest order without a table copy.
+/// Callers supply exactly `size³` rows for a valid size (2..=[`MAX_SIZE`]), as with [`write_cube`].
+/// Integer-depth exports clamp/round to 1/32768 steps; floating exports clamp without rounding.
+pub fn write_cube_export(creator: &str, title: &str, size: usize, integer_depth: bool, rows: impl Iterator<Item = [f32; 3]>) -> String {
+    let s = format!(
+        "#Created by: {creator}\nTITLE \"{}\"\n\n#LUT size\nLUT_3D_SIZE {size}\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n",
+        title.replace('"', "'")
+    );
+    cube_rows(
+        s,
+        rows.map(|c| {
+            c.map(|v| {
+                let v = v.clamp(0.0, 1.0);
+                if integer_depth { (v * 32768.0).round() / 32768.0 } else { v }
+            })
+        }),
+    )
+}
+
 fn luma(c: [f32; 3]) -> f32 {
     0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
 }
@@ -700,6 +852,30 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commented_cube_preserves_export_header_and_rows() {
+        let mut lut = super::LutFile::identity(2).unwrap();
+        lut.title = "A \"look\"".into();
+        let text = super::write_cube_commented(&lut, "ExampleCraft");
+        assert!(text.starts_with("#Created by: ExampleCraft\nTITLE \"A 'look'\"\n\n#LUT size\nLUT_3D_SIZE 2\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n"));
+        let parsed = super::parse_cube(&text).unwrap();
+        assert_eq!(parsed.data, lut.data);
+        assert_eq!(parsed.title, "A 'look'");
+        assert_eq!(text.lines().count(), 11 + 8);
+        let rows = |s: &str| s.lines().filter(|line| line.starts_with(|c: char| c.is_ascii_digit())).map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(rows(&text), rows(&super::write_cube(&lut)));
+    }
+
+    #[test]
+    fn commented_cube_keeps_nondefault_domain_and_sample_precision() {
+        let mut lut = super::LutFile::identity(2).unwrap();
+        lut.domain_min = [0.125, 0.25, 0.375];
+        lut.domain_max = [0.625, 0.75, 0.875];
+        lut.data[0] = 0.833344;
+        let parsed = super::parse_cube(&super::write_cube_commented(&lut, "ExampleCraft")).unwrap();
+        assert_eq!(parsed, lut);
+    }
 
     #[test]
     fn cube_title_hashes_and_comment_quotes_are_distinct() {
@@ -1200,43 +1376,6 @@ mod tests {
     }
 
     #[test]
-    fn cube_domain_is_kept_and_validated() {
-        let base = "TITLE \"t\"
-LUT_3D_SIZE 2
-";
-        let rows = "0 0 0
-0 0 1
-0 1 0
-0 1 1
-1 0 0
-1 0 1
-1 1 0
-1 1 1
-";
-        // The default domain parses as default.
-        let d = parse_cube(&format!("{base}{rows}")).expect("default domain");
-        assert!(d.domain_is_default());
-        // DOMAIN_MIN/MAX are kept for the caller to act on.
-        let d = parse_cube(&format!(
-            "DOMAIN_MIN 0.1 0.2 0.3
-DOMAIN_MAX 0.9 0.8 0.7
-{base}{rows}"
-        ))
-        .expect("custom domain");
-        assert_eq!(d.domain_min, [0.1, 0.2, 0.3]);
-        assert_eq!(d.domain_max, [0.9, 0.8, 0.7]);
-        assert!(!d.domain_is_default());
-        // A degenerate domain is a parse error, not a division by zero later.
-        let e = parse_cube(&format!(
-            "DOMAIN_MIN 0.5 0.5 0.5
-DOMAIN_MAX 0.5 1 1
-{base}{rows}"
-        ))
-        .unwrap_err();
-        assert!(e.0.contains("below DOMAIN_MAX"), "{e}");
-    }
-
-    #[test]
     fn cube_1d_narrow_domain_is_refused() {
         // #8913: the issue's fixture — a two-node ramp over 0.24..0.26. Baking it onto the
         // 33-point grid rendered grey-65 as 148 where Photoshop renders 190 (42-level error).
@@ -1280,64 +1419,6 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn cube_1d_domain_is_baked_into_the_resample() {
-        // An identity ramp over the domain 0.25..0.75: 0.25 maps to 0, 0.5 to 0.5, 0.75 to 1.
-        let table = "LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 0.25 0.75\n0 0 0\n1 1 1\n";
-        let l = parse_cube(table).expect("1D with input range");
-        assert!(l.domain_is_default(), "the domain is baked in, so the cube is plain 0..1");
-        let at = |r: usize| l.data[r * 3];
-        // 33-point grid, red fastest: entry r on the red axis is input r / 32.
-        assert!(at(0).abs() < 1e-6, "below the domain saturates to 0");
-        assert!((at(16) - 0.5).abs() < 1e-5, "0.5 is the middle of 0.25..0.75: {}", at(16));
-        assert!((at(8) - 0.0).abs() < 1e-5, "0.25 maps to 0: {}", at(8));
-        assert!((at(24) - 1.0).abs() < 1e-5, "0.75 maps to 1: {}", at(24));
-        assert!((at(32) - 1.0).abs() < 1e-6, "above the domain saturates to 1");
-        // Per-channel DOMAIN_MIN/MAX work the same way.
-        let l = parse_cube("LUT_1D_SIZE 2\nDOMAIN_MIN 0 0 0.5\nDOMAIN_MAX 1 1 1\n0 0 0\n1 1 1\n").expect("1D domain");
-        let blue_mid = l.data[(16 * 33 * 33) * 3 + 2];
-        assert!(blue_mid.abs() < 1e-5, "blue 0.5 is the bottom of its domain: {blue_mid}");
-        // A degenerate 1D domain is rejected like the 3D one.
-        let e = parse_cube("LUT_1D_SIZE 2\nLUT_1D_INPUT_RANGE 1 1\n0 0 0\n1 1 1\n").unwrap_err();
-        assert!(e.0.contains("below DOMAIN_MAX"), "{e}");
-    }
-
-    #[test]
-    fn cube_roundtrip_and_identity() {
-        let id = LutFile::identity(5).unwrap();
-        let text = write_cube(&LutFile { title: "Id".into(), ..id.clone() });
-        let back = parse_cube(&text).unwrap();
-        assert_eq!(back.size, 5);
-        assert_eq!(back.title, "Id");
-        for (a, b) in back.data.iter().zip(&id.data) {
-            assert!((a - b).abs() < 1e-5);
-        }
-        // Red varies fastest: entry 1 is (0.25, 0, 0).
-        assert_eq!(&back.data[3..6], &[0.25, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn cube_1d_expands() {
-        let text = "LUT_1D_SIZE 2\n0 0 0\n0.5 1 1\n";
-        let l = parse_cube(text).unwrap();
-        assert_eq!(l.size, 33);
-        let last = &l.data[l.data.len() - 3..];
-        assert!((last[0] - 0.5).abs() < 1e-6 && (last[1] - 1.0).abs() < 1e-6);
-
-        let mut larger = String::from("LUT_1D_SIZE 256\n");
-        for i in 0..256 {
-            let value = i as f32 / 255.0;
-            larger.push_str(&format!("{value} {value} {value}\n"));
-        }
-        assert_eq!(parse_cube(&larger).unwrap().size, 33);
-    }
-
-    #[test]
-    fn cube_1d_size_multiplication_overflow_is_rejected() {
-        let text = format!("LUT_1D_SIZE {}\n", usize::MAX);
-        assert!(parse_cube(&text).is_err());
-    }
-
-    #[test]
     fn three_dl_without_a_header_reads_low_nodes_as_12_bit() {
         let table = |peak: u32| -> String {
             let mut text = String::from("0 1023\n");
@@ -1355,21 +1436,6 @@ DOMAIN_MAX 0.5 1 1
         // cube declaration; `Mesh 1 10` would declare a 3³ cube and refuse this 2³ table (#9078).
         let white = parse_3dl(&format!("3DMESH\n{}", table(1023))).unwrap().data[21..24].to_vec();
         assert_eq!(white, [1.0; 3]);
-    }
-
-    #[test]
-    fn three_dl_blue_fastest_and_bit_depth() {
-        let mut text = String::from("0 1023\n");
-        for r in 0..2 {
-            for g in 0..2 {
-                for b in 0..2 {
-                    text.push_str(&format!("{} {} {}\n", r * 4095, g * 4095, b * 4095));
-                }
-            }
-        }
-        let l = parse_3dl(&text).unwrap();
-        assert_eq!(l.size, 2);
-        assert_eq!(l.data, LutFile::identity(2).unwrap().data);
     }
 
     /// A `size`³ inverse-identity `.3dl` (blue fastest): node (r,g,b) outputs `max - max·v/(size-1)`
@@ -1579,12 +1645,6 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn look_3d_size_exponent_overflow_is_rejected() {
-        let text = format!("<look><size>{}</size><data>00</data></look>", usize::MAX);
-        assert!(parse_look(&text).is_err());
-    }
-
-    #[test]
     fn format_detection_matches_parse() {
         assert_eq!(Format::detect("a.3DL", b"<look>"), Format::ThreeDl);
         assert_eq!(Format::detect("a.Look", b""), Format::Look);
@@ -1596,42 +1656,74 @@ DOMAIN_MAX 0.5 1 1
     }
 
     #[test]
-    fn malformed_rejected() {
-        assert!(parse_cube("LUT_3D_SIZE 2\n0 0 0\n").is_err());
-        assert!(parse_cube("garbage").is_err());
-        assert!(parse_cube("LUT_3D_SIZE 99999\n").is_err());
-        assert!(parse_3dl("1 2 3\n4 5 6\n").is_err());
-        assert!(parse_look("<look></look>").is_err());
+    fn annotated_cube_export_preserves_header_and_integer_precision() {
+        let mut lut = LutFile::identity(2).unwrap();
+        lut.title = "My \"Look\"".into();
+        lut.data[..3].copy_from_slice(&[1.0 / 6.0, 5.0 / 6.0, 160.0 / 255.0]);
+        let output = write_cube_export("PhotoCraft", &lut.title, lut.size, true, lut.data.as_chunks::<3>().0.iter().copied());
+        assert!(output.starts_with("#Created by: PhotoCraft\nTITLE \"My 'Look'\"\n\n#LUT size\nLUT_3D_SIZE 2\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n0.166656 0.833344 0.627441\n"));
+        assert_eq!(output.lines().count(), 11 + 8);
+        let parsed = parse_cube(&output).unwrap();
+        assert_eq!(parsed.size, 2);
+        assert_eq!(&parsed.data[3..], &lut.data[3..]);
+        let float = write_cube_export("PhotoCraft", &lut.title, lut.size, false, lut.data.as_chunks::<3>().0.iter().copied());
+        assert!(float.contains("0.166667 0.833333 0.627451\n"));
     }
 
     #[test]
-    fn builtins_exist_and_are_in_range() {
-        for (id, _) in BUILTIN {
-            let l = builtin(id).unwrap();
-            assert_eq!(l.data.len(), 33 * 33 * 33 * 3);
-            assert!(l.data.iter().all(|v| (0.0..=1.0).contains(v)), "{id}");
+    fn annotated_empty_title_and_float_clamping() {
+        let text = write_cube_export("Exporter", "", 2, false, std::iter::repeat_n([-0.5, 0.25, 1.5], 8));
+        assert!(text.contains("TITLE \"\"\n"));
+        let back = parse_cube(&text).unwrap();
+        assert_eq!(back.data, [0.0, 0.25, 1.0].repeat(8));
+    }
+}
+
+#[cfg(test)]
+mod profile_cube_tests {
+    use super::*;
+
+    fn cube(prefix: &str) -> String {
+        format!("{prefix}\nLUT_3D_SIZE 2\n{}", "0.25 0.5 0.75\n".repeat(8))
+    }
+
+    #[test]
+    fn profile_preserves_optional_literal_title_and_domains() {
+        let no_title = parse_cube_3d(&cube(""), 256).unwrap();
+        assert_eq!(no_title.title, None);
+        let value = parse_cube_3d(&cube("TITLE \"look # literal\"\nDOMAIN_MIN 1 0 2\nDOMAIN_MAX 0 0 1"), 256).unwrap();
+        assert_eq!(value.title.as_deref(), Some("look # literal"));
+        assert_eq!(value.domain_min, [1.0, 0.0, 2.0]);
+        assert_eq!(value.domain_max, [0.0, 0.0, 1.0]);
+        assert_eq!(value.data, vec![[0.25, 0.5, 0.75]; 8]);
+        assert_eq!(parse_cube_3d(&cube("TITLE \"\""), 256).unwrap().title.as_deref(), Some(""));
+        assert!(parse_cube(&cube("DOMAIN_MIN 1 0 2\nDOMAIN_MAX 0 0 1")).is_err());
+    }
+
+    #[test]
+    fn profile_limits_are_checked_without_large_allocations() {
+        assert!(parse_cube_3d("LUT_3D_SIZE 256", 256).unwrap_err().0.contains("16777216"));
+        assert!(parse_cube_3d("LUT_3D_SIZE 257", 256).unwrap_err().0.contains("out of range"));
+        assert!(parse_cube_3d("LUT_3D_SIZE 256", 129).unwrap_err().0.contains("out of range"));
+        assert!(parse_cube_3d(&cube(""), usize::MAX).is_err());
+        assert!(parse_cube_3d(&cube(""), 1).is_err());
+        assert!(parse_cube_3d(&format!("{}0 0 0\n", cube("")), 2).unwrap_err().0.contains("budget"));
+        assert!(parse_cube_3d("LUT_1D_SIZE 2\n0 0 0\n1 1 1", 256).is_err());
+    }
+
+    #[test]
+    fn every_numeric_token_must_be_valid_and_finite() {
+        for row in ["0 ignored 0 0", "0 0 0 ignored", "NaN 0 0", "inf 0 0", "0 0 -inf", "1e39 0 0", "0 0", "0 0 0 0"] {
+            assert!(parse_cube_3d(&format!("LUT_3D_SIZE 2\n{row}\n{}", "0 0 0\n".repeat(7)), 256).is_err(), "{row}");
+            assert!(parse_cube_3d(&cube(&format!("DOMAIN_MIN {row}")), 256).is_err(), "{row}");
         }
-        assert!(builtin("nope").is_none());
     }
 
     #[test]
-    fn cube_domain_survives_a_write() {
-        let cube = "DOMAIN_MIN 0.25 0.25 0.25
-DOMAIN_MAX 0.75 0.75 0.75
-LUT_3D_SIZE 2
-0 0 0
-0 0 1
-0 1 0
-0 1 1
-1 0 0
-1 0 1
-1 1 0
-1 1 1
-";
-        let l = parse_cube(cube).expect("a cube with a non-default domain");
-        assert!(!l.domain_is_default());
-        let back = parse_cube(&write_cube(&l)).expect("roundtrip");
-        assert_eq!(back.domain_min, l.domain_min, "the written table must mean the same");
-        assert_eq!(back.domain_max, l.domain_max);
+    fn standard_reader_keeps_quoted_comments_and_1d_expansion() {
+        assert_eq!(parse_cube(&cube("TITLE \"look # preserved\" # comment")).unwrap().title, "look # preserved");
+        let value = parse_cube("LUT_1D_SIZE 2\n0 0 0\n1 1 1").unwrap();
+        assert_eq!(value.size, 33);
+        assert!(parse_cube_3d(&cube("DOMAIN_MIN 0 0 0 # not a whole-line comment"), 256).is_err());
     }
 }

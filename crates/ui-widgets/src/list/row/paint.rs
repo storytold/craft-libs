@@ -1,0 +1,295 @@
+//! Painting a row's trailing items, toggles, thumbnails, text and cells.
+
+use super::ListRow;
+use super::placement::Placed;
+use super::show::{LINK, TEXT_CELL, TOGGLE};
+use super::style::ListRowStyle;
+use super::thumb::{RowThumb, target_at};
+use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
+use crate::buttons::IconButton;
+use crate::choice::Checkbox;
+use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
+use crate::controls::disclosure::Disclosure;
+use crate::list::toggle::{ToggleFace, ToggleState};
+use crate::primitives::{Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
+use crate::style::{Flags, GlyphRole, Ink, StateMix, StateSet, StyleColor};
+use craft_behavior::{Flow, IconId, Mixed, PartRef};
+use craft_theme::ControlSize;
+use egui::{CornerRadius, Pos2, Rect, Vec2};
+
+impl ListRow<'_> {
+    pub(super) fn paint_trailing(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let side = Vec2::splat(cx.style.sizes.icon);
+        let selected = cx.resolved.selected == Some(true) || cx.env.facts_of(cx.id).is_some_and(|facts| facts.flags.contains(Flags::SELECTED));
+        let drags = &self.drags;
+        let handle = |part: &super::TrailingPart| drags.iter().any(|(spot, _)| *spot == super::RowDragSpot::Trailing(*part));
+        for (at, (trailing, slot)) in self.trailing.iter_mut().zip(&placed.items).enumerate() {
+            let Some(slot) = slot else { continue };
+            let shape = Rect::from_center_size(slot.center(), side);
+            match &mut trailing.item {
+                TrailingItem::Text { text, strong, .. } => {
+                    ui.draw().text(*slot, &trailing_run(text, *strong));
+                }
+                TrailingItem::Icon { icon, .. } => {
+                    let mut icon = icon.clone();
+                    icon.color.get_or_insert(cx.resolve(&cx.style.trailing_icon.color));
+                    ui.draw().icon(shape, &icon);
+                }
+                TrailingItem::Hosted(hosted) => {
+                    if let Some(item) = hosted.item.take() {
+                        let height = hosted.size.map_or(slot.height(), |size| size.ideal.y.min(slot.height()));
+                        item.show(ui, field_key(at), Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
+                    }
+                }
+                TrailingItem::Part { part, face, enabled, revealed, .. } => {
+                    let key = part.part();
+                    let shown = !*revealed
+                        || cx.response.hovered()
+                        || selected
+                        || self.menu_open
+                        || cx.part_state(key).flags.contains(Flags::FOCUSED)
+                        || item_part_open(&cx.ctx, cx.id, key);
+                    if !shown {
+                        continue;
+                    }
+                    match face {
+                        // A drag handle is no button (`access` names it in the row's description): its icon is a mark.
+                        TrailingFace::Icon(icon) if handle(part) => {
+                            let mut icon = icon.clone();
+                            icon.color.get_or_insert(cx.resolve(&cx.style.trailing_icon.color));
+                            ui.draw().icon(shape, &icon);
+                        }
+                        TrailingFace::Icon(icon) => {
+                            ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled).glyphs(GlyphRole::PanelRail))
+                        }
+                        TrailingFace::Disclosure { open } => ui.face(key, Disclosure::new(Bind::given(*open)).node(false).enabled(*enabled)),
+                        TrailingFace::Strong(text) => {
+                            ui.draw().text(*slot, &trailing_run(text, true));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn paint_toggles(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let icon = cx.style.sizes.mark;
+        for (at, cell) in &placed.toggles {
+            let toggle = &self.toggles[*at];
+            let part = TOGGLE.at(*at as u64);
+            if let Some(fill) = toggle.fill {
+                ui.draw().data_fill(&PaintShape::Rect(*cell, CornerRadius::ZERO), fill);
+            }
+            match &toggle.face {
+                ToggleFace::Check => {
+                    let value = match toggle.state {
+                        ToggleState::Mixed => Mixed::Mixed,
+                        state => Mixed::Same(state == ToggleState::On),
+                    };
+                    ui.face(part, Checkbox::new(Bind::given(value)).size(ControlSize::Sm));
+                }
+                ToggleFace::Icons { on, off } => {
+                    let shown = match toggle.state {
+                        ToggleState::On | ToggleState::Mixed => Some(on),
+                        ToggleState::Off if toggle.shows_off(cx.part(part).hovered) => Some(off),
+                        ToggleState::Off => None,
+                    };
+                    if let Some(id) = shown {
+                        let spec = IconSpec::svg(id.clone());
+                        let spec = if toggle.fill.is_some() {
+                            spec.ink(Ink::OnDark)
+                        } else {
+                            spec.color(glyph_ink(cx, part, toggle.state == ToggleState::On))
+                        };
+                        ui.draw().icon(Rect::from_center_size(cell.center(), Vec2::splat(icon)), &spec);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn paint_thumbs(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed, ink: StyleColor) {
+        let style = cx.style;
+        let frame = style.thumb_frame_width;
+        let outset = style.sizes.tight;
+        let arm = style.sizes.gap;
+        let rects: Vec<Rect> = placed.first.into_iter().chain(placed.extras.iter().map(|(thumb, _)| *thumb)).collect();
+        let mut paints = self.first.take().into_iter().map(Some).chain(self.extras.iter_mut().map(|extra| extra.paint.take()));
+        for (at, thumb) in rects.iter().enumerate() {
+            if let Some(Some(paint)) = paints.next() {
+                let _ = ui.child(("thumb", at), thumb.shrink(frame), RowThumb::new(paint));
+            }
+            // The frame is the slot's square edge, and the picture fills the slot inside it.
+            ui.draw().stroke(&PaintShape::Rect(*thumb, CornerRadius::ZERO), StrokeWidth::Thin, style.thumb_frame);
+        }
+        // Adjacent targets are one target together (a frame and its content): one set of brackets frames them all.
+        let mut at = 0;
+        while at < rects.len() {
+            if !self.targets.contains(target_at(at)) {
+                at += 1;
+                continue;
+            }
+            let mut framed = rects[at];
+            while at + 1 < rects.len() && self.targets.contains(target_at(at + 1)) {
+                at += 1;
+                framed = framed.union(rects[at]);
+            }
+            at += 1;
+            let r = framed.expand(outset);
+            let draw = ui.draw();
+            for (corner, dx, dy) in
+                [(r.left_top(), 1.0, 1.0), (r.right_top(), -1.0, 1.0), (r.right_bottom(), -1.0, -1.0), (r.left_bottom(), 1.0, -1.0)]
+            {
+                let path = vec![corner + Vec2::new(arm * dx, 0.0), corner, corner + Vec2::new(0.0, arm * dy)];
+                draw.stroke(&PaintShape::Path(path), StrokeWidth::Medium, ink);
+            }
+        }
+        for (at, (_, link)) in placed.extras.iter().enumerate() {
+            let (Some(slot), Some((linked, _))) = (link, &self.extras[at].link) else { continue };
+            let id = IconId::new(if *linked { "link" } else { "unlink" });
+            let side = Rect::from_center_size(slot.center(), Vec2::splat(style.sizes.icon));
+            let color = glyph_ink(cx, LINK.at(at as u64), *linked);
+            ui.draw().icon(side, &IconSpec::svg(id).color(color));
+        }
+    }
+
+    /// Paints the label, detail and wrapped lines in the label band; returns the bottom of the text, where the component
+    /// under it (`below`) starts after a gap.
+    pub(super) fn paint_text(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, label: Rect) -> f32 {
+        let style = cx.style;
+        let sizes = &style.sizes;
+        let rtl = cx.env.direction().is_rtl();
+        let wrapped = self.lines.as_ref().map(|text| {
+            let run = TextRun::new(text.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(self.lines_wrap());
+            draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
+        });
+        let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);
+        let (label, mut top) = self.text_block(label, sizes, lines + self.below_height(sizes));
+        // A heading's detail sits at the end of the label's line and the title is cut to what it leaves.
+        let beside = match (&self.detail, self.heading) {
+            (Some(detail), true) => {
+                let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
+                let shown = draw.layout(&run, label.width());
+                let x = if rtl { label.left() } else { label.right() - shown.size().x };
+                draw.galley(Pos2::new(x, top + (sizes.label_line - shown.size().y) / 2.0), &shown);
+                shown.size().x + sizes.gap
+            }
+            _ => 0.0,
+        };
+        if !self.renaming && !self.label_has_field() {
+            let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
+            let look = if muted { &style.cell_muted } else { &style.text };
+            let run = self.label_run(cx.resolved.label).role(look.role).color(cx.resolve(&look.color)).elide();
+            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line)), &run);
+        }
+        top += sizes.label_line;
+        if let Some(detail) = self.detail.as_ref().filter(|_| !self.heading) {
+            let run = TextRun::new(detail.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).elide();
+            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(label.width(), sizes.detail_line)), &run);
+            top += sizes.detail_line;
+        }
+        if let Some(layout) = wrapped {
+            let x = if rtl { label.right() - layout.size().x } else { label.left() };
+            draw.galley(Pos2::new(x, top + sizes.gap), &layout);
+        }
+        top + lines
+    }
+}
+
+impl ListRow<'_> {
+    /// The label as a run without its role and colour: its styled spans (`label_spans`) when it has them, else `label`
+    /// as one span, every span italic under `italic`.
+    pub(super) fn label_run<'s>(&'s self, label: &'s str) -> TextRun<'s> {
+        let mut spans: Vec<Span<'s>> = if self.label_spans.is_empty() { vec![Span::new(label)] } else { self.label_spans.clone() };
+        if self.italic {
+            spans.iter_mut().for_each(|span| span.italic = true);
+        }
+        TextRun::spans(spans)
+    }
+
+    /// The text cells, inset and centred on the row's height, each aligned as its column says.
+    /// The text cell `at` as a run in its column's look, without its colour.
+    pub(super) fn cell_run(&self, style: &ListRowStyle, at: usize) -> TextRun<'_> {
+        let text = &self.texts[at];
+        let (align, numeric) = self.align_of(&text.column);
+        let mut span = Span::new(text.text.as_str());
+        span.tabular = numeric;
+        let run = TextRun::spans(vec![span]).role(self.cell_look(style, &text.column).role).align(align);
+        if text.wrap { run.wrap(Wrap::Wrap) } else { run.elide() }
+    }
+
+    /// Whether the text cell `at` is a selection part: wrapped text in a column `cell_selectable` names.
+    pub(super) fn cell_selects(&self, at: usize) -> bool {
+        let text = &self.texts[at];
+        text.wrap && self.selectable.contains(&text.column)
+    }
+
+    pub(super) fn paint_cells(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let sizes = &cx.style.sizes;
+        let rtl = cx.env.direction().is_rtl();
+        for (at, position, cell) in &placed.texts {
+            let text = &self.texts[*at];
+            if self.cell_fields.iter().any(|(column, _)| *column == text.column) {
+                continue;
+            }
+            let look = self.cell_look(cx.style, &text.column);
+            let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
+            let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
+            let run = self.cell_run(cx.style, *at).color(cx.resolve(&look.color));
+            let layout = ui.draw().layout(&run, room.width());
+            let top =
+                if text.wrap { room.top() + ((room.height() - layout.size().y) / 2.0).max(0.0) } else { room.center().y - sizes.label_line / 2.0 };
+            let x = ui.draw().text_x(room, &run, &layout);
+            if self.cell_selects(*at) {
+                ui.selectable_text(TEXT_CELL.at(*position as u64), Rect::from_min_size(Pos2::new(x, top), layout.size()), &run);
+            } else {
+                ui.draw().galley(Pos2::new(x, top), &layout);
+            }
+        }
+    }
+}
+
+impl ListRow<'_> {
+    /// Whether a cell field stands in the label's place.
+    pub(super) fn label_has_field(&self) -> bool {
+        self.label_column(&self.cells).is_some_and(|label| self.cell_fields.iter().any(|(column, _)| column == label))
+    }
+
+    /// Shows each cell field in its column's cell, or in the label's room in the label's column, at its own height up to
+    /// the row's, centred on the row's band.
+    pub(super) fn paint_cell_fields(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let sizes = &cx.style.sizes;
+        let rtl = cx.env.direction().is_rtl();
+        let label = self.label_column(&self.cells).cloned();
+        let band = placed.label.y_range();
+        for (at, (column, field)) in self.cell_fields.iter_mut().enumerate() {
+            let (Some(item), Some(size)) = (field.item.take(), field.size) else { continue };
+            let room = if label.as_ref() == Some(column) {
+                placed.label
+            } else {
+                let Some((_, cell)) = self.cells.iter().find(|(key, _)| key == column) else { continue };
+                let cell = Rect::from_x_y_ranges(cell.x_range(), band);
+                Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
+            };
+            let height = size.ideal.y.min(room.height());
+            item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
+        }
+    }
+}
+
+/// The ink of a toggle or link glyph that is `on` or not: its own part's hover and press, over the row's selection and
+/// lead.
+fn glyph_ink(cx: &Cx<'_, ListRow<'_>>, part: PartRef, on: bool) -> StyleColor {
+    let (row, cell) = (cx.state(), cx.part_state(part));
+    let look = if on { &cx.style.toggle } else { &cx.style.toggle_off };
+    StateSet::new(cell.state, row.flags, StateMix::new(cell.t.hover, cell.t.press, row.t.on)).resolve(&look.color)
+}
+
+/// The down-right clipping mark: a stem down from the top, then a leg toward the reading end with an arrowhead.
+pub(super) fn draw_clip_arrow(draw: &Draw<'_>, slot: Rect, rtl: bool, ink: StyleColor) {
+    let side = slot.width().min(slot.height());
+    let square = Rect::from_center_size(slot.center(), Vec2::splat(side));
+    let at = |x: f32, y: f32| Pos2::new(if rtl { square.right() - x * side } else { square.left() + x * side }, square.top() + y * side);
+    draw.stroke(&PaintShape::Path(vec![at(0.2, 0.2), at(0.2, 0.7), at(0.8, 0.7)]), StrokeWidth::Medium, ink);
+    draw.stroke(&PaintShape::Path(vec![at(0.6, 0.45), at(0.85, 0.7), at(0.6, 0.95)]), StrokeWidth::Medium, ink);
+}
