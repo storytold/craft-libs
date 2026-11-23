@@ -18,12 +18,16 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "mpegts")]
+mod framed_audio;
 mod mux;
 #[cfg(test)]
 mod mux_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "mpegts")]
+pub use framed_audio::{FramedAudioPacket, framed_audio_packets};
 pub use mux::{AudioSpec, AudioTiming, AviWriter, MuxOptions, StreamSpec, VideoSpec};
 
 pub use crate::source::{ByteSource, ReadSeekSource};

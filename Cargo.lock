@@ -1588,6 +1588,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-android-res"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-anicraft-format"
 version = "0.1.0"
 dependencies = [
@@ -1645,6 +1653,16 @@ dependencies = [
  "proptest",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-cdr"
+version = "0.1.0"
+dependencies = [
+ "craft-cdr",
+ "crc32fast",
+ "flate2",
+ "proptest",
 ]
 
 [[package]]
@@ -1714,6 +1732,7 @@ dependencies = [
  "craft-ai-agents",
  "craft-atomic",
  "craft-flags",
+ "dirs",
  "getrandom 0.3.4",
  "log",
  "proptest",
@@ -1798,8 +1817,11 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color",
  "craft-color-transform",
  "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
  "craft-render-parity",
  "proptest",
  "rayon",
@@ -1924,6 +1946,7 @@ dependencies = [
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-xml",
  "kurbo 0.13.1",
  "log",
@@ -2153,6 +2176,9 @@ dependencies = [
  "image",
  "log",
  "serde",
+ "serde_json",
+ "skrifa 0.47.0",
+ "wuff",
 ]
 
 [[package]]
@@ -2560,6 +2586,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-material-graph"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "rayon",
+]
+
+[[package]]
 name = "craft-materialx"
 version = "0.1.0"
 dependencies = [
@@ -2625,6 +2659,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-y4m",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2979,10 +3014,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-png"
+version = "0.1.0"
+dependencies = [
+ "png 0.18.1",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ppt-binary"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-codepage",
  "craft-drawingml",
  "craft-pptx",
  "image",
@@ -3431,6 +3475,7 @@ dependencies = [
 name = "craft-tga"
 version = "0.1.0"
 dependencies = [
+ "image",
  "thiserror 2.0.21",
 ]
 
@@ -3438,9 +3483,11 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 dependencies = [
+ "image",
  "proptest",
  "serde",
  "thiserror 2.0.21",
+ "tiff",
 ]
 
 [[package]]
@@ -12104,8 +12151,6 @@ dependencies = [
 [[package]]
 name = "vello_common"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3361bff7f7d82c0c496b92048db83846691f0e844cc28dee92b1c824291b55ee"
 dependencies = [
  "bytemuck",
  "fearless_simd",
@@ -12154,8 +12199,6 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo 0.1.1",
@@ -13113,6 +13156,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 dependencies = [
  "either",
+]
+
+[[package]]
+name = "wuff"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6a992b57b3d1ee972b2e3fd9225e44793104d49818836dd812d5459187712dd"
+dependencies = [
+ "brotli-decompressor 6.3.1",
+ "bytes",
 ]
 
 [[package]]
