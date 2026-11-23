@@ -27,6 +27,8 @@ struct Rig {
     focus_after: Rc<Cell<bool>>,
     field: Rc<Cell<Id>>,
     ended: Rc<RefCell<Vec<Ended>>>,
+    /// How many passes reported `text_lost_focus`.
+    lost: Rc<Cell<usize>>,
 }
 
 fn rig(text: &str, select_on_focus: bool) -> Rig {
@@ -34,7 +36,8 @@ fn rig(text: &str, select_on_focus: bool) -> Rig {
     let (shown, focus_after) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(false)));
     let field = Rc::new(Cell::new(Id::NULL));
     let ended = Rc::new(RefCell::new(Vec::new()));
-    let (held, on, asks, id, log) = (text.clone(), shown.clone(), focus_after.clone(), field.clone(), ended.clone());
+    let lost = Rc::new(Cell::new(0));
+    let (held, on, asks, id, log, lost_seen) = (text.clone(), shown.clone(), focus_after.clone(), field.clone(), ended.clone(), lost.clone());
     let mut fixture = Fixture::new(move |ui| {
         if !on.get() {
             return;
@@ -46,6 +49,7 @@ fn rig(text: &str, select_on_focus: bool) -> Rig {
         }
         let out = field.show(ui);
         id.set(out.response.id);
+        lost_seen.set(lost_seen.get() + usize::from(out.text_lost_focus));
         log.borrow_mut().extend(out.events.iter().filter_map(|event| match event {
             EditEvent::Commit { .. } => Some(Ended::Commit),
             EditEvent::Cancel { reason, .. } => Some(Ended::Cancel(*reason)),
@@ -56,7 +60,7 @@ fn rig(text: &str, select_on_focus: bool) -> Rig {
         }
     });
     fixture.settle();
-    Rig { fixture, text, shown, focus_after, field, ended }
+    Rig { fixture, text, shown, focus_after, field, ended, lost }
 }
 
 impl Rig {
@@ -66,6 +70,10 @@ impl Rig {
 
     fn ended(&self) -> Vec<Ended> {
         self.ended.borrow().clone()
+    }
+
+    fn lost_focus(&self) -> usize {
+        self.lost.get()
     }
 
     fn focused(&self) -> bool {
@@ -118,7 +126,8 @@ impl Rig {
 }
 
 /// Switching to another app and back is no focus move: the field keeps the focus and its run, the selection it had
-/// carries on, and nothing commits or cancels; Escape afterwards still gives back the text from before the run.
+/// carries on, and nothing commits, cancels or reports `text_lost_focus`; Escape afterwards still gives back the text
+/// from before the run.
 #[trial]
 fn switching_apps_carries_on_with_the_typing_run() {
     let mut rig = rig("Lisbon", false);
@@ -132,6 +141,7 @@ fn switching_apps_carries_on_with_the_typing_run() {
     rig.fixture.settle();
     assert!(rig.focused(), "the field has the focus when the window is back");
     assert_eq!(rig.ended(), [], "the window coming back ends nothing");
+    assert_eq!(rig.lost_focus(), 0, "an app switch is no focus loss: the field reports none, going or coming back");
     rig.type_text("Porto");
     assert_eq!(rig.text(), "Porto", "the selection carried on: typing replaced it");
     rig.escape();
