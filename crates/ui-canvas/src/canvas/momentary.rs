@@ -155,17 +155,24 @@ impl Momentary {
     /// the Hand into Zoom In, and Alt turns either into Zoom Out. While `in_gesture` (a drag runs), the tool of the
     /// pass before keeps the drag, whatever the keys do.
     pub fn tool(&mut self, mods: Mods, in_gesture: bool) -> Option<MomentaryTool> {
-        self.tool_holding(None, mods, in_gesture)
+        self.tool_holding(None, false, mods, in_gesture)
     }
 
     /// [`tool`](Self::tool) with `injected`, the command that the keys injected input holds with no key event
     /// ([`ToolInput::hold`](super::ToolInput::hold)) run through the keymap: it counts before the command whose window
-    /// key is down, as the real key would.
-    pub(crate) fn tool_holding(&mut self, injected: Option<MomentaryCommands>, mods: Mods, in_gesture: bool) -> Option<MomentaryTool> {
+    /// key is down, as the real key would. With `navigates` ([`ToolHost::navigates`](super::ToolHost::navigates)) the
+    /// Hand is in effect whatever the keys hold.
+    pub(crate) fn tool_holding(
+        &mut self,
+        injected: Option<MomentaryCommands>,
+        navigates: bool,
+        mods: Mods,
+        in_gesture: bool,
+    ) -> Option<MomentaryTool> {
         if in_gesture {
             return self.latched;
         }
-        let tool = self.pick(injected.or(self.held), mods);
+        let tool = if navigates { Some(MomentaryTool::Hand) } else { self.pick(injected.or(self.held), mods) };
         self.latched = tool;
         tool
     }

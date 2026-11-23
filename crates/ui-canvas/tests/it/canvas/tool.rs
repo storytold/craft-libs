@@ -1184,12 +1184,14 @@ fn momentary_canvas(main: Probe) -> CanvasRig<Id> {
 
 /// `momentary_canvas` with `body` as the canvas's body.
 fn momentary_canvas_with(main: Probe, body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static) -> CanvasRig<Id> {
-    momentary_canvas_under(NavigationOptions::default(), main, body)
+    momentary_canvas_under(NavigationOptions::default(), Rc::default(), main, body)
 }
 
-/// `momentary_canvas_with` under the navigation choices `options`.
+/// `momentary_canvas_with` under the navigation choices `options`, its host told in each pass whether the pointer
+/// `navigates`.
 fn momentary_canvas_under(
     options: NavigationOptions,
+    navigates: Rc<Cell<bool>>,
     main: Probe,
     mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static,
 ) -> CanvasRig<Id> {
@@ -1204,7 +1206,7 @@ fn momentary_canvas_under(
         let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |ui, cx| {
             body(ui, cx);
             if let Some(pass) = tool_pass(&cx.env) {
-                reply = Some(ToolHost::new().momentary(&mut set).run(ui, &pass, &mut *main.borrow_mut()));
+                reply = Some(ToolHost::new().momentary(&mut set).navigates(navigates.get()).run(ui, &pass, &mut *main.borrow_mut()));
             }
         });
         shown_canvas.set(shown.output.response.id);
@@ -1240,6 +1242,28 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
 }
 
+/// Palm rejection: a press the host says navigates (a finger once a pen has been seen) pans with the Hand to its
+/// release, even once the host stops saying so mid-drag, and never reaches the selected tool; the next press that does
+/// not navigate is the tool's.
+#[trial]
+fn a_press_the_host_says_navigates_pans_with_the_hand_to_its_release() {
+    let log = Log::default();
+    let navigates = Rc::new(Cell::new(true));
+    let (mut fixture, view, _) = momentary_canvas_under(NavigationOptions::default(), Rc::clone(&navigates), Probe::new("main", &log), |_, _| {});
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let before = view.get().expect("the canvas ran").center;
+    fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY * 0.5)]);
+    navigates.set(false);
+    fixture.frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]).settle();
+    assert_ne!(view.get().expect("the canvas ran").center, before, "the navigating press pans the view");
+    let calls = log.borrow().clone();
+    let pressed = |call: &String| ["main press", "main drag", "main release"].contains(&call.as_str());
+    assert!(!calls.iter().any(pressed), "the navigating press never reaches the selected tool: {calls:?}");
+    fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]).settle();
+    let calls = log.borrow().clone();
+    assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "the next press is the selected tool's: {calls:?}");
+}
+
 /// The zoom rectangle of a momentary Zoom that Cmd+Space started keeps being sized by the drag once Cmd is let go, and
 /// moves with Space once Space is let go and pressed again, as a marquee does: the release zooms to the moved
 /// rectangle. Space held since the press sizes it until let go.
@@ -1249,7 +1273,7 @@ fn space_pressed_again_moves_a_cmd_space_zoom_rectangle() {
     let mut options = NavigationOptions::default();
     options.scrubby_zoom = false;
     options.animated_zoom = false;
-    let (mut fixture, view, _) = momentary_canvas_under(options, Probe::new("main", &log), |_, _| {});
+    let (mut fixture, view, _) = momentary_canvas_under(options, Rc::default(), Probe::new("main", &log), |_, _| {});
     let room = fixture.by_role(Role::CANVAS)[0].rect;
     let at = room.center() - Vec2::new(180.0, 90.0);
     let before = view.get().expect("the canvas ran").zoom;
