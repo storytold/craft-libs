@@ -508,9 +508,11 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
         }
         self.defaults |= cx.part_activated(DEFAULT).is_some();
         self.swap |= cx.part_activated(SWAP).is_some();
+        // Focus moving onto a well (an arrow, a click) makes it active; focus resting on a well leaves the host's
+        // choice of another one alone.
         if self.click_activates
             && cx.is_focused()
-            && let Some(part) = cx.active_part()
+            && let Some(part) = cx.focus_arrived()
             && part.key == WELL
             && let Some(well) = part.index.map(Well::of)
             && well != active

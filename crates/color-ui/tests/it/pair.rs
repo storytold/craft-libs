@@ -1,5 +1,6 @@
 //! `SwatchPair` wells take the theme's well shape (`shape.wells`): a round well is round to the pointer too. Focus
-//! arrives at the active well, so a panel opening with the pair first activates no other well.
+//! arrives at the active well, so a panel opening with the pair first activates no other well, and only focus moving
+//! onto a well activates it.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -9,7 +10,7 @@ use craft_color_ui::ui::{PairWell, SwatchPair, SwatchPairOutput, Well};
 use craft_theme::{Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
-use egui::{Rect, Ui, Vec2, vec2};
+use egui::{Key, Modifiers, Rect, Ui, Vec2, vec2};
 
 /// Where a click lands on the primary well in theme `theme`: at the well's middle and just inside the corner of its
 /// square. Each is the well the click reached, if any.
@@ -145,4 +146,29 @@ fn a_popover_opening_on_the_pair_focuses_the_active_well_and_activates_none() {
     assert_eq!(tree.role_of(focused), Some(Role::RADIO_BUTTON), "a well takes the focus");
     assert_eq!(tree.toggled_of(focused), Some(Mixed::Same(true)), "the focus arrives at the active well");
     assert!(!activated.get(), "the arrival activates no well");
+}
+
+/// A well that keeps the focus while the host makes the other one active (a Stroke chip clicked elsewhere) leaves the
+/// host's choice; an arrow that moves the focus onto a well makes that well active.
+#[trial]
+fn the_host_activates_the_other_well_while_one_keeps_the_focus_and_an_arrow_activates() {
+    let active = Rc::new(Cell::new(Well::Primary));
+    let held = active.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let wells = [PairWell::new("Fill", Srgba::rgb(0.1, 0.3, 0.8)), PairWell::new("Stroke", Srgba::rgb(0.0, 0.0, 0.0))];
+        let mut well = held.get();
+        let _ = SwatchPair::<()>::new("Fill and stroke", wells, Bind::bound(&mut well)).show(ui);
+        held.set(well);
+    });
+    fixture.room(vec2(400.0, 300.0)).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    let tree = fixture.tree();
+    assert_eq!(tree.toggled_of(craft_ui::testing::access::focused_key(tree)), Some(Mixed::Same(true)), "Tab arrives at the active Fill well");
+    active.set(Well::Secondary);
+    fixture.settle();
+    assert_eq!(active.get(), Well::Secondary, "the focused Fill well leaves the host's Stroke active");
+    fixture.key(Key::ArrowLeft, Modifiers::NONE).settle();
+    assert_eq!(active.get(), Well::Secondary, "an arrow that keeps the focus on Fill changes nothing");
+    fixture.key(Key::ArrowRight, Modifiers::NONE).key(Key::ArrowLeft, Modifiers::NONE).settle();
+    assert_eq!(active.get(), Well::Primary, "the arrow onto Fill makes it active");
 }
