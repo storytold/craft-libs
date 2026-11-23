@@ -529,7 +529,7 @@ fn parse_type(
     for (idx, o) in slots {
         if table.entries.len() >= limits.max_entries {
             table.truncated = true;
-            return;
+            break;
         }
         let Some(e) = c.checked_add(entries_start).and_then(|x| x.checked_add(o)).filter(|e| e.saturating_add(8) <= end) else {
             skipped += 1;
