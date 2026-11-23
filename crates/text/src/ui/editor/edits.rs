@@ -7,7 +7,7 @@ use std::ops::Range;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{Granularity, MoveMods, NavMove, SurroundingUnit};
 
-use super::{EditKind, TextEditorHost, TextSelection};
+use super::{EditKind, TextEditorCommand, TextEditorHost, TextSelection};
 use crate::quotes::{QuoteStyle, smart_quotes};
 
 /// Most clicks in a run that select more: 2 a word, 3 a line, 4 a paragraph, 5 all text.
@@ -297,6 +297,24 @@ impl Edits<'_> {
         self.selection.caret = to.min(self.chars());
         if !extend {
             self.selection.anchor = self.selection.caret;
+        }
+    }
+
+    /// Runs one of the session's commands. Commit and Cancel wait while a composition is open: the key belongs to the
+    /// input method then. The Character panel toggle sets `character_panel`.
+    pub fn command(&mut self, command: TextEditorCommand, character_panel: &mut bool) {
+        match command.along_flow(self.host.vertical()) {
+            TextEditorCommand::Commit => self.done.commit |= self.session.preedit.is_none(),
+            TextEditorCommand::Cancel => self.done.cancel |= self.session.preedit.is_none(),
+            TextEditorCommand::CharacterPanel => *character_panel = true,
+            command => {
+                if let Some(key) = command.style_key(self.selection.is_empty()) {
+                    let handled = self.host.style_key(key, self.selection);
+                    if !handled && let Some((step, mods)) = command.fallback() {
+                        self.move_along(step, mods);
+                    }
+                }
+            }
         }
     }
 

@@ -34,8 +34,8 @@ use craft_behavior::{
 };
 use craft_ui::canvas::{canvas_space, context_click};
 use craft_ui::contract::{
-    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome,
-    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
+    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, EditorStep, Focus as _, MeasureCx,
+    Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
 };
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::ClipItem;
@@ -454,8 +454,8 @@ fn show_i_beam(cx: &mut Cx<'_, TextEditor<'_>>, phase: &PressPhase, vertical: bo
 }
 
 /// The clipboard's text when the pass's input asks to paste and the clipboard has it ready.
-fn pasted_text(cx: &mut Cx<'_, TextEditor<'_>>, inputs: &[EditorInput]) -> Option<std::sync::Arc<str>> {
-    if !inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))) {
+fn pasted_text(cx: &mut Cx<'_, TextEditor<'_>>, steps: &[EditorStep<TextEditorCommand>]) -> Option<std::sync::Arc<str>> {
+    if !steps.iter().any(|step| matches!(step, EditorStep::Input(EditorInput::Edit(EditCommand::Paste)))) {
         return None;
     }
     match cx.clipboard().paste() {
@@ -504,14 +504,12 @@ impl Component for TextEditor<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let space = Space::of(&cx.env);
         let before = cx.value().copied().unwrap_or_default();
-        let inputs: Vec<EditorInput> = cx.editor_input().collect();
-        let mut fired = Vec::new();
-        while let Some((command, _)) = cx.take_command::<TextEditorCommand>() {
-            fired.push(command);
-        }
+        // The inputs and the commands keys fired, in the order their events came: typing after a commit's chord is
+        // not the session's.
+        let steps = cx.editor_steps::<TextEditorCommand>();
         let press = *cx.press();
         let now = cx.now();
-        let pasted = pasted_text(cx, &inputs);
+        let pasted = pasted_text(cx, &steps);
         let mut copied: Option<String> = None;
         let mut session = std::mem::take(cx.memory::<Session>());
         let mut edits = Edits {
@@ -529,7 +527,20 @@ impl Component for TextEditor<'_> {
         let fallback = space.doc_rect(cx.rect);
 
         let mut ending: Option<Range<usize>> = None;
-        for input in inputs {
+        let mut character_panel = false;
+        for step in steps {
+            // A commit or cancel ends the session; an input method's committed text still lands.
+            if (edits.done.commit || edits.done.cancel) && ending.is_none() {
+                break;
+            }
+            let input = match step {
+                EditorStep::Input(input) => input,
+                EditorStep::Command(command, _) => {
+                    edits.command(command, &mut character_panel);
+                    continue;
+                }
+                _ => continue,
+            };
             if let Some(range) = ending.take() {
                 if let EditorInput::Text(text) = &input {
                     edits.commit_marked(range, text);
@@ -589,29 +600,13 @@ impl Component for TextEditor<'_> {
         }
 
         // Commands and the claimed Escape arrive with the pass's own input: a second pass of the frame takes none, so
-        // a commit, a cancel or the panel toggle is reported by one pass only. Commit and Cancel wait while a
-        // composition is open: the key belongs to the input method then.
+        // a commit, a cancel or the panel toggle is reported by one pass only. Escape waits while a composition is
+        // open: the key belongs to the input method then.
         if cx.take_claimed(ESCAPE) && edits.session.preedit.is_none() {
             if edits.esc_commits {
                 edits.done.commit = true;
             } else {
                 edits.done.cancel = true;
-            }
-        }
-        let mut character_panel = false;
-        for command in fired {
-            match command.along_flow(edits.host.vertical()) {
-                TextEditorCommand::Commit => edits.done.commit |= edits.session.preedit.is_none(),
-                TextEditorCommand::Cancel => edits.done.cancel |= edits.session.preedit.is_none(),
-                TextEditorCommand::CharacterPanel => character_panel = true,
-                command => {
-                    if let Some(key) = command.style_key(edits.selection.is_empty()) {
-                        let handled = edits.host.style_key(key, edits.selection);
-                        if !handled && let Some((step, mods)) = command.fallback() {
-                            edits.move_along(step, mods);
-                        }
-                    }
-                }
             }
         }
 
