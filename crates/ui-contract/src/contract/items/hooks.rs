@@ -612,6 +612,18 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if self.scrolls && !ui.is_sizing_pass() && !crate::runtime::measure::active(&ctx) {
             self.follow_anchor(comp, (&ctx, id), &layout, rect.size());
         }
+        // The renamed item left the source (removed, renamed or hidden by the app, or folded away): its editor is gone, so the
+        // rename ends rather than waiting for the item to return and open the old draft again.
+        if let Some(key) = self.renaming.key.clone()
+            && !self.ended_rename
+            && !ui.is_sizing_pass()
+            && !crate::runtime::measure::active(&ctx)
+            && self.index_of(&key).is_none()
+        {
+            let before = Rename { key, name: self.renaming.draft.clone() };
+            self.events.push(CollectionEvent::Rename(EditEvent::cancel(self.renaming.gesture, CancelReason::Removed, Some(Mixed::Same(before)))));
+            self.ended_rename = true;
+        }
         if self.ended_rename {
             self.renaming = Renaming::default();
             if self.refocus {
