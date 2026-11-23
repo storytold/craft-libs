@@ -281,6 +281,9 @@ pub(super) struct Drags<K> {
     pub(super) pending: Option<PendingDrop<K>>,
     /// The selected row a plain press landed on: a click on it narrows the selection to it, a drag keeps it.
     pub(super) collapse: Option<K>,
+    /// The unselected row a plain primary press landed on: a click on it picks it, a drag carries it alone and leaves
+    /// the selection as it was.
+    pub(super) pick: Option<K>,
     /// The row whose rename column got a double press: the editor opens when the press ends as a click, not when it
     /// becomes a drag.
     pub(super) rename: Option<K>,
@@ -322,6 +325,7 @@ impl<K> Default for Drags<K> {
             moving: None,
             pending: None,
             collapse: None,
+            pick: None,
             rename: None,
             activate: None,
             command: None,

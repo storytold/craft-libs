@@ -315,7 +315,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             }
             None => cx.core.memory.session::<Held<C::Selection>>(sub(id, "selection")).0 = self.selection.clone(),
         }
-        self.selection_at_read = self.selection.clone();
     }
 
     fn content(&mut self, comp: &mut C, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, values: &AppValues) {

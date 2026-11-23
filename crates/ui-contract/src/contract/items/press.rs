@@ -106,8 +106,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
                     // A plain press on a selected row of a multiple selection leaves the selection whole, so a drag
                     // carries all of it; the release as a click narrows it to the row. In a single selection that
-                    // allows an empty one, the release as a click empties it. A later click of a multi-click on a
-                    // held row keeps the selection the earlier click left (`keeps_pick`).
+                    // allows an empty one, the release as a click empties it. A plain press on a row outside the
+                    // selection picks it when it ends as a click, so a drag carries the row and leaves the selection
+                    // as it was. A later click of a multi-click on a held row keeps the selection the earlier click
+                    // left (`keeps_pick`).
                     let holds = match Self::select_mode(comp) {
                         SelectMode::Multi => true,
                         SelectMode::Single => props.allow_empty,
@@ -135,6 +137,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if again => {}
                         None if hold => self.drags.collapse = Some(key.clone()),
                         None if keep => {}
+                        None if plain && !self.holds(at) => self.drags.pick = Some(key.clone()),
                         None if primary => self.click_pick(comp, at, mods.shift, mods.cmd, mods),
                         None => self.pick_by(comp, at, mods.shift, mods.cmd, PickBy::Pointer(mods)),
                     }
@@ -219,6 +222,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         match cx.core.press.phase {
             PressPhase::Release { click, start, pos, .. } => {
+                if let Some(key) = self.drags.pick.take()
+                    && click
+                    && let Some(at) = self.index_of(&key)
+                {
+                    self.click_pick(comp, at, false, false, mods_now);
+                }
                 if click
                     && props.menu_on_click
                     && start.button == craft_behavior::PointerButton::Primary
@@ -269,6 +278,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             PressPhase::Cancel { .. } => {
                 self.drags.slow = None;
                 self.drags.collapse = None;
+                self.drags.pick = None;
                 self.drags.rename = None;
                 self.drags.activate = None;
                 self.drags.command = None;

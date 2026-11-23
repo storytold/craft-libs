@@ -1420,9 +1420,10 @@ fn auto_rows_are_measured_once_per_pass_and_a_restated_row_takes_its_new_size_in
 
     let at = settled.1[1].center();
     fixture.frame(vec![moved(at)]);
-    fixture.frame(vec![press(at), release(at)]);
+    fixture.frame(vec![press(at)]);
+    fixture.frame(vec![release(at)]);
     let clicked = (list(&fixture), row(&fixture, 1));
-    assert!(clicked.1.height() > settled.1[1].height(), "the selected row takes its taller size in the frame of the click");
+    assert!(clicked.1.height() > settled.1[1].height(), "the selected row takes its taller size in the frame of the click's release");
     fixture.idle(2);
     assert_eq!(clicked, (list(&fixture), row(&fixture, 1)), "the frame of the click shows the list and the row at their settled sizes");
 
