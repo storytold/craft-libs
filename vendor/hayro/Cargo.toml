@@ -49,6 +49,7 @@ version = "1"
 features = ["bytemuck_derive"]
 
 [dependencies.hayro-interpret]
+path = "../hayro-interpret"
 version = "0.7.0"
 default-features = false
 
@@ -75,6 +76,7 @@ features = [
 default-features = false
 
 [dependencies.vello_cpu]
+path = "../vello_cpu"
 version = "0.0.8"
 features = [
     "std",

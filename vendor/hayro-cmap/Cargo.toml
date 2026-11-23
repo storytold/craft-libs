@@ -48,6 +48,7 @@ optional = true
 default-features = false
 
 [dependencies.hayro-postscript]
+path = "../hayro-postscript"
 version = "0.1.0"
 default-features = false
 

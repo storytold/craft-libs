@@ -55,10 +55,12 @@ path = "examples/extract_images.rs"
 version = "2.10"
 
 [dependencies.hayro-cmap]
+path = "../hayro-cmap"
 version = "0.1.0"
 default-features = false
 
 [dependencies.hayro-syntax]
+path = "../hayro-syntax"
 version = "0.7.2"
 features = [
     "std",

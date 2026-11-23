@@ -54,10 +54,10 @@ pdf-writer = "0.15"
 miniz_oxide = "0.8"
 weezl = "0.1"
 skrifa = "0.47"
-krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
-hayro = { version = "=0.7.1", default-features = false }
-hayro-interpret = { version = "=0.7.0", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
-hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"] }
+krilla = { path = "vendor/krilla", version = "=0.8.2", default-features = false, features = ["raster-images"] }
+hayro = { path = "vendor/hayro", version = "=0.7.1", default-features = false }
+hayro-interpret = { path = "vendor/hayro-interpret", version = "=0.7.0", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
+hayro-syntax = { path = "vendor/hayro-syntax", version = "=0.7.2", default-features = false, features = ["std"] }
 bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"

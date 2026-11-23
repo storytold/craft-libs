@@ -73,9 +73,9 @@ wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-hayro-syntax = "=0.7.2"
-hayro-interpret = { version = "=0.7.0", default-features = false }
-hayro-cmap = "=0.1.0"
+hayro-syntax = { path = "../../vendor/hayro-syntax", version = "=0.7.2" }
+hayro-interpret = { path = "../../vendor/hayro-interpret", version = "=0.7.0", default-features = false }
+hayro-cmap = { path = "../../vendor/hayro-cmap", version = "=0.1.0" }
 kurbo = "0.13"
 ttf-parser = "=0.25.1"
 

@@ -77,6 +77,7 @@ optional = true
 default-features = false
 
 [dependencies.hayro-jbig2]
+path = "../hayro-jbig2"
 version = "=0.3.0"
 optional = true
 default-features = false
