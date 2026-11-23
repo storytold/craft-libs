@@ -6004,6 +6004,7 @@ dependencies = [
  "craft-timeline",
  "craft-ui-gallery",
  "craft-update",
+ "epaint_default_fonts",
 ]
 
 [[package]]
