@@ -460,23 +460,47 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
     assert_eq!(*log.borrow(), vec![StartAction::FoldPinned(PathBuf::from("/tmp/Empty"))], "an empty folder's disclosure folds it");
 }
 
-/// The pinned folders stand above the recent files, as production's Folders section does, and the Recent heading carries
-/// a Clear button that asks the app to clear the list.
-#[trial]
-fn folders_come_before_recent_and_recent_has_a_clear_button() {
+/// A start screen of one recent file and one pinned folder in a wide room, with `pdfcraft` turning on PdfCraft's
+/// look (`pinned_first`, `heading_sections`); every action goes to the log.
+fn folders_screen(pdfcraft: bool) -> (Fixture, Log) {
     let log: Log = Rc::default();
     let seen = log.clone();
     let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
     let folders = vec![PinnedFolder::new("/tmp/Work", "Work")];
     let mut fixture = Fixture::new(move |ui| {
         let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
-        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).pinned(&folders).show(ui);
-        seen.borrow_mut().extend(out.actions);
+        let screen = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).pinned(&folders);
+        let screen = if pdfcraft { screen.pinned_first().heading_sections() } else { screen };
+        seen.borrow_mut().extend(screen.show(ui).actions);
     });
     fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
-    let top = |fixture: &Fixture, text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect.min.y);
-    let pinned = top(&fixture, "Pinned Folders").expect("the pinned folders heading");
-    let recent = top(&fixture, "Recent").expect("the recent heading");
+    (fixture, log)
+}
+
+/// The top of the first painted run reading `text`.
+fn text_top(fixture: &Fixture, text: &str) -> Option<f32> {
+    fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect.min.y)
+}
+
+/// Upstream's start screen by default: the pinned folders follow the recent files, and the Recent heading has no
+/// Clear button.
+#[trial]
+fn recent_comes_before_folders_and_has_no_clear_button_by_default() {
+    let (fixture, _) = folders_screen(false);
+    let pinned = text_top(&fixture, "Pinned Folders").expect("the pinned folders heading");
+    let recent = text_top(&fixture, "Recent").expect("the recent heading");
+    assert!(recent < pinned, "the recent files ({recent}) come before the folders ({pinned})");
+    assert!(fixture.by_label("Clear").is_none(), "no Clear button by default");
+}
+
+/// With `pinned_first` and `heading_sections` (PdfCraft's look) the pinned folders stand above the recent files, as
+/// production's Folders section does, and the Recent heading carries a Clear button that asks the app to clear the
+/// list.
+#[trial]
+fn folders_come_before_recent_and_recent_has_a_clear_button() {
+    let (mut fixture, log) = folders_screen(true);
+    let pinned = text_top(&fixture, "Pinned Folders").expect("the pinned folders heading");
+    let recent = text_top(&fixture, "Recent").expect("the recent heading");
     assert!(pinned < recent, "the folders ({pinned}) come before the recent files ({recent})");
     let clear = fixture.by_label("Clear").expect("the Recent heading's Clear button");
     fixture.click(&clear).idle(2);
@@ -484,8 +508,8 @@ fn folders_come_before_recent_and_recent_has_a_clear_button() {
 }
 
 /// An app that opens files from its title bar leaves Open out of the page (`offers_open(false)`); the page's empty
-/// room still asks for Open on a double click, and the section headings are the heading role, not the panel's
-/// emphasised body text.
+/// room still asks for Open on a double click, and with `heading_sections` the section headings are the heading role,
+/// not the panel's emphasised body text.
 #[trial]
 fn open_can_be_left_out_and_the_headings_are_page_headings() {
     let log: Log = Rc::default();
@@ -493,7 +517,8 @@ fn open_can_be_left_out_and_the_headings_are_page_headings() {
     let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
     let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
     let mut fixture = Fixture::new(move |ui| {
-        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).offers_new(false).offers_open(false).show(ui);
+        let out =
+            StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).offers_new(false).offers_open(false).heading_sections().show(ui);
         seen.borrow_mut().extend(out.actions);
     });
     fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
@@ -503,6 +528,27 @@ fn open_can_be_left_out_and_the_headings_are_page_headings() {
     let recent = texts.iter().find(|run| run.text == "Recent").expect("the Recent heading");
     let file = texts.iter().find(|run| run.text == "Poster.psd").expect("a card's name");
     assert!(recent.rect.height() > file.rect.height(), "the heading is larger than card text: {:?} against {:?}", recent.rect, file.rect);
+}
+
+/// The height of the Recent heading's run, with or without `heading_sections`.
+fn recent_heading_height(heading_sections: bool) -> f32 {
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd")];
+    let (mut view, mut sort) = (RecentView::Grid, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let screen = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files);
+        let _ = if heading_sections { screen.heading_sections() } else { screen }.show(ui);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
+    fixture.texts().iter().find(|run| run.text == "Recent").map_or(0.0, |run| run.rect.height())
+}
+
+/// By default the section titles are upstream's plain section titles; `heading_sections` makes them page headings,
+/// larger than the default titles.
+#[trial]
+fn section_titles_are_plain_by_default_and_headings_when_asked() {
+    let (plain, heading) = (recent_heading_height(false), recent_heading_height(true));
+    assert!(plain > 0.0, "the Recent title shows by default");
+    assert!(heading > plain, "the heading ({heading}) is larger than the plain title ({plain})");
 }
 
 /// An app may name the pinned folders section itself (`pinned_title`), in place of the built-in "Pinned Folders".

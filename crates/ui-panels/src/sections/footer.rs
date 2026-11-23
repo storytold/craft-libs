@@ -370,6 +370,19 @@ impl FooterDrop {
     }
 }
 
+/// How a dialog footer draws the buttons that do not commit. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum DialogButtonLook {
+    /// Every button but the accepting and the destructive one in the secondary look.
+    #[default]
+    Standard,
+    /// PdfCraft's: Cancel and an Alternate answer (Don't Save, No) are plain text (the ghost look) beside the accented
+    /// accepting button, as production's prompts show them.
+    Quiet,
+}
+
 /// What a dialog button means; it decides the button's look and its place in the row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -645,15 +658,16 @@ impl FooterBar {
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
+                let quiet = Env::of(ui).get::<DialogButtonLook>() == DialogButtonLook::Quiet;
                 let place = |ui: &mut Ui, shown: &mut Shown| {
                     for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-                            // Production shows Cancel as plain text beside the accented answer.
-                            DialogRole::Cancel => Variant::GHOST,
-                            DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => Variant::SECONDARY,
+                            // Production shows Cancel and Don't Save as plain text beside the accented answer.
+                            DialogRole::Cancel | DialogRole::Alternate if quiet => Variant::GHOST,
+                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => Variant::SECONDARY,
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {

@@ -28,6 +28,7 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 /// The style of a group grip: its size comes from the tokens.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -642,9 +643,13 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     }
                     return None;
                 }
+                // The panels' toggle commands resolve here, outside the memoized row, so the marks are part of its key
+                // and a mark that comes or goes repaints the row.
+                let marks = tab_marks(ui.ctx(), self.panels.as_slice());
                 let row = TabRow {
                     anchor: self.anchor.clone(),
                     panels: self.panels.clone(),
+                    marks,
                     active: self.active,
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
@@ -716,11 +721,25 @@ struct TabRow<'a, P> {
     anchor: P,
     #[memo_props(hash = "its Hash is the content key taken when the titles were made")]
     panels: Titles,
+    /// The marked tabs, each with the hint that says why: resolved outside the row, so the row's key follows them.
+    #[memo_props(hash = "panel keys and hint texts are plain values")]
+    marks: Vec<(PanelKey, Option<Arc<str>>)>,
     active: PanelKey,
     closable: bool,
     wheel_selects: bool,
     dock: Option<Id>,
     sent: Outbox<'a, TabEvent>,
+}
+
+/// The tabs of `panels` whose toggle command marks them, as it marks the panel's rail button, with the command's hint.
+fn tab_marks(ctx: &egui::Context, panels: &[PanelTitle]) -> Vec<(PanelKey, Option<Arc<str>>)> {
+    panels
+        .iter()
+        .filter_map(|panel| {
+            let resolved = commands::resolve(ctx, panel.command.clone()?);
+            IconButton::shows_marker(&resolved).then(|| (panel.key, resolved.hint.clone()))
+        })
+        .collect()
 }
 
 /// A group's tab strip with its tab insertion spots. Returns the strip's id.
@@ -744,18 +763,17 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if row.wheel_selects {
         strip = strip.wheel_selects();
     }
-    let ctx = ui.ctx().clone();
+    let marks = &row.marks;
     let strip = strip.show_items(ui, &source, &mut |key, _| {
         let panel = panels.iter().find(|panel| &panel.key == key);
         let title = panel.map_or_else(Label::default, |panel| panel.title.clone());
         // The panel's toggle command marks its tab as it marks the panel's rail button, with the hint to say why.
-        let resolved = panel.and_then(|panel| panel.command.clone()).map(|command| commands::resolve(&ctx, command));
-        let marked = resolved.as_ref().is_some_and(|resolved| IconButton::shows_marker(resolved));
-        let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(marked);
+        let mark = marks.iter().find(|(marked, _)| marked == key);
+        let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(mark.is_some());
         if let Some(count) = panel.and_then(|panel| panel.count) {
             tab = tab.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
         }
-        match resolved.and_then(|resolved| resolved.hint.clone()).filter(|_| marked) {
+        match mark.and_then(|(_, hint)| hint.clone()) {
             Some(hint) => tab.tooltip(hint),
             None => tab,
         }

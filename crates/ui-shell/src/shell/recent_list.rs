@@ -85,7 +85,21 @@ impl<'a> RecentList<'a> {
         let env = Env::of(ui);
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, picture, card_zoom: None, paper: None, drop_hint: None, now, actions: &actions, offers_new: true, offers_open: true, pinned_title: None };
+        let page = Page {
+            env: &env,
+            words: &words,
+            thumbnails,
+            picture,
+            card_zoom: None,
+            paper: None,
+            drop_hint: None,
+            now,
+            actions: &actions,
+            offers_new: true,
+            offers_open: true,
+            pinned_title: None,
+            heading_sections: false,
+        };
         let files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
         let empty = empty.unwrap_or_else(|| words.no_recent.clone());
         let shown = Section::fixed(words.recent.clone()).header_gap(Gap::Section).command_scope(StartRecentCommands::SCOPE).show(ui, |ui, cx| {

@@ -391,7 +391,9 @@ impl<'a> FloatingGroup<'a> {
         // grip; an OS window's grips lie over its title row. The rule under the title row takes a band of its own.
         let sizes = DockSizes::style(&StyleCx::of_env(ui.ctx(), &env));
         let sizes = self.scale.map_or(sizes, |scale| sizes.at_scale(scale));
-        (self.header, self.chrome, self.rtl) = (sizes.title_row, sizes.window_chrome(self.native.is_none()), env.direction.is_rtl());
+        // A grip title row has no rule under it, so the chrome keeps no band for one.
+        (self.header, self.chrome, self.rtl) =
+            (sizes.title_row, sizes.window_chrome_ruled(self.native.is_none(), !self.grip), env.direction.is_rtl());
         if self.grip {
             self.props = self.props.header(HeaderRegion::new().band(DragBand::Move).rule(false));
         }
