@@ -54,21 +54,17 @@ pub mod testing;
 
 pub use document::MergeRule;
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
-#[cfg(target_arch = "wasm32")]
-pub use files::BrowserFiles;
 #[cfg(not(target_arch = "wasm32"))]
 pub use files::DiskFiles;
 #[cfg(target_arch = "wasm32")]
 pub use files::LocalStorageFiles;
+/// The browser's settings storage under its former name.
+#[cfg(target_arch = "wasm32")]
+#[deprecated(note = "use `LocalStorageFiles::new(cap)`")]
+pub type BrowserFiles = LocalStorageFiles;
 pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
-<<<<<<< HEAD
-#[cfg(not(target_arch = "wasm32"))]
-pub use paths::Probe;
-pub use paths::{Location, Portable, Resolved, Rule};
-=======
 pub use paths::{Location, Portable, Probe, Resolved, Rule};
->>>>>>> origin/next
 #[cfg(not(target_arch = "wasm32"))]
 pub use profiles::{ProfileError, Profiles};
 pub use remember::{Remembered, RememberedSection};

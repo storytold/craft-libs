@@ -1,6 +1,5 @@
 //! `craft_platform::open`.
 
-<<<<<<< HEAD
 // Requests heard on another thread (a second launch, an Apple Event) reach the UI once each, in
 // the order they arrived, an open for an action never merged with a plain open, and each wakes
 // the UI: a lost wake leaves a file unopened until the user moves the mouse.
@@ -49,7 +48,8 @@ fn an_intake_delivers_each_batch_once_in_order_and_wakes() {
     // A relative path is made absolute against the working directory, as for a plain open.
     intake.sender().open_for(vec![PathBuf::from("rel.pdf")], "print");
     assert!(matches!(intake.take().as_slice(), [Intake::OpenFor { paths, .. }] if paths.len() == 1 && paths[0].is_absolute()));
-=======
+}
+
 // A source whose push calls the wake while holding its own borrow (the Apple-event inbox does)
 // must not be drained from the wake: the wake only repaints, and the next `take` collects it.
 #[test]
@@ -83,7 +83,6 @@ fn a_request_pushed_while_its_source_is_borrowed_is_taken_on_the_next_take() {
     let taken = intake.take();
     assert!(matches!(taken.as_slice(), [Intake::Open(paths)] if paths.len() == 1), "{taken:?}");
     assert!(intake.take().is_empty(), "the source was emptied");
->>>>>>> origin/next
 }
 
 // The target is one argument after `--` (or the Windows handler), so no shell reads a `&` and no

@@ -13,15 +13,6 @@ workspace = true
 
 [features]
 default = []
-<<<<<<< HEAD
-appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process", "dep:web-sys", "dep:windows"]
-browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys"]
-=======
-# `appearance`: also Windows' UI settings and macOS' accessibility display setting (reduced motion).
-appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process", "dep:web-sys", "dep:windows", "dep:objc2-app-kit"]
-# `browser`: downloads, and the file picker and save through `rfd`.
-browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys", "dep:rfd", "dep:wasm-bindgen-futures"]
->>>>>>> origin/next
 # `SystemReader::report_contrast` and `report_reduced_motion`: preferences a test sets in place of an OS source.
 testing = ["appearance"]
 # Moving the system pointer (a scrub's screen-edge wrap).
@@ -45,7 +36,7 @@ craft-atomic = { workspace = true }
 craft-docpath = { workspace = true }
 craft-host = { workspace = true }
 craft-i18n = { workspace = true }
-serde ={ workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Version eframe already pulls in; image data only (no default features beyond it).
@@ -83,8 +74,6 @@ clipboard-win = { version = "5.3.1", features = ["std"], optional = true }
 # The system's reduced-motion setting (`UISettings`).
 windows = { version = "0.62", features = ["UI_ViewManagement"], optional = true }
 xcap = { version = "=0.9.8", optional = true }
-# WinRT's `UISettings::AnimationsEnabled` for the appearance watcher's reduced motion, without `unsafe` (MIT OR Apache-2.0).
-windows = { version = "0.62", default-features = false, features = ["std", "UI_ViewManagement"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }

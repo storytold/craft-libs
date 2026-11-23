@@ -23,27 +23,6 @@ fn synthetic_input_never_replaces_what_the_user_copied() {
     assert_eq!(clipboard.read_text().unwrap().as_deref(), Some("mine"));
 }
 
-<<<<<<< HEAD
-// Copied files reach the system clipboard as a file list holding the same paths, spaces and
-// non-ASCII names included; a URI that names no local file is never written as one, and a list
-// with no file in it leaves the write to the next flavour.
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn a_file_list_is_written_as_files() {
-    let paths = vec![std::env::temp_dir().join("a b#1.pdf"), std::env::temp_dir().join("café 100%.png")];
-    let files = |plan: Result<(usize, Put), ClipboardError>| match plan {
-        Ok((index, Put::Files(files))) => Some((index, files)),
-        _ => None,
-    };
-    assert_eq!(files(plan_write(&[Flavor::files(&paths), Flavor::text("names")], None)), Some((0, paths.clone())));
-
-    let mut mixed = b"# copied\r\nhttps://example.com/a.pdf\r\n".to_vec();
-    mixed.extend(Flavor::files(&paths[..1]).data);
-    assert_eq!(files(plan_write(&[Flavor::new(URI_LIST, mixed)], None)), Some((0, paths[..1].to_vec())));
-
-    let web = Flavor::new(URI_LIST, b"https://example.com/a.pdf\r\n".to_vec());
-    assert!(matches!(plan_write(&[web, Flavor::text("names")], None), Ok((1, Put::Text(text))) if text == "names"));
-=======
 // Copied files arrive as a text/uri-list. A backend that holds the list but answers no files
 // turns every file paste in tests, and in hosts without a system clipboard, into a no-op.
 #[test]
@@ -54,5 +33,4 @@ fn a_held_uri_list_reads_as_files() {
     let files = clipboard.read_files().unwrap().unwrap();
     assert_eq!(files.len(), 2);
     assert!(files[0].ends_with("a b.txt") && files[1].ends_with("c.csv"));
->>>>>>> origin/next
 }

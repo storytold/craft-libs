@@ -301,14 +301,6 @@ pub trait Files: Send + Sync {
     }
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
-<<<<<<< HEAD
-    /// Answers the next pick, or the oldest pick still open, with `picked` instead of showing a
-    /// picker; the answer arrives through [`take_answer`](Files::take_answer) on a later pass.
-    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
-        let _ = picked;
-        Err(FileError::Unsupported)
-    }
-=======
     /// Queues a save of `bytes` as ticket `request`'s answer, taken with
     /// [`take_answer`](Files::take_answer): the desktop service asks for the path, then writes
     /// atomically; the browser service opens the save picker or makes one download. Counted in
@@ -318,7 +310,12 @@ pub trait Files: Send + Sync {
     fn can_pick(&self) -> bool;
     /// Whether [`save`](Files::save) hands the bytes to the browser instead of writing a path.
     fn browser_saves(&self) -> bool;
->>>>>>> origin/next
+    /// Answers the next pick, or the oldest pick still open, with `picked` instead of showing a
+    /// picker; the answer arrives through [`take_answer`](Files::take_answer) on a later pass.
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let _ = picked;
+        Err(FileError::Unsupported)
+    }
 }
 
 /// No pickers (every pick answers `Cancelled`); reads and writes go to the file system. The
@@ -432,12 +429,10 @@ struct ScriptState {
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
     files: HashMap<PathBuf, Vec<u8>>,
-<<<<<<< HEAD
     /// Paths a write to is refused ([`ScriptedFiles::failing_writes`]).
     refused: HashSet<PathBuf>,
     /// The path of every write that took, in order ([`ScriptedFiles::written`]).
     written: Vec<PathBuf>,
-=======
     /// The bytes of the saves not answered yet, written to the chosen path with the answer.
     saves: HashMap<PickId, Vec<u8>>,
     /// Stands in for a browser host.
@@ -455,7 +450,6 @@ impl ScriptState {
         }
         self.answered.push(PickAnswer { id, request, picked });
     }
->>>>>>> origin/next
 }
 
 impl ScriptedFiles {
@@ -575,14 +569,9 @@ impl ScriptedFiles {
         let picked =
             if state.held { state.queued.pop_front() } else { Some(suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled)) };
         match picked {
-            Some(picked) => state.answered.push(PickAnswer { id, request, picked }),
+            Some(picked) => state.settle(id, request, picked),
             None => state.open.push((id, request)),
         }
-<<<<<<< HEAD
-=======
-        let picked = suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled);
-        state.settle(id, request, picked);
->>>>>>> origin/next
         id
     }
 }
@@ -635,7 +624,7 @@ impl Files for ScriptedFiles {
         let mut state = self.state();
         if state.held && !state.open.is_empty() {
             let (id, request) = state.open.remove(0);
-            state.answered.push(PickAnswer { id, request, picked });
+            state.settle(id, request, picked);
         } else {
             state.queued.push_back(picked);
         }

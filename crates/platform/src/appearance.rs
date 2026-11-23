@@ -1,12 +1,6 @@
-<<<<<<< HEAD
 //! Desktop colour, contrast, motion and text-scale preferences and GNOME's window-button layout
-//! through the XDG Settings portal, Windows' animation effects setting, plus the browser's contrast
-//! and motion media queries on the web.
-=======
-//! Desktop colour, contrast and motion preferences and GNOME's window-button layout through the
-//! XDG Settings portal, the system's animation setting on Windows and macOS, plus the browser's
-//! contrast and motion media queries on the web.
->>>>>>> origin/next
+//! through the XDG Settings portal, the system's animation setting on Windows and macOS, plus the
+//! browser's contrast and motion media queries on the web.
 //!
 //! Derived from PdfCraft's activation-safe subscription and GNOME schema fallback,
 //! CADCraft's BSD support, and ArtCraft Launcher's ReadOne/Read compatibility.
@@ -61,27 +55,6 @@ struct Shared {
     /// `XDG_CURRENT_DESKTOP` names GNOME; read once when the watcher starts.
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     gnome: bool,
-<<<<<<< HEAD
-    #[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows))]
-    wake: Box<dyn Fn() + Send + Sync>,
-}
-impl Shared {
-    /// No answers yet. `settled` is true for a source that has nothing to wait for.
-    #[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows))]
-    fn new(active: bool, settled: bool, wake: Box<dyn Fn() + Send + Sync>) -> Self {
-        Shared {
-            value: AtomicU8::new(0),
-            contrast: AtomicU8::new(0),
-            motion: AtomicU8::new(0),
-            text_scale: AtomicU32::new(0),
-            generation: AtomicU64::new(0),
-            active: AtomicBool::new(active),
-            settled: Mutex::new(settled),
-            settled_changed: Condvar::new(),
-            layout: Mutex::new(None),
-            icons: Mutex::new(None),
-            #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
-=======
     #[cfg(not(target_arch = "wasm32"))]
     wake: Box<dyn Fn() + Send + Sync>,
 }
@@ -92,6 +65,7 @@ impl Shared {
             value: AtomicU8::new(0),
             contrast: AtomicU8::new(0),
             motion: AtomicU8::new(0),
+            text_scale: AtomicU32::new(0),
             generation: AtomicU64::new(0),
             active: AtomicBool::new(active),
             settled: Mutex::new(false),
@@ -99,7 +73,6 @@ impl Shared {
             layout: Mutex::new(None),
             icons: Mutex::new(None),
             #[cfg(all(unix, not(target_os = "macos")))]
->>>>>>> origin/next
             gnome: is_gnome_session(&|k| std::env::var(k).ok()),
             wake,
         }
@@ -132,18 +105,14 @@ impl Shared {
             (self.wake)();
         }
     }
-<<<<<<< HEAD
-    #[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows))]
-=======
     #[cfg(not(target_arch = "wasm32"))]
->>>>>>> origin/next
     fn publish_code(&self, slot: &AtomicU8, code: u8) {
         if slot.swap(code, Ordering::AcqRel) != code {
             self.changed();
         }
     }
     /// Raises the generation for a value just stored, then wakes an active host.
-    #[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows))]
+    #[cfg(not(target_arch = "wasm32"))]
     fn changed(&self) {
         self.generation.fetch_add(1, Ordering::AcqRel);
         if self.active.load(Ordering::Acquire) {
@@ -160,13 +129,9 @@ impl Shared {
             },
         );
     }
-<<<<<<< HEAD
-    #[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows))]
-=======
     #[cfg(not(target_arch = "wasm32"))]
->>>>>>> origin/next
     fn publish_motion(&self, reduced: bool) {
-        self.publish_code(&self.motion, motion_code(reduced));
+        self.publish_code(&self.motion, if reduced { 2 } else { 1 });
     }
     /// `None` is no scaling: the desktop's value is out of range, or there is none.
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
@@ -201,11 +166,6 @@ impl Shared {
         }
     }
 }
-/// The `Shared::motion` code of `reduced`.
-#[cfg(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows))]
-fn motion_code(reduced: bool) -> u8 {
-    if reduced { 2 } else { 1 }
-}
 /// An owned subscription. Dropping cancels connection setup, reads, backoff and helper capture,
 /// and waits at most 100 ms for acknowledgement. Only a finished worker is joined: an OS call
 /// or caller wake callback can block synchronously, so an exceptional unfinished worker is
@@ -234,33 +194,16 @@ impl Watcher {
     }
     /// Start observing with explicit control over wake notifications.
     /// An inactive subscription still updates its cache. Unsupported targets and worker
-<<<<<<< HEAD
-    /// startup failure return `None`; browser targets never start a desktop watcher. On Windows no
-    /// worker runs: reduced motion is read here and again by [`Watcher::set_active`].
-=======
     /// startup failure return `None`; browser targets never start a desktop watcher.
     ///
     /// Linux and the BSDs subscribe to the XDG Settings portal. Windows and macOS start a worker
     /// that reads the system's animation setting once a second and answers
     /// [`reduced_motion`](Self::reduced_motion) only: theme and contrast stay `None` there.
->>>>>>> origin/next
     pub fn start_active(active: bool, wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
         {
             Self::spawn(active, wake, portal::watch)
         }
-<<<<<<< HEAD
-        #[cfg(windows)]
-        {
-            let shared = Shared::new(active, true, Box::new(wake));
-            // Stored without a wake: the host reads the first answer when it builds its first frame.
-            if let Some(reduced) = windows::reduced_motion() {
-                shared.motion.store(motion_code(reduced), Ordering::Release);
-            }
-            Some(Self { shared: Arc::new(shared) })
-        }
-        #[cfg(not(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows)))]
-=======
         #[cfg(any(windows, target_os = "macos"))]
         {
             let shared = Arc::new(Shared::new(active, Box::new(wake)));
@@ -268,7 +211,6 @@ impl Watcher {
             Some(Self { shared, worker: Worker::Native { stop, finished, thread: Some(thread) } })
         }
         #[cfg(not(any(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")), windows, target_os = "macos")))]
->>>>>>> origin/next
         {
             let _ = (active, wake);
             None
@@ -313,15 +255,8 @@ impl Watcher {
     /// without a desktop watcher.
     ///
     /// It comes over the same connection as the theme, a change runs the same wake callback, and
-<<<<<<< HEAD
-    /// [`Watcher::wait_first`] returns after the first read of it. macOS has no watcher and the
-    /// Windows one reads only reduced motion: their other settings need platform bindings that
-    /// call `unsafe` code, which this crate forbids.
-    /// On the web use `browser_contrast`.
-=======
     /// [`Watcher::wait_first`] returns after the first read of it. Always `None` on Windows and
     /// macOS, whose watcher reads the animation setting only. On the web use `browser_contrast`.
->>>>>>> origin/next
     pub fn contrast(&self) -> Option<Contrast> {
         match self.shared.contrast.load(Ordering::Acquire) {
             1 => Some(Contrast::Standard),
@@ -329,16 +264,7 @@ impl Watcher {
             _ => None,
         }
     }
-<<<<<<< HEAD
-    /// Whether the desktop asks for reduced motion, from the portal's `org.freedesktop.appearance`
-    /// `reduced-motion`, or GNOME's `org.gnome.desktop.interface` `enable-animations` (inverted)
-    /// when the portal has no `reduced-motion` key; on Windows, the inverse of the Animation effects
-    /// setting (`UISettings::AnimationsEnabled`), read at start and by [`Watcher::set_active`].
-    /// `None` until one answers, when neither key exists or WinRT can't be asked, and on targets
-    /// without a desktop watcher.
-=======
     /// Whether the system asks for reduced motion.
->>>>>>> origin/next
     ///
     /// - Linux and the BSDs: three portal keys, combined so that any one asking for reduced
     ///   motion wins: `org.freedesktop.appearance` `reduced-motion` (1), GNOME's
@@ -389,15 +315,9 @@ impl Watcher {
         self.current()
     }
     /// Enable or suppress future change notifications without stopping observation.
-    /// Changing this flag does not clear the cached preference. On Windows, becoming active reads
-    /// reduced motion again, since the user changes it in Settings while the app is in the
-    /// background; a changed answer raises the generation and wakes the host.
+    /// Changing this flag does not itself wake the host or clear the cached preference.
     pub fn set_active(&self, active: bool) {
         self.shared.active.store(active, Ordering::Release);
-        #[cfg(windows)]
-        if active && let Some(reduced) = windows::reduced_motion() {
-            self.shared.publish_motion(reduced);
-        }
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn spawn<F: std::future::Future<Output = ()> + 'static>(
@@ -405,11 +325,7 @@ impl Watcher {
         wake: impl Fn() + Send + Sync + 'static,
         source: impl FnOnce(Arc<Shared>) -> F + Send + 'static,
     ) -> Option<Self> {
-<<<<<<< HEAD
-        let shared = Arc::new(Shared::new(active, false, Box::new(wake)));
-=======
         let shared = Arc::new(Shared::new(active, Box::new(wake)));
->>>>>>> origin/next
         let worker_shared = Arc::clone(&shared);
         let (stop, stopped) = async_channel::bounded::<()>(1);
         let (done, finished) = std::sync::mpsc::channel();
@@ -509,5 +425,3 @@ mod files;
 mod native;
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 mod portal;
-#[cfg(windows)]
-mod windows;

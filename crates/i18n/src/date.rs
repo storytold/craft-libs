@@ -381,17 +381,14 @@ impl PartsWrite for Spliced {
 impl DateFormat {
     /// The format for `region`'s time locale and clock.
     pub fn new(region: &Region) -> DateFormat {
-<<<<<<< HEAD
-        Self { locale: region.time.clone(), hour_cycle: region.hour_cycle, latin_digits: false, week_start: None, cache: Arc::default() }
-=======
         Self {
             locale: region.time.clone(),
             hour_cycle: region.hour_cycle,
             latin_digits: false,
+            week_start: None,
             cache: Arc::default(),
             generation: crate::words::next_generation(),
         }
->>>>>>> origin/next
     }
 
     /// This format writing `0`–`9` for [`Digits::Latin`], else the locale's own digits. Formatters
@@ -406,9 +403,10 @@ impl DateFormat {
         self.generation
     }
 
-    /// This format with weeks starting on `day` in place of the region's.
+    /// This format with weeks starting on `day` in place of the region's. It lays weeks out
+    /// differently, so it is a new [`generation`](Self::generation).
     pub fn with_first_weekday(self, day: Weekday) -> DateFormat {
-        DateFormat { week_start: Some(day), ..self }
+        DateFormat { week_start: Some(day), generation: crate::words::next_generation(), ..self }
     }
 
     /// The format for a locale tag (`de-CH`), with the locale's clock.
@@ -535,9 +533,8 @@ impl DateFormat {
                 });
                 // 2026-10-26 is a Monday; the week runs on into November (October has 31 days).
                 let monday = CalendarDate { year: 2026, month: 10, day: 26 };
-                let weekdays = ["ccccc", "ccc", "cccccc", "cccc"].map(|pattern| {
-                    std::array::from_fn(|i| name(pattern, monday.add_days(i as i64)).unwrap_or_default())
-                });
+                let weekdays = ["ccccc", "ccc", "cccccc", "cccc"]
+                    .map(|pattern| std::array::from_fn(|i| name(pattern, monday.add_days(i as i64)).unwrap_or_default()));
                 Some(Names { months, weekdays })
             })
             .as_ref()
