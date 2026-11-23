@@ -53,7 +53,7 @@ pub use compare::{CompareSwatch, CompareSwatchOutput, CompareSwatchStyle};
 pub use disc::{ColorDisc, ColorDiscOutput, ColorDiscStyle, ColorDiscWords, DiscMove};
 pub use droppers::{DropperButton, DropperButtonOutput, DropperKind, DropperTool};
 pub use eyedropper::{
-    EyedropperBar, EyedropperBarOutput, EyedropperOptions, EyedropperPick, EyedropperTool, EyedropperWords, SampleSize, SampleSource,
+    EyedropperBar, EyedropperBarOutput, EyedropperHold, EyedropperOptions, EyedropperPick, EyedropperTool, EyedropperWords, SampleSize, SampleSource,
 };
 pub use harmony::{
     HarmonyCommand, HarmonyMenu, HarmonyMenuAction, HarmonyPanel, HarmonyPanelOutput, HarmonyPanelState, HarmonyPicked, HarmonyWheel,

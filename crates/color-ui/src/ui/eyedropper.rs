@@ -260,6 +260,31 @@ pub struct EyedropperPick {
     pub background: bool,
 }
 
+/// The sampling ring while the button is held: the colour the press replaces (the foreground, or with Alt the
+/// background) and, while the pointer is over the document,
+/// where it is and the colour it samples there. A host that builds the tool each frame carries it from one frame to the
+/// next ([`EyedropperTool::hold`], [`EyedropperTool::holding`]), so the ring stays while the pointer rests and its lower
+/// half keeps the colour from before the press.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EyedropperHold {
+    /// The colour the press replaces, as it was at the press: the ring's lower half.
+    before: Srgba,
+    /// The pointer and the colour sampled there; `None` while the pointer is off the document.
+    shown: Option<(Pos2, Srgba)>,
+}
+
+impl EyedropperHold {
+    /// The colour the press replaces, as it was at the press: the ring's lower half.
+    pub fn before(&self) -> Srgba {
+        self.before
+    }
+
+    /// Where the ring is and the sampled colour, its upper half; `None` while the pointer is off the document.
+    pub fn shown(&self) -> Option<(Pos2, Srgba)> {
+        self.shown
+    }
+}
+
 /// The pipette icon's tip, in the icon's own 24-unit box.
 pub(super) const HOTSPOT: [f32; 2] = [2.0, 22.0];
 /// The ring's outer radius in points.
@@ -274,16 +299,18 @@ const RING_SEGMENTS: usize = 48;
 pub struct EyedropperTool<'a> {
     options: EyedropperOptions,
     sample: Box<dyn FnMut([f64; 2], SampleSize, SampleSource) -> Option<Srgba> + 'a>,
-    held: Option<(Pos2, Srgba)>,
+    held: Option<EyedropperHold>,
     picked: Option<EyedropperPick>,
     foreground: Srgba,
+    /// The current background colour, when the host gives one: an Alt press replaces it.
+    background: Option<Srgba>,
 }
 
 impl<'a> EyedropperTool<'a> {
     /// A tool sampling through `sample` with the document point, the sample size and the source (`None` outside the
     /// document).
     pub fn new(options: EyedropperOptions, sample: impl FnMut([f64; 2], SampleSize, SampleSource) -> Option<Srgba> + 'a) -> Self {
-        EyedropperTool { options, sample: Box::new(sample), held: None, picked: None, foreground: Srgba::rgb(0.0, 0.0, 0.0) }
+        EyedropperTool { options, sample: Box::new(sample), held: None, picked: None, foreground: Srgba::rgb(0.0, 0.0, 0.0), background: None }
     }
 
     /// The current foreground colour: the lower half of the sampling ring.
@@ -291,6 +318,26 @@ impl<'a> EyedropperTool<'a> {
     pub fn foreground(mut self, color: Srgba) -> Self {
         self.foreground = color;
         self
+    }
+
+    /// The current background colour: the lower half of the sampling ring while an Alt press samples it. A host
+    /// whose Alt press samples the foreground (a painting tool's Alt stand-in) gives none.
+    #[must_use]
+    pub fn background(mut self, color: Srgba) -> Self {
+        self.background = Some(color);
+        self
+    }
+
+    /// This tool in the middle of a held press that an earlier frame's tool took: see [`EyedropperHold`].
+    #[must_use]
+    pub fn holding(mut self, hold: Option<EyedropperHold>) -> Self {
+        self.held = hold;
+        self
+    }
+
+    /// The held press, for the next frame's tool; `None` with the button up.
+    pub fn hold(&self) -> Option<EyedropperHold> {
+        self.held
     }
 
     /// The newest pick, once.
@@ -301,13 +348,16 @@ impl<'a> EyedropperTool<'a> {
     fn sample_at(&mut self, pointer: &ToolPointer, cx: &ToolContext<'_>) {
         let Some(space) = cx.space() else { return };
         let Point { x, y } = space.view.to_doc(pointer.pos);
-        match (self.sample)([x, y], self.options.size, self.options.source) {
-            Some(color) => {
-                self.held = Some((pointer.pos, color));
-                self.picked = Some(EyedropperPick { color, background: pointer.mods.alt });
-            }
-            None => self.held = None,
+        let replaced = match self.background {
+            Some(background) if pointer.mods.alt => background,
+            _ => self.foreground,
+        };
+        let before = self.held.map_or(replaced, |hold| hold.before);
+        let color = (self.sample)([x, y], self.options.size, self.options.source);
+        if let Some(color) = color {
+            self.picked = Some(EyedropperPick { color, background: pointer.mods.alt });
         }
+        self.held = Some(EyedropperHold { before, shown: color.map(|color| (pointer.pos, color)) });
     }
 }
 
@@ -331,6 +381,7 @@ fn band(draw: &Draw<'_>, center: Pos2, (inner, outer): (f32, f32), (from, to): (
 impl CanvasTool for EyedropperTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         self.picked = None;
+        self.held = None;
         self.sample_at(pointer, cx);
         cx.request_repaint();
         ToolAction::Claimed
@@ -351,11 +402,13 @@ impl CanvasTool for EyedropperTool<'_> {
     }
 
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
-        let (true, Some((center, new)), Some(style)) = (self.options.show_ring, self.held, cx.style()) else { return };
+        let (true, Some(EyedropperHold { before, shown: Some((center, new)) }), Some(style)) = (self.options.show_ring, self.held, cx.style()) else {
+            return;
+        };
         let tokens = style.tokens;
         let inner = RING_OUTER_RADIUS - 2.0 * RING_BAND;
         band(draw, center, (inner, inner + RING_BAND), (PI, TAU), new);
-        band(draw, center, (inner, inner + RING_BAND), (0.0, PI), self.foreground);
+        band(draw, center, (inner, inner + RING_BAND), (0.0, PI), before);
         let grey = style.color(tokens.color.overlay.grid);
         let ring = |radius: f32| {
             let mut points = arc(center, radius, 0.0, TAU);
