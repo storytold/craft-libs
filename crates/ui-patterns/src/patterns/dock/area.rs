@@ -1522,6 +1522,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .column(shape)
                 .actions(actions)
                 .grip(scene.config.floating_grip)
+                .rounded_body(scene.config.floating_rounded_body)
                 .window_of(anchor.clone())
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)

@@ -76,6 +76,10 @@ pub struct DockConfig {
     /// A floating window's title row is a bare grip (no menu, float or close action, no column arrow): a quick-action
     /// strip's look.
     pub floating_grip: bool,
+    /// The surfaces inside a floating window keep to its rounded corners, and its edge shows over them along its
+    /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
+    /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
+    pub floating_rounded_body: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
@@ -110,6 +114,7 @@ impl Default for DockConfig {
             close_menu_items: true,
             close_button: true,
             floating_grip: false,
+            floating_rounded_body: false,
             tab_close_buttons: false,
             titled_headers: false,
             wheel_selects_tabs: false,
@@ -202,6 +207,13 @@ impl DockConfig {
     #[must_use]
     pub fn floating_grip(mut self, on: bool) -> Self {
         self.floating_grip = on;
+        self
+    }
+
+    /// A floating window's body keeping to its rounded corners on or off ([`floating_rounded_body`](Self::floating_rounded_body)).
+    #[must_use]
+    pub fn floating_rounded_body(mut self, on: bool) -> Self {
+        self.floating_rounded_body = on;
         self
     }
 

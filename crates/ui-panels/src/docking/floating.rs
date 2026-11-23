@@ -267,6 +267,10 @@ pub struct FloatingGroup<'a> {
     /// column arrow and no rule under it: a quick-action strip's look.
     #[prop]
     grip: bool,
+    /// The surfaces the body paints keep to the window's rounded lower corners (`frame_surfaces`), and the window's
+    /// edge is drawn again over the body, which covers it along the sides: the window reads as one rounded piece.
+    #[prop]
+    rounded_body: bool,
     /// Always open: the caller shows the group while its window exists, and a close comes out as the Close action.
     open: Bind<'a, bool>,
     taken: Option<HeaderAction>,
@@ -323,6 +327,7 @@ impl<'a> FloatingGroup<'a> {
             menu: None,
             actions: ACTIONS.to_vec(),
             grip: false,
+            rounded_body: false,
             open: Bind::given(true),
             taken: None,
             menu_opener: None,
@@ -394,7 +399,16 @@ impl<'a> FloatingGroup<'a> {
         let mount = self.mount();
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
-        let shown = self.show(ui, |ui, cx| (!minimized).then(|| body(ui, cx)));
+        // The window's lower corners: its body ends at the window's foot and sides.
+        let window = UiTokens::corner(env.tokens.shape.radius.window);
+        let lower = egui::CornerRadius { nw: 0, ne: 0, sw: window.sw, se: window.se };
+        let rounded = self.rounded_body;
+        let shown = self.show(ui, |ui, cx| {
+            if rounded {
+                crate::primitives::frame_surfaces(ui, cx.rect, lower);
+            }
+            (!minimized).then(|| body(ui, cx))
+        });
         Inner { output: shown.output, inner: shown.inner.flatten(), settle: shown.settle }
     }
 
@@ -494,6 +508,9 @@ impl Component for FloatingGroup<'_> {
 
     /// The double arrow, over the title row's surface.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.rounded_body {
+            ui.draw().surface_edge(cx.rect, SurfaceKind::Floating);
+        }
         let Some(column) = self.column.filter(|_| self.chevron_declared) else { return };
         paint_chevron(ui, column.edge, column.arrow, column.collapsed.is_none(), cx.flow.is_rtl(), &cx.words::<DockWords>());
     }

@@ -84,7 +84,8 @@ pub(crate) fn paint_surface(ui: &Ui, env: &Env, core: &CxCore<'_>, style: &dyn S
     if core.faded {
         core.paint.borrow_mut().surface_radius = look.radius;
     }
-    let shapes = surface_look_shapes(&env.tokens, look, &core.state, core.rect, env.direction, ui.ctx().pixels_per_point());
+    let mut shapes = surface_look_shapes(&env.tokens, look, &core.state, core.rect, env.direction, ui.ctx().pixels_per_point());
+    crate::primitives::fit_to_frame(ui.ctx(), ui.layer_id(), &mut shapes);
     match core.surface_slot {
         Some(slot) => ui.painter().set(slot, egui::Shape::Vec(shapes)),
         None => {

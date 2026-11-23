@@ -587,7 +587,18 @@ impl<'a> Draw<'a> {
     /// Paints a surface of `kind` (tracks, plot wells).
     pub fn surface(&self, rect: Rect, kind: SurfaceKind, corners: Corners) {
         let style = surface_style(self.env.tokens, kind);
-        self.painter.extend(Surface::shapes(&style, None, rect, corners, self.env.direction, self.painter.pixels_per_point()));
+        let mut shapes = Surface::shapes(&style, None, rect, corners, self.env.direction, self.painter.pixels_per_point());
+        super::fit_to_frame(self.painter.ctx(), self.painter.layer_id(), &mut shapes);
+        self.painter.extend(shapes);
+    }
+
+    /// Paints the edge alone of a surface of `kind` over `rect`, with no shadow or fill: a floating window draws its
+    /// edge again over its content, which covers it where it reaches the window's sides.
+    pub fn surface_edge(&self, rect: Rect, kind: SurfaceKind) {
+        let mut style = surface_style(self.env.tokens, kind);
+        style.shadow = None;
+        style.fill = egui::Color32::TRANSPARENT;
+        self.painter.extend(Surface::shapes(&style, None, rect, Corners::All, self.env.direction, self.painter.pixels_per_point()));
     }
 
     /// Paints a surface of an already resolved `style` (a kind's look with one field changed, as a knob's round radius).

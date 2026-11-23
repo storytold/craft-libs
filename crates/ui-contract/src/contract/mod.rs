@@ -92,7 +92,7 @@ pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_r
 pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
-pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
+pub use label::{CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
 pub use lazy::Lazy;
 #[doc(hidden)]
 #[cfg(feature = "suite")]

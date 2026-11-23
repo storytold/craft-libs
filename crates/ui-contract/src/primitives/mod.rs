@@ -53,8 +53,8 @@ pub use rule::{RectSide, Rule, RuleKind};
 pub use scroll_bar::{HiddenContent, ScrollBar};
 pub use sensing::{PartResult, TextOutcome, cancel_press_of, member_gesture_running};
 pub use state_layer::{StateLayer, StateLayerKind};
-pub use surface::Surface;
-pub(crate) use surface::SurfaceSlot;
+pub(crate) use surface::{Frames as SurfaceFrames, SurfaceSlot, fit_to_frame};
+pub use surface::{Surface, frame_surfaces};
 pub use surround::paint_surround;
 #[cfg(feature = "testing")]
 pub(crate) use svg_set::Layer;
