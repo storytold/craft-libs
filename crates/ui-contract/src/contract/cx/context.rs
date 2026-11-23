@@ -200,8 +200,9 @@ pub struct CxCore<'a> {
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.
     pub(crate) editor: Option<crate::contract::editor::EditorInfo>,
-    /// The editor part's inputs of this pass, until `editor_input` takes them.
-    pub(crate) editor_inputs: Vec<craft_behavior::EditorInput>,
+    /// The editor part's inputs of this pass, each with its order among the pass's events, until `editor_input` or
+    /// `editor_steps` takes them.
+    pub(crate) editor_inputs: Vec<(crate::contract::editor::Order, craft_behavior::EditorInput)>,
     /// The text part's draft is not a value of its codec.
     pub(crate) text_invalid: bool,
     /// The text part's `TextOptions::unparsed` while its draft does not parse: the refusal the pass reports when the

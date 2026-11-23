@@ -1875,9 +1875,9 @@ impl Returning {
     }
 }
 
-/// The release of the momentary or tool command `held`, fired when its key goes up or the window loses focus (the key's
-/// release then goes to another window).
-fn release_fired(held: Held, mods: craft_keymap::Mods, time: f64) -> Fired {
+/// The release of the momentary or tool command `held`, fired when its key goes up at `place` among the pass's events
+/// or the window loses focus (the key's release then goes to another window).
+fn release_fired(held: Held, mods: craft_keymap::Mods, time: f64, place: Option<usize>) -> Fired {
     Fired {
         command: held.command,
         target: held.target,
@@ -1887,6 +1887,7 @@ fn release_fired(held: Held, mods: craft_keymap::Mods, time: f64) -> Fired {
         alt_variant: false,
         mods,
         time,
+        place,
     }
 }
 
@@ -1995,7 +1996,7 @@ pub(crate) fn begin(ctx: &Context) {
     }
     // The fired press of `hit`, or `None` when its command is disabled now or blocked by a modal layer an earlier hit of
     // the pass opened (kb.C9). A momentary or tool command is kept with its key, whose release fires it again.
-    let press = |hit: Hit, key: Option<craft_keymap::Key>, time: f64| -> Option<Fired> {
+    let press = |hit: Hit, key: Option<craft_keymap::Key>, time: f64, place: Option<usize>| -> Option<Fired> {
         let (blocked, holds_key) = with(ctx, |board| {
             board.def(&hit.command).map_or((false, false), |def| {
                 (def.modal == ModalRule::Blocked, matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
@@ -2026,20 +2027,21 @@ pub(crate) fn begin(ctx: &Context) {
             alt_variant: hit.alt_variant,
             mods: hit.trigger.chord.mods,
             time,
+            place,
         })
     };
     // Settles a wait by the time of the event that ends it: the hold when the key was down for the delay, else the tap.
-    let settle = |wait: Option<HoldWait>, time: f64| -> Option<Fired> {
+    let settle = |wait: Option<HoldWait>, time: f64, place: Option<usize>| -> Option<Fired> {
         let wait = wait?;
         let hit = if time - wait.since >= wait.delay { Some(wait.hold) } else { wait.tap }?;
-        press(hit, Some(wait.key), time)
+        press(hit, Some(wait.key), time, place)
     };
     let mut fired = Vec::new();
     let mut changes = shortcuts.mods.iter().map(|(index, _)| *index).peekable();
     for (index, shortcut) in shortcuts.keys.iter().enumerate() {
         // A change of Cmd, Ctrl or Alt before this key settles the wait first.
         while changes.next_if(|change| *change <= index).is_some() {
-            fired.extend(settle(wait.take(), now));
+            fired.extend(settle(wait.take(), now, None));
         }
         // When the key event arrived: a frame may run it later, and a double press and a hold read the key's own times.
         let time = shortcut.at.unwrap_or(now);
@@ -2047,14 +2049,14 @@ pub(crate) fn begin(ctx: &Context) {
         match shortcut.phase {
             FirePhase::Release => {
                 if wait.as_ref().is_some_and(|wait| Some(wait.key) == key) {
-                    fired.extend(settle(wait.take(), time));
+                    fired.extend(settle(wait.take(), time, Some(shortcut.place)));
                 }
                 let held = with(ctx, |board| key.and_then(|key| board.held.iter().position(|held| held.key == key)).map(|at| board.held.remove(at)));
-                fired.extend(held.map(|held| release_fired(held, shortcut.input.mods, time)));
+                fired.extend(held.map(|held| release_fired(held, shortcut.input.mods, time, Some(shortcut.place))));
             }
             _ => {
                 // Another key's press settles the wait first: keys act in the order they went down.
-                fired.extend(settle(wait.take(), time));
+                fired.extend(settle(wait.take(), time, Some(shortcut.place)));
                 // A binding whose command is disabled where the press lands (a window command with no floating
                 // window, a canvas's view command it does not offer) is passed over: the press runs the next binding
                 // of its chord, in an outer scope, or of its next chord candidate, as if the disabled one were unbound.
@@ -2069,26 +2071,26 @@ pub(crate) fn begin(ctx: &Context) {
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled)));
                 match hold {
                     Some((key, hold)) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
-                    None => fired.extend(tap.and_then(|hit| press(hit, key, time))),
+                    None => fired.extend(tap.and_then(|hit| press(hit, key, time, Some(shortcut.place)))),
                 }
             }
         }
     }
     for _ in changes {
-        fired.extend(settle(wait.take(), now));
+        fired.extend(settle(wait.take(), now, None));
     }
     // The key's release goes to another window: a momentary command ends and a wait drops.
     if shortcuts.focus_lost {
         wait = None;
         let held = with(ctx, |board| std::mem::take(&mut board.held));
-        fired.extend(held.into_iter().map(|held| release_fired(held, craft_keymap::Mods::NONE, now)));
+        fired.extend(held.into_iter().map(|held| release_fired(held, craft_keymap::Mods::NONE, now, None)));
     }
     // The deadline is a time event: only the first pass of a frame, which has elapsed time, fires it.
     if let Some(due) = wait.as_ref().map(|wait| wait.since + wait.delay) {
         if now < due {
             frame::request_repaint_after(ctx, due - now);
         } else if frame::running(ctx).is_some_and(|pass| pass.elapsed > 0.0) {
-            fired.extend(wait.take().and_then(|wait| press(wait.hold, Some(wait.key), now)));
+            fired.extend(wait.take().and_then(|wait| press(wait.hold, Some(wait.key), now, None)));
         }
     }
     with(ctx, |board| {

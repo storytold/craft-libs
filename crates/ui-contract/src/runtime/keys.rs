@@ -112,6 +112,8 @@ pub(crate) struct Shortcut {
     /// The input time the event arrived at when an earlier frame held it back; `None` for the pass's own input, which
     /// arrived at the pass time.
     pub(crate) at: Option<f64>,
+    /// The event's place among the frame's events ([`Batch::place`]), which the editor inputs it comes between share.
+    pub(crate) place: usize,
 }
 
 /// What the intent routing did with one press.

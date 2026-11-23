@@ -1,14 +1,16 @@
-//! The editor contract: a component with an editor part receives one ordered input stream, a read-only editor
-//! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
+//! The editor contract: a component with an editor part receives one ordered input stream, with the commands of its
+//! scope that keys fired in their place, a read-only editor receives only inputs that change no text, and its visible
+//! lines become AccessKit run nodes.
 
 use craft_behavior::{EditCommand, EditorInput, Granularity, PartKey, Sense, SurroundingUnit, TextPos};
 use craft_host::target::ShellInfo;
-use craft_ui::contract::{Common, Component, Cx, EditorHandle, PaintUi, PartsCx, Props as _, Role, Show as _};
+use craft_ui::contract::{CommandSet, Common, Component, Cx, EditorHandle, EditorStep, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::KeyUse;
 use craft_ui::runtime::frame::discard_pass;
 use craft_ui::style::StyleCx;
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{click, moved, press, release};
 use craft_ui::testing::text::ImeSeen;
@@ -877,4 +879,81 @@ fn a_pre_edit_and_a_refused_deletion_in_one_frame_interrupt_the_composition() {
         assert!(!rig.doc().composing.get(), "the probe shows no marked text after the refusal");
         assert_eq!(interrupted, marks, "marks {marks}, split {split}: the composition is interrupted only by an editor that shows marked text");
     }
+}
+
+/// The commands of an editor's typing scope: Commit on Cmd+Enter, as a type tool ends editing with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "editorTrial", scope = "trial.editor", typing)]
+#[non_exhaustive]
+enum EditorCommand {
+    #[command(label = "Commit", default = "Cmd+Enter")]
+    Commit,
+}
+
+/// An editor that is the instance of `EditorCommand`'s scope and logs the steps of each pass.
+#[derive(craft_ui::contract::Component)]
+struct Typer<'a> {
+    #[common]
+    common: Common,
+    steps: &'a RefCell<Vec<EditorStep<EditorCommand>>>,
+}
+
+impl Component for Typer<'_> {
+    const ROLE: Role = Role::MULTILINE_TEXT_INPUT;
+    const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
+    const KEYS: KeyUse = KeyUse::CODE;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: TyperStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.editor(EDITOR, rect, EditorPurpose::Text);
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let steps = cx.editor_steps::<EditorCommand>();
+        self.steps.borrow_mut().extend(steps);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A command of the editor's scope that a chord fires reaches the editor between the inputs typed before and after
+/// the chord in the same frame, so an editor that Cmd+Enter ends applies none of the typing after it. Guards against
+/// the editor reading a frame's inputs and its commands as two batches.
+#[trial]
+fn a_command_a_chord_fires_reaches_its_editor_between_the_typing_around_it() {
+    let steps = RefCell::new(Vec::new());
+    let mut show = |ui: &mut egui::Ui| {
+        let _ = Typer { common: Common::new(), steps: &steps }.label("Type").command_scope(<EditorCommand as CommandSet>::SCOPE).show_at(ui, AT);
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    click(&mut frames, AT.center(), &mut show);
+    steps.take();
+    let cmd_enter = [
+        Event::ModifiersChanged(Modifiers::COMMAND),
+        key_press(Key::Enter, Modifiers::COMMAND),
+        key_release(Key::Enter, Modifiers::COMMAND),
+        Event::ModifiersChanged(Modifiers::NONE),
+    ];
+    frames.frame([vec![Event::Text("a".into())], cmd_enter.to_vec(), vec![Event::Text("b".into())]].concat(), &mut show);
+    let steps = steps.take();
+    assert!(
+        matches!(
+            steps.as_slice(),
+            [EditorStep::Input(EditorInput::Text(a)), EditorStep::Command(EditorCommand::Commit, _), EditorStep::Input(EditorInput::Text(b))]
+                if &**a == "a" && &**b == "b"
+        ),
+        "the command sits between the texts its chord came between: {steps:?}"
+    );
 }

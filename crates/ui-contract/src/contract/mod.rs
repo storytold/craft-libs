@@ -5,7 +5,7 @@ mod collection;
 mod container;
 mod cx;
 pub(crate) mod editor;
-pub use editor::EditorHandle;
+pub use editor::{EditorHandle, EditorStep};
 mod entry;
 mod faces;
 pub(crate) mod footer_slot;

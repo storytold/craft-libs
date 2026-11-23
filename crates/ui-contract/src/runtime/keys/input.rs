@@ -127,7 +127,7 @@ impl Strip<'_> {
                     consumed.swap_remove(at);
                     return false;
                 }
-                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at });
+                batch.shortcuts.push(Shortcut { input, phase: FirePhase::Release, press: None, canvas: false, at, place: batch.place });
                 true
             }
             KeyEvent::Text(text) => {
@@ -176,7 +176,7 @@ impl Strip<'_> {
                     // A component that reads every chord gets the event as the chord's press, the way the key made it.
                     self.press(batch, key, &input, false, at);
                 } else if !sent {
-                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at });
+                    batch.shortcuts.push(Shortcut { input, phase: FirePhase::Press, press: None, canvas: false, at, place: batch.place });
                 }
                 // The event stands for the chord, so the shortcut path is its only reader: egui does not copy or paste
                 // on top of the command.
@@ -315,7 +315,14 @@ impl Strip<'_> {
                     held: Vec::new(),
                 });
                 if !repeat {
-                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true, at });
+                    batch.shortcuts.push(Shortcut {
+                        input: *input,
+                        phase: FirePhase::Press,
+                        press: Some(batch.presses.len() - 1),
+                        canvas: true,
+                        at,
+                        place: batch.place,
+                    });
                 }
                 false
             }
@@ -380,6 +387,7 @@ impl Strip<'_> {
                         press: Some(batch.presses.len() - 1),
                         canvas: false,
                         at,
+                        place: batch.place,
                     });
                 }
                 true

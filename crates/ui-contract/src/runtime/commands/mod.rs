@@ -194,13 +194,17 @@ pub struct Fired {
     /// The modifiers the firing input carried: a key's chord, a component's activation, the frame's held modifiers for
     /// an injected activation. Automation and the palette carry none.
     pub mods: craft_keymap::Mods,
+    /// For a key, the place of its event among the pass's events, which the editor inputs of the pass share, so an
+    /// editor runs the command between the inputs typed before and after it (`Cx::editor_steps`). `None` for the other
+    /// sources and for a key whose hold settles by its deadline or a modifier change, or whose window lost focus.
+    pub place: Option<usize>,
 }
 
 impl Fired {
     /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
     /// cycle or the Alt variant.
     pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, mods: craft_keymap::Mods::NONE }
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, mods: craft_keymap::Mods::NONE, place: None }
     }
 
     /// The command with `mods` as the modifiers its firing input carried.
