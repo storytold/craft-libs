@@ -870,21 +870,25 @@ impl Component for Tile<'_> {
         let picture = placed.picture;
         let flat = CornerRadius::ZERO;
         if !self.flat_thumbnail {
-            // Filled from the outside in, under the picture, so the rings sit outside its edge.
+            // Filled from the outside in, so the rings sit outside the picture's edge. A plateless tile's picture may have a
+            // transparent ground, so its rings are bands around the picture, not rects under it that would flood it.
             let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
+            let banded = self.plateless && !style.sizes.card;
             let draw = ui.draw();
-            // Bands around the picture, not filled rects under it: a picture with a transparent ground (no plate) must not
-            // be flooded by the ring.
-            if halo > 0.0 {
-                for side in ring_bands(picture.expand(ring + halo), picture.expand(ring)) {
-                    draw.fill(&PaintShape::Rect(side, flat), style.halo);
+            let fill_ring = |outer: Rect, inner: Rect, color| {
+                if banded {
+                    for side in ring_bands(outer, inner) {
+                        draw.fill(&PaintShape::Rect(side, flat), color);
+                    }
+                } else {
+                    draw.fill(&PaintShape::Rect(outer, flat), color);
                 }
+            };
+            if halo > 0.0 {
+                fill_ring(picture.expand(ring + halo), picture.expand(ring), style.halo);
             }
             if ring > 0.0 {
-                let color = cx.resolve(&style.ring);
-                for side in ring_bands(picture.expand(ring), picture) {
-                    draw.fill(&PaintShape::Rect(side, flat), color);
-                }
+                fill_ring(picture.expand(ring), picture, cx.resolve(&style.ring));
             }
             if style.sizes.card {
                 ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);

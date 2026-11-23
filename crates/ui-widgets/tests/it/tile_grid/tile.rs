@@ -46,7 +46,7 @@ fn overlap(a: &Rect, b: &Rect) -> bool {
 }
 
 #[trial]
-fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlap() {
+fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlaps() {
     let (_, glyphs, dots) = badges(400.0);
     assert_eq!((glyphs.len(), dots.len()), (6, 1), "at the default card width the five stars, the flag and the dot show");
     for width in [40.0, 64.0, 80.0, 96.0, 128.0, 400.0] {
