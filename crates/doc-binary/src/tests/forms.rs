@@ -236,6 +236,14 @@ fn a_definition_is_measured_with_the_escapes_the_docx_reader_uses() {
 }
 
 #[test]
+fn tab_and_line_breaks_in_form_text_are_kept_as_character_references() {
+    let f = Ff { name: "T", text_default: "A\tB\nC\rD\u{1}E", ..Ff::default() };
+    let form = form_of("FORMTEXT", with_picf(&ffdata_bytes(&f)));
+    // The other control character is still dropped.
+    assert!(form.contains(r#"<w:default w:val="A&#9;B&#10;C&#13;DE"/>"#), "{form}");
+}
+
+#[test]
 fn a_text_field_keeps_its_kind() {
     for (n, name) in [(1u16, "number"), (2, "date"), (3, "currentDate"), (4, "currentTime"), (5, "calculated")] {
         let f = Ff { bits: n << 11, name: "T", ..Ff::default() };

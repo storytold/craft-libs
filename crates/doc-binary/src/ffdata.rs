@@ -99,10 +99,11 @@ fn utf16(bytes: &[u8]) -> String {
     char::decode_utf16(units).map(|r| r.unwrap_or('\u{FFFD}')).filter(|c| xml_char(*c)).collect()
 }
 
-/// A character XML 1.0 allows in an attribute value without escaping tricks (the control
-/// characters a file might hold are dropped).
+/// A character XML 1.0 allows in an attribute value (the other control characters a file might
+/// hold are dropped). Tab, line feed and carriage return are kept; [`attr`] writes them as
+/// numeric references so attribute normalisation does not turn them into spaces.
 fn xml_char(c: char) -> bool {
-    !matches!(c, '\0'..='\u{1F}' | '\u{7F}'..='\u{9F}' | '\u{FFFE}' | '\u{FFFF}')
+    matches!(c, '\t' | '\n' | '\r') || !matches!(c, '\0'..='\u{1F}' | '\u{7F}'..='\u{9F}' | '\u{FFFE}' | '\u{FFFF}')
 }
 
 fn attr(out: &mut String, s: &str) {
@@ -114,6 +115,9 @@ fn attr(out: &mut String, s: &str) {
             '"' => out.push_str("&quot;"),
             // The same escapes as the .docx writer, so both sides measure the same markup.
             '\'' => out.push_str("&apos;"),
+            '\t' => out.push_str("&#9;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
             c => out.push(c),
         }
     }
