@@ -84,6 +84,10 @@ pub struct DockConfig {
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// Every group shows the panel menu button at the end of its tab strip, listing the dock's rows when the host has
+    /// none for its panel. Off: only a group whose shown panel has host rows (`DockPanels::panel_rows`) shows the
+    /// button, and the dock's rows open from a context request on a tab.
+    pub menu_button: bool,
 }
 
 impl Default for DockConfig {
@@ -102,11 +106,19 @@ impl Default for DockConfig {
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
+            menu_button: false,
         }
     }
 }
 
 impl DockConfig {
+    /// The panel menu button on every group on or off.
+    #[must_use]
+    pub fn menu_button(mut self, on: bool) -> Self {
+        self.menu_button = on;
+        self
+    }
+
     /// The Minimize and Move Group Up and Down items of docked groups' menus on or off.
     #[must_use]
     pub fn group_order_items(mut self, on: bool) -> Self {

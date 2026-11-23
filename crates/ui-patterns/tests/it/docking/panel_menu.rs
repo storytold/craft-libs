@@ -147,3 +147,40 @@ fn a_window_floated_after_an_undo_takes_a_new_id() {
     assert_eq!(ids.len(), 1, "Float made a window again");
     assert_ne!(ids, undone, "the window after the undo does not take the undone window's id");
 }
+
+/// Panels with no host rows.
+struct Bare;
+
+impl DockPanels<usize> for Bare {
+    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
+}
+
+/// With `DockConfig::menu_button`, a group whose panel has no host rows still shows the panel menu button, and its
+/// menu lists the dock's rows; without it the group shows none.
+#[trial]
+fn the_menu_button_config_shows_the_panel_menu_without_host_rows() {
+    for on in [false, true] {
+        let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![2], 0));
+        let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+        let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
+        let mut fixture = Fixture::new(move |ui| {
+            let mut shown = held.borrow().clone();
+            DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Bare, DockConfig::default().menu_button(on)).show(ui);
+            *held.borrow_mut() = shown;
+        });
+        fixture.room(Vec2::new(1200.0, 600.0)).settle();
+        let buttons: Vec<_> =
+            fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
+        if !on {
+            assert!(buttons.is_empty(), "without host rows and without the config, no group shows the button");
+            continue;
+        }
+        assert_eq!(buttons.len(), 2, "each group shows its panel menu button");
+        fixture.click(&buttons[1]).idle(2);
+        let float = fixture.by_label("Float").expect("the menu lists the dock's Float row");
+        fixture.click(&float).idle(2);
+        let shown = workspace.borrow();
+        let floated: Vec<usize> = shown.layout().floating.iter().flat_map(|window| window.panels().copied().collect::<Vec<_>>()).collect();
+        assert_eq!(floated, vec![2], "the dock's row runs for the group whose button opened the menu");
+    }
+}
