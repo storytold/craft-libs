@@ -6,6 +6,9 @@
 //! rfd can't show this panel: its async dialogs always begin a sheet, on the main or first window
 //! when no parent is given (rfd 0.17.2 `backend/macos/modal_future.rs:71-102`).
 //!
+//! An Open with a [`check_box`](crate::FileDialog::check_box) shows it as the panel's accessory
+//! view, disclosed, and answers [`Answer::Checked`] when it was ticked.
+//!
 //! Save and message boxes are sheets on the parent window through rfd, as native apps show them.
 //! rfd falls back to the blocking `runModal` when the app isn't running or has no window
 //! (`modal_future.rs:79-118`), so [`sheet_parent`] lets a sheet start only with a parent in a
@@ -17,7 +20,7 @@ use std::ffi::c_void;
 use block2::RcBlock;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSApplication, NSModalResponse, NSModalResponseOK, NSOpenPanel, NSView};
+use objc2_app_kit::{NSApplication, NSButton, NSButtonType, NSControlStateValueOn, NSModalResponse, NSModalResponseOK, NSOpenPanel, NSView};
 use objc2_foundation::{NSArray, NSString, NSURL};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -95,6 +98,16 @@ pub(crate) fn show_panel(d: &FileDialog, reply: Reply) -> Option<Panel> {
     if let Some(directory) = d.directory.as_deref().and_then(NSURL::from_directory_path) {
         panel.setDirectoryURL(Some(&directory));
     }
+    // The request's check box, off, under the file list; its state is read when the panel closes.
+    let check_box = d.check_box.as_deref().filter(|_| !folder).map(|label| {
+        let button = NSButton::new(mtm);
+        button.setButtonType(NSButtonType::Switch);
+        button.setTitle(&NSString::from_str(label));
+        button.sizeToFit();
+        panel.setAccessoryView(Some(&button));
+        panel.setAccessoryViewDisclosed(true);
+        button
+    });
     // The handler keeps the panel alive until it closes; AppKit releases the handler after
     // calling it, which ends the cycle. Never called, the reply drops and answers Unavailable.
     let reply = Cell::new(Some(reply));
@@ -105,7 +118,12 @@ pub(crate) fn show_panel(d: &FileDialog, reply: Reply) -> Option<Panel> {
             return reply.send(Answer::Cancelled);
         }
         let paths: Vec<_> = answered.URLs().to_vec().iter().filter_map(|url| url.to_file_path()).collect();
-        reply.send(if paths.is_empty() { Answer::Cancelled } else { Answer::Paths(paths) });
+        let checked = check_box.as_ref().is_some_and(|button| button.state() == NSControlStateValueOn);
+        reply.send(match paths {
+            paths if paths.is_empty() => Answer::Cancelled,
+            paths if checked => Answer::Checked(paths),
+            paths => Answer::Paths(paths),
+        });
     });
     panel.beginWithCompletionHandler(&handler);
     Some(panel)

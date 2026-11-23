@@ -7,7 +7,7 @@
 //! one; otherwise the service starts it in the last folder it remembers for the
 //! [`PickRequest::purpose`]. It applies the extension policy to a saved name before the app sees it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -69,6 +69,11 @@ pub struct PickRequest {
     pub fallback: bool,
     /// The save makes the document a new file on the host page; other services ignore it.
     pub save_as: bool,
+    /// The label of an extra check box on an Open picker, off each time the picker opens
+    /// (PhotoCraft's Image Sequence). [`Files::take_answer_checked`] says whether the user ticked
+    /// it. A picker that cannot show one (and Folder and Save pickers) shows without it, and its
+    /// answer reads unticked.
+    pub check_box: Option<String>,
 }
 
 impl PickRequest {
@@ -85,6 +90,7 @@ impl PickRequest {
             suggested_extension: None,
             fallback: false,
             save_as: false,
+            check_box: None,
         }
     }
 
@@ -148,6 +154,12 @@ impl PickRequest {
     /// Forces the in-app chooser for this request instead of the system's file dialog.
     pub fn fallback(mut self, on: bool) -> Self {
         self.fallback = on;
+        self
+    }
+
+    /// Adds a check box with `label` to an Open picker; see [`PickRequest::check_box`].
+    pub fn check_box(mut self, label: impl Into<String>) -> Self {
+        self.check_box = Some(label.into());
         self
     }
 
@@ -271,6 +283,12 @@ pub trait Files: Send + Sync {
     /// The answer of ticket `id`, once it has come; it is removed. Other tickets' answers stay
     /// where they are, so a feature that never asks for its answer blocks no other feature.
     fn take_answer(&self, id: PickId) -> Option<Picked>;
+    /// [`take_answer`](Files::take_answer), with whether the user ticked the request's
+    /// [`check_box`](PickRequest::check_box). False for a request without one, for an answer
+    /// without paths, and from a service whose pickers show no check box (the default).
+    fn take_answer_checked(&self, id: PickId) -> Option<(Picked, bool)> {
+        self.take_answer(id).map(|picked| (picked, false))
+    }
     /// Drops ticket `id`: its answer, if it has come, and the answer that has yet to come. An
     /// owner that closes with a pick outstanding calls it.
     fn forget(&self, id: PickId);
@@ -382,8 +400,9 @@ pub struct ScriptedFiles {
 struct ScriptState {
     next: u64,
     asked: Vec<PickRequest>,
-    /// Answers for the picks to come, first pick first.
-    queued: VecDeque<Picked>,
+    /// Answers for the picks to come, first pick first, each with whether the check box was
+    /// ticked.
+    queued: VecDeque<(Picked, bool)>,
     /// Picks stay open until the test answers them.
     held: bool,
     /// A Save is answered with the suggested name in the suggested folder.
@@ -391,6 +410,8 @@ struct ScriptState {
     /// Picks the test has not answered yet, oldest first.
     open: Vec<(PickId, PickRequest)>,
     answered: Vec<PickAnswer>,
+    /// The answered picks whose check box was ticked.
+    checked: HashSet<PickId>,
     files: HashMap<PathBuf, Vec<u8>>,
     /// The bytes of the saves not answered yet, written to the chosen path with the answer.
     saves: HashMap<PickId, Vec<u8>>,
@@ -399,8 +420,12 @@ struct ScriptState {
 }
 
 impl ScriptState {
-    /// Files `picked` as ticket `id`'s answer; a save's bytes go to the path it chose.
-    fn settle(&mut self, id: PickId, request: PickRequest, picked: Picked) {
+    /// Files `picked` as ticket `id`'s answer; a save's bytes go to the path it chose. `checked`
+    /// counts only for a request with a check box and an answer with paths.
+    fn settle(&mut self, id: PickId, request: PickRequest, picked: Picked, checked: bool) {
+        if checked && request.check_box.is_some() && !picked.paths().is_empty() {
+            self.checked.insert(id);
+        }
         if let Some(bytes) = self.saves.remove(&id)
             && let Picked::Paths(paths) = &picked
             && let Some(path) = paths.first()
@@ -420,7 +445,7 @@ impl ScriptedFiles {
     /// A service that answers the picks with `answers`, in order.
     pub fn answering(answers: impl IntoIterator<Item = Picked>) -> Self {
         let files = Self::default();
-        files.state().queued.extend(answers);
+        files.state().queued.extend(answers.into_iter().map(|picked| (picked, false)));
         files
     }
 
@@ -455,7 +480,13 @@ impl ScriptedFiles {
 
     /// Queues the answer of the next pick that has none yet.
     pub fn queue(&self, picked: Picked) {
-        self.state().queued.push_back(picked);
+        self.state().queued.push_back((picked, false));
+    }
+
+    /// Queues the answer of the next pick that has none yet, with the request's
+    /// [`check_box`](PickRequest::check_box) ticked.
+    pub fn queue_checked(&self, picked: Picked) {
+        self.state().queued.push_back((picked, true));
     }
 
     /// Every request asked so far, in order.
@@ -472,7 +503,16 @@ impl ScriptedFiles {
     pub fn answer(&self, picked: Picked) -> Option<PickId> {
         let mut state = self.state();
         let (id, request) = state.open.pop()?;
-        state.settle(id, request, picked);
+        state.settle(id, request, picked, false);
+        Some(id)
+    }
+
+    /// Answers the newest open pick with its [`check_box`](PickRequest::check_box) ticked; its
+    /// ticket, or `None` when none is open.
+    pub fn answer_checked(&self, picked: Picked) -> Option<PickId> {
+        let mut state = self.state();
+        let (id, request) = state.open.pop()?;
+        state.settle(id, request, picked, true);
         Some(id)
     }
 
@@ -481,7 +521,7 @@ impl ScriptedFiles {
         let mut state = self.state();
         let Some(at) = state.open.iter().position(|(open, _)| *open == id) else { return false };
         let (_, request) = state.open.remove(at);
-        state.settle(id, request, picked);
+        state.settle(id, request, picked, false);
         true
     }
 
@@ -514,8 +554,8 @@ impl ScriptedFiles {
             state.open.push((id, request));
             return id;
         }
-        let picked = suggested.or_else(|| state.queued.pop_front()).unwrap_or(Picked::Cancelled);
-        state.settle(id, request, picked);
+        let (picked, checked) = suggested.map(|s| (s, false)).or_else(|| state.queued.pop_front()).unwrap_or((Picked::Cancelled, false));
+        state.settle(id, request, picked, checked);
         id
     }
 }
@@ -526,14 +566,20 @@ impl Files for ScriptedFiles {
     }
 
     fn take_answer(&self, id: PickId) -> Option<Picked> {
+        self.take_answer_checked(id).map(|(picked, _)| picked)
+    }
+
+    fn take_answer_checked(&self, id: PickId) -> Option<(Picked, bool)> {
         let mut state = self.state();
         let at = state.answered.iter().position(|a| a.id == id)?;
-        Some(state.answered.remove(at).picked)
+        let checked = state.checked.remove(&id);
+        Some((state.answered.remove(at).picked, checked))
     }
 
     fn forget(&self, id: PickId) {
         let mut state = self.state();
         state.answered.retain(|a| a.id != id);
+        state.checked.remove(&id);
         state.open.retain(|(open, _)| *open != id);
         state.saves.remove(&id);
     }

@@ -7,6 +7,10 @@
 //! ([`with_chosen_type`]). rfd stays the fallback (zenity, or no portal), and this can go once an
 //! rfd release reads the picked type (PolyMeilex/rfd#341).
 //!
+//! An Open with a check box ([`FileDialog::check_box`]) asks the portal itself too: its `OpenFile`
+//! takes the box as one of its `choices` and answers whether it was ticked, which rfd can't
+//! express ([`open_files`]).
+//!
 //! A Save in flight can be stopped through its [`Cancel`] (its pick was forgotten): the wait for
 //! the portal's answer races the cancel and the portal leaving the bus, and a cancel closes the
 //! portal's request. How each answer reads is [`classify`]'s one rule.
@@ -213,11 +217,37 @@ pub(crate) fn parent_id(window: Option<RawWindowHandle>) -> String {
     }
 }
 
-/// Shows the portal's Save dialog and waits for its answer, the portal leaving the bus or
-/// `cancel`, whichever comes first. A cancel closes the portal's request. `Err` when the portal
-/// couldn't be asked (no portal, no FileChooser).
+/// How a portal request ended: the response code and results, how long the dialog was open,
+/// whether a cancel was queued, and whether the portal left the bus. Without a response the code
+/// is 0 and the results are empty: the cancel and backend flags decide.
+struct Response {
+    code: u32,
+    results: HashMap<String, OwnedValue>,
+    elapsed: Duration,
+    cancel_queued: bool,
+    backend_gone: bool,
+}
+
+/// A request token for `kind` (`save`, `open`) unique in this process.
+fn token(kind: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    format!("craft_dialogs_{kind}_{}_{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Calls the FileChooser's `method` (`SaveFile`, `OpenFile`) with `parent`, `title` and `options`
+/// (which carry `token` as their `handle_token`) and waits for the dialog's answer, the portal
+/// leaving the bus or `cancel`, whichever comes first. A cancel closes the portal's request.
+/// `Err` when the portal couldn't be asked (no portal, no FileChooser).
 // pc: apps/photocraft/src/portal_save.rs:310 save_file, :266 close_request, :333 NameOwnerChanged
-fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest, cancel: &Cancel) -> Result<Decision, String> {
+fn ask(
+    conn: &zbus::blocking::Connection,
+    token: &str,
+    method: &str,
+    parent: &str,
+    title: &str,
+    options: HashMap<&'static str, Value<'_>>,
+    cancel: &Cancel,
+) -> Result<Response, String> {
     use futures_lite::StreamExt;
     use futures_lite::future::{block_on, or};
     use zbus::blocking::Proxy;
@@ -230,8 +260,6 @@ fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest, cancel: &Canc
 
     let text = |e: zbus::Error| e.to_string();
     let unique = conn.unique_name().ok_or("Portal connection has no unique name")?.as_str().trim_start_matches(':').replace('.', "_");
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let token = format!("craft_dialogs_save_{}_{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
     let path = format!("/org/freedesktop/portal/desktop/request/{unique}/{token}");
     // Listen before asking, so a quick answer isn't missed: to the request's answer, and to the
     // portal leaving the bus, after which no answer comes.
@@ -241,7 +269,7 @@ fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest, cancel: &Canc
     let mut owners = block_on(bus.inner().receive_signal_with_args("NameOwnerChanged", &[(0, PORTAL)])).map_err(text)?;
     let chooser = Proxy::new(conn, PORTAL, "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser").map_err(text)?;
     let started = Instant::now();
-    let handle: OwnedObjectPath = chooser.call("SaveFile", &(req.parent.as_str(), "Save As", options(req, &token))).map_err(text)?;
+    let handle: OwnedObjectPath = chooser.call(method, &(parent, title, options)).map_err(text)?;
     // A portal older than 0.9 ignores `handle_token` and answers on a request path of its own,
     // which it returns: listen there instead, as the Request documentation asks.
     let (request, mut replies) = if handle.as_str() == path {
@@ -270,20 +298,26 @@ fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest, cancel: &Canc
         ),
     ));
     let elapsed = started.elapsed();
-    let nothing = HashMap::new();
-    // Without a response there is no code: the cancel and backend flags decide.
+    let none = |cancel_queued, backend_gone| Response { code: 0, results: HashMap::new(), elapsed, cancel_queued, backend_gone };
     Ok(match event {
         Event::Reply(Some(reply)) => {
             let (code, results): (u32, HashMap<String, OwnedValue>) = reply.body().deserialize().map_err(text)?;
-            classify(code, elapsed, cancel.is_cancelled(), false, &results)
+            Response { code, results, elapsed, cancel_queued: cancel.is_cancelled(), backend_gone: false }
         }
-        Event::Reply(None) | Event::Gone => classify(0, elapsed, cancel.is_cancelled(), true, &nothing),
+        Event::Reply(None) | Event::Gone => none(cancel.is_cancelled(), true),
         Event::Cancelled => {
             // The portal closes its dialog; a request it already answered has nothing to close.
             let _ = request.call_method("Close", &());
-            classify(0, elapsed, true, false, &nothing)
+            none(true, false)
         }
     })
+}
+
+/// Shows the portal's Save dialog and waits for its answer; see [`ask`].
+fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest, cancel: &Cancel) -> Result<Decision, String> {
+    let token = token("save");
+    let r = ask(conn, &token, "SaveFile", &req.parent, "Save As", options(req, &token), cancel)?;
+    Ok(classify(r.code, r.elapsed, r.cancel_queued, r.backend_gone, &r.results))
 }
 
 /// A filter as the portal takes it: its label and one `*.ext` glob per pattern (the case-insensitive
@@ -430,6 +464,129 @@ pub(crate) fn save_as(mut req: SaveRequest, cancel: &Cancel) -> SaveOutcome {
         req.suggested = req.name.clone();
         req.folder = path.parent().map(Path::to_path_buf);
         req.current = picked;
+    }
+}
+
+/// The id of an Open dialog's check box among the portal's `choices`.
+const CHECK_BOX: &str = "craft_check_box";
+
+/// An Open dialog with a check box to show.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OpenRequest {
+    /// The portal's parent window identifier (`x11:<xid>`), or empty.
+    pub parent: String,
+    /// The dialog's title.
+    pub title: String,
+    /// The folder the dialog opens in.
+    pub folder: Option<PathBuf>,
+    /// The file types offered.
+    pub filters: Vec<Filter>,
+    /// Whether several files may be picked.
+    pub multiple: bool,
+    /// The check box's label.
+    pub check_box: String,
+}
+
+impl OpenRequest {
+    /// The portal request for an Open `dialog` with a check box, attached to the window `parent`
+    /// names. `None` when the dialog has no check box or is not an Open.
+    pub(crate) fn new(dialog: &FileDialog, parent: String) -> Option<Self> {
+        let crate::Kind::Open { multiple } = dialog.kind else { return None };
+        Some(Self {
+            parent,
+            title: dialog.title.clone().unwrap_or_else(|| "Open".into()),
+            folder: dialog.directory.clone(),
+            filters: dialog.filters.clone(),
+            multiple,
+            check_box: dialog.check_box.clone()?,
+        })
+    }
+}
+
+/// How a portal Open ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OpenOutcome {
+    /// The user picked these files, with the check box ticked or not.
+    Opened { paths: Vec<PathBuf>, checked: bool },
+    /// The user cancelled.
+    Cancelled,
+    /// The portal could not show the dialog: the caller shows rfd's, without the check box.
+    UseRfd(String),
+}
+
+/// The `OpenFile` options for `req`: folder, file types, and the check box, off each time the
+/// dialog opens.
+fn open_options<'a>(req: &'a OpenRequest, token: &'a str) -> HashMap<&'static str, Value<'a>> {
+    let mut o: HashMap<&'static str, Value<'a>> =
+        HashMap::from([("handle_token", Value::from(token)), ("modal", Value::from(true)), ("multiple", Value::from(req.multiple))]);
+    if let Some(folder) = &req.folder {
+        // A byte string with its terminating NUL, as the portal specifies.
+        use std::os::unix::ffi::OsStrExt;
+        let mut bytes = folder.as_os_str().as_bytes().to_vec();
+        bytes.push(0);
+        o.insert("current_folder", Value::from(bytes));
+    }
+    if !req.filters.is_empty() {
+        o.insert("filters", Value::from(req.filters.iter().map(wire).collect::<Vec<_>>()));
+    }
+    // A choice is (id, label, options, initial); one without options is a check box, whose
+    // initial state is "false".
+    let choices: Vec<(&str, &str, Vec<(&str, &str)>, &str)> = vec![(CHECK_BOX, req.check_box.as_str(), Vec::new(), "false")];
+    o.insert("choices", Value::from(choices));
+    o
+}
+
+/// Reads one portal response to `OpenFile`, like [`classify`] does for Save: a queued cancel or
+/// code 1 is Cancel, a quick code 2 a dialog that never showed (rfd's is shown instead), a slow
+/// one Esc. Code 0 names the files, all local, and the check box's state in `choices` (`"true"`
+/// when ticked); a box the answer leaves out was not ticked.
+pub(crate) fn classify_open(
+    code: u32,
+    elapsed: Duration,
+    cancel_queued: bool,
+    backend_gone: bool,
+    results: &HashMap<String, OwnedValue>,
+) -> OpenOutcome {
+    if cancel_queued {
+        return OpenOutcome::Cancelled;
+    }
+    if backend_gone {
+        return OpenOutcome::UseRfd("the desktop portal left the session bus".into());
+    }
+    match code {
+        0 => {}
+        1 => return OpenOutcome::Cancelled,
+        2 if elapsed < TOO_QUICK => return OpenOutcome::UseRfd(CLOSED_AT_ONCE.into()),
+        2 => return OpenOutcome::Cancelled,
+        _ => return OpenOutcome::UseRfd(format!("the open dialog failed (portal response {code})")),
+    }
+    let uris: Vec<String> = match results.get("uris").and_then(|v| v.try_clone().ok()).map(Vec::<String>::try_from) {
+        Some(Ok(uris)) => uris,
+        _ => return OpenOutcome::UseRfd("no file in the portal's answer".into()),
+    };
+    if uris.is_empty() {
+        return OpenOutcome::Cancelled;
+    }
+    let paths = match uris.iter().map(|uri| file_uri_path(uri).ok_or_else(|| format!("not a local file: {uri}"))).collect::<Result<Vec<_>, _>>() {
+        Ok(paths) => paths,
+        Err(why) => return OpenOutcome::UseRfd(why),
+    };
+    let choices: Vec<(String, String)> = results.get("choices").and_then(|v| v.try_clone().ok()?.try_into().ok()).unwrap_or_default();
+    let checked = choices.iter().any(|(id, value)| id == CHECK_BOX && value == "true");
+    OpenOutcome::Opened { paths, checked }
+}
+
+/// Open with a check box on Linux and the BSDs: the portal's dialog, which shows the box. A portal
+/// that can't be reached or can't show the dialog answers [`OpenOutcome::UseRfd`].
+pub(crate) fn open_files(req: &OpenRequest) -> OpenOutcome {
+    let conn = match zbus::blocking::connection::Builder::session().and_then(|b| b.build()) {
+        Ok(conn) => conn,
+        Err(e) => return OpenOutcome::UseRfd(e.to_string()),
+    };
+    let token = token("open");
+    match ask(&conn, &token, "OpenFile", &req.parent, &req.title, open_options(req, &token), &Cancel::default()) {
+        Ok(r) => classify_open(r.code, r.elapsed, r.cancel_queued, r.backend_gone, &r.results),
+        Err(why) => OpenOutcome::UseRfd(why),
     }
 }
 

@@ -15,7 +15,7 @@
 //! uppercase extension is lowercased, while an existing file keeps its spelling (`file_dialog.rs:210 lowercased_extension`, `:365 saved_path`); the two
 //! steps are separate settings of the [`ExtensionPolicy`].
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -237,6 +237,8 @@ struct Inner {
     pending: HashMap<PickId, Pending>,
     answered: VecDeque<PickAnswer>,
     last_folder: HashMap<String, PathBuf>,
+    /// The answered picks whose check box was ticked.
+    checked: HashSet<PickId>,
     /// A panel is on screen or queued (mirrored from the panels each pump).
     panel_busy: bool,
 }
@@ -251,6 +253,7 @@ impl FileService {
             pending: HashMap::new(),
             answered: VecDeque::new(),
             last_folder: HashMap::new(),
+            checked: HashSet::new(),
             panel_busy: false,
         }));
         let (to_panels, requests) = std::sync::mpsc::channel();
@@ -550,6 +553,9 @@ impl FilePanels {
         dialog.title = request.title.clone();
         dialog.filters = request.filters.iter().map(|f| Filter { name: f.name.clone(), extensions: f.extensions.clone() }).collect();
         dialog.directory = start_folder(request, last_folder);
+        if matches!(request.kind, PickKind::Open | PickKind::OpenMany) {
+            dialog.check_box = request.check_box.clone();
+        }
         if request.kind == PickKind::Save {
             let adds_extension = cfg!(windows) && !request.filters.is_empty();
             dialog.file_name = request.file_name.as_deref().and_then(|name| dialog_file_name(name, adds_extension));
@@ -608,14 +614,17 @@ impl FilePanels {
     /// native panel answered, not the fallback chooser, whose Cancel is always the user's.
     fn finish(&mut self, id: PickId, answer: Answer, from_panel: bool) -> Option<ReplaceQuestion> {
         let Pending { request, awaiting_replace, bytes } = lock(&self.inner).pending.remove(&id)?;
+        // A ticked box counts only on the Open it was asked for.
+        let checked =
+            matches!(answer, Answer::Checked(_)) && request.check_box.is_some() && matches!(request.kind, PickKind::Open | PickKind::OpenMany);
         let picked = match (answer, awaiting_replace) {
             (Answer::Message(result), Some(question)) => {
                 let replace =
                     matches!(&result, MessageResult::Ok) || matches!(&result, MessageResult::Custom(label) if *label == self.replace_words.replace);
                 if replace { Picked::Paths(vec![question.settled]) } else { Picked::Cancelled }
             }
-            (Answer::Paths(paths), _) if paths.is_empty() => Picked::Cancelled,
-            (Answer::Paths(mut paths), _) => {
+            (Answer::Paths(paths) | Answer::Checked(paths), _) if paths.is_empty() => Picked::Cancelled,
+            (Answer::Paths(mut paths) | Answer::Checked(mut paths), _) => {
                 if request.kind == PickKind::Save {
                     let answered = paths.swap_remove(0);
                     let settled = Self::settled_save_path(self.extension_policy, &answered, request.suggested_extension.as_deref());
@@ -634,6 +643,9 @@ impl FilePanels {
             (Answer::Cancelled, None) if from_panel => (self.backend_problem)().map_or(Picked::Cancelled, Picked::Unavailable),
             (Answer::Cancelled | Answer::Message(_), _) => Picked::Cancelled,
         };
+        if checked && matches!(&picked, Picked::Paths(paths) if !paths.is_empty()) {
+            lock(&self.inner).checked.insert(id);
+        }
         self.complete(id, request, picked, bytes);
         None
     }
@@ -694,9 +706,14 @@ impl Files for FileService {
     }
 
     fn take_answer(&self, id: PickId) -> Option<Picked> {
+        self.take_answer_checked(id).map(|(picked, _)| picked)
+    }
+
+    fn take_answer_checked(&self, id: PickId) -> Option<(Picked, bool)> {
         let mut inner = lock(&self.inner);
         let at = inner.answered.iter().position(|a| a.id == id)?;
-        inner.answered.remove(at).map(|a| a.picked)
+        let picked = inner.answered.remove(at).map(|a| a.picked)?;
+        Some((picked, inner.checked.remove(&id)))
     }
 
     // A ticket still pending leaves `pending`, so the answer the panel gives later is dropped by
@@ -705,6 +722,7 @@ impl Files for FileService {
         let mut inner = lock(&self.inner);
         inner.pending.remove(&id);
         inner.answered.retain(|a| a.id != id);
+        inner.checked.remove(&id);
     }
 
     fn pick_pending(&self) -> bool {
@@ -941,6 +959,38 @@ pub(crate) mod service_tests {
         panels.pump_with(&mut host.borrow_mut(), NONE);
         assert!(!host.borrow().is_open::<FileChooser>(), "the forgotten save's chooser is closed");
         assert!(service.take_answer(id).is_none());
+    }
+
+    // The check box reaches the Open panels only: a Folder or Save request with one shows its
+    // panel without it, and its ticked answer reads unticked.
+    #[trial]
+    fn only_an_open_panel_gets_the_check_box() {
+        let one = vec![PathBuf::from("/x/frame_001.png")];
+        let (service, mut panels, log) = service_with(vec![
+            Answer::Checked(one.clone()),
+            Answer::Checked(one.clone()),
+            Answer::Checked(one.clone()),
+            Answer::Checked(one.clone()),
+        ]);
+        let ids = [
+            service.pick(PickRequest::open("document").check_box("Image Sequence")),
+            service.pick(PickRequest::open_many("document").check_box("Image Sequence")),
+            service.pick(PickRequest::folder("document").check_box("Image Sequence")),
+            service.pick(PickRequest::save("document").check_box("Image Sequence")),
+        ];
+        panels.pump(NONE);
+        let shown: Vec<Option<String>> = log
+            .borrow()
+            .iter()
+            .map(|r| match r {
+                Request::File(dialog) => dialog.check_box.clone(),
+                Request::Message(_) => None,
+            })
+            .collect();
+        let label = Some("Image Sequence".to_owned());
+        assert_eq!(shown, [label.clone(), label, None, None]);
+        let ticked: Vec<bool> = ids.iter().map(|id| service.take_answer_checked(*id).expect("answered").1).collect();
+        assert_eq!(ticked, [true, true, false, false]);
     }
 
     // Saving over an existing `PHOTO.PNG` with Lowercase Extension on writes `PHOTO.PNG`, the

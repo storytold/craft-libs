@@ -31,12 +31,12 @@ serde_json = { workspace = true, optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
 # The file-dialog probe asks the session bus whether the desktop portal offers a file chooser.
-# The free-standing Open and Folder panel (`beginWithCompletionHandler:`). rfd and winit already
-# use these.
+# The free-standing Open and Folder panel (`beginWithCompletionHandler:`) and an Open's check box
+# (`NSButton` as the panel's accessory view). rfd and winit already use these.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSApplication", "NSButton", "NSButtonCell", "NSCell", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSSavePanel", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
 
 # The Linux and BSD Save panel asks the desktop portal itself, which reports the file type picked.

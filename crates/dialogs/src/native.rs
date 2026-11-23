@@ -116,6 +116,25 @@ fn show_file<W: HasWindowHandle + HasDisplayHandle>(d: FileDialog, parent: Optio
             });
             (pending, shown)
         }
+        // An Open with a check box: the portal's own dialog, which shows the box; rfd's, without
+        // it, when the portal can't show one.
+        kind @ Kind::Open { .. } if d.check_box.is_some() => {
+            let parent_id = crate::portal::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
+            let request = crate::portal::OpenRequest::new(&d, parent_id);
+            let pending: Pending = Box::pin(async move {
+                match request.map(|r| crate::portal::open_files(&r)) {
+                    Some(crate::portal::OpenOutcome::Opened { paths, checked: true }) => Answer::Checked(paths),
+                    Some(crate::portal::OpenOutcome::Opened { paths, checked: false }) => Answer::Paths(paths),
+                    Some(crate::portal::OpenOutcome::Cancelled) => Answer::Cancelled,
+                    Some(crate::portal::OpenOutcome::UseRfd(why)) => {
+                        log::info!("portal open dialog unavailable ({why}), using rfd");
+                        retried(dialog, bare, kind).await
+                    }
+                    None => retried(dialog, bare, kind).await,
+                }
+            });
+            (pending, Shown::default())
+        }
         kind => (retried(dialog, bare, kind), Shown::default()),
     };
     #[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd")))]

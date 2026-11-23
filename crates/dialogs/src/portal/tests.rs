@@ -54,3 +54,51 @@ fn the_picked_file_type_gives_a_bare_name_its_extension_and_a_typed_extension_wi
         assert_eq!(with_chosen_type(Path::new(path), opened, chosen, filters), PathBuf::from(expected), "{path} with type {picked:?}");
     }
 }
+
+/// An Open with a check box: the portal gets the box as a choice that starts off, under the
+/// request's label, and the answer reads the box's state, the files and the codes as Save does.
+#[trial]
+fn an_open_check_box_is_a_portal_choice_and_its_answer_is_read() {
+    let dialog = FileDialog::open_many().title("Open").filter("PNG", &["png"]).directory("/s").check_box("Image Sequence");
+    let req = OpenRequest::new(&dialog, "x11:2a".into()).expect("an Open with a check box");
+    assert!(req.multiple);
+    assert_eq!(OpenRequest::new(&FileDialog::open(), String::new()), None, "no box asked for");
+    assert_eq!(OpenRequest::new(&FileDialog::save().check_box("Image Sequence"), String::new()), None, "a Save takes no box");
+    let options = open_options(&req, "t");
+    let choices: Vec<(String, String, Vec<(String, String)>, String)> =
+        options.get("choices").expect("the box is a choice").try_to_owned().expect("owned").try_into().expect("a(ssa(ss)s)");
+    assert_eq!(choices, [(CHECK_BOX.to_owned(), "Image Sequence".to_owned(), Vec::new(), "false".to_owned())]);
+    assert!(bool::try_from(options.get("multiple").expect("multiple").try_to_owned().expect("owned")).expect("a bool"));
+
+    let owned = |v: Value<'_>| v.try_to_owned().expect("an owned value");
+    let answer = |uris: Vec<&str>, ticked: Option<&str>| {
+        let mut results = HashMap::from([("uris".to_owned(), owned(Value::from(uris.into_iter().map(str::to_owned).collect::<Vec<_>>())))]);
+        if let Some(state) = ticked {
+            results.insert(
+                "choices".to_owned(),
+                owned(Value::from(vec![("other".to_owned(), "true".to_owned()), (CHECK_BOX.to_owned(), state.to_owned())])),
+            );
+        }
+        results
+    };
+    let slow = TOO_QUICK;
+    let files = vec![PathBuf::from("/s/frame_001.png"), PathBuf::from("/s/a b.png")];
+    let two = vec!["file:///s/frame_001.png", "file:///s/a%20b.png"];
+    assert_eq!(classify_open(0, slow, false, false, &answer(two.clone(), Some("true"))), OpenOutcome::Opened { paths: files.clone(), checked: true });
+    assert_eq!(
+        classify_open(0, slow, false, false, &answer(two.clone(), Some("false"))),
+        OpenOutcome::Opened { paths: files.clone(), checked: false }
+    );
+    assert_eq!(
+        classify_open(0, slow, false, false, &answer(two.clone(), None)),
+        OpenOutcome::Opened { paths: files, checked: false },
+        "no state is off"
+    );
+    assert_eq!(classify_open(0, slow, false, false, &answer(Vec::new(), Some("true"))), OpenOutcome::Cancelled, "no file");
+    assert!(matches!(classify_open(0, slow, false, false, &answer(vec!["sftp://h/x.png"], None)), OpenOutcome::UseRfd(_)), "not a local file");
+    assert_eq!(classify_open(1, slow, false, false, &answer(two.clone(), Some("true"))), OpenOutcome::Cancelled);
+    assert_eq!(classify_open(2, slow, false, false, &HashMap::new()), OpenOutcome::Cancelled, "Esc");
+    assert!(matches!(classify_open(2, Duration::ZERO, false, false, &HashMap::new()), OpenOutcome::UseRfd(_)), "closed at once");
+    assert_eq!(classify_open(0, slow, true, false, &answer(two, Some("true"))), OpenOutcome::Cancelled, "a queued cancel wins");
+    assert!(matches!(classify_open(0, slow, false, true, &HashMap::new()), OpenOutcome::UseRfd(_)), "the portal left the bus");
+}

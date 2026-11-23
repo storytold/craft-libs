@@ -88,12 +88,17 @@ pub struct FileDialog {
     pub directory: Option<PathBuf>,
     /// The file name a Save dialog suggests.
     pub file_name: Option<String>,
+    /// The label of an extra check box on an Open dialog, off when it opens. Shown by the desktop
+    /// portal's dialog on Linux and the BSDs and by the macOS panel; a dialog that gets it answers
+    /// [`Answer::Checked`] when it was ticked. rfd's dialogs (Windows, and the fallback where the
+    /// portal can't show its own) take no extra control and show without it.
+    pub check_box: Option<String>,
 }
 
 impl FileDialog {
     /// A dialog of `kind` with nothing else set.
     pub fn new(kind: Kind) -> Self {
-        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None }
+        Self { kind, title: None, filters: Vec::new(), directory: None, file_name: None, check_box: None }
     }
 
     /// Choose one existing file.
@@ -137,6 +142,12 @@ impl FileDialog {
     /// Sets the file name a Save dialog suggests.
     pub fn file_name(mut self, file_name: impl Into<String>) -> Self {
         self.file_name = Some(file_name.into());
+        self
+    }
+
+    /// Adds a check box with `label` to an Open dialog; see [`FileDialog::check_box`].
+    pub fn check_box(mut self, label: impl Into<String>) -> Self {
+        self.check_box = Some(label.into());
         self
     }
 }
@@ -218,6 +229,8 @@ pub enum Answer {
     Cancelled,
     /// The chosen files, folder or save path.
     Paths(Vec<PathBuf>),
+    /// The chosen files, with the Open dialog's [`check_box`](FileDialog::check_box) ticked.
+    Checked(Vec<PathBuf>),
     /// The button a message box was closed with.
     Message(MessageResult),
     /// No dialog could be shown, or it stopped without an answer; the text says why. Report it as

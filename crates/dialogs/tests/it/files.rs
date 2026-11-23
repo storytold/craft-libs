@@ -114,3 +114,72 @@ fn path_field_browse_fills_the_path() {
     assert_eq!(*path.borrow(), "/photos/brochure.pdf");
     assert_eq!(sets.get(), 1, "the answer lands once");
 }
+
+/// Picks `request` on a file service whose panel answers `answer`, and returns the answer with
+/// whether the check box was ticked.
+fn checked_answer(request: PickRequest, answer: craft_dialogs::Answer) -> (Picked, bool) {
+    use craft_dialogs::service::FileService;
+    let (service, mut panels) = FileService::scripted(craft_host::Wake::none(), [answer]);
+    let id = service.pick(request);
+    let mut host = craft_ui::dialog::DialogHost::new();
+    panels.pump_with::<NoWindow>(&mut host, None);
+    let answered = service.take_answer_checked(id).expect("the pick is answered");
+    assert_eq!(service.take_answer_checked(id), None, "an answer is read once");
+    answered
+}
+
+/// No window for the panels: the scripted service never shows one.
+struct NoWindow;
+
+impl raw_window_handle::HasWindowHandle for NoWindow {
+    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for NoWindow {
+    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Err(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+/// An Open with a check box answers its files and whether the box was ticked; a ticked answer to a
+/// request without a box, an unticked one, and a ticked answer naming no file all read unticked.
+#[trial]
+fn an_open_check_box_answers_whether_it_was_ticked() {
+    use craft_dialogs::Answer;
+    let sequence = || PickRequest::open("document").check_box("Image Sequence");
+    let one = paths(&["frame_001.png"]);
+    assert_eq!(checked_answer(sequence(), Answer::Checked(one.clone())), (Picked::Paths(one.clone()), true), "ticked");
+    assert_eq!(checked_answer(sequence(), Answer::Paths(one.clone())), (Picked::Paths(one.clone()), false), "left off");
+    assert_eq!(checked_answer(PickRequest::open("document"), Answer::Checked(one.clone())), (Picked::Paths(one.clone()), false), "no box asked for");
+    assert_eq!(checked_answer(sequence(), Answer::Checked(Vec::new())), (Picked::Cancelled, false), "nothing picked");
+    let many = paths(&["a.png", "b.png"]);
+    let open_many = PickRequest::open_many("document").check_box("Image Sequence");
+    assert_eq!(checked_answer(open_many, Answer::Checked(many.clone())), (Picked::Paths(many), true), "several files, ticked");
+}
+
+/// The scripted service of app tests answers the check box as queued, and reads it once; plain
+/// `take_answer` reads the same paths.
+#[trial]
+fn scripted_files_answer_the_check_box() {
+    use craft_host::ScriptedFiles;
+    let one = paths(&["frame_001.png"]);
+    let files = ScriptedFiles::new();
+    files.queue_checked(Picked::Paths(one.clone()));
+    files.queue(Picked::Paths(one.clone()));
+    files.queue_checked(Picked::Paths(one.clone()));
+    let ticked = files.pick(PickRequest::open("document").check_box("Image Sequence"));
+    let plain = files.pick(PickRequest::open("document").check_box("Image Sequence"));
+    let unasked = files.pick(PickRequest::open("document"));
+    assert_eq!(files.take_answer_checked(ticked), Some((Picked::Paths(one.clone()), true)));
+    assert_eq!(files.take_answer_checked(plain), Some((Picked::Paths(one.clone()), false)));
+    assert_eq!(files.take_answer_checked(unasked), Some((Picked::Paths(one.clone()), false)), "no box asked for");
+    assert_eq!(files.requests()[0].check_box.as_deref(), Some("Image Sequence"));
+
+    let held = ScriptedFiles::held();
+    let id = held.pick(PickRequest::open("document").check_box("Image Sequence"));
+    assert_eq!(held.answer_checked(Picked::Paths(one.clone())), Some(id));
+    assert_eq!(held.take_answer(id), Some(Picked::Paths(one)), "take_answer reads the same paths");
+    assert_eq!(held.take_answer_checked(id), None);
+}
