@@ -105,8 +105,9 @@ impl PenTool {
         let found = BezierOverlay::hit_test(&[path], &PathSelection::default(), HandlesShown::Selected, view, pointer.pos, reach)?;
         let BezierHit::Segment { segment, t, .. } = found else { return None };
         let at = draft.insert_at(segment.knot, t.clamp(*CURVATURE_T_RANGE.start(), *CURVATURE_T_RANGE.end()))?;
-        // As `PathEdit::InsertCurvature` does on a finished path: the Curvature Pen adds a smooth point, on a straight
-        // segment too, and the reflow gives it its handles.
+        // `insert_at` returns the index it put the new knot at, so `at` is in range here. As
+        // `PathEdit::InsertCurvature` does on a finished path, the Curvature Pen adds a smooth point, on a straight
+        // segment too, and the caller's reflow gives it its handles.
         draft.knots[at].smooth = true;
         Some(at)
     }
