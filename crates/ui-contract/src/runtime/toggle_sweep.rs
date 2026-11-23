@@ -1,4 +1,7 @@
 //! A primary press on a standalone toggle can set the other toggles of its layout as it sweeps.
+//!
+//! A drag from a toggle that crosses no other toggle of its layout and does not end on the toggle itself is not a sweep:
+//! it cancels, as a press released outside a control does, and the pressed toggle keeps its value.
 
 use std::sync::Arc;
 
@@ -69,6 +72,32 @@ struct Sweep {
     on: bool,
     travel: Travel,
     visited: IdSet,
+    /// The drag has crossed another toggle of the group or ended on the owner, so the owner takes the value too.
+    engaged: bool,
+}
+
+/// A toggle that asked for the sweep's value in one pass: where it was and whether a sweep may set it.
+#[derive(Clone)]
+struct Member {
+    id: Id,
+    group: Id,
+    layer: areas::Layer,
+    visible: Rect,
+    enabled: bool,
+}
+
+/// What the owner needs to find out whether its drag has become a sweep.
+struct Probe {
+    path: Arc<Vec<Segment>>,
+    /// Where the button went up, when it went up in this pass.
+    end: Option<Pos2>,
+    others: Vec<Member>,
+}
+
+/// What a pass's records say about the toggle asking.
+enum Ready {
+    Owner { on: bool, replay: bool, probe: Option<Probe> },
+    Sibling { on: bool, path: Arc<Vec<Segment>> },
 }
 
 struct CompletedSweep {
@@ -86,6 +115,10 @@ struct Record {
     replay_first_path: bool,
     // The replay survives opening another gesture in the same pass.
     completed: Option<CompletedSweep>,
+    /// The toggles that asked in this pass, and in the last pass that had any: a drag from one of them is a sweep
+    /// only when it reaches another, and the layout of the last pass is the one under the pointer.
+    members: Vec<Member>,
+    earlier: Vec<Member>,
 }
 
 impl Stored for Record {}
@@ -94,6 +127,9 @@ impl Record {
     fn advance(&mut self, pass: u64, input: &PassPointer, cancelled: bool) {
         if self.pass == pass {
             return;
+        }
+        if !self.members.is_empty() {
+            self.earlier = std::mem::take(&mut self.members);
         }
         self.completed = None;
         if !self.replay_first_path {
@@ -133,7 +169,7 @@ impl Record {
     }
 
     fn start(&mut self, owner: Id, group: Id, press: PressStart, on: bool, input: &PassPointer) {
-        let mut sweep = Sweep { owner, group, on, travel: Travel::new(press.origin), visited: IdSet::default() };
+        let mut sweep = Sweep { owner, group, on, travel: Travel::new(press.origin), visited: IdSet::default(), engaged: false };
         let path = Arc::make_mut(&mut self.path);
         path.clear();
         sweep.travel.advance(after_press(&input.events, press), input.frame.as_ref().map_or(0.0, |frame| frame.slop), path);
@@ -159,10 +195,11 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
     let eligible = |sweep: &Sweep| enabled && sweep.group == group && sweep.travel.dragging;
     let completed = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.advance(pass, &input, cancelled);
+        record.members.push(Member { id, group, layer, visible, enabled });
         let finished = record.completed.as_ref().filter(|finished| eligible(&finished.sweep))?;
         let sweep = &finished.sweep;
         if sweep.owner == id {
-            return Some((sweep.on, None));
+            return sweep.engaged.then_some((sweep.on, None));
         }
         (!sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&finished.path))))
     })
@@ -189,26 +226,47 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
         }
         let sweep = record.sweep.as_ref().filter(|sweep| eligible(sweep))?;
         if sweep.owner == id {
-            return Some((sweep.on, None, record.replay_first_path));
+            let probe = (!sweep.engaged).then(|| Probe {
+                path: Arc::clone(&record.path),
+                end: sweep.travel.released.then_some(sweep.travel.last).flatten(),
+                others: record.earlier.iter().filter(|other| other.group == group && other.enabled && other.id != id).cloned().collect(),
+            });
+            return Some(Ready::Owner { on: sweep.on, replay: record.replay_first_path, probe });
         }
-        (!record.path.is_empty() && !sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&record.path)), false))
+        (!record.path.is_empty() && !sweep.visited.contains(&id)).then(|| Ready::Sibling { on: sweep.on, path: Arc::clone(&record.path) })
     });
     let Some(ready) = ready else { return completed };
-    let (on, path, replay) = ready;
-    if replay {
-        ctx.request_repaint();
-    }
-    if let Some(path) = path {
-        if !crosses_visible(ctx, layer, visible, &path) {
-            return completed;
-        }
-        PerViewport::<Record>::with(ctx, viewport, |record| {
-            if let Some(sweep) = &mut record.sweep {
-                sweep.visited.insert(id);
+    match ready {
+        Ready::Owner { on, replay, probe } => {
+            if let Some(probe) = probe {
+                let reaches = |other: &Member| crosses_visible(ctx, other.layer, other.visible, &probe.path);
+                let ends_here = probe.end.is_some_and(|end| crosses_visible(ctx, layer, visible, &[(end, end)]));
+                if !(ends_here || probe.others.iter().any(reaches)) {
+                    return completed;
+                }
+                PerViewport::<Record>::with(ctx, viewport, |record| {
+                    if let Some(sweep) = record.sweep.as_mut().filter(|sweep| sweep.owner == id) {
+                        sweep.engaged = true;
+                    }
+                });
             }
-        });
+            if replay {
+                ctx.request_repaint();
+            }
+            Some(on)
+        }
+        Ready::Sibling { on, path } => {
+            if !crosses_visible(ctx, layer, visible, &path) {
+                return completed;
+            }
+            PerViewport::<Record>::with(ctx, viewport, |record| {
+                if let Some(sweep) = &mut record.sweep {
+                    sweep.visited.insert(id);
+                }
+            });
+            Some(on)
+        }
     }
-    Some(on)
 }
 
 /// Keep the entire part of the path inside the rect: a floating layer may cover only part of it.

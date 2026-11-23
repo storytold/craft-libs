@@ -253,6 +253,10 @@ impl<C: Component> Pointer for Cx<'_, C> {
 impl<C: Component> Cx<'_, C> {
     /// The value a primary-button sweep sets on this toggle. Only siblings in the same layout
     /// participate. A control that uses this must sense both clicks and drags.
+    ///
+    /// A drag that starts on this toggle sets it only once it is a sweep: the pointer has crossed another
+    /// toggle of the layout, or the button goes up over this one. A drag that does neither is a press released
+    /// outside the control and leaves the value as it was.
     pub fn swept_toggle(&self, on: Option<bool>) -> Option<bool> {
         let group = self.pointer_group?;
         let target = crate::runtime::toggle_sweep::ToggleTarget {

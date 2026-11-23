@@ -36,6 +36,39 @@ fn a_checkbox_sweep_keeps_its_group_and_skips_disabled_boxes() {
 }
 
 #[trial]
+fn a_checkbox_drag_that_reaches_no_related_box_cancels_like_any_press_released_outside() {
+    let values = Rc::new(RefCell::new([false; 2]));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut values = shown.borrow_mut();
+        Stack::new().show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut values[0])).label("Pressed").show(ui);
+        });
+        Stack::new().show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut values[1])).label("Other group").show(ui);
+        });
+    });
+    fixture.settle();
+    let pressed = fixture.by_label("Pressed").expect("pressed");
+    let other = fixture.by_label("Other group").expect("other group");
+    fixture.press(&pressed);
+    fixture.frame(vec![pointer::moved(other.center())]);
+    fixture.release(&other);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [false, false], "a drag released away from the box, past no related box, changes nothing");
+
+    fixture.click(&pressed);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [true, false], "the next click on the same box still toggles it");
+
+    fixture.press(&pressed);
+    fixture.frame(vec![pointer::moved(other.center())]);
+    fixture.release(&pressed);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [false, false], "a drag that comes back and ends on its own box sets it");
+}
+
+#[trial]
 fn a_checkbox_sweep_includes_the_release_position() {
     let values = Rc::new(RefCell::new([false, false, false]));
     let shown = values.clone();
