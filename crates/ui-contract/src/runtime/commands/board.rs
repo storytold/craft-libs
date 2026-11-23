@@ -1112,6 +1112,28 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     }
 }
 
+/// Tells the app of a key press `hit` that ran nothing because its command `resolved` is disabled, when the app's own
+/// state of an app-scope command (`app`) is all that disables it, so the app can say why nothing ran
+/// (`FrameOutput::declined`). A refusal by the gate, the modal rule or a declaring instance's state is not the app's to
+/// explain.
+fn decline(ctx: &Context, hit: Hit, app: bool, resolved: &ResolvedCommand, time: f64) {
+    if resolved.enabled || !app || resolved.instance.is_some() || resolved.refused {
+        return;
+    }
+    let declined = Fired {
+        command: hit.command,
+        target: None,
+        source: FireSource::Key,
+        phase: FirePhase::Press,
+        cycle: hit.cycle.len() > 1,
+        alt_variant: hit.alt_variant,
+        time,
+        pasted: None,
+        paste_at: None,
+    };
+    with(ctx, |board| board.declined.push(declined));
+}
+
 /// The chords the keymap binds to the edit commands, which the input hook removes from the raw input when the
 /// focused component lists the command.
 pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
@@ -2015,28 +2037,19 @@ pub(crate) fn begin(ctx: &Context) {
                 };
                 let typing = shortcuts.typing && !shortcut.canvas;
                 let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled))) else {
+                    // Every binding of the press is disabled where it lands, so it runs nothing. The binding it would
+                    // run with none passed over may be declined to the app (`decline`).
+                    if let Some(passed) = keys.press(&shortcuts.layout, &shortcut.input, typing, None) {
+                        let (app, instance) = with(ctx, |board| board.target_of(ctx, &passed.command, &board.here));
+                        let resolved = resolve_once(ctx, &passed.command, instance, Reach::Focus, None);
+                        decline(ctx, passed, app, &resolved, time);
+                    }
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
                 let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
                 if !resolved.enabled {
-                    // The key stays taken. When the app's own state of an app-scope command is all that disables it,
-                    // the app hears of the press so it can say why nothing ran; a refusal by the gate, the modal rule
-                    // or a declaring instance's state is not the app's to explain.
-                    if app && resolved.instance.is_none() && !resolved.refused {
-                        let declined = Fired {
-                            command: hit.command,
-                            target: None,
-                            source: FireSource::Key,
-                            phase: FirePhase::Press,
-                            cycle: hit.cycle.len() > 1,
-                            alt_variant: hit.alt_variant,
-                            time,
-                            pasted: None,
-                            paste_at: None,
-                        };
-                        with(ctx, |board| board.declined.push(declined));
-                    }
+                    decline(ctx, hit, app, &resolved, time);
                     continue;
                 }
                 // An app-scope command a modal layer's instance declares is delivered to that instance.
