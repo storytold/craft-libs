@@ -438,17 +438,24 @@ impl Component for Rulers<'_> {
         let press = cx.part(CORNER).press;
         let started = press.phase.start().filter(|start| start.button == PointerButton::Primary);
         if started.is_some() && !self.origin_locked {
+            // Every step of the drag proposes where it lands, its start and its release too: a drag of one move lands.
+            let land =
+                |pos: Pos2, start: Point| if corner.contains(pos) { start } else { Self::landing(&space, self.snap.as_ref(), pos, press.mods, zero) };
             match press.phase {
-                PressPhase::DragStart { .. } => {
+                PressPhase::DragStart { pos, .. } => {
                     *cx.press_slot::<Point>() = Some(zero);
                     cx.begin();
+                    cx.propose(land(pos, zero));
                 }
                 PressPhase::Drag { pos, .. } => {
                     let start = cx.press_slot::<Point>().unwrap_or(zero);
-                    let at = if corner.contains(pos) { start } else { Self::landing(&space, self.snap.as_ref(), pos, press.mods, zero) };
-                    cx.propose(at);
+                    cx.propose(land(pos, start));
                 }
-                PressPhase::Release { click: false, .. } => cx.commit(),
+                PressPhase::Release { pos, click: false, .. } => {
+                    let start = cx.press_slot::<Point>().unwrap_or(zero);
+                    cx.propose(land(pos, start));
+                    cx.commit();
+                }
                 _ => {}
             }
             if press.double_pressed() {

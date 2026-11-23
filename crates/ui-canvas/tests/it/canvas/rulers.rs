@@ -170,3 +170,23 @@ fn with_rulers_on_the_tool_and_a_canvas_control_paint_inside_the_view_and_the_ru
     });
     assert!(strips_keep_the_canvas, "the rulers paint inside the top strip under the canvas's rect: {strip:?} in {shapes:?}");
 }
+
+/// A drag of the rulers' corner with one move past the drag threshold, released there, moves the zero point to where it
+/// was released: the drag proposes its landing at its start and at its release, not only on the moves between.
+#[trial]
+fn a_corner_drag_of_one_move_lands_the_zero_point() {
+    let zero = Rc::new(RefCell::new(Point::ZERO));
+    let view = |room: Rect| CanvasView::new(room, Point::new(f64::from(room.center().x), f64::from(room.center().y)), 1.0);
+    let snap = Snap::new(std::sync::Arc::new(SnapTargets::new()), SnapOptions::default());
+    let mut fixture = ToolFixture::with_rulers("Document", Overpaint, view, snap, zero.clone(), |_, _| {});
+    fixture.fixture().room(Vec2::new(500.0, 400.0)).settle();
+    let canvas = fixture.canvas().rect;
+    let (from, to) = (canvas.min + Vec2::splat(4.0), canvas.center());
+    let fixture = fixture.fixture();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(from)]);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(to)]);
+    fixture.frame(vec![craft_ui::testing::pointer::release(to)]);
+    fixture.settle();
+    assert_ne!(*zero.borrow(), Point::ZERO, "the zero point lands where the one-move drag released");
+}
