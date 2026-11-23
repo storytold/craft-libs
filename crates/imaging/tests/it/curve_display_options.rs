@@ -67,10 +67,7 @@ fn display_control(fixture: &Fixture, label: &str) -> craft_ui::testing::Target 
         "Channel Overlays" | "Histogram" | "Baseline" | "Intersection Line" => Role::CHECK_BOX,
         _ => panic!("unexpected display control {label}"),
     };
-    let mut targets = fixture
-        .by_role(role)
-        .into_iter()
-        .filter(|target| craft_ui::testing::access::name(fixture.tree(), target.node) == Some(label));
+    let mut targets = fixture.by_role(role).into_iter().filter(|target| craft_ui::testing::access::name(fixture.tree(), target.node) == Some(label));
     let target = targets.next().unwrap_or_else(|| panic!("the {label} control"));
     assert!(targets.next().is_none(), "one {label} control");
     target
