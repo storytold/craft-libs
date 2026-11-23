@@ -148,11 +148,13 @@ struct Read<'a, S: DocumentSettings> {
 
 /// The values the app binds, as the body works on them during one frame. A frame can run the body twice; the cells
 /// carry what the first pass did into the second, and `events` and `actions` collect those of both passes.
-struct Bound<'a, S> {
+struct Bound<'a, S: DocumentSettings> {
     /// The bound saved presets; `None` keeps them in the form memory.
     saved: Option<&'a RefCell<PresetLibrary<S>>>,
     /// The bound tab id.
     tab: Option<&'a RefCell<String>>,
+    /// The bound memory of the details rows; `None` keeps it in the session.
+    memory: Option<&'a RefCell<S::Memory>>,
     /// Each save and delete of the frame.
     events: &'a RefCell<Vec<NamedPresetEvent<String>>>,
     /// The `request_action` ids of the frame.
@@ -333,6 +335,9 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
     let bound = &shared.bound;
     let (setup, words, units) = (shared.setup, shared.words, shared.units);
     let mut session = form.memory::<Session<S>>().clone();
+    if let Some(cell) = bound.memory {
+        session.memory.clone_from(&cell.borrow());
+    }
     // Settings the host opened already hold what the dialog adds to them.
     if form.first() && !shared.host_opened {
         values.open(setup, shared.untitled);
@@ -437,6 +442,9 @@ fn body<S: DocumentSettings>(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mu
             *cell.borrow_mut() = key;
         }
     }
+    if let Some(cell) = bound.memory {
+        cell.borrow_mut().clone_from(&session.memory);
+    }
     *form.memory::<Session<S>>() = session;
     true
 }
@@ -495,6 +503,10 @@ pub struct NewDocumentDialog<'a, S: DocumentSettings = DocumentOptions> {
     /// Binds the shown tab's id (`recent`, `saved` or a category's id) to `tab`.
     #[prop]
     tab: Option<Bind<'a, String>>,
+    /// Keeps what the details rows keep (`DocumentSettings::Memory`) in `memory`, in place of the dialog's session, so
+    /// a host that sets the settings from outside the dialog (`DocumentSettings::note_set`) keeps it with them.
+    #[prop]
+    memory: Option<&'a mut S::Memory>,
     /// Keeps the dialog's place and size across runs under `key`.
     #[prop]
     remember: Option<SaveKey>,
@@ -528,6 +540,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             saved: None,
             recent: None,
             tab: None,
+            memory: None,
             remember: None,
             answers: Vec::new(),
             opening: None,
@@ -597,6 +610,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             mut saved,
             recent: mut recent_bound,
             mut tab,
+            memory,
             remember,
             answers,
             opening,
@@ -612,6 +626,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
         };
         let saved_cell = saved.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
         let tab_cell = tab.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
+        let memory_cell = memory.as_deref().map(|memory| RefCell::new(memory.clone()));
         let events = RefCell::new(Vec::new());
         let actions = RefCell::new(Vec::new());
         let env = Env::of(ui);
@@ -621,7 +636,7 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
         let units = env.units();
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
-            bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), events: &events, actions: &actions },
+            bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), memory: memory_cell.as_ref(), events: &events, actions: &actions },
             setup: &setup,
             categories: &categories,
             recents: &recent,
@@ -639,7 +654,12 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             .collection_body(true)
             .outer_gesture(true)
             .answers(answers)
-            .on_reset(|cx| cx.memory::<Session<S>>().reset());
+            .on_reset(|cx| {
+                cx.memory::<Session<S>>().reset();
+                if let Some(cell) = &memory_cell {
+                    *cell.borrow_mut() = S::Memory::default();
+                }
+            });
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -661,6 +681,9 @@ impl<'a, S: DocumentSettings> NewDocumentDialog<'a, S> {
             if read_bind(bind).as_ref() != Some(&now) {
                 write_bind(bind, now);
             }
+        }
+        if let (Some(memory), Some(cell)) = (memory, memory_cell) {
+            *memory = cell.into_inner();
         }
         NewDocumentOutput {
             response: shown.response,
@@ -723,6 +746,8 @@ pub struct HostedNewDocument<S: DocumentSettings = DocumentOptions> {
     setup: Option<S::Setup>,
     /// The `request_action` ids the app has not taken yet.
     actions: Vec<String>,
+    /// What the details rows keep, bound to the dialog, so a field automation sets is noted where the rows read it.
+    memory: S::Memory,
 }
 
 impl<S: DocumentSettings> HostedNewDocument<S> {
@@ -772,17 +797,10 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
     /// A hosted dialog opening on `options`; `build` makes the dialog over them (the clipboard, the profiles, the
     /// app's name). The settings open at once (the clipboard's size, the default name from the root's words), so
     /// automation lists and sets them before the first pass.
-    pub fn new(ctx: &egui::Context, mut options: S, build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static) -> Self {
-        let setup = {
-            let built = build(&mut options);
-            let mut setup = built.setup;
-            S::set_resolutions(&mut setup, built.print_resolution, built.screen_resolution);
-            setup
-        };
-        options.open(&setup, Env::of_root(ctx).words::<NewDocumentWords>().untitled.as_str());
-        HostedNewDocument {
+    pub fn new(ctx: &egui::Context, options: S, build: impl for<'b> Fn(&'b mut S) -> NewDocumentDialog<'b, S> + Send + 'static) -> Self {
+        let mut hosted = HostedNewDocument {
             id: dialog_id("new-document"),
-            opening: options.clone(),
+            opening: S::default(),
             options,
             build: Box::new(build),
             requests: HostRequests::new(),
@@ -795,7 +813,20 @@ impl<S: DocumentSettings> HostedNewDocument<S> {
             held: HeldAnswer::new(),
             setup: None,
             actions: Vec::new(),
-        }
+            memory: S::Memory::default(),
+        };
+        let setup = hosted.setup_now();
+        hosted.options.open(&setup, Env::of_root(ctx).words::<NewDocumentWords>().untitled.as_str());
+        hosted.opening = hosted.options.clone();
+        hosted
+    }
+
+    /// What the dialog is set up with: the host's setup or the built dialog's, under the built dialog's resolutions.
+    fn setup_now(&mut self) -> S::Setup {
+        let built = (self.build)(&mut self.options);
+        let mut setup = self.setup.clone().unwrap_or(built.setup);
+        S::set_resolutions(&mut setup, built.print_resolution, built.screen_resolution);
+        setup
     }
 
     /// The settings the details column shows.
@@ -884,7 +915,7 @@ impl<S: DocumentSettings> StackDialog for HostedNewDocument<S> {
     }
 
     /// Sets a settings key as the serde round trip takes it, `tab` to a tab the dialog has, or `preset` to a saved
-    /// preset's name, which restores everything but the name as picking its card does.
+    /// preset's name, which applies the preset's card as picking it does.
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
         match field {
             "tab" => {
@@ -900,13 +931,14 @@ impl<S: DocumentSettings> StackDialog for HostedNewDocument<S> {
                 let name = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
                 let item =
                     self.saved.items().into_iter().find(|item| item.name == name).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
-                restore_all(&mut self.options, &item.value);
+                let card = DocumentCard::new(item.name.clone(), String::new(), item.value.clone(), CardSource::Saved(item.id));
+                let setup = self.setup_now();
+                S::apply_card(&mut self.options, &card, &setup, &mut self.memory);
                 Ok(())
             }
             _ => {
                 set_serde_field(&mut self.options, field, value)?;
-                // PLAN: the dialog's session memory is not reachable from the hosted dialog; `note_set` gets a fresh one.
-                self.options.note_set(field, &mut S::Memory::default());
+                self.options.note_set(field, &mut self.memory);
                 self.options = std::mem::take(&mut self.options).fitted();
                 Ok(())
             }
@@ -927,6 +959,7 @@ impl<S: DocumentSettings> StackDialog for HostedNewDocument<S> {
             .saved(Bind::bound(&mut self.saved))
             .recent(Bind::bound(&mut self.recent))
             .tab(Bind::bound(&mut self.tab))
+            .memory(&mut self.memory)
             .answers(self.requests.take_answers())
             .opening(self.opening.clone());
         if let Some(setup) = &self.setup {

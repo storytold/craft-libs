@@ -3,14 +3,18 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, SaveKey, Show as _, clicked};
+use craft_ui::dialog::DialogHost;
+use craft_ui::display::Text;
 use craft_ui::patterns::form_dialogs::{
-    BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, NewDocumentDialog,
+    BackgroundContents, BitDepth, CardCx, CardSource, ColorMode, DetailsCx, DocumentCard, DocumentOptions, DocumentSettings, HostedNewDocument,
+    NewDocumentDialog,
 };
 use craft_ui::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary};
 use craft_ui::runtime::memory::MemoryStage;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -40,7 +44,8 @@ fn pick(fixture: &mut Fixture, tab: &str, card: &str) {
 /// The most a host's count may be: its `fitted` caps it.
 const MOST: u32 = 3;
 
-/// A host's own settings: a count its details row bumps, which `fitted` caps.
+/// A host's own settings: a count its details row bumps, which `fitted` caps. Its memory notes the fields set from
+/// outside and the cards applied, and its details row shows them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Counted {
     name: String,
@@ -50,7 +55,7 @@ struct Counted {
 impl DocumentSettings for Counted {
     type Preset = ();
     type Setup = ();
-    type Memory = ();
+    type Memory = Vec<String>;
 
     fn name(&self) -> &str {
         &self.name
@@ -77,6 +82,10 @@ impl DocumentSettings for Counted {
         self
     }
 
+    fn note_set(&mut self, field: &str, memory: &mut Vec<String>) {
+        memory.push(field.to_owned());
+    }
+
     fn open(&mut self, _setup: &(), untitled: &str) {
         if self.name.is_empty() {
             untitled.clone_into(&mut self.name);
@@ -95,8 +104,9 @@ impl DocumentSettings for Counted {
         DocumentCard::new(name.to_owned(), String::new(), saved.clone(), CardSource::Recent)
     }
 
-    fn apply_card(&mut self, card: &DocumentCard<Self>, _setup: &(), _memory: &mut ()) {
+    fn apply_card(&mut self, card: &DocumentCard<Self>, _setup: &(), memory: &mut Vec<String>) {
         self.count = card.settings.count;
+        memory.push("card".to_owned());
     }
 
     fn details(ui: &mut Ui, values: &mut Self, cx: &mut DetailsCx<'_, Self>) {
@@ -104,7 +114,27 @@ impl DocumentSettings for Counted {
             values.count += 1;
             cx.request_action("bump");
         }
+        Text::new(format!("Noted {}", cx.memory().join(" "))).show(ui);
     }
+}
+
+/// What automation sets reaches the memory the details rows read: a set field is noted there, and a saved preset set
+/// by name is applied as its card is.
+#[trial]
+fn automation_writes_reach_the_memory_the_details_rows_read() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let ctx = fixture.ctx().clone();
+    let mut saved = PresetLibrary::new();
+    saved.add(&GroupPath::root(), "Two", Counted { name: String::new(), count: 2 }).expect("a saved preset");
+    let dialog = HostedNewDocument::new(&ctx, Counted::default(), |options| NewDocumentDialog::over(Bind::bound(options))).saved(saved);
+    let id = host.borrow_mut().open(dialog);
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "count", json!(1)), Ok(()));
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "preset", json!("Two")), Ok(()));
+    fixture.idle(10);
+    assert!(shows(&fixture, "Noted count card"), "{:?}", fixture.texts().iter().map(|painted| painted.text.clone()).collect::<Vec<_>>());
 }
 
 /// A host's settings type edits its own details row through the dialog; its `fitted` runs after the edit, the action it
