@@ -11,6 +11,8 @@ use crate::h264;
 use crate::hevc;
 #[cfg(feature = "mpeg2-decode")]
 use crate::mpeg2;
+#[cfg(feature = "mpeg4-decode")]
+use crate::mpeg4;
 #[cfg(feature = "vp9-decode")]
 use crate::vp9;
 use craft_media::{CodecId, CodecParams};
@@ -31,6 +33,8 @@ enum Inner {
     Av1 { dec: Box<av1::decode::Decoder>, config_obus: Vec<u8> },
     #[cfg(feature = "mpeg2-decode")]
     Mpeg2(Box<mpeg2::Decoder>),
+    #[cfg(feature = "mpeg4-decode")]
+    Mpeg4(Box<mpeg4::Decoder>),
     #[cfg(feature = "prores")]
     ProRes,
     #[cfg(feature = "dnx")]
@@ -213,6 +217,8 @@ impl TrackDecoder {
             Inner::Av1 { dec, .. } => dec.set_draft(on),
             #[cfg(feature = "mpeg2-decode")]
             Inner::Mpeg2(_) => {}
+            #[cfg(feature = "mpeg4-decode")]
+            Inner::Mpeg4(_) => {}
             #[cfg(feature = "prores")]
             Inner::ProRes => {}
             #[cfg(feature = "dnx")]
@@ -266,6 +272,11 @@ impl TrackDecoder {
             }
             #[cfg(feature = "mpeg2-decode")]
             Inner::Mpeg2(dec) => {
+                let pics = dec.decode(packet, pts)?;
+                self.output(pics, None)
+            }
+            #[cfg(feature = "mpeg4-decode")]
+            Inner::Mpeg4(dec) => {
                 let pics = dec.decode(packet, pts)?;
                 self.output(pics, None)
             }
@@ -323,6 +334,11 @@ impl TrackDecoder {
             }
             #[cfg(feature = "mpeg2-decode")]
             Inner::Mpeg2(dec) => {
+                let pics = dec.flush();
+                self.output(pics, None)
+            }
+            #[cfg(feature = "mpeg4-decode")]
+            Inner::Mpeg4(dec) => {
                 let pics = dec.flush();
                 self.output(pics, None)
             }
@@ -385,6 +401,11 @@ impl TrackDecoder {
                 dec.reset();
                 Ok(())
             }
+            #[cfg(feature = "mpeg4-decode")]
+            Inner::Mpeg4(dec) => {
+                dec.reset();
+                Ok(())
+            }
             #[cfg(feature = "prores")]
             Inner::ProRes => Ok(()),
             #[cfg(feature = "dnx")]
@@ -424,6 +445,7 @@ impl TrackDecoder {
         feature = "vp9-decode",
         feature = "av1-decode",
         feature = "mpeg2-decode",
+        feature = "mpeg4-decode",
         feature = "vp8-decode"
     ))]
     fn output<P>(&mut self, pics: Vec<P>, err: Option<VideoError>) -> Result<Vec<VideoFrame>, VideoError>
@@ -496,6 +518,14 @@ impl Inner {
                     dec.decode(extradata, 0)?;
                 }
                 Ok(Inner::Mpeg2(dec))
+            }
+            #[cfg(feature = "mpeg4-decode")]
+            CodecId::Mpeg4Video => {
+                let mut dec = Box::new(mpeg4::Decoder::new());
+                if !extradata.is_empty() {
+                    dec.configure(extradata)?;
+                }
+                Ok(Inner::Mpeg4(dec))
             }
             #[cfg(feature = "prores")]
             CodecId::ProRes => Ok(Inner::ProRes),
