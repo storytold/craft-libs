@@ -167,6 +167,17 @@ pub fn on_canvas_with<R: Into<StoryOutput>>(
     shown.inner.map(Into::into).unwrap_or_default()
 }
 
+/// Shows `canvas`, which shows its own rulers ([`Canvas::with_rulers`]), over `room` and `document` as
+/// [`on_canvas_with`] does, with no control in its body, and returns what the rulers reported.
+pub fn on_ruled_canvas(ui: &mut Ui, room: Rect, canvas: Canvas<'_>, document: Option<&dyn RasterSource>) -> StoryOutput {
+    let shown = canvas.show_at(ui, room, |ui, body| {
+        if let Some(document) = document {
+            show_document(ui, body.rect, document);
+        }
+    });
+    shown.output.rulers.map(Into::into).unwrap_or_default()
+}
+
 /// Shows `document` on the story document's ground ([`on_ground`]) at the canvas rect `at`, in the body of a canvas
 /// with a view, under the canvas controls shown after it.
 pub fn show_document(ui: &mut Ui, at: Rect, document: &dyn RasterSource) {

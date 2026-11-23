@@ -44,6 +44,15 @@ fn title_bar_inset(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TitleBar::new().frame(Frame::Inset(MacInset::default())).show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()
 }
 
+/// A title that is a button: it reads as text until hovered, and a click or Enter reports it in
+/// `TitleBarOutput::title_activated` (a document's rename and location popup).
+#[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
+fn title_bar_action_title(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let frame = captions(CaptionFamily::Windows, &[], &[Caption::Minimize, Caption::Maximize, Caption::Close]);
+    let title = Title::unsaved("Landscape.psd").action("Rename or move the document");
+    TitleBar::new().frame(frame).show_titled(ui, title, menu, tools).into()
+}
+
 #[story(TitleBar<'static>, covers = [], drive = Drive::Never)]
 fn title_bar_native(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TitleBar::new().frame(Frame::Native).title_when_native().show_titled(ui, Title::new("Landscape.psd"), menu, tools).into()

@@ -5,8 +5,8 @@ mod hit_test;
 mod mark;
 mod model;
 mod ops;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod style;
 mod tools;
 mod words;
@@ -71,14 +71,16 @@ pub enum BezierTool {
     Convert,
     /// Anchors drawn, not edited (PhotoCraft's Path Selection and Pen tools).
     Anchors,
-    /// Add Anchor Point: a press on a segment, within 5 screen points of it, inserts an anchor at the hit's `t`
-    /// ([`PathEdit::InsertAnchor`]); a drag moves the new anchor, which is selected. A press on an anchor or a shown
-    /// handle selects and drags it as [`BezierTool::Direct`] does (⇧ adds to the selection, ⌥ on a handle moves it
-    /// alone), and a click on empty canvas deselects the anchors and keeps the path. With ⌥ a click on a segment selects
-    /// its whole subpath and a drag moves a copy of it ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that
-    /// takes no copies), and a press on an anchor does nothing. Hover: the segment mark with the anchor a click adds
-    /// ([`HitMark`]) and the pen with "+"; over an anchor the arrow; with ⌥ no mark and the arrow with "+"; the
-    /// crosshair under the canvas's precise cursor ([`CanvasSpace::precise`]).
+    /// Add Anchor Point: a click on a segment, within 5 screen points of it, inserts an anchor at the hit's `t`
+    /// ([`PathEdit::InsertAnchor`]); a drag inserts it and pulls out its handles as the Pen does
+    /// ([`PathEdit::PullAnchor`]: ⇧ turns them to the nearest 45°, ⌥ during the drag breaks the pair); the new anchor is
+    /// selected. A press on an anchor or a shown handle selects and drags it as [`BezierTool::Direct`] does (⇧ adds to
+    /// the selection, ⌥ on a handle moves it alone), and a click on empty canvas deselects the anchors and keeps the
+    /// path. With ⌥ held at the press a click on a segment selects its whole subpath and a drag moves a copy of it
+    /// ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that takes no copies), and a press on an anchor does
+    /// nothing. Hover: the segment mark with the anchor a click adds ([`HitMark`]) and the pen with "+"; over an anchor
+    /// the arrow; with ⌥ no mark and the arrow with "+"; the crosshair under the canvas's precise cursor
+    /// ([`CanvasSpace::precise`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
     /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
@@ -241,6 +243,17 @@ enum Target {
         t: f64,
         from: Point,
     },
+    /// Add Anchor's drag from a segment: an insert into `segment` at `t`, whose anchor stays at `from`, the point of
+    /// the curve at `t`, and whose handles follow the pointer. `out` is the out handle of the last pass, and
+    /// `in_ctrl` the in handle ⌥ left once it broke the pair.
+    Pull {
+        path: u64,
+        segment: KnotRef,
+        t: f64,
+        from: Point,
+        out: Point,
+        in_ctrl: Option<Point>,
+    },
     /// Direct Selection's ⌥ drag on a segment: a copy of `subpath` dragged from `from`, the grabbed point.
     Duplicate {
         path: u64,
@@ -385,7 +398,7 @@ struct Scene {
 ///   the selected anchors or the picked handle (⌥ alone); Delete and Backspace report
 ///   [`delete`](BezierOutput::delete) under the tools that delete anchors (Direct, Convert, Curvature, Add Anchor,
 ///   Delete Anchor), Insert [`insert`](BezierOutput::insert) halfway along the segment leaving the picked anchor;
-///   Escape deselects.
+///   Escape leaves the selection and goes to the window.
 /// - The anchor tools ([`BezierTool::AddAnchor`], [`BezierTool::DeleteAnchor`], [`BezierTool::AutoAddDelete`]) and
 ///   [`BezierTool::Curvature`] take only a press that hits what they edit, and draw the [`HitMark`] of what a press
 ///   would take under the pointer. [`segment_mark`](Self::segment_mark), [`anchors`](Self::anchors) and
@@ -595,6 +608,12 @@ impl<'a> BezierOverlay<'a> {
         match hit {
             // Add Anchor with ⌥ takes the whole subpath as Direct's ⌥ does (PhotoCraft #12709).
             BezierHit::Segment { .. } if self.tool.takes_subpath(mods) => self.target(hit, start, mods, paths),
+            // Add Anchor's drag pulls out the new anchor's handles (PhotoCraft #12707); Auto Add/Delete's, and Delete
+            // Anchor's with ⌥, moves it.
+            BezierHit::Segment { path, segment, t } if self.tool == BezierTool::AddAnchor && self.tool.adds(mods) => {
+                let from = Self::segment_point(paths, path, segment, t);
+                Target::Pull { path, segment, t, from, out: from, in_ctrl: None }
+            }
             BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
                 Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
             }
@@ -719,9 +738,38 @@ impl<'a> BezierOverlay<'a> {
                 PathEdit::InsertCurvature { path, segment, t, by: snapped(from + locked(delta)) - from }
             }
             &Target::Insert { path, segment, t, from } => PathEdit::InsertAnchor { path, segment, t, by: snapped(from + locked(delta)) - from },
+            &Target::Pull { path, segment, t, from, in_ctrl, .. } => {
+                let to = from + delta;
+                let out = if mods.shift { handle_45(from, to) } else { snapped(to) };
+                PathEdit::PullAnchor { path, segment, t, out, in_ctrl }
+            }
             &Target::Duplicate { path, subpath, from } => PathEdit::DuplicateSubpath { path, subpath, by: snapped(from + locked(delta)) - from },
             Target::Nothing | Target::Toggle { .. } | Target::Pick { .. } | Target::Marquee => return None,
         })
+    }
+
+    /// [`edit`](Self::edit), keeping what a [`Target::Pull`] carries from pass to pass: ⌥ pressed during the drag
+    /// leaves the in handle where the last pass had it, and the out handle is remembered for the next pass.
+    fn edit_pulled(
+        view: &CanvasView,
+        snap: Option<&Snap>,
+        tool: BezierTool,
+        target: &mut Target,
+        origin: Pos2,
+        pointer: Pos2,
+        mods: Mods,
+    ) -> Option<PathEdit> {
+        if let Target::Pull { from, out, in_ctrl, .. } = target
+            && mods.alt
+            && in_ctrl.is_none()
+        {
+            *in_ctrl = Some(*from - (*out - *from));
+        }
+        let edit = Self::edit(view, snap, tool, target, origin, pointer, mods);
+        if let (Target::Pull { out, .. }, Some(PathEdit::PullAnchor { out: pulled, .. })) = (target, &edit) {
+            *out = *pulled;
+        }
+        edit
     }
 
     /// Proposes `paths` with `edit` applied to the paths the press began on.
@@ -896,7 +944,9 @@ impl<'a> BezierOverlay<'a> {
         let moves = !matches!(held.target, Target::Nothing | Target::Toggle { .. } | Target::Pick { .. });
         if first && moves {
             held.began = true;
-            if let Target::CurvatureInsert { path, segment, .. } | Target::Insert { path, segment, .. } = held.target {
+            if let Target::CurvatureInsert { path, segment, .. } | Target::Insert { path, segment, .. } | Target::Pull { path, segment, .. } =
+                held.target
+            {
                 self.report.select = Some(self.inserted(path, segment));
             }
             cx.begin();
@@ -910,7 +960,7 @@ impl<'a> BezierOverlay<'a> {
                     }
                 }
                 _ => {
-                    if let Some(edit) = Self::edit(view, snap, self.tool, &held.target, start.origin, pos, mods) {
+                    if let Some(edit) = Self::edit_pulled(view, snap, self.tool, &mut held.target, start.origin, pos, mods) {
                         self.propose(cx, &held.start, edit);
                     }
                 }
@@ -938,7 +988,8 @@ impl<'a> BezierOverlay<'a> {
             return;
         }
         if held.began {
-            if let Some(edit) = Self::edit(view, snap, self.tool, &held.target, start.origin, pos, mods) {
+            let mut target = held.target.clone();
+            if let Some(edit) = Self::edit_pulled(view, snap, self.tool, &mut target, start.origin, pos, mods) {
                 self.propose(cx, &held.start, edit);
             }
             // The copy is what was dragged: it ends up selected, not the source.
@@ -955,7 +1006,7 @@ impl<'a> BezierOverlay<'a> {
                 self.set(cx, &held.start, PathEdit::InsertCurvature { path, segment, t, by: Vec2::ZERO });
                 self.report.select = Some(self.inserted(path, segment));
             }
-            Target::Insert { path, segment, t, .. } => {
+            Target::Insert { path, segment, t, .. } | Target::Pull { path, segment, t, .. } => {
                 self.set(cx, &held.start, PathEdit::InsertAnchor { path, segment, t, by: Vec2::ZERO });
                 self.report.select = Some(self.inserted(path, segment));
             }
@@ -1070,9 +1121,6 @@ impl<'a> BezierOverlay<'a> {
                 self.report.delete = Some(AnchorDelete::new(path, self.selection.anchors.clone(), true));
             }
         }
-        if keyed && cx.gesture().is_none() && cx.intents().take(Intent::Cancel) && *self.selection != PathSelection::default() {
-            self.report.select = Some(PathSelection::default());
-        }
     }
 
     /// The path ⌘A selects: the selection's, else the picked part's, else the only one.
@@ -1127,6 +1175,27 @@ fn nudge_vector(view: &CanvasView, direction: egui::Vec2, distance: f64) -> Vec2
     if length > 0.0 { doc / length * distance } else { Vec2::ZERO }
 }
 
+/// ⇧ on a handle pulled out of the anchor at `anchor` to `to`, as the reference application turns it: the nearest of
+/// the eight 45° directions, an axis keeping the drag's offset along it and a diagonal the shorter of the two offsets
+/// on both axes. `to` itself for a zero or non-finite offset.
+fn handle_45(anchor: Point, to: Point) -> Point {
+    let d = to - anchor;
+    if !d.x.is_finite() || !d.y.is_finite() || d == Vec2::ZERO {
+        return to;
+    }
+    let (ax, ay) = (d.x.abs(), d.y.abs());
+    // tan 22.5°: nearer the axis than the diagonal.
+    let tan = std::f64::consts::FRAC_PI_8.tan();
+    if ay <= ax * tan {
+        Point::new(to.x, anchor.y)
+    } else if ax <= ay * tan {
+        Point::new(anchor.x, to.y)
+    } else {
+        let shorter = ax.min(ay);
+        anchor + Vec2::new(shorter.copysign(d.x), shorter.copysign(d.y))
+    }
+}
+
 fn contains(r: DocRect, p: Point) -> bool {
     (r.x0..=r.x1).contains(&p.x) && (r.y0..=r.y1).contains(&p.y)
 }
@@ -1145,7 +1214,7 @@ pub struct BezierOutput {
     pub select: Option<PathSelection>,
     /// Add an anchor to the segment leaving a knot of a path, at `t` (PhotoCraft's Add Anchor Point): Insert on a
     /// picked anchor (`t` 0.5). A click or drag of an anchor tool on a segment is the [`change`](Self::change)
-    /// [`PathEdit::InsertAnchor`] instead.
+    /// [`PathEdit::InsertAnchor`] instead ([`PathEdit::PullAnchor`] for Add Anchor's drag).
     pub insert: Option<(u64, KnotRef, f64)>,
     /// Delete or Backspace with anchors selected under a tool that deletes (Direct, Convert, Curvature, Add Anchor,
     /// Delete Anchor): remove these anchors of a path (Delete Anchor Point), `segments` true; a Delete Anchor click

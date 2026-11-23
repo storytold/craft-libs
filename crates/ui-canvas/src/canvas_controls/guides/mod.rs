@@ -3,14 +3,15 @@
 
 mod place;
 pub mod reading;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use reading::GuideReading;
 
 use super::words::CanvasControlWords;
 use crate::canvas::{
     CanvasSpace, Guide, GuideDrag, GuideKey, GuideLine, LABEL_STEP_MIN, NUDGE, NUDGE_FAR, Snap, canvas_snap, canvas_space, context_menu, readout,
+    ruler_guide,
 };
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
@@ -136,8 +137,8 @@ struct HeldGuide;
 ///   (one that reaches the canvas's tool) clears the selection, reported as `Some(None)`.
 /// - The units, the zero point and the ruler a guide is placed in come from the canvas
 ///   ([`Canvas::rulers`](crate::canvas::Canvas::rulers)).
-/// - [`pending`](Guides::pending) shows the guide a ruler drag is creating. Show the `Rulers` before the guides in
-///   the canvas body: the guides read the drag the rulers reported in the same pass.
+/// - The guide a ruler drag is creating shows and commits through [`ruler_guide`](crate::canvas::ruler_guide): the canvas
+///   shows its rulers before its body and publishes the drag they reported in the same pass.
 /// - While a drag moves or creates a guide, [`running`](reading::running) reads that guide's axis and position by the canvas id, from
 ///   the note the drag sets on its gesture.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -165,9 +166,6 @@ pub struct Guides<'a> {
     /// The distance an arrow key moves a guide with Shift held, in document units.
     #[prop(quantity = "document units")]
     big_step: f64,
-    /// The guide a ruler is creating, as the rulers report it in this pass (`RulersOutput::guide`); not set, none shows.
-    #[prop]
-    pending: Option<GuideDrag>,
     report: Report,
 }
 
@@ -191,7 +189,6 @@ impl<'a> Guides<'a> {
             bounds: None,
             step: NUDGE,
             big_step: NUDGE_FAR,
-            pending: None,
             report: Report::default(),
         }
         .label(label)
@@ -482,7 +479,7 @@ impl Component for Guides<'_> {
     /// `run_pointer` reads only declared parts, so this is the one gate of the pointer.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
         let held = cx.press_slot::<HeldGuide>().is_some() || cx.gesture_running();
-        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || held));
+        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::mods(cx.ui.ctx()).cmd || held));
         let (Some(space), Some(guides), true) = (canvas_space(&cx.env), cx.value(), takes) else { return };
         let mut any = false;
         for &at in &place::keyboard_order(guides) {
@@ -507,7 +504,7 @@ impl Component for Guides<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         let guides = cx.value().cloned().unwrap_or_default();
-        if let Some(drag) = self.pending {
+        if let Some(drag) = ruler_guide(&cx.env) {
             self.run_pending(cx, &space, &guides, drag);
         }
         // `parts` declares the guides only when the pointer may take them, and `run_pointer` reads declared parts only.
@@ -529,10 +526,11 @@ impl Component for Guides<'_> {
         for guide in guides {
             let Some([a, b]) = place::segment(&space.view, guide.along, guide.position, guide.span, cx.rect) else { continue };
             let color = if self.selected == Some(guide.key) { style.selected.egui() } else { guide.color.map_or(style.line.egui(), data_color) };
+            let look = RuleLook { color, width: RuleWidth::Points(style.width) };
             match guide.line {
-                GuideLine::Solid => painter.painter.extend(Rule::shapes(&RuleLook { color, width: RuleWidth::Points(style.width) }, a, b, ppp)),
+                GuideLine::Solid => painter.painter.extend(Rule::shapes(&look, a, b, ppp)),
                 GuideLine::Dashed => painter.dashed(&[a, b], Dashes::new(style.dash, style.gap), StrokeWidth::Thin, color),
-                GuideLine::Dots => painter.dashed(&[a, b], Dashes::new(style.width, style.gap), StrokeWidth::Thin, color),
+                GuideLine::Dots => painter.painter.extend(Rule::dotted(&look, a, b, style.gap, ppp)),
             }
             if focused == Some(guide.key.get()) && (b - a).length() > 0.0 {
                 painter.painter.extend(FocusRing::shapes(&style.focus, FocusKind::Halo, &footprint(&space, a, b, style.width), ppp));

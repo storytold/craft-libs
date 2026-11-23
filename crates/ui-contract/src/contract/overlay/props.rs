@@ -10,7 +10,7 @@ use crate::runtime::windows::ResizeEdge;
 use craft_behavior::overlay::{Align, MinWidth, Side};
 use craft_behavior::{GesturePhase, OwnerClass};
 use egui::emath::TSTransform;
-use egui::{Align2, Pos2, Rect, Response, Vec2};
+use egui::{Align2, Id, Pos2, Rect, Response, Vec2};
 use std::borrow::Cow;
 
 /// What a press outside the layer and its anchor does.
@@ -195,7 +195,7 @@ impl Overlay {
         mapped.placed = mapped.placed.map(|rect| to_screen * rect);
         mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
         mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
-        if let Place::Float(FloatPlace { pos: Some(pos) }) = &mut mapped.place {
+        if let Place::Float(FloatPlace { pos: Some(pos), .. }) = &mut mapped.place {
             *pos = to_screen * *pos;
         }
         Cow::Owned(mapped)
@@ -215,7 +215,8 @@ impl Overlay {
     }
 
     /// A dropdown list: from its content, at least as wide as its anchor and capped, focus stays on the anchor. It
-    /// closes when a row is activated or the focus leaves the anchor.
+    /// closes when a row is activated or the focus leaves the anchor. The opener's list keys go to the collection
+    /// [`Overlay::list`] names.
     pub fn dropdown() -> Overlay {
         let focus = FocusPolicy::POPUP.trap(false).restore(false).initial(Initial::KeepAnchor);
         let mut overlay = Overlay::base(Rank::Popup, Overlay::below(), OverlayFit::ContentCapped(DROPDOWN_SHARE), OwnerClass::PassivePopup, focus);
@@ -284,7 +285,7 @@ impl Overlay {
     }
 
     /// The chrome of a modal over a part of the window the modal covers, placed at `rect`: above the modal, with no
-    /// focus scope and no dismissal of its own. Its move band moves the window the layer is shown in.
+    /// focus policy and no dismissal of its own. Its move band moves the window the layer is shown in.
     pub fn modal_chrome(rect: Rect) -> Overlay {
         let mut overlay =
             Overlay::base(Rank::ModalChrome, Place::Float(FloatPlace::centred()), OverlayFit::Content, OwnerClass::Widget, FocusPolicy::NONE);
@@ -448,6 +449,14 @@ impl Overlay {
     /// Sets the focus scope.
     pub fn focus(mut self, focus: FocusPolicy) -> Overlay {
         self.focus = focus;
+        self
+    }
+
+    /// The collection in a dropdown that takes its opener's list keys (`FocusPolicy::list`). A dropdown that holds a
+    /// list names it each pass it is shown; the opener keeps the keys while the named list is not shown, and in a
+    /// dropdown that names none.
+    pub fn list(mut self, list: Id) -> Overlay {
+        self.focus = self.focus.list(list);
         self
     }
 

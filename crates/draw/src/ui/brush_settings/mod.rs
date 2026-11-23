@@ -13,13 +13,13 @@
 //! draws the frame and the shared rows, and every control reports edit events the app sends to its
 //! tool options host.
 
-mod ellipse;
-mod panel;
-mod preview;
-mod rows;
-mod sections;
-mod size_field;
-#[cfg(feature = "screen-testing")]
+pub(crate) mod ellipse;
+pub(crate) mod panel;
+pub(crate) mod preview;
+pub(crate) mod rows;
+pub(crate) mod sections;
+pub(crate) mod size_field;
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

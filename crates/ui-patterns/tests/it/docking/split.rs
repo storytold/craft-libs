@@ -2,15 +2,16 @@
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Column, Group, Layout, Node, SplitSize};
-use craft_ui::contract::Role;
+use craft_ui::contract::{Role, Tracked};
 use craft_ui::docking::frame::maximize;
 use craft_ui::docking::tree;
-use craft_ui::docking::{DockColumn, HidePanels, PanelSpec};
+use craft_ui::docking::{DockColumn, HidePanels, PanelKey, PanelSpec};
 use craft_ui::testing::memory::global;
 use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 fn spec(panel: &u8) -> PanelSpec {
@@ -64,7 +65,7 @@ fn a_column_divider_dragged_past_a_minimum_and_back_stays_under_the_pointer() {
 fn a_resize_under_a_pruned_view_keeps_the_hidden_panels() {
     let rest = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![1], 0), Node::tabs(vec![2], 0));
     let mut layout = Layout::new(Some(Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), rest)), Vec::new());
-    let keep = |panel: &usize| *panel != 2;
+    let keep = Tracked::new(BTreeSet::from([PanelKey::of(&0_usize), PanelKey::of(&1_usize)]));
     let none_protected = |_: &usize| false;
     let original = layout.clone();
     let view = maximize(&original, None, HidePanels::Except(&keep), &none_protected);

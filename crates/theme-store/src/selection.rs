@@ -384,7 +384,7 @@ impl fmt::Display for SelectionError {
 impl std::error::Error for SelectionError {}
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use craft_ui::testing::trial;
     use serde_json::json;
 

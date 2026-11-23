@@ -23,6 +23,9 @@ pub(super) struct Body<'a> {
     pub layout: ColorPickerLayout,
     pub models: Vec<&'a dyn ColorModel>,
     pub warnings: Vec<ColorWarning>,
+    /// Compact only: the host gave a compare colour, so the compare block stands beside the area (Word's Colors
+    /// dialog's New over Current). The Full layout always shows it.
+    pub compare: bool,
     pub alpha: bool,
     pub dynamic_tracks: bool,
     pub eyedropper: bool,
@@ -44,7 +47,12 @@ impl<'a> Body<'a> {
         let words = Env::of(ui).words::<ColorPickerWords>();
         let model = self.models.iter().copied().find(|m| Some(m.id()) == pass.model);
         let visible: Vec<&dyn ColorModel> = model.into_iter().chain([pass.mode.model()]).collect();
-        self.area_and_strip(ui, pass, &visible, AreaShape::Plot, got);
+        Row::new().show(ui, |ui, _| {
+            self.area_and_strip(ui, pass, &visible, AreaShape::Plot, got);
+            if self.compare {
+                self.compare_block(ui, pass, &words, got);
+            }
+        });
         if let Some(model) = model {
             FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let values = pass.shown.values_in(model);
@@ -119,10 +127,14 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected.
+    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected. In the Compact
+    /// layout (the tabbed Colors dialog) Enter in it commits the typed digits and does not reach the dialog's OK, as in
+    /// the production Colors dialog. In the Full layout Enter commits the digits and confirms the dialog, as in the
+    /// reference image editor's Color Picker.
     pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
         let field =
             TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
+        let field = if self.layout == ColorPickerLayout::Compact { field.submits() } else { field };
         let edit = match sizing {
             Some(sizing) => field.sizing(sizing),
             None => field,

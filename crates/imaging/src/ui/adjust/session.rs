@@ -1,8 +1,8 @@
 //! [`AdjustSession`]: the Properties panel's memory of the settings it found on an adjustment
 //! layer, so Reset returns to them once the user edited.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The settings an adjustment layer had when the Properties panel started showing it, and whether
 /// the panel edited them since (or since the last Reset). A plain value the app keeps per panel;

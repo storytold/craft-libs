@@ -11,8 +11,8 @@ pub mod http;
 pub mod install;
 pub mod manifest;
 pub mod msi_context;
-mod msi_copy;
-mod msi_migrate;
+pub(crate) mod msi_copy;
+pub(crate) mod msi_migrate;
 pub mod packages;
 pub mod paths;
 pub mod pins;
@@ -51,7 +51,9 @@ pub use version::{Version, is_newer, parse as parse_version};
 #[cfg(feature = "screen-testing")]
 /// The registrations of this package for the integration binary.
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 /// Checks for an update against GitHub releases for the given app.
@@ -88,12 +90,13 @@ pub(crate) const TEST_AGENT: &str = "ArtCraft-Launcher-Test/0.0";
 extern crate self as craft_update;
 #[cfg(test)]
 #[path = "../tests/https_only.rs"]
-mod https_only;
+pub(crate) mod https_only;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

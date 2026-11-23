@@ -217,6 +217,9 @@ pub(super) fn source(token: ColorToken, mode: Mode) -> ColorSource {
         }
         // The contrast pass moves it to the non-text minimum on the control surfaces.
         T::LineMark => Neutral(8),
+        // Two steps from the panel, whatever panel the theme pins: lighter in dark mode, darker in light mode, so a grip
+        // is seen without standing out like an icon (photocraft#16406).
+        T::LineGrip => Anchored(pick(5, 4)),
         T::LineFocus => Accent(9),
         T::AccentSolid => Accent(9),
         T::AccentHover => Accent(SOLID_HOVER),
@@ -481,3 +484,6 @@ pub const MOTION_OUTLINE_MS: u32 = 120;
 /// Easing of a selection outline's glide. GridCraft's `ease_out` is `1 - (1 - t)^3` (0.875 at the
 /// half way); `Standard` reaches 0.878 there and is the closest of the three curves.
 pub const MOTION_OUTLINE_EASING: Easing = Easing::Standard;
+
+/// How far switched content slides in, in points (WordCraft's ribbon `CONTENT_SWITCH_SLIDE`, 14 points).
+pub const MOTION_SLIDE_PT: u32 = 14;

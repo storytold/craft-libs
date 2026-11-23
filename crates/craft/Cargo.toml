@@ -214,6 +214,15 @@ craft-evm = { workspace = true, optional = true }
 craft-geom = { workspace = true, optional = true }
 craft-suite-account = { workspace = true, optional = true }
 craft-xfa = { workspace = true, optional = true }
+craft-gpu = { workspace = true, optional = true }
+craft-gpu-null = { workspace = true, optional = true }
+craft-gpu-providers = { workspace = true, optional = true }
+craft-gpu-wgpu = { workspace = true, optional = true }
+craft-ipp = { workspace = true, optional = true }
+craft-ppt-binary = { workspace = true, optional = true }
+craft-sqlite = { workspace = true, optional = true }
+craft-audio-dsp = { workspace = true, optional = true }
+craft-sbs = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -260,6 +269,28 @@ screen-testing = [
     "craft-timeline?/screen-testing",
     "craft-update?/screen-testing",
 ]
+suite = [
+    "screen-testing",
+    "craft-ui/suite",
+    "craft-automation?/suite",
+    "craft-browse?/suite",
+    "craft-color-ui?/suite",
+    "craft-dialogs?/suite",
+    "craft-draw?/suite",
+    "craft-font-manager?/suite",
+    "craft-imaging?/suite",
+    "craft-layers?/suite",
+    "craft-menu?/suite",
+    "craft-pages?/suite",
+    "craft-print?/suite",
+    "craft-review?/suite",
+    "craft-table?/suite",
+    "craft-text?/suite",
+    "craft-theme-editor?/suite",
+    "craft-theme-store?/suite",
+    "craft-timeline?/suite",
+    "craft-update?/suite",
+]
 aaf = ["dep:craft-aaf"]
 
 aep = ["dep:craft-aep"]
@@ -288,6 +319,7 @@ audio-alac-decode = ["audio", "craft-audio/alac-decode"]
 audio-alac-encode = ["audio", "craft-audio/alac-encode"]
 audio-decode = ["audio", "craft-audio/decode"]
 audio-decode-native = ["audio", "craft-audio/decode-native"]
+audio-dsd = ["audio", "craft-audio/dsd"]
 audio-eac3-encode = ["audio", "craft-audio/eac3-encode"]
 audio-encode = ["audio", "craft-audio/encode"]
 audio-flac-decode = ["audio", "craft-audio/flac-decode"]
@@ -317,6 +349,8 @@ audio-vmd-decode = ["audio", "craft-audio/vmd-decode"]
 audio-vorbis-decode = ["audio", "craft-audio/vorbis-decode"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
 
+audio-dsp = ["dep:craft-audio-dsp"]
+
 automation = ["dep:craft-automation", "keymap"]
 automation-agents = ["automation", "craft-automation/agents"]
 
@@ -325,6 +359,7 @@ ber = ["dep:craft-ber"]
 browse = ["dep:craft-browse"]
 
 captions = ["dep:craft-captions"]
+captions-mov-text = ["captions", "craft-captions/mov-text"]
 
 cfb = ["dep:craft-cfb"]
 
@@ -373,7 +408,7 @@ develop-model = ["dep:craft-develop-model"]
 
 dex = ["dep:craft-dex"]
 
-dialogs = ["dep:craft-dialogs"] # native only: rfd's folder picker and file paths
+dialogs = ["dep:craft-dialogs", "browse"] # native only: rfd's folder picker and file paths
 
 doc = ["dep:craft-doc"]
 doc-pcraft-pixels = ["doc", "craft-doc/pcraft-pixels"]
@@ -472,6 +507,20 @@ geom = ["dep:craft-geom"]
 gif = ["dep:craft-gif"]
 gif-frames = ["gif", "craft-gif/frames"]
 
+gpu = ["dep:craft-gpu"]
+gpu-startup = ["gpu", "craft-gpu/startup"]
+
+gpu-null = ["dep:craft-gpu-null"]
+
+gpu-providers = ["dep:craft-gpu-providers"]
+
+gpu-wgpu = ["dep:craft-gpu-wgpu"]
+gpu-wgpu-adapter-probe = ["gpu-wgpu", "craft-gpu-wgpu/adapter-probe"]
+gpu-wgpu-native-dx12 = ["gpu-wgpu", "craft-gpu-wgpu/native-dx12"]
+gpu-wgpu-native-gles = ["gpu-wgpu", "craft-gpu-wgpu/native-gles"]
+gpu-wgpu-native-metal = ["gpu-wgpu", "craft-gpu-wgpu/native-metal"]
+gpu-wgpu-native-vulkan = ["gpu-wgpu", "craft-gpu-wgpu/native-vulkan"]
+
 gridcraft-format = ["dep:craft-gridcraft-format"]
 
 gzip = ["dep:craft-gzip"]
@@ -488,6 +537,7 @@ heif-testdata = ["heif", "craft-heif/testdata"]
 
 html = ["dep:craft-html"]
 html-flow = ["html", "craft-html/flow"]
+html-standalone = ["html", "craft-html/standalone"]
 
 http-url = ["dep:craft-http-url"]
 
@@ -512,6 +562,8 @@ imaging = ["dep:craft-imaging", "color-ui", "keymap"]
 indd = ["dep:craft-indd"]
 
 ipc = ["dep:craft-ipc"]
+
+ipp = ["dep:craft-ipp"]
 
 java-class = ["dep:craft-java-class"]
 
@@ -573,6 +625,8 @@ media-source = ["dep:craft-media-source"]
 menu = ["dep:craft-menu"]
 
 mesh = ["dep:craft-mesh"]
+mesh-abc = ["mesh", "craft-mesh/abc"]
+mesh-dae = ["mesh", "craft-mesh/dae"]
 mesh-fbx = ["mesh", "craft-mesh/fbx"]
 mesh-gltf = ["mesh", "craft-mesh/gltf"]
 mesh-obj = ["mesh", "craft-mesh/obj"]
@@ -605,7 +659,7 @@ openpgp = ["dep:craft-openpgp"]
 
 ora = ["dep:craft-ora"]
 
-pages = ["dep:craft-pages"]
+pages = ["dep:craft-pages", "keymap", "text"]
 
 palette = ["dep:craft-palette"]
 
@@ -620,6 +674,7 @@ pdf-content = ["pdf", "craft-pdf/content"]
 pdf-cos = ["pdf", "craft-pdf/cos"]
 pdf-crypt = ["pdf", "craft-pdf/crypt"]
 pdf-filters = ["pdf", "craft-pdf/filters"]
+pdf-fonts = ["pdf", "craft-pdf/fonts"]
 pdf-interpret = ["pdf", "craft-pdf/interpret"]
 pdf-paths = ["pdf", "craft-pdf/paths"]
 pdf-raster = ["pdf", "craft-pdf/raster"]
@@ -642,8 +697,10 @@ pkcs7 = ["dep:craft-pkcs7"]
 
 platform = ["dep:craft-platform"]
 platform-appearance = ["platform", "craft-platform/appearance"]
+platform-apple-events = ["platform", "craft-platform/apple-events"]
 platform-browser = ["platform", "craft-platform/browser"]
 platform-clipboard = ["platform", "craft-platform/clipboard"]
+platform-clipboard-system = ["platform", "craft-platform/clipboard-system"]
 platform-pointer = ["platform", "craft-platform/pointer"]
 platform-screen = ["platform", "craft-platform/screen"]
 platform-testing = ["platform", "craft-platform/testing"]
@@ -653,6 +710,8 @@ plist = ["dep:craft-plist"]
 
 plotter = ["dep:craft-plotter"]
 plotter-serde = ["plotter", "craft-plotter/serde"]
+
+ppt-binary = ["dep:craft-ppt-binary"]
 
 pptx = ["dep:craft-pptx"]
 
@@ -708,11 +767,13 @@ raw-raf = ["raw", "craft-raw/raf"]
 raw-rw2 = ["raw", "craft-raw/rw2"]
 raw-srw = ["raw", "craft-raw/srw"]
 
-review = ["dep:craft-review", "keymap"]
+review = ["dep:craft-review", "keymap", "pages"]
 
 rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
+
+sbs = ["dep:craft-sbs"]
 
 score = ["dep:craft-score"]
 
@@ -737,6 +798,8 @@ smime = ["dep:craft-smime"]
 sniff = ["dep:craft-sniff"]
 
 sourcemap = ["dep:craft-sourcemap"]
+
+sqlite = ["dep:craft-sqlite"]
 
 ssip = ["dep:craft-ssip"]
 
@@ -847,6 +910,7 @@ timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
 tracked = ["dep:craft-tracked"]
+tracked-serde = ["tracked", "craft-tracked/serde"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]

@@ -197,6 +197,32 @@ pub struct FrameKind {
 /// EOI or the end of the data first. Reads only the headers, so it is cheap enough to route
 /// every JPEG an app opens.
 pub fn frame(b: &[u8]) -> Option<FrameKind> {
+    let (marker, seg) = frame_segment(b)?;
+    Some(FrameKind { marker, precision: *seg.get(2)? })
+}
+
+/// Whether `bytes` are a progressive JPEG whose frame samples some component more finely (across
+/// or down) than its first. zune-jpeg 0.5.15, the decoder behind `image`, asserts in its upsampler
+/// on such a frame (etemesi254/zune-image#236; fixed there by 36007420, unreleased as of
+/// 0.5.16-rc3), and in the browser a panic aborts the page. Until the fix ships, such a JPEG is
+/// refused from its header: the decoder refuses the larger ones itself, so nothing that decoded is
+/// lost. Baseline frames of the same shape decode and are left to it.
+/// shortcut: remove this check (and its callers' early return) once `Cargo.lock` has zune-jpeg
+/// 0.5.16 or later.
+pub fn finer_than_first(bytes: &[u8]) -> bool {
+    let Some((marker, seg)) = frame_segment(bytes) else { return false };
+    if !matches!(marker, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+        return false;
+    }
+    // Length (2), precision (1), height (2), width (2), components (1), then id, sampling and
+    // table for each component.
+    let n = usize::from(seg.get(7).copied().unwrap_or(0));
+    let sampling = |k: usize| seg.get(9 + 3 * k).map(|b| (b >> 4, b & 0x0F));
+    let Some((h0, v0)) = sampling(0) else { return false };
+    (1..n).any(|k| sampling(k).is_some_and(|(h, v)| h > h0 || v > v0))
+}
+
+fn frame_segment(b: &[u8]) -> Option<(u8, &[u8])> {
     if b.get(..2) != Some(&[0xFF, 0xD8]) {
         return None;
     }
@@ -213,7 +239,7 @@ pub fn frame(b: &[u8]) -> Option<FrameKind> {
             _ => {
                 let len = usize::from(u16::from_be_bytes([*b.get(i + 2)?, *b.get(i + 3)?]));
                 if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
-                    return Some(FrameKind { marker: m, precision: *b.get(i + 4)? });
+                    return Some((m, b.get(i + 2..)?));
                 }
                 i = i.checked_add(2 + len)?;
             }
@@ -262,8 +288,71 @@ mod scan;
 
 pub use bands::{Band, Bands, Reader};
 
-use idct::render;
+use idct::{render, render_scaled};
+use parse::{be16, parse_frame};
 use scan::decode_coefficients;
+
+/// The largest reduction [`decode_reduced`] reads straight from a JPEG's 8×8 blocks: 1/8.
+pub const MAX_SHRINK: u8 = 3;
+
+/// Output size `(width, height, estimated_bytes)` of a JPEG reduction without decoding pixels.
+///
+/// `shrink` must be in `1..=MAX_SHRINK` (1/2, 1/4, or 1/8). Checks `limits` against the
+/// full-size frame header.
+pub fn reduced_estimate(bytes: &[u8], limits: &Limits, shrink: u8) -> Result<(u32, u32, usize), Error> {
+    if shrink == 0 || shrink > MAX_SHRINK {
+        return Err(err("shrink must be 1..=3"));
+    }
+    if bytes.get(..2) != Some(&[0xFF, 0xD8]) {
+        return Err(err("not a JPEG stream"));
+    }
+    let mut i = 2usize;
+    while let Some(&v) = bytes.get(i) {
+        if v != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&m) = bytes.get(i + 1) else { break };
+        match m {
+            0xFF => {
+                i += 1;
+                continue;
+            }
+            0x00 | 0x01 | 0xD0..=0xD8 => {
+                i += 2;
+                continue;
+            }
+            0xD9 | 0xDA => return Err(err("no frame header before scan")),
+            _ => {}
+        }
+        let len = usize::from(be16(bytes, i + 2)?);
+        if len < 2 {
+            return Err(err("bad marker segment length"));
+        }
+        let seg = bytes.get(i + 4..i + 2 + len).ok_or_else(|| err("marker segment runs past the end of the file"))?;
+        if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+            let f = parse_frame(m, seg, limits)?;
+            let w = (f.width as u32).div_ceil(1 << shrink);
+            let h = (f.height as u32).div_ceil(1 << shrink);
+            let output_bytes = (w as usize).saturating_mul(h as usize).saturating_mul(f.comps.len().saturating_mul(4).saturating_add(4));
+            let coef_bytes = if f.progressive { f.comps.iter().map(|c| c.bw.saturating_mul(c.bh)).sum::<usize>().saturating_mul(256) } else { 0 };
+            return Ok((w, h, coef_bytes.saturating_add(output_bytes)));
+        }
+        i += 2 + len;
+    }
+    Err(err("no frame header found"))
+}
+
+/// Decode a JPEG stream at `1 / 2^shrink` of its size (each side rounded up), for `shrink` in
+/// `1..=MAX_SHRINK` (1/2, 1/4, or 1/8) using reduced-size IDCTs on the 8×8 DCT blocks.
+pub fn decode_reduced(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>, shrink: u8) -> Result<Decoded, Error> {
+    if shrink == 0 || shrink > MAX_SHRINK {
+        return Err(err("shrink must be 1..=3"));
+    }
+    let (frame, tables, damaged) = decode_coefficients(bytes, limits)?;
+    let (width, height, components, samples) = render_scaled(frame, &tables, adobe_transform, shrink)?;
+    Ok(Decoded { width, height, components, samples, damaged })
+}
 
 /// Decode a JPEG stream of one of the frame types listed in the [crate docs](crate).
 ///

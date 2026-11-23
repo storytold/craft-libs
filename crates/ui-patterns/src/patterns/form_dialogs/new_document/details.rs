@@ -7,19 +7,19 @@ use super::presets::{
 use super::{NewDocumentWords, Read, Session, background_rgb, depth_label, mode_label};
 use crate::buttons::{Button, IconButton};
 use crate::choice::{Checkbox, Segmented, Swatch};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity, clicked};
+use crate::contract::{Bind, Entry, FieldLayout, Gap, MemoProps, Props as _, Show as _, ShowContainer as _, Sizing, Validity, clicked};
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
-use crate::layout_components::Row;
+use crate::layout_components::{Grid, Row};
 use crate::patterns::form_dialogs::LinkedSize;
-use crate::patterns::presets::{PresetError, PresetLibrary};
+use crate::patterns::presets::{PresetError, PresetNames};
 use crate::pickers::{Select, UnitSelect};
 use crate::runtime::env::{Env, Label, Message, UnitKind};
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::words::CommonWords;
 use crate::style::TypeRole;
-use crate::text::TextField;
-use craft_behavior::{EditEvent, EditEvents, IconId, PixelSize};
+use crate::text::{NumberField, TextField};
+use craft_behavior::{ColumnWidth, EditEvent, EditEvents, IconId, NumberCodec, PixelSize};
 use craft_theme::Srgba;
 use egui::Ui;
 
@@ -97,7 +97,10 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
 
     let size_units = unit_entries(read, &SIZE_UNITS);
     let resolution_units = unit_entries(read, &RESOLUTION_UNITS);
-    let orientations = [Entry::new(Orientation::Portrait, words.portrait.clone()), Entry::new(Orientation::Landscape, words.landscape.clone())];
+    let orientations = [
+        Entry::new(Orientation::Portrait, words.portrait.clone()).icon(IconId::new("orientation_portrait")),
+        Entry::new(Orientation::Landscape, words.landscape.clone()).icon(IconId::new("orientation_landscape")),
+    ];
     let modes = ColorMode::ALL.map(|mode| Entry::new(mode, mode_label(words, mode).clone()));
     let depths: Vec<_> = values.color_mode.depths().iter().map(|&depth| Entry::new(depth, depth_label(words, depth).clone())).collect();
     let working = setup.profiles.iter().find(|profiles| profiles.mode == values.color_mode);
@@ -120,22 +123,23 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
         PIXEL_ASPECTS.iter().map(|(id, _)| Entry::new((*id).to_owned(), pixel_aspect_label(words, id).clone())).collect();
     pixel_aspects.extend(setup.custom_pixel_aspects.iter().map(|(id, name)| Entry::new(id.clone(), name.clone())));
 
-    Text::new(words.preset_details.clone()).role(TypeRole::Label).shade(Shade::Muted).show(ui);
-    FieldGroup::new(words.preset_details.clone()).show(ui, |ui, _| {
-        Field::new(words.name.clone()).id_salt("name").show(ui, |ui, _| {
+    Text::new(words.preset_details.clone()).role(TypeRole::SectionCaption).shade(Shade::Muted).show(ui);
+    FieldGroup::new(words.preset_details.clone()).gap(Gap::Tight).show(ui, |ui, _| {
+        Field::new(words.name.clone()).layout(FieldLayout::Above).id_salt("name").show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
-                let shown = TextField::new(words.name.clone(), Bind::given(values.name.clone())).limit(MAX_NAME).select_on_focus().show(ui);
+                let shown = TextField::new(words.name.clone(), Bind::given(values.name.clone()))
+                    .limit(MAX_NAME)
+                    .select_on_focus()
+                    .sizing(Sizing::FillWidth)
+                    .show(ui);
                 if let Some(name) = shown.value().cloned() {
                     values.name = name;
                 }
                 if std::mem::take(&mut session.focus_name) {
                     focus::request(ui.ctx(), FocusTarget::Id(shown.response.id));
                 }
-                let save = IconButton::new(IconId::new("save"))
-                    .label(words.save_preset_title.clone())
-                    .tooltip(words.save_preset_title.clone())
-                    .id_salt("save-preset")
-                    .show(ui);
+                let title = words.save_preset_title.clone();
+                let save = IconButton::new(IconId::new("square_plus")).label(title.clone()).tooltip(title).id_salt("save-preset").show(ui);
                 if clicked(&save) {
                     session.naming = Some(proposed_name(read));
                     session.name_tried = false;
@@ -144,39 +148,57 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
             });
         });
 
-        for side in [Side::Width, Side::Height] {
-            Field::new(side.name(words).clone()).id_salt(side.key()).show(ui, |ui, _| {
+        let dimension = |ui: &mut Ui, session: &mut Session, side: Side| {
+            Field::new(side.name(words).clone()).layout(FieldLayout::Above).id_salt(side.key()).show(ui, |ui, _| {
                 let (value, range) = match side {
                     Side::Width => (session.size.width(), session.size.width_range()),
                     Side::Height => (session.size.height(), session.size.height_range()),
                 };
+                if matches!(side, Side::Height) {
+                    // One unit serves both sides, so its select sits on the Width row only and Height leaves that
+                    // room to Orientation beside it. The field reads and steps in the shared unit.
+                    let kind = session.size.unit();
+                    let units = Env::of(ui).units();
+                    let shown = NumberField::new(side.name(words).clone(), Bind::given(Some(value)))
+                        .range(range)
+                        .codec(NumberCodec::new(units.reader(Some(kind)), *kind.decimals().end()))
+                        .step(kind.step())
+                        .sizing(Sizing::FillWidth)
+                        .show(ui);
+                    apply_number(session, &shown.edit.events, |size, value| size.set_height(value));
+                    return;
+                }
                 let shown = UnitSelect::new(side.name(words).clone(), Bind::given(Some(value)), Bind::given(session.size.unit()), &size_units)
                     .range(range)
                     .unit_label(side.unit_name(words).clone())
+                    .sizing(Sizing::FillWidth)
                     .show(ui);
-                apply_number(session, &shown.edit.events, |size, value| match side {
-                    Side::Width => size.set_width(value),
-                    Side::Height => size.set_height(value),
-                });
+                apply_number(session, &shown.edit.events, |size, value| size.set_width(value));
                 if let Some(kind) = shown.unit.value().copied() {
                     session.size.set_unit(kind);
                 }
             });
-        }
-
-        Field::new(words.orientation.clone()).id_salt("orientation").show(ui, |ui, _| {
-            let current = Orientation::of(session.size.pixels());
-            let shown = Segmented::new(words.orientation.clone(), Bind::given(current), &orientations).show(ui);
-            if let Some(turned) = shown.value().cloned() {
-                session.orientation = Some(turned);
-                if current != turned {
-                    values.take_linked(&session.size);
-                    let PixelSize { width, height, .. } = values.size;
-                    values.size = PixelSize::new(height, width);
-                    session.size = values.linked(read.units.points_per_inch());
+        };
+        dimension(ui, session, Side::Width);
+        // Two shares, as Color Mode and Depth: a content-sized column here was measured empty, which clipped Orientation
+        // out of reach.
+        const HEIGHT_AND_ORIENTATION: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+        Grid::new(&HEIGHT_AND_ORIENTATION).fill().show(ui, |ui, _| {
+            dimension(ui, session, Side::Height);
+            Field::new(words.orientation.clone()).layout(FieldLayout::Above).id_salt("orientation").show(ui, |ui, _| {
+                let current = Orientation::of(session.size.pixels());
+                let shown = Segmented::new(words.orientation.clone(), Bind::given(current), &orientations).show(ui);
+                if let Some(turned) = shown.value().cloned() {
+                    session.orientation = Some(turned);
+                    if current != turned {
+                        values.take_linked(&session.size);
+                        let PixelSize { width, height, .. } = values.size;
+                        values.size = PixelSize::new(height, width);
+                        session.size = values.linked(read.units.points_per_inch());
+                    }
+                    keep_selection = true;
                 }
-                keep_selection = true;
-            }
+            });
         });
 
         let shown = Checkbox::new(Bind::given(values.artboard)).label(words.artboards.clone()).show(ui);
@@ -185,7 +207,7 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
             session.preset_artboard = false;
         }
 
-        Field::new(words.resolution.clone()).id_salt("resolution").show(ui, |ui, _| {
+        Field::new(words.resolution.clone()).layout(FieldLayout::Above).id_salt("resolution").show(ui, |ui, _| {
             let shown = UnitSelect::new(
                 words.resolution.clone(),
                 Bind::given(Some(session.size.resolution())),
@@ -194,6 +216,7 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
             )
             .range(session.size.resolution_range())
             .unit_label(words.resolution_unit.clone())
+            .sizing(Sizing::FillWidth)
             .show(ui);
             apply_number(session, &shown.edit.events, LinkedSize::set_resolution);
             if let Some(kind) = shown.unit.value().copied() {
@@ -202,40 +225,27 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
         });
         values.take_linked(&session.size);
 
-        Field::new(words.color_mode.clone()).id_salt("mode").show(ui, |ui, _| {
-            let shown = Select::new(words.color_mode.clone(), Bind::given(values.color_mode), &modes).show(ui);
-            if let Some(mode) = shown.value().cloned() {
-                values.color_mode = mode;
-                // A profile of the old mode's colour space does not suit the new one.
-                values.profile = None;
-            }
+        const MODE_AND_DEPTH: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+        Grid::new(&MODE_AND_DEPTH).fill().show(ui, |ui, _| {
+            Field::new(words.color_mode.clone()).layout(FieldLayout::Above).id_salt("mode").show(ui, |ui, _| {
+                let shown = Select::new(words.color_mode.clone(), Bind::given(values.color_mode), &modes).sizing(Sizing::FillWidth).show(ui);
+                if let Some(mode) = shown.value().cloned() {
+                    values.color_mode = mode;
+                    // A profile of the old mode's colour space does not suit the new one.
+                    values.profile = None;
+                }
+            });
+            Field::new(words.depth.clone()).layout(FieldLayout::Above).id_salt("depth").show(ui, |ui, _| {
+                let shown = Select::new(words.depth.clone(), Bind::given(values.depth), &depths).sizing(Sizing::FillWidth).show(ui);
+                if let Some(depth) = shown.value().cloned() {
+                    values.depth = depth;
+                }
+            });
         });
-        Field::new(words.depth.clone()).id_salt("depth").show(ui, |ui, _| {
-            let shown = Select::new(words.depth.clone(), Bind::given(values.depth), &depths).show(ui);
-            if let Some(depth) = shown.value().cloned() {
-                values.depth = depth;
-            }
-        });
-        Field::new(words.profile.clone()).id_salt("profile").show(ui, |ui, _| {
-            let current = values.profile.clone().filter(|profile| others.contains(&profile));
-            let shown = Select::new(words.profile.clone(), Bind::given(current), &profiles).show(ui);
-            if let Some(profile) = shown.value().cloned() {
-                values.profile = profile;
-            }
-        });
-        Field::new(words.pixel_aspect.clone()).id_salt("pixel-aspect").show(ui, |ui, _| {
-            let listed = pixel_aspects.iter().any(|entry| entry.value() == Some(&values.pixel_aspect));
-            let current = if listed { values.pixel_aspect.clone() } else { SQUARE_PIXELS.to_owned() };
-            let shown = Select::new(words.pixel_aspect.clone(), Bind::given(current), &pixel_aspects).show(ui);
-            if let Some(id) = shown.value().cloned() {
-                values.pixel_aspect = id;
-            }
-        });
-
-        Field::new(words.background.clone()).id_salt("background").show(ui, |ui, _| {
+        Field::new(words.background.clone()).layout(FieldLayout::Above).id_salt("background").show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 let kind = BackgroundKind::of(values.background);
-                let shown = Select::new(words.background.clone(), Bind::given(kind), &backgrounds).show(ui);
+                let shown = Select::new(words.background.clone(), Bind::given(kind), &backgrounds).sizing(Sizing::FillWidth).show(ui);
                 match shown.value().cloned() {
                     Some(BackgroundKind::White) => values.background = BackgroundContents::White,
                     Some(BackgroundKind::Black) => values.background = BackgroundContents::Black,
@@ -251,6 +261,21 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
                     right.request_color = true;
                 }
             });
+        });
+        Field::new(words.profile.clone()).layout(FieldLayout::Above).id_salt("profile").show(ui, |ui, _| {
+            let current = values.profile.clone().filter(|profile| others.contains(&profile));
+            let shown = Select::new(words.profile.clone(), Bind::given(current), &profiles).sizing(Sizing::FillWidth).show(ui);
+            if let Some(profile) = shown.value().cloned() {
+                values.profile = profile;
+            }
+        });
+        Field::new(words.pixel_aspect.clone()).layout(FieldLayout::Above).id_salt("pixel-aspect").show(ui, |ui, _| {
+            let listed = pixel_aspects.iter().any(|entry| entry.value() == Some(&values.pixel_aspect));
+            let current = if listed { values.pixel_aspect.clone() } else { SQUARE_PIXELS.to_owned() };
+            let shown = Select::new(words.pixel_aspect.clone(), Bind::given(current), &pixel_aspects).sizing(Sizing::FillWidth).show(ui);
+            if let Some(id) = shown.value().cloned() {
+                values.pixel_aspect = id;
+            }
         });
     });
 
@@ -306,17 +331,26 @@ pub(super) enum Refusal {
     Full,
 }
 
-/// Whether `name` can be saved beside the presets of `library`: the library's name check, then its size limit.
-pub(super) fn refusal(library: &PresetLibrary<DocumentOptions>, name: &str) -> Option<Refusal> {
-    library.name_error(name).map(Refusal::Name).or_else(|| (library.total() >= MAX_SAVED).then_some(Refusal::Full))
+/// Whether `name` can be saved beside the presets named `names`: the library's name check, then its size limit.
+pub(super) fn refusal(names: &PresetNames, name: &str) -> Option<Refusal> {
+    names.name_error(name).map(Refusal::Name).or_else(|| (names.len() >= MAX_SAVED).then_some(Refusal::Full))
 }
 
-/// The text that says why a preset cannot be saved.
-fn refusal_message(read: &Read<'_>, refusal: &Refusal) -> Label {
-    match refusal {
-        Refusal::Name(PresetError::NameTaken) => read.library_words.name_taken.clone(),
-        Refusal::Name(_) => read.library_words.name_invalid.clone(),
-        Refusal::Full => read.words.too_many.clone(),
+/// The texts that say why a preset cannot be saved.
+#[derive(MemoProps)]
+struct RefusalWords<'w> {
+    taken: &'w Label,
+    invalid: &'w Label,
+    full: &'w Label,
+}
+
+impl RefusalWords<'_> {
+    fn message(&self, refusal: &Refusal) -> Label {
+        match refusal {
+            Refusal::Name(PresetError::NameTaken) => self.taken.clone(),
+            Refusal::Name(_) => self.invalid.clone(),
+            Refusal::Full => self.full.clone(),
+        }
     }
 }
 
@@ -350,15 +384,21 @@ fn save_pane(ui: &mut Ui, session: &mut Session, read: &Read<'_>, right: &mut Ri
     let cancel = Env::of(ui).words::<CommonWords>().cancel.clone();
     let Some(name) = session.naming.clone() else { return };
     let tried = session.name_tried;
-    let library = read.library;
-    let check = |typed: &String| match refusal(library, typed) {
-        Some(refused) if tried => Validity::Error(Message::new(refusal_message(read, &refused))),
-        _ => Validity::Ok,
-    };
+    let refusals = RefusalWords { taken: &read.library_words.name_taken, invalid: &read.library_words.name_invalid, full: &read.words.too_many };
+    let inputs = (read.library.names(), tried, refusals);
     Text::new(words.save_preset_title.clone()).role(TypeRole::Label).shade(Shade::Muted).show(ui);
     Field::new(words.preset_name.clone()).id_salt("preset-name").show(ui, |ui, _| {
-        let shown =
-            TextField::new(words.preset_name.clone(), Bind::given(name.clone()).check(check)).limit(MAX_NAME).select_on_focus().submits().show(ui);
+        let shown = TextField::new(
+            words.preset_name.clone(),
+            Bind::given(name.clone()).check_with(&inputs, |(names, tried, refusals), typed| match refusal(names, typed) {
+                Some(refused) if *tried => Validity::Error(Message::new(refusals.message(&refused))),
+                _ => Validity::Ok,
+            }),
+        )
+        .limit(MAX_NAME)
+        .select_on_focus()
+        .submits()
+        .show(ui);
         if let Some(typed) = shown.value().cloned() {
             session.naming = Some(typed);
             session.name_tried = false;

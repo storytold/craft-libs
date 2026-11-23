@@ -1,7 +1,7 @@
 //! `DocumentWindow`: a document's window, a container in its own OS viewport.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::contract::overlay::OverlayFit;
 use crate::contract::{
@@ -11,7 +11,7 @@ use crate::contract::{
 use crate::runtime::env::Label;
 use crate::runtime::memory::{Remember as _, sub};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::{WindowAction, WindowHost, WindowSpec};
+use crate::runtime::windows::{WindowAction, WindowHost, WindowLevel, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::placement::{capped, cascade, monitor_of};
@@ -84,6 +84,8 @@ impl Outcome for DocumentWindowOutput {
 /// - **Title and focus.** The title is the label given to `new`; it follows the document while the app changes it.
 ///   [`raise`](DocumentWindow::raise) brings the window forward in the pass it is set. With
 ///   [`in_list`](DocumentWindow::in_list) the window makes itself the list's active window when it gains OS focus.
+/// - **Body.** The body is laid out in the window's room and never scrolls, in the OS window and on the fallback
+///   layer alike; an app that wants scrolling puts a scroll region in the body.
 /// - **Fallback.** Where OS windows are unavailable the document shows on a movable, resizable layer with a title row.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
@@ -138,7 +140,7 @@ impl<'a> DocumentWindow<'a> {
 
     /// A window titled `title`, resizable, with the installed decision's frame.
     pub fn new(title: impl Into<Label>) -> Self {
-        let fallback = Overlay::floating().resizable(true).fit(OverlayFit::Resizable);
+        let fallback = Overlay::floating().resizable(true).fit(OverlayFit::Resizable).body_scroll(false);
         let props = ContainerProps::new()
             .surface(SurfaceKind::Background)
             .pad(Pad::None)
@@ -159,10 +161,28 @@ impl<'a> DocumentWindow<'a> {
         self
     }
 
-    /// Where the window opens, as its outer rect in desktop points. A saved placement comes first.
+    /// Where the window is, as its outer rect in desktop points. A saved placement comes first. The window is kept
+    /// at `rect` while the app shows it, so an app whose user moves the window keeps `rect` where the window went
+    /// (its [`WindowHost::facts`]); else the window goes back at the next pass.
     #[must_use]
     pub fn first_placed(self, rect: Rect) -> Self {
         self.overlay(|overlay| overlay.placed(rect))
+    }
+
+    /// Stands the window at `level` among the windows, in place of an ordinary window's. With
+    /// [`WindowLevel::Palette`] a document window stays above the app's main window while the app is active, as a
+    /// floating document does in the references, drops below a blocking dialog in another window, and hides while the
+    /// main window is minimized.
+    #[must_use]
+    pub fn level(mut self, level: WindowLevel) -> Self {
+        self.props = match std::mem::take(&mut self.props.mount) {
+            Mount::Viewport { fallback, spec } => {
+                let spec = spec.unwrap_or_else(WindowSpec::document).level(level);
+                self.props.mount(Mount::Viewport { fallback, spec: Some(spec) })
+            }
+            other => self.props.mount(other),
+        };
+        self
     }
 
     /// Whether the user can resize the window.

@@ -93,6 +93,47 @@ impl HitShape {
         }
     }
 
+    /// The shape moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: Vec2) -> Self {
+        let points = |points: &[Pos2]| points.iter().map(|point| *point + by).collect();
+        match self {
+            HitShape::Rect(rect) => HitShape::Rect(rect.translate(by)),
+            HitShape::Circle { center, radius } => HitShape::Circle { center: *center + by, radius: *radius },
+            HitShape::Segment { a, b } => HitShape::Segment { a: *a + by, b: *b + by },
+            HitShape::Polyline { points: line, closed, reach } => HitShape::Polyline { points: points(line), closed: *closed, reach: *reach },
+            HitShape::Polygon(polygon) => HitShape::Polygon(points(polygon)),
+            HitShape::OutsidePolygon { within, polygon } => HitShape::OutsidePolygon { within: within.translate(by), polygon: points(polygon) },
+        }
+    }
+
+    /// The shape with each coordinate taken from `to`'s where the two lie within `within` points, when both are the
+    /// same kind of shape with as many points: two shapes `==` finds equal after it differ by no more than `within`.
+    #[must_use]
+    pub fn snapped(&self, to: &HitShape, within: f32) -> Self {
+        let near = |value: f32, to: f32| if (value - to).abs() <= within { to } else { value };
+        let pos = |value: Pos2, to: Pos2| Pos2::new(near(value.x, to.x), near(value.y, to.y));
+        let rect = |value: Rect, to: Rect| Rect::from_min_max(pos(value.min, to.min), pos(value.max, to.max));
+        let points = |values: &[Pos2], to: &[Pos2]| {
+            if values.len() == to.len() { values.iter().zip(to).map(|(value, to)| pos(*value, *to)).collect() } else { values.to_vec() }
+        };
+        match (self, to) {
+            (HitShape::Rect(value), HitShape::Rect(to)) => HitShape::Rect(rect(*value, *to)),
+            (HitShape::Circle { center, radius }, HitShape::Circle { center: to_center, radius: to_radius }) => {
+                HitShape::Circle { center: pos(*center, *to_center), radius: near(*radius, *to_radius) }
+            }
+            (HitShape::Segment { a, b }, HitShape::Segment { a: to_a, b: to_b }) => HitShape::Segment { a: pos(*a, *to_a), b: pos(*b, *to_b) },
+            (HitShape::Polyline { points: line, closed, reach }, HitShape::Polyline { points: to_line, reach: to_reach, .. }) => {
+                HitShape::Polyline { points: points(line, to_line), closed: *closed, reach: near(*reach, *to_reach) }
+            }
+            (HitShape::Polygon(polygon), HitShape::Polygon(to_polygon)) => HitShape::Polygon(points(polygon, to_polygon)),
+            (HitShape::OutsidePolygon { within: area, polygon }, HitShape::OutsidePolygon { within: to_area, polygon: to_polygon }) => {
+                HitShape::OutsidePolygon { within: rect(*area, *to_area), polygon: points(polygon, to_polygon) }
+            }
+            _ => self.clone(),
+        }
+    }
+
     /// Whether `point` hits the shape grown to be at least `across` wide and high: the hit area of a part is never
     /// smaller than the pointer's target size.
     fn hit_across(&self, point: Pos2, across: f32) -> bool {
@@ -230,6 +271,22 @@ pub struct Shape<O> {
     pub local: bool,
     /// The least size across the hit area has, in points.
     pub min_across: f32,
+}
+
+impl<O: Clone> Shape<O> {
+    /// The shape moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: Vec2) -> Self {
+        Shape { shape: self.shape.translated(by), owner: self.owner.clone(), ..*self }
+    }
+
+    /// The shape with its geometry and least size across taken from `to`'s where they lie within `within` points
+    /// ([`HitShape::snapped`]).
+    #[must_use]
+    pub fn snapped(&self, to: &Shape<O>, within: f32) -> Self {
+        let min_across = if (self.min_across - to.min_across).abs() <= within { to.min_across } else { self.min_across };
+        Shape { shape: self.shape.snapped(&to.shape, within), owner: self.owner.clone(), min_across, ..*self }
+    }
 }
 
 impl<O> Shape<O> {

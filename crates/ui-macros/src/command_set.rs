@@ -42,7 +42,7 @@ fn command_attrs(attrs: &[Attribute], mut read: impl FnMut(&syn::meta::ParseNest
     Ok(())
 }
 
-fn snake(name: &str) -> String {
+pub(crate) fn snake(name: &str) -> String {
     let mut out = String::new();
     for (i, c) in name.chars().enumerate() {
         if c.is_ascii_uppercase() {
@@ -227,7 +227,26 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         }
         Ok(true)
     })?;
-    let register = if set.story { quote!(#k::__register_command_set!(#ident, story);) } else { quote!(#k::__register_command_set!(#ident);) };
+    let register = if set.story {
+        let helper = quote::format_ident!("__registry_command_{}", snake(&ident.to_string()));
+        quote! {
+            pub(crate) fn #helper() -> #k::runtime::commands::SetEntry {
+                #k::runtime::commands::SetEntry::new(
+                    ::std::any::type_name::<#ident>,
+                    <#ident as #k::runtime::commands::CommandSet>::defs,
+                    <#ident as #k::runtime::commands::CommandSet>::no_default_on,
+                    <#ident as #k::runtime::commands::CommandSet>::edits,
+                    <#ident as #k::runtime::commands::CommandSet>::holds,
+                    if <#ident as #k::runtime::commands::CommandSet>::TYPING {
+                        Some(<#ident as #k::runtime::commands::CommandSet>::SCOPE)
+                    } else { None },
+                    <#ident as #k::runtime::commands::CommandSet>::platform_defaults,
+                )
+            }
+        }
+    } else {
+        quote!(#k::__register_command_set!(#ident);)
+    };
     let prefix = set.prefix.ok_or_else(|| syn::Error::new_spanned(ident, "a command set names its id prefix: `#[command(prefix = \"..\")]`"))?;
     check_prefix(&prefix)?;
     if let Some(scope) = &set.scope {
@@ -346,8 +365,6 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
         }
 
-        const _: () = {
-            #register
-        };
+        #register
     })
 }

@@ -1,8 +1,8 @@
 //! `ChipField`: a list of text chips in lines, each removable, with a draft text part after the last chip, "+N more"
 //! where a line limit stops the list, and Clear All.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::{FieldStyle, text_part};
 use crate::buttons::IconButton;

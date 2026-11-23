@@ -18,7 +18,7 @@ use std::cell::RefCell;
 type Log = RefCell<Vec<&'static str>>;
 
 /// A style-affecting app value the body hands to its children.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnvValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnvValue, craft_ui::contract::MemoProps)]
 #[env(style, root = Tone(1))]
 struct Tone(u8);
 

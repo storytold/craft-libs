@@ -20,13 +20,15 @@ pub mod ui;
 /// The stories and word sets the integration tests register.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(test)]
-mod annotate_tests;
+pub(crate) mod annotate_tests;
 #[cfg(test)]
-mod versions_tests;
+pub(crate) mod versions_tests;
 
 #[cfg(feature = "ui")]
 pub use annotate::AnnotationEdit;
@@ -40,9 +42,10 @@ pub use versions::{Branch, BranchId, BranchState, HistoryRow, Version, VersionId
 extern crate self as craft_review;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

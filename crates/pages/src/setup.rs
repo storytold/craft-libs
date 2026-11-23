@@ -206,6 +206,58 @@ pub struct PageSetup {
     pub different_odd_even: bool,
     /// Section direction right-to-left (Word).
     pub right_to_left: bool,
+    /// Word's Document Grid; `None` where the app shows no grid section.
+    #[serde(default)]
+    pub grid: Option<DocumentGrid>,
+}
+
+/// The most lines per page or characters per line the Document Grid takes.
+pub const MAX_GRID_COUNT: u32 = 1000;
+
+/// Word's four Document Grid kinds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum GridKind {
+    /// No grid.
+    #[default]
+    None,
+    /// A line grid only.
+    Lines,
+    /// A line and a character grid.
+    LinesAndChars,
+    /// Characters snap to the grid.
+    SnapToChars,
+}
+
+impl GridKind {
+    /// Whether the characters-per-line count applies (`LinesAndChars` and `SnapToChars`).
+    pub fn chars_enabled(self) -> bool {
+        matches!(self, GridKind::LinesAndChars | GridKind::SnapToChars)
+    }
+
+    /// Whether the lines-per-page count applies (every kind but `None`).
+    pub fn lines_enabled(self) -> bool {
+        self != GridKind::None
+    }
+}
+
+/// A page's Document Grid.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct DocumentGrid {
+    /// The kind of grid.
+    pub kind: GridKind,
+    /// Lines per page, up to [`MAX_GRID_COUNT`].
+    pub lines_per_page: u32,
+    /// Characters per line, up to [`MAX_GRID_COUNT`].
+    pub chars_per_line: u32,
+}
+
+impl DocumentGrid {
+    /// A grid of `kind` with `lines_per_page` lines and `chars_per_line` characters.
+    pub const fn new(kind: GridKind, lines_per_page: u32, chars_per_line: u32) -> Self {
+        DocumentGrid { kind, lines_per_page, chars_per_line }
+    }
 }
 
 impl Default for PageSetup {
@@ -223,6 +275,7 @@ impl Default for PageSetup {
             different_first: false,
             different_odd_even: false,
             right_to_left: false,
+            grid: None,
         }
     }
 }

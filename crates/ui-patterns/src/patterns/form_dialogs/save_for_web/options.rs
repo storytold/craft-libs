@@ -12,6 +12,7 @@ use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
+use super::model::set_pixels;
 use crate::layout_components::Row;
 use crate::patterns::form_dialogs::{LinkedSize, Resample, resize_from_scale};
 use crate::pickers::{Select, UnitSelect};
@@ -114,7 +115,7 @@ pub(super) fn show(
         if has_slices {
             slices_rows(ui, words, options);
         }
-        size_section(ui, words, sizing, units, link, &mut options.resample);
+        size_section(ui, words, sizing, units, link, options);
     });
 }
 
@@ -124,8 +125,15 @@ fn preset_row(ui: &mut Ui, words: &SaveForWebWords, presets: &[WebPreset], optio
     entries.extend(presets.iter().enumerate().map(|(at, preset)| Entry::new(Some(at), Label::from(preset.name.clone()))));
     row(ui, &words.preset, "preset", |ui| {
         if let Some(Some(at)) = Select::new(words.preset.clone(), Bind::given(current), &entries).show(ui).value().cloned() {
-            let (percent, resample, slices) = (options.percent, options.resample, options.slices.clone());
-            *options = SaveForWebOptions { percent, resample, slices, palette_edits: BTreeMap::new(), ..presets[at].options.clone() };
+            *options = SaveForWebOptions {
+                percent: options.percent,
+                size: options.size,
+                constrain_proportions: options.constrain_proportions,
+                resample: options.resample,
+                slices: options.slices.clone(),
+                palette_edits: BTreeMap::new(),
+                ..presets[at].options.clone()
+            };
         }
     });
 }
@@ -331,7 +339,7 @@ fn metadata_row(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOp
 }
 
 /// Image Size: Width and Height in pixels or percent, the Percent row and the Resample method.
-fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, units: &Units, link: &mut LinkedSize, resample: &mut Resample) {
+fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, units: &Units, link: &mut LinkedSize, options: &mut SaveForWebOptions) {
     let kinds = [Entry::new(UnitKind::Pixels, units.name(UnitKind::Pixels)), Entry::new(UnitKind::Percent, units.name(UnitKind::Percent))];
     Section::fixed(words.image_size.clone()).id_salt("size").show(ui, |ui, _| {
         row(ui, &words.width, "width", |ui| {
@@ -342,6 +350,7 @@ fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, unit
                 .show(ui);
             if let Some(v) = field.edit.value().cloned().flatten() {
                 link.set_width(v);
+                options.set_exact_size(link);
             }
             if let Some(unit) = field.unit.value().copied() {
                 link.set_unit(unit);
@@ -355,6 +364,7 @@ fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, unit
                 .show(ui);
             if let Some(v) = field.edit.value().cloned().flatten() {
                 link.set_height(v);
+                options.set_exact_size(link);
             }
             if let Some(unit) = field.unit.value().copied() {
                 link.set_unit(unit);
@@ -365,25 +375,22 @@ fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, unit
             let field = NumberField::new(words.percent.clone(), Bind::given(Some(percent)))
                 .codec(NumberCodec::new(units.reader(Some(UnitKind::Percent)), 2))
                 .range(LEAST_PERCENT..=MAX_PERCENT);
-            if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
-                set_percent(link, v);
+            if let Some(v) = field.show(ui).edit.value().cloned().flatten()
+                && let Ok(size) = resize_from_scale(link.original(), v)
+            {
+                set_pixels(link, size);
+                options.percent = v;
+                options.size = None;
             }
         });
+        if let Some(on) = check(ui, &words.constrain, "constrain", link.is_linked()) {
+            options.constrain(link, on);
+        }
         let methods = Resample::entries(sizing, &RESAMPLE_METHODS);
         row(ui, &sizing.resample_method, "resample", |ui| {
-            if let Some(method) = Select::new(sizing.resample_method.clone(), Bind::given(*resample), &methods).show(ui).value().copied() {
-                *resample = method;
+            if let Some(method) = Select::new(sizing.resample_method.clone(), Bind::given(options.resample), &methods).show(ui).value().copied() {
+                options.resample = method;
             }
         });
     });
-}
-
-/// Sets the output size to `percent` of the document, whatever unit the fields show.
-fn set_percent(link: &mut LinkedSize, percent: f64) {
-    if let Ok(size) = resize_from_scale(link.original(), percent) {
-        let unit = link.unit();
-        link.set_unit(UnitKind::Pixels);
-        link.set_width(f64::from(size.width));
-        link.set_unit(unit);
-    }
 }

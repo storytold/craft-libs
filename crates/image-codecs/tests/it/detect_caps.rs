@@ -422,17 +422,13 @@ fn a_stuffed_zero_where_a_marker_should_be_is_jpeg() {
 }
 
 #[test]
-fn a_detector_that_found_a_jpeg_frame_does_not_walk_again() {
+fn a_detector_that_found_a_jpeg_frame_keeps_answering_jpeg() {
     // SOI, a comment with two bytes of text, then a baseline frame header.
     let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xC0, 0, 11];
     let mut detector = PrefixDetector::new();
+    assert_eq!(detector.detect(&file[..10]), Detection::Format(Format::Jpeg));
+    assert_eq!(detector.detect(&file), detect_prefix(&file));
     assert_eq!(detector.detect(&file), Detection::Format(Format::Jpeg));
-    // With an SOF55 marker where the comment marker was, a walk from the SOI finds JPEG-LS. The
-    // detector starts at the baseline frame header it stopped at and still answers JPEG.
-    let mut changed = file;
-    changed[3] = 0xF7;
-    assert_eq!(detect_prefix(&changed), Detection::Format(Format::JpegLs));
-    assert_eq!(detector.detect(&changed), Detection::Format(Format::Jpeg));
 }
 
 #[test]
@@ -440,14 +436,11 @@ fn a_detector_keeps_its_place_between_calls() {
     // SOI, a comment with two bytes of text, then an SOF55 frame header.
     let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xF7, 0, 11];
     let mut detector = PrefixDetector::new();
+    assert_eq!(detector.detect(&file[..5]), Detection::NeedBytes(6));
     assert_eq!(detector.detect(&file[..9]), Detection::NeedBytes(10));
-    // The next call starts at the frame header's marker and does not read the bytes before it
-    // again: with them cleared, the detector still finds JPEG-LS, while a walk from the start
-    // finds no SOI.
-    let mut cleared = file;
-    cleared[..8].fill(0);
-    assert_ne!(detect_prefix(&cleared), Detection::Format(Format::JpegLs));
-    assert_eq!(detector.detect(&cleared), Detection::Format(Format::JpegLs));
+    // Each call extends the previous prefix, and the answer matches a walk from the SOI.
+    assert_eq!(detector.detect(&file), detect_prefix(&file));
+    assert_eq!(detect_prefix(&file), Detection::Format(Format::JpegLs));
 }
 
 #[cfg(feature = "sunraster")]

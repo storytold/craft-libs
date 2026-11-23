@@ -8,8 +8,8 @@ use craft_theme::{ContrastChoice, ModeChoice, MotionChoice, Size, TextSize, Them
 use craft_ui::choice::RadioGroup;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::form::{Field, FieldGroup};
-use craft_ui::layout_components::Row;
+use craft_ui::form::Field;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
@@ -110,7 +110,7 @@ impl<'a> AppearancePage<'a> {
         let mut held = Held::new(draft);
         let mut toggled = None;
         let mut changed = false;
-        let mut shown = FieldGroup::new(words.appearance.clone()).show(ui, |ui, cx| {
+        let mut shown = Stack::new().label(words.appearance.clone()).show(ui, |ui, cx| {
             let before = held.read(cx).unwrap_or_default();
             let mut now = before.clone();
             let shown = now.applied_to(&suite.shown);

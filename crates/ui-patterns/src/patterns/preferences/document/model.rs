@@ -4,7 +4,7 @@ use super::draft::{SettingsDraft, insert, lookup};
 use super::rules::RuleKind;
 use super::texts::OPEN_RANGE;
 use super::{CustomSettings, SettingsDocument, table_of};
-use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesModel};
+use crate::patterns::preferences::model::{GroupSpec, PageSpec, PrefValue, PreferencesDraft, PreferencesModel};
 use craft_theme::Rgba;
 use egui::{Context, Ui};
 use serde::Serialize;
@@ -91,7 +91,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
             (PrefValue::Int(n), Value::Float(_)) => Value::Float(clamp_float(n as f64)),
             (PrefValue::Float(x), Value::Float(_)) if x.is_finite() => Value::Float(clamp_float(x)),
             (PrefValue::Float(x), Value::Integer(_)) if x.is_finite() => Value::Integer(clamp_int(x.round() as i64)),
-            (PrefValue::Text(text), Value::String(_)) if matches!(kind, None | Some(RuleKind::Custom)) => Value::String(text),
+            (PrefValue::Text(text), Value::String(_)) if matches!(kind, None | Some(RuleKind::Custom | RuleKind::CustomRows)) => Value::String(text),
             (PrefValue::Choice(id), Value::String(_) | Value::Integer(_)) => match kind {
                 Some(RuleKind::Choice(options)) if options.iter().any(|(option, _)| *option == id) => match id.parse::<i64>() {
                     Ok(n) if self.rules.get(key).is_some_and(|rule| rule.integer) => Value::Integer(n),
@@ -114,33 +114,6 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
 
     fn custom_page(&mut self, ui: &mut Ui, page: &str) {
         self.custom.page(ui, page, &mut self.draft);
-    }
-
-    fn differs(&self) -> bool {
-        self.draft.table != self.saved_table || self.custom.differs()
-    }
-
-    fn apply(&mut self) -> Result<(), String> {
-        let words = Arc::clone(&self.own);
-        let invalid = |error: String| words.invalid.fill(&[("error", &error)]);
-        let value: T =
-            toml::Value::Table(self.draft.table.clone()).try_into().map_err(|error: toml::de::Error| invalid(error.message().to_owned()))?;
-        // The serialized value is the next draft: the struct's own reading of the values.
-        let table = table_of(&value).map_err(|error| invalid(error.to_string()))?;
-        self.custom.apply(&value)?;
-        for (key, edit) in changed_keys(&self.saved_table, &table) {
-            self.applied.retain(|(earlier, _)| *earlier != key);
-            self.applied.push((key, edit));
-        }
-        self.saved_table = table;
-        self.draft = SettingsDraft { table: self.saved_table.clone() };
-        self.saved = value;
-        Ok(())
-    }
-
-    fn cancel(&mut self) {
-        self.draft = SettingsDraft { table: self.saved_table.clone() };
-        self.custom.cancel();
     }
 
     fn reset_page(&mut self, page: &str) {
@@ -166,5 +139,34 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
 
     fn nested_open(&self) -> bool {
         self.custom.nested_open()
+    }
+}
+
+impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSettings<T>> PreferencesDraft for SettingsDocument<T, C> {
+    fn differs(&self) -> bool {
+        self.draft.table != self.saved_table || self.custom.differs()
+    }
+
+    fn apply(&mut self) -> Result<(), String> {
+        let words = Arc::clone(&self.own);
+        let invalid = |error: String| words.invalid.fill(&[("error", &error)]);
+        let value: T =
+            toml::Value::Table(self.draft.table.clone()).try_into().map_err(|error: toml::de::Error| invalid(error.message().to_owned()))?;
+        // The serialized value is the next draft: the struct's own reading of the values.
+        let table = table_of(&value).map_err(|error| invalid(error.to_string()))?;
+        self.custom.apply(&value)?;
+        for (key, edit) in changed_keys(&self.saved_table, &table) {
+            self.applied.retain(|(earlier, _)| *earlier != key);
+            self.applied.push((key, edit));
+        }
+        self.saved_table = table;
+        self.draft = SettingsDraft { table: self.saved_table.clone() };
+        self.saved = value;
+        Ok(())
+    }
+
+    fn cancel(&mut self) {
+        self.draft = SettingsDraft { table: self.saved_table.clone() };
+        self.custom.cancel();
     }
 }

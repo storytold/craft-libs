@@ -119,6 +119,21 @@ pub enum LeadOnOpen {
     First,
 }
 
+/// What the pointer moving over the rows changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HoverLead {
+    /// Nothing: only a press moves the lead.
+    #[default]
+    Off,
+    /// The lead moves to the row under the pointer; the selection stays until a pick (click, Enter, or a key move):
+    /// option lists, where the selection is the chosen value.
+    Lead,
+    /// The lead moves and picks the row, as the arrow keys do: menus and the undo list, where the hover range is
+    /// the point.
+    LeadAndSelection,
+}
+
 /// How tall a collection's rows are. Read-only display tables (a metadata table) take text rows; lists the user picks
 /// from or navigates keep control-high rows, a pointer target as tall as a control. A row with a thumbnail or a
 /// detail line is as tall as those need either way.
@@ -173,9 +188,8 @@ pub struct CollectionProps {
     pub allow_empty: bool,
     /// Where the lead starts.
     pub lead_on_open: LeadOnOpen,
-    /// The lead, and the selection with it as for the arrow keys, moves to the row under the pointer when the pointer
-    /// moves: menus, popup lists and the undo list.
-    pub lead_follows_hover: bool,
+    /// What the pointer moving over the rows changes: the lead, and for some lists the selection too.
+    pub hover_lead: HoverLead,
     /// The arrow keys select the row they move the lead to. Off: they move the lead only, and Space, Enter or a click
     /// selects it (a swatch table, a tab strip, a preset browser); Enter then activates it as well.
     pub arrows_select: bool,
@@ -299,7 +313,7 @@ impl CollectionProps {
             striped: false,
             allow_empty: false,
             lead_on_open: LeadOnOpen::Selected,
-            lead_follows_hover: false,
+            hover_lead: HoverLead::Off,
             arrows_select: true,
             focus_on_press: true,
             rows_stamp: None,
@@ -434,10 +448,10 @@ impl CollectionProps {
         self
     }
 
-    /// The lead follows the pointer over the rows.
+    /// What the pointer moving over the rows changes.
     #[must_use]
-    pub const fn lead_follows_hover(mut self, on: bool) -> Self {
-        self.lead_follows_hover = on;
+    pub const fn hover_lead(mut self, hover: HoverLead) -> Self {
+        self.hover_lead = hover;
         self
     }
 
@@ -595,26 +609,27 @@ impl CollectionProps {
     }
 }
 
-/// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.
+/// What an item reads of its place in the collection; the item step joins it to the item's flags at step 12. The
+/// fields marked "Measured" are the ones an auto row's measure reads (the row-hook contract on `ItemCx`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowState {
-    /// The row is selected.
+    /// The row is selected. Measured.
     pub selected: bool,
-    /// The row holds the lead.
+    /// The row holds the lead. Measured.
     pub lead: bool,
     /// A drag would drop on the row.
     pub drop_target: bool,
     /// The row is being dragged.
     pub dragging: bool,
-    /// The row's name is being edited.
+    /// The row's name is being edited. Measured.
     pub renaming: bool,
     /// The app marks the row.
     pub emphasized: bool,
-    /// The collection's current item (`CollectionProps::current`).
+    /// The collection's current item (`CollectionProps::current`). Measured.
     pub current: bool,
-    /// An odd row of a striped list.
+    /// An odd row of a striped list. Measured.
     pub striped: bool,
-    /// A tree row whose children show.
+    /// A tree row whose children show. Measured.
     pub open: bool,
     /// The pointer is over the row and a press there would reach it.
     pub hovered: bool,
@@ -627,11 +642,11 @@ pub struct RowState {
     /// button shown.
     pub menu_open: bool,
     /// `Some(steps)` for a sub-row of a row above (`ItemSource::sub_row`): compact, its toggles `steps` indent steps
-    /// into its content.
+    /// into its content. Measured.
     pub sub_row: Option<usize>,
-    /// The next row is a sub-row, which continues this row: no divider between them.
+    /// The next row is a sub-row, which continues this row: no divider between them. Measured.
     pub continued: bool,
-    /// The row is the collection's last: dividers fall between rows, so none under it.
+    /// The row is the collection's last: dividers fall between rows, so none under it. Measured.
     pub last: bool,
     /// The activation key (Enter) activated the row this pass: a row with controls of its own may move focus into one.
     pub activated_by_key: bool,

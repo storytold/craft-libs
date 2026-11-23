@@ -307,10 +307,13 @@ type FamilyLoad = Arc<OnceLock<Arc<[LoadedFace]>>>;
 /// Each family's files load once ([`Catalog::load_family`]): other threads asking for the same
 /// family wait for that load, other families load at the same time.
 pub struct Catalog {
+    id: u64,
     env: FontEnv,
     config: RwLock<Config>,
     index: RwLock<Arc<Index>>,
     ready: OnceLock<()>,
+    /// The first scan was started on a background thread.
+    scanning: AtomicBool,
     scan: Mutex<ScanState>,
     stamp: Mutex<Stamp>,
     generation: AtomicU64,
@@ -331,11 +334,14 @@ impl Catalog {
     /// A catalog of the fonts installed on the system `env` describes, the font store, and the
     /// files the platform's font service lists (with the `system` feature).
     pub fn new(env: FontEnv) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             env,
             config: RwLock::new(Config { app_dirs: Vec::new(), listers: Vec::new(), font_service: cfg!(feature = "system") }),
             index: RwLock::new(Arc::new(Index::default())),
             ready: OnceLock::new(),
+            scanning: AtomicBool::new(false),
             scan: Mutex::new(ScanState::default()),
             stamp: Mutex::new(Stamp::default()),
             generation: AtomicU64::new(0),
@@ -388,13 +394,30 @@ impl Catalog {
     }
 
     /// Start the first scan on a background thread, so the first lookup doesn't wait for all of
-    /// it. Does nothing once it has run, or when no thread can be started (the first lookup
-    /// then scans).
+    /// it. Does nothing once it has started or run, or when no thread can be started (the first
+    /// lookup then scans).
     pub fn scan_in_background(self: &Arc<Self>) {
-        if self.ready.get().is_none() {
+        if self.ready.get().is_none() && !self.scanning.swap(true, Ordering::AcqRel) {
             let me = Arc::clone(self);
-            let _ = std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.ensure());
+            if std::thread::Builder::new().name("font-catalog-scan".into()).spawn(move || me.background_scan()).is_err() {
+                self.scanning.store(false, Ordering::Release);
+            }
         }
+    }
+
+    /// The background thread's scan. A scan that panics leaves the catalog unscanned and not
+    /// scanning, so the next [`Catalog::scan_in_background`] or lookup scans again.
+    fn background_scan(&self) {
+        struct Done<'a>(&'a Catalog);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                if self.0.ready.get().is_none() {
+                    self.0.scanning.store(false, Ordering::Release);
+                }
+            }
+        }
+        let _done = Done(self);
+        self.ensure();
     }
 
     fn ensure(&self) {
@@ -475,6 +498,13 @@ impl Catalog {
         Watch { stop }
     }
 
+    /// The catalog's identity: unique among the catalogs of the process, fixed at construction. Clones of the `Arc`
+    /// share it. A holder of derived data keys it by the id and the [`generation`](Catalog::generation), which counts
+    /// changes of this catalog only.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// Counts the catalog's changes: each scan, and each face added or removed.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
@@ -491,7 +521,8 @@ impl Catalog {
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// The family names, sorted ignoring case.
+    /// The family names, sorted ignoring case. Private system families are among them ([`is_private_family`]): a
+    /// document may name one, while font lists leave them out.
     pub fn families(&self) -> Arc<[String]> {
         Arc::clone(&self.snapshot().families)
     }
@@ -788,4 +819,10 @@ impl Walk {
             self.files.push((path, source, by_name));
         }
     }
+}
+
+/// Whether `family` is a private system family, which font menus don't list: a name with a leading '.' (macOS's
+/// `.SF NS`, `.Aqua Kana`), as Photoshop hides them.
+pub fn is_private_family(family: &str) -> bool {
+    family.starts_with('.')
 }

@@ -3,7 +3,6 @@
 use crate::contract::cx::CxCore;
 use crate::runtime::egui::repaint;
 use crate::runtime::pass_state;
-use crate::runtime::wheel;
 use craft_behavior::{MoveMods, NavMove};
 use egui::{Context, Id, Rect, Vec2};
 
@@ -20,7 +19,7 @@ pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     if moves.is_empty() && !reveal {
         return;
     }
-    let Some(owner) = core.env.scroll_owner().or_else(|| wheel::nearest_scroll_owner(&core.ctx, core.rect)) else { return };
+    let Some(owner) = core.env.scroll_owner() else { return };
     pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.into_iter().map(|(mv, mods)| (owner, mv, mods))));
     if reveal {
         pass_state::with::<Reveals, _>(&core.ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(core.rect) }));
@@ -56,6 +55,24 @@ pub(crate) fn take_reveal(ctx: &Context, owner: Id) -> Option<Rect> {
             RevealTo::Child(_) => None,
         }
     })
+}
+
+/// Steps the scrolling body `owner` by one of its units: toward the right of the screen (`right`) or the left. `view`
+/// is the rect the body shows this pass and `units` the rects of the units its content is made of (a ribbon's groups),
+/// in any order. The step brings the nearest unit that lies past the view's edge on that side whole into view, by the
+/// least move that shows it, at the owner's next pass, as a reveal does. Returns whether there was such a unit: at the
+/// end of the content nothing moves. Half a point past the edge counts as inside: less than a pixel shows at any scale.
+pub fn scroll_step(ctx: &Context, owner: Id, view: Rect, units: &[Rect], right: bool) -> bool {
+    let past = |unit: &&Rect| if right { unit.max.x > view.max.x + 0.5 } else { unit.min.x < view.min.x - 0.5 };
+    let nearest = if right {
+        units.iter().filter(past).min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+    } else {
+        units.iter().filter(past).max_by(|a, b| a.max.x.total_cmp(&b.max.x))
+    };
+    let Some(unit) = nearest else { return false };
+    pass_state::with::<Reveals, _>(ctx, |reveals| reveals.0.push(Reveal { owner, to: RevealTo::Rect(*unit) }));
+    repaint::request(ctx);
+    true
 }
 
 /// Queues a reveal request for `owner`.

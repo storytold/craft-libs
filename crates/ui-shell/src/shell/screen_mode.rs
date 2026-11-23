@@ -4,13 +4,15 @@ use crate::contract::{BindMut, BodyCx};
 use crate::runtime::commands::Commands as _;
 use crate::runtime::egui::pass;
 use crate::runtime::windows::{WindowAction, WindowHost, os_of};
+use crate::style::SurfaceKind;
 use craft_behavior::{EditEvent, Mixed};
 use craft_host::target::{Os, WindowState};
 use egui::Context;
 use std::sync::Arc;
 
-/// The three screen modes. The shell keeps the current one in its `screen_mode` binding and maps it to the body mode,
-/// the document tabs and the scroll bars. Saved as `"standard"`, `"fullScreenWithMenuBar"` and `"fullScreen"`.
+/// The screen modes. The shell keeps the current one in its `screen_mode` binding and maps it to the body mode,
+/// the document tabs and the scroll bars; its [`ScreenModeSet`] says which of them the F key cycles through. Saved as
+/// `"standard"`, `"fullScreenWithMenuBar"`, `"fullScreen"`, `"focus"` and `"immersive"`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -22,12 +24,49 @@ pub enum ScreenMode {
     FullScreenWithMenuBar,
     /// The body only.
     FullScreen,
+    /// The body only, with the screen bar; the surround is black.
+    Focus,
+    /// The body only, with the screen bar, filling the pages' canvas.
+    Immersive,
+}
+
+/// Which screen modes the F key cycles through. The shell publishes its set to its regions as an env value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui_macros::EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ScreenModeSet {
+    /// Standard, Full Screen With Menu Bar and Full Screen.
+    #[default]
+    Panels,
+    /// Standard, Full Screen With Menu Bar, Focus and Immersive; F11 gives Full Screen With Menu Bar.
+    Document,
+}
+
+impl ScreenModeSet {
+    /// The modes the set cycles through, in order.
+    pub fn modes(self) -> &'static [ScreenMode] {
+        match self {
+            ScreenModeSet::Panels => &[ScreenMode::Standard, ScreenMode::FullScreenWithMenuBar, ScreenMode::FullScreen],
+            ScreenModeSet::Document => &[ScreenMode::Standard, ScreenMode::FullScreenWithMenuBar, ScreenMode::Focus, ScreenMode::Immersive],
+        }
+    }
 }
 
 impl ScreenMode {
-    /// Whether the shell shows the body only.
+    /// The surface around the body in this mode: `Some(Scrim)` for `Focus` only, `None` for every other mode.
+    /// Immersive fills the room with the body's own canvas, so it paints nothing behind it.
+    pub fn surround(self) -> Option<SurfaceKind> {
+        (self == Self::Focus).then_some(SurfaceKind::Scrim)
+    }
+
+    /// Whether the shell shows the body only: Full Screen, Focus and Immersive.
     pub fn body_only(self) -> bool {
-        self == Self::FullScreen
+        matches!(self, Self::FullScreen | Self::Focus | Self::Immersive)
+    }
+
+    /// Whether the mode shows the screen bar: Focus and Immersive.
+    pub(super) fn has_screen_bar(self) -> bool {
+        matches!(self, Self::Focus | Self::Immersive)
     }
 
     /// Whether the document tabs show.
@@ -40,26 +79,29 @@ impl ScreenMode {
         self != Self::Standard
     }
 
-    /// The mode the F key selects: Standard, Full Screen With Menu Bar, Full Screen, Standard.
-    pub fn next(self) -> Self {
-        match self {
-            Self::Standard => Self::FullScreenWithMenuBar,
-            Self::FullScreenWithMenuBar => Self::FullScreen,
-            Self::FullScreen => Self::Standard,
-        }
+    /// The mode the F key selects: the one after this in `set`'s order, wrapping to the first. A mode outside the set
+    /// steps to Standard.
+    pub fn next(self, set: ScreenModeSet) -> Self {
+        self.step(set, 1)
     }
 
-    /// The mode Shift+F selects.
-    pub fn previous(self) -> Self {
-        match self {
-            Self::Standard => Self::FullScreen,
-            Self::FullScreenWithMenuBar => Self::Standard,
-            Self::FullScreen => Self::FullScreenWithMenuBar,
+    /// The mode Shift+F selects: the one before this in `set`'s order, wrapping to the last. A mode outside the set
+    /// steps to Standard.
+    pub fn previous(self, set: ScreenModeSet) -> Self {
+        self.step(set, set.modes().len().saturating_sub(1))
+    }
+
+    /// The mode `by` places after this one in `set`'s order, wrapping.
+    fn step(self, set: ScreenModeSet, by: usize) -> Self {
+        let modes = set.modes();
+        match modes.iter().position(|mode| *mode == self) {
+            Some(at) => modes.get((at + by) % modes.len()).copied().unwrap_or_default(),
+            None => Self::Standard,
         }
     }
 }
 
-/// The screen-mode commands of a window. The three modes are radio rows of View > Screen Mode; the cycle commands are
+/// The screen-mode commands of a window. The modes are radio rows of View > Screen Mode; the cycle commands are
 /// the F key and Shift+F. The window's shell takes them and writes its `screen_mode` binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "screenMode", scope = "window")]
@@ -74,6 +116,12 @@ pub enum ScreenModeCommands {
     /// The body only.
     #[command(label = "Full Screen Mode", kind = "radio", group = "screen_mode", alias = "screenMode.fullScreen")]
     FullScreen,
+    /// The body only, with the screen bar; the surround is black.
+    #[command(label = "Focus Screen Mode", kind = "radio", group = "screen_mode")]
+    Focus,
+    /// The body only, with the screen bar, filling the pages' canvas.
+    #[command(label = "Immersive Screen Mode", kind = "radio", group = "screen_mode")]
+    Immersive,
     /// The next mode.
     #[command(label = "Cycle Screen Mode", default = "F", icon = "app_window")]
     Cycle,
@@ -89,17 +137,21 @@ impl ScreenModeCommands {
             ScreenMode::Standard => ScreenModeCommands::Standard,
             ScreenMode::FullScreenWithMenuBar => ScreenModeCommands::FullScreenWithMenuBar,
             ScreenMode::FullScreen => ScreenModeCommands::FullScreen,
+            ScreenMode::Focus => ScreenModeCommands::Focus,
+            ScreenMode::Immersive => ScreenModeCommands::Immersive,
         }
     }
 
     /// The mode the command leaves a window in that is in `current`.
-    pub fn apply(self, current: ScreenMode) -> ScreenMode {
+    pub fn apply(self, current: ScreenMode, set: ScreenModeSet) -> ScreenMode {
         match self {
             ScreenModeCommands::Standard => ScreenMode::Standard,
             ScreenModeCommands::FullScreenWithMenuBar => ScreenMode::FullScreenWithMenuBar,
             ScreenModeCommands::FullScreen => ScreenMode::FullScreen,
-            ScreenModeCommands::Cycle => current.next(),
-            ScreenModeCommands::CycleBack => current.previous(),
+            ScreenModeCommands::Focus => ScreenMode::Focus,
+            ScreenModeCommands::Immersive => ScreenMode::Immersive,
+            ScreenModeCommands::Cycle => current.next(set),
+            ScreenModeCommands::CycleBack => current.previous(set),
         }
     }
 }
@@ -132,6 +184,7 @@ impl ScreenModeFollow {
         mut bind: BindMut<'_, ScreenMode>,
         name: Arc<str>,
         os: bool,
+        set: ScreenModeSet,
     ) -> (ScreenMode, bool) {
         let before = match bind.read(cx) {
             Some(Mixed::Same(held)) => held,
@@ -140,7 +193,7 @@ impl ScreenModeFollow {
         let last = self.applied;
         let mut mode = before;
         while let Some((command, _)) = cx.take_command::<ScreenModeCommands>() {
-            mode = command.apply(mode);
+            mode = command.apply(mode, set);
         }
         if os {
             mode = self.follow_window(ctx, mode);

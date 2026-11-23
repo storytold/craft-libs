@@ -18,6 +18,7 @@ use crate::util::ui_crate;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
+use syn::parse::Parser as _;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 use syn::{Data, DeriveInput};
@@ -37,6 +38,22 @@ pub(crate) struct Escape {
     pub(crate) attr: &'static str,
     /// The one key it takes (`assume`).
     pub(crate) keyword: &'static str,
+    /// What a type parameter that only escaped fields name is bound by instead of the derive's trait (`Hash + Sync`
+    /// for a field that feeds a key through its `Hash`); `None` keeps the trait.
+    pub(crate) bound: Option<TokenStream>,
+}
+
+/// Which fields a derive does not check, and what a type parameter that only those fields name is bound by.
+pub(crate) trait EscapeRule {
+    /// `None` when `field` is checked; else `Some(bound)`: what a type parameter that only escaped fields name is bound
+    /// by instead of the derive's trait (`None` keeps the trait).
+    fn escape(&self, field: &syn::Field) -> syn::Result<Option<Option<TokenStream>>>;
+}
+
+impl EscapeRule for Escape {
+    fn escape(&self, field: &syn::Field) -> syn::Result<Option<Option<TokenStream>>> {
+        Ok(escaped(field, self)?.then(|| self.bound.clone()))
+    }
 }
 
 /// The escape a derive allows for one type parameter, `#[<attr>(<keyword>)]`: the parameter is bound by `bound`
@@ -55,12 +72,13 @@ pub(crate) struct ParamEscape {
 /// `check::<Field>()` spanned at the field's type, so a rejected field (`Cell<T>` included) is an error at the derive
 /// that names the field, and a recursive type (a node holding `Vec<Self>` or `Vec<Node<T>>`) does not make its impl
 /// require itself. A field type written with `Self` is checked as the type itself. A field carrying `escape` is not
-/// checked. A type parameter carrying `param_escape` is bound by its `bound` instead of `trait_path`; its fields are
-/// still checked under that bound.
+/// checked; a type parameter that only escaped fields name is bound by the escape's bound, when it has one. A type
+/// parameter carrying `param_escape` is bound by its `bound` instead of `trait_path`; its fields are still checked under
+/// that bound.
 pub(crate) fn field_checks(
     input: &DeriveInput,
     trait_path: &TokenStream,
-    escape: Option<&Escape>,
+    escape: Option<&dyn EscapeRule>,
     param_escape: Option<&ParamEscape>,
 ) -> syn::Result<FieldChecks> {
     let fields: Vec<&syn::Field> = match &input.data {
@@ -82,7 +100,26 @@ pub(crate) fn field_checks(
             }
         }
     }
-    let mut bounds = Vec::new();
+    // The type parameters each kind of field names: a parameter only escaped fields name is bound by the escape's
+    // bound, when it has one.
+    let (mut named, mut named_escaped) = (Named::default(), Named::default());
+    // The bound of the escaped fields that name each parameter, in field order.
+    let mut escaped_bounds: Vec<(syn::Ident, TokenStream)> = Vec::new();
+    for field in &fields {
+        match escape.map(|escape| escape.escape(field)).transpose()?.flatten() {
+            Some(bound) => {
+                let mut names = Named::default();
+                syn::visit::Visit::visit_type(&mut names, &field.ty);
+                if let Some(bound) = bound {
+                    escaped_bounds.extend(names.0.iter().map(|ident| (ident.clone(), bound.clone())));
+                }
+                named_escaped.0.extend(names.0);
+            }
+            None => syn::visit::Visit::visit_type(&mut named, &field.ty),
+        }
+    }
+    // Each type parameter takes the derive's bound beside its own, in one place: a second place for it is a lint in
+    // the type's crate (`clippy::multiple_bound_locations`).
     for param in generics.type_params_mut() {
         let escaped = match param_escape {
             Some(param_escape) => param_escaped(param, param_escape)?,
@@ -91,14 +128,15 @@ pub(crate) fn field_checks(
         // A derive's helper attributes are not attributes of the impl.
         param.attrs.clear();
         let ident = &param.ident;
-        bounds.push(match param_escape {
-            Some(ParamEscape { bound, .. }) if escaped => quote!(#ident: #bound),
-            _ => quote!(#ident: #trait_path),
-        });
-    }
-    let where_clause = generics.make_where_clause();
-    for bound in bounds {
-        where_clause.predicates.push(syn::parse2(bound)?);
+        let only_escaped = named_escaped.0.contains(ident) && !named.0.contains(ident);
+        let escape_bound = escaped_bounds.iter().find(|(named, _)| named == ident).map(|(_, bound)| bound);
+        let bound = match (param_escape, escape_bound) {
+            (Some(ParamEscape { bound, .. }), _) if escaped => quote!(#bound),
+            (_, Some(bound)) if only_escaped => quote!(#bound),
+            _ => quote!(#trait_path),
+        };
+        let bounds = syn::punctuated::Punctuated::<syn::TypeParamBound, syn::Token![+]>::parse_terminated.parse2(bound)?;
+        param.bounds.extend(bounds);
     }
     let ident = &input.ident;
     let (_, type_generics, _) = input.generics.split_for_impl();
@@ -106,7 +144,7 @@ pub(crate) fn field_checks(
     let mut checked = Vec::new();
     for field in fields {
         if let Some(escape) = escape
-            && escaped(field, escape)?
+            && escape.escape(field)?.is_some()
         {
             continue;
         }
@@ -126,6 +164,21 @@ pub(crate) fn field_checks(
         };
     };
     Ok(FieldChecks { generics, checks })
+}
+
+/// The single-segment paths a type names, among them the type parameters it uses.
+#[derive(Default)]
+struct Named(Vec<syn::Ident>);
+
+impl<'ast> syn::visit::Visit<'ast> for Named {
+    fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+        if path.qself.is_none()
+            && let Some(ident) = path.path.get_ident()
+        {
+            self.0.push(ident.clone());
+        }
+        syn::visit::visit_type_path(self, path);
+    }
 }
 
 /// Replaces the type `Self` with the deriving type, which the generated free function can't name as `Self`.
@@ -162,7 +215,7 @@ fn param_escaped(param: &syn::TypeParam, escape: &ParamEscape) -> syn::Result<bo
 /// Whether `field` carries `#[<attr>(<keyword> = "reason")]`. Any other content of the attribute, or an empty
 /// reason, is an error.
 pub(crate) fn escaped(field: &syn::Field, escape: &Escape) -> syn::Result<bool> {
-    let Escape { attr: name, keyword } = *escape;
+    let Escape { attr: name, keyword, .. } = escape;
     let mut found = false;
     for attr in field.attrs.iter().filter(|attr| attr.path().is_ident(name)) {
         attr.parse_nested_meta(|meta| {
@@ -202,7 +255,8 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     let input: DeriveInput = syn::parse2(input)?;
     let k = tracked_crate();
     let trait_path = quote!(#k::PlainData);
-    let FieldChecks { generics, checks } = field_checks(&input, &trait_path, Some(&Escape { attr: "plain_data", keyword: "assume" }), None)?;
+    let FieldChecks { generics, checks } =
+        field_checks(&input, &trait_path, Some(&Escape { attr: "plain_data", keyword: "assume", bound: None }), None)?;
     let ident = &input.ident;
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (_, type_generics, _) = input.generics.split_for_impl();

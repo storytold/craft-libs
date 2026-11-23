@@ -925,6 +925,17 @@ mod tests {
     }
 
     #[test]
+    fn a_walk_that_found_another_frame_header_stays_at_it() {
+        // SOI, a comment with two bytes of text, then a baseline frame header.
+        let file = [0xFF, 0xD8, 0xFF, 0xFE, 0, 4, 1, 2, 0xFF, 0xC0, 0, 11];
+        let mut pos = 0;
+        assert_eq!(jpeg_frame_from(&file, &mut pos), Some(JpegFrame::Other));
+        assert_eq!(pos, 8);
+        assert_eq!(jpeg_frame_from(&file, &mut pos), Some(JpegFrame::Other));
+        assert_eq!(pos, 8);
+    }
+
+    #[test]
     fn interleaved_scans_and_tables_are_unsupported() {
         let img = image(8, 4, ChannelLayout::Rgb, false, 2);
         let good = encode(&img, plan(&img)).unwrap();

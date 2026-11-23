@@ -39,15 +39,15 @@ fn handles(ui: &mut Ui, edges: Bind<'_, PageEdges>) -> StoryOutput {
 
 #[story(MarginHandles<'static>, covers = [Default], drive = Drive::Custom(drag_left_edge))]
 fn margin_handles_on_rulers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let edges = data.value("state", PageEdges::new(Margins::uniform(72.0)).header_footer(36.0, 36.0));
-    handles(ui, Bind::bound(edges))
+    let (edges, edges_at) = data.value_at("state", PageEdges::new(Margins::uniform(72.0)).header_footer(36.0, 36.0));
+    handles(ui, edges_at.bind(edges))
 }
 
 #[story(MarginHandles<'static>, covers = [Invalid], drive = Drive::Never)]
 fn margin_handles_header_below_the_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let edges = data.value("reaching", PageEdges::new(Margins::uniform(72.0)).header_footer(96.0, 36.0));
+    let (edges, edges_at) = data.value_at("reaching", PageEdges::new(Margins::uniform(72.0)).header_footer(96.0, 36.0));
     let refuse_overlap = |edges: &PageEdges| {
         if edges.header > edges.margins.top { Validity::Refuse(Message::new("The header reaches the text")) } else { Validity::Ok }
     };
-    handles(ui, Bind::bound(edges).check(refuse_overlap))
+    handles(ui, edges_at.bind(edges).check(refuse_overlap))
 }

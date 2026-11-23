@@ -3,11 +3,12 @@
 #[cfg(feature = "font-picker")]
 use super::FaceAxes;
 use super::{
-    BaselinePosition, Caps, CharacterControls, CharacterValues, Kerning, Leading, LineSpacing, ParagraphAlign, ParagraphControls, ParagraphDialog,
-    ParagraphFormat, ParagraphPreview, ParagraphValues, SpacingKind, SpecialIndent, TextAlign,
+    AsianTypography, BaselinePosition, Caps, CharacterControls, CharacterValues, Kerning, Leading, LineBreakOptions, LineSpacing, ParagraphAlign,
+    ParagraphControls, ParagraphDialog, ParagraphFormat, ParagraphPreview, ParagraphTab, ParagraphValues, SpacingKind, SpecialIndent, TextAlign,
 };
 use craft_theme::Rgba;
 use craft_ui::contract::Show as _;
+use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -116,6 +117,24 @@ fn indented() -> ParagraphFormat {
         space_after: Some(1.0),
         space_after_kind: SpacingKind::Lines,
         line_spacing: Some(LineSpacing::Exactly(20.0)),
+        direction: Some(Some(super::ParagraphDirection::LeftToRight)),
+        mirror_indents: Some(Some(false)),
+        breaks: Some(LineBreakOptions {
+            widow_control: Some(true),
+            keep_with_next: None,
+            keep_lines_together: Some(false),
+            page_break_before: Some(false),
+            suppress_line_numbers: Some(false),
+            dont_hyphenate: Some(true),
+        }),
+        asian: Some(AsianTypography {
+            kinsoku: Some(true),
+            word_wrap: Some(false),
+            overflow_punct: None,
+            top_line_punct: Some(true),
+            auto_space_de: Some(true),
+            auto_space_dn: Some(false),
+        }),
         ..ParagraphFormat::default()
     }
 }
@@ -125,6 +144,23 @@ fn indents_and_spacing(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let mut dialog = ParagraphDialog::new(indented()).word(true);
     let _ = dialog.show(ui, &DialogStack::default());
     StoryOutput::default()
+}
+
+/// Paragraphs that differ in "Don't add space between paragraphs of the same style": the box under the spacing rows is
+/// mixed.
+#[story(ParagraphDialog, covers = [], drive = Drive::Never)]
+fn contextual_spacing_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || ParagraphDialog::new(ParagraphFormat { contextual_spacing: Some(None), ..indented() }).word(true))
+}
+
+#[story(ParagraphDialog, covers = [], drive = Drive::Never)]
+fn line_and_page_breaks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || ParagraphDialog::new(indented()).word(true).tab(ParagraphTab::LineAndPageBreaks))
+}
+
+#[story(ParagraphDialog, covers = [], drive = Drive::Never)]
+fn asian_typography(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || ParagraphDialog::new(indented()).word(true).tab(ParagraphTab::AsianTypography))
 }
 
 #[story(ParagraphPreview, covers = [Default], drive = Drive::Never)]

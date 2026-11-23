@@ -5,16 +5,19 @@ use super::{
     AppCatalog, CommandChain, CommandGate, CommandInput, CommandScope, CommandSet, CommandState, EditCommands, FirePhase, FireSource, Fired,
     ResolvedCommand, WindowShortcut, registry,
 };
+use crate::contract::Revision;
 use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::egui::{pass, repaint};
 use crate::runtime::focus::EditSet;
+#[cfg(feature = "testing")]
+use crate::runtime::measure::Resolve;
 use crate::runtime::pass_state;
 use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Scopes,
-    Trigger,
+    Trigger, TypingRule,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -48,13 +51,24 @@ impl Instances {
         self.list.iter()
     }
 
-    /// Registers `instance`, keeping the place of one already registered under the same id.
-    fn upsert(&mut self, instance: Instance) {
+    /// Registers `instance`, keeping the place of one already registered under the same id. Returns whether a
+    /// resolution can see the difference: the id is new or was dead, or its scope, viewport or layer changed.
+    fn upsert(&mut self, instance: Instance) -> bool {
         match self.at.get(&instance.id) {
-            Some(at) => self.list[*at] = instance,
+            Some(at) => {
+                let held = &self.list[*at];
+                // A held instance that missed a pass is dead until it registers again: its return is seen too.
+                let seen = held.stamp + 1 < instance.stamp
+                    || held.scope != instance.scope
+                    || held.viewport != instance.viewport
+                    || held.layer != instance.layer;
+                self.list[*at] = instance;
+                seen
+            }
             None => {
                 self.at.insert(instance.id, self.list.len());
                 self.list.push(instance);
+                true
             }
         }
     }
@@ -109,16 +123,28 @@ pub(crate) struct Board {
     /// The commands the app defines at run time, from this frame's input.
     app: Option<AppCatalog>,
     keymap: Option<KeymapCache>,
+    /// How many keymaps the board built: the keymap's generation (`runtime::inputs::Input::Keymap`).
+    keymaps: u64,
     gate: Option<CommandGate>,
-    /// The gate's answers in this frame, by command key (`CommandRef::key`). The gate answers from what the app knew
-    /// before the frame, so the board asks it once per command per frame, whichever readers and passes resolve it.
+    /// The gate's answers under its current key, by command key (`CommandRef::key`). The gate is a `fn` of its props,
+    /// so the board asks it once per command until the key moves, whichever readers, passes and frames resolve it.
     gate_answers: HashMap<String, bool>,
     /// Command ids by number, so a state lookup allocates nothing.
     numbers: HashMap<String, u32>,
+    /// The app-scope states of the app's `Tracked<CommandStates>`, by command number, and the revision they are of.
+    app_states: HashMap<u32, CommandState>,
+    app_revision: Option<Revision>,
+    /// The states instances published this frame and last frame; a resolution reads this frame's, else last frame's.
     this: HashMap<StateKey, CommandState>,
     last: HashMap<StateKey, CommandState>,
-    /// What the frame's input changed, under the root frame it arrived for (`set_input`).
-    changed: (u64, InputChanges),
+    /// The revision of each state key that has changed: the value of `state_seq` when it last did.
+    revisions: HashMap<StateKey, u64>,
+    /// Moves with every state change.
+    state_seq: u64,
+    /// The state keys that changed, with the `state_seq` of each change, since the oldest wake of a kept table.
+    state_log: Vec<(u64, StateKey)>,
+    /// The generations of the inputs every resolution reads and of the focus vantage.
+    gens: Gens,
     /// Scoped commands waiting for their instance.
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
@@ -133,12 +159,14 @@ pub(crate) struct Board {
     before: HashMap<ViewportId, (Id, CommandChain)>,
     /// Where the commands of the running pass are judged from: the key focus and the modal layers.
     here: Vantage,
-    /// The chain of the last pass in which any component held key focus.
-    last_focused: Vec<Id>,
+    /// Each viewport's own vantage facts.
+    views: HashMap<ViewportId, View>,
     matcher: Matcher,
     held: Vec<Held>,
     /// The top modal layer's root container of each viewport that has one.
     modal_roots: HashMap<ViewportId, Id>,
+    /// The root of the page region the window's shell shows, per viewport: where keys with nothing focused also go.
+    page_roots: HashMap<ViewportId, Id>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
     modal_published: HashSet<StateKey>,
     modal_published_last: HashSet<StateKey>,
@@ -149,18 +177,10 @@ pub(crate) struct Board {
     unknown: HashSet<String>,
     /// App catalog ids that a linked set also defines, already logged.
     shadowed: HashSet<String>,
-    /// What each reader was shown, by the state key it read and its viewport (`note_read`).
-    shown: ShownMap,
+    /// What each reader was shown, by viewport (`read`).
+    shown: HashMap<ViewportId, Shown>,
     /// The scope each child scope is declared inside: an instance of the child is also an instance of the parent.
     parents: HashMap<&'static str, &'static str>,
-}
-
-/// What `set_input` changed for the readers of command states, which each pass of the frame notes before any component
-/// runs (`begin`).
-#[derive(Clone, Default)]
-struct InputChanges {
-    /// The keymap was rebuilt: any chord shown may differ.
-    keymap: bool,
 }
 
 /// Whether a resolution finds the same state under `a` and `b`: no state is the default one.
@@ -168,7 +188,7 @@ fn same_state(a: Option<&CommandState>, b: Option<&CommandState>) -> bool {
     a.cloned().unwrap_or_default() == b.cloned().unwrap_or_default()
 }
 
-/// Who read a command's resolution: the vantage `begin` resolves it from again.
+/// Who read a command's resolution: the vantage it is resolved from again.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Reader {
     /// A surface with no component of its own (`resolve_global`): the key focus of the running pass.
@@ -182,36 +202,277 @@ enum Reader {
     InMenu(Id, CommandChain),
 }
 
-/// What each reader was shown the last time it resolved a command, by the viewport and the state key it read. The
-/// readers of a key stay in the order they first read it: the gate is app code, and `wake_shown` asks it in that order.
-type ShownMap = HashMap<ViewportId, HashMap<StateKey, Vec<(Reader, ResolvedCommand)>>>;
+impl Reader {
+    /// The reader's kind, for the testing check's message.
+    #[cfg(feature = "testing")]
+    fn kind(&self) -> &'static str {
+        match self {
+            Reader::Global => "global",
+            Reader::Beneath(_) => "beneath-layer",
+            Reader::Chain(_) => "component",
+            Reader::InMenu(..) => "in-menu",
+        }
+    }
 
-/// Keeps `resolved` as what `reader` of `viewport` was shown under `key`, in place of what it was shown before.
-fn keep_shown(shown: &mut ShownMap, key: StateKey, viewport: ViewportId, reader: Reader, resolved: &ResolvedCommand) {
-    keep_in(shown.entry(viewport).or_default().entry(key).or_default(), reader, resolved);
-}
-
-fn keep_in(readers: &mut Vec<(Reader, ResolvedCommand)>, reader: Reader, resolved: &ResolvedCommand) {
-    match readers.iter_mut().find(|(kept, _)| *kept == reader) {
-        Some((_, kept)) => kept.clone_from(resolved),
-        None => readers.push((reader, resolved.clone())),
+    /// The layer or menu whose vantage this reader is judged from, which the reader goes with when it closes.
+    fn layer(&self) -> Option<Id> {
+        match self {
+            Reader::Beneath(layer) | Reader::InMenu(layer, _) => Some(*layer),
+            _ => None,
+        }
     }
 }
 
-/// Notes, in the read record, that the running code showed the state under `key`, and keeps what `reader` was shown: a
-/// settled region that showed it runs when `begin` resolves the command from the same reader to something else (a
-/// state, the gate, a modal layer or an instance changed), and a change published after it in the pass runs the pass
-/// again.
-fn note_read(ctx: &Context, key: Option<StateKey>, reader: Reader, resolved: &ResolvedCommand) {
-    let Some((number, instance)) = key else { return };
-    reads::note(ctx, BindKey::Command(number, instance), Id::NULL, measure::active(ctx), &[]);
-    let viewport = pass::current_viewport(ctx);
-    with(ctx, |board| keep_shown(&mut board.shown, (number, instance), viewport, reader, resolved));
+/// The generations of what resolutions read beside states and the gate, across the viewports.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Gens {
+    /// Read by every resolution: the keymap, the app catalog and the registry, the scope parents, the instances and
+    /// their liveness, and the modal facts (open layers, their roots, the states published inside them, the held-open
+    /// canvas).
+    shared: u64,
+    /// Read by a resolution that picks an instance: the instances around the focus in every viewport.
+    focus: u64,
+}
+
+/// The generations of one viewport's own vantage facts.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ViewGens {
+    /// Read by every resolution in the viewport: a dialog owns the keys at its focus.
+    keys: u64,
+    /// Read by a resolution that picks an instance or reaches by focus: the chain last focused in the viewport and the
+    /// instances of its focus chain inside the top modal layer.
+    focus: u64,
+    /// Read by a resolution the focused stop answered: the edits that stop takes and those of them that do nothing now.
+    edits: u64,
+}
+
+/// One viewport's vantage facts as its last `begin` set them, and their generations. A viewport's `begin` compares
+/// with its own, so two windows never move each other's.
+#[derive(Default)]
+struct View {
+    /// The chain of the last pass in which any component of the viewport held key focus.
+    last_focused: Vec<Id>,
+    inside_modal: Vec<Id>,
+    dialog_keys: bool,
+    /// The focused stop's edits and those of them that do nothing now. The focus record changes only in an end hook,
+    /// so the value `begin` reads holds for the pass.
+    edits: Option<(EditSet, EditSet)>,
+    gens: ViewGens,
+}
+/// A press's double-press matcher, its time, and whether a binding's command accepts the press where it lands.
+type ChordMatch<'a> = (&'a mut Matcher, f64, &'a dyn Fn(&CommandRef) -> bool);
+
+/// What a resolution read besides the board's own generation and the gate.
+#[derive(Default)]
+struct Reads {
+    /// It picked an instance for a source with no component of its own, or reached by the focus.
+    focus: bool,
+    /// The focused stop answered for the command, or was asked: it read that stop's edits.
+    edits: bool,
+}
+
+/// The inputs a kept resolution was made from: it holds while each is unchanged.
+#[derive(Clone, PartialEq)]
+struct ResolveKey {
+    shared: u64,
+    /// The viewport's keys generation.
+    keys: u64,
+    /// The focus generations, across the viewports and the viewport's own, when the resolution read the focus.
+    focus: Option<(u64, u64)>,
+    /// The state key read and its revision.
+    state: Option<(StateKey, u64)>,
+    /// The gate's key and its answer, with a gate.
+    gate: Option<(u128, bool)>,
+    /// The viewport's edits generation, when the resolution read the focused stop's edits.
+    edits: Option<u64>,
+    /// The vantage of a reader under a layer or inside a menu (`None` inside: no stop to return to).
+    vantage: Option<Option<Vantage>>,
+    /// The command's number, which a resolution the focused stop answered is noted under.
+    number: u32,
+}
+
+impl ResolveKey {
+    /// The key a region that showed the resolution read it under: the state's, else the focused stop's answer.
+    fn bind(&self) -> Option<BindKey> {
+        match (self.state, self.edits) {
+            (Some(((number, instance), _)), _) => Some(BindKey::Command(number, instance)),
+            (None, Some(_)) => Some(BindKey::FocusedEdit(self.number)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// A resolution a reader was shown, and what it was made from.
+struct Kept {
+    resolved: Arc<ResolvedCommand>,
+    key: ResolveKey,
+}
+
+/// The inputs as a viewport's last wake saw them.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Woke {
+    gens: Gens,
+    view: ViewGens,
+    state_seq: u64,
+    gate: Option<u128>,
+}
+
+/// A kept resolution and who it was kept for.
+struct Entry {
+    reader: Reader,
+    kept: Kept,
+}
+
+/// What each reader of a viewport was shown, with indexes from each input to the entries that read it, so a wake walks
+/// only the entries whose inputs moved.
+#[derive(Default)]
+struct Shown {
+    entries: HashMap<u64, Entry>,
+    next: u64,
+    /// By reader and command number (a command's parameter variants share the number).
+    by_reader: HashMap<Reader, HashMap<u32, Vec<u64>>>,
+    /// By the state key read.
+    by_state: HashMap<StateKey, HashSet<u64>>,
+    /// The entries that read the focus generations.
+    by_focus: HashSet<u64>,
+    /// The entries that read the focused stop's edits.
+    by_edits: HashSet<u64>,
+    /// The entries of readers under a layer or inside a menu, whose vantage every wake reads again.
+    layered: HashSet<u64>,
+    /// The inputs at the last wake.
+    woke: Option<Woke>,
+}
+
+impl Shown {
+    fn index(&mut self, id: u64) {
+        let Some(entry) = self.entries.get(&id) else { return };
+        let key = &entry.kept.key;
+        if let Some((state, _)) = key.state {
+            self.by_state.entry(state).or_default().insert(id);
+        }
+        if key.focus.is_some() {
+            self.by_focus.insert(id);
+        }
+        if key.edits.is_some() {
+            self.by_edits.insert(id);
+        }
+        if entry.reader.layer().is_some() {
+            self.layered.insert(id);
+        }
+    }
+
+    fn unindex(&mut self, id: u64) {
+        let Some(entry) = self.entries.get(&id) else { return };
+        if let Some((state, _)) = entry.kept.key.state
+            && let Some(ids) = self.by_state.get_mut(&state)
+        {
+            ids.remove(&id);
+            if ids.is_empty() {
+                self.by_state.remove(&state);
+            }
+        }
+        self.by_focus.remove(&id);
+        self.by_edits.remove(&id);
+        self.layered.remove(&id);
+    }
+
+    /// The entry `reader` keeps for `command`.
+    fn find(&self, reader: &Reader, number: u32, command: &CommandRef) -> Option<u64> {
+        let ids = self.by_reader.get(reader)?.get(&number)?;
+        ids.iter().copied().find(|id| self.entries.get(id).is_some_and(|entry| entry.kept.resolved.command == *command))
+    }
+
+    /// Keeps `kept` for `reader`, in place of what it kept for the same command.
+    fn keep(&mut self, reader: Reader, number: u32, kept: Kept) {
+        match self.find(&reader, number, &kept.resolved.command) {
+            Some(id) => self.replace(id, kept),
+            None => {
+                let id = self.next;
+                self.next += 1;
+                self.by_reader.entry(reader.clone()).or_default().entry(number).or_default().push(id);
+                self.entries.insert(id, Entry { reader, kept });
+                self.index(id);
+            }
+        }
+    }
+
+    /// `kept` in place of entry `id`'s, indexed under its inputs.
+    fn replace(&mut self, id: u64, kept: Kept) {
+        self.unindex(id);
+        if let Some(entry) = self.entries.get_mut(&id) {
+            entry.kept = kept;
+        }
+        self.index(id);
+    }
+
+    /// Drops the entries `drop` names.
+    fn drop_where(&mut self, mut drop: impl FnMut(&Entry) -> bool) {
+        let gone: Vec<u64> = self.entries.iter().filter(|(_, entry)| drop(entry)).map(|(id, _)| *id).collect();
+        for id in gone {
+            self.unindex(id);
+            if let Some(entry) = self.entries.remove(&id) {
+                let number = entry.kept.key.number;
+                if let Some(by_number) = self.by_reader.get_mut(&entry.reader) {
+                    if let Some(ids) = by_number.get_mut(&number) {
+                        ids.retain(|at| *at != id);
+                        if ids.is_empty() {
+                            by_number.remove(&number);
+                        }
+                    }
+                    if by_number.is_empty() {
+                        self.by_reader.remove(&entry.reader);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Whether `key` still holds under the board's `gens`, the viewport's `view` generations, `revisions`, the current
+/// `gate` answer and the reader's `vantage`. A gate whose key moved but whose answer is the same keeps the resolution,
+/// under the new key.
+fn holds(
+    key: &mut ResolveKey,
+    gens: Gens,
+    view: ViewGens,
+    revisions: &HashMap<StateKey, u64>,
+    gate: Option<(u128, bool)>,
+    vantage: Option<&Option<Vantage>>,
+) -> bool {
+    let same = key.shared == gens.shared
+        && key.keys == view.keys
+        && key.focus.is_none_or(|focus| focus == (gens.focus, view.focus))
+        && key.edits.is_none_or(|edits| edits == view.edits)
+        && key.state.is_none_or(|(state, revision)| revisions.get(&state).copied().unwrap_or(0) == revision)
+        && key.vantage.as_ref() == vantage;
+    let gate = match (key.gate, gate) {
+        (kept, now) if kept == now => true,
+        (Some((_, kept)), Some((now, answer))) if kept == answer => {
+            key.gate = Some((now, answer));
+            true
+        }
+        _ => false,
+    };
+    same && gate
+}
+
+/// The edits of the stop that holds key focus in `viewport`, and those of them that do nothing now.
+fn focused_edits(ctx: &Context, viewport: ViewportId) -> Option<(EditSet, EditSet)> {
+    focus::record(ctx, viewport).keys.map(|keys| (keys.edits, keys.inactive))
+}
+
+/// Notes, in the read record, that the running code showed a resolution under `key` (a state's, or the focused stop's
+/// answer): a settled memoized view that showed it runs when `begin` resolves the command from the same reader to something
+/// else (a state, the gate, a modal layer, an instance or the stop's edits changed), and a change published after it in
+/// the pass runs the pass again.
+fn note_read(ctx: &Context, key: Option<BindKey>) {
+    let Some(key) = key else { return };
+    reads::note(ctx, key, Id::NULL, measure::active(ctx), &[]);
 }
 
 /// Where a resolution judges a command from: the modal facts and the focus. The board's own is the key focus of the
 /// running pass; a surface that closes before its command runs (the palette) judges from the window under it.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 struct Vantage {
     /// A modal layer blocks a window.
     modal_open: bool,
@@ -234,7 +495,75 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
     pass_state::with::<Board, _>(ctx, f)
 }
 
+/// What a reader's lookup found.
+enum Lookup {
+    /// A kept resolution whose inputs are unchanged, and the key it was read under.
+    Fresh(Arc<ResolvedCommand>, Option<BindKey>),
+    /// A kept resolution some input of which changed.
+    Stale,
+    /// None.
+    Missing,
+}
+
 impl Board {
+    /// Notes that the state under `key` changed: the readers of it resolve again.
+    fn bump_state(&mut self, key: StateKey) {
+        self.state_seq += 1;
+        self.revisions.insert(key, self.state_seq);
+        self.state_log.push((self.state_seq, key));
+    }
+
+    /// The gate's key and its answer for `command`, asking it once per command under each key.
+    fn gate_answer(&mut self, command: &CommandRef) -> Option<(u128, bool)> {
+        let gate = self.gate.as_ref()?;
+        let answer = match self.gate_answers.get(command.key_text().as_ref()) {
+            Some(answer) => *answer,
+            None => {
+                let answer = gate.allows(command);
+                self.gate_answers.insert(command.key(), answer);
+                answer
+            }
+        };
+        Some((gate.key(), answer))
+    }
+
+    /// The generations of `viewport`'s own vantage facts.
+    fn view_gens(&self, viewport: ViewportId) -> ViewGens {
+        self.views.get(&viewport).map_or_else(ViewGens::default, |view| view.gens)
+    }
+
+    /// What `reader` of `viewport` was shown of `command`, judged from `vantage` (a layered reader's). `edits` is the
+    /// focused stop's edits now: a resolution that read them is stale once an end hook moved them, before the next
+    /// `begin` moves the edits generation (a read between passes).
+    fn lookup(
+        &mut self,
+        viewport: ViewportId,
+        reader: &Reader,
+        command: &CommandRef,
+        vantage: Option<&Option<Vantage>>,
+        edits: Option<(EditSet, EditSet)>,
+    ) -> Lookup {
+        let Some(&number) = self.numbers.get(command.id.as_str()) else { return Lookup::Missing };
+        let gate = self.gate_answer(command);
+        let view = self.view_gens(viewport);
+        let edits_moved = self.views.get(&viewport).is_some_and(|kept| kept.edits != edits);
+        let Some(shown) = self.shown.get_mut(&viewport) else { return Lookup::Missing };
+        let Some(id) = shown.find(reader, number, command) else { return Lookup::Missing };
+        let Some(entry) = shown.entries.get_mut(&id) else { return Lookup::Missing };
+        let edits_hold = !edits_moved || entry.kept.key.edits.is_none();
+        if holds(&mut entry.kept.key, self.gens, view, &self.revisions, gate, vantage) && edits_hold {
+            Lookup::Fresh(Arc::clone(&entry.kept.resolved), entry.kept.key.bind())
+        } else {
+            Lookup::Stale
+        }
+    }
+
+    /// Keeps `resolved`, made from `key`, as what `reader` of `viewport` was shown.
+    fn keep(&mut self, viewport: ViewportId, reader: Reader, resolved: Arc<ResolvedCommand>, key: ResolveKey) {
+        let number = key.number;
+        self.shown.entry(viewport).or_default().keep(reader, number, Kept { resolved, key });
+    }
+
     fn live(&self, ctx: &Context, instance: &Instance) -> bool {
         instance.stamp + 1 >= pass::pass_nr(ctx, instance.viewport)
     }
@@ -332,7 +661,8 @@ impl Board {
     fn pick(&self, ctx: &Context, scope: &str, from: &Vantage) -> Option<Id> {
         // The held-open canvas ranks below every instance around the focus.
         let focused: Vec<Id> = self.held_open.into_iter().chain(from.focused.iter().flat_map(|(_, chain)| chain.iter().copied())).collect();
-        pick_instance(&self.live_instances(ctx, scope), &focused, &self.last_focused)
+        let last = self.views.get(&pass::current_viewport(ctx)).map_or(&[][..], |view| view.last_focused.as_slice());
+        pick_instance(&self.live_instances(ctx, scope), &focused, last)
     }
 
     /// The non-app scopes around the focus, innermost first. An instance of a child scope also brings the scopes it
@@ -370,7 +700,8 @@ impl Board {
     /// Who answers for `command` ahead of the app: an instance inside the top modal layer that published its state,
     /// else the focused component when it takes the command as an edit (inside a modal layer, only when the focus
     /// is in it).
-    fn declaring(&self, ctx: &Context, command: &CommandRef, from: &Vantage) -> Option<Declaration> {
+    fn declaring(&self, ctx: &Context, command: &CommandRef, from: &Vantage, reads: &mut Reads) -> Option<Declaration> {
+        reads.focus = true;
         let dialog_open = from.modal_open || from.dialog_keys;
         let number = *self.numbers.get(command.id.as_str())?;
         let published = self.modal_published.iter().chain(&self.modal_published_last).find(|(published, _)| *published == number);
@@ -378,13 +709,24 @@ impl Board {
             return Some(Declaration::Instance(id));
         }
         let edit = self.registry.edit_of(&command.id)?;
-        let keys = from
-            .edits
-            .map(|edits| (edits, from.inactive.unwrap_or(EditSet::NONE)))
-            .or_else(|| focus::record(ctx, pass::current_viewport(ctx)).keys.map(|keys| (keys.edits, keys.inactive)));
+        let keys = match from.edits {
+            Some(edits) => Some((edits, from.inactive.unwrap_or(EditSet::NONE))),
+            None => {
+                reads.edits = true;
+                focused_edits(ctx, pass::current_viewport(ctx))
+            }
+        };
         let in_reach = !dialog_open || !from.inside_modal.is_empty();
         let (edits, inactive) = keys.filter(|_| in_reach)?;
-        edits.contains(edit).then_some(Declaration::Focused { inactive: inactive.contains(edit) })
+        let inactive = inactive.contains(edit);
+        // An Undo or Redo the focused part has no step for goes where `fall_through` sends it (the declaring instance
+        // or the app command), so that target answers for it and its state enables the command: a toolbar Undo stays
+        // enabled while the app can undo though the field cannot. Cut, Copy and Delete with nothing selected stay the
+        // part's and disabled.
+        if inactive && matches!(edit, EditCommand::Undo | EditCommand::Redo) {
+            return None;
+        }
+        edits.contains(edit).then_some(Declaration::Focused { inactive })
     }
 
     /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate, and the
@@ -396,6 +738,7 @@ impl Board {
         instance: Option<Id>,
         reach: Reach<'_>,
         from: &Vantage,
+        reads: &mut Reads,
     ) -> (ResolvedCommand, Option<StateKey>) {
         let def = self.def(&command.id);
         let app = self.to_app(self.scope_of(command));
@@ -404,7 +747,7 @@ impl Board {
         // A command no set registers is never blocked.
         let rule = def.map(|def| def.modal);
         // The instance inside the top modal that declares the command, which then answers for it.
-        let declaring = (rule == Some(ModalRule::Declared)).then(|| self.declaring(ctx, command, from)).flatten();
+        let declaring = (rule == Some(ModalRule::Declared)).then(|| self.declaring(ctx, command, from, reads)).flatten();
         // The declaring instance answers for the command: it is where the command is delivered. The focused component
         // answers for itself, so the app's state of the command does not apply.
         let instance = match declaring {
@@ -416,13 +759,20 @@ impl Board {
             Some(Declaration::Focused { .. }) => None,
             None => self.state_key(command, instance),
         };
-        let this = key.and_then(|key| self.this.get(&key));
-        let last = key.and_then(|key| self.last.get(&key));
+        // An app-scope state is the app's held one; an instance's is this frame's publish, else last frame's.
+        let (this, last) = match key {
+            Some((number, None)) => (self.app_states.get(&number), None),
+            Some(key) => (self.this.get(&key), self.last.get(&key)),
+            None => (None, None),
+        };
         let state = this.or(last);
         let flags = resolve_flags(this.map(CommandState::flags), last.map(CommandState::flags));
         let reached = declaring.is_some()
             || instance.is_some_and(|id| match reach {
-                Reach::Focus => from.inside_modal.contains(&id),
+                Reach::Focus => {
+                    reads.focus = true;
+                    from.inside_modal.contains(&id)
+                }
                 Reach::Chain(chain) => chain.ids().skip_while(|at| !self.is_modal_root(*at)).any(|at| at == id),
             });
         let modal = !dialog_open
@@ -447,6 +797,7 @@ impl Board {
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
+            edit: self.registry.edit_of(&command.id).is_some(),
             command: command.clone(),
             instance,
         };
@@ -474,13 +825,17 @@ impl KeyScopes {
     /// What a press of `input` runs, read through `layout`, with `typing` when a text field has the keys. With
     /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own. A
     /// held scope's keys stay with the text while typing; a typing scope's keys are the text component's own.
-    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
+    /// With a matcher, a binding of a command `accept` refuses (disabled where the press lands) is passed over for the
+    /// press's next binding.
+    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<ChordMatch<'_>>) -> Option<Hit> {
         let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
         let held: &[&'static str] = if typing { &[] } else { &self.held };
         let contexts: Vec<&str> = self.typing.iter().chain(held).copied().collect();
         let active = Active { panel, contexts: &contexts, typing };
         match matcher {
-            Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }),
+            Some((matcher, now, accept)) => {
+                matcher.press_where(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }, accept)
+            }
             None => Matcher::single(layout, &self.keymap, input, &active, outer),
         }
     }
@@ -494,13 +849,16 @@ fn chord_input(chord: &Chord) -> KeyInput {
 /// Loads the linked command sets; the stories' sets only with `stories`.
 pub(crate) fn install(ctx: &Context, stories: bool) -> Result<(), registry::CommandDefError> {
     let registry = registry::Registry::shared(stories)?;
-    with(ctx, |board| board.registry = registry);
+    with(ctx, |board| {
+        board.registry = registry;
+        board.gens.shared += 1;
+    });
     Ok(())
 }
 
 /// A keymap with the chords it binds to the edit commands and to the window's keys.
 #[derive(Clone)]
-struct BuiltKeymap {
+pub(crate) struct BuiltKeymap {
     keymap: Arc<Keymap>,
     edit_chords: Arc<[(EditCommand, Chord)]>,
     window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
@@ -508,9 +866,12 @@ struct BuiltKeymap {
     shown_text: Arc<HashMap<Chord, Arc<str>>>,
 }
 
-/// The keymap of `defs` on `platform` under `overrides`.
-fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>) -> Keymap {
+/// The keymap of `defs` on `platform` under `overrides`, with the app's typing rule when it set one.
+fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>, typing: Option<TypingRule>) -> Keymap {
     let mut keymap = Keymap::new(defs, scopes, platform);
+    if let Some(rule) = typing {
+        keymap = keymap.with_typing_rule(rule);
+    }
     if let Some(overrides) = overrides {
         keymap.set_overrides((**overrides).clone());
     }
@@ -569,6 +930,12 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     let joined = |defs: &[CommandDef]| -> Vec<CommandDef> { defs.iter().chain(&app_defs).cloned().collect() };
     let mut defs = registry.defs_for(platform);
     if let Some(app) = app {
+        // The app's defaults for a linked set's command replace the set's, before the app's alternate keys join them.
+        for def in &mut defs {
+            if let Some(bindings) = app.replaced_defaults(&def.command.id) {
+                def.defaults = bindings.to_vec();
+            }
+        }
         for extra in app.defs() {
             if let Some(def) = defs.iter_mut().find(|def| def.command == extra.command) {
                 for binding in &extra.defaults {
@@ -579,7 +946,8 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             }
         }
     }
-    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides);
+    let typing = app.and_then(AppCatalog::typing);
+    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides, typing);
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs
         .iter()
@@ -593,7 +961,7 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             def.defaults
                 .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
         }
-        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides);
+        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, typing);
     }
     let window_shortcuts = registry
         .defs()
@@ -626,23 +994,17 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts, shown_text: Arc::new(shown_text) }
 }
 
-/// The keymap of each shared registry (with or without the stories' sets) on each platform with no overrides. It
-/// depends on nothing else, so every context of the process shares it.
-static DEFAULT_KEYMAPS: std::sync::Mutex<Vec<(Platform, bool, BuiltKeymap)>> = std::sync::Mutex::new(Vec::new());
-
-/// The keymap of `registry` and `app` on `platform` under `overrides`: built once per platform for the shared
-/// registry with no overrides and no catalog, else built here.
+/// Builds or reuses a keymap owned by this exact command registry.
 fn keymap_for(registry: &Arc<registry::Registry>, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
-    if app.is_some() || overrides.is_some() || !registry::Registry::is_shared(registry) {
+    if app.is_some() || overrides.is_some() {
         return build_keymap(registry, app, platform, overrides);
     }
-    let mut kept = DEFAULT_KEYMAPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stories = registry.has_stories();
-    if let Some((.., built)) = kept.iter().find(|(on, with, _)| *on == platform && *with == stories) {
+    let mut kept = registry.keymaps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, built)) = kept.iter().find(|(on, _)| *on == platform) {
         return built.clone();
     }
     let built = build_keymap(registry, None, platform, None);
-    kept.push((platform, stories, built.clone()));
+    kept.push((platform, built.clone()));
     built
 }
 
@@ -651,7 +1013,9 @@ fn keymap_for(registry: &Arc<registry::Registry>, app: Option<&AppCatalog>, plat
 #[doc(hidden)]
 pub fn declare_child(ctx: &Context, child: CommandScope, parent: CommandScope) {
     with(ctx, |board| {
-        board.parents.insert(child.name(), parent.name());
+        if board.parents.insert(child.name(), parent.name()) != Some(parent.name()) {
+            board.gens.shared += 1;
+        }
     });
 }
 
@@ -665,24 +1029,47 @@ fn platform(ctx: &Context) -> Platform {
     crate::runtime::windows::os_of(ctx)
 }
 
-/// Before each frame: last frame's state is the fallback, the app's states, gate and catalog are this frame's, and the
-/// keymap follows the user's overrides and the catalog's generation. The readers of a state that changed run from
-/// `begin`, which resolves again what each was shown.
+/// Before each frame: the states instances published last frame are the fallback, the app's states are read again
+/// when their revision moved, the gate and the catalog are this frame's, and the keymap follows the user's overrides
+/// and the catalog's generation. The readers of an input that changed run from `begin`, which resolves again what each
+/// was shown.
 pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     let platform = platform(ctx);
-    let frame = pass::root_frame_nr(ctx);
     let generation = input.catalog.as_ref().map(AppCatalog::generation);
     let shadowed = with(ctx, |board| {
-        let mut states = HashMap::new();
-        for (command, state) in &input.states {
-            let number = board.number(&command.id);
-            states.insert((number, None), state.clone());
+        // A published state resolves from this frame's, else the last frame's: one published last frame and not again
+        // is gone now.
+        let gone: Vec<StateKey> = board.last.keys().filter(|key| !board.this.contains_key(key)).copied().collect();
+        board.last = std::mem::take(&mut board.this);
+        for key in gone {
+            board.bump_state(key);
         }
-        // A state resolves from this frame's, else the last frame's.
-        board.last = std::mem::replace(&mut board.this, states);
+        if board.modal_published_last.iter().any(|key| !board.modal_published.contains(key)) {
+            board.gens.shared += 1;
+        }
         board.modal_published_last = std::mem::take(&mut board.modal_published);
+        let revision = input.states.as_ref().map(|(revision, _)| *revision);
+        if revision != board.app_revision {
+            board.app_revision = revision;
+            let mut states = HashMap::new();
+            for (command, state) in input.states.iter().flat_map(|(_, states)| states.iter()) {
+                states.insert(board.number(&command.id), state.clone());
+            }
+            let changed: Vec<u32> = states
+                .iter()
+                .filter(|(number, state)| board.app_states.get(number) != Some(*state))
+                .map(|(number, _)| *number)
+                .chain(board.app_states.keys().filter(|number| !states.contains_key(number)).copied())
+                .collect();
+            board.app_states = states;
+            for number in changed {
+                board.bump_state((number, None));
+            }
+        }
+        if input.gate.as_ref().map(CommandGate::key) != board.gate.as_ref().map(CommandGate::key) {
+            board.gate_answers.clear();
+        }
         board.gate = input.gate.clone();
-        board.gate_answers.clear();
         board.app = input.catalog.clone();
         let stale = board.keymap.as_ref().is_none_or(|cache| {
             cache.platform != platform
@@ -699,13 +1086,14 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
                 keymap_for(&board.registry, input.catalog.as_ref(), platform, input.overrides.as_ref());
             board.keymap =
                 Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, edit_chords, window_shortcuts, shown_text });
+            board.gens.shared += 1;
+            board.keymaps += 1;
             for def in input.catalog.as_ref().map_or(&[][..], AppCatalog::defs) {
                 if board.registry.get(&def.command.id).is_some() && board.shadowed.insert(def.command.id.clone()) {
                     shadowed.push(def.command.id.clone());
                 }
             }
         }
-        board.changed = (frame, InputChanges { keymap: stale });
         shadowed
     });
     for id in shadowed {
@@ -719,19 +1107,52 @@ pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
 }
 
+/// The generation of the window's keymap without noting a read: it moves each time a new keymap is built.
+pub(crate) fn keymap_built(ctx: &Context) -> u64 {
+    with(ctx, |board| board.keymaps)
+}
+
+/// The generation of the window's keymap, for a key that holds what is derived from its chords: it moves each time a
+/// new keymap is built. The caller's view reads the keymap, so a change of it runs the view.
+pub fn keymap_generation(ctx: &Context) -> u64 {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
+    keymap_built(ctx)
+}
+
+/// Whether the queue holds a command for one of `instances`: only a run of the view they registered in takes it.
+pub(crate) fn queued_for(ctx: &Context, instances: &[Id]) -> bool {
+    !instances.is_empty() && with(ctx, |board| board.queue.iter().any(|fired| fired.target.is_some_and(|target| instances.contains(&target))))
+}
+
 /// The bindings the window's keymap gives `command`; none before the first frame builds one.
 pub(crate) fn bindings(ctx: &Context, command: &CommandRef) -> Vec<craft_keymap::Binding> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.bindings(command)).unwrap_or_default())
 }
 
 /// The chord the window's keymap shows for `command` (`Keymap::shown_chord`); none before the first frame builds one.
 pub(crate) fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command)))
+}
+
+/// The window's own keymap: the registry scopes, the app catalog, the window shortcuts and the app's overrides, as the
+/// board resolves keys with it; none before the first frame builds one.
+pub fn keymap(ctx: &Context) -> Option<Arc<Keymap>> {
+    with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap)))
 }
 
 /// The command that holds `chord` in the window's keymap (`Keymap::holder`); none before the first frame builds one.
 pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))
+}
+
+/// Whether a command the window's keymap binds `chord` to is enabled, as the last pass resolved it for a surface with
+/// no component of its own (the state a menu row shows): a press of the chord can run something. Notes no reader.
+pub(crate) fn runs_now(ctx: &Context, chord: &Chord) -> bool {
+    let holders = with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.holders(chord)).unwrap_or_default());
+    holders.iter().any(|command| resolve_from(ctx, command, None).0.enabled)
 }
 
 /// The chords bound to the window's keys, which the input hook takes before any component.
@@ -752,6 +1173,7 @@ pub(crate) fn take_delivered(ctx: &Context) -> Vec<Fired> {
 /// Whether the component that holds key focus sits inside the instance `id`.
 #[doc(hidden)]
 pub fn focus_within(ctx: &Context, id: Id) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Focus);
     with(ctx, |board| board.here.focused.iter().any(|(_, chain)| chain.contains(&id)))
 }
 
@@ -762,10 +1184,15 @@ pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
 
 /// `register_instance` in the layer `layer`, which a replay of the registration keeps.
 fn register_in(ctx: &Context, scope: CommandScope, id: Id, layer: Option<Id>) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_in(ctx, scope, id, layer));
+    crate::runtime::replay::journal(ctx, || (scope, id, layer), |ctx, &(scope, id, layer)| register_in(ctx, scope, id, layer));
+    crate::runtime::replay::note_instance(ctx, id);
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
-    with(ctx, |board| board.instances.upsert(Instance { id, scope, viewport, stamp, layer }));
+    with(ctx, |board| {
+        if board.instances.upsert(Instance { id, scope, viewport, stamp, layer }) {
+            board.gens.shared += 1;
+        }
+    });
 }
 
 /// Records the instances around the component `id`, which holds key focus in the running pass of its viewport. The
@@ -788,11 +1215,23 @@ pub(crate) fn note_focus(ctx: &Context, id: Id, chain: &CommandChain) {
 
 pub(crate) fn set_modal_open(ctx: &Context, open: bool, viewport: ViewportId, root: Option<Id>) {
     with(ctx, |board| {
-        board.here.modal_open = open;
-        match root {
+        let held = match root {
             Some(root) => board.modal_roots.insert(viewport, root),
             None => board.modal_roots.remove(&viewport),
         };
+        if board.here.modal_open != open || held != root {
+            board.gens.shared += 1;
+        }
+        board.here.modal_open = open;
+    });
+}
+
+/// Records `root` as the page region `viewport` shows (`AppShell::page`): a key pressed with nothing focused reaches
+/// the page's command scope beside the window's.
+#[doc(hidden)]
+pub fn note_page_root(ctx: &Context, viewport: ViewportId, root: Id) {
+    with(ctx, |board| {
+        board.page_roots.insert(viewport, root);
     });
 }
 
@@ -849,51 +1288,51 @@ fn vantage_under(ctx: &Context, layer: Id, stop: Option<(focus::StopRec, Vec<Id>
 }
 
 /// `command` as seen by `instance` (`None` for the app) from `from` (`None`: the key focus of the running pass), with
-/// the gate applied outside the board's lock, and the key of the state it read.
+/// the gate applied, and the inputs it was made from; `reads` holds what the caller read to find the instance.
 fn resolve_in(
     ctx: &Context,
     command: &CommandRef,
     instance: Option<Id>,
     reach: Reach<'_>,
     from: Option<&Vantage>,
-) -> (ResolvedCommand, Option<StateKey>) {
-    let ((mut resolved, key), first_unknown, gate) = with(ctx, |board| {
+    mut reads: Reads,
+) -> (ResolvedCommand, ResolveKey) {
+    let (resolved, key, first_unknown) = with(ctx, |board| {
         let first_unknown = board.def(&command.id).is_none() && board.unknown.insert(command.id.clone());
         // A command no state named yet has a key too, so a state given later reaches the regions that read it.
         board.number(&command.id);
-        let resolved = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here));
-        // This frame's answer, else the gate to ask.
-        let gate = board.gate.as_ref().map(|gate| board.gate_answers.get(command.key_text().as_ref()).copied().ok_or_else(|| gate.clone()));
-        (resolved, first_unknown, gate)
+        let (mut resolved, state) = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here), &mut reads);
+        let gate = board.gate_answer(command);
+        if gate.is_some_and(|(_, allowed)| !allowed) {
+            resolved.enabled = false;
+        }
+        let view = board.view_gens(pass::current_viewport(ctx));
+        let key = ResolveKey {
+            shared: board.gens.shared,
+            keys: view.keys,
+            focus: reads.focus.then_some((board.gens.focus, view.focus)),
+            state: state.map(|state| (state, board.revisions.get(&state).copied().unwrap_or(0))),
+            gate,
+            edits: reads.edits.then_some(view.edits),
+            vantage: None,
+            number: board.numbers.get(command.id.as_str()).copied().unwrap_or(u32::MAX),
+        };
+        (resolved, key, first_unknown)
     });
     if first_unknown {
         log::warn!("the command {} is in no registered command set: it is an app command with its id as its label", command.id);
-    }
-    let allowed = match gate {
-        None => true,
-        Some(Ok(answer)) => answer,
-        Some(Err(gate)) => {
-            let answer = gate.allows(command);
-            with(ctx, |board| {
-                board.gate_answers.insert(command.key(), answer);
-            });
-            answer
-        }
-    };
-    if !allowed {
-        resolved.enabled = false;
     }
     (resolved, key)
 }
 
 /// `command` for a surface with no component of its own: against the instance that `fire` would target.
-pub(crate) fn resolve_global(ctx: &Context, command: &CommandRef) -> ResolvedCommand {
+pub(crate) fn resolve_global(ctx: &Context, command: &CommandRef) -> Arc<ResolvedCommand> {
     read(ctx, Reader::Global, command)
 }
 
 /// `command` for a surface with no component of its own that closes before its command runs, from the window under
 /// the modal layer `layer` (`beneath`).
-pub(crate) fn resolve_beneath(ctx: &Context, layer: Id, command: &CommandRef) -> ResolvedCommand {
+pub(crate) fn resolve_beneath(ctx: &Context, layer: Id, command: &CommandRef) -> Arc<ResolvedCommand> {
     read(ctx, Reader::Beneath(layer), command)
 }
 
@@ -903,7 +1342,7 @@ pub(crate) fn resolve_beneath(ctx: &Context, layer: Id, command: &CommandRef) ->
 /// group whose button opened it, focused or not), judged from the stop focus returns to once the menus close, which
 /// gives the edits, the modal facts and the instance when the chain holds none (Cut in a text field's edit menu follows
 /// the field's selection; an Edit menu row reaches the field that held focus); its activation fires that resolution.
-pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> ResolvedCommand {
+pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> Arc<ResolvedCommand> {
     let reader = match focus::running_menu(ctx) {
         Some(menu) => Reader::InMenu(menu, chain.clone()),
         None => Reader::Chain(chain.clone()),
@@ -911,89 +1350,201 @@ pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &Comma
     read(ctx, reader, command)
 }
 
-/// `command` as `reader` is shown it, noted as its read.
-fn read(ctx: &Context, reader: Reader, command: &CommandRef) -> ResolvedCommand {
-    let (resolved, key) = resolve_as(ctx, &reader, command);
-    note_read(ctx, key, reader, &resolved);
+/// `command` as `reader` is shown it, noted as its read: the kept resolution while its inputs are unchanged, else a new
+/// one, kept.
+fn read(ctx: &Context, reader: Reader, command: &CommandRef) -> Arc<ResolvedCommand> {
+    // The resolved command carries the chord the keymap shows, kept or made now.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
+    let viewport = pass::current_viewport(ctx);
+    let vantage = vantage_of(ctx, &reader);
+    let edits = focused_edits(ctx, viewport);
+    let found = with(ctx, |board| board.lookup(viewport, &reader, command, vantage.as_ref(), edits));
+    let (resolved, bind) = match found {
+        Lookup::Fresh(resolved, bind) => (resolved, bind),
+        found => {
+            #[cfg(feature = "testing")]
+            measure::count_resolve(ctx, if matches!(found, Lookup::Stale) { Resolve::Again } else { Resolve::New });
+            let _ = found;
+            let (resolved, key) = resolve_as(ctx, &reader, command, vantage);
+            let (resolved, bind) = (Arc::new(resolved), key.bind());
+            with(ctx, |board| board.keep(viewport, reader, Arc::clone(&resolved), key));
+            (resolved, bind)
+        }
+    };
+    note_read(ctx, bind);
     resolved
 }
 
-/// `command` from the vantage of `reader`, and the key of the state it read. The readers' first resolution and the one
-/// `begin` makes again both come from here.
-fn resolve_as(ctx: &Context, reader: &Reader, command: &CommandRef) -> (ResolvedCommand, Option<StateKey>) {
+/// The vantage a layered reader is judged from: the window under its layer, or where focus goes once its menus close
+/// (`None` when no stop is there). `None` for the other readers, which are judged from the board's own.
+fn vantage_of(ctx: &Context, reader: &Reader) -> Option<Option<Vantage>> {
     match reader {
-        Reader::Global => resolve_from(ctx, command, None),
-        Reader::Beneath(layer) => {
-            let from = beneath(ctx, *layer);
-            resolve_from(ctx, command, Some(&from))
-        }
-        Reader::Chain(chain) => resolve_chain(ctx, command, chain),
-        Reader::InMenu(menu, chain) => {
-            let from = out_of_menu(ctx, *menu);
-            let instance = with(ctx, |board| {
-                board.innermost(chain, board.scope_of(command)).or_else(|| board.target_of(ctx, command, from.as_ref().unwrap_or(&board.here)).1)
-            });
-            resolve_in(ctx, command, instance, Reach::Chain(chain), from.as_ref())
-        }
+        Reader::Beneath(layer) => Some(Some(beneath(ctx, *layer))),
+        Reader::InMenu(menu, _) => Some(out_of_menu(ctx, *menu)),
+        Reader::Global | Reader::Chain(_) => None,
     }
 }
 
-/// `command` against the instances of `chain`.
-fn resolve_chain(ctx: &Context, command: &CommandRef, chain: &CommandChain) -> (ResolvedCommand, Option<StateKey>) {
-    let instance = with(ctx, |board| board.innermost(chain, board.scope_of(command)).or_else(|| board.target_of(ctx, command, &board.here).1));
-    resolve_in(ctx, command, instance, Reach::Chain(chain), None)
+/// `command` from the vantage of `reader` (`vantage`, from `vantage_of`), and the inputs it was made from. The
+/// readers' first resolution and the one `begin` makes again both come from here.
+fn resolve_as(ctx: &Context, reader: &Reader, command: &CommandRef, vantage: Option<Option<Vantage>>) -> (ResolvedCommand, ResolveKey) {
+    let from = vantage.as_ref().and_then(Option::as_ref);
+    let (resolved, mut key) = match reader {
+        Reader::Global | Reader::Beneath(_) => resolve_from(ctx, command, from),
+        Reader::Chain(chain) => resolve_chain(ctx, command, chain, None),
+        Reader::InMenu(_, chain) => resolve_chain(ctx, command, chain, from),
+    };
+    key.vantage = vantage;
+    (resolved, key)
 }
 
-fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> (ResolvedCommand, Option<StateKey>) {
-    let (_, instance) = with(ctx, |board| board.target_of(ctx, command, from.unwrap_or(&board.here)));
-    resolve_in(ctx, command, instance, Reach::Focus, from)
+/// The instance a source with no component of its own delivers `command` to from `from`, noting in `reads` that it
+/// read the focus when it picked one.
+fn target_read(ctx: &Context, board: &Board, command: &CommandRef, from: &Vantage, reads: &mut Reads) -> (bool, Option<Id>) {
+    let (app, instance) = board.target_of(ctx, command, from);
+    reads.focus |= !app;
+    (app, instance)
 }
 
-/// fx.F23: resolves every command a reader of `viewport` was shown again, from that reader's own vantage under this
-/// pass's gate, states, modal facts and instances, and notes an edit of the state key of each whose resolution differs
-/// in any shown part (label, chord, enabled, checked, marked, hint), so a settled region that shows it runs; the entry
-/// keeps the new resolution. Readers of regions that did not run keep their entries: a settled region is the reader
-/// this exists for. It reads no input: a second pass of a frame compares against what the first pass's runs were shown
-/// and what the first pass's call kept, so it wakes only the readers whose resolution the first pass changed (a modal
+/// `command` against the instances of `chain`, judged from `from` (`None`: the board's own vantage).
+fn resolve_chain(ctx: &Context, command: &CommandRef, chain: &CommandChain, from: Option<&Vantage>) -> (ResolvedCommand, ResolveKey) {
+    let mut reads = Reads::default();
+    let instance = with(ctx, |board| {
+        board.innermost(chain, board.scope_of(command)).or_else(|| target_read(ctx, board, command, from.unwrap_or(&board.here), &mut reads).1)
+    });
+    resolve_in(ctx, command, instance, Reach::Chain(chain), from, reads)
+}
+
+fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> (ResolvedCommand, ResolveKey) {
+    let mut reads = Reads::default();
+    let (_, instance) = with(ctx, |board| target_read(ctx, board, command, from.unwrap_or(&board.here), &mut reads));
+    resolve_in(ctx, command, instance, Reach::Focus, from, reads)
+}
+
+/// `command` resolved once, for a key press or a fire: nothing keeps it.
+fn resolve_once(ctx: &Context, command: &CommandRef, instance: Option<Id>, reach: Reach<'_>, from: Option<&Vantage>) -> ResolvedCommand {
+    #[cfg(feature = "testing")]
+    measure::count_resolve(ctx, Resolve::New);
+    resolve_in(ctx, command, instance, reach, from, Reads::default()).0
+}
+
+/// fx.F23: resolves again what a reader of `viewport` was shown when an input of it changed since the viewport's last
+/// wake, from that reader's own vantage under this pass's gate, states, modal facts and instances, and notes an edit of
+/// the key each was read under when its resolution differs in any shown part (label, chord, enabled, checked, marked,
+/// hint), so a settled memoized view that shows it runs; the entry keeps the new resolution. Readers of regions that did not
+/// run keep their entries: a settled memoized view is the reader this exists for. It walks only the entries whose inputs
+/// moved, through the table's indexes: every entry when a generation all of them read moved (the shared one, the
+/// viewport's keys, the gate), else the readers of the focus, of the focused stop's edits and of each changed state,
+/// and the readers under a layer or in a menu, whose vantage it reads again. A second pass of a frame compares against
+/// what the first pass's runs were shown, so it wakes only the readers whose resolution the first pass changed (a modal
 /// layer it opened or closed), once.
 fn wake_shown(ctx: &Context, viewport: ViewportId) {
-    let mut table = with(ctx, |board| board.shown.remove(&viewport)).unwrap_or_default();
+    let taken = with(ctx, |board| {
+        let now =
+            Woke { gens: board.gens, view: board.view_gens(viewport), state_seq: board.state_seq, gate: board.gate.as_ref().map(CommandGate::key) };
+        let shown = board.shown.get(&viewport)?;
+        let woke = shown.woke;
+        if woke == Some(now) && shown.layered.is_empty() {
+            return None;
+        }
+        let all = woke.is_none_or(|woke| woke.gens.shared != now.gens.shared || woke.view.keys != now.view.keys || woke.gate != now.gate);
+        let mut walk: HashSet<u64> = if all { shown.entries.keys().copied().collect() } else { shown.layered.clone() };
+        if let Some(woke) = woke.filter(|_| !all) {
+            if (woke.gens.focus, woke.view.focus) != (now.gens.focus, now.view.focus) {
+                walk.extend(&shown.by_focus);
+            }
+            if woke.view.edits != now.view.edits {
+                walk.extend(&shown.by_edits);
+            }
+            for (_, state) in board.state_log.iter().filter(|(seq, _)| *seq > woke.state_seq) {
+                walk.extend(shown.by_state.get(state).into_iter().flatten());
+            }
+        }
+        Some((now, walk, board.shown.remove(&viewport)?))
+    });
+    let Some((now, walk, mut table)) = taken else { return };
     let mut changed = Vec::new();
-    for (key, readers) in &mut table {
-        // A reader beneath a layer or inside a menu that is no longer shown is gone with it.
-        readers.retain(|(reader, _)| match reader {
-            Reader::Beneath(layer) | Reader::InMenu(layer, _) => overlay::is_open(ctx, *layer),
-            _ => true,
+    // A reader beneath a layer or inside a menu that is no longer shown is gone with it.
+    table.drop_where(|entry| entry.reader.layer().is_some_and(|layer| !overlay::is_open(ctx, layer)));
+    let mut vantages: HashMap<Id, Option<Option<Vantage>>> = HashMap::new();
+    for id in walk {
+        let Some(entry) = table.entries.get_mut(&id) else { continue };
+        #[cfg(feature = "testing")]
+        measure::count_wake_walk(ctx);
+        let vantage = match entry.reader.layer() {
+            Some(layer) => vantages.entry(layer).or_insert_with(|| vantage_of(ctx, &entry.reader)).clone(),
+            None => None,
+        };
+        let fresh = with(ctx, |board| {
+            let gate = board.gate_answer(&entry.kept.resolved.command);
+            holds(&mut entry.kept.key, board.gens, board.view_gens(viewport), &board.revisions, gate, vantage.as_ref())
         });
-        for (reader, kept) in readers.iter_mut() {
-            // The gate is app code and may resolve commands itself, so no board lock is held here.
-            let (resolved, _) = resolve_as(ctx, reader, &kept.command);
-            if resolved != *kept {
-                *kept = resolved;
-                changed.push(*key);
-            }
+        if fresh {
+            continue;
         }
+        #[cfg(feature = "testing")]
+        measure::count_resolve(ctx, Resolve::Again);
+        let (resolved, key) = resolve_as(ctx, &entry.reader, &entry.kept.resolved.command, vantage);
+        let was = entry.kept.key.bind();
+        let resolved = if resolved == *entry.kept.resolved {
+            Arc::clone(&entry.kept.resolved)
+        } else {
+            changed.extend(was);
+            changed.extend(key.bind().filter(|bind| Some(*bind) != was));
+            Arc::new(resolved)
+        };
+        table.replace(id, Kept { resolved, key });
     }
-    table.retain(|_, readers| !readers.is_empty());
+    table.woke = Some(now);
     with(ctx, |board| {
-        // Reads the gate made while the entries were out of the board.
-        let added = board.shown.remove(&viewport).unwrap_or_default();
-        for (key, readers) in added {
-            for (reader, resolved) in readers {
-                keep_in(table.entry(key).or_default(), reader, &resolved);
+        // Resolutions read nothing into the table while it is out of the board; keep any that arrived all the same.
+        if let Some(added) = board.shown.remove(&viewport) {
+            for (_, entry) in added.entries {
+                let number = entry.kept.key.number;
+                table.keep(entry.reader, number, entry.kept);
             }
         }
-        if !table.is_empty() {
+        if !table.entries.is_empty() {
             board.shown.insert(viewport, table);
         }
     });
-    for (number, instance) in changed {
-        lazy::note_edit(ctx, BindKey::Command(number, instance));
+    for key in changed {
+        lazy::note_edit(ctx, key);
     }
 }
 
+/// Testing check, every 100th pass of a viewport: every kept resolution of `viewport` equals a full resolution from its
+/// reader, and every kept gate answer equals the gate's answer asked again apart from the cache. A difference is an
+/// input the keys miss.
+#[cfg(feature = "testing")]
+fn check_kept(ctx: &Context, viewport: ViewportId) {
+    let Some(table) = with(ctx, |board| board.shown.remove(&viewport)) else { return };
+    for entry in table.entries.values() {
+        if entry.reader.layer().is_some_and(|layer| !overlay::is_open(ctx, layer)) {
+            continue;
+        }
+        let command = &entry.kept.resolved.command;
+        measure::count_resolve(ctx, Resolve::Checked);
+        let (fresh, _) = resolve_as(ctx, &entry.reader, command, vantage_of(ctx, &entry.reader));
+        assert!(
+            fresh == *entry.kept.resolved,
+            "the kept resolution of {} for a {} reader differs from a full resolve: kept {:?}, resolved {fresh:?}",
+            command,
+            entry.reader.kind(),
+            entry.kept.resolved,
+        );
+        let (cached, gate) = with(ctx, |board| (board.gate_answers.get(command.key_text().as_ref()).copied(), board.gate.clone()));
+        if let (Some(cached), Some(gate)) = (cached, gate) {
+            assert!(cached == gate.allows(command), "the kept gate answer for {command} differs from the gate's");
+        }
+    }
+    with(ctx, |board| {
+        board.shown.insert(viewport, table);
+    });
+}
+
 /// Step-1 resolution for a context in `chain`; `None` when the command's scope has no instance in the chain.
-pub(crate) fn resolve_scoped(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> Option<ResolvedCommand> {
+pub(crate) fn resolve_scoped(ctx: &Context, chain: &CommandChain, command: &CommandRef) -> Option<Arc<ResolvedCommand>> {
     let (found, app) = with(ctx, |board| {
         let scope = board.scope_of(command);
         (board.innermost(chain, scope).is_some(), board.to_app(scope))
@@ -1023,7 +1574,9 @@ fn queue(ctx: &Context, fired: Fired) {
 pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) {
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
-    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).0.instance);
+    #[cfg(feature = "testing")]
+    measure::count_resolve(ctx, Resolve::New);
+    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here, &mut Reads::default()).0.instance);
     let fired = Fired { target, ..Fired::new(command, FireSource::Key, FirePhase::Press, pass::now(ctx)) };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
@@ -1059,7 +1612,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     if !app && instance.is_none() {
         return false;
     }
-    let (resolved, _) = resolve_in(ctx, command, instance, Reach::Focus, from);
+    let resolved = resolve_once(ctx, command, instance, Reach::Focus, from);
     if !resolved.enabled {
         return false;
     }
@@ -1070,7 +1623,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
 }
 
 /// Publishes `state` of `command` for the innermost instance in `chain`. A state other than the one resolved so far in
-/// the frame is an edit of it: a settled region that read it runs, and so does the pass, when something read it
+/// the frame is an edit of it: a settled memoized view that read it runs, and so does the pass, when something read it
 /// earlier in the pass.
 ///
 /// A publish is a board effect, which a measuring run skips as it skips registration: the real run of the same content
@@ -1079,10 +1632,11 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
     if !measure::effect(ctx, "commands::publish") {
         return;
     }
-    replay::journal(ctx, || {
-        let (chain, command, state) = (chain.clone(), command.clone(), state.clone());
-        move |ctx: &Context| publish(ctx, &chain, &command, state.clone())
-    });
+    replay::journal(
+        ctx,
+        || (chain.clone(), command.clone(), state.clone()),
+        |ctx, (chain, command, state)| publish(ctx, chain, command, state.clone()),
+    );
     let changed = with(ctx, |board| {
         let scope = board.scope_of(command);
         let declared = board.def(&command.id).is_some_and(|def| def.modal == ModalRule::Declared);
@@ -1098,11 +1652,14 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
         let key = (number, Some(instance));
         // The pass that publishes is the one that knows the layers around the caller.
         let in_modal = chain.ids().any(|id| board.is_modal_root(id));
-        if in_modal {
-            board.modal_published.insert(key);
+        if in_modal && board.modal_published.insert(key) && !board.modal_published_last.contains(&key) {
+            board.gens.shared += 1;
         }
         let changed = !same_state(board.this.get(&key).or_else(|| board.last.get(&key)), Some(&state));
         board.this.insert(key, state);
+        if changed {
+            board.bump_state(key);
+        }
         changed.then_some((number, instance))
     });
     if let Some((number, instance)) = changed {
@@ -1164,7 +1721,7 @@ pub fn bound_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain,
         S::from_ref(&hit.command)?;
         Some((hit.command, board.instance_around(at, around, S::SCOPE.name())))
     })?;
-    let (resolved, _) = resolve_in(ctx, &command, instance, Reach::Chain(around), None);
+    let resolved = resolve_once(ctx, &command, instance, Reach::Chain(around), None);
     if resolved.enabled { S::from_ref(&command) } else { None }
 }
 
@@ -1185,7 +1742,7 @@ pub(crate) fn binds_scoped(ctx: &Context, chord: &Chord) -> bool {
         let (_, instance) = board.target_of(ctx, &command, &board.here);
         Some((command, instance))
     });
-    found.is_some_and(|(command, instance)| resolve_in(ctx, &command, instance, Reach::Focus, None).0.enabled)
+    found.is_some_and(|(command, instance)| resolve_once(ctx, &command, instance, Reach::Focus, None).enabled)
 }
 
 /// Where a shortcut pressed with focus in a menu or on a menu bar matches, and where a hit gives the focus back. The
@@ -1235,10 +1792,6 @@ impl Returning {
 /// H7: the key stage's shortcut events, matched against the keymap in the scopes around the focused component,
 /// through the gate, to their commands.
 pub(crate) fn begin(ctx: &Context) {
-    let (arrived, changed) = with(ctx, |board| board.changed.clone());
-    if arrived == pass::root_frame_nr(ctx) && changed.keymap {
-        lazy::unsettle(ctx);
-    }
     let viewport = pass::current_viewport(ctx);
     let focused = focus::record(ctx, viewport).focused;
     let shortcuts = keys::take_shortcuts(ctx);
@@ -1247,8 +1800,12 @@ pub(crate) fn begin(ctx: &Context) {
     // A shortcut pressed in a menu or on a menu bar matches where the focus returns to once the menus close.
     let returning = focused.filter(|_| !shortcuts.keys.is_empty()).and_then(|focused| Returning::of(ctx, focused));
     let shell = frame::shell_root(ctx, viewport);
+    let edits = focused_edits(ctx, viewport);
     let taken = with(ctx, |board| {
-        board.held_open = held_open;
+        if board.held_open != held_open {
+            board.held_open = held_open;
+            board.gens.shared += 1;
+        }
         let returned = returning
             .map(Returning::id)
             .and_then(|held| [board.before.get(&viewport), board.chains.get(&viewport)].into_iter().flatten().find(|(id, _)| *id == held))
@@ -1261,18 +1818,48 @@ pub(crate) fn begin(ctx: &Context) {
             (true, Some(root)) => vec![*root],
             _ => chain,
         };
-        if !chain.is_empty() {
-            board.last_focused.clone_from(&chain);
+        let view = board.views.entry(viewport).or_default();
+        if !chain.is_empty() && view.last_focused != chain {
+            view.last_focused.clone_from(&chain);
+            view.gens.focus += 1;
         }
         // Nothing focused outside a modal: the window's shell root takes the commands, so a window command's key comes
-        // before an app command's. Nothing holds focus there, so the chain last focused stays.
-        let chain = if chain.is_empty() && focused.is_none() { shell.into_iter().collect() } else { chain };
+        // before an app command's, and the page region's after it. Nothing holds focus there, so the chain last focused
+        // stays.
+        let chain = if chain.is_empty() && focused.is_none() {
+            let page = board.page_roots.get(&viewport).copied();
+            shell.into_iter().chain(page).collect()
+        } else {
+            chain
+        };
         match board.here.focused.iter_mut().find(|(v, _)| *v == viewport) {
-            Some(entry) => entry.1.clone_from(&chain),
-            None => board.here.focused.push((viewport, chain.clone())),
+            Some(entry) if entry.1 == chain => {}
+            Some(entry) => {
+                entry.1.clone_from(&chain);
+                board.gens.focus += 1;
+            }
+            None => {
+                board.here.focused.push((viewport, chain.clone()));
+                board.gens.focus += 1;
+            }
         }
-        board.here.dialog_keys = shortcuts.dialog;
-        board.here.inside_modal = Board::inside_modal_of(&chain, |id| board.is_modal_root(id));
+        // The viewport's own facts move its own generations; `here` holds the running viewport's for the pass.
+        let inside_modal = Board::inside_modal_of(&chain, |id| board.is_modal_root(id));
+        let view = board.views.entry(viewport).or_default();
+        if view.dialog_keys != shortcuts.dialog {
+            view.dialog_keys = shortcuts.dialog;
+            view.gens.keys += 1;
+        }
+        if view.inside_modal != inside_modal {
+            view.inside_modal = inside_modal;
+            view.gens.focus += 1;
+        }
+        if view.edits != edits {
+            view.edits = edits;
+            view.gens.edits += 1;
+        }
+        board.here.dialog_keys = view.dialog_keys;
+        board.here.inside_modal.clone_from(&view.inside_modal);
         if shortcuts.keys.is_empty() {
             return None;
         }
@@ -1288,6 +1875,10 @@ pub(crate) fn begin(ctx: &Context) {
     });
     // With this pass's vantage set, what the readers were shown is resolved again before any of them runs.
     wake_shown(ctx, viewport);
+    #[cfg(feature = "testing")]
+    if pass::pass_nr(ctx, viewport).is_multiple_of(100) {
+        check_kept(ctx, viewport);
+    }
     let Some((keys, mut matcher)) = taken else { return };
     let mut fired = Vec::new();
     for shortcut in &shortcuts.keys {
@@ -1310,12 +1901,19 @@ pub(crate) fn begin(ctx: &Context) {
                 }
             }
             _ => {
-                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing && !shortcut.canvas, Some((&mut matcher, time)))
-                else {
+                // A binding whose command is disabled where the press lands (a window command with no floating
+                // window, a canvas's view command it does not offer) is passed over: the press runs the next binding
+                // of its chord, in an outer scope, or of its next chord candidate, as if the disabled one were unbound.
+                let enabled = |command: &CommandRef| {
+                    let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
+                    resolve_in(ctx, command, instance, Reach::Focus, None, Reads::default()).0.enabled
+                };
+                let typing = shortcuts.typing && !shortcut.canvas;
+                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled))) else {
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
-                let (resolved, _) = resolve_in(ctx, &hit.command, instance, Reach::Focus, None);
+                let resolved = resolve_once(ctx, &hit.command, instance, Reach::Focus, None);
                 if !resolved.enabled {
                     continue;
                 }
@@ -1368,9 +1966,22 @@ pub(crate) fn begin(ctx: &Context) {
 /// The end hook: instances that stopped registering are gone, and so are the commands queued for them and the readers
 /// inside them.
 pub(crate) fn end(ctx: &Context) {
+    let viewport = pass::current_viewport(ctx);
     with(ctx, |board| {
         let live = pass::live_viewports(ctx);
         let alive: Vec<bool> = board.instances.iter().map(|i| board.live(ctx, i) && live.contains(&i.viewport)).collect();
+        // An instance of this viewport this pass did not register is dead from the viewport's next pass: resolutions
+        // see it.
+        let dies = board.instances.iter().zip(&alive).any(|(i, alive)| *alive && i.viewport == viewport && i.stamp < pass::pass_nr(ctx, viewport));
+        let gone: HashSet<Id> = board.instances.iter().zip(&alive).filter(|(_, alive)| !**alive).map(|(i, _)| i.id).collect();
+        // The revisions of a removed instance's states go in the same step as a shared move, which makes every entry
+        // that holds one stale first.
+        if !gone.is_empty() {
+            board.revisions.retain(|(_, instance), _| instance.is_none_or(|id| !gone.contains(&id)));
+        }
+        if dies || !gone.is_empty() {
+            board.gens.shared += 1;
+        }
         let mut keep = alive.iter();
         board.instances.retain(|_| keep.next().copied().unwrap_or(false));
         let instances = &board.instances;
@@ -1379,16 +1990,20 @@ pub(crate) fn end(ctx: &Context) {
         board.held.retain(|held| held.target.is_none_or(ids));
         board.chains.retain(|viewport, _| live.contains(viewport));
         board.before.retain(|viewport, _| live.contains(viewport));
+        board.views.retain(|viewport, _| live.contains(viewport));
         board.here.focused.retain(|(viewport, _)| live.contains(viewport));
         board.shown.retain(|viewport, table| {
-            table.retain(|_, readers| {
-                readers.retain(|(reader, _)| match reader {
-                    Reader::Chain(chain) | Reader::InMenu(_, chain) => chain.innermost_any().is_none_or(&ids),
-                    _ => true,
-                });
-                !readers.is_empty()
+            table.drop_where(|entry| match &entry.reader {
+                Reader::Chain(chain) | Reader::InMenu(_, chain) => chain.innermost_any().is_some_and(|id| !ids(id)),
+                _ => false,
             });
-            live.contains(viewport) && !table.is_empty()
+            live.contains(viewport) && !table.entries.is_empty()
         });
+        // The state log keeps the changes no kept table has woken past.
+        let oldest = board.shown.values().map(|table| table.woke.map_or(0, |woke| woke.state_seq)).min();
+        match oldest {
+            Some(oldest) => board.state_log.retain(|(seq, _)| *seq > oldest),
+            None => board.state_log.clear(),
+        }
     });
 }

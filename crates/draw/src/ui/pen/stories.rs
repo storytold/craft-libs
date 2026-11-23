@@ -2,7 +2,6 @@
 
 use super::{PathOptionsPopover, PathOptionsSettings};
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -14,8 +13,8 @@ fn line_color() -> Srgba {
 #[story(PathOptionsPopover<'static>, covers = [Default], drive = Drive::Never)]
 fn path_options_defaults(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut open = *data.value("open", false);
-    let settings = data.value("defaults", PathOptionsSettings::default());
-    let shown = PathOptionsPopover::new("Path Options", Bind::bound(&mut *settings)).default_color(line_color()).show(ui, &mut open);
+    let (settings, settings_at) = data.value_at("defaults", PathOptionsSettings::default());
+    let shown = PathOptionsPopover::new("Path Options", settings_at.bind(&mut *settings)).default_color(line_color()).show(ui, &mut open);
     *data.value("open", false) = open;
     shown.into()
 }
@@ -23,8 +22,8 @@ fn path_options_defaults(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PathOptionsPopover<'static>, covers = [], drive = Drive::Never)]
 fn path_options_with_a_color(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut open = *data.value("open-set", false);
-    let settings = data.value("set", PathOptionsSettings { rubber_band: true, color: Some([200, 40, 40]), thickness: Some(2.0) });
-    let shown = PathOptionsPopover::new("Path Options", Bind::bound(&mut *settings)).show(ui, &mut open);
+    let (settings, settings_at) = data.value_at("set", PathOptionsSettings { rubber_band: true, color: Some([200, 40, 40]), thickness: Some(2.0) });
+    let shown = PathOptionsPopover::new("Path Options", settings_at.bind(&mut *settings)).show(ui, &mut open);
     *data.value("open-set", false) = open;
     shown.into()
 }

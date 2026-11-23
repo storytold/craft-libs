@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::contract::Show as _;
+use craft_ui::primitives::Serials;
 use craft_ui::testing::canvas_story::StoryDocument;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Color32, ColorImage, Ui};
@@ -102,7 +103,7 @@ impl Document {
             return Arc::clone(textures);
         }
         let name = format!("transform-story-{}x{}", size[0], size[1]);
-        let textures = Arc::new(PreviewTextures::from_levels(name, pyramid(size), [1.0, 1.0]));
+        let textures = Arc::new(PreviewTextures::from_levels(&mut Serials::default(), name, pyramid(size), [1.0, 1.0]));
         kept.push((size, Arc::clone(&textures)));
         textures
     }

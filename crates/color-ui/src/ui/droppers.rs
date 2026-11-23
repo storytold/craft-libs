@@ -31,8 +31,8 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::requests::EyedropperRequest;
 use egui::{Pos2, Response, Ui, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The pipette icon's tip, in the icon's own 24-unit box.
 const HOTSPOT: [f32; 2] = [2.0, 22.0];

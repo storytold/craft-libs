@@ -11,16 +11,18 @@
 //! ```no_run
 //! use craft_imaging::ui::transform_preview::{PreviewMap, PreviewPixels, PreviewTextures, TransformPreview};
 //! use craft_ui::contract::Show as _;
+//! use craft_ui::primitives::Serials;
 //! # fn demo(ui: &mut egui::Ui, canvas_rect: egui::Rect, image: egui::ColorImage, quad: [kurbo::Point; 4]) {
-//! // Once per session:
-//! let textures = PreviewTextures::new("ft-preview", PreviewPixels::new(image, [1.0, 1.0]));
+//! // Once per session, with the `Serials` the owner of the previews holds:
+//! let mut serials = Serials::default();
+//! let textures = PreviewTextures::new(&mut serials, "ft-preview", PreviewPixels::new(image, [1.0, 1.0]));
 //! // Every pass, in the canvas body under the guides and the box:
 //! TransformPreview::new("Moving layer", &textures).map(PreviewMap::quad(quad)).opacity(0.8).clip([800, 600]).show_at(ui, canvas_rect);
 //! # }
 //! ```
 
 mod maps;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod styled;
 mod textures;

@@ -36,7 +36,7 @@ fn a_footer_letter_activates_its_button_in_a_full_window_dialog() {
 }
 
 /// The sample workspace on a dialog host, run once per frame.
-mod hosting {
+pub(crate) mod hosting {
     use super::super::HostedWorkspace;
     use super::super::stories::{BrushChanged, BrushWorkspace, Flat};
     use crate::contract::Role;

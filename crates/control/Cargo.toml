@@ -14,7 +14,7 @@ workspace = true
 default = []
 # AI agents in the open window (desktop): the ArtCraft Launcher's switch, the connection file and
 # the `<id>-cli mcp` side that finds the open window. The agent settings build without it.
-agents = ["dep:craft-ai-agents", "dep:craft-atomic", "dep:craft-flags", "dep:log"]
+agents = ["dep:craft-ai-agents", "dep:craft-atomic", "dep:craft-flags", "dep:dirs", "dep:log"]
 
 [dependencies]
 serde = { workspace = true }
@@ -28,6 +28,8 @@ getrandom = "0.3"
 craft-ai-agents = { workspace = true, optional = true }
 craft-atomic = { workspace = true, optional = true }
 craft-flags = { workspace = true, optional = true }
+# The system's Documents folder for the default agent folder, on every desktop system (MIT OR Apache-2.0).
+dirs = { version = "7", optional = true }
 log = { workspace = true, optional = true }
 
 [dev-dependencies]

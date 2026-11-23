@@ -2,10 +2,10 @@
 //! ([`PerspectiveSession`], [`PerspectiveWarp`], [`PerspectiveBar`]). The warp map is the app's;
 //! the warped picture is drawn by the transform preview through `PreviewMap::function`.
 
-mod bar;
-mod overlay;
+pub(crate) mod bar;
+pub(crate) mod overlay;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub use bar::{PerspectiveBar, PerspectiveBarOutput, PerspectiveBarWords};

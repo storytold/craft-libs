@@ -1,15 +1,15 @@
 //! `Bar` and `BarItems`: the bar container and its strip of command items, and the members of a status bar.
 
-mod align;
-mod bar;
-mod breadcrumb;
-mod constraint_fields;
-mod items;
-mod lead;
-mod status;
-mod status_readout;
-#[cfg(feature = "testing")]
-mod stories;
+pub(crate) mod align;
+pub(crate) mod bar;
+pub(crate) mod breadcrumb;
+pub(crate) mod constraint_fields;
+pub(crate) mod items;
+pub(crate) mod lead;
+pub(crate) mod status;
+pub(crate) mod status_readout;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use align::{AlignAction, AlignBar, AlignBarOutput};

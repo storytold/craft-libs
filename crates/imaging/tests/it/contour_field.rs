@@ -4,10 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_imaging::layer_style::Contour;
-use craft_imaging::ui::layer_style::{ContourField, ContourKey, ContourRequest, ContourWords, contour_rows};
+use craft_imaging::ui::layer_style::{ContourField, ContourKey, ContourRequest, contour_source};
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::presets::PresetState;
-use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, pos2};
 
@@ -18,8 +17,8 @@ fn rig() -> (Fixture, Rc<RefCell<Vec<ContourRequest>>>) {
     let mut contour = Contour::linear();
     let mut state = PresetState::<ContourKey>::new();
     let mut fixture = Fixture::new(move |ui| {
-        let words = Env::of(ui).words::<ContourWords>();
-        let rows = contour_rows(&Contour::presets(), &[], &words, None);
+        let presets = Contour::presets();
+        let rows = contour_source(&presets, &[], None);
         let out = ContourField::new("Contour", Bind::bound(&mut contour), &rows, Bind::bound(&mut state)).show(ui);
         seen.borrow_mut().extend(out.edit_contour);
     });

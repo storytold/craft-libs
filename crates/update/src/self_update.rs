@@ -321,4 +321,4 @@ pub fn prepare_update_with_options(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

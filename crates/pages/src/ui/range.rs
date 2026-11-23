@@ -2,8 +2,8 @@
 //! page choices, showing the pages back in the same format; and `PageRangeOptions`, the All pages / Pages from-to / Subset rows of
 //! Acrobat's Page Range Options.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{Codec, NotAValue, NumberCodec};
 use craft_ui::buttons::IconButton;
@@ -164,19 +164,16 @@ impl<'a> PageRangeField<'a> {
         let env = Env::of(ui);
         let words = env.words::<PageRangeFieldWords>();
         let units = env.units();
-        let refuse = {
-            let (words, units) = (words.clone(), units.clone());
-            move |value: &PageSelection| match &value.error {
-                Some(error) => Validity::Refuse(Message::new(words.error(error, &units))),
-                None => Validity::Ok,
-            }
-        };
         let placeholder = units.number((current.min(count.saturating_sub(1)) + 1) as f64, 0..=0);
         let mut picked = None;
         let mut response = None;
         Field::new(label).side(SideLabel::new().kind(LabelKind::Hidden)).show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
-                let value = Bind::given(PageSelection::of(pages)).check(&refuse);
+                let value =
+                    Bind::given(PageSelection::of(pages)).check_with((words.clone(), units.clone()), |(words, units), value| match &value.error {
+                        Some(error) => Validity::Refuse(Message::new(words.error(error, units))),
+                        None => Validity::Ok,
+                    });
                 let field = TextField::with_codec(words.selected_pages.clone(), value, PageRangeCodec::new(count))
                     .placeholder(Label::from(placeholder.clone()))
                     .show(ui);

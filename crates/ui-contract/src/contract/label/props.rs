@@ -72,7 +72,7 @@ impl GlyphLabel {
 
 /// How the labelled rows under a container show their labels: set once on the container (`ContainerProps::labels`),
 /// read by every label step under it until another container sets its own.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum LabelScheme {
     /// A dialog or a form: a beside label sits against its control and ends with a colon; the control keeps its own

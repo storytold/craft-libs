@@ -1,7 +1,6 @@
 //! Stories of `PresetFooter`.
 
 use super::{PresetFooter, PresetFooterOptions};
-use crate::contract::Bind;
 use crate::sections::FooterAction;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
@@ -12,7 +11,7 @@ fn preset_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let slider = *data.value("slider", true);
     let new_group = *data.value("new_group", true);
     let count = *data.value("count", true);
-    let footer = PresetFooter::<u32>::new(Bind::bound(data.value("zoom", 1.0f64))).options(
+    let footer = PresetFooter::<u32>::new(data.bind("zoom", 1.0f64)).options(
         PresetFooterOptions::new()
             .slider(slider)
             .new_group(new_group)

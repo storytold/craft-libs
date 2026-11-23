@@ -348,6 +348,22 @@ pub enum PathEdit {
         /// The move of the new anchor, in document units.
         by: Vec2,
     },
+    /// Add Anchor's drag from a segment: add an anchor to the segment leaving `segment` at `t` and pull out its
+    /// handles, as the Pen does: the out handle at `out` and the in handle opposite it through the anchor, a smooth
+    /// knot; once Alt broke the pair, the in handle at `in_ctrl` and a corner knot.
+    #[non_exhaustive]
+    PullAnchor {
+        /// The path's host key.
+        path: u64,
+        /// The anchor the segment leaves.
+        segment: KnotRef,
+        /// Position along the segment, 0..=1.
+        t: f64,
+        /// The new anchor's out handle.
+        out: Point,
+        /// The new anchor's in handle once Alt broke the pair; `None` mirrors `out`.
+        in_ctrl: Option<Point>,
+    },
     /// The Curvature tool's double-click or Enter on an anchor: a smooth knot becomes a corner
     /// with retracted handles and a corner becomes smooth, then the subpath reflows.
     #[non_exhaustive]
@@ -425,6 +441,12 @@ impl PathEdit {
         PathEdit::InsertAnchor { path, segment, t, by }
     }
 
+    /// Add Anchor's insert into the segment leaving `segment` at `t` with the new anchor's handles pulled out to `out`
+    /// and mirrored, or with the in handle at `in_ctrl`.
+    pub fn pull_anchor(path: u64, segment: KnotRef, t: f64, out: Point, in_ctrl: Option<Point>) -> Self {
+        PathEdit::PullAnchor { path, segment, t, out, in_ctrl }
+    }
+
     /// The Curvature tool's toggle of `knot` between smooth and corner.
     pub fn toggle_curvature(path: u64, knot: KnotRef) -> Self {
         PathEdit::ToggleCurvature { path, knot }
@@ -445,6 +467,7 @@ impl PathEdit {
             | PathEdit::MoveCurvature { path, .. }
             | PathEdit::InsertCurvature { path, .. }
             | PathEdit::InsertAnchor { path, .. }
+            | PathEdit::PullAnchor { path, .. }
             | PathEdit::ToggleCurvature { path, .. }
             | PathEdit::DuplicateSubpath { path, .. } => path,
         }
