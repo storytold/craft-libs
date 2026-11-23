@@ -318,6 +318,11 @@ impl MenuLevel {
         self.with(|state| state.active)
     }
 
+    /// The active row while it is enabled.
+    pub(super) fn active_enabled(&self) -> Option<Id> {
+        self.with(|state| state.active.filter(|active| state.shown.iter().any(|row| row.id == *active && row.enabled)))
+    }
+
     /// Moves the active row by `mv` among the enabled rows as the user last saw them, without moving the focus (the
     /// keys of a field that drives the menu): Up and Down wrap, Home and Page Up go to the first, End and Page Down to
     /// the last. Returns whether it moved.

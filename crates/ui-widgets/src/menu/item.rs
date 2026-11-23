@@ -241,6 +241,8 @@ pub struct MenuItem<'a> {
     #[prop(name = "entry_checked")]
     entry: Option<bool>,
     ran: bool,
+    /// The row took a key activation it does not run: the first key in a menu the pointer opened (`update`).
+    withheld: bool,
     opens: bool,
     open: bool,
     active: bool,
@@ -267,6 +269,7 @@ impl<'a> MenuItem<'a> {
             keep_open: false,
             entry: None,
             ran: false,
+            withheld: false,
             opens: false,
             open: false,
             active: false,
@@ -550,9 +553,13 @@ impl Component for MenuItem<'_> {
             }
         };
         let takes_over = hovered && (!heading || rested >= AIM_REST);
+        // Enter or Space as the first key in a menu the pointer opened reaches the focused row, which the pointer may never
+        // have lit: it runs the row the pointer lit, or with none lit it only closes the menu, as a native menu does.
+        let lit = level.active_enabled();
+        let first_key = key_started && !self.submenu && cx.activation().is_some_and(|activation| activation.by_key) && lit != Some(cx.id);
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
-        if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
+        if enabled && focused && keyboard && (focus_gained || key_started) && !first_key && level.activate_row(cx.id) {
             frame::request_repaint(&ctx);
         }
         // A disabled row is never active.
@@ -562,7 +569,19 @@ impl Component for MenuItem<'_> {
             frame::request_repaint_after(&ctx, AIM_REST - rested);
         }
         let typed = enabled && level.take_run(cx.id);
-        let asked = enabled && (typed || cx.activation().is_some());
+        self.withheld = first_key;
+        if first_key {
+            match lit {
+                Some(row) => level.run(row),
+                None => {
+                    if let Some(menu) = crate::runtime::focus::running_menu(&ctx) {
+                        crate::runtime::focus::return_from_pick(&ctx, crate::runtime::focus::PickedIn::Menus(menu));
+                        crate::runtime::overlay::request_close(&ctx, menu, crate::runtime::overlay::CloseReason::Requested);
+                    }
+                }
+            }
+        }
+        let asked = enabled && (typed || (cx.activation().is_some() && !first_key));
         if self.submenu {
             self.opens = asked || (enabled && forward) || (enabled && takes_over);
             if self.opens {
@@ -605,9 +624,10 @@ impl Component for MenuItem<'_> {
         self.ran = asked;
     }
 
-    /// A submenu row never runs: it opens its submenu, and the menus stay open.
+    /// A submenu row never runs: it opens its submenu, and the menus stay open. Nor does a row whose key activation it
+    /// withheld: the row the pointer lit runs instead, or none.
     fn activated(&self, cx: &Cx<'_, Self>) -> bool {
-        !self.submenu && cx.activation().is_some()
+        !self.submenu && !self.withheld && cx.activation().is_some()
     }
 
     fn flags(&self) -> Flags {
