@@ -556,7 +556,8 @@ impl Component for MenuItem<'_> {
         // Enter or Space as the first key in a menu the pointer opened reaches the focused row, which the pointer may never
         // have lit: it runs the row the pointer lit, or with none lit it only closes the menu, as a native menu does.
         let lit = level.active_enabled();
-        let first_key = key_started && !self.submenu && cx.activation().is_some_and(|activation| activation.by_key) && lit != Some(cx.id);
+        // A submenu row is no exception: the first key opens no submenu the pointer did not light.
+        let first_key = key_started && cx.activation().is_some_and(|activation| activation.by_key) && lit != Some(cx.id);
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
         if enabled && focused && keyboard && (focus_gained || key_started) && !first_key && level.activate_row(cx.id) {

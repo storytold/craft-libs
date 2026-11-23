@@ -188,3 +188,41 @@ fn return_in_a_menu_opened_by_space_runs_its_first_row() {
     assert_eq!(ran.get(), Some("Clear All"), "Return runs the menu's first row");
     assert!(menu_rect(&fixture).is_none(), "running the row closes the menu");
 }
+
+/// A menu the pointer opened puts its first row in focus without lighting it; when that row opens a submenu, Return
+/// with no row lit only closes the menu and opens no submenu, and with a row lit under the pointer it runs that row.
+#[trial]
+fn return_in_a_pointer_opened_menu_whose_first_row_opens_a_submenu() {
+    let ran = Rc::new(Cell::new(None::<&'static str>));
+    let seen = ran.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Open").show(ui);
+        Menu::new("Main").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            Menu::submenu_row(ui, "Recent", |ui, _| {
+                MenuItem::new("Report.txt").show(ui);
+            });
+            for row in ["Clear All", "Reset"] {
+                if MenuItem::new(row).show(ui).ran {
+                    seen.set(Some(row));
+                }
+            }
+        });
+    });
+    fixture.settle();
+    let open = |fixture: &mut Fixture| {
+        let opener = fixture.by_label("Open").expect("the opener");
+        fixture.advance(1.0).click(&opener).settle();
+        assert!(fixture.by_label("Clear All").is_some(), "a click on the opener opens the menu");
+    };
+    open(&mut fixture);
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Clear All").is_none(), "Return with no row lit closes the menu");
+    assert!(fixture.by_label("Report.txt").is_none(), "and opens no submenu");
+    assert_eq!(ran.get(), None, "and runs no row");
+    open(&mut fixture);
+    let reset = fixture.by_label("Reset").expect("the Reset row").center();
+    fixture.frame(vec![pointer::moved(reset)]).settle();
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+    assert_eq!(ran.get(), Some("Reset"), "Return runs the row the pointer lit");
+    assert!(fixture.by_label("Clear All").is_none(), "and the run closes the menu");
+}
