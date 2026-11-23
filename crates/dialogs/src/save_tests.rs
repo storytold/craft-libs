@@ -144,6 +144,34 @@ fn a_file_changed_on_disk_is_asked_about_once() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+// Tc-9 (4): Save As onto the document's own file writes the file type the panel picked, straight away or after the
+// changed-on-disk question's Replace: the own-file path dropped the pick, so the document saved in its old type.
+#[trial]
+fn save_as_onto_the_own_file_keeps_the_picked_type() {
+    let dir = scratch("own-type");
+    let file = dir.join("a.pdf");
+    std::fs::write(&file, b"one").unwrap();
+    let (files, mut watch, mut flow) = (ScriptedFiles::default(), watch(), SaveFlow::new());
+    watch.known_now(7, &file);
+    let write = SaveStep::Write { key: 7, path: file.clone(), target: SaveTarget::As, file_type: Some(1) };
+    for changed in [false, true] {
+        if changed {
+            std::fs::write(&file, b"another app wrote more").unwrap();
+        }
+        assert_eq!(flow.start(&files, &watch, document(Some(&file), "a.pdf"), SaveTarget::As), SaveStep::Picking);
+        files.answer(files.last_ticket(), Picked::Saved { path: file.clone(), file_type: Some(1) });
+        let step = flow.take_pick(&files, &watch);
+        if changed {
+            assert_eq!(step, Some(SaveStep::AskChangedOnDisk { key: 7, path: file.clone() }), "a changed file asks first");
+            assert_eq!(flow.replace(), write, "Replace writes the picked type");
+        } else {
+            assert_eq!(step, Some(write.clone()), "the own file writes the picked type");
+        }
+        flow.written(&mut watch, 7, &file);
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
 // A write that finishes for another document (its save was cancelled) leaves a newer save alone.
 #[trial]
 fn a_late_write_does_not_free_another_save() {

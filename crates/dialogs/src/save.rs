@@ -89,8 +89,8 @@ pub enum SaveStep<D> {
         path: PathBuf,
         /// Whether the document takes `path` as its file or keeps its own.
         target: SaveTarget,
-        /// The index of the file type picked in the save panel, when it reported one; `None` for the document's own
-        /// file.
+        /// The index of the file type picked in the save panel, when it reported one; `None` for a save in place,
+        /// which opens no panel.
         file_type: Option<usize>,
     },
     /// The user cancelled (the picker or the question); nothing was written.
@@ -106,9 +106,22 @@ pub enum SaveStep<D> {
 /// The state of one save.
 #[derive(Clone, Debug)]
 enum Pending<D> {
-    Picking { document: SaveDocument<D>, target: SaveTarget, ticket: PickId },
-    Asking { document: SaveDocument<D>, target: SaveTarget, path: PathBuf },
-    Writing { key: D, target: SaveTarget },
+    Picking {
+        document: SaveDocument<D>,
+        target: SaveTarget,
+        ticket: PickId,
+    },
+    /// The changed-on-disk question, with the file type the save panel picked for the path, if any.
+    Asking {
+        document: SaveDocument<D>,
+        target: SaveTarget,
+        path: PathBuf,
+        file_type: Option<usize>,
+    },
+    Writing {
+        key: D,
+        target: SaveTarget,
+    },
 }
 
 /// Save and Save As for an app's documents, one save at a time.
@@ -154,7 +167,7 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
             return SaveStep::Busy;
         }
         match document.path.clone() {
-            Some(path) if target == SaveTarget::InPlace && !is_mail_temp_copy(&path) => self.confirm(watch, document, target, path),
+            Some(path) if target == SaveTarget::InPlace && !is_mail_temp_copy(&path) => self.confirm(watch, document, target, path, None),
             _ => self.open_picker(files, document, target),
         }
     }
@@ -171,7 +184,7 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
         let Some(Pending::Picking { document, target, .. }) = self.pending.take() else { return None };
         let Picked::Saved { path, file_type } = picked else { return Some(SaveStep::Cancelled { key: document.key }) };
         if document.path.as_deref() == Some(path.as_path()) {
-            return Some(self.confirm(watch, document, target, path));
+            return Some(self.confirm(watch, document, target, path, file_type));
         }
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
         Some(SaveStep::Write { key: document.key, path, target, file_type })
@@ -181,9 +194,9 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
     /// when no such question is open.
     // pdfcraft: crates/ui-egui/src/editing/save.rs:141 overwrite_changed_file
     pub fn replace(&mut self) -> SaveStep<D> {
-        let Some(Pending::Asking { document, target, path }) = self.pending.take() else { return SaveStep::Busy };
+        let Some(Pending::Asking { document, target, path, file_type }) = self.pending.take() else { return SaveStep::Busy };
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        SaveStep::Write { key: document.key, path, target, file_type: None }
+        SaveStep::Write { key: document.key, path, target, file_type }
     }
 
     /// The changed-on-disk question's Save As: leave the file on disk as it is and ask where to
@@ -245,15 +258,22 @@ impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
 }
 
 impl<D: Clone + Eq + Hash + Send + 'static> SaveFlow<D> {
-    /// Writes `path`, the document's own file, unless another app changed it.
-    fn confirm(&mut self, watch: &FileWatch<D>, document: SaveDocument<D>, target: SaveTarget, path: PathBuf) -> SaveStep<D> {
+    /// Writes `path`, the document's own file, as `file_type` (the save panel's pick), unless another app changed it.
+    fn confirm(
+        &mut self,
+        watch: &FileWatch<D>,
+        document: SaveDocument<D>,
+        target: SaveTarget,
+        path: PathBuf,
+        file_type: Option<usize>,
+    ) -> SaveStep<D> {
         if watch.disk_differs(&document.key, &path, document.saved.as_deref().map(Vec::as_slice)) {
             let key = document.key.clone();
-            self.pending = Some(Pending::Asking { document, target, path: path.clone() });
+            self.pending = Some(Pending::Asking { document, target, path: path.clone(), file_type });
             return SaveStep::AskChangedOnDisk { key, path };
         }
         self.pending = Some(Pending::Writing { key: document.key.clone(), target });
-        SaveStep::Write { key: document.key, path, target, file_type: None }
+        SaveStep::Write { key: document.key, path, target, file_type }
     }
 
     fn open_picker(&mut self, files: &dyn Files, document: SaveDocument<D>, target: SaveTarget) -> SaveStep<D> {
