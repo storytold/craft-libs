@@ -78,6 +78,16 @@ fn use_counts_lift_a_command_but_never_past_a_better_match() {
     assert_eq!(found, vec![3, 2, 0, 1]);
 }
 
+/// An app's tie order (a tool before an effect) decides between entries that match as well, before the label's length,
+/// and never lifts a worse match.
+#[trial]
+fn a_tie_order_puts_an_equal_match_first_but_never_past_a_better_one() {
+    let entries =
+        vec![entry("t0", "Rect Shape").with_tie_order(3), entry("t1", "Rect Tool Long").with_tie_order(0), entry("t2", "Rect").with_tie_order(5)];
+    // The exact label first whatever its order, then the lower order though its label is longer.
+    assert_eq!(find(entries, "rect"), vec![2, 1, 0]);
+}
+
 #[trial]
 fn a_recent_place_lifts_an_entry_with_that_path() {
     let entries =

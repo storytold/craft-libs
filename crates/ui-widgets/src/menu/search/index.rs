@@ -78,6 +78,8 @@ struct Names {
     haystack: String,
     /// The initials of each label, of two or more letters.
     initials: Vec<String>,
+    /// The entry's [`HelpEntry::with_tie_order`].
+    tie_order: u8,
     /// The characters of the shown label.
     label_len: usize,
 }
@@ -320,7 +322,7 @@ impl SearchIndex {
             }
             let haystack = pairs.iter().map(|(_, full)| full.as_str()).chain(ids.iter().map(String::as_str)).collect::<Vec<_>>().join("\n");
             let label_len = pairs.first().map_or(0, |(label, _)| label.chars().count());
-            names.push(Names { names: pairs, ids, haystack, initials, label_len });
+            names.push(Names { names: pairs, ids, haystack, initials, tie_order: entry.tie_order, label_len });
         }
         found.sort_unstable();
         found.dedup();
@@ -524,8 +526,8 @@ impl SearchIndex {
 /// What entries are ordered by, compared field by field: whether a word matched only through a description, whether a
 /// word matched only through a typo, how the whole query matches, the worst grade a word gets, the sum of the grades,
 /// how the whole query matches when read with the words of the same meaning it matched through, how often the entry
-/// was picked (higher grade first), the entry's place among the recent picks and the label's length.
-type RankKey = (bool, bool, u8, u8, u32, u8, Reverse<u32>, usize, usize);
+/// was picked (higher grade first), the entry's place among the recent picks, its tie order and the label's length.
+type RankKey = (bool, bool, u8, u8, u32, u8, Reverse<u32>, usize, u8, usize);
 
 /// The entries of `index` matching `query`, best first, as indexes into the entries it was built from: tiers, grades
 /// from `uses` (`ilog2(min(count, 999) + 1)`), `recent` places and a substring fallback for long queries. It does not
@@ -538,7 +540,8 @@ type RankKey = (bool, bool, u8, u8, u32, u8, Reverse<u32>, usize, usize);
 /// a word matched only through a description come after every other entry, and before them those where a word matched
 /// only through a typo. The rest are ordered by how the whole query matches, the worst grade a word gets, the sum of
 /// the grades, how the whole query matches when read through the words of the same meaning, the use grade of the
-/// entry (highest first), its place in `recent`, the label's length and the entry's place. So an entry picked often, or
+/// entry (highest first), its place in `recent`, its [`HelpEntry::with_tie_order`], the label's length and the entry's
+/// place. So an entry picked often, or
 /// recently, ranks above the entries that match as well as it does and below every entry that matches better.
 pub fn rank(index: &SearchIndex, query: &str, recent: &[usize], uses: &dyn Fn(usize) -> u32) -> Vec<usize> {
     let query = normalize(&index.folder, query);
@@ -679,7 +682,7 @@ pub fn rank(index: &SearchIndex, query: &str, recent: &[usize], uses: &dyn Fn(us
         let meant_tier = if synonym { best_reading(&query, &starts, &tokens, &meant, |read| index.phrase(e, read, false)) } else { tier };
         let picked = recent.iter().position(|&r| r == i).unwrap_or(recent.len());
         let used = Reverse((uses(i).min(999) + 1).ilog2());
-        ranked.push(((described, typo, tier, worst, sum, meant_tier, used, picked, e.label_len), i));
+        ranked.push(((described, typo, tier, worst, sum, meant_tier, used, picked, e.tie_order, e.label_len), i));
     }
     ranked.sort_by_key(|&(key, place)| (key, place));
     ranked.into_iter().map(|(_, place)| place).collect()

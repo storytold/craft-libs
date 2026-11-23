@@ -27,6 +27,7 @@ pub struct HelpEntry {
     words: Option<String>,
     icon: Option<IconSpec<'static>>,
     ids: Vec<String>,
+    tie_order: u8,
 }
 
 impl HelpEntry {
@@ -41,6 +42,7 @@ impl HelpEntry {
             words: None,
             icon: None,
             ids: Vec::new(),
+            tie_order: 0,
         }
     }
 
@@ -95,6 +97,14 @@ impl HelpEntry {
     #[must_use]
     pub fn with_ids(mut self, ids: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.ids = ids.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The entry's place among entries that match a query as well and were picked as often and as recently, lower
+    /// first, before the label's length decides (an app's tools before its menu commands, say). 0 when not given.
+    #[must_use]
+    pub fn with_tie_order(mut self, order: u8) -> Self {
+        self.tie_order = order;
         self
     }
 
