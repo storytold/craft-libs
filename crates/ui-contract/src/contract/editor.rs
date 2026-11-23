@@ -27,6 +27,7 @@ pub(crate) type Order = (usize, u8);
 
 /// One step of an editor's pass, in the order of the events it came from ([`Cx::editor_steps`]).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum EditorStep<S> {
     /// An input of the editor part.
     Input(EditorInput),
