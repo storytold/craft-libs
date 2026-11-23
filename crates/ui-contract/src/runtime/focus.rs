@@ -885,6 +885,12 @@ pub(crate) fn holds_anchored_layer(ctx: &Context, owner: Id) -> bool {
     })
 }
 
+/// Whether a layer the component `owner` opened is shown (its edit menu, a list): the component's key focus may be with
+/// that layer, which is not the component losing it.
+pub(crate) fn holds_opened_layer(ctx: &Context, owner: Id) -> bool {
+    with(ctx, |state| state.last_scopes.values().any(|scope| !scope.closing && scope.opener.is_some_and(|(id, _)| id == owner)))
+}
+
 /// What moved the key focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

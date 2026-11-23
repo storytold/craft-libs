@@ -1719,3 +1719,30 @@ fn page_down_on_a_control_in_a_row_pages_the_capped_list() {
     fixture.key(Key::PageDown, Modifiers::NONE).settle();
     assert!(!in_view(&fixture, "Layer 0") && in_view(&fixture, "Layer 8"), "PageDown on the row's control paged the rows");
 }
+
+/// The rename editor's edit menu holds its editing focus while it is open: key focus is with the menu then, which is no
+/// blur, so the rename stays open with the typed name.
+#[trial]
+fn an_open_edit_menu_does_not_end_the_rename_as_a_blur() {
+    use craft_behavior::CancelReason;
+    use craft_ui::testing::pointer;
+    let (mut fixture, seen) = rig(|_| None);
+    request_rename(fixture.ctx(), list_id(), &0_usize);
+    fixture.settle();
+    fixture.type_text("Cover");
+    fixture.idle(2);
+    let editor = *fixture.by_role(craft_ui::contract::Role::TEXT_INPUT).first().expect("the rename editor");
+    fixture.advance(1.0);
+    fixture.frame(vec![pointer::secondary(editor.center(), true)]);
+    fixture.frame(vec![pointer::secondary(editor.center(), false)]);
+    fixture.settle();
+    assert!(fixture.by_label("Cut").is_some(), "the edit menu is open");
+    fixture.idle(4);
+    let ended = |event: &CollectionEvent<usize, craft_ui::list::RowEvent>| {
+        matches!(
+            event,
+            CollectionEvent::Rename(EditEvent::Cancel { reason: CancelReason::Blur, .. }) | CollectionEvent::Rename(EditEvent::Commit { .. })
+        )
+    };
+    assert!(!seen.borrow().iter().any(ended), "an open edit menu ends no rename: {:?}", seen.borrow().len());
+}
