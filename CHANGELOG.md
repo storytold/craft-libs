@@ -8,11 +8,10 @@ All crates share the workspace version. See [the versioning policy](docs/version
 
 ### 2026-11-23 — Upstream Merge (`next` + `main`) and Picker Sample Fix
 
-- **Merged `storytold/craft-libs` into the fork's `next`:** 78 commits from `next`
-  (through `315a223e6`, including the font picker port #3010) plus `main` (through
-  `1507e63e6`, including the `craft-develop` sensor and local tone stages), so one local tree
-  satisfies every revision `photocraft` pins — `e953d47a` for the shared crates and `7631ed550e`
-  for `craft-develop`/`craft-develop-model`.
+- **Merged `storytold/craft-libs` into the fork's `next`:** `next` at `a4e08cdaf`, on top of a
+  fork line that already carried `upstream/main` (the Camera Raw filter merge, `c2a11e702`), so one
+  checkout satisfies every revision `photocraft` pins — `8d436f486a` for the shared crates and the
+  `craft-develop` pair from the `main` line.
 - **Fixed: picker samples skip the private-use areas** ([`ab0873b44`](https://github.com/ussoewwin/craft-libs/commit/ab0873b44)):
   a patched face such as a Nerd Font maps its icons to `U+E000..U+F8FF` first, so the "first glyphs
   the face has" sample became icon codepoints, and laying it out in the interface face panicked
