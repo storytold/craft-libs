@@ -1531,6 +1531,7 @@ Pointer values and the press lifecycle (8.1, 8.2), egui-free: the runtime conver
   - `pub fn group(mut self, group: char) -> Self`. The digit-group separator, which the reader skips between digits.
   - `pub fn unit(mut self, spelling: &str, factor: f64) -> Self`. A unit spelling (case-insensitive; letters or the symbols `%`, `°`) and its factor to the base unit.
   - `pub fn unit_tagged(mut self, spelling: &str, factor: f64, tag: u32) -> Self`. Like [`Reader::unit`], with a `tag` that [`Reader::read_tagged`] returns when the text names this spelling.
+  - `pub fn split_unit(mut self, spelling: &str, factor: f64, rest: f64, tag: u32) -> Self`. Like [`Reader::unit_tagged`], where a number written right after the spelling adds that many of `rest`: picas
   - `pub fn decimal_separator(&self) -> char`. The decimal separator the reader reads and writes.
   - `pub fn read(&self, text: &str, start: Option<f64>) -> Result<f64, NotAValue>`. The value of `text`. `start` is the value relative input applies to.
   - `pub fn read_tagged(&self, text: &str, start: Option<f64>) -> Result<(f64, Option<u32>), NotAValue>`. The value of `text` and the tag of the unit its last quantity named (`None` for a bare number or an untagged
@@ -2686,6 +2687,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::pressed`: `pub fn pressed(response: &Response) -> bool`. Whether a pointer press went down on `response`'s component and is still held.
 - `craft_ui::contract::register_contract`: re-export of `craft_ui_macros::register_contract` (outside these crates).
 - `craft_ui::contract::request_rename`: `pub fn request_rename<K: Clone + Send + Sync + 'static>(ctx: &Context, collection: Id, key: &K)`. Asks the collection `collection` (the id it is built with, `Props::id`) to start renaming the item `key`. At its
+- `craft_ui::contract::response_of`: `pub fn response_of(ui: &Ui, id: Id) -> Option<Response>`. The `Response` of the component `id` in the running pass: its root's egui widget, or the response its arena gives a
 - `craft_ui::contract::scroll_step`: `pub fn scroll_step(ctx: &Context, owner: Id, view: Rect, units: &[Rect], right: bool) -> bool`. Steps the scrolling body `owner` by one of its units: toward the right of the screen (`right`) or the left. `view`
 - `craft_ui::contract::section_part`: `pub fn section_part<K: std::hash::Hash>(key: &K) -> craft_behavior::PartRef`. The part of a collection that stands for the section row `key` (`ItemSource::section_stop`): the item step builds
 - `craft_ui::contract::show_item`: `pub fn show_item<C>(ui: &mut Ui, rect: Rect, item: C, at: crate::runtime::access::SetPosition) -> C::Output where C: super::Component + super::Props + super::Show,`. Shows `item` in `rect` as the item at `at` of a set, with the item facts a collection installs.
