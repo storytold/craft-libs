@@ -97,7 +97,7 @@ fn shadow_drag_cuts_the_angle_fraction_off() {
             let _ = draft.drag_shadow(&defaults, true, [0.0, 0.0]);
             assert!(draft.drag_shadow(&defaults, false, total), "{kind:?} {total:?}");
             assert_eq!(shown(&draft), (Some(want.0), Some(want.1)), "{kind:?} {total:?}");
-            assert_eq!(draft.style.global_light, want.0, "{kind:?} {total:?}");
+            assert_eq!(f64::from(draft.style.global_light), want.0, "{kind:?} {total:?}");
         }
     }
     assert_eq!(ShadowDrag::begin(120.0, 0.0).moved([21.5, -22.6]).map(|(angle, _)| angle), Some(-134.0));
