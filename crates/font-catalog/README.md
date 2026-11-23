@@ -68,8 +68,13 @@ Each face (`FaceInfo`) has its family and style, legacy family and style, family
 - `rescan` scans again, reading only new and changed files.
 - `installed_fonts_changed` compares the modification times of every folder the scan read (and the folders of files a font service named) and, on Windows, the registry's font list. It costs a few hundred `stat` calls, not a scan.
 - `rescan_if_changed` does both; apps call it when their window is activated.
+- `store_changed` compares the modification times of the font store's folders only, cheap enough to poll every second.
 - `watch(interval, on_change)` polls on a background thread.
-- `generation` counts the catalog's changes.
+- `generation` counts the catalog's changes; `changes_since(generation)` names the families added, removed and changed since then (`full` when the history of the last 64 changes no longer reaches back that far).
+
+## In an app
+
+`app::start(AppFonts { .. })` at launch sets the app's folders, starts the first scan on a background thread and polls the font store's folders every second, so a family the launcher installs shows at once. `app::on_activated()` on window activation rescans on a worker thread when any folder changed, with a full rescan at most every five minutes. `AppFonts::on_change` wakes the app after a change; the app then calls `app::changes_since` with the generation it last saw. A CLI calls `app::configure` instead, which neither scans in the background nor polls.
 
 ## One enumeration for the UI and documents
 

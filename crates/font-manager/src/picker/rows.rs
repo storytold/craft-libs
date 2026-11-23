@@ -665,7 +665,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
             _ => {}
         }
     }
-    cx.memory::<Typing>().hide_classes = hide_classes;
+    let typing = cx.memory::<Typing>();
+    typing.hide_classes = hide_classes;
+    typing.over_rows = over_rows;
     // A preview the pointer proposed ends when the pointer leaves the rows (a keyed row keeps its preview). The
     // collection keeps its lead on the row, so the pointer coming back to that row reports no move: the row under it
     // proposes again.
@@ -708,8 +710,11 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         picker.picked = Some(family.to_owned());
         picker.picked_style = style.map(str::to_owned);
         end_preview(picker, cx);
-        cx.propose(family.to_owned());
-        cx.commit();
+        // A press on a row can end a typed name first, and that commit may already have set this family.
+        if cx.value().map(String::as_str) != Some(family) {
+            cx.propose(family.to_owned());
+            cx.commit();
+        }
         popup.close(cx);
     }
 }
