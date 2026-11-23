@@ -439,7 +439,7 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
 
         // Determine if crop is aligned with chroma subsampling
         let is_aligned = match p.pixel_format {
-            crate::theora::PixelFormat::Yuv420 => p.pic_x.is_multiple_of(2) && p.pic_y.is_multiple_of(2),
+            crate::theora::PixelFormat::Yuv420 => p.pic_x.is_multiple_of(2) && p.pic_y.is_multiple_of(2) && p.pic_height.is_multiple_of(2),
             crate::theora::PixelFormat::Yuv422 => p.pic_x.is_multiple_of(2),
             crate::theora::PixelFormat::Yuv444 => true,
         };

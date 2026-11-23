@@ -244,6 +244,21 @@ fn test_theora_video_frame_conversion() {
     let vf_odd_y = VideoFrame::try_from(odd_y_pic).expect("convert odd y crop");
     assert_eq!(vf_odd_y.subsampling(), craft_video::frame::Subsampling::S444);
     assert_eq!(vf_odd_y.height(), 3);
+
+    // Aligned crop offset (pic_y = 0) with odd height (pic_height = 3) and distinct chroma rows selects S444 to preserve chroma pairing
+    let mut odd_h_pic = test_picture(32, 32);
+    odd_h_pic.pic_x = 0;
+    odd_h_pic.pic_y = 0;
+    odd_h_pic.pic_width = 4;
+    odd_h_pic.pic_height = 3;
+    odd_h_pic.u[0] = 10;
+    odd_h_pic.u[16] = 20;
+    let vf_odd_h = VideoFrame::try_from(odd_h_pic).expect("convert odd height crop");
+    assert_eq!(vf_odd_h.subsampling(), craft_video::frame::Subsampling::S444);
+    assert_eq!(vf_odd_h.height(), 3);
+    assert_eq!(vf_odd_h.planes()[1].row_u8(0).unwrap()[0], 20);
+    assert_eq!(vf_odd_h.planes()[1].row_u8(1).unwrap()[0], 10);
+    assert_eq!(vf_odd_h.planes()[1].row_u8(2).unwrap()[0], 10);
 }
 
 #[test]
@@ -579,6 +594,14 @@ fn test_theora_encoder_invalid_input_rejected() {
     let mut pic = test_picture(32, 32);
     pic.pic_width = 0;
     pic.y.clear();
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    let mut pic = test_picture(32, 32);
+    pic.pic_height = 16;
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    let mut pic = test_picture(32, 32);
+    pic.pic_x = 2;
     assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
 
     // Short non-zero stride shorter than plane width
