@@ -60,10 +60,11 @@ pub fn has_traversal_component_bytes(bytes: &[u8]) -> bool {
 /// Sanitize and validate an entry path, rejecting any zip-slip traversal vectors.
 ///
 /// Returns `None` if `path` is empty or contains parent traversal components (`..`),
-/// null bytes, leading separators (`/` or `\`), or Windows drive prefixes (`C:`).
-/// Returns `Some(path)` if the path is safe.
+/// null bytes, or Windows drive prefixes (`C:`).
+/// Strips leading separators (`/` or `\`) to ensure the path is relative.
 pub fn sanitize_path(path: &str) -> Option<&str> {
-    if path.is_empty() || has_traversal_component(path) { None } else { Some(path) }
+    let trimmed = path.trim_start_matches(['/', '\\']);
+    if trimmed.is_empty() || has_traversal_component(trimmed) { None } else { Some(trimmed) }
 }
 
 #[cfg(test)]
@@ -92,6 +93,16 @@ mod tests {
         assert!(has_traversal_component(r"\\server\share"));
         assert!(has_traversal_component("/"));
         assert!(has_traversal_component("\\"));
+    }
+
+    #[test]
+    fn sanitizes_leading_separators() {
+        assert_eq!(sanitize_path("/etc/passwd"), Some("etc/passwd"));
+        assert_eq!(sanitize_path(r"\windows\system32"), Some(r"windows\system32"));
+        assert_eq!(sanitize_path("//server/share"), Some("server/share"));
+        assert_eq!(sanitize_path(r"\\server\share"), Some(r"server\share"));
+        assert_eq!(sanitize_path("/"), None);
+        assert_eq!(sanitize_path("\\"), None);
     }
 
     #[test]
@@ -132,7 +143,7 @@ mod tests {
         assert_eq!(sanitize_path("../../etc/passwd"), None);
         assert_eq!(sanitize_path(r"..\..\windows\system32"), None);
         assert_eq!(sanitize_path("C:/test.txt"), None);
-        assert_eq!(sanitize_path("/etc/shadow"), None);
+        assert_eq!(sanitize_path("/etc/shadow"), Some("etc/shadow"));
         assert_eq!(sanitize_path(""), None);
         assert_eq!(sanitize_path("safe/path.txt"), Some("safe/path.txt"));
         assert_eq!(sanitize_path("mimetype"), Some("mimetype"));

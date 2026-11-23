@@ -171,10 +171,10 @@ impl<'a> Archive<'a> {
         self.zip.has_overlapping_files().map_err(|e| Error::NotZip(e.to_string()))
     }
 
-    /// The entry names in the archive's order, folders included. Names that are not text or
-    /// that contain path-traversal components are left out.
+    /// The entry names in the archive's order, folders included. A name that is not text is
+    /// left out.
     pub fn names(&self) -> impl Iterator<Item = Cow<'_, str>> {
-        self.zip.file_names().filter_map(Result::ok).filter(|name| !has_traversal_component(name))
+        self.zip.file_names().filter_map(Result::ok)
     }
 
     /// Is there an entry `name` (exactly as stored)? Paths containing traversal components

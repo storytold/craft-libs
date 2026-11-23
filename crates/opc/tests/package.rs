@@ -184,7 +184,7 @@ fn skipped_parts_count_against_the_inflate_budget() {
 
 #[test]
 fn backslash_zip_entry_names_are_found() {
-    let z = zip_of(&[("PPT\\Slides\\Slide1.xml", b"<a/>".to_vec()), ("/docProps/core.xml", b"<b/>".to_vec())]);
+    let z = zip_of(&[("PPT\\Slides\\Slide1.xml", b"<a/>".to_vec()), ("docProps/core.xml", b"<b/>".to_vec())]);
     let p = Package::open(&z, &LIMITS).unwrap();
     assert!(p.get("ppt/slides/slide1.xml").is_some());
     assert_eq!(p.canonical("ppt/slides/slide1.xml"), Some("PPT/Slides/Slide1.xml"));

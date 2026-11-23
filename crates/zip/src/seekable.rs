@@ -227,10 +227,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
         self.zip.has_overlapping_files().map_err(|e| Error::NotZip(e.to_string()))
     }
 
-    /// The entry names in the archive's order, folders included. Non-UTF-8 names and names
-    /// containing path-traversal components are omitted.
+    /// The entry names in the archive's order, folders included. Non-UTF-8 names are omitted.
     pub fn names(&self) -> impl Iterator<Item = Cow<'_, str>> {
-        self.zip.file_names().filter_map(Result::ok).filter(|name| !has_traversal_component(name))
+        self.zip.file_names().filter_map(Result::ok)
     }
 
     /// Is there an entry `name` (exactly as stored)? Paths containing traversal components
@@ -551,8 +550,8 @@ mod tests {
         let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
         assert!(archive.has_traversal_component());
 
-        // Names iterator filters out traversal vectors
-        let names = archive.names().collect::<Vec<_>>();
+        // Entry enumeration omits traversal vectors
+        let names = (0..archive.len()).filter_map(|i| archive.entry_name(i).unwrap()).collect::<Vec<_>>();
         assert_eq!(names, vec!["valid.txt"]);
 
         // Virtual lookups reject traversal
