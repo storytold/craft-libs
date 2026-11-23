@@ -438,6 +438,9 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             && let Some(empty) = self.empty.clone()
         {
             cx.set(empty);
+            // The text part showed the old text earlier in this pass: the pass runs again, so the field shows and reports
+            // the empty text in the pass that took the click, not one pass later.
+            crate::runtime::frame::discard_pass(&cx.core.ctx, "a search field's clear part emptied it");
         }
     }
 

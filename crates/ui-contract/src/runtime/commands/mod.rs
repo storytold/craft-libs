@@ -457,6 +457,7 @@ pub struct CommandInput {
     pub(crate) overrides: Option<Arc<Overrides>>,
     pub(crate) gate: Option<CommandGate>,
     pub(crate) catalog: Option<AppCatalog>,
+    pub(crate) paste_reads_clipboard: bool,
 }
 
 impl CommandInput {
@@ -492,6 +493,16 @@ impl CommandInput {
     #[must_use]
     pub fn gate(mut self, gate: CommandGate) -> Self {
         self.gate = Some(gate);
+        self
+    }
+
+    /// Whether the library's Paste ([`EditCommands::Paste`]), fired at the app by a menu row, a toolbar button or the
+    /// palette, first asks the platform for the clipboard in the pass that fires it and reaches the app with the
+    /// clipboard's content, as ⌘V does. Off (the default), it reaches the app at once with no content and the app
+    /// reads its clipboard itself.
+    #[must_use]
+    pub fn paste_reads_clipboard(mut self, on: bool) -> Self {
+        self.paste_reads_clipboard = on;
         self
     }
 }

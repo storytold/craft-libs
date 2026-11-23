@@ -1200,10 +1200,17 @@ fn run_pass(
             Label::from(words.page_of.fill(&[("page", label.as_str()), ("count", total.as_str())]))
         };
         let bars = if count > 0 { bars.tip(&tip) } else { bars };
-        let bars = bars.show_at(ui, cx.rect);
-        let bar_drag = bars.view.value().is_some();
+        // Full screen's edge-to-edge view (`PageView::fill_screen`) has no scroll bars: nothing is drawn and nothing takes a press
+        // along the window's edges.
+        let bar_moved = if build.fill_screen {
+            drop(bars);
+            None
+        } else {
+            bars.show_at(ui, cx.rect).view.value().cloned()
+        };
+        let bar_drag = bar_moved.is_some();
         scrolled |= bar_drag;
-        let bar_want = bars.view.value().map(|moved| drawn_frame.offset_of(moved.center, vw, vh));
+        let bar_want = bar_moved.map(|moved| drawn_frame.offset_of(moved.center, vw, vh));
         let bar_shapes = slot.take_after(&ctx);
 
         // The part in view waits while the view zooms or moves.

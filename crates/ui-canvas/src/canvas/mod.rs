@@ -117,7 +117,7 @@ use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
     CanvasTransform, CanvasView, CursorIcon, CursorPriority, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, Mixed,
-    PartKey, PointerButton, PressPhase, PressState, Sense, Wheel, WheelNotch, WheelUnit,
+    PartKey, PointerButton, PressPhase, PressState, Sense, Wheel, WheelNotch, WheelSource, WheelUnit,
 };
 use egui::{Context, Pos2, Rect, Response, Vec2};
 use navigate::MiddleAutoscroll;
@@ -460,6 +460,8 @@ impl<'a> Canvas<'a> {
         let (press, on_region) = self.pressed(cx);
         // A press, a zoom, a key move and a view command end the touchpad glide and the eased wheel's owed motion.
         let mut halt = matches!(press.phase, PressPhase::Down { .. });
+        // A press, a key move and a view command also drop the eased wheel zoom's owed part; its own zoom does not.
+        let mut stop_zoom_ease = halt;
         let mut jumped = false;
         let mut line_pan = Vec2::ZERO;
         // The screen point a wheel or pinch zoom of this pass kept still, before the clamp below can move the centre.
@@ -473,6 +475,10 @@ impl<'a> Canvas<'a> {
             zoom_anchor = read.zoom_anchor.or(zoom_anchor);
             halt |= read.zoomed;
         }
+        let paid = pay_wheel_zoom(&ctx, &mut motion, &mut view, size, pixels_per_point, now);
+        jumped |= paid.jumped;
+        zoom_anchor = paid.zoom_anchor.or(zoom_anchor);
+        halt |= paid.zoomed;
         // Every pass feeds the ease, the line pan or nothing, so owed motion keeps paying; the service takes the time
         // from its own clock, so a later pass of the same frame pays nothing.
         if self.navigation.eased_wheel && !halt {
@@ -535,6 +541,7 @@ impl<'a> Canvas<'a> {
         }
         moves.extend(cx.take_scroll_moves());
         halt |= !moves.is_empty();
+        stop_zoom_ease |= !moves.is_empty();
         for (step, mods) in moves {
             if to_body {
                 keys.page = Some((step, mods));
@@ -559,6 +566,7 @@ impl<'a> Canvas<'a> {
             }
             view = next;
             halt = true;
+            stop_zoom_ease = true;
             match motion {
                 CommandMotion::Ease if self.navigation.animated_zoom => {
                     // A zoom that keeps the centre eases about it; one that moves the centre (Fit on Screen) eases
@@ -578,6 +586,7 @@ impl<'a> Canvas<'a> {
             motion.glide.stop();
             cx.stop_wheel_ease();
         }
+        motion.wheel_zoom.stop_if(stop_zoom_ease);
         // A view that moves during a wheel gesture marks it moved, so a body that turns pages at the edge does not turn
         // one after a pan or a go-to.
         if target != at_start {
@@ -611,6 +620,13 @@ impl<'a> Canvas<'a> {
             match action {
                 // The eased wheel hands a line's pan to the wheel service, which pays it out over the passes after.
                 WheelAction::Pan(delta) if self.navigation.eased_wheel && wheel.unit == WheelUnit::Line => read.line_pan = delta,
+                // The eased wheel zoom owes a notch's zoom, which `settle` pays over this pass and the ones after.
+                WheelAction::Zoom(factor) if self.navigation.eased_wheel_zoom && eases_zoom(wheel) => {
+                    let at = wheel.at.unwrap_or_else(|| view.rect.center());
+                    let frame_dt = f64::from(cx.core.ctx.input(|input| input.stable_dt));
+                    motion.wheel_zoom.feed(factor, at, now, frame_dt);
+                    read.zoomed = true;
+                }
                 action => {
                     read.zoomed = !matches!(action, WheelAction::Pan(_));
                     // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in
@@ -1092,6 +1108,31 @@ fn clamped(mut view: CanvasView, document: Option<Size>, navigation: &Navigation
         CanvasScrollbars::clamp(&mut view, DocRect::from_origin_size(Point::ZERO, document));
     }
     view
+}
+
+/// Pays this pass's part of what the eased wheel zoom's notches owe (`NavigationOptions::eased_wheel_zoom`) on `view`,
+/// and asks for the next pass while more is owed: whether it zoomed, whether the view moved and the point the zoom kept
+/// still.
+fn pay_wheel_zoom(ctx: &Context, motion: &mut ViewMotion, view: &mut CanvasView, size: Size, pixels_per_point: f32, now: f64) -> WheelRead {
+    let paid = motion.wheel_zoom.step(now).map(|(factor, at)| {
+        let action = WheelAction::Zoom(factor);
+        let (anchor, zoom) = (WheelNavigation::zoom_anchor(view, action, at, size), view.zoom);
+        let jumped = WheelNavigation::apply(view, action, at, size, pixels_per_point);
+        WheelRead { jumped, zoom_anchor: anchor.filter(|_| view.zoom != zoom), zoomed: true, ..WheelRead::default() }
+    });
+    if motion.wheel_zoom.owes() {
+        frame::request_repaint(ctx);
+    }
+    paid.unwrap_or_default()
+}
+
+/// Whether the eased wheel zoom takes `wheel`'s zoom: a wheel notch under the zoom modifier (Cmd or Ctrl), whose
+/// deltas the wheel service turns into the share's zoom and never into scroll. A pinch (no modifier), a trackpad's
+/// steps and a step under 8 points of egui's wheel zoom speed (which egui leaves unsmoothed too) zoom at once.
+fn eases_zoom(wheel: &Wheel) -> bool {
+    /// The log of the factor of 8 points at egui's default wheel zoom speed (1/200 a point).
+    const SMALLEST: f32 = 8.0 / 200.0;
+    (wheel.mods.cmd || wheel.mods.ctrl) && wheel.source != WheelSource::Trackpad && wheel.zoom.ln().abs() >= SMALLEST
 }
 
 /// What a pass's wheel did to the view ([`Canvas::read_wheel`]).

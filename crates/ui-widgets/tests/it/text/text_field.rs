@@ -275,3 +275,25 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.idle(2);
     assert_eq!(caret.get(), 4, "the user's caret move past the two-byte \"é\" writes its byte offset back");
 }
+
+/// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,
+/// as an agent's click reply comes with it (the control channel answers with the pass that ran the input).
+#[trial]
+fn the_clear_part_empties_the_field_in_the_pass_of_its_click() {
+    use craft_ui::testing::focus::AccessActionKind;
+    let id = Rc::new(Cell::new(Id::NULL));
+    let field = id.clone();
+    // The app's own text, as a search panel's query is.
+    let text = Rc::new(RefCell::new(String::from("abc")));
+    let held = text.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut query = held.borrow_mut();
+        field.set(TextField::search("Search", Bind::bound(&mut *query)).show(ui).response.id);
+    });
+    fixture.settle();
+    assert_eq!(fixture.tree().value(id.get()), Some("abc"));
+    let clear = fixture.part(id.get(), CLEAR).expect("a search field with text shows the clear part");
+    fixture.access(AccessActionKind::Click, &clear);
+    assert_eq!(text.borrow().as_str(), "", "the click emptied the text");
+    assert_eq!(fixture.tree().value(id.get()), Some(""), "the field reads empty in the pass of the click");
+}

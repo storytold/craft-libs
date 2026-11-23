@@ -38,6 +38,9 @@ pub struct NavigationOptions {
     pub key_line: f32,
     /// A wheel pan eases to its target through the wheel service instead of jumping. Off.
     pub eased_wheel: bool,
+    /// A wheel zoom (a zoom-modifier wheel notch, not a pinch or a trackpad's small steps) eases to its factor over the
+    /// passes after the notch, as egui eases a wheel, instead of zooming at once. Off.
+    pub eased_wheel_zoom: bool,
     /// A touchpad's scroll glides on after the fingers lift. Off.
     pub touchpad_glide: bool,
     /// What the middle button does over the canvas background. `Pan`.
@@ -100,6 +103,7 @@ impl Default for NavigationOptions {
             wheel_line: 16.0,
             key_line: PageKey::SMALL_STEP,
             eased_wheel: false,
+            eased_wheel_zoom: false,
             touchpad_glide: false,
             middle_button: craft_behavior::MiddleButton::default(),
             invert_middle: false,

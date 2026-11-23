@@ -151,6 +151,8 @@ pub(crate) struct Board {
     out: Vec<Fired>,
     /// The latest point-bearing clipboard request in each viewport.
     pending_pastes: HashMap<ViewportId, Fired>,
+    /// The app's `CommandInput::paste_reads_clipboard`.
+    paste_reads_clipboard: bool,
     /// App-scope commands a key pressed while only their own state disabled them, for the next `FrameOutput`.
     declined: Vec<Fired>,
     /// The commands instances took since the last `FrameOutput`, in order.
@@ -1082,6 +1084,7 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
         }
         board.gate = input.gate.clone();
         board.app = input.catalog.clone();
+        board.paste_reads_clipboard = input.paste_reads_clipboard;
         let stale = board.keymap.as_ref().is_none_or(|cache| {
             cache.platform != platform
                 || cache.generation != generation
@@ -1635,6 +1638,21 @@ fn queue(ctx: &Context, fired: Fired) {
         && let Some(edit) = with(ctx, |board| board.registry.edit_of(&fired.command.id))
         && keys::queue_edit(ctx, edit)
     {
+        return;
+    }
+    // An app that reads the clipboard through the board (`CommandInput::paste_reads_clipboard`) gets a Paste fired at
+    // it from a menu, a button or the palette with the clipboard's content: the platform is asked in this pass, and
+    // the paste it delivers fires the command (`deliver_requested_paste`).
+    let reads_clipboard = fired.phase != FirePhase::Release
+        && fired.target.is_none()
+        && fired.pasted.is_none()
+        && fired.source != FireSource::Key
+        && with(ctx, |board| board.paste_reads_clipboard && board.registry.edit_of(&fired.command.id) == Some(EditCommand::Paste));
+    if reads_clipboard {
+        with(ctx, |board| {
+            board.pending_pastes.insert(pass::current_viewport(ctx), fired);
+        });
+        crate::runtime::egui::clipboard::request_paste(ctx);
         return;
     }
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });

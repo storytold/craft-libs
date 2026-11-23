@@ -246,17 +246,27 @@ pub struct CommentComposer<'a> {
     hint: Option<Label>,
     kind: ComposerDraft,
     close: ComposerClose,
+    fixed_rows: bool,
 }
 
 impl<'a> CommentComposer<'a> {
     /// A composer at `anchor` (screen points; `None` hides it) that edits `draft`.
     pub fn new(anchor: Option<Pos2>, draft: &'a mut String) -> Self {
-        CommentComposer { anchor, draft, header: None, hint: None, kind: ComposerDraft::New, close: ComposerClose::OnOutsidePress }
+        CommentComposer { anchor, draft, header: None, hint: None, kind: ComposerDraft::New, close: ComposerClose::OnOutsidePress, fixed_rows: false }
     }
 
     /// A header of `title` and the `author` above the field; the card is named `title`.
     pub fn header(mut self, title: impl Into<Label>, author: &'a str) -> Self {
         self.header = Some((title.into(), author));
+        self
+    }
+
+    /// The field keeps its three rows and scrolls longer text inside them (`TextField::max_lines`), so the card keeps
+    /// one size. Off (the default), the field grows with its text, which the card's measure, taken before the text
+    /// wraps, does not see: near the bottom of the window the card is placed shorter than it lays out and clips its
+    /// buttons.
+    pub fn fixed_rows(mut self) -> Self {
+        self.fixed_rows = true;
         self
     }
 
@@ -330,7 +340,7 @@ pub struct CommentComposerOutput {
 impl CommentComposer<'_> {
     /// Shows the composer and reports whether the user posted or closed it.
     pub fn show(self, ui: &mut Ui) -> CommentComposerOutput {
-        let CommentComposer { anchor, draft, header, hint, kind, close } = self;
+        let CommentComposer { anchor, draft, header, hint, kind, close, fixed_rows } = self;
         let mut output = CommentComposerOutput::default();
         let Some(anchor) = anchor else { return output };
         let words = Env::of(ui).words::<ThreadWords>();
@@ -355,6 +365,7 @@ impl CommentComposer<'_> {
                 }
                 let hint = hint.clone().unwrap_or_else(|| words.add_comment.clone());
                 let field = TextField::new(hint.clone(), Bind::bound(&mut *draft)).lines(COMPOSER_ROWS).placeholder(hint).submits().default_stop();
+                let field = if fixed_rows { field.max_lines(COMPOSER_ROWS) } else { field };
                 // An edit opens with the caret after the comment's text, so typing adds to it; a new comment's empty
                 // field has nothing to replace either way.
                 let field = if kind == ComposerDraft::New { field } else { field.keep_caret_on_open() }.show(ui);
