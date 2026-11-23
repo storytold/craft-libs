@@ -774,3 +774,39 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     fixture.click(&back);
     assert_eq!(shown.get(), TABLE, "a click on the entering tab shows it");
 }
+
+/// A document tab dragged from one strip onto another strip's tab, or onto a strip with no tabs at all (every document
+/// in windows of its own), is dropped into that strip: the drop says which tab it landed on, none on an empty strip.
+#[trial]
+fn a_tab_dropped_on_another_strip_lands_there_even_with_no_tabs() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    for others in [vec![DocumentTab::new(2_usize, "Three")], Vec::new()] {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two")];
+        let (seen, strip) = (RefCell::new(Vec::new()), Cell::new(Rect::NOTHING));
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            let _ = DocumentTabs::new("Main", &tabs).selected(0).reorderable(true).show(ui);
+            ui.add_space(40.0);
+            let out = DocumentTabs::new("Window", &others).reorderable(true).show(ui);
+            strip.set(out.response.rect);
+            seen.borrow_mut().extend(out.events);
+        };
+        frames.idle(2, &mut show);
+        let tree = frames.tree();
+        let from = tab_rect(&tree, "One").center();
+        let to = if others.is_empty() { strip.get().center() } else { tab_rect(&tree, "Three").center() };
+        frames.frame(vec![moved(from)], &mut show);
+        frames.frame(vec![press(from)], &mut show);
+        for step in 1..=6 {
+            frames.frame(vec![moved(from.lerp(to, step as f32 / 6.0))], &mut show);
+        }
+        frames.frame(vec![release(to)], &mut show);
+        frames.idle(1, &mut show);
+        let over = seen.borrow().iter().find_map(|event| match event {
+            DocumentTabsEvent::DroppedInto { documents, over, .. } if documents.as_slice() == [0] => Some(*over),
+            _ => None,
+        });
+        let wanted = others.first().map(|tab| tab.id);
+        assert_eq!(over, Some(wanted), "the tab dropped on {wanted:?} lands in the other strip: {:?}", seen.borrow());
+    }
+}
