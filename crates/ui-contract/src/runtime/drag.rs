@@ -297,6 +297,8 @@ struct Registration {
 pub(crate) struct Targets {
     this: Vec<Registration>,
     winner: Option<(Id, u32)>,
+    /// The winner is a target over a component, not the whole window.
+    component: bool,
 }
 
 fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
@@ -748,6 +750,7 @@ pub(crate) fn end_pass(ctx: &Context) {
             .filter(|(at, _)| open[*at])
             .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
+        targets.component = best.is_some_and(|registration| !registration.window);
         let best = best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.tokens.clone())));
         targets.winner = best.as_ref().map(|(key, _)| *key);
         targets.this.clear();
@@ -770,7 +773,8 @@ pub(crate) fn end_pass(ctx: &Context) {
     if is_source {
         windows::note_source_pointer(ctx, viewport, pointer::frame_raw(ctx).pos);
     }
-    let foreign_target = is_source && !held && foreign_winner(ctx, viewport);
+    let elsewhere = is_source && held_elsewhere(ctx);
+    let foreign_target = is_source && !held && (elsewhere || foreign_winner(ctx, viewport));
     let running = board(ctx, |board| {
         if let Some(session) = &mut board.session {
             let expired = session.released.is_some_and(|released| frame > released + 1);
@@ -800,18 +804,30 @@ pub(crate) fn end_pass(ctx: &Context) {
         }
     }
     if running && over_this_window {
-        match winner {
-            None => cursor::request(ctx, Cursor::System(CursorIcon::NotAllowed), CursorPriority::Drag),
-            Some(_) => {
-                let icon = match op {
-                    DropOperation::Copy => CursorIcon::Copy,
-                    DropOperation::Link => CursorIcon::Alias,
-                    _ => CursorIcon::Grabbing,
-                };
-                cursor::request(ctx, Cursor::System(icon), CursorPriority::DropTarget);
-            }
+        if winner.is_some() || elsewhere {
+            let icon = match op {
+                DropOperation::Copy => CursorIcon::Copy,
+                DropOperation::Link => CursorIcon::Alias,
+                _ => CursorIcon::Grabbing,
+            };
+            cursor::request(ctx, Cursor::System(icon), CursorPriority::DropTarget);
+        } else {
+            cursor::request(ctx, Cursor::System(CursorIcon::NotAllowed), CursorPriority::Drag);
         }
     }
+}
+
+/// Whether a component's target in another viewport than the running one lies under the pointer: one that won that
+/// viewport's last pass, or one its running pass registered. The main window's pass runs around the passes of its OS
+/// windows, so what it registered in this frame, at the pointer the source window saw last, comes before their end
+/// hooks: a release in an OS window right as the pointer reaches the main window's target still drops there.
+pub(crate) fn held_elsewhere(ctx: &Context) -> bool {
+    let viewport = pass::current_viewport(ctx);
+    pass::live_viewports(ctx).into_iter().filter(|other| *other != viewport).any(|other| {
+        PerViewport::<Targets>::with(ctx, other, |targets| {
+            (targets.winner.is_some() && targets.component) || targets.this.iter().any(|registration| !registration.window)
+        })
+    })
 }
 
 /// Whether a viewport other than `viewport` has a target that took the pointer in its last pass.

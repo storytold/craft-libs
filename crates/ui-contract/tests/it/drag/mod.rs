@@ -45,6 +45,8 @@ struct Payload(u32);
 struct Seen {
     dropped: Vec<(u32, DropOperation)>,
     ended: Vec<DropOperation>,
+    /// Drops a window-wide target took.
+    caught: usize,
 }
 
 /// Starts a drag from its grip and reads how the drop went.
@@ -232,6 +234,99 @@ fn a_drag_crosses_windows_and_the_target_in_the_other_window_takes_the_drop() {
     let seen = seen.borrow();
     assert_eq!(seen.dropped, vec![(7, DropOperation::Move)], "the other window's target took the drop once");
     assert_eq!(seen.ended, vec![DropOperation::Move], "the source saw the operation once");
+}
+
+/// Sb-9 (3): a drag out of an OS window whose window-wide target (a tab strip's tear-off) takes what no other target
+/// does, released over a target in the main window in the frame after the pointer reached it: that target takes the
+/// drop, not the window-wide one. Released where no window lies, the window-wide target takes it.
+#[trial]
+fn a_drag_out_of_an_os_window_drops_on_a_main_window_target_before_its_own_windows_target() {
+    let run = |release_at: Pos2| {
+        let seen = RefCell::new(Seen::default());
+        let windows = Windows::new();
+        let other = ViewportId::from_hash_of("other");
+        let at = |min: Pos2, size: Vec2| ViewportInfo { inner_rect: Some(Rect::from_min_size(min, size)), ..ViewportInfo::default() };
+        windows.root_info(at(Pos2::ZERO, Vec2::new(800.0, 600.0)));
+        windows.child_info(at(Pos2::new(100.0, 100.0), Vec2::new(400.0, 300.0)));
+        let frame = |events: Vec<egui::Event>| {
+            windows.frame(vec![], events, |ui| {
+                Slot { common: Common::new(), seen: &seen, mark: DropMark::Into(SLOT) }.id_salt("slot").show_at(ui, SLOT);
+                ui.ctx().show_viewport_immediate(other, ViewportBuilder::default(), |other_ui, _| {
+                    Chip { common: Common::new(), seen: &seen, preview: DragPreview::None }.id_salt("chip").show_at(other_ui, CHIP);
+                    Catch { common: Common::new(), seen: &seen }.id_salt("catch").show_at(other_ui, SLOT);
+                });
+            });
+        };
+        let from = CHIP.center();
+        for _ in 0..2 {
+            frame(vec![]);
+        }
+        frame(vec![moved(from)]);
+        frame(vec![press(from)]);
+        for step in 1..=3 {
+            frame(vec![moved(from + (release_at - from) * (step as f32 / 3.0))]);
+        }
+        frame(vec![release(release_at)]);
+        for _ in 0..3 {
+            frame(vec![]);
+        }
+        seen.into_inner()
+    };
+    // The slot's centre in the main window, (250, 35), lies at (150, -65) in the OS window at (100, 100).
+    let over = run(Pos2::new(150.0, -65.0));
+    assert_eq!(over.dropped, vec![(7, DropOperation::Move)], "the main window's target took the drop");
+    assert_eq!(over.caught, 0, "the OS window's own window-wide target did not");
+    // (150, 600) in the OS window lies below both windows.
+    let away = run(Pos2::new(150.0, 600.0));
+    assert!(away.dropped.is_empty(), "no target lies there");
+    assert_eq!(away.caught, 1, "the window-wide target took the drop");
+}
+
+/// A window-wide target that takes every drop of the payload.
+struct Anywhere;
+
+impl WindowDropTarget<Payload> for Anywhere {
+    type Drop = ();
+
+    fn accept(&self, _: &Payload, _: DropOperation) -> Option<()> {
+        Some(())
+    }
+
+    fn mark(&self, _: &()) -> DropMark {
+        DropMark::Into(Rect::ZERO)
+    }
+}
+
+/// Takes every drop of the payload over its whole window.
+#[derive(Component)]
+struct Catch<'a> {
+    #[common]
+    common: Common,
+    seen: &'a RefCell<Seen>,
+}
+
+impl Component for Catch<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: CatchStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        SLOT.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if cx.window_drop_target(&Anywhere).is_some() {
+            self.seen.borrow_mut().caught += 1;
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
 }
 
 const LIST: Rect = Rect { min: Pos2::new(20.0, 100.0), max: Pos2::new(220.0, 220.0) };
