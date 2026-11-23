@@ -235,3 +235,34 @@ fn a_fallback_document_window_dragged_by_its_title_reports_where_it_went() {
     assert!(near(after.size(), before.size()), "a move keeps the window's size: {before:?} to {after:?}");
     assert_eq!(place.get(), after, "the host keeps the window where the drag reported it");
 }
+
+/// On the fallback layer, `raise` brings a document window in front of one opened after it in the pass it is set, as a
+/// press on its layer does. Guards against a raise that only asked an OS window for focus, so the layer stayed behind.
+#[trial]
+fn a_raised_fallback_document_window_comes_to_the_front() {
+    use craft_ui::runtime::overlay;
+    use craft_ui::testing::Fixture;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (raise, first, top) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+    let (asked, seen, front) = (raise.clone(), first.clone(), top.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        front.set(overlay::top(ui.ctx()));
+        for (name, at) in [("First.psd", 40.0), ("Second.psd", 80.0)] {
+            let window = DocumentWindow::new(name).id_salt(name).first_placed(Rect::from_min_size(pos2(at, at), vec2(300.0, 200.0)));
+            let raised = name == "First.psd" && asked.get();
+            let shown = if raised { window.raise() } else { window }.show(ui, |_, _| {});
+            if name == "First.psd" {
+                seen.set(Some(shown.output.response.id));
+            }
+        }
+    });
+    fixture.settle();
+    assert!(first.get().is_some() && top.get() != first.get(), "the window opened last is in front");
+    raise.set(true);
+    fixture.frame(Vec::new());
+    raise.set(false);
+    fixture.frame(Vec::new());
+    assert_eq!(top.get(), first.get(), "the raised window is in front");
+}

@@ -10,7 +10,7 @@ use crate::contract::{
 };
 use crate::runtime::env::Label;
 use crate::runtime::memory::{Remember as _, sub};
-use crate::runtime::overlay::CloseReason;
+use crate::runtime::overlay::{self, CloseReason};
 use crate::runtime::windows::{WindowAction, WindowHost, WindowLevel, WindowSpec};
 use crate::sections::{HeaderAction, HeaderStrength, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -265,10 +265,13 @@ impl Component for DocumentWindow<'_> {
     fn finish(mut self, mut cx: Cx<'_, Self>) -> DocumentWindowOutput {
         let host = WindowHost::of(&cx.ctx);
         let viewport = host.viewport_of(cx.id);
-        if self.raise
-            && let Some(viewport) = viewport
-        {
-            host.act(viewport, WindowAction::Focus);
+        if self.raise {
+            match viewport {
+                Some(viewport) => {
+                    host.act(viewport, WindowAction::Focus);
+                }
+                None => overlay::raise(&cx.ctx, cx.id),
+            }
         }
         let focused = viewport.and_then(|viewport| host.facts(viewport)).is_some_and(|facts| facts.focused);
         let had_focus = std::mem::replace(&mut cx.keep::<HadFocus>().0, focused);
