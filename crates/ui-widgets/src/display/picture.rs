@@ -27,8 +27,11 @@ pub enum PictureSize {
     /// picture.
     Sample(ThumbSize),
     /// The image at its own size in device pixels, one texel to a pixel (a bitmap drawn for the screen's density).
-    /// A painter or a picture made off the frame has no own size and takes the icon side.
+    /// A painter or a picture made off the frame has no own size and takes the icon side (a painter is always given a size).
     DevicePixels,
+    /// An explicit height in points, not from a token: for a preview whose size the dialog fixes. The width is the
+    /// height times the picture's `aspect` (`ThumbAspect::new(wide, high)` with both in points gives `wide` points).
+    Points(u16),
 }
 
 /// The style of a picture.
@@ -84,10 +87,11 @@ impl<'a> Picture<'a> {
         Picture::from_source(label, Source::Image { key, image })
     }
 
-    /// A picture of what `paint` paints into the picture's rect, whose width is `aspect` times its height. `label`
-    /// names it for a screen reader; an empty one leaves it decorative.
-    pub fn painter(label: impl Into<Label>, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
-        Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
+    /// A picture of what `paint` paints into the picture's rect, `size` high and `aspect` times as wide. A painter has no
+    /// size of its own, so the caller says it: no default, which would otherwise be the icon side. `label` names it
+    /// for a screen reader; an empty one leaves it decorative.
+    pub fn painter(label: impl Into<Label>, size: PictureSize, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
+        Picture::from_source(label, Source::Painter(Box::new(paint))).extent(size).aspect(aspect)
     }
 
     /// A picture made off the frame by `source` for `key`: pending, with the framework's placeholder, until the
@@ -121,6 +125,7 @@ impl Component for Picture<'_> {
             PictureSize::Icon | PictureSize::DevicePixels => cx.control().icon,
             PictureSize::Thumb(step) => step.pick([thumbs.sm, thumbs.md, thumbs.lg]),
             PictureSize::Sample(step) => step.pick([thumbs.sample.sm, thumbs.sample.md, thumbs.sample.lg]),
+            PictureSize::Points(points) => f32::from(points),
         };
         PictureStyle { metrics: Metrics::new(), height }
     }

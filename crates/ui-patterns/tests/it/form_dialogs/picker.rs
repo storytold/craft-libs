@@ -44,7 +44,7 @@ fn picker(ui: &mut egui::Ui, picked: &Picked, say: fn(&str) -> String) {
                 .show_items(ui, &keyed(&positions, |i| *i), &mut |key, _| Tile::new(say(LAYOUTS[*key])).thumb(ThumbAspect::SQUARE, |_, _| ()));
         });
         Stack::new().show(ui, |ui, _| {
-            Picture::painter(say(LAYOUTS[picked.layout]), ThumbAspect::new(4, 3), |_, _| ()).extent(PictureSize::Sample(ThumbSize::Large)).show(ui);
+            Picture::painter(say(LAYOUTS[picked.layout]), PictureSize::Sample(ThumbSize::Large), ThumbAspect::new(4, 3), |_, _| ()).show(ui);
             Text::new(say(LAYOUTS[picked.layout])).show(ui);
             Text::new(say(ABOUT)).show(ui);
         });

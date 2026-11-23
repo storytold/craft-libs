@@ -239,7 +239,7 @@ fn thumb(picture: Picture<'_>, aspect: ThumbAspect, size: ThumbSize) -> Picture<
 
 /// A picture that paints nothing, for measuring a tile.
 fn blank_picture(aspect: ThumbAspect, size: ThumbSize) -> Picture<'static> {
-    thumb(Picture::painter(Label::default(), aspect, |_: &ContentPainterCx<'_>, _: Rect| {}), aspect, size)
+    thumb(Picture::painter(Label::default(), PictureSize::Thumb(size), aspect, |_: &ContentPainterCx<'_>, _: Rect| {}), aspect, size)
 }
 
 impl<'a> GalleryFace<'a> {
@@ -261,7 +261,7 @@ impl<'a> GalleryFace<'a> {
             GalleryFace::Rendered { key, thumbnails, source } => Picture::rendered(Label::default(), *key, thumbnails, *source),
             GalleryFace::Paint(paint) => {
                 let paint = *paint;
-                Picture::painter(Label::default(), aspect, move |cx: &ContentPainterCx<'_>, rect: Rect| paint(cx, rect))
+                Picture::painter(Label::default(), PictureSize::Thumb(size), aspect, move |cx: &ContentPainterCx<'_>, rect: Rect| paint(cx, rect))
             }
         };
         thumb(picture, aspect, size)

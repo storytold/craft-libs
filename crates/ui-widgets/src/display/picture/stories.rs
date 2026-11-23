@@ -48,5 +48,11 @@ fn picture_rendered(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]
 fn picture_painter(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Picture::painter("Swatch", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
+    Picture::painter("Swatch", PictureSize::Thumb(ThumbSize::Large), ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).show(ui).into()
+}
+
+/// A painter preview at an explicit size in points: 120 wide, 40 high, whatever the tokens say.
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_points(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Picture::painter("Preview", PictureSize::Points(40), ThumbAspect::new(120, 40), |cx, rect| cx.checker(rect)).show(ui).into()
 }
