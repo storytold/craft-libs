@@ -11,9 +11,9 @@ struct Fixture {
     mask_slot: usize,
 }
 fn fixture(code: u32, data: &[u8], sample_bytes: usize, present: bool) -> Fixture {
-    fixture_named(code, data, sample_bytes, present, "Coverage")
+    fixture_named(code, data, sample_bytes, present, "Coverage", true)
 }
-fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, name: &str) -> Fixture {
+fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, name: &str, properties: bool) -> Fixture {
     let mut w = W::new(22);
     for value in [2, 1, 1, code] {
         w.u32(value);
@@ -37,6 +37,12 @@ fn fixture_named(code: u32, data: &[u8], sample_bytes: usize, present: bool, nam
         w.u32(value);
     }
     w.string(name);
+    if properties {
+        w.prop(15, &[0, 0, 0, 3, 0xff, 0xff, 0xff, 0xfe]);
+        w.prop_u32(35, 2);
+        w.prop_u32(36, 1);
+        w.prop_u32(35, 0); // duplicates remain ordered for the caller's policy
+    }
     w.end();
     let pixels = w.slot();
     let hierarchy = hierarchy(&mut w, 2, 1, sample_bytes, data, Compression::None);
@@ -67,6 +73,17 @@ fn auxiliary_header_and_tiles_keep_exact_single_component_source_precision() {
         let header = xcf.effect_mask_header(&record(&f), &mut records::Budget::default(), &|| true).unwrap().unwrap();
         assert_eq!((header.source_offset(), header.width(), header.height()), (f.mask as u64, 2, 1));
         assert_eq!(header.channel().name, "Coverage");
+        let properties = header.properties();
+        assert_eq!(properties.iter().map(|p| p.kind).collect::<Vec<_>>(), [15, 35, 36, 35]);
+        assert_eq!(properties.iter().map(|p| p.declared_length).collect::<Vec<_>>(), [8, 4, 4, 4]);
+        assert_eq!(properties[0].payload, &[0, 0, 0, 3, 0xff, 0xff, 0xff, 0xfe]);
+        assert_eq!(properties[1].payload, &2u32.to_be_bytes());
+        assert_eq!(properties[2].payload, &1u32.to_be_bytes());
+        assert_eq!(properties[3].payload, &0u32.to_be_bytes());
+        for property in properties {
+            assert_eq!(property.raw, &f.bytes[property.offset..property.offset + 8 + property.payload.len()]);
+        }
+        assert!(properties.windows(2).all(|pair| pair[0].offset < pair[1].offset));
         let mut budget = data.len();
         let mut actual = Vec::new();
         let info = xcf
@@ -170,7 +187,7 @@ fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before
 
 #[test]
 fn repeated_empty_name_headers_spend_shared_work_and_stop_before_publishing() {
-    let f = fixture_named(150, &[1, 2], 1, true, "");
+    let f = fixture_named(150, &[1, 2], 1, true, "", false);
     let xcf = Xcf::parse(&f.bytes).unwrap();
     let effect = record(&f);
     // Eight dimension bytes, four name-length bytes, and eight PROP_END bytes.

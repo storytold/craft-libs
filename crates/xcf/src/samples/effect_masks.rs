@@ -1,7 +1,8 @@
 //! Source-bound auxiliary masks: framing and one-component source samples only.
-use super::*;
+use super::{SampleOptions, SourceDrawable, SourceTile, VisitTarget};
 use crate::effects::StoredEffect;
 use crate::records;
+use crate::{Channel, Error, Result, Xcf, invalid};
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,7 @@ pub struct EffectMaskHeader<'a> {
     offset: u64,
     dimensions: (u32, u32),
     channel: Channel,
+    properties: Vec<records::Property<'a>>,
     hierarchy: usize,
 }
 
@@ -36,7 +38,7 @@ impl std::fmt::Debug for EffectMaskHeader<'_> {
     }
 }
 
-impl EffectMaskHeader<'_> {
+impl<'a> EffectMaskHeader<'a> {
     pub fn source_offset(&self) -> u64 {
         self.offset
     }
@@ -48,6 +50,11 @@ impl EffectMaskHeader<'_> {
     }
     pub fn channel(&self) -> &Channel {
         &self.channel
+    }
+    /// Original ordered source properties from the same bounded header scan.
+    /// Payloads remain borrowed and uninterpreted; no additional scan is performed.
+    pub fn properties(&self) -> &[records::Property<'a>] {
+        &self.properties
     }
 }
 
@@ -94,7 +101,15 @@ impl<'a> Xcf<'a> {
         if !keep_going() {
             return Err(Error::Cancelled.into());
         }
-        Ok(Some(EffectMaskHeader { source: self.c.b, version: self.image.version, offset, dimensions, channel, hierarchy }))
+        Ok(Some(EffectMaskHeader {
+            source: self.c.b,
+            version: self.image.version,
+            offset,
+            dimensions,
+            channel,
+            properties: properties.records,
+            hierarchy,
+        }))
     }
 
     /// Deliver exact one-component source samples with the same precision/order
