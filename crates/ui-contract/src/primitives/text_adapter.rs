@@ -455,8 +455,10 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         state.held_selection = None;
     }
     // An idle part shows its resting text, if it has one; focus (or the edit menu holding it) and any draft show the
-    // value's own text.
-    let resting = input.options.resting.as_deref().filter(|_| !input.focused && !input.held);
+    // value's own text. A pass that edits an idle part's text (the host replacing its selection, or putting a draft in)
+    // edits the value's own text, not the resting text drawn in its place.
+    let edits_idle = input.options.replace_selection.is_some() || state.change.is_some();
+    let resting = input.options.resting.as_deref().filter(|_| !input.focused && !input.held && !edits_idle);
     let mut base =
         state.draft.clone().or_else(|| state.normalised.take()).or_else(|| resting.map(str::to_owned)).unwrap_or_else(|| input.shown.to_owned());
     let mut edited = apply(&mut input, state, &mut base, widget);
