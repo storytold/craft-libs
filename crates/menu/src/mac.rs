@@ -173,7 +173,10 @@ fn lower_nodes(nodes: &[Node], targets: &mut HashMap<String, Target>) -> Vec<nat
         .iter()
         .map(|n| match n {
             Node::Separator => native::Node::Separator,
-            Node::Submenu { label, children, .. } => native::Node::Submenu { label: label.clone(), children: lower_nodes(children, targets) },
+            // A native submenu is disabled while it has no children: a disabled one goes over empty.
+            Node::Submenu { label, children, enabled, .. } => {
+                native::Node::Submenu { label: label.clone(), children: if *enabled { lower_nodes(children, targets) } else { Vec::new() } }
+            }
             Node::Standard { kind, label } => native::Node::Platform {
                 kind: match kind {
                     Standard::Services => native::Platform::Services,

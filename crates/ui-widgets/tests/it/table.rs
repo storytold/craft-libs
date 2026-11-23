@@ -14,6 +14,109 @@ use egui::{Key, Modifiers, Pos2, Rect};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// A text field in a table cell receives typing and reports its edit to the row's owner.
+#[trial]
+fn a_table_cell_text_field_reports_edits() {
+    use craft_behavior::{EditEvent, Selection};
+    use craft_ui::contract::{ReorderRule, SpaceAction};
+    use craft_ui::text::TextField;
+    let edited = Rc::new(RefCell::new(None::<String>));
+    let seen = edited.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::fill(1.0))];
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns)
+            .selection(Bind::given(Selection::single(0)))
+            .reorder(ReorderRule::new())
+            .deletable(true)
+            .space(SpaceAction::Preview)
+            .show_items(ui, &source, &mut |_, icx| {
+                let seen = seen.clone();
+                ListRow::new("File").cells(icx.cells()).cell_field(SIZE, TextField::new("Page range", Bind::given(String::new())), move |out| {
+                    for event in out.events {
+                        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+                        {
+                            *seen.borrow_mut() = Some(value);
+                        }
+                    }
+                })
+            });
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let field = fixture.by_label("Page range").expect("the cell field");
+    fixture.click(&field).type_text("1").settle();
+    assert_eq!(edited.borrow().as_deref(), Some("1"), "typing reports an edit before Enter");
+}
+
+#[trial]
+fn a_table_cell_can_show_a_field_followed_by_text() {
+    use craft_ui::contract::Bind;
+    use craft_ui::text::TextField;
+    for (direction, column) in [
+        (craft_i18n::Direction::Ltr, NAME),
+        (craft_i18n::Direction::Rtl, NAME),
+        (craft_i18n::Direction::Ltr, SIZE),
+        (craft_i18n::Direction::Rtl, SIZE),
+    ] {
+        let mut fixture = Fixture::new(move |ui| {
+            let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::Content)];
+            let keys = [0_usize];
+            let source = keyed(&keys, |key: &usize| *key);
+            Table::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+                ListRow::new("File").cells(icx.cells()).cell_field_suffix(column.clone(), "2 of 3").cell_field(
+                    column.clone(),
+                    TextField::new("Page range", Bind::given(String::new())).placeholder("Choose pages 1–3"),
+                    |_| {},
+                )
+            });
+        });
+        fixture.in_room(Room::Dialog).direction(direction).settle();
+        let field = fixture.by_label("Page range").expect("the range field");
+        let count = fixture.texts().iter().find(|text| text.text == "2 of 3").expect("the count is painted").rect;
+        assert!(
+            if direction == craft_i18n::Direction::Ltr { field.rect.right() <= count.left() } else { count.right() <= field.rect.left() },
+            "field {:?} and count {count:?} follow reading order",
+            field.rect
+        );
+        assert!(field.rect.width() >= 80.0, "the field keeps room for a range: {:?}", field.rect);
+    }
+}
+
+#[trial]
+fn an_accessibility_focused_table_cell_field_reports_typing() {
+    use craft_behavior::EditEvent;
+    use craft_ui::contract::Bind;
+    use craft_ui::testing::focus::AccessActionKind;
+    use craft_ui::text::TextField;
+    let edited = Rc::new(RefCell::new(None::<String>));
+    let seen = edited.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::Content)];
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns).show_items(ui, &source, &mut |_, icx| {
+            let seen = seen.clone();
+            ListRow::new("File").cells(icx.cells()).cell_field(
+                SIZE,
+                TextField::new("Page range", Bind::given(String::new())).placeholder("All pages"),
+                move |out| {
+                    for event in out.events {
+                        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+                        {
+                            *seen.borrow_mut() = Some(value);
+                        }
+                    }
+                },
+            )
+        });
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let field = fixture.by_label("Page range").expect("the field");
+    fixture.access(AccessActionKind::Focus, &field).type_text("1").settle();
+    assert_eq!(edited.borrow().as_deref(), Some("1"), "typing after accessibility focus reports the edit");
+}
+
 const NAME: ColumnKey = ColumnKey::new("name");
 const SIZE: ColumnKey = ColumnKey::new("size");
 const DATE: ColumnKey = ColumnKey::new("date");
@@ -379,4 +482,26 @@ fn columns_wider_than_the_table_keep_their_least_width_scroll_sideways_with_the_
     let (moved_cell, moved_text) = (count.left() - header(&fixture, "Count").left(), before.left() - painted(&fixture, "7").left());
     assert!(moved_cell > 1.0, "the wheel scrolls the columns sideways: {moved_cell}");
     assert!((moved_cell - moved_text).abs() < 0.5, "the header scrolls with the rows: header {moved_cell}, row {moved_text}");
+}
+
+/// Production's header menu lists Reset Columns and no column commands: a table can ask for that menu.
+#[trial]
+fn a_plain_header_menu_lists_no_column_commands() {
+    let mut fixture = Fixture::new(|ui| {
+        let columns = vec![
+            ColumnSpec::new(NAME, "Name", ColumnWidth::Controls(6.0)).movable(),
+            ColumnSpec::new(DATE, "Date", ColumnWidth::Controls(4.0)).movable(),
+        ];
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        Table::new("Files", columns)
+            .plain_header_menu(true)
+            .show_items(ui, &source, &mut |key, icx| ListRow::new(format!("File {key}")).cells(icx.cells()));
+    });
+    fixture.in_room(Room::Dialog).settle();
+    let name = fixture.by_label("Name").expect("the header cell").center();
+    secondary_click(&mut fixture, name);
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Reset Columns").is_some(), "the menu opens with Reset Columns");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Move Column Right").is_none(), "no column commands");
+    assert!(menu_row(&fixture, Role::MENU_ITEM, "Resize Column…").is_none(), "no Resize Column");
 }

@@ -15,7 +15,7 @@ use crate::runtime::keys;
 use crate::style::{ComponentStyle, GlyphRole, RuleKind, StyleCx};
 use craft_behavior::{Insets, Metrics, OwnerClass, Sense};
 use craft_host::target::Os;
-use craft_keymap::{Chord, Key};
+use craft_keymap::{Chord, Key, Mods};
 use craft_theme::{
     Variant,
     variant::{Emphasis, Tone},
@@ -370,6 +370,19 @@ impl FooterDrop {
     }
 }
 
+/// How a dialog footer draws the buttons that do not commit. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue, crate::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum DialogButtonLook {
+    /// Every button but the accepting and the destructive one in the secondary look.
+    #[default]
+    Standard,
+    /// PdfCraft's: Cancel and an Alternate answer (Don't Save, No) are plain text (the ghost look) beside the accented
+    /// accepting button, as production's prompts show them.
+    Quiet,
+}
+
 /// What a dialog button means; it decides the button's look and its place in the row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -386,6 +399,9 @@ pub enum DialogRole {
     Alternate,
     /// Any other outcome.
     Other,
+    /// A second answer to the question the dialog asks ("Save as…" beside "Save anyway"): between Cancel and the
+    /// accepting button, as a document app's prompt orders them.
+    Alternative,
 }
 
 impl DialogRole {
@@ -397,12 +413,14 @@ impl DialogRole {
             (false, DialogRole::Other | DialogRole::Alternate) => 0,
             (false, DialogRole::Destructive) => 1,
             (false, DialogRole::Cancel) => 2,
-            (false, DialogRole::Accept) => 3,
+            (false, DialogRole::Alternative) => 3,
+            (false, DialogRole::Accept) => 4,
             (true, DialogRole::Accept) => 0,
             (true, DialogRole::Destructive) => 1,
-            (true, DialogRole::Alternate) => 2,
-            (true, DialogRole::Cancel) => 3,
-            (true, DialogRole::Other) => 4,
+            (true, DialogRole::Alternative) => 2,
+            (true, DialogRole::Alternate) => 3,
+            (true, DialogRole::Cancel) => 4,
+            (true, DialogRole::Other) => 5,
         }
     }
 }
@@ -436,8 +454,9 @@ impl FooterButton {
         FooterButton { label: label.into(), role, letter: None, chord: None, enabled: true, disabled_reason: None, tooltip: None, stays_open: false }
     }
 
-    /// The letter that activates the button while its dialog holds focus and no text part owns the keys. The
-    /// button reports it as its `access_key`.
+    /// The letter that activates the button while its dialog holds focus and no text part owns the keys. On Windows
+    /// and Linux, Alt with the letter also activates it while its dialog is the top modal, whatever has the focus. The
+    /// button reports the letter as its `access_key`.
     #[must_use]
     pub const fn letter(mut self, letter: char) -> Self {
         self.letter = Some(letter);
@@ -524,7 +543,7 @@ enum Content {
 }
 
 /// The indexes of `roles` in display order: by role rank, and in the given order within a rank. A column puts
-/// `Accept` on top, `Alternate` and `Cancel` under it on every platform, then the others.
+/// `Accept` on top, `Alternate`, `Cancel` and `Alternative` under it on every platform, then the others.
 pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..roles.len()).collect();
     if column {
@@ -532,7 +551,8 @@ pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -
             DialogRole::Accept => 0,
             DialogRole::Alternate => 1,
             DialogRole::Cancel => 2,
-            DialogRole::Destructive | DialogRole::Other => 3,
+            DialogRole::Alternative => 3,
+            DialogRole::Destructive | DialogRole::Other => 4,
         });
     } else {
         order.sort_by_key(|&at| roles[at].rank(windows));
@@ -634,16 +654,20 @@ impl FooterBar {
                 let lettered = letters_reach_footer(&ctx);
                 // A text part does not own modified chords, so a focused field does not stop a button's chord.
                 let chorded = crate::runtime::overlay::drawing_top_modal(&ctx);
+                let os = crate::runtime::windows::os_of(&ctx);
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
+                let quiet = Env::of(ui).get::<DialogButtonLook>() == DialogButtonLook::Quiet;
                 let place = |ui: &mut Ui, shown: &mut Shown| {
-                    for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
+                    for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
                             DialogRole::Destructive => Variant::DANGER,
-                            DialogRole::Cancel | DialogRole::Alternate | DialogRole::Other => Variant::SECONDARY,
+                            // Production shows Cancel and Don't Save as plain text beside the accented answer.
+                            DialogRole::Cancel | DialogRole::Alternate if quiet => Variant::GHOST,
+                            DialogRole::Cancel | DialogRole::Other | DialogRole::Alternate | DialogRole::Alternative => Variant::SECONDARY,
                         };
                         let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                         if column {
@@ -666,9 +690,14 @@ impl FooterBar {
                         // The capture, renewed each pass, holds the chord from every other component from the next input
                         // hook on; `take_claimed` consumes the held press, so a second pass of the frame finds nothing
                         // left and does not press the button again.
-                        let letter = button.letter.and_then(Key::from_char).map(Chord::plain).filter(|_| lettered);
+                        // Windows and Linux dialogs also take Alt with the letter, as their mnemonics do; on macOS Option
+                        // with a letter types a character.
+                        let key = button.letter.and_then(Key::from_char);
+                        let letter = key.map(Chord::plain).filter(|_| lettered);
+                        let alt = key.map(|key| Chord::new(Mods::ALT, key)).filter(|_| chorded && os != Os::Mac);
                         let modified = button.chord.filter(|_| chorded);
-                        for chord in letter.into_iter().chain(modified).filter(|_| button.enabled && !ui.is_sizing_pass()) {
+                        let chords = letter.into_iter().chain(alt).chain(modified);
+                        for chord in chords.filter(|_| button.enabled && !ui.is_sizing_pass()) {
                             keys::capture(&ctx, owner, chord);
                             if keys::take_claimed(&ctx, owner, chord) {
                                 shown.picked = Some(at);

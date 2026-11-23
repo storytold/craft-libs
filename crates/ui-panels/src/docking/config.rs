@@ -1,6 +1,7 @@
 //! `DockConfig`: how a dock behaves, apart from how it looks (the dock's `ComponentStyle`) and what it says
 //! (`DockWords`).
 
+use super::IconicMode;
 use super::targets::ZoneRule;
 use craft_behavior::DockSide;
 
@@ -72,10 +73,21 @@ pub struct DockConfig {
     pub close_menu_items: bool,
     /// Shows a close action on the title bar of a floating window whose panels are all closable.
     pub close_button: bool,
+    /// A floating window's title row is a bare grip (no menu, float or close action, no column arrow): a quick-action
+    /// strip's look.
+    pub floating_grip: bool,
+    /// The surfaces inside a floating window keep to its rounded corners, and its edge shows over them along its
+    /// sides ([`FloatingGroup::rounded_body`](super::FloatingGroup)): a floating tool rail reads as one rounded piece.
+    /// Off: the panels and rails inside paint their own square surfaces to the window's edge.
+    pub floating_rounded_body: bool,
     /// Shows a close button on the tabs of closable panels in docked and floating groups, where a middle click also
     /// closes them, for tabs that act as documents. Off: panels close from their menu. Accordion headers and iconic
     /// columns never show it.
     pub tab_close_buttons: bool,
+    /// A group's header shows the shown panel's title, its count and a close button in place of a tab strip, as a
+    /// single titled panel does; the panels are shown from a rail or a menu instead. Closing follows
+    /// `tab_close_buttons`.
+    pub titled_headers: bool,
     /// The wheel over a tab strip shows the next or previous panel, one per wheel notch.
     pub wheel_selects_tabs: bool,
     /// A floating window opens in an OS window of its own where the window host opens OS windows and reports where
@@ -84,6 +96,9 @@ pub struct DockConfig {
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
+    /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
+    pub iconic_mode: IconicMode,
     /// Every group shows the panel menu button at the end of its tab strip, listing the dock's rows when the host has
     /// none for its panel. Off: only a group whose shown panel has host rows (`DockPanels::panel_rows`) shows the
     /// button, and the dock's rows open from a context request on a tab.
@@ -106,10 +121,14 @@ impl Default for DockConfig {
             title_bar_docks: true,
             close_menu_items: true,
             close_button: true,
+            floating_grip: false,
+            floating_rounded_body: false,
             tab_close_buttons: false,
+            titled_headers: false,
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
+            iconic_mode: IconicMode::Flyouts,
             menu_button: false,
             flyout_outside_closes: true,
         }
@@ -117,6 +136,13 @@ impl Default for DockConfig {
 }
 
 impl DockConfig {
+    /// What the icons of docked iconic columns open.
+    #[must_use]
+    pub fn iconic_mode(mut self, mode: IconicMode) -> Self {
+        self.iconic_mode = mode;
+        self
+    }
+
     /// The panel menu button on every group on or off.
     #[must_use]
     pub fn menu_button(mut self, on: bool) -> Self {
@@ -201,6 +227,20 @@ impl DockConfig {
         self
     }
 
+    /// A floating window's title row as a bare grip on or off.
+    #[must_use]
+    pub fn floating_grip(mut self, on: bool) -> Self {
+        self.floating_grip = on;
+        self
+    }
+
+    /// A floating window's body keeping to its rounded corners on or off ([`floating_rounded_body`](Self::floating_rounded_body)).
+    #[must_use]
+    pub fn floating_rounded_body(mut self, on: bool) -> Self {
+        self.floating_rounded_body = on;
+        self
+    }
+
     /// Close buttons on tabs on or off.
     #[must_use]
     pub fn tab_close_buttons(mut self, on: bool) -> Self {
@@ -208,7 +248,14 @@ impl DockConfig {
         self
     }
 
-    /// Wheel selection of tabs on or off.
+    /// Titled group headers on or off.
+    #[must_use]
+    pub fn titled_headers(mut self, on: bool) -> Self {
+        self.titled_headers = on;
+        self
+    }
+
+    /// See [`DockConfig::wheel_selects_tabs`].
     #[must_use]
     pub fn wheel_selects_tabs(mut self, on: bool) -> Self {
         self.wheel_selects_tabs = on;

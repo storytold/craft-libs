@@ -39,7 +39,7 @@ pub(crate) use report::{ReportIn, report, report_inert, report_parts, validity_o
 #[cfg(feature = "testing")]
 pub(crate) use scroll_owner::queue_reveal;
 pub use scroll_owner::scroll_step;
-pub(crate) use scroll_owner::{child_reveal, peek_reveal, queue_child_reveal, reveal_move, scroll_moves, take_reveal};
+pub(crate) use scroll_owner::{child_reveal, peek_reveal, queue_child_reveal, reveal_move, scroll_and_fallback_moves, scroll_moves, take_reveal};
 pub(crate) use sense::{part_state, register_wheel};
 pub(crate) use settle::settle;
 pub(crate) use state::{register_reset, state, value_flags};

@@ -281,8 +281,7 @@ impl<'b> BodyHooks<'b> {
     pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
         self.measured_body.map(|body| {
             let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
-            let wanted = self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width);
-            overlay_of(props).map_or(wanted, |overlay| wanted.max(crate::contract::overlay::anchor_floor(overlay)))
+            self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width)
         })
     }
 

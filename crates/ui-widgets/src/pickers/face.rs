@@ -134,8 +134,8 @@ impl<'a> SelectFace<'a> {
         self.leading.iter().map(|icon| Adornment::glyph(icon.clone())).collect()
     }
 
-    fn chevron() -> Adornment {
-        Adornment::glyph(crate::controls::disclosure::DisclosureGlyph::dropdown())
+    fn chevron(arrow: crate::controls::disclosure::DropdownArrow) -> Adornment {
+        Adornment::glyph(crate::controls::disclosure::DisclosureGlyph::dropdown_of(arrow))
     }
 }
 
@@ -205,7 +205,7 @@ impl Component for SelectFace<'_> {
             (Some(_), false) => cx.style.thumb,
             (Some(_), true) => cx.style.thumb + cx.style.caption_gap + caption.y,
         };
-        let beside = self.lead(cx.style, caption.x) + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron()]);
+        let beside = self.lead(cx.style, caption.x) + reserve(&cx.style.field, &self.leading_glyphs(), &[Self::chevron(cx.env.get())]);
         if self.fit && self.name {
             // A fitted box is at most a field length, padding included; a longer text elides, down to its readable
             // least.
@@ -217,7 +217,7 @@ impl Component for SelectFace<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let chevron = Self::chevron();
+        let chevron = Self::chevron(cx.env.get());
         let rtl = cx.flow.is_rtl();
         let mut flow = Flow::new(cx.content_rect, rtl);
         let caption = self.caption_run(&cx.style.caption).map(|run| ui.draw().layout(&run.color(cx.resolve(&cx.style.caption.color)), f32::INFINITY));

@@ -17,6 +17,9 @@ pub use registry::{SetEntry, sets};
 #[cfg(feature = "suite")]
 pub(crate) use registry::{StorySelection, configure_story_sets, with_story_sets};
 
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub use board::clear_focus_vantage;
 #[doc(hidden)]
 pub use board::declare_child;
 #[doc(hidden)]
@@ -24,11 +27,14 @@ pub use board::focus_within;
 pub use board::keymap;
 #[doc(hidden)]
 pub use board::note_page_root;
+#[cfg(feature = "testing")]
+pub(crate) use board::observe_fired;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::runs_now;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_declined, take_delivered, take_fired,
+    window_shortcuts,
 };
 #[doc(hidden)]
 pub use board::{bound_around, keymap_generation, take_around};
@@ -115,7 +121,9 @@ impl AppCatalog {
         self.generation
     }
 
-    pub(crate) fn defs(&self) -> &[CommandDef] {
+    /// The catalog's rows in the order the app gave them, each with its scope (always [`Scope::app`]), kind and
+    /// default bindings, as a shortcuts list reads them.
+    pub fn defs(&self) -> &[CommandDef] {
         &self.defs
     }
 
@@ -183,13 +191,20 @@ pub struct Fired {
     /// release arrived, also when the runtime held the event back to a later frame; the pass time for the other
     /// sources. A key's hold is the time between its press and its release, however late a frame runs them.
     pub time: f64,
+    /// The clipboard's content, for a paste the platform delivered with its event (the clipboard event that stands for
+    /// the paste chord) when no focused component lists Paste: the command that event fires carries it, so the app
+    /// pastes what the event held in the pass it runs the command. `None` for every other command, and for a paste
+    /// whose content the app reads from the clipboard itself.
+    pub pasted: Option<ClipContent>,
+    /// The screen point supplied when requesting this paste, if any.
+    pub paste_at: Option<egui::Pos2>,
 }
 
 impl Fired {
     /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
-    /// cycle or the Alt variant.
+    /// cycle, the Alt variant or paste content.
     pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time }
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, pasted: None, paste_at: None }
     }
 }
 
@@ -231,7 +246,9 @@ pub enum FirePhase {
 pub struct CommandState {
     flags: CommandFlags,
     title: Option<Arc<str>>,
+    icon: Option<Cow<'static, str>>,
     hint: Option<Arc<str>>,
+    hint_alone: bool,
     marked: bool,
 }
 
@@ -270,10 +287,25 @@ impl CommandState {
         self
     }
 
+    /// An icon for this frame in place of the command's own, by catalogue name or registered app set name.
+    #[must_use]
+    pub fn icon(mut self, icon: impl Into<Cow<'static, str>>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
     /// The accessible description and second tooltip line.
     #[must_use]
     pub fn hint(mut self, hint: impl Into<Arc<str>>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    /// Opt-in: on a control whose label shows whole and that has no tooltip of its own, the hint is the whole tooltip,
+    /// with the chord after it, in place of the label and chord over the hint (the default).
+    #[must_use]
+    pub fn hint_alone(mut self, alone: bool) -> Self {
+        self.hint_alone = alone;
         self
     }
 
@@ -294,8 +326,16 @@ impl CommandState {
         self.title.as_ref()
     }
 
+    pub(crate) fn icon_ref(&self) -> Option<&Cow<'static, str>> {
+        self.icon.as_ref()
+    }
+
     pub(crate) fn hint_ref(&self) -> Option<&Arc<str>> {
         self.hint.as_ref()
+    }
+
+    pub(crate) fn is_hint_alone(&self) -> bool {
+        self.hint_alone
     }
 }
 
@@ -305,7 +345,10 @@ impl CommandState {
 pub struct ResolvedCommand {
     /// The state's title, else the command's label, else its id.
     pub label: Arc<str>,
-    /// The icon name.
+    /// The command's catalogue label (the registry's), whatever title the state sets; `None` for a command the
+    /// registry does not define.
+    pub catalog_label: Option<Arc<str>>,
+    /// The icon name: the state's icon, else the command's own.
     pub icon: Option<Cow<'static, str>>,
     /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).
     pub chord: Option<Chord>,
@@ -319,12 +362,18 @@ pub struct ResolvedCommand {
     pub marked: bool,
     /// The accessible description and second tooltip line.
     pub hint: Option<Arc<str>>,
+    /// The hint is the whole tooltip of a control whose label shows whole ([`CommandState::hint_alone`]).
+    pub hint_alone: bool,
     /// What the command is.
     pub kind: CommandKind,
     /// The command is an edit a focused component takes as its own (it has an `EditCommand` link): a control bound to
     /// it keeps the focus where it is on a press, so the edit reaches the focused component.
     pub edit: bool,
     pub(crate) command: CommandRef,
+    /// Something besides the command's own state refuses it: the gate, the modal rule, the instance's liveness or a
+    /// focused component whose edit does nothing now. A key whose app-scope command its state alone disables is
+    /// declined (`FrameOutput::declined`); a refused one is not.
+    pub(crate) refused: bool,
     #[doc(hidden)]
     pub instance: Option<Id>,
 }
@@ -408,6 +457,7 @@ pub struct CommandInput {
     pub(crate) overrides: Option<Arc<Overrides>>,
     pub(crate) gate: Option<CommandGate>,
     pub(crate) catalog: Option<AppCatalog>,
+    pub(crate) paste_reads_clipboard: bool,
 }
 
 impl CommandInput {
@@ -443,6 +493,16 @@ impl CommandInput {
     #[must_use]
     pub fn gate(mut self, gate: CommandGate) -> Self {
         self.gate = Some(gate);
+        self
+    }
+
+    /// Whether the library's Paste ([`EditCommands::Paste`]), fired at the app by a menu row, a toolbar button or the
+    /// palette, first asks the platform for the clipboard in the pass that fires it and reaches the app with the
+    /// clipboard's content, as ⌘V does. Off (the default), it reaches the app at once with no content and the app
+    /// reads its clipboard itself.
+    #[must_use]
+    pub fn paste_reads_clipboard(mut self, on: bool) -> Self {
+        self.paste_reads_clipboard = on;
         self
     }
 }
@@ -561,6 +621,14 @@ pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -
         return false;
     }
     board::fire_from(ctx, &command.into(), source)
+}
+
+/// Requests a paste at a screen point; the delivered command carries the point with its content. The next clipboard
+/// delivery in this viewport completes the request. A new request replaces any previous pending point there.
+pub fn request_paste_at(ctx: &Context, at: egui::Pos2) {
+    if crate::runtime::measure::effect(ctx, "commands::request_paste_at") {
+        board::request_paste_at(ctx, at);
+    }
 }
 
 /// `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state

@@ -510,6 +510,29 @@ fn a_reveal_from_a_hosted_field_scrolls_its_collection_in_the_same_pass() {
     assert_eq!(changes, 1, "the collection scrolls once for the reveal: {held:?}");
 }
 
+/// A reveal of a rect the view already shows moves nothing, so it asks for no second pass: a part that asks every frame
+/// (a focused row that keeps itself in view) must not make every frame run twice (egui's "request_discard has been
+/// called N frames in a row").
+#[trial]
+fn a_reveal_of_a_rect_in_view_runs_no_second_pass() {
+    let (log, source) = (Log::new(), Count(30));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).id_salt("list");
+            log.take(list.show_items(ui, &source, &mut |key, _| ProbeRow::new(*key, log)));
+        });
+    };
+    frames.idle(3, &mut show);
+    let idle = frames.frame(vec![], &mut show);
+    let row = log.rect(1);
+    for _ in 0..3 {
+        craft_ui::testing::contract::queue_reveal(&frames.ctx, log.id(), row);
+        let passes = frames.frame(vec![], &mut show);
+        assert_eq!(passes, idle, "a reveal of a row in view runs no extra pass");
+    }
+}
+
 /// Enter on a rename field nobody typed in commits the draft the collection proposed, and ends with no event when the
 /// draft is the row's own text.
 #[trial]
@@ -541,4 +564,41 @@ fn enter_on_an_untyped_rename_commits_only_a_proposed_draft() {
     };
     assert_eq!(renamed("proposed"), ["proposed"], "Enter accepts the proposed draft");
     assert!(renamed("b").is_empty(), "a draft equal to the row's text reports no commit");
+}
+
+/// The renaming list's view: its rows, its log and its Enter, which the trial reads.
+#[derive(craft_ui::contract::MemoProps)]
+struct RenamingPanel {}
+
+thread_local! {
+    /// The log, Enter and rows the renaming panel shows: a memoized view's props are plain data.
+    static RENAMING_PANEL: Cell<Option<(&'static Log, &'static Cell<bool>, &'static Words)>> = const { Cell::new(None) };
+}
+
+fn renaming_panel(_: &mut RenamingPanel, ui: &mut Ui) {
+    let Some((log, enter, words)) = RENAMING_PANEL.with(Cell::get) else { return };
+    let list = Probe::new(SelectMode::Single).id_salt("list").renaming("b", enter);
+    log.take(list.show_items(ui, words, &mut |key, _| ProbeRow::new(*key, log)));
+}
+
+/// A rename requested from outside a settled memoized view (a docked panel's body) runs the view, so its collection
+/// takes the request and opens the rename field.
+#[trial]
+fn a_rename_request_runs_the_settled_view_of_its_collection() {
+    use craft_ui::contract::MemoView;
+    let log = Log::new();
+    let enter: &'static Cell<bool> = Box::leak(Box::new(Cell::new(false)));
+    let words: &'static Words = Box::leak(Box::new(Words::flat(&["a", "b", "c"])));
+    RENAMING_PANEL.with(|panel| panel.set(Some((log, enter, words))));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            MemoView::new("panel", RenamingPanel {}, renaming_panel).show(ui);
+        });
+    };
+    frames.idle(30, &mut show);
+    request_rename(&frames.ctx, log.id(), &1_usize);
+    frames.idle(3, &mut show);
+    let begun = log.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { .. })));
+    assert!(begun, "the settled view ran and its collection opened the requested rename");
 }
