@@ -352,6 +352,11 @@ same commit:
 hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "<full-commit-id>", version = "=0.7.2" }
 ```
 
+`craft-pdf` re-exports the crate as `craft_pdf::syntax`, and `open` returns
+`craft_pdf::syntax::Pdf`; use that path for its types. A consumer that also depends on
+`hayro-syntax` directly and patches it to anything other than this repository at the same
+commit gets a second `hayro-syntax`, whose types do not match `craft-pdf`'s.
+
 Cargo ignores dependency workspaces' root patches, so these go in the consuming workspace.
 A compile-time marker
 rejects unpatched Krilla. Check the normal dependency graph separately from the test graph
