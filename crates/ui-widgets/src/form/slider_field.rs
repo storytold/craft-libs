@@ -4,8 +4,8 @@
 pub(crate) mod stories;
 
 use crate::contract::{
-    Bind, BindCheck, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, Focus as _, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel,
-    Sizing, Validity, WordSetCx as _,
+    Bind, BindCheck, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, Focus as _, MeasureCx, Outcome, PaintUi, Props as _, Role,
+    SideLabel, Sizing, Validity, WordSetCx as _,
 };
 use crate::runtime::env::{Label, UnitKind};
 use crate::runtime::keys::{ScalarKeyPolicy, ScalarRow, register_scalar};
@@ -82,6 +82,11 @@ pub struct SliderField<'a> {
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
+    /// The change per point of a scrub on the number field or its caption, in the field's shown units
+    /// (`NumberField::scrub_step`), in place of the field's step: the range over the track's width moves the value as
+    /// far as the same drag on the slider's thumb. An omitted, non-positive or non-finite rate scrubs by the step.
+    #[prop(quantity = "step")]
+    scrub_step: Option<f64>,
     /// Optional independent vertical-key and accessibility nudges for the full clipped row, including its caption.
     /// Its focused numeric child keeps the normal editor precedence and its original typing/wheel properties.
     #[prop]
@@ -166,6 +171,7 @@ impl<'a> SliderField<'a> {
             step: None,
             typed_decimals: None,
             wheel_step: None,
+            scrub_step: None,
             key_policy: None,
             pointer_modifiers: craft_behavior::DragModifiers::default(),
             pointer_model_step: None,
@@ -191,6 +197,7 @@ impl<'a> SliderField<'a> {
             step: self.step,
             typed_decimals: self.typed_decimals,
             wheel_step: self.wheel_step,
+            scrub_step: self.scrub_step,
             key_policy: self.key_policy,
             pointer_modifiers: self.pointer_modifiers,
             pointer_model_step: self.pointer_model_step,
@@ -213,6 +220,7 @@ struct Look {
     step: Option<f64>,
     typed_decimals: Option<usize>,
     wheel_step: Option<f64>,
+    scrub_step: Option<f64>,
     key_policy: Option<ScalarKeyPolicy>,
     pointer_modifiers: craft_behavior::DragModifiers,
     pointer_model_step: Option<f64>,
@@ -301,6 +309,10 @@ impl Look {
             .scrub_by_label()
             .pointer_modifiers(self.pointer_modifiers)
             .scalar_access_step(self.key_policy.and_then(ScalarKeyPolicy::amount));
+        let field = match self.scrub_step {
+            Some(rate) => field.scrub_step(rate),
+            None => field,
+        };
         let field = match &self.number_codec {
             Some(codec) => field.codec(codec.clone()),
             None => field,
