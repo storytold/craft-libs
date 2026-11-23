@@ -93,12 +93,14 @@ fn along_y(mv: NavMove) -> NavMove {
 }
 
 /// Declares the part `key.at(index)` for `divider`: an edge part above the panes that takes drags and is its own Tab
-/// stop. `rect` is the container's rect, which the bar is mirrored across for right-to-left. The part is returned for
-/// what a caller adds (a tooltip that names the edge).
+/// stop. A press on it leaves key focus where it is (`Sense::KEEP_FOCUS`), so a pointer drag does not make the divider
+/// the key target: the arrow keys after it still reach whatever held them, and only a divider reached by Tab takes
+/// them to resize. `rect` is the container's rect, which the bar is mirrored across for right-to-left. The part is
+/// returned for what a caller adds (a tooltip that names the edge).
 pub fn declare<'a, C: Component>(cx: &'a mut PartsCx<'_, C>, rect: Rect, key: PartKey, index: u64, divider: &Divider) -> PartBuilder<'a> {
     let bar = Flow::new(rect, cx.flow.is_rtl()).to_physical(divider.bar);
     cx.part(key.at(index), bar)
-        .sense(Sense::DRAG | Sense::TAKE_FOCUS)
+        .sense(Sense::DRAG | Sense::KEEP_FOCUS)
         .priority(HitPriority::new(HitLevel::Edge, 0))
         .cursor(divider.cursor())
         .focusable()
