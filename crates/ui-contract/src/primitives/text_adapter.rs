@@ -480,8 +480,9 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && input.intents.untaken(&Intent::Cancel)
         && crate::runtime::focus::escape_closes_dialog(ctx);
     if dialog_escape {
-        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
-        state.end = Some(End::Escape);
+        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog. A dialog that keeps
+        // typing on Escape (`FocusPolicy::escape_keeps_typing`) commits the draft as leaving the field does.
+        state.end = Some(if crate::runtime::focus::escape_keeps_typing(ctx) { End::Blur } else { End::Escape });
     }
     let draft_takes = state.draft.is_some() && !dialog_escape && !(focused_before && keys::focus_in_modal_dialog(ctx));
     let takes_escape =

@@ -59,7 +59,12 @@ pub(crate) fn edit_intents<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) {
             && focus::escape_closes_dialog(&cx.core.ctx);
         let escapes = !cx.core.escape_to_list && !crate::runtime::keys::focus_in_modal_dialog(&cx.core.ctx);
         let reason = if dialog_escape {
-            cx.cancel(CancelReason::Escape);
+            // A dialog that keeps typing on Escape (`FocusPolicy::escape_keeps_typing`) commits it instead.
+            if focus::escape_keeps_typing(&cx.core.ctx) {
+                cx.commit();
+            } else {
+                cx.cancel(CancelReason::Escape);
+            }
             None
         } else if escapes && cx.core.intents.take(Intent::Cancel) {
             Some(CancelReason::Escape)

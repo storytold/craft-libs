@@ -104,6 +104,10 @@ pub struct PreferencesWindow<'a> {
     /// Lays the page out as `layout` says ([`PreferencesPage::layout`]); the default is [`PreferencesLayout::Paged`].
     #[prop]
     layout: PreferencesLayout,
+    /// Escape keeps the typing in the focused field ([`Dialog::escape_keeps_typing`]): in [`PreferencesMode::Live`]
+    /// the typed value stays applied when Escape closes the window. Off by default: Escape cancels the typing.
+    #[prop(flag)]
+    escape_keeps_typing: bool,
 }
 
 /// What the body, the footer and the buttons' guard share during one pass: the host, the window's state as the pass
@@ -158,12 +162,20 @@ impl<H: PreferencesDraft + ?Sized> Session<'_, '_, H> {
 impl<'a> PreferencesWindow<'a> {
     /// A window over the host's `state`.
     pub fn new(state: Bind<'a, PreferencesState>) -> Self {
-        PreferencesWindow { state, title: None, embedded: false, remember: None, mode: PreferencesMode::Staged, layout: PreferencesLayout::Paged }
+        PreferencesWindow {
+            state,
+            title: None,
+            embedded: false,
+            remember: None,
+            mode: PreferencesMode::Staged,
+            layout: PreferencesLayout::Paged,
+            escape_keeps_typing: false,
+        }
     }
 
     /// Shows the window for this pass over `host`. The output's `closed` tells the host to stop showing it.
     pub fn show<H: PreferencesDraft + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesOutput {
-        let PreferencesWindow { state, title, embedded, remember, mode, layout } = self;
+        let PreferencesWindow { state, title, embedded, remember, mode, layout, escape_keeps_typing } = self;
         let env = Env::of(ui);
         let words = env.words::<PreferencesWords>();
         let common = env.words::<CommonWords>();
@@ -201,6 +213,7 @@ impl<'a> PreferencesWindow<'a> {
             .resizable(true)
             .overlay(|overlay| overlay.size(size).min_size(least))
             .close_on_enter(can_ok)
+            .escape_keeps_typing(escape_keeps_typing)
             .on_pick(|button, cx| {
                 if button.role() == DialogRole::Other && !nested {
                     session.borrow_mut().apply(cx);

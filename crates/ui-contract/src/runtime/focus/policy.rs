@@ -69,6 +69,10 @@ pub struct FocusPolicy {
     /// In a `KeepAnchor` layer, the collection the opener hands its list keys to (Up, Down, Page keys, Home and End,
     /// Enter and Tab as the layer's rules say). Without one the opener keeps its keys.
     pub list: Option<Id>,
+    /// In a dialog whose Escape closes it, the Escape keeps the typing in the focused field: the field commits its
+    /// draft as on leaving it, and the dialog then closes. Off (the default), one Escape cancels the typing with the
+    /// dialog. A window that applies its rows as they change (a live Preferences window) keeps what was typed.
+    pub escape_keeps_typing: bool,
 }
 
 impl FocusPolicy {
@@ -83,6 +87,7 @@ impl FocusPolicy {
         pages: false,
         list_enter: true,
         list: None,
+        escape_keeps_typing: false,
     };
     /// A pane: an F6 stop.
     pub const PANE: FocusPolicy = FocusPolicy { kind: ScopeKind::Pane, ..FocusPolicy::NONE };
@@ -97,6 +102,7 @@ impl FocusPolicy {
         pages: false,
         list_enter: true,
         list: None,
+        escape_keeps_typing: false,
     };
     /// A popup: focus moves in, Escape closes and focus returns to the opener.
     pub const POPUP: FocusPolicy = FocusPolicy {
@@ -109,6 +115,7 @@ impl FocusPolicy {
         pages: false,
         list_enter: true,
         list: None,
+        escape_keeps_typing: false,
     };
     /// A menu: like a popup.
     pub const MENU: FocusPolicy = FocusPolicy { kind: ScopeKind::Menu, ..FocusPolicy::POPUP };
@@ -149,6 +156,12 @@ impl FocusPolicy {
     /// The collection in the layer that takes the opener's list keys.
     pub const fn list(mut self, list: Id) -> Self {
         self.list = Some(list);
+        self
+    }
+
+    /// Whether Escape in this dialog keeps the focused field's typing ([`FocusPolicy::escape_keeps_typing`]).
+    pub const fn escape_keeps_typing(mut self, on: bool) -> Self {
+        self.escape_keeps_typing = on;
         self
     }
 
