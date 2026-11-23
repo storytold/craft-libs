@@ -71,7 +71,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{FormDialogWords, ParamDialogWords};
 use craft_ui::primitives::{Checker, IconSpec};
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase, FireSource};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::runtime::pending::{Job, Pending};
@@ -627,7 +627,12 @@ impl ContentAwareFillWorkspace {
                     let slot = self.slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
                     let tools: Vec<&RailTool<FillTool>> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                     let picked = slot.and_then(|slot| {
-                        tool_pick(&tools, slot.id, &self.tool, &self.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
+                        if fired.source == FireSource::Key {
+                            tool_pick(&tools, slot.id, &self.tool, &self.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
+                        } else {
+                            // Named commands select their member; only shortcuts recall or cycle the slot.
+                            Some((slot.id, tool))
+                        }
                     });
                     if let Some((slot_id, tool)) = picked {
                         self.pick(Some(&ctx), tool);

@@ -317,6 +317,11 @@ impl CanvasTool for FillCanvasTool<'_> {
                 if pointer.button != PointerButton::Primary {
                     return ToolAction::Ignored;
                 }
+                // A proximity close may have consumed the first press of a double-click.
+                // Its continuation must not start another polygon after that draft was removed.
+                if self.tool == FillTool::PolygonalLasso && self.canvas.lasso.is_none() && pointer.clicks >= 2 {
+                    return ToolAction::Done;
+                }
                 let reach = f64::from(cx.slop);
                 let kind = if self.tool == FillTool::PolygonalLasso { DraftKind::Polygonal } else { DraftKind::Freehand };
                 let (draft, operation) =
