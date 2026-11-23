@@ -238,7 +238,7 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     let mut fixture = Fixture::new(move |ui| {
         let mut at = bound.get();
         let mut held = shown.borrow_mut();
-        let field = TextField::new("Notes", Bind::bound(&mut *held)).lines(2).max_lines(2).caret(Bind::bound(&mut at));
+        let field = TextField::new("Notes", Bind::bound(&mut *held)).lines(2).max_lines(2).tab_inserts(true).caret(Bind::bound(&mut at));
         seen.set(field.show(ui).response.rect);
         drop(held);
         bound.set(at);
@@ -274,6 +274,20 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.key(Key::ArrowRight, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), 4, "the user's caret move past the two-byte \"é\" writes its byte offset back");
+
+    // Tab still inserts into a field that keeps the arrows.
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(2);
+    assert!(text.borrow().contains('\t'), "Tab inserts a tab: {:?}", text.borrow());
+    assert_eq!(caret.get(), 5, "the caret advances past the inserted tab");
+
+    // Page keys move the caret to the framework editor's ends.
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), text.borrow().len(), "PageDown moves the caret to the end");
+    fixture.key(Key::PageUp, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(caret.get(), 0, "PageUp moves the caret to the start");
 }
 
 /// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,
