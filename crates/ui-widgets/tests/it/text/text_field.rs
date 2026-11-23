@@ -388,17 +388,19 @@ fn text_lost_focus_reports_a_focus_loss_without_an_edit() {
 }
 
 /// A field that keeps its text on Escape does so only while it can be edited: one that went read-only in the middle of
-/// a typing run takes Escape as a plain field does, so the run is cancelled and the text from before it comes back,
-/// not committed.
+/// a typing run takes Escape as a plain field does, so the run is cancelled, not committed. (A read-only component
+/// refuses every event that carries a value, so the cancel reaches the app as an event and writes nothing back.)
 #[trial]
-fn a_field_that_went_read_only_mid_run_gives_back_the_text_on_escape() {
+fn a_field_that_went_read_only_mid_run_cancels_its_run_on_escape() {
     let text = Rc::new(RefCell::new(String::from("old")));
     let read_only = Rc::new(Cell::new(false));
     let events = Rc::new(RefCell::new(Vec::new()));
-    let (shown, locked, log) = (text.clone(), read_only.clone(), events.clone());
+    let id = Rc::new(Cell::new(Id::NULL));
+    let (shown, locked, log, field) = (text.clone(), read_only.clone(), events.clone(), id.clone());
     let mut fixture = Fixture::new(move |ui| {
         let mut held = shown.borrow_mut();
         let out = TextField::new("Filter", Bind::bound(&mut *held)).keeps_on_escape().select_on_focus().read_only(locked.get()).show(ui);
+        field.set(out.response.id);
         log.borrow_mut().extend(out.events.iter().map(|event| match event {
             craft_behavior::EditEvent::Commit { .. } => "commit",
             craft_behavior::EditEvent::Cancel { .. } => "cancel",
@@ -415,9 +417,12 @@ fn a_field_that_went_read_only_mid_run_gives_back_the_text_on_escape() {
     events.borrow_mut().clear();
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.idle(3);
-    assert_eq!(*text.borrow(), "old", "Escape on a read-only field gives back the text from before the run");
     assert!(!events.borrow().contains(&"commit"), "the run is not committed: {:?}", events.borrow());
     assert!(events.borrow().contains(&"cancel"), "the run is cancelled: {:?}", events.borrow());
+    // The draft is gone: the field shows the host's value again, not the text typed before the run ended.
+    *text.borrow_mut() = String::from("host");
+    fixture.idle(3);
+    assert_eq!(fixture.tree().value(id.get()), Some("host"), "the field shows the host's value");
 }
 
 /// A kept Escape that closes the popover the field sits in hands focus back to the popover's opener, as any Escape that
