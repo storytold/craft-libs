@@ -1673,6 +1673,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-circuit"
+version = "0.1.0"
+dependencies = [
+ "craft-csv",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-cloud"
 version = "0.1.0"
 dependencies = [

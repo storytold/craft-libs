@@ -81,6 +81,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-dav`](crates/dav/README.md): WebDAV multistatus documents (RFC 4918) with the CalDAV and
   CardDAV namespaces, from MailCraft: read fail-closed into a bounded `craft-xml` tree with fixed
   prefixes, and the successful properties of each response. No I/O.
+- [`craft-circuit`](crates/circuit/README.md): electrical schematic model: parts, pins with electrical kinds, wires, junctions and labels on sheets; nets with unique names, a JSON and CSV netlist, parts-list grouping, and connection checks with stable rule ids, within limits on input and work.
 - [`craft-cms`](crates/cms/README.md): pure-Rust ICC v2/v4 colour management: profile parsing
   and writing, transforms, rendering intents, black point compensation, soft proofing, gamut
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
