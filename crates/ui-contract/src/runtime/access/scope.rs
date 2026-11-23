@@ -521,13 +521,15 @@ pub(crate) enum LabelPatch {
 
 /// What `label` does to the `nodes` registered in the scope of `container`: one control is labelled by it
 /// (described by it when the control keeps its own name or the label describes), several make the container's node
-/// labelled by it, none leaves everything alone. A label with no node of its own names its one control by its text,
-/// or joins the control's description, and leaves the container its own name.
+/// labelled by it, none, or a label without text, leaves everything alone. A label with no node of its own names its
+/// one control by its text, or joins the control's description, and leaves the container its own name.
 pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNode]) -> Vec<LabelPatch> {
     if nodes.is_empty() {
         return Vec::new();
     }
-    let own = label.shown.then_some(label.id);
+    // A label without text has nothing to name or describe: the controls keep their own names.
+    let named = !label.text.is_empty();
+    let own = label.shown.then_some(label.id).filter(|_| named);
     let mut patches: Vec<LabelPatch> =
         own.map(|id| LabelPatch::Label { id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }).into_iter().collect();
     // The label is about one control only when that control sits directly in the scope. One in an unlabelled row is
@@ -538,6 +540,7 @@ pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNod
         _ => None,
     };
     match (single, own) {
+        _ if !named => {}
         (Some(only), Some(own)) if label.role == FieldLabelRole::Describes || only.keeps_name => {
             patches.push(LabelPatch::DescribedBy { node: only.id, label: own });
         }

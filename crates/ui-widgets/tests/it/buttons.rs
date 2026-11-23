@@ -797,3 +797,22 @@ fn a_toggle_button_reports_pressed_on_and_off() {
         assert_eq!(tree.toggled_of(NodeKey::of(plain)), None, "a plain button has no pressed state");
     }
 }
+
+/// An icon-only toggle button in a field with no label text (a dialog's custom row with an empty label), beside an egui
+/// check box in an `egui::Grid`, keeps the name its own label gives it.
+#[trial]
+fn an_icon_only_toggle_in_a_field_without_label_text_keeps_its_name() {
+    let mut fixture = Fixture::new(|ui| {
+        craft_ui::form::Field::new("").show(ui, |ui, _| {
+            egui::Grid::new("inks").num_columns(2).show(ui, |ui| {
+                let mut print = true;
+                ui.add(egui::Checkbox::without_text(&mut print));
+                let _ = ToggleButton::new("Convert Cyan to process", Bind::given(false)).icon(IconId::new("eye")).icon_only().show(ui);
+                ui.end_row();
+            });
+        });
+    });
+    fixture.settle();
+    let toggle = fixture.by_label("Convert Cyan to process").expect("the toggle keeps its name");
+    assert!(fixture.by_role(Role::BUTTON).iter().any(|button| button.node == toggle.node), "the named node is the toggle button");
+}
