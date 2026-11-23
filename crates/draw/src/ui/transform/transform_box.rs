@@ -395,6 +395,9 @@ pub struct TransformBox<'a> {
     /// Ellipse tool's. It takes no press: a press there is the inside's, or the tool's.
     #[prop]
     centre_mark: bool,
+    /// Whether the corner and side handles are circles (a rounded document editor's look) instead of squares.
+    #[prop]
+    round_handles: bool,
     /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
     /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
     /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
@@ -428,6 +431,7 @@ impl<'a> TransformBox<'a> {
             overflow: false,
             session_arrows: true,
             centre_mark: false,
+            round_handles: false,
             line: None,
             reach: TransformReach::Box,
             pivot_held: false,
@@ -817,12 +821,17 @@ impl<'a> TransformBox<'a> {
 }
 
 impl TransformBox<'_> {
+    /// The shape of a handle of `side` at `at`: a square, or a circle of that diameter with round handles.
+    fn handle_shape(&self, at: Pos2, side: f32) -> PaintShape {
+        if self.round_handles { PaintShape::Circle(at, side / 2.0) } else { PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO) }
+    }
+
     /// The square of handle `part` at `at` on the screen, filled as the part's state shows when the rules let it take a
     /// press; `enlarged` with the overflow plus.
     fn paint_handle(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, part: BoxPart, at: Pos2, enlarged: bool) {
         let look = &cx.style.handle;
         let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
-        let square = PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO);
+        let square = self.handle_shape(at, side);
         let fill = if self.rules.allows(part) { cx.resolve_part(BOX.at(part.index()), &look.fill) } else { cx.resolve(&look.fill) };
         draw.fill(&square, fill);
         draw.stroke(&square, StrokeWidth::Thin, look.stroke);
@@ -841,7 +850,7 @@ impl TransformBox<'_> {
             let look = &style.handle;
             for k in 0..4 {
                 let middle = corners[k].lerp(corners[(k + 1) % 4], 0.5);
-                let square = PaintShape::Rect(Rect::from_center_size(middle, Vec2::splat(look.side)), CornerRadius::ZERO);
+                let square = self.handle_shape(middle, look.side);
                 draw.fill(&square, cx.resolve(&look.fill));
                 draw.stroke(&square, StrokeWidth::Thin, look.stroke);
             }

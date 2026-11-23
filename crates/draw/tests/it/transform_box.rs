@@ -54,6 +54,7 @@ struct Config {
     /// The host keeps the box in f32, as a text layer keeps its box, and gives it back with its centre as the pivot.
     f32_host: bool,
     centre_mark: bool,
+    round_handles: bool,
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
@@ -102,6 +103,7 @@ fn defaults() -> Config {
         rulers: None,
         f32_host: false,
         centre_mark: false,
+        round_handles: false,
         line: None,
         targets: Vec::new(),
     }
@@ -187,6 +189,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
                     .centre_mark(config.centre_mark)
+                    .round_handles(config.round_handles)
             };
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
@@ -1268,4 +1271,15 @@ fn a_linked_corner_dragged_inward_along_one_axis_shrinks_both_sides() {
     assert!((width / height - RECT.width() / RECT.height()).abs() < 1e-6, "in proportion: {width} by {height}");
     // PLAN: the framework scales a linked corner by the drag's projection on the anchor–corner diagonal (here 0.736 of
     // the box); production scaled by the larger axis share (0.6, the 40 % the app test asserted). The rule is left as it is.
+}
+
+/// Round handles draw the eight corner and side handles as circles, where the default draws squares.
+#[trial]
+fn round_handles_are_circles() {
+    let circles = |round: bool| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| config.round_handles = round);
+        h.fixture.frame_shapes().iter().filter(|shape| matches!(shape, egui::Shape::Circle(_))).count()
+    };
+    // Each handle is a filled circle and its stroke.
+    assert_eq!(circles(true), circles(false) + 16, "the four corners and four sides are circles");
 }
