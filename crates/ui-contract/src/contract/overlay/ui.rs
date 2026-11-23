@@ -154,6 +154,11 @@ impl<'a> OverlayUi<'a> {
             return None;
         };
         let (kind, peers) = (overlay.popup, overlay.opener.is_none());
+        // A popup with no recorded opener hangs from this component: when the component goes disabled, its anchor is
+        // gone, as for an explicit opener that goes disabled (`dismissal`).
+        if open && peers && overlay.dismiss.anchor_gone && !self.resolved.enabled {
+            crate::runtime::overlay::request_close(self.ctx, popup.id, CloseReason::AnchorGone);
+        }
         let ctx = self.ctx.clone();
         with_popups(&ctx, |popups| {
             popups.anchors.push((self.owner, PopupShown { id: popup.id, kind, open }));
