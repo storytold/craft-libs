@@ -120,6 +120,7 @@ impl AccessTree {
     }
 
     /// The tree of a frame that made none.
+    #[cfg(feature = "testing")]
     pub(crate) fn none() -> Self {
         AccessTree::new(TreeUpdate { nodes: Vec::new(), tree: None, tree_id: accesskit::TreeId::ROOT, focus: NodeId(0) })
     }
