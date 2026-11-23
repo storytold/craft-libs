@@ -555,6 +555,11 @@ impl Component for MenuItem<'_> {
         if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
             frame::request_repaint(&ctx);
         }
+        // While the press that opened the menu is held, egui hovers nothing else, so the level does not follow the
+        // pointer: the row a release would pick becomes the active row here.
+        if enabled && cx.held_over() && level.activate_row(cx.id) {
+            frame::request_repaint(&ctx);
+        }
         // A disabled row is never active.
         self.active = enabled && level.is_active(cx.id);
         // A crossed row waits for the rest to end: one pass when it does.

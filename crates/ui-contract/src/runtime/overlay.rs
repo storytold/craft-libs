@@ -618,6 +618,14 @@ pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
     with_pass(ctx, |pass| pass.dragged_release.is_some_and(|(popup, at)| pass.drawing.iter().any(|(id, _)| *id == popup) && rect.contains(at)))
 }
 
+/// Whether the press that opened the layer whose body is running is still held with the pointer inside `rect` (screen
+/// space): the row there shows its hover, as the row a release there picks.
+pub(crate) fn held_inside(ctx: &Context, rect: Rect) -> bool {
+    let Some(layer) = with_pass(ctx, |pass| pass.drawing.last().map(|(id, _)| *id)) else { return false };
+    let at = pointer::with_pass_raw(ctx, |read| read.hover.filter(|_| read.primary_down));
+    at.is_some_and(|at| rect.contains(at)) && with_persist(ctx, pass::current_viewport(ctx), |persist| persist.held_open.contains(&layer))
+}
+
 /// Ends the body `begin_layer` started.
 pub(crate) fn end_layer(ctx: &Context) {
     with_pass(ctx, |pass| {
