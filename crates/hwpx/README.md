@@ -34,7 +34,9 @@ assert!(craft_hwpx::read(b"not a package").is_err());
   paragraph's source paragraph is filed in `Document::kept` under `KEPT_FORMAT` while the
   paragraph stays as read.
 - What isn't read is logged (`log::warn!`), once per kind: equations show their script as
-  italic text, and OLE objects, charts, text art and video are left out.
+  italic text, arcs are drawn as their frame, cells lose their diagonal lines, and OLE objects,
+  charts, text art and video are left out, as is a page background whose picture the package
+  doesn't hold.
 
 ## Sources
 

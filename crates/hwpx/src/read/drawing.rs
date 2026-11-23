@@ -457,7 +457,13 @@ impl Converter<'_> {
             }
             "hp:ellipse" => ShapeKind::Ellipse,
             "hp:line" | "hp:connectLine" => ShapeKind::Line,
-            _ => ShapeKind::Rectangle,
+            _ => {
+                if tag == "hp:arc" {
+                    // no arc shape in the model yet: its frame is drawn, and said so
+                    self.missing("arcs (drawn as their frame)");
+                }
+                ShapeKind::Rectangle
+            }
         };
         let (pw, ph) = (emu_pt(emu(w)).clamp(0.0, MAX_LEN_PT), emu_pt(emu(h)).clamp(0.0, MAX_LEN_PT));
         let ff = if matches!(tag, "hp:polygon" | "hp:curve") { freeform(el, pw, ph, turned).map(Arc::new) } else { None };

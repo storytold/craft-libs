@@ -527,3 +527,19 @@ fn a_note_inside_a_hyperlink_keeps_its_own_text_unlinked() {
         .expect("no note paragraph");
     assert!(!linked(&note, "각주"), "the note's text isn't linked");
 }
+
+/// What the model can't hold yet is drawn as near as it can be and logged, never dropped
+/// silently: an arc (drawn as its frame), a cell's diagonal lines, and a page background whose
+/// picture the package doesn't hold.
+#[test]
+fn unread_arcs_diagonals_and_background_pictures_are_logged() {
+    let header = r#"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hh:refList><hh:borderFills><hh:borderFill id="3"><hh:slash type="CENTER"/></hh:borderFill><hh:borderFill id="4"><hc:fillBrush><hc:imgBrush mode="TOTAL"><hc:img binaryItemIDRef="nowhere"/></hc:imgBrush></hc:fillBrush></hh:borderFill></hh:borderFills></hh:refList></hh:head>"#;
+    let section = format!(
+        r#"<hs:sec {NS}><hp:p><hp:run><hp:secPr><hp:pageBorderFill type="BOTH" borderFillIDRef="4" textBorder="PAPER" fillArea="PAPER"/></hp:secPr><hp:arc><hp:sz width="4000" height="4000"/><hp:pos treatAsChar="1"/></hp:arc><hp:t>본문</hp:t></hp:run></hp:p><hp:p><hp:run><hp:tbl rowCnt="1" colCnt="1"><hp:tr><hp:tc borderFillIDRef="3"><hp:subList><hp:p><hp:run><hp:t>칸</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSz width="5000" height="1000"/></hp:tc></hp:tr></hp:tbl></hp:run></hp:p></hs:sec>"#
+    );
+    let (doc, warnings) = crate::test_log::warnings(|| read_bytes(&hwpx_with(header, &section)));
+    assert!(doc.is_ok());
+    for what in ["arcs", "cell diagonal lines", "page background picture"] {
+        assert!(warnings.iter().any(|w| w.contains(what)), "{what} not logged: {warnings:?}");
+    }
+}

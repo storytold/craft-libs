@@ -204,7 +204,10 @@ impl Converter<'_> {
             return vec![self.background_box(rel, x, y, w, h, BoxFill::Shape(fill, None))];
         };
         let pkg = self.pkg;
-        let Some((name, data)) = pkg.binary(&id) else { return vec![] };
+        let Some((name, data)) = pkg.binary(&id) else {
+            self.missing("page background picture (missing image data)");
+            return vec![];
+        };
         let media = self.media(name, data);
         let px = pixel_size(data).filter(|(a, b)| *a > 0 && *b > 0);
         let Some((pw, ph)) = px.filter(|_| mode.starts_with("TILE")) else {

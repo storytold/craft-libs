@@ -362,6 +362,10 @@ impl Converter<'_> {
             if let Some(f) = bf.fill.as_deref().filter(|f| *f != "FFFFFF").and_then(rgb) {
                 props.shading = Some(f);
             }
+            if bf.slash || bf.back_slash {
+                // the model's cells have no diagonal lines yet
+                self.missing("cell diagonal lines");
+            }
         }
         let cm = tc.find("hp:cellMargin");
         let own = cm.is_some() && truthy(tc.get("hasMargin"));
