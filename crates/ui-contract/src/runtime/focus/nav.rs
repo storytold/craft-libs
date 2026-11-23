@@ -851,6 +851,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
     state.record = super::FocusedRecord {
         claims: keys.map(|keys| keys.claims.to_vec()).unwrap_or_default(),
         focused: stop.as_ref().map(|stop| stop.id),
+        host: stop.as_ref().is_some_and(|stop| stop.host),
         root: stop.as_ref().filter(|stop| stop.root != stop.id && !stop.text).map(|stop| stop.root),
         menu: state.focused_menu_level(),
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),

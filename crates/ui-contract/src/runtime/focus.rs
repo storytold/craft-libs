@@ -76,6 +76,8 @@ pub(crate) struct FocusedRecord {
     pub(crate) claims: Vec<craft_keymap::Chord>,
     /// The component of the focused stop: only its state-dependent claims hold.
     pub(crate) focused: Option<Id>,
+    /// The focused stop is the app's own egui widget (`Stop::host`): it reads the presses it claims from egui.
+    pub(crate) host: bool,
     /// The arena root of the focused stop when the stop is a non-text member of an arena (a part of a canvas's frame
     /// overlay): the root's state-dependent claims hold too, so a canvas tool's keys work with a part focused.
     pub(crate) root: Option<Id>,
@@ -234,18 +236,21 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// reaches the canvas by Tab, F6 or `request`; while it has focus, its keys route as `keys` says (the arrows as
 /// nudges, Escape as its `Intent::Cancel`). `keys` is `KeyUse::CANVAS`, or a variant such as
 /// `KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(..)` while the canvas edits text in place and Tab and the
-/// clipboard are its own. With nothing focused the canvas is the key target: a bare Tab it keeps, and the clipboard
-/// events and edit chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them;
-/// Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus. With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
+/// clipboard are its own. With nothing focused the canvas is the key target: a bare Tab it keeps, the chords it claims
+/// (`KeyUse::with_claims`; Alt+numpad code entry leaves a claimed Alt+digit alone), and the clipboard events and edit
+/// chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them; Page Up and Down,
+/// Home and End arrive as its `Intent::Move`, as while it has the focus. With the canvas focused, Tab it keeps and the
+/// chords it claims stay in egui too, and its edit set arrives as `Intent::Edit`
 /// (`keys::intents_of`), as for any focused stop. Call it each pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
 }
 
-/// The keys of the document canvas `viewport` registered in its last pass (`KeyUse::chrome_key`), framework or the
-/// app's own. Read before the begin hook rotates the registrations, by the input hook and the begin hook's Tab moves.
-pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse> {
-    with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
+/// The stop of the document canvas `viewport` registered in its last pass (`KeyUse::chrome_key`), framework or the
+/// app's own (`Stop::host`). Read before the begin hook rotates the registrations, by the input hook and the begin
+/// hook's Tab moves.
+pub(crate) fn canvas_stop(ctx: &Context, viewport: ViewportId) -> Option<Stop> {
+    with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.clone()))
 }
 
 /// The document canvas the running viewport registered in its last pass (`KeyUse::chrome_key`): the window's key

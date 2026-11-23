@@ -187,7 +187,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             Some(intent) => push(&mut routed, driven.map(|driven| driven.list), intent, false),
             None => {
                 // A capture's owner, else the claim's: the focused component's own, then its arena root's, then its
-                // menu level's, then the registered menu bar's (keytips hold their letters with no focus).
+                // menu level's, then the registered menu bar's (keytips hold their letters with no focus). With nothing
+                // focused, the window's canvas declares the rest (`KeyUse::claims`).
                 let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
                 let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
                 claimed.extend(
@@ -197,6 +198,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                         .or_else(|| held(menu))
                         .or_else(|| held(menu_bar))
                         .or(focused)
+                        .or_else(|| canvas.as_ref().map(|canvas| canvas.stop.id))
                         .map(|id| (id, *chord)),
                 );
             }

@@ -23,7 +23,7 @@ struct Strip<'a> {
     pages: bool,
     /// The focused component reads every press as a chord (`OwnerClass::Recorder`).
     records: bool,
-    claims: &'a [Chord],
+    claims: &'a Claims,
     edits: &'a dyn Fn(EditCommand) -> bool,
     /// The chords bound to the edit commands.
     edit_chords: &'a [(EditCommand, Chord)],
@@ -235,7 +235,8 @@ impl Strip<'_> {
     /// What the key stage makes of a press of `key` with `input`.
     fn use_of(&self, key: Key, input: &KeyInput) -> PressUse {
         let mods = input.mods;
-        let claimed = self.claims.iter().find(|chord| self.layout.matches(chord, input, self.os));
+        let matches = |claims: &[Chord]| claims.iter().find(|chord| self.layout.matches(chord, input, self.os)).copied();
+        let claimed = matches(&self.claims.framework).map(|chord| (chord, false)).or_else(|| matches(&self.claims.host).map(|chord| (chord, true)));
         let ctrl_tab = key == Key::Tab && (if self.os == Os::Mac { mods.ctrl && !mods.cmd } else { mods.cmd });
         let ctrl_tab = ctrl_tab && self.pages && !self.keeps_tab;
         let bare_tab = key == Key::Tab && !mods.cmd && !mods.ctrl && !mods.alt;
@@ -255,8 +256,8 @@ impl Strip<'_> {
             .iter()
             .find(|(key, chord)| !matches!(key, WindowShortcut::Chrome(_)) && self.layout.matches(chord, input, self.os))
             .map(|(key, _)| *key);
-        if let Some(chord) = claimed {
-            PressUse::Claimed(*chord)
+        if let Some((chord, egui)) = claimed {
+            PressUse::Claimed { chord, egui }
         } else if let Some((command, _)) = edit {
             PressUse::Edit(*command)
         } else if key == Key::Space && self.canvas_space {
@@ -285,9 +286,9 @@ impl Strip<'_> {
     fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool, at: Option<f64>) -> bool {
         let mods = input.mods;
         match self.use_of(key, input) {
-            PressUse::Claimed(chord) => {
+            PressUse::Claimed { chord, egui } => {
                 batch.claimed.push(chord);
-                false
+                egui
             }
             PressUse::Edit(command) => {
                 batch.clips.push(command);
@@ -364,8 +365,12 @@ impl Strip<'_> {
 
 /// What the key stage makes of one press (`Strip::use_of`).
 enum PressUse {
-    /// The focused component or a capture claims the chord.
-    Claimed(Chord),
+    /// The key target or a capture claims the chord. `egui`: the claim is an app's own egui widget's
+    /// (`Stop::host`), which reads the press from egui's input, so egui keeps it.
+    Claimed {
+        chord: Chord,
+        egui: bool,
+    },
     /// The chord of an edit command the focused component lists.
     Edit(EditCommand),
     /// The Space of the canvas a dialog keeps open.
@@ -393,6 +398,14 @@ enum PressUse {
 /// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
+    claims.extend(state_claims(record, stage));
+    claims
+}
+
+/// The chords of `focused_claims` that the focused stop does not declare: the state-dependent ones and the End of
+/// `EndKey::EndMode`.
+fn state_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
+    let mut claims = Vec::new();
     let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar].contains(&Some(owner));
     claims.extend(stage.claims.iter().filter(|(owner, _)| holds(*owner)).map(|(_, chord)| *chord));
     // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
@@ -432,7 +445,7 @@ pub(super) fn tab_toggles_now(ctx: &Context) -> bool {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let enabled = Env::root_for(ctx, viewport).is_some_and(|env| env.tab_toggles_chrome);
     let focused = focus::focused_rec(ctx);
-    let canvas = focus::canvas_keys(ctx, viewport).is_some();
+    let canvas = focus::canvas_stop(ctx, viewport).is_some();
     let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
     let pressed = focused.as_ref().is_some_and(|rec| focus::origin(ctx, rec) == Some(focus::FocusOrigin::Press));
     tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys), pressed)
@@ -479,7 +492,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let keys = record.keys;
     let menu_bar = record.menu_bar.is_some() && keys.is_none_or(|keys| !focus::takes_letters(&keys));
     let before = events.len();
-    let canvas = focus::canvas_keys(ctx, viewport).filter(|_| keys.is_none() && !record.foreign);
+    let target_canvas = target_canvas(ctx, viewport, &record);
+    let canvas = target_canvas.as_ref().map(|stop| stop.keys);
     let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));
     let edit_chords = if keys.as_ref().or(canvas.as_ref()).is_some_and(lists_edits) { commands::edit_chords(ctx) } else { Arc::default() };
     let window_shortcuts = commands::window_shortcuts(ctx);
@@ -491,7 +505,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
     let bound = |chord: &Chord| commands::runs_now(ctx, chord);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
-        let claims = stage_claims(&record, stage);
+        let claims = stage_claims(&record, target_canvas.as_ref(), stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
         let strip = Strip {
@@ -575,12 +589,33 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     (trimmed || events.len() != before, later)
 }
 
-/// The chords the key stage takes as claimed (`PressUse::Claimed`): the focused component's (`focused_claims`) and
-/// every capture's.
-fn stage_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
-    let mut claims = focused_claims(record, stage);
-    claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
-    claims
+/// The chords the key stage takes as claimed (`PressUse::Claimed`).
+struct Claims {
+    /// The captures', the menu level's and the menu bar's, and the key target's when it is a framework component.
+    framework: Vec<Chord>,
+    /// The ones the key target declares (`KeyUse::claims`) when it is an app's own egui widget (`Stop::host`): egui
+    /// keeps their presses, where the app reads them.
+    host: Vec<Chord>,
+}
+
+/// The window's document canvas as the key target of `viewport`'s input: nothing has the focus, neither a framework
+/// stop nor an app's own widget or popup (`Strip::canvas`).
+fn target_canvas(ctx: &Context, viewport: ViewportId, record: &focus::FocusedRecord) -> Option<focus::Stop> {
+    focus::canvas_stop(ctx, viewport).filter(|_| record.keys.is_none() && !record.foreign)
+}
+
+/// The claims of the key stage: the focused component's (`focused_claims`) and every capture's. With nothing focused
+/// the window's document canvas `canvas` (`target_canvas`) stands for the focused component with the chords it
+/// declares, as it does for a fired command (`claims::fire_claimed`).
+fn stage_claims(record: &focus::FocusedRecord, canvas: Option<&focus::Stop>, stage: &Stage) -> Claims {
+    let (mut framework, mut host) =
+        if record.host { (state_claims(record, stage), record.claims.clone()) } else { (focused_claims(record, stage), Vec::new()) };
+    framework.extend(stage.captures.iter().map(|(_, chord)| *chord));
+    if let Some(canvas) = canvas {
+        let to = if canvas.host { &mut host } else { &mut framework };
+        to.extend_from_slice(canvas.keys.claims);
+    }
+    Claims { framework, host }
 }
 
 /// Whether the key stage of `input`'s viewport will take a press as a claimed chord (`PressUse::Claimed`), read before
@@ -590,11 +625,12 @@ pub(crate) fn claims_press(ctx: &Context, input: &RawInput) -> impl Fn(&egui::Ev
     let viewport = input.viewport_id;
     let os = crate::runtime::windows::os_of(ctx);
     let record = focus::record(ctx, viewport);
-    let (claims, mut layout) = with(ctx, viewport, |stage| (stage_claims(&record, stage), stage.layout.clone()));
+    let canvas = target_canvas(ctx, viewport, &record);
+    let (claims, mut layout) = with(ctx, viewport, |stage| (stage_claims(&record, canvas.as_ref(), stage), stage.layout.clone()));
     layout.set_latin(input.keyboard_layout_is_latin);
     let latin = input.latin_layout_chars.clone();
     move |event: &egui::Event| match raw_input::key_event(event, os, &latin) {
-        KeyEvent::Press { input: pressed, .. } => claims.iter().any(|chord| layout.matches(chord, &pressed, os)),
+        KeyEvent::Press { input: pressed, .. } => claims.framework.iter().chain(&claims.host).any(|chord| layout.matches(chord, &pressed, os)),
         _ => false,
     }
 }

@@ -1,6 +1,7 @@
 //! The theme styles' `right_to_left`.
 
 use egui::{Context, Ui};
+use std::sync::Arc;
 
 /// Turns off egui's own caret blink in `ui`, and hides the caret stroke unless `visible`: the runtime blinks it.
 pub(crate) fn set_text_cursor(ui: &mut Ui, visible: bool) {
@@ -62,4 +63,22 @@ pub(crate) fn set_theme_direction(ctx: &Context, root: &mut Ui, right_to_left: b
 /// Sets the spacing between the children `ui` lays out.
 pub(crate) fn set_item_spacing(ui: &mut Ui, gap: egui::Vec2) {
     ui.spacing_mut().item_spacing = gap;
+}
+
+/// The egui style of an app's own `Ui`, kept where a framework part takes the app's egui code into a `Ui` of its own:
+/// the framework's regions set their layout spacing on the `Ui`s they hand out, and app code shown in one (a dock
+/// panel's body that the app draws with egui) lays out as it would outside the part when the part applies this.
+#[derive(Clone, Debug)]
+pub struct HostStyle(Arc<egui::Style>);
+
+impl HostStyle {
+    /// The style `ui` has now.
+    pub fn of(ui: &Ui) -> Self {
+        HostStyle(Arc::clone(ui.style()))
+    }
+
+    /// Gives `ui` the kept style.
+    pub fn apply(&self, ui: &mut Ui) {
+        ui.set_style(Arc::clone(&self.0));
+    }
 }

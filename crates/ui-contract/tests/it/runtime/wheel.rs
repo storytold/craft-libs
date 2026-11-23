@@ -100,6 +100,13 @@ fn a_fractional_ctrl_wheel_is_a_pinch_and_a_whole_notch_stays_a_scroll() {
         assert!(native.len() == 1 && (native[0].zoom - 1.1).abs() < 1e-4, "{os:?}: a native pinch reaches the view as sent: {native:?}");
         let after_native = step(&mut fixture, vec![ctrl_lines(1.0)]);
         assert!(scrolled(&after_native), "{os:?}: a whole notch after a native pinch is a wheel notch: {after_native:?}");
+
+        // A host whose Ctrl+wheel does something else (Zoom with Trackpad Pinch off, or its own Ctrl-scroll zoom rate)
+        // turns the fold off: the fractional step stays a wheel event.
+        fixture.root(RootEnv::default().ctrl_wheel_pinch(false));
+        fixture.advance(0.5);
+        let unfolded = step(&mut fixture, vec![ctrl_lines(0.4)]);
+        assert!(scrolled(&unfolded), "{os:?}: with `ctrl_wheel_pinch` off a fractional Ctrl+wheel is a wheel event: {unfolded:?}");
     }
 }
 

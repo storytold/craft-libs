@@ -400,9 +400,24 @@ fn frame_hit(ctx: &Context) -> HitSizes {
     pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
 }
 
-/// The wheel speed and Alt-code pages of the frame's root values; the defaults before the app sets any input.
-pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
-    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
+/// What the raw-input step reads of the frame's root values (`RootEnv`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RootInput {
+    pub(crate) wheel: WheelSpeed,
+    pub(crate) alt_codes: AltCodePages,
+    pub(crate) ctrl_wheel_pinch: bool,
+}
+
+impl RootInput {
+    fn of(root: &RootEnv) -> Self {
+        RootInput { wheel: root.wheel, alt_codes: root.alt_codes, ctrl_wheel_pinch: root.ctrl_wheel_pinch }
+    }
+}
+
+/// The raw-input values of the frame's root values; the defaults before the app sets any input.
+pub(crate) fn root_input(ctx: &Context) -> RootInput {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| RootInput::of(&input.root)))
+        .unwrap_or_else(|| RootInput::of(&RootEnv::default()))
 }
 
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own

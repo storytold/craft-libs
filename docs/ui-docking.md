@@ -56,7 +56,7 @@ The host keeps its panels' specs in a plain-data model that implements `PanelSpe
 
 | Method | Does |
 | --- | --- |
-| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`. |
+| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`, `host_body`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
 
 The area reads them only when the model's revision, the workspace's revision or the lock changes (`runtime::derived`), and keeps what it read otherwise, so an idle pass reads no spec. A host changes a label or a limit by editing the model. A spec reads no style: a tool rail's grid is `DockGrid::rail(cells)`, which the dock sizes from its own tokens.
@@ -69,6 +69,8 @@ The host implements `DockPanels<P>` for the views:
 | `group_view` | Takes a whole group in place of its tab strip and body, in a `Ui` held to the group's rect; a canvas group draws its document here. Default `None`. |
 | `group_header` | The host's controls in a group header, before the tab strip. |
 | `panel_rows` | The host's rows of a panel's menu, before the dock's own. |
+
+A body lays out with the group's spacing, which framework components expect. A panel whose body is the app's own egui code sets `PanelSpec::host_body()`: the dock then hands its `body`, `footer`, `group_header`, `rail_footer` and, while it is the panel its group shows, its group's `group_view` a `Ui` with the style of the `Ui` the area was shown in, so that code lays out as it does outside the dock. The dock's own parts keep the framework style. An app hosting its old egui panels moves onto the framework panel by panel, clearing `host_body` on each panel it ports.
 
 The binding decides who applies the edits. With `Bind::bound` the area writes every action to the workspace itself. With `Bind::given` it writes nothing, and the host applies `DockAreaOutput::actions` (or `edit`, the same changes as edit events) to its own copy: the actions hold every change of the pass, divider sizes and window moves included. `DockArea::read_only` shows a workspace locked, keyed by its revision.
 

@@ -23,6 +23,7 @@ use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
 use crate::runtime::derived::derived;
 use crate::runtime::drag;
+use crate::runtime::egui::style::HostStyle;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
@@ -303,6 +304,8 @@ struct Scene<'s, P> {
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
     rail_footer: Option<&'s P>,
+    /// The style of the `Ui` the area was shown in, which the bodies of `PanelSpec::host_body` panels lay out with.
+    host_style: &'s HostStyle,
 }
 
 /// The spec of `panel` in `specs`, or an unnamed one.
@@ -341,6 +344,19 @@ impl<P: Clone + Eq + Hash> DockModel<P> {
 }
 
 impl<P: Clone + Eq + Hash> Scene<'_, P> {
+    /// Runs `run`, which shows host code of `panel`, on `ui`: with the style of the `Ui` the area was shown in when the
+    /// panel's body is the app's own egui code (`PanelSpec::host_body`), and `ui`'s own style back after it.
+    fn hosted<R>(&self, panel: &P, ui: &mut Ui, run: impl FnOnce(&mut Ui) -> R) -> R {
+        if !self.specs.get(panel).is_some_and(|spec| spec.host_body) {
+            return run(ui);
+        }
+        let own = HostStyle::of(ui);
+        self.host_style.apply(ui);
+        let shown = run(ui);
+        own.apply(ui);
+        shown
+    }
+
     fn spec(&self, panel: &P) -> PanelSpec {
         spec_in(self.specs, panel)
     }
@@ -463,6 +479,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         let DockArea { label, mut workspace, specs, panels, config, hide, maximized, auto_collapse, locked, mut flyout, rail_footer, top_inset } =
             self;
         let ctx = ui.ctx().clone();
+        let host_style = HostStyle::of(ui);
         let (rtl, window) = {
             let env = Env::of(ui);
             (env.direction.is_rtl(), env.get::<ShellEntry>().0.map(|shell| shell.window().clone()))
@@ -521,6 +538,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 rtl,
                 rail_footer: rail_footer.as_ref(),
                 top_inset,
+                host_style: &host_style,
             };
             let mut result = show_area(ui, body, &input, rights, &mut *panels, flyout.as_mut());
             for edit in &result.edit {
@@ -625,6 +643,7 @@ struct Input<'i, P> {
     rtl: bool,
     rail_footer: Option<&'i P>,
     top_inset: f32,
+    host_style: &'i HostStyle,
 }
 
 /// `bounds` without its top `inset` points, never past its bottom.
@@ -655,7 +674,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl, rail_footer, top_inset } = *input;
+    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl, rail_footer, top_inset, host_style } =
+        *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
@@ -680,6 +700,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         rtl,
         floated: current.floated(),
         rail_footer,
+        host_style,
     };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
@@ -1018,7 +1039,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // column bar, as the references' toolbar: the host's view takes the room under it.
         let grip = if members.get(active).is_some_and(|panel| scene.spec(panel).grid.is_some()) { scene.sizes.grip } else { 0.0 };
         if let GroupAt::Measure(_) = at
-            && let Some(height) = self.panels.group_view(members, active, ui, at, body)
+            && let Some(height) = scene.hosted(&members[active], ui, |ui| self.panels.group_view(members, active, ui, at, body))
         {
             return Some(height + grip);
         }
@@ -1062,7 +1083,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let words = &words;
             let GroupParts { titles, hosted, states } = parts_of();
             let mut group = DockGroup::new(anchor.clone(), titles.clone(), PanelKey::of(&members[at]))
-                .extra(move |ui, body| panels.borrow_mut().group_header(members, at, ui, body))
+                .extra(move |ui, body| scene.hosted(&members[at], ui, |ui| panels.borrow_mut().group_header(members, at, ui, body)))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
@@ -1079,7 +1100,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 group = group.pad(Pad::Regular);
             }
             if spec.footer {
-                group = group.footer(move |ui, body| panels.borrow_mut().footer(&members[at], ui, body));
+                group = group.footer(move |ui, body| scene.hosted(&members[at], ui, |ui| panels.borrow_mut().footer(&members[at], ui, body)));
             }
             if scene.config.tab_close_buttons {
                 group = group.closable();
@@ -1094,7 +1115,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         };
         let rect = match at {
             GroupAt::Measure(width) => {
-                let measured = make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, body| panel_body(&panels, shown, ui, body));
+                let measured =
+                    make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, body| panel_body(scene, &panels, shown, ui, body));
                 return Some(measured.y);
             }
             GroupAt::Show(rect) => rect,
@@ -1108,10 +1130,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // The view is a layout room of its own: a view that fills takes the whole group.
-                let taken = in_room(ui, view, |ui| panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body));
+                let taken = in_room(ui, view, |ui| {
+                    scene.hosted(&members[active], ui, |ui| panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body))
+                });
                 match taken {
                     Some(_) => None,
-                    None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output),
+                    None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(scene, &panels, shown, ui, body)).output),
                 }
             })
             .inner;
@@ -1128,7 +1152,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let at = members.iter().position(|member| member == panel).unwrap_or(active);
             let room = Vec2::new(rect.width(), scene.space.content_room());
             let measured = make(at, false).id(output.response.id).measure_in(ui, Proposal::Size(room), |ui, body| {
-                panel_body(&panels, &members[at], ui, body);
+                panel_body(scene, &panels, &members[at], ui, body);
             });
             Vec2::new(rect.width(), measured.y)
         };
@@ -1321,7 +1345,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     .pad(Pad::None)
                     .footer(|ui, _| {
                         // Compact rail controls leave room for the scrolling panel icons in short windows.
-                        Stack::new().fill_width().gap(Gap::None).show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
+                        Stack::new()
+                            .fill_width()
+                            .gap(Gap::None)
+                            .show(ui, |ui, body| scene.hosted(panel, ui, |ui| pass.borrow_mut().panels.rail_footer(panel, ui, body)));
                     })
                     .show_at(ui, cell, |ui, _| {
                         // design: allow[contract/allocate](the rail lays its icons out in a rect of its own: the panel body claims their height, so the host's footer sits under them)
@@ -1700,9 +1727,16 @@ fn window_edit<P: Clone + Eq + Hash>(
     }
 }
 
-/// Shows `panel`'s body in a group's body. It runs every pass the group shows; the host memoizes inside it.
-fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, panel: &P, ui: &mut Ui, body: &mut BodyCx<'_>) {
-    panels.borrow_mut().body(panel, ui, body);
+/// Shows `panel`'s body in a group's body, in the host's style where the body is the app's own egui code
+/// (`Scene::hosted`). It runs every pass the group shows; the host memoizes inside it.
+fn panel_body<'p, P: Clone + Eq + Hash>(
+    scene: &Scene<'_, P>,
+    panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>,
+    panel: &P,
+    ui: &mut Ui,
+    body: &mut BodyCx<'_>,
+) {
+    scene.hosted(panel, ui, |ui| panels.borrow_mut().body(panel, ui, body));
 }
 
 /// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to, with

@@ -651,7 +651,7 @@ const PINCH_CONTINUES: f64 = 0.25;
 
 /// Windows and Linux: turns a fractional Ctrl+wheel (or a Wayland point-unit one) into `Event::Zoom` at egui's Ctrl-scroll
 /// speed; a whole notch stays a wheel event unless within 0.25 s of a pinch step. An input that carries `Event::Zoom`
-/// already is left alone and ends the run of pinch steps.
+/// already is left alone and ends the run of pinch steps. Runs while `RootEnv::ctrl_wheel_pinch` is on.
 pub(crate) fn fold_legacy_pinch(ctx: &Context, input: &mut RawInput) {
     let os = crate::runtime::windows::os_of(ctx);
     if os == Os::Mac {
@@ -710,14 +710,16 @@ pub(crate) struct RawState {
 /// A frame's raw events reach only its first pass; a second pass's input holds none, so each wheel delta is scaled
 /// once and each digit folded once, with nothing to replay or remember between passes.
 pub(crate) fn prepare(ctx: &Context, input: &mut RawInput) {
-    fold_legacy_pinch(ctx, input);
     // This frame's `RootEnv`, which `set_input` stored before egui ran the input hook.
-    // PLAN: assumed `pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages)` in `runtime/frame.rs` (platform-w3).
-    let (wheel, pages) = crate::runtime::frame::root_input(ctx);
-    scale_wheel(&mut input.events, wheel);
+    let root = crate::runtime::frame::root_input(ctx);
+    if root.ctrl_wheel_pinch {
+        fold_legacy_pinch(ctx, input);
+    }
+    let pages = root.alt_codes;
+    scale_wheel(&mut input.events, root.wheel);
     let os = crate::runtime::windows::os_of(ctx);
     let macos = os == Os::Mac;
-    // A chord a component claims or a capture holds goes to its owner before Alt-code entry.
+    // A chord the key target claims or a capture holds goes to its owner before Alt-code entry.
     let claimed = crate::runtime::keys::claims_press(ctx, input);
     let events = &mut input.events;
     PerViewport::<RawState>::with(ctx, input.viewport_id, |state| {

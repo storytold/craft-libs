@@ -23,6 +23,7 @@ pub(crate) mod hidden;
 pub(crate) mod columns;
 pub(crate) mod dock_back;
 pub(crate) mod group_view;
+pub(crate) mod host_body;
 pub(crate) mod workspace_dialogs;
 
 pub(crate) mod native;
