@@ -45,7 +45,8 @@ languages covered.
 Curation rule — **permissive licenses only** (the suite is MIT OR Apache-2.0
 and commercial users run it):
 
-- ✅ Qwen2.5-0.5B / 1.5B / 3B Instruct (Apache-2.0)
+- ✅ Qwen2.5-0.5B / 1.5B Instruct (Apache-2.0; 3B is `qwen-research`, excluded)
+- ✅ Qwen3-0.6B / 1.7B Q8_0 (Apache-2.0; the loader forces thinking off)
 - ✅ SmolLM2-1.7B (Apache-2.0)
 - ✅ Gemma-3 (Gemma Terms — allowed, flag in UI)
 - ✅ Helsinki-NLP opus-mt-* per-language pairs (CC-BY/MIT)
@@ -73,6 +74,9 @@ trait Provider {
 - `LocalGguf` — GGUF inference. First implementation target: **candle**
   (pure Rust, Apache/MIT — keeps the no-C++ toolchain rule). `llama-cpp-2`
   stays a possible perf upgrade later, gated behind a feature flag.
+  Loads the Qwen2, Qwen3 and Llama quantized architectures; Qwen3 chat
+  turns append `/no_think` and an empty `think` block so a translation
+  never starts with a reasoning trace.
 
 ### `fetch` — one-click download
 
