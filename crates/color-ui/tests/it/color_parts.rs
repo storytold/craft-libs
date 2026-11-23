@@ -524,16 +524,23 @@ fn eight_bit(color: Srgba) -> Srgba {
 }
 
 /// Drags the first marker of a brightness disc 60 points left in 20 steps, the host applying each update and the commit
-/// as `apply` makes them of the marker's colour at the press and its colour now. Returns how many updates arrived and
-/// how the drag ended (`None`: committed).
-fn brightness_disc_drag(apply: impl Fn(Srgba, Srgba, &DiscMove) -> Srgba + 'static) -> (usize, Vec<Option<CancelReason>>) {
+/// as `apply` makes them of the marker's colour at the press and its colour now, and giving the disc its round trip
+/// `stored`. Returns how many updates arrived and how the drag ended (`None`: committed).
+fn brightness_disc_drag(
+    stored: Option<fn(usize, Srgba) -> Srgba>,
+    apply: impl Fn(Srgba, Srgba, &DiscMove) -> Srgba + 'static,
+) -> (usize, Vec<Option<CancelReason>>) {
     let colours = Rc::new(RefCell::new(vec![eight_bit(Srgba::rgb(0.9, 0.3, 0.2)), Srgba::rgb(0.2, 0.5, 0.8)]));
     let start = colours.borrow()[0];
     let (updates, ends) = (Rc::new(Cell::new(0)), Rc::new(RefCell::new(Vec::new())));
     let (shown, u, e) = (colours.clone(), updates.clone(), ends.clone());
     let mut fixture = Fixture::new(move |ui| {
         let markers = shown.borrow().clone();
-        let out = ColorDisc::new("Harmony", &markers, Bind::kept()).radius(DiscRadius::Brightness).show(ui);
+        let mut disc = ColorDisc::new("Harmony", &markers, Bind::kept()).radius(DiscRadius::Brightness);
+        if let Some(stored) = &stored {
+            disc = disc.stored_as(stored);
+        }
+        let out = disc.show(ui);
         for event in out.edit.events.iter() {
             let moved = match event {
                 EditEvent::Update { value, .. } => {
@@ -575,7 +582,7 @@ const DRAG_STEPS: usize = 20;
 /// what the drag made of the colour before, not an outside change that cancels it.
 #[trial]
 fn a_brightness_disc_drag_the_host_applies_in_8_bit_colours_runs_to_its_release() {
-    let (updates, ends) = brightness_disc_drag(|_, now, moved| {
+    let (updates, ends) = brightness_disc_drag(None, |_, now, moved| {
         let v = HsbModel.from_srgb(now).values;
         eight_bit(HsbModel.to_srgb(&ModelValues::new("hsb", &[moved.hue, v[1], moved.radial * 100.0]).values))
     });
@@ -587,7 +594,7 @@ fn a_brightness_disc_drag_the_host_applies_in_8_bit_colours_runs_to_its_release(
 /// colours, puts the marker where the drag reported it: the drag runs to its release.
 #[trial]
 fn a_brightness_disc_drag_whose_host_keeps_the_saturation_from_the_press_runs_to_its_release() {
-    let (updates, ends) = brightness_disc_drag(|start, _, moved| {
+    let (updates, ends) = brightness_disc_drag(None, |start, _, moved| {
         let v = HsbModel.from_srgb(start).values;
         eight_bit(HsbModel.to_srgb(&ModelValues::new("hsb", &[moved.hue, v[1], moved.radial * 100.0]).values))
     });
@@ -600,7 +607,7 @@ fn a_brightness_disc_drag_whose_host_keeps_the_saturation_from_the_press_runs_to
 #[trial]
 fn a_brightness_disc_drag_whose_host_takes_another_colour_is_cancelled() {
     let applied = Cell::new(0);
-    let (_, ends) = brightness_disc_drag(move |_, now, moved| {
+    let (_, ends) = brightness_disc_drag(None, move |_, now, moved| {
         applied.set(applied.get() + 1);
         if applied.get() < DRAG_STEPS / 2 {
             let v = HsbModel.from_srgb(now).values;
@@ -610,6 +617,36 @@ fn a_brightness_disc_drag_whose_host_takes_another_colour_is_cancelled() {
         }
     });
     assert_eq!(ends, [Some(CancelReason::HostChanged)], "an outside change cancels the drag");
+}
+
+/// A colour as a host stores it whose model's round trip darkens every colour by a tenth (as a CMYK profile's can), to
+/// 8 bits.
+fn darkened(_: usize, color: Srgba) -> Srgba {
+    eight_bit(Srgba::rgb(color.r * 0.9, color.g * 0.9, color.b * 0.9))
+}
+
+/// Tb-10 (3): a host that stores each colour in another model, whose round trip moves it further than an 8-bit one,
+/// gives the disc that round trip: its drag runs to its release, an outside change still cancels it, and without the
+/// round trip the moved colour reads as an outside change.
+#[trial]
+fn a_disc_drag_through_the_hosts_lossy_model_runs_to_its_release() {
+    let through_model = |_: Srgba, now: Srgba, moved: &DiscMove| {
+        let v = HsbModel.from_srgb(now).values;
+        darkened(0, HsbModel.to_srgb(&ModelValues::new("hsb", &[moved.hue, v[1], moved.radial * 100.0]).values))
+    };
+    let (updates, ends) = brightness_disc_drag(Some(darkened), through_model);
+    assert!(updates >= DRAG_STEPS / 2, "the drag updated as it moved: {updates}");
+    assert_eq!(ends, [None], "the drag commits, never cancelled");
+
+    let (_, ends) = brightness_disc_drag(None, through_model);
+    assert_eq!(ends, [Some(CancelReason::HostChanged)], "without the host's round trip the stored colour is another");
+
+    let applied = Cell::new(0);
+    let (_, ends) = brightness_disc_drag(Some(darkened), move |start, now, moved| {
+        applied.set(applied.get() + 1);
+        if applied.get() < DRAG_STEPS / 2 { through_model(start, now, moved) } else { Srgba::rgb(0.1, 0.8, 0.3) }
+    });
+    assert_eq!(ends, [Some(CancelReason::HostChanged)], "an outside change still cancels the drag");
 }
 
 /// Tb-8 (2): a marker of a linked harmony wheel dragged a quarter turn, a few points at a time, by a host that moves

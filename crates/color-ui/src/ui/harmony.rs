@@ -139,12 +139,13 @@ pub struct HarmonyWheel<'a> {
     base: Option<Option<usize>>,
     look: DiscLook,
     radius: DiscRadius,
+    stored: Option<&'a dyn Fn(usize, Srgba) -> Srgba>,
 }
 
 impl<'a> HarmonyWheel<'a> {
     /// A wheel named `label` over `colors`.
     pub fn new(label: impl Into<Label>, colors: &'a [Srgba]) -> Self {
-        HarmonyWheel { label: label.into(), colors, selected: None, base: None, look: DiscLook::Smooth, radius: DiscRadius::Saturation }
+        HarmonyWheel { label: label.into(), colors, selected: None, base: None, look: DiscLook::Smooth, radius: DiscRadius::Saturation, stored: None }
     }
 
     /// Marks the colour at this index as selected; none by default.
@@ -172,9 +173,16 @@ impl<'a> HarmonyWheel<'a> {
         self
     }
 
+    /// How the host stores colour `index`: `color` written in its own model and read back, so a drag survives that
+    /// round trip ([`ColorDisc::stored_as`]).
+    pub fn stored_as(mut self, stored: &'a dyn Fn(usize, Srgba) -> Srgba) -> Self {
+        self.stored = Some(stored);
+        self
+    }
+
     /// Shows the wheel and the Brightness row.
     pub fn show(self, ui: &mut Ui) -> HarmonyWheelOutput {
-        let HarmonyWheel { label, colors, selected, base, look, radius } = self;
+        let HarmonyWheel { label, colors, selected, base, look, radius, stored } = self;
         let words = Env::of(ui).words::<HarmonyWords>();
         let selected = selected.filter(|&i| i < colors.len());
         let base = base.unwrap_or(selected).filter(|&i| i < colors.len());
@@ -195,6 +203,9 @@ impl<'a> HarmonyWheel<'a> {
             }
             if let Some(selected) = selected {
                 disc = disc.chosen(selected);
+            }
+            if let Some(stored) = stored {
+                disc = disc.stored_as(stored);
             }
             let disc = disc.look(look).radius(radius).level(level).names(names.clone()).show(ui);
             (pressed, clicked, context) = (disc.pressed, disc.clicked, disc.context);

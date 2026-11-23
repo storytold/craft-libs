@@ -41,7 +41,7 @@ const SECTORS: u32 = 24;
 const PATCH_RINGS: u32 = 5;
 const SECTOR_DEGREES: f32 = 15.0;
 /// How far from where a drag put its marker, in radii, the host's colour may lie and still be the drag's: what an
-/// 8-bit or another model's round trip moves a colour by, two of the hundredths a drag reports its radial in.
+/// 8-bit round trip moves a colour by, two of the hundredths a drag reports its radial in.
 const ECHO_REACH: f32 = 0.02;
 
 craft_ui::words! {
@@ -191,7 +191,8 @@ struct Grab {
 ///   ([`pressed`](ColorDiscOutput::pressed) reports it, for the host to select it); a press elsewhere grabs nothing.
 ///   A drag moves the grabbed marker's hue (the pointer's angle, whole degrees) and saturation (its distance over the
 ///   radius, whole percents, at most 1), one gesture; the marker's brightness stays, the host's slider sets it. A
-///   click is one `Set`. A colour of the host's that is not what the drag reported cancels the drag.
+///   click is one `Set`. A colour of the host's that is not what the drag reported, after the host's own round trip
+///   ([`stored_as`](ColorDisc::stored_as)), cancels the drag.
 /// - Keys: the markers are one Tab stop, which lands on the selected marker (the first without a selection); a press
 ///   that grabs a marker focuses it. Left and Right change the focused marker's hue by 1 degree, Up and Down its
 ///   saturation by 1 percent; Shift steps ten; each key is a `Set`. During a drag keys change nothing. Esc during a
@@ -227,6 +228,7 @@ pub struct ColorDisc<'a> {
     /// The markers' accessible names, in order; a marker without one is "Color N".
     #[prop(into)]
     names: Vec<Label>,
+    stored: Option<&'a dyn Fn(usize, Srgba) -> Srgba>,
     pressed: Option<usize>,
     grabbed: Option<usize>,
     clicked: Option<DiscHit>,
@@ -246,6 +248,7 @@ impl<'a> ColorDisc<'a> {
             look: DiscLook::Smooth,
             radius: DiscRadius::Saturation,
             names: Vec::new(),
+            stored: None,
             pressed: None,
             grabbed: None,
             clicked: None,
@@ -253,6 +256,14 @@ impl<'a> ColorDisc<'a> {
         }
         .label(label)
         .ltr_axis()
+    }
+
+    /// How the host stores marker `index`'s colours: `color` written in the host's own model (CMYK through a profile)
+    /// and read back. A drag's colour that comes back moved by that round trip is still the drag's, not an outside
+    /// change; without it the host is taken to keep the colour as given, to 8 bits.
+    pub fn stored_as(mut self, stored: &'a dyn Fn(usize, Srgba) -> Srgba) -> Self {
+        self.stored = Some(stored);
+        self
     }
 
     /// The disc's centre and radius in the area `rect`, `inset` inside its shorter side.
@@ -277,7 +288,11 @@ impl<'a> ColorDisc<'a> {
 
     /// Marker `index` where the host has it: the radial channel is the one the radius shows.
     fn resting(&self, index: usize) -> DiscMove {
-        let [hue, saturation, brightness] = self.hsb(index);
+        self.at(index, self.hsb(index))
+    }
+
+    /// Marker `index` at the hue, saturation and brightness `hsb`: the radial channel is the one the radius shows.
+    fn at(&self, index: usize, [hue, saturation, brightness]: [f32; 3]) -> DiscMove {
         let radial = match self.radius {
             DiscRadius::Saturation => saturation,
             DiscRadius::Brightness => brightness,
@@ -399,15 +414,20 @@ impl Component for ColorDisc<'_> {
         // A colour of the host's that changed and does not lie where the drag put the marker is an outside change. Only
         // the hue and the radial count: the host keeps the channel the radius does not show as it likes (from the
         // colour before, or from the press against the drift of 8-bit colours) and stores the colour in its own
-        // model. A colour whose 8 bits lose its hue (black on a saturation disc) is the drag's when it is the 8-bit
-        // colour the drag made of the colour before.
+        // model, whose round trip the host gives. A colour whose 8 bits lose its hue (black on a saturation disc) is
+        // the drag's when it is the 8-bit colour the drag made of the colour before.
         if running && let Some(marker) = grabbed.filter(|marker| *marker < self.markers.len()) {
             let last = cx.memory::<Grab>().last.replace(self.markers[marker]);
             if let Some(moved) = cx.value().filter(|moved| moved.marker == marker)
                 && let Some(last) = last.filter(|last| *last != self.markers[marker])
             {
-                let echo = HsbModel.to_srgb(&ModelValues::new("hsb", &self.values_on(last, moved)).values);
-                if !lies_at(self.resting(marker), moved) && !echo.same_rgb8(self.markers[marker]) {
+                let mut echo = HsbModel.to_srgb(&ModelValues::new("hsb", &self.values_on(last, moved)).values);
+                let mut sent = *moved;
+                if let Some(stored) = self.stored {
+                    echo = stored(marker, echo);
+                    sent = self.at(marker, hsb_of(echo));
+                }
+                if !lies_at(self.resting(marker), &sent) && !echo.same_rgb8(self.markers[marker]) {
                     cx.cancel(CancelReason::HostChanged);
                 }
             }
