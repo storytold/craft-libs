@@ -9,9 +9,19 @@ mod dct;
 #[cfg(feature = "images")]
 mod jbig2;
 #[cfg(feature = "images")]
+pub use jbig2::{
+    MAX_PAGE_JBIG2_WORK, clear_jbig2_limited, jbig2_limited, jbig2_limited_by_stream,
+    page_jbig2_work_spent,
+};
+#[cfg(all(feature = "images", feature = "std"))]
+pub use jbig2::set_page_jbig2_work;
+#[cfg(feature = "images")]
 mod jpx;
 mod lzw_flate;
 mod run_length;
+
+#[cfg(test)]
+mod cancellation_tests;
 
 // PdfCraft patch: the incremental Flate decoder that `page::ContentReader` drives.
 pub(crate) use lzw_flate::flate::{FlateState, is_plain as flate_is_plain};
@@ -83,28 +93,37 @@ impl Filter {
         }
     }
 
-    /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`).
+    /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
+    /// `rows` the `/Height` of the image whose samples it produces, when it is an image's last
+    /// filter.
     pub(crate) fn apply(
         &self,
         data: &[u8],
         params: &Dict<'_>,
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
         limit: usize,
+        control: Option<&crate::cancel::Control>,
+        rows: Option<usize>,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let res = match self {
-            Self::AsciiHexDecode => ascii_hex::decode(data)
+            Self::AsciiHexDecode => (if control.is_some() { ascii_hex::decode_into_controlled(data, control) } else { ascii_hex::decode(data) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data, limit)
+            Self::Ascii85Decode => (if control.is_some() { ascii_85::decode_controlled(data, limit, control) } else { ascii_85::decode(data, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::RunLengthDecode => run_length::decode(data, limit)
+            Self::RunLengthDecode => (if control.is_some() { run_length::decode_controlled(data, limit, control) } else { run_length::decode(data, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => lzw_flate::lzw::decode(data, params, limit)
+            Self::LzwDecode => (if control.is_some() { lzw_flate::lzw::decode_controlled(data, params, limit, control) } else { lzw_flate::lzw::decode(data, params, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => lzw_flate::flate::decode(data, params, limit)
+            Self::FlateDecode => (if control.is_some() {
+                lzw_flate::flate::decode_controlled(data, params, limit, control, rows)
+            } else {
+                lzw_flate::flate::decode(data, params, limit, rows)
+            })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
             #[cfg(feature = "images")]
@@ -120,9 +139,11 @@ impl Filter {
                 warn!("image decoding is not supported (enable the `images` feature)");
                 Err(DecodeFailure::ImageDecode)
             }
-            _ => Err(DecodeFailure::StreamDecode),
+            // PdfCraft patch (30): `Stream::raw_data` decrypted the data with the filter this names.
+            Self::Crypt => Ok(FilterResult::from_data(data.to_vec())),
         };
 
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         if res.is_err() {
             warn!("failed to apply filter {}", self.debug_name());
         }
@@ -139,8 +160,12 @@ impl Filter {
 pub const MAX_DECODED_STREAM: usize = 256 << 20;
 
 /// PdfCraft patch: the most bytes they may produce for an image of known size, however large it
-/// says it is.
-const MAX_DECODED_IMAGE: u64 = 1 << 30;
+/// says it is, unless the document's [`DecodeLimits`](crate::DecodeLimits) set another figure.
+pub(crate) const MAX_DECODED_IMAGE: u64 = 1 << 30;
+
+/// The most pixels an image or mask may have for the interpreter to decode it, unless the
+/// document's [`DecodeLimits`](crate::DecodeLimits) set another figure.
+pub(crate) const MAX_IMAGE_PIXELS: u64 = 1 << 28;
 
 /// PdfCraft patch: the output limit for one filter of a stream decoded with `params`; `last`
 /// says whether it is the last filter. The last filter of an image whose size, bits per
@@ -159,7 +184,7 @@ pub(crate) fn decode_limit(params: &ImageDecodeParams, last: bool, limits: crate
     }
     let bits = u64::from(params.width) * u64::from(components) * u64::from(bpc);
     let pixels = bits.div_ceil(8).saturating_mul(u64::from(params.height));
-    let image = pixels.saturating_mul(2).min(MAX_DECODED_IMAGE);
+    let image = pixels.saturating_mul(2).min(limits.max_decoded_image());
     usize::try_from(image).unwrap_or(MAX_DECODED_STREAM)
 }
 
@@ -176,13 +201,14 @@ const MAX_CCITT_PIXELS: u64 = 1 << 28;
 
 /// PdfCraft patch: the most rows of `columns` pixels, `row_bytes` bytes each once decoded, that fit
 /// both `limit` bytes and the pixel cap; at least one when one row fits.
+#[cfg(feature = "images")]
 pub(crate) fn ccitt_max_rows(columns: u32, row_bytes: u32, limit: usize) -> u32 {
     let by_pixels = MAX_CCITT_PIXELS / u64::from(columns.max(1));
     let by_bytes = u64::try_from(limit).unwrap_or(u64::MAX) / u64::from(row_bytes.max(1));
     u32::try_from(by_pixels.min(by_bytes)).unwrap_or(u32::MAX)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "images"))]
 mod ccitt_tests {
     use super::ccitt_max_rows;
 

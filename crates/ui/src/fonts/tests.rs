@@ -680,6 +680,20 @@ fn a_fetched_file_reaches_every_face_and_family_that_uses_it() {
 }
 
 #[test]
+fn bytes_fetched_under_one_integrity_never_reach_a_face_requiring_another() {
+    const STRICT: &[ServedFace] = &[ServedFace {
+        integrity: "sha256-strict",
+        ..served("Noto Sans Arabic", "Regular", &["Arab"], "fonts/noto-sans-arabic/NotoSansArabic.ttf", 0)
+    }];
+    let mut stack = web_fonts("en", STRICT).stack();
+    let file: egui::epaint::text::Blob = Arc::new(ARABIC.to_vec());
+    stack.provide_fetched("fonts/noto-sans-arabic/NotoSansArabic.ttf", "", &file);
+    assert!(!stack.definitions.font_data.contains_key("Noto Sans Arabic Regular"), "fetched without an integrity check");
+    stack.provide_fetched("fonts/noto-sans-arabic/NotoSansArabic.ttf", "sha256-strict", &file);
+    assert!(stack.definitions.font_data.contains_key("Noto Sans Arabic Regular"));
+}
+
+#[test]
 fn fetched_cjk_faces_fit_the_latin_rows_as_embedded_ones_do() {
     const SC: &[ServedFace] = &[served("Noto Sans CJK SC", "Regular", &["Hans", "Latn"], "fonts/sc.otf", 0)];
     let mut web = web_fonts("zh-CN", SC).stack();

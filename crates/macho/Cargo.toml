@@ -1,0 +1,22 @@
+[package]
+name = "craft-macho"
+description = "Mach-O header pieces from hostile bytes, from Craft Anything: universal (fat and fat64) slice tables, CPU and load command names, load command minimum sizes and the thread-state program counter. Pure Rust, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+# `serde`: `Serialize` on `FatSlice`, for apps that report slice tables as JSON.
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = { workspace = true }

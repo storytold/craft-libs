@@ -18,6 +18,15 @@ use crate::matroska::track::{Sample, Track, TrackKind, gcd};
 use crate::source::{ByteSource, ReadSeekSource};
 
 const WIN: usize = 64 * 1024;
+/// Source bytes damage recovery may read per file (the same bound as the Ogg demuxer's).
+const RECOVERY_BUDGET: u64 = 64 << 20;
+/// Largest EBML header element read. A real one is a few dozen bytes.
+const MAX_EBML_HEADER: u64 = 4096;
+/// Largest laced block body read into memory to split its frames. Laced blocks hold small frames
+/// (audio); a bigger one is skipped as damage rather than read whole.
+const MAX_LACED_BODY: u64 = 16 << 20;
+/// Warnings kept per file; the rest are counted in one last entry.
+const MAX_WARNINGS: usize = 256;
 /// Upper bound for level-1 metadata elements read into memory (Info, Tracks, Cues, Tags…).
 const MAX_META: u64 = 256 << 20;
 /// Cap on the frames indexed from one file, all tracks together.
@@ -34,6 +43,15 @@ const MIN_FRAME_ALLOWANCE: usize = 1 << 20;
 /// [`Track`] of several hundred bytes.
 pub(super) const MAX_TRACKS: usize = 1 << 16;
 
+/// Record a warning, keeping at most `MAX_WARNINGS` and one entry saying the rest were dropped.
+fn warn(warnings: &mut Vec<String>, msg: String) {
+    match warnings.len().cmp(&MAX_WARNINGS) {
+        std::cmp::Ordering::Less => warnings.push(msg),
+        std::cmp::Ordering::Equal => warnings.push("further warnings omitted".into()),
+        std::cmp::Ordering::Greater => {}
+    }
+}
+
 /// What is left of the file-wide limits while clusters are scanned.
 struct FrameBudget {
     /// Frames (what the file's length allows, at most `MAX_FRAMES`, minus those already indexed).
@@ -47,6 +65,18 @@ impl FrameBudget {
     fn new(file_len: u64) -> Self {
         let by_len = usize::try_from(file_len / FILE_BYTES_PER_FRAME).unwrap_or(usize::MAX);
         Self { frames: by_len.clamp(MIN_FRAME_ALLOWANCE, MAX_FRAMES), bytes: file_len }
+    }
+
+    /// The budget left for a file whose `tracks` already hold the frames of an earlier scan.
+    fn resumed(file_len: u64, tracks: &[Track]) -> Self {
+        let mut b = Self::new(file_len);
+        let (frames, bytes) = tracks
+            .iter()
+            .flat_map(|t| t.samples.iter())
+            .fold((0usize, 0u64), |(n, b), s| (n.saturating_add(1), b.saturating_add(u64::from(s.size.max(1)))));
+        b.frames = b.frames.saturating_sub(frames);
+        b.bytes = b.bytes.saturating_sub(bytes);
+        b
     }
 
     fn take(&mut self, frames: &[(u64, u32)]) -> Result<()> {
@@ -70,11 +100,26 @@ pub struct OpenOptions {
     /// Verify CRC-32 elements of level-1 elements (and clusters while indexing). Mismatches are
     /// recorded in [`MkvFile::crc_errors`]; parsing continues. Default `false`.
     pub verify_crc: bool,
+    /// Index only the front of the file: stop the cluster scan at this absolute byte offset.
+    /// Default `None` (scan every cluster).
+    ///
+    /// The first Cluster is always scanned (a file needs at least one to be useful). After it, an
+    /// element of known size (a Cluster, or Cues or Tags between Clusters) is read only if it lies
+    /// entirely below the limit, so a byte source that has loaded only the front of the file is
+    /// enough. Two things can still read past the limit: the first Cluster, and a Cluster of
+    /// unknown size (live streams), whose end is only found by scanning it. Info and Tracks are
+    /// read as usual; Cues, Tags and the other elements after the scanned part are not read
+    /// until the index is completed.
+    ///
+    /// The sample tables then cover everything before [`MkvFile::index_end`], which is `Some`
+    /// until the index is complete ([`MkvFile::indexed`]). Continue with [`MkvFile::extend_index`]
+    /// without rescanning. Ignored when `index` is `false`.
+    pub index_limit: Option<u64>,
 }
 
 impl Default for OpenOptions {
     fn default() -> Self {
-        Self { index: true, verify_crc: false }
+        Self { index: true, verify_crc: false, index_limit: None }
     }
 }
 
@@ -105,12 +150,27 @@ pub struct MkvFile {
     pub first_cluster: Option<u64>,
     /// Sample tables have been built by scanning all clusters.
     pub indexed: bool,
+    /// Set while an open limited by [`OpenOptions::index_limit`] left the index incomplete: the
+    /// absolute offset where the cluster scan stopped and where [`MkvFile::extend_index`]
+    /// continues. The tables cover every frame before it and none after. `None` once the index
+    /// is complete, and for files opened without an index.
+    pub index_end: Option<u64>,
+    /// Walker state to continue the scan from [`MkvFile::index_end`].
+    resume: Option<Resume>,
     /// Number of CRC-32 elements verified (with `verify_crc`).
     pub crc_checked: u32,
     /// Absolute offsets of elements whose CRC-32 did not match.
     pub crc_errors: Vec<u64>,
     /// Non-fatal problems met while parsing (damage, resyncs, truncation).
     pub warnings: Vec<String>,
+}
+
+/// What a scan stopped at [`MkvFile::index_end`] needs to continue: the level-1 elements already
+/// read (so a later pass does not read them twice) and the metadata byte budget left.
+#[derive(Clone, Debug, Default)]
+struct Resume {
+    parsed: HashMap<u64, u64>,
+    meta_left: u64,
 }
 
 /// One demuxed frame.
@@ -170,15 +230,30 @@ pub struct Keyframe {
 // I/O with a small read window
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct Cache {
     buf: Vec<u8>,
     start: u64,
+    /// Bytes read from the source to refill the window, all told.
+    refilled: u64,
+    /// Source bytes left for damage recovery ([`Io::resync`]) in this file. Each candidate it tests can
+    /// refill the window several times, so the work is charged by what was actually read.
+    recovery_left: u64,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self { buf: Vec::new(), start: 0, refilled: 0, recovery_left: RECOVERY_BUDGET }
+    }
 }
 
 struct Io<'a, S: ByteSource + ?Sized> {
     src: &'a S,
     len: u64,
+    /// Bytes the caller has available (an [`OpenOptions::index_limit`]): the read window does not
+    /// run past it unless a read needs the bytes, so a source that has loaded only the front of
+    /// the file is not asked for the rest. `len` without a limit.
+    avail: u64,
     cache: &'a mut Cache,
 }
 
@@ -209,7 +284,7 @@ impl Hdr {
 impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
     fn new(src: &'a S, cache: &'a mut Cache) -> Self {
         let len = src.len();
-        Self { src, len, cache }
+        Self { src, len, avail: len, cache }
     }
 
     /// Up to `n` (≤ WIN) bytes at `pos` (fewer at EOF).
@@ -221,10 +296,14 @@ impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
         let want_end = (pos + n as u64).min(self.len);
         let c = &*self.cache;
         if !(pos >= c.start && want_end <= c.start + c.buf.len() as u64) {
-            let fill = ((self.len - pos) as usize).min(WIN);
+            let window_end = (pos + WIN as u64).min(self.len);
+            // stay inside what is available, but never fetch less than this read needs
+            let end = if self.avail > pos { window_end.min(self.avail).max(want_end) } else { want_end };
+            let fill = (end - pos) as usize;
             let mut buf = std::mem::take(&mut self.cache.buf);
             buf.resize(fill, 0);
             self.src.read_at(pos, &mut buf)?;
+            self.cache.refilled = self.cache.refilled.saturating_add(fill as u64);
             self.cache.buf = buf;
             self.cache.start = pos;
         }
@@ -250,7 +329,8 @@ impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
         if pos >= limit {
             return Ok(None);
         }
-        let b = self.peek(pos, 12)?;
+        // never more than the parent holds: its last element may be shorter than a maximal header
+        let b = self.peek(pos, 12.min(usize::try_from(limit - pos).unwrap_or(12)))?;
         let Some((id, il)) = read_id(b) else { return Ok(None) };
         let Some((size, sl)) = read_size(&b[il..]) else { return Ok(None) };
         let hlen = il + sl;
@@ -261,10 +341,18 @@ impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
     }
 
     /// Scan forward from `from` for a plausible level-1 element (Cluster preferred), up to `limit`.
+    ///
+    /// The scan stops (`None`) once the file's recovery budget is spent: every candidate can make
+    /// [`Io::plausible`] refill the window at a far offset, which a damaged region would repeat per byte.
     fn resync(&mut self, from: u64, limit: u64) -> Result<Option<u64>> {
         let mut pos = from;
         while pos + 4 <= limit {
+            if self.cache.recovery_left == 0 {
+                return Ok(None);
+            }
+            let before = self.cache.refilled;
             let chunk = self.peek(pos, WIN)?.to_vec();
+            self.charge_recovery(before);
             if chunk.len() < 4 {
                 return Ok(None);
             }
@@ -277,13 +365,25 @@ impl<'a, S: ByteSource + ?Sized> Io<'a, S> {
                     continue;
                 }
                 let p = pos + i as u64;
-                if self.plausible(p, id, limit)? {
+                let before = self.cache.refilled;
+                let found = self.plausible(p, id, limit)?;
+                self.charge_recovery(before);
+                if found {
                     return Ok(Some(p));
+                }
+                if self.cache.recovery_left == 0 {
+                    return Ok(None);
                 }
             }
             pos += (chunk.len() - 3) as u64;
         }
         Ok(None)
+    }
+
+    /// Charge the recovery budget for the window refills since `refilled_before`.
+    fn charge_recovery(&mut self, refilled_before: u64) {
+        let spent = self.cache.refilled.saturating_sub(refilled_before);
+        self.cache.recovery_left = self.cache.recovery_left.saturating_sub(spent);
     }
 
     fn plausible(&mut self, p: u64, id: u32, limit: u64) -> Result<bool> {
@@ -396,13 +496,21 @@ fn parse_block<S: ByteSource + ?Sized>(io: &mut Io<'_, S>, data_start: u64, len:
     let hdr = (tl + 3) as u64;
     let lacing = Lacing::from_flags(flags);
     let frames = if lacing == Lacing::None {
-        vec![(data_start + hdr, (len - hdr) as u32)]
+        let Ok(size) = u32::try_from(len.saturating_sub(hdr)) else { return Ok(None) };
+        vec![(data_start + hdr, size)]
     } else {
-        let body = io.read_vec(data_start + hdr, len - hdr)?;
-        match parse_lacing(lacing, &body) {
-            Ok(f) => f.into_iter().map(|(o, l)| (data_start + hdr + o as u64, l as u32)).collect(),
-            Err(_) => return Ok(None),
+        let body_len = len.saturating_sub(hdr);
+        if body_len > MAX_LACED_BODY {
+            return Ok(None);
         }
+        let body = io.read_vec(data_start + hdr, body_len)?;
+        let Ok(laced) = parse_lacing(lacing, &body) else { return Ok(None) };
+        let mut frames = Vec::with_capacity(laced.len());
+        for (o, l) in laced {
+            let Ok(size) = u32::try_from(l) else { return Ok(None) };
+            frames.push((data_start + hdr + o as u64, size));
+        }
+        frames
     };
     Ok(Some((track, rel, flags, frames)))
 }
@@ -572,14 +680,14 @@ fn scan_cluster<S: ByteSource + ?Sized>(
             break lim;
         }
         let Some(c) = io.header(pos, lim)? else {
-            warnings.push(format!("damaged cluster at {}: undecodable element at {pos}", h.pos));
+            warn(warnings, format!("damaged cluster at {}: undecodable element at {pos}", h.pos));
             break io.resync(pos + 1, limit)?.unwrap_or(limit);
         };
         if known_end.is_none() && is_top_level(c.id) {
             break pos;
         }
         if c.size == Size::Unknown || c.overruns(lim) {
-            warnings.push(format!("damaged cluster at {}: element 0x{:X} at {pos} overruns", h.pos, c.id));
+            warn(warnings, format!("damaged cluster at {}: element 0x{:X} at {pos} overruns", h.pos, c.id));
             if c.overruns(lim) && matches!(c.id, SIMPLE_BLOCK | BLOCK_GROUP) && io.len <= c.data_start() + c.size.known().unwrap_or(0) {
                 break lim; // truncated file: drop the partial block
             }
@@ -617,17 +725,31 @@ pub fn open_with<S: ByteSource>(src: S, opts: &OpenOptions) -> Result<MkvFile> {
 }
 
 fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Cache) -> Result<MkvFile> {
+    // each pass over the file (open, building the index) gets the whole budget
+    cache.recovery_left = RECOVERY_BUDGET;
     let mut io = Io::new(src, cache);
+    if let Some(l) = opts.index_limit.filter(|_| opts.index) {
+        io.avail = l;
+    }
     let len = io.len;
     // EBML header (tolerate leading junk in the first 64 KiB)
     let start = {
-        let b = io.peek(0, WIN)?;
         let magic = [0x1A, 0x45, 0xDF, 0xA3];
-        b.windows(4).position(|w| w == magic).ok_or_else(|| Error::NotMatroska("no EBML header".into()))? as u64
+        // the usual case needs 4 bytes, not the whole window (a source may hold only the front of the file)
+        if io.peek(0, 4)? == magic {
+            0
+        } else {
+            let b = io.peek(0, WIN)?;
+            b.windows(4).position(|w| w == magic).ok_or_else(|| Error::NotMatroska("no EBML header".into()))? as u64
+        }
     };
     let eh = io.header(start, len)?.ok_or_else(|| Error::NotMatroska("bad EBML header".into()))?;
     let hdr_end = eh.end(len);
-    let hdr = io.read_vec(eh.data_start(), hdr_end - eh.data_start())?;
+    let hdr_len = hdr_end - eh.data_start();
+    if hdr_len > MAX_EBML_HEADER {
+        return Err(Error::NotMatroska(format!("EBML header of {hdr_len} bytes")));
+    }
+    let hdr = io.read_vec(eh.data_start(), hdr_len)?;
     let (mut doc_type, mut dtv, mut dtrv) = ("matroska".to_string(), 1, 1);
     for e in Children::new(&hdr) {
         match e.id {
@@ -671,14 +793,17 @@ fn open_impl<S: ByteSource + ?Sized>(src: &S, opts: &OpenOptions, cache: &mut Ca
         attachments: Vec::new(),
         first_cluster: None,
         indexed: false,
+        index_end: None,
+        resume: None,
         crc_checked: 0,
         crc_errors: Vec::new(),
         warnings: Vec::new(),
     };
     if seg.overruns(len) {
-        file.warnings.push("Segment extends past end of file (truncated)".into());
+        warn(&mut file.warnings, "Segment extends past end of file (truncated)".into());
     }
-    let mut w = Walker { opts, parsed: HashMap::new(), meta_left: len, blocks_seen: false, lookup: None, budget: FrameBudget::new(len) };
+    let mut w =
+        Walker { opts, parsed: HashMap::new(), meta_left: len, blocks_seen: false, resuming: false, lookup: None, budget: FrameBudget::new(len) };
     w.walk(&mut io, &mut file)?;
     finish_tracks(&mut file);
     Ok(file)
@@ -692,6 +817,9 @@ struct Walker<'o> {
     /// valid file stays within its length; SeekHead entries pointing into one another do not.
     meta_left: u64,
     blocks_seen: bool,
+    /// Continuing a scan (see [`MkvFile::extend_index`]): keep `file.index_end` and the resume
+    /// state current, as a limited open does, so that a failed read can be retried.
+    resuming: bool,
     /// Built at the first Cluster after Tracks is parsed.
     lookup: Option<TrackIndex>,
     budget: FrameBudget,
@@ -699,25 +827,66 @@ struct Walker<'o> {
 
 impl Walker<'_> {
     fn walk<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile) -> Result<()> {
+        let start = file.segment_data_start;
+        self.walk_from(io, file, start)
+    }
+
+    /// Walk the Segment's children from `start`. With an [`OpenOptions::index_limit`] the walk may
+    /// stop early, leaving `file.index_end` and the resume state for [`MkvFile::extend_index`].
+    fn walk_from<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, start: u64) -> Result<()> {
+        let result = self.walk_children(io, file, start);
+        // Stopped early or failed part-way: hand the elements read so far to the next
+        // `extend_index`. `parsed` holds only elements read in full (see `level1`), so it is
+        // moved, not copied per element.
+        if file.index_end.is_some() {
+            file.resume = Some(Resume { parsed: std::mem::take(&mut self.parsed), meta_left: self.meta_left });
+        }
+        result
+    }
+
+    fn walk_children<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, start: u64) -> Result<()> {
         let seg_end = file.segment_end;
-        let mut pos = file.segment_data_start;
+        let limit = self.opts.index_limit.filter(|_| self.opts.index);
+        if let Some(l) = limit {
+            io.avail = l;
+        }
+        let mut pos = start;
+        let track = limit.is_some() || self.resuming;
+        let mut stopped = false;
         while pos < seg_end {
+            if track {
+                self.save(file, pos);
+            }
+            // the first Cluster is always scanned; the rest only while they fit below the limit
+            // (checked before the header is read: that lies past the limit too)
+            if limit.is_some_and(|l| pos >= l) && !file.clusters.is_empty() {
+                stopped = true;
+                break;
+            }
             let Some(h) = io.header(pos, seg_end)? else {
                 match io.resync(pos + 1, seg_end)? {
                     Some(p) => {
-                        file.warnings.push(format!("undecodable element at {pos}; resynced at {p}"));
+                        warn(&mut file.warnings, format!("undecodable element at {pos}; resynced at {p}"));
                         pos = p;
                         continue;
                     }
                     None => break,
                 }
             };
+            if let Some(l) = limit
+                && !file.clusters.is_empty()
+                && matches!(h.size, Size::Known(_))
+                && h.end(seg_end) > l
+            {
+                stopped = true;
+                break;
+            }
             match h.id {
                 CLUSTER => {
                     if file.first_cluster.is_none() {
                         file.first_cluster = Some(h.pos);
                         // make sure Info/Tracks are known before interpreting blocks
-                        self.follow_seek_head(io, file, &[INFO, TRACKS])?;
+                        self.follow_seek_head(io, file, &[INFO, TRACKS], u64::MAX)?;
                         if !self.opts.index {
                             break;
                         }
@@ -743,7 +912,7 @@ impl Walker<'_> {
                     } else if h.overruns(seg_end) && h.id != VOID {
                         match io.resync(pos + 1, seg_end)? {
                             Some(p) => {
-                                file.warnings.push(format!("oversized element 0x{:X} at {pos}; resynced at {p}", h.id));
+                                warn(&mut file.warnings, format!("oversized element 0x{:X} at {pos}; resynced at {p}", h.id));
                                 pos = p;
                             }
                             None => break,
@@ -754,29 +923,52 @@ impl Walker<'_> {
                 }
             }
         }
-        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD])?;
+        if io.cache.recovery_left == 0 {
+            warn(&mut file.warnings, "recovery budget spent; the rest of the damaged data was not searched".into());
+        }
+        if track {
+            self.save(file, pos);
+        }
+        if stopped {
+            // what lies after the scanned part (Cues, Tags…) waits for the rest of the index
+            let before = file.index_end.unwrap_or(pos);
+            self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], before)?;
+            file.cues.sort_by_key(|c| c.time);
+            file.indexed = false;
+            return Ok(());
+        }
+        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], u64::MAX)?;
         // follow a second-level SeekHead reached through the first one
-        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS])?;
+        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS], u64::MAX)?;
         file.cues.sort_by_key(|c| c.time);
         file.indexed = self.opts.index;
+        file.index_end = None;
+        file.resume = None;
         Ok(())
     }
 
-    fn follow_seek_head<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, ids: &[u32]) -> Result<()> {
+    /// Record that everything before `pos` is done: a read that fails from here on (data not
+    /// loaded yet) can be retried by [`MkvFile::extend_index`] without repeating any of it.
+    fn save(&self, file: &mut MkvFile, pos: u64) {
+        file.index_end = Some(pos);
+    }
+
+    /// Read the elements of the given kinds that the SeekHead points at below `before`.
+    fn follow_seek_head<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, ids: &[u32], before: u64) -> Result<()> {
         let entries = file.seek_head.clone();
         for e in entries {
             if !ids.contains(&e.id) {
                 continue;
             }
             let Some(abs) = file.segment_data_start.checked_add(e.position) else { continue };
-            if self.parsed.contains_key(&abs) || abs >= file.segment_end {
+            if self.parsed.contains_key(&abs) || abs >= file.segment_end || abs >= before {
                 continue;
             }
             match io.header(abs, file.segment_end)? {
                 Some(h) if h.id == e.id => {
                     self.level1(io, file, &h, file.segment_end)?;
                 }
-                _ => file.warnings.push(format!("SeekHead entry 0x{:X} -> {abs} does not point at that element", e.id)),
+                _ => warn(&mut file.warnings, format!("SeekHead entry 0x{:X} -> {abs} does not point at that element", e.id)),
             }
         }
         Ok(())
@@ -787,13 +979,26 @@ impl Walker<'_> {
             file.crc_checked += 1;
             if !ok {
                 file.crc_errors.push(pos);
-                file.warnings.push(format!("CRC-32 mismatch in element at {pos}"));
+                warn(&mut file.warnings, format!("CRC-32 mismatch in element at {pos}"));
             }
         }
     }
 
-    /// Parse a level-1 metadata element; returns its end.
+    /// Parse a level-1 metadata element; returns its end. An element whose read fails is left
+    /// unrecorded, so a retry reads it again and one that succeeded is never read twice.
     fn level1<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, h: &Hdr, limit: u64) -> Result<u64> {
+        let known = self.parsed.contains_key(&h.pos);
+        let (meta_left, attachments) = (self.meta_left, file.attachments.len());
+        let result = self.level1_read(io, file, h, limit);
+        if result.is_err() && !known {
+            self.parsed.remove(&h.pos);
+            self.meta_left = meta_left;
+            file.attachments.truncate(attachments);
+        }
+        result
+    }
+
+    fn level1_read<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, h: &Hdr, limit: u64) -> Result<u64> {
         if let Some(&end) = self.parsed.get(&h.pos) {
             return Ok(end);
         }
@@ -803,12 +1008,12 @@ impl Walker<'_> {
         };
         self.parsed.insert(h.pos, end);
         if h.overruns(limit) {
-            file.warnings.push(format!("element 0x{:X} at {} truncated", h.id, h.pos));
+            warn(&mut file.warnings, format!("element 0x{:X} at {} truncated", h.id, h.pos));
         }
         let n = end - h.data_start();
         if n > self.meta_left || (h.size == Size::Unknown && n == self.meta_left && end < limit) {
             self.meta_left = 0;
-            file.warnings.push(format!("element 0x{:X} at {} overlaps elements already read; skipped", h.id, h.pos));
+            warn(&mut file.warnings, format!("element 0x{:X} at {} overlaps elements already read; skipped", h.id, h.pos));
             return Ok(end);
         }
         self.meta_left -= n;
@@ -818,7 +1023,7 @@ impl Walker<'_> {
         }
         let n = end - h.data_start();
         if n > MAX_META {
-            file.warnings.push(format!("element 0x{:X} at {} too large ({n} bytes); skipped", h.id, h.pos));
+            warn(&mut file.warnings, format!("element 0x{:X} at {} too large ({n} bytes); skipped", h.id, h.pos));
             return Ok(end);
         }
         let data = io.read_vec(h.data_start(), n)?;
@@ -932,6 +1137,27 @@ impl MkvFile {
         Some((end.max(0) as u64).saturating_mul(self.info.timestamp_scale))
     }
 
+    /// Continue a scan that an [`OpenOptions::index_limit`] stopped, from [`MkvFile::index_end`],
+    /// without rescanning what is indexed. `opts.index_limit` bounds the new scan like at open
+    /// (`None`: to the end of the Segment, which completes the index: Cues, Tags… are read and
+    /// [`MkvFile::indexed`] becomes `true`); `opts.verify_crc` applies as at open.
+    ///
+    /// A no-op when there is nothing left to scan, including a limit at or below `index_end`.
+    /// Safe to call again after an error such as a byte source that has not loaded the range yet
+    /// (`WouldBlock`): the clusters scanned before the failure stay indexed and `index_end` says
+    /// where the next call continues.
+    pub fn extend_index<S: ByteSource + ?Sized>(&mut self, src: &S, opts: &OpenOptions) -> Result<()> {
+        let Some(start) = self.index_end else { return Ok(()) };
+        let resume = self.resume.take().unwrap_or_default();
+        let opts = OpenOptions { index: true, ..opts.clone() };
+        let mut cache = Cache::default();
+        let mut io = Io::new(src, &mut cache);
+        let budget = FrameBudget::resumed(io.len, &self.tracks);
+        let mut w =
+            Walker { opts: &opts, parsed: resume.parsed, meta_left: resume.meta_left, blocks_seen: true, resuming: true, lookup: None, budget };
+        w.walk_from(&mut io, self, start)
+    }
+
     /// Index of the track with this `TrackNumber`.
     pub fn track_by_number(&self, number: u64) -> Option<usize> {
         self.tracks.iter().position(|t| t.number == number)
@@ -1026,6 +1252,8 @@ impl<S: ByteSource> Demuxer<S> {
     pub fn with_options(src: S, opts: OpenOptions) -> Result<Self> {
         let mut cache = Cache::default();
         let file = open_impl(&src, &opts, &mut cache)?;
+        // reading packets recovers from damage on its own budget, not what the open left
+        cache.recovery_left = RECOVERY_BUDGET;
         let pos = file.first_cluster.unwrap_or(file.segment_end);
         let lookup = track_index(&file.tracks);
         Ok(Self { src, file, opts, cache, lookup, pos, cluster: None, pending: VecDeque::new(), skip_laces: None, done: false })
@@ -1048,13 +1276,19 @@ impl<S: ByteSource> Demuxer<S> {
         self.file.duration_ns()
     }
 
-    /// Scan all clusters and build sample tables (no-op if already indexed).
+    /// Scan all clusters and build sample tables (no-op if already indexed; continues a scan that
+    /// stopped at [`OpenOptions::index_limit`] from where it stopped).
     pub fn build_index(&mut self) -> Result<()> {
         if self.file.indexed {
             return Ok(());
         }
-        let opts = OpenOptions { index: true, verify_crc: self.opts.verify_crc };
+        let opts = OpenOptions { index: true, verify_crc: self.opts.verify_crc, index_limit: None };
+        if self.file.index_end.is_some() {
+            return self.file.extend_index(&self.src, &opts);
+        }
         self.file = open_impl(&self.src, &opts, &mut self.cache)?;
+        // the index pass spent its own budget; packet reading keeps a whole one
+        self.cache.recovery_left = RECOVERY_BUDGET;
         self.lookup = track_index(&self.file.tracks);
         Ok(())
     }
@@ -1133,13 +1367,13 @@ impl<S: ByteSource> Demuxer<S> {
 
     fn seek_via_cue(&mut self, track: usize, ticks: i64, cluster_position: u64) -> Result<Option<SeekPoint>> {
         let Some(abs) = self.file.segment_data_start.checked_add(cluster_position) else {
-            self.file.warnings.push(format!("cue position {cluster_position} is past the segment end"));
+            warn(&mut self.file.warnings, format!("cue position {cluster_position} is past the segment end"));
             return Ok(None);
         };
         let mut io = Io::new(&self.src, &mut self.cache);
         let Some(h) = io.header(abs, self.file.segment_end)? else { return Ok(None) };
         if h.id != CLUSTER {
-            self.file.warnings.push(format!("cue points at {abs}, which is not a Cluster"));
+            warn(&mut self.file.warnings, format!("cue points at {abs}, which is not a Cluster"));
             return Ok(None);
         }
         let mut warnings = Vec::new();

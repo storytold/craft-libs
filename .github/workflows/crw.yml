@@ -12,46 +12,29 @@ permissions:
   contents: read
 
 concurrency:
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
   group: shared-crw-${{ github.ref }}
   cancel-in-progress: true
 
+# fmt, clippy and the tests run in the Workspace gate on every OS; this checks what it does not.
 jobs:
-  native:
-    timeout-minutes: 20
-    name: CRW lint and tests (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: craft-crw-${{ matrix.os }}
-      - run: cargo fmt -p craft-crw --check
-      - run: cargo clippy -p craft-crw --all-targets --locked -- -D warnings
-      - run: cargo test -p craft-crw --locked
-
   wasm:
     timeout-minutes: 10
     name: CRW WASM
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: craft-crw-wasm
       - run: cargo check -p craft-crw --locked --target wasm32-unknown-unknown
 
   samples:
@@ -59,15 +42,18 @@ jobs:
     name: CRW sample files decode exactly
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
-          key: craft-crw-samples
+          toolchain: stable
       - name: Cache the CC0 sample files
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@v6.1.0
         with:
           path: ${{ runner.temp }}/crw-samples
           key: crw-samples-${{ hashFiles('crates/crw/tests/samples.json') }}

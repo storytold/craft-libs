@@ -15,6 +15,9 @@ use crate::structure::StructureExpect;
 /// How deep placed scenes may nest.
 pub const MAX_NESTING: usize = 4;
 
+/// The most pixels an image source may ask for on either side.
+pub const MAX_IMAGE_PX: u32 = 4096;
+
 /// The plate text points find their glyphs on unless they name another.
 pub const TEXT_PLATE: &str = "Black";
 
@@ -471,8 +474,8 @@ impl Scene {
             if sources.iter().filter(|s| **s).count() != 1 {
                 out.push("image needs exactly one of ramp, split or feather".into());
             }
-            if image.px[0] == 0 || image.px[1] == 0 || image.px[0] > 4096 || image.px[1] > 4096 {
-                out.push("image px must be 1–4096".into());
+            if image.px.iter().any(|px| !(1..=MAX_IMAGE_PX).contains(px)) {
+                out.push(format!("image px must be 1–{MAX_IMAGE_PX}"));
             }
             if image.alpha.as_ref().is_some_and(|a| image.feather.is_some() || !(0.0..=1.0).contains(&a.opacity)) {
                 out.push("image alpha needs a color image and an opacity of 0–1".into());

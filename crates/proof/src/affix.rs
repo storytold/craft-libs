@@ -42,6 +42,8 @@ use std::hash::Hasher;
 use crate::patterns::{FxHasher, FxMap};
 
 mod compound;
+#[cfg(test)]
+mod rep_tests;
 
 pub(crate) use compound::{MAX_SUGGEST_COMPOUND_WORK, Pieces};
 
@@ -677,6 +679,19 @@ fn cap_try(s: &str) -> String {
     out
 }
 
+/// Most `REP` entries kept; every suggestion round tries each one at every place it matches.
+const MAX_REP_ENTRIES: usize = 4096;
+
+/// Adds a `REP` entry (`_` stands for a space) unless the table is full, `from` is empty or longer
+/// than any word a suggester takes (it could never match), or `to` is longer than a dictionary word.
+fn push_rep(rep: &mut Vec<(String, String)>, from: &str, to: &str) {
+    // Letters, not bytes: a 40-letter word in a four-byte script is 160 bytes long.
+    let fits = from.chars().nth(crate::affix_suggest::MAX_LETTERS).is_none();
+    if rep.len() < MAX_REP_ENTRIES && !from.is_empty() && fits && to.len() <= MAX_WORD_BYTES {
+        rep.push((from.replace('_', " "), to.replace('_', " ")));
+    }
+}
+
 /// `form`, unless it is empty: no word is, and `FULLSTRIP` can strip a stem down to nothing.
 fn non_empty(form: String) -> Option<String> {
     Some(form).filter(|f| !f.is_empty())
@@ -1120,7 +1135,7 @@ fn parse_aff(aff: &str, english: bool) -> Result<Rules, String> {
                 if !rep_header && at(1).parse::<usize>().is_ok() {
                     rep_header = true;
                 } else if f.len() >= 3 {
-                    r.rep.push((at(1).replace('_', " "), at(2).replace('_', " ")));
+                    push_rep(&mut r.rep, at(1), at(2));
                 }
             }
             "PFX" | "SFX" => {
@@ -2212,6 +2227,38 @@ impl AffixDict {
         self.check_except(w, self.excluded(true))
     }
 
+    /// Validate a collected suggestion in its displayed case, before OCONV. Only identity,
+    /// first-letter and uppercase variants are allowed (including uppercase that keeps sharp s).
+    /// An exact target excluded from suggestions cannot be rescued by a lowercase fallback.
+    /// This preserves the checker's homonym, compound and CHECKSHARPS rules without scanning
+    /// stems or changing which words the spelling checker accepts.
+    pub(crate) fn can_suggest_cased(&self, original: &str, changed: &str) -> bool {
+        if original.len() > MAX_INPUT_BYTES || changed.len() > MAX_INPUT_BYTES {
+            return false;
+        }
+        if changed != original
+            && changed != capitalize(original)
+            && changed != original.to_uppercase()
+            && changed != original.split('ß').map(str::to_uppercase).collect::<Vec<_>>().join("ß")
+        {
+            return false;
+        }
+        let target = self.normalize(changed);
+        if self.is_forbidden(&target) {
+            return false;
+        }
+        // The exact simple-word path includes affixes; asking with no exclusions detects a
+        // target that may carry NOSUGGEST, SUBSTANDARD or FORBIDDENWORD. An eligible exact
+        // compound derivation still counts, but a lowercase fallback must not rescue it. Spend
+        // the same shared suggestion budget as the normal checker, and abstain if it runs out.
+        match self.simple_word_budgeted(&target, Excluded::default(), true) {
+            None => return false,
+            Some(true) if !self.contains_except(&target, self.excluded(true)) => return false,
+            _ => {}
+        }
+        self.can_suggest(changed)
+    }
+
     /// Whether `w` is a word only through a `KEEPCASE` stem, so it is correct in this letter case
     /// alone (`km` from `km/K`, which `Km` and `KM` are not).
     pub(crate) fn case_locked(&self, w: &str) -> bool {
@@ -2674,7 +2721,7 @@ impl AffixDict {
                     read.map_err(|e| format!("affix dictionary: bad `{line}`: {e}"))?;
                 }
                 "MAP" => rules.map.push(at(1).chars().collect()),
-                "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
+                "REP" => push_rep(&mut rules.rep, at(1), at(2)),
                 kind @ ("PFX" | "SFX") => {
                     let flag = rules.one_flag(at(1)).map_err(|e| format!("affix dictionary: bad flag in `{line}`: {e}"))?;
                     if f.len() != 6 {
@@ -3296,6 +3343,41 @@ pub(crate) mod tests {
         // Many `SS` pairs: only the first MAX_SHARPS are varied, and a long word costs nothing.
         let d = AffixDict::from_hunspell("CHECKSHARPS\n", "1\naßaßaßaßaß\n", &[]).unwrap();
         assert!(d.check("ASSASSASSASSASS") && !d.check(&"SS".repeat(60)));
+    }
+
+    #[test]
+    fn displayed_casing_rejects_exact_exclusions_before_case_fallback() {
+        for flag in ["N", "F", "S"] {
+            let aff = "SET UTF-8\nNOSUGGEST N\nFORBIDDENWORD F\nSUBSTANDARD S\nSFX A Y 1\nSFX A 0 s .\nSFX B Y 1\nSFX B 0 S .\n";
+            let dic = format!("5\nnormal/A\nNORMAL/{flag}B\nmixCase\npour\nkm/K\n");
+            let d = AffixDict::from_hunspell(&format!("{aff}KEEPCASE K\n"), &dic, &[]).unwrap();
+            for (original, changed) in [("normal", "NORMAL"), ("normals", "NORMALS")] {
+                assert!(!d.can_suggest_cased(changed, changed), "{flag}: {changed}");
+                assert!(!d.can_suggest_cased(original, changed), "{flag}: {original} → {changed}");
+            }
+            assert!(d.can_suggest_cased("normal", "Normal"));
+            assert!(d.can_suggest_cased("mixCase", "MIXCASE"));
+            assert!(d.can_suggest_cased("km", "km") && !d.can_suggest_cased("km", "KM"));
+            assert!(!d.can_suggest_cased("normal", "pour"), "no arbitrary replacement");
+            let back = AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap();
+            assert!(!back.can_suggest_cased("normal", "NORMAL"));
+        }
+    }
+
+    #[test]
+    fn displayed_casing_uses_normalization_and_native_homonym_policy() {
+        let aff = "SET UTF-8\nNOSUGGEST N\nSUBSTANDARD S\nIGNORE ()\nICONV 1\nICONV Q NORMAL\n";
+        for flag in ["N", "S"] {
+            let d = AffixDict::from_hunspell(aff, &format!("3\nnormal\nNORMAL/{flag}\nNORMAL\n"), &[]).unwrap();
+            // Native homonyms carry exclusions: a second entry does not erase NOSUGGEST.
+            assert!(!d.contains_suggestible("NORMAL"));
+            assert!(!d.can_suggest_cased("(normal)", "(NORMAL)"));
+            assert!(!d.can_suggest_cased("Q", "Q"));
+        }
+        let plain = AffixDict::from_hunspell(aff, "3\nnormal\nNORMAL\nNORMAL\n", &[]).unwrap();
+        assert!(plain.can_suggest_cased("normal", "NORMAL"));
+        assert!(plain.can_suggest_cased("Q", "Q"));
+        assert!(!plain.can_suggest_cased(&"x".repeat(MAX_INPUT_BYTES + 1), "NORMAL"));
     }
 
     #[test]

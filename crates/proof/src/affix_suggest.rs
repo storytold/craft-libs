@@ -6,7 +6,10 @@
 //!    adding a missing accent is the commonest slip and ranks first, while taking away one the
 //!    writer typed ranks after the known confusions;
 //! 3. the REP table of common confusions (`żeka` → `rzeka`);
-//! 4. a missing space (`napewno` → `na pewno`);
+//! 4. a missing space (`napewno` → `na pewno`), or a missing apostrophe where the dictionary
+//!    knows the elided form (`jadore` → `j'adore`, `lacqua` → `l'acqua`); an elision ranks just
+//!    before the missing space, so after accent-adding, MAP and REP fixes (tying with dropping a
+//!    typed accent);
 //! 5. keyboard neighbours from the KEY rows, then one typo: a letter left out, added, swapped with
 //!    the next or mistyped (TRY letters);
 //! 6. when that finds fewer than asked for: the stems that start like the word (MAP relatives
@@ -38,6 +41,14 @@ pub(crate) const COST_OTHER_MAP: u32 = 7;
 const COST_DROP_DIACRITIC: u32 = 11;
 const COST_REP: u32 = 10;
 pub(crate) const COST_SPLIT: u32 = 12;
+/// A missing apostrophe between an elided word and a dictionary word of two letters or more
+/// (`j'adore`, `qu'il`, `dell'anno`).
+const COST_ELISION: u32 = COST_SPLIT - 1;
+/// Any other missing apostrophe the dictionary accepts (a possessive `church's`, an enclitic
+/// `acusi't`, a contraction `he'd`), ranked after every one-letter fix (`churches`, `acudit`).
+const COST_APOSTROPHE: u32 = COST_MISTYPE + 1;
+/// Longest elided first part tried, in letters (`quoiqu'`, `lorsqu'`, `quell'`).
+const MAX_ELIDED: usize = 7;
 /// A missing space leaving a half shorter than three letters ([`Split::Anywhere`]).
 const COST_SPLIT_SHORT: u32 = 17;
 /// A missing space between two longer halves with no short word beside it ([`Split::Near`]).
@@ -71,6 +82,15 @@ pub(crate) struct Tuning {
     /// Offer a word only the dictionary capitalizes (a name, an abbreviation: `Col`, `Wis`) only
     /// when the word itself is capitalized, and never as half of a missing space (`Che Que`).
     pub strict_case: bool,
+    /// Offer a missing apostrophe before a suggestible word of 2+ letters as an elision (French
+    /// `j'adore`, Italian `l'acqua`), ranked at [`COST_ELISION`]: after accent-adding, MAP and REP fixes (a tie with dropping a typed accent),
+    /// before the missing space (`j adore`) and the typos. On by default ([`Tuning::DEFAULT`]) because
+    /// the pack languages share it, so it does not mean "this language elides": the dictionary check
+    /// gates it, and a dictionary without such forms never offers one. A language that never elides
+    /// and has apostrophe forms that compete turns it off (English); then every missing apostrophe
+    /// ranks after the one-letter fixes (`churchs` → `churches` before `church's`, `neer` → `never`
+    /// before `ne'er`).
+    pub elision: bool,
 }
 
 /// Where a missing space may go.
@@ -97,6 +117,7 @@ impl Tuning {
         map_cost,
         mistype_cost,
         strict_case: false,
+        elision: true,
     };
 }
 
@@ -227,7 +248,8 @@ impl Collector<'_> {
 
     /// Keep a suggestion known to be correct, unless the dictionary says never to offer it.
     fn keep(&mut self, text: String, cost: u32) {
-        if !text.split(' ').all(|part| self.d.can_suggest(part)) {
+        // Reject exact excluded spellings at admission, before later candidates spend the budget.
+        if !text.split(' ').all(|part| self.d.can_suggest_cased(part, part)) {
             return;
         }
         self.seq += 1;
@@ -251,15 +273,43 @@ fn groups<'a>(d: &'a AffixDict, t: &Tuning) -> Cow<'a, [Vec<char>]> {
     Cow::Owned(d.map().iter().cloned().chain(t.map.iter().map(|g| g.chars().collect())).collect())
 }
 
-/// The other members of every MAP group of `c` (its likely confusions), each once.
-fn alternatives(c: char, map: &[Vec<char>]) -> Vec<char> {
-    let mut out: Vec<char> = Vec::new();
-    for x in map.iter().filter(|g| g.contains(&c)).flat_map(|g| g.iter().copied()) {
-        if x != c && !out.contains(&x) {
-            out.push(x);
+/// Per-call lookups over the dictionary's groups followed by the language's groups.
+/// Store memberships, not every pair of alternatives: one long group stays linear in storage.
+pub(crate) struct MapLookup<'a> {
+    groups: &'a [Vec<char>],
+    first: HashMap<char, char>,
+    groups_of: HashMap<char, Vec<usize>>,
+}
+
+impl<'a> MapLookup<'a> {
+    pub(crate) fn new(groups: &'a [Vec<char>]) -> Self {
+        let mut first = HashMap::new();
+        let mut groups_of: HashMap<char, Vec<usize>> = HashMap::new();
+        for (i, group) in groups.iter().enumerate() {
+            let Some(&representative) = group.first() else { continue };
+            for &c in group {
+                first.entry(c).or_insert(representative);
+                let memberships = groups_of.entry(c).or_default();
+                if memberships.last() != Some(&i) {
+                    memberships.push(i);
+                }
+            }
         }
+        Self { groups, first, groups_of }
     }
-    out
+
+    /// Lowercase the query only; the first group's representative keeps its authored case.
+    pub(crate) fn fold(&self, c: char) -> char {
+        let l = c.to_lowercase().next().unwrap_or(c);
+        self.first.get(&l).copied().unwrap_or(l)
+    }
+
+    /// Other members of all matching groups, once each and in original group/member order.
+    fn alternatives(&self, c: char) -> Vec<char> {
+        let mut seen = HashSet::new();
+        seen.insert(c);
+        self.groups_of.get(&c).into_iter().flatten().filter_map(|&i| self.groups.get(i)).flatten().copied().filter(|&x| seen.insert(x)).collect()
+    }
 }
 
 /// Every way of changing up to `t.max_map_changes` letters of `chars` to a MAP relative (`alts`,
@@ -292,12 +342,6 @@ fn exact_map_variants(chars: &[char], alts: &[Vec<char>], t: &Tuning, left: usiz
             buf.pop();
         }
     }
-}
-
-/// A letter's MAP representative (the first of its first group), lower case: `ż` → `z`, `ó` → `o`.
-pub(crate) fn fold(c: char, map: &[Vec<char>]) -> char {
-    let l = c.to_lowercase().next().unwrap_or(c);
-    map.iter().find(|g| g.contains(&l)).and_then(|g| g.first().copied()).unwrap_or(l)
 }
 
 /// Optimal string alignment distance where a MAP slip (`a`/`ą`, `u`/`ó`) costs 1 and any other
@@ -385,10 +429,11 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
         pieces: Default::default(),
     };
     add_case(&mut col, word, &input);
-    let map = groups(d, t);
+    let groups = groups(d, t);
+    let map = MapLookup::new(&groups);
     add_map_slips(&mut col, &chars, &map, t);
     add_confusions(&mut col, &input, t);
-    add_splits(&mut col, &input, &t.split);
+    add_splits(&mut col, &input, t);
     add_key_neighbours(&mut col, &chars);
     add_typos(&mut col, &chars, t);
     col.compounds();
@@ -426,6 +471,14 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
             _ => vec![text.clone()],
         };
         for t in recased {
+            let eligible = |candidate: &str| {
+                let original: Vec<_> = text.split(' ').collect();
+                let changed: Vec<_> = candidate.split(' ').collect();
+                original.len() == changed.len() && original.iter().zip(changed).all(|(a, b)| d.can_suggest_cased(a, b))
+            };
+            // Collector::keep already accepted text. Collection may have exhausted the shared
+            // affix budget, so recheck only a changed case and otherwise retain that accepted form.
+            let t = if t == text || eligible(&t) { t } else { text.clone() };
             // Shown as the dictionary's OCONV table writes it (`'` → `’` in French).
             let t = d.output(&t).into_owned();
             if t != word && !out.contains(&t) {
@@ -449,8 +502,8 @@ fn add_case(col: &mut Collector, word: &str, input: &str) {
 }
 
 /// Round 2: accents and other MAP slips.
-fn add_map_slips(col: &mut Collector, chars: &[char], map: &[Vec<char>], t: &Tuning) {
-    let alts: Vec<Vec<char>> = chars.iter().map(|&c| alternatives(c, map)).collect();
+fn add_map_slips(col: &mut Collector, chars: &[char], map: &MapLookup<'_>, t: &Tuning) {
+    let alts: Vec<Vec<char>> = chars.iter().map(|&c| map.alternatives(c)).collect();
     let mut variants = Vec::new();
     map_variants(chars, &alts, t, &mut variants);
     variants.sort_by_key(|v| v.1);
@@ -474,11 +527,22 @@ fn add_confusions(col: &mut Collector, input: &str, t: &Tuning) {
     }
 }
 
-/// Round 4: a missing space; both halves must be dictionary words.
-fn add_splits(col: &mut Collector, input: &str, split: &Split) {
-    for (i, _) in input.char_indices().skip(1) {
+/// Round 4: a missing space; both halves must be dictionary words. Before it, a missing
+/// apostrophe: the dictionary's own check says whether `a'b` is right, so no language list is
+/// needed and a dictionary without such forms never offers one. A true elision, whose second part
+/// is a word itself (French `j'adore`, Italian and Catalan `l'acqua`, `dell'anno`), ranks before
+/// the space (`j adore`) and every typo while [`Tuning::elision`] is on; any other form ranks
+/// after the one-letter fixes ([`COST_APOSTROPHE`]). At most two lookups per split, and only after
+/// a short first part ([`MAX_ELIDED`]).
+fn add_splits(col: &mut Collector, input: &str, t: &Tuning) {
+    let no_apostrophe = !input.contains(['\'', '’']);
+    for (n, (i, _)) in input.char_indices().enumerate().skip(1) {
         let (Some(a), Some(b)) = (input.get(..i), input.get(i..)) else { continue };
-        if let Some(cost) = split_cost(split, a, b) {
+        if no_apostrophe && n <= MAX_ELIDED {
+            let word = t.elision && b.chars().nth(1).is_some() && col.d.contains_suggestible_with(b, false);
+            col.offer(&format!("{a}'{b}"), if word { COST_ELISION } else { COST_APOSTROPHE });
+        }
+        if let Some(cost) = split_cost(&t.split, a, b) {
             col.offer(&format!("{a} {b}"), cost);
         }
     }
@@ -558,12 +622,12 @@ fn add_typos(col: &mut Collector, chars: &[char], t: &Tuning) {
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
 /// case) by shared letter pairs, then keep the forms of the best within two typos.
-fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
+fn scan(col: &mut Collector, chars: &[char], map: &MapLookup<'_>) {
     let d = col.d;
     let Some(&first) = chars.first() else { return };
-    let folded: Vec<char> = chars.iter().map(|&c| fold(c, map)).collect();
+    let folded: Vec<char> = chars.iter().map(|&c| map.fold(c)).collect();
     let pairs: HashSet<(char, char)> = std::iter::once(' ').chain(folded.iter().copied()).zip(folded.iter().copied()).collect();
-    let mut firsts: Vec<char> = std::iter::once(first).chain(alternatives(first, map)).collect();
+    let mut firsts: Vec<char> = std::iter::once(first).chain(map.alternatives(first)).collect();
     let upper: Vec<char> = firsts.iter().flat_map(|c| c.to_uppercase()).collect();
     firsts.extend(upper);
     firsts.sort_unstable();
@@ -573,7 +637,7 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
     for f in firsts {
         let prefix = f.to_string();
         for stem in d.stems_with_prefix(&prefix) {
-            let sf: Vec<char> = stem.chars().map(|c| fold(c, map)).collect();
+            let sf: Vec<char> = stem.chars().map(|c| map.fold(c)).collect();
             let shared = std::iter::once(' ').chain(sf.iter().copied()).zip(sf.iter().copied()).filter(|p| pairs.contains(p)).count();
             if shared < 2 {
                 continue;
@@ -596,7 +660,7 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
         }
     }
     best.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-    let related = |a: char, b: char| fold(a, map) == fold(b, map);
+    let related = |a: char, b: char| map.fold(a) == map.fold(b);
     let limit = 4;
     let mut budget = SCAN_FORMS_WORK;
     for (_, stem) in best {
@@ -619,6 +683,92 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_lookup_preserves_first_group_case_and_ordered_alternatives() {
+        let groups = vec![vec![], vec!['A', 'a', 'ą', 'a'], vec!['b', 'ą', 'á'], vec!['a', 'A'], vec!['b', 'ą', 'á']];
+        let map = MapLookup::new(&groups);
+        assert_eq!(map.fold('Ą'), 'A');
+        assert_eq!(map.fold('á'), 'b', "overlap does not merge the groups transitively");
+        assert_eq!(map.fold('A'), 'A', "keep the representative's authored case");
+        assert_eq!(map.fold('B'), 'b');
+        assert_eq!(map.fold('İ'), 'i', "use the first lowercase scalar, as before");
+        assert_eq!(map.fold('Ω'), 'ω');
+        assert_eq!(map.alternatives('a'), ['A', 'ą']);
+        assert_eq!(map.alternatives('ą'), ['A', 'a', 'b', 'á']);
+        assert_eq!(map.alternatives('A'), ['a', 'ą']);
+        assert!(map.alternatives('Ω').is_empty(), "alternative lookup is case sensitive");
+        assert_eq!(map.groups_of.get(&'a'), Some(&vec![1, 3]), "a repeated member is indexed once per group");
+    }
+
+    #[test]
+    fn map_tuning_order_and_compact_reload_keep_suggestions() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nMAP 3\nMAP cčc\nMAP cć\nMAP cčc\n", "3\nčaj\nćaj\nĉaj\n", &[]).unwrap();
+        let t = Tuning { map: &["cĉč"], ..Tuning::DEFAULT };
+        let bytes = d.to_bytes().unwrap();
+        let back = AffixDict::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, back.to_bytes().unwrap(), "the index does not change the compact format");
+        assert_eq!(d.map(), back.map(), "retain authored groups and duplicates");
+        for dict in [&d, &back] {
+            assert_eq!(suggest_in(dict, "caj", 8, &t), ["čaj", "ćaj", "ĉaj"]);
+            assert_eq!(suggest_in(dict, "Caj", 8, &t), ["Čaj", "Ćaj", "Ĉaj"]);
+            assert_eq!(suggest_in(dict, "CAJ", 8, &t), ["ČAJ", "ĆAJ", "ĈAJ"]);
+            assert!(suggest_in(dict, "", 8, &t).is_empty());
+            assert!(suggest_in(dict, "caj", 0, &t).is_empty());
+        }
+    }
+
+    #[test]
+    fn map_membership_index_does_not_expand_large_groups_into_pairs() {
+        let group: Vec<char> = (0xe000..0xf000).filter_map(char::from_u32).collect();
+        let groups = vec![group.clone()];
+        let map = MapLookup::new(&groups);
+        assert_eq!(map.first.len(), group.len());
+        assert_eq!(map.groups_of.values().map(Vec::len).sum::<usize>(), group.len());
+        assert_eq!(map.alternatives(group[0]), group[1..]);
+    }
+
+    /// MAP work should grow with the table and stems, rather than their product.
+    #[test]
+    fn large_maps_do_not_multiply_stem_scan_work() {
+        fn dictionary(scale: usize) -> AffixDict {
+            let aff = format!("SET UTF-8\nMAP {}\n{}", 1000 * scale, "MAP xX\n".repeat(1000 * scale));
+            let mut words = vec!["abcdefg".to_string()];
+            words.extend((0..1000 * scale).filter_map(|i| char::from_u32(0xe000 + i as u32)).map(|c| format!("abcde{c}")));
+            let dic = format!("{}\n{}\n", words.len(), words.join("\n"));
+            AffixDict::from_hunspell(&aff, &dic, &[]).unwrap()
+        }
+        fn cpu_cost(f: &mut impl FnMut()) -> f64 {
+            let ran = || {
+                let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+                s.split_whitespace().next()?.parse::<u64>().ok()
+            };
+            let (start, before) = (std::time::Instant::now(), ran());
+            f();
+            match (before, ran()) {
+                (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+                _ => start.elapsed().as_secs_f64(),
+            }
+        }
+        let small = dictionary(1);
+        let big = dictionary(8);
+        let run = |d: &AffixDict| {
+            let out = suggest_in(d, "abcdef", 8, &Tuning::DEFAULT);
+            let expected: Vec<String> = (0..8).map(|i| format!("abcde{}", char::from_u32(0xe000 + i).unwrap())).collect();
+            assert_eq!(out, expected);
+            std::hint::black_box(out);
+        };
+        run(&small);
+        run(&big);
+        let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+        for _ in 0..5 {
+            t1 = t1.min(cpu_cost(&mut || (0..8).for_each(|_| run(&small))) / 8.0);
+            t8 = t8.min(cpu_cost(&mut || run(&big)));
+        }
+        let ratio = t8 / t1.max(1e-9);
+        eprintln!("MAP/stem scan: small={t1:.6}s big={t8:.6}s ratio={ratio:.2}");
+        assert!(ratio < 24.0, "8x MAP and stems cost {ratio:.2}x: {t1:.6}s / {t8:.6}s");
+    }
 
     /// craft-libs#487 review: MAP variants are made by number of changes, so when a long word has
     /// more than [`MAX_MAP_VARIANTS`] of them the cap drops the most-changed ones, never a single
@@ -738,8 +888,9 @@ mod tests {
 
     #[test]
     fn distance_weighs_map_slips_half() {
-        let map = vec![vec!['a', 'ą'], vec!['o', 'ó', 'u']];
-        let related = |a: char, b: char| fold(a, &map) == fold(b, &map);
+        let groups = vec![vec!['a', 'ą'], vec!['o', 'ó', 'u']];
+        let map = MapLookup::new(&groups);
+        let related = |a: char, b: char| map.fold(a) == map.fold(b);
         let c = |s: &str| s.chars().collect::<Vec<_>>();
         assert_eq!(weighted_distance(&c("ktury"), &c("który"), &related, 9), 1);
         assert_eq!(weighted_distance(&c("kot"), &c("kto"), &related, 9), 2);
@@ -763,6 +914,38 @@ mod tests {
         assert_eq!(suggest_in(&d, "Piesx", 4, &Tuning::DEFAULT).first().map(String::as_str), Some("Pies"));
     }
 
+    #[test]
+    fn recasing_keeps_valid_original_when_exact_target_is_excluded() {
+        for flag in ["N", "F", "S"] {
+            let aff = "SET UTF-8\nNOSUGGEST N\nFORBIDDENWORD F\nSUBSTANDARD S\nTRY normal\n";
+            let d = AffixDict::from_hunspell(aff, &format!("2\nnormal\nNORMAL/{flag}\n"), &[]).unwrap();
+            let got = suggest_in(&d, "NORMALL", 4, &Tuning::DEFAULT);
+            assert!(got.iter().any(|w| w == "normal"), "{flag}: {got:?}");
+            assert!(!got.iter().any(|w| w == "NORMAL"), "{flag}: {got:?}");
+            let split = AffixDict::from_hunspell(aff, &format!("3\nnormal\nNORMAL/{flag}\npour\n"), &[]).unwrap();
+            let got = suggest_in(&split, "NORMALPOUR", 4, &Tuning::DEFAULT);
+            assert!(got.iter().any(|w| w == "normal pour"), "{flag}: {got:?}");
+            assert!(!got.iter().any(|w| w == "NORMAL POUR"), "{flag}: {got:?}");
+        }
+        let d = AffixDict::from_hunspell("NOSUGGEST N\n", "3\nnormal\nNORMAL/N\npour\n", &[]).unwrap();
+        assert!(!d.can_suggest_cased("normal", "NORMAL"));
+        assert!(!d.can_suggest_cased("normal", "pour"));
+    }
+
+    /// An excluded simple entry does not exclude an eligible exact COMPOUNDRULE derivation.
+    #[test]
+    fn rep_keeps_eligible_exact_compound_beside_an_excluded_simple_entry() {
+        for flag in ["N", "S", "F"] {
+            let aff = "SET UTF-8\nNOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\nCOMPOUNDRULE ab\nREP 1\nREP zz foobar\n";
+            let d = AffixDict::from_hunspell(aff, &format!("3\nfoobar/{flag}\nfoo/a\nbar/b\n"), &[]).unwrap();
+            for d in [&d, &AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap()] {
+                assert_eq!(d.contains_suggestible("foobar"), flag != "F", "{flag}: exact compound eligibility");
+                let got = suggest_in(d, "zz", 4, &Tuning::DEFAULT);
+                assert_eq!(got.iter().any(|w| w == "foobar"), flag != "F", "{flag}: {got:?}");
+            }
+        }
+    }
+
     /// A language's tables come after its dictionary's, a TRY alphabet stands in for a missing TRY
     /// line, and a split rule decides which missing spaces are offered.
     #[test]
@@ -777,5 +960,99 @@ mod tests {
         assert!(suggest_in(&d, "nakot", 4, &near).contains(&"na kot".into()));
         assert!(!suggest_in(&d, "kotna", 4, &near).contains(&"kot na".into()), "no stray short half");
         assert!(suggest_in(&d, "kotna", 4, &Tuning::DEFAULT).contains(&"kot na".into()));
+    }
+
+    /// A French elision in the shape of the LibreOffice `fr` dictionary (written for this test):
+    /// long flags named after the elided word, `’` read as `'` and written back as `’`.
+    const FR_AFF: &str = "SET UTF-8\nFLAG long\nWORDCHARS -’'\nICONV 1\nICONV ’ '\nOCONV 1\nOCONV ' ’\n\
+        PFX j' Y 1\nPFX j' 0 j' .\nPFX l' Y 1\nPFX l' 0 l' .\n";
+    const FR_DIC: &str = "5\nadore/j'\nami/l'\njade\nj\nl\n";
+
+    /// Craft-proof bug: French `Jadore` was offered `Adore, J adore, Jade` but never `J’adore`. A
+    /// missing apostrophe the dictionary accepts comes before the missing space, in the
+    /// writer's case and with the dictionary's apostrophe.
+    #[test]
+    fn a_missing_elision_apostrophe_is_offered_before_the_missing_space() {
+        let d = AffixDict::from_hunspell(FR_AFF, FR_DIC, &[]).unwrap();
+        assert!(d.check("j'adore") && d.check("j’adore") && !d.check("jadore"));
+        for (word, want, space) in
+            [("Jadore", "J’adore", "J adore"), ("jadore", "j’adore", "j adore"), ("JADORE", "J’ADORE", "J ADORE"), ("lami", "l’ami", "l ami")]
+        {
+            let got = suggest_in(&d, word, 6, &Tuning::DEFAULT);
+            assert_eq!(got.first().map(String::as_str), Some(want), "{word}: {got:?}");
+            let at = |s: &str| got.iter().position(|g| g == s);
+            assert!(at(want) < at(space) || at(space).is_none(), "{word}: {got:?}");
+        }
+        // A word the writer gave an apostrophe isn't split again.
+        assert!(!suggest_in(&d, "j'adorr", 6, &Tuning::DEFAULT).iter().any(|g| g.matches('’').count() > 1));
+    }
+
+    /// A dictionary without elided forms offers no apostrophe: the missing space is still first.
+    #[test]
+    fn no_apostrophe_without_elided_forms_in_the_dictionary() {
+        let d = AffixDict::from_hunspell("SET UTF-8\n", "4\nadore\nj\nna\npewno\n", &[]).unwrap();
+        for word in ["jadore", "napewno"] {
+            let got = suggest_in(&d, word, 6, &Tuning::DEFAULT);
+            assert!(got.iter().all(|g| !g.contains(['\'', '’'])), "{word}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "napewno", 6, &Tuning::DEFAULT).first().map(String::as_str), Some("na pewno"));
+    }
+
+    /// Review of the elision fix: an apostrophe form whose second part is no word (a Catalan
+    /// enclitic `acusi't`, an English possessive `church's`) ranks after the one-letter fixes,
+    /// while a true elision (`l'home`) still ranks first among them.
+    #[test]
+    fn an_apostrophe_before_no_word_ranks_after_one_letter_fixes() {
+        let aff = "SET UTF-8\nTRY acdehimorstu\nWORDCHARS '\nSFX T Y 1\nSFX T 0 't .\nPFX L Y 1\nPFX L 0 l' .\nSFX S Y 1\nSFX S 0 es .\nSFX M Y 1\nSFX M 0 's .\n";
+        let d = AffixDict::from_hunspell(aff, "5\nacudit\nacusi/T\nhome/L\nl\nchurch/SM\n", &[]).unwrap();
+        assert!(d.check("acusi't") && d.check("church's"));
+        for (word, before, after) in [("acusit", "acudit", "acusi't"), ("churchs", "churches", "church's"), ("lhome", "l'home", "l home")] {
+            let got = suggest_in(&d, word, 8, &Tuning::DEFAULT);
+            let at = |s: &str| got.iter().position(|g| g == s);
+            assert!(at(before).is_some() && at(before) < at(after) && at(after).is_some(), "{word}: {got:?}");
+        }
+        assert_eq!(suggest_in(&d, "lhome", 8, &Tuning::DEFAULT).first().map(String::as_str), Some("l'home"));
+        assert!(suggest_in(&d, "churchs", 8, &Tuning::DEFAULT).iter().position(|g| g == "church") < Some(2), "drop the s");
+    }
+
+    /// A language without elision ([`Tuning::elision`], English) ranks every missing apostrophe
+    /// after the one-letter fixes, even before a word (`neer` → `near` before `ne'er`).
+    #[test]
+    fn a_language_without_elision_ranks_apostrophes_late() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nTRY aenr\nWORDCHARS '\n", "3\nne'er\ner\nnear\n", &[]).unwrap();
+        let english = Tuning { elision: false, ..Tuning::DEFAULT };
+        assert_eq!(suggest_in(&d, "neer", 4, &english).first().map(String::as_str), Some("near"));
+        assert!(suggest_in(&d, "neer", 4, &english).contains(&"ne'er".to_string()));
+        assert_eq!(suggest_in(&d, "neer", 4, &Tuning::DEFAULT).first().map(String::as_str), Some("ne'er"), "an elision");
+    }
+    /// A REP candidate is admitted before costly TRY checks consume the normal shared budget.
+    /// Finalization must retain that accepted affixed word, including a conservative case fallback.
+    #[test]
+    fn accepted_affixed_suggestions_survive_exhausted_collection_budget() {
+        let input = format!("{}x{}", "a".repeat(20), "a".repeat(19));
+        let mut aff = String::from("SET UTF-8\nFLAG num\nTRY ");
+        aff.extend(('a'..='z').chain((0x100..0x166).filter_map(char::from_u32)));
+        aff.push_str(&format!("\nREP 1\nREP {input} kots\n"));
+        // The bounded adversarial rule shape of the existing shared-budget regression.
+        for f in 1..=1000u32 {
+            let c = char::from_u32(0x4e00 + f).unwrap();
+            aff.push_str(&format!("PFX {f} Y 1\nPFX {f} {c} 0 .\n"));
+        }
+        let conts: Vec<String> = (0..286).map(|k| (5000 + k * 7).to_string()).collect();
+        for len in 1..=40 {
+            for k in 0..50 {
+                let f = 5000 + (len - 1) * 50 + k;
+                aff.push_str(&format!("SFX {f} Y 1\nSFX {f} 0 {}/{} .\n", "a".repeat(len), conts.join(",")));
+            }
+        }
+        aff.push_str("SFX 9000 Y 1\nSFX 9000 0 s .\n");
+        let d = AffixDict::from_hunspell(&aff, "3\nb/1,5000\nab/2\nkot/9000\n", &[]).unwrap();
+        assert!(!d.stems().any(|s| s == "kots") && d.can_suggest("kots"));
+        for word in [input.clone(), input.to_uppercase()] {
+            let got = suggest_in(&d, &word, 1, &Tuning::DEFAULT);
+            assert_eq!(got.len(), 1, "accepted affixed candidate lost: {word}: {got:?}");
+            assert!(got[0].eq_ignore_ascii_case("kots"), "{word}: {got:?}");
+            assert!(d.can_suggest(&got[0]));
+        }
     }
 }
