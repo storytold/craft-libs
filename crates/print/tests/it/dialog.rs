@@ -514,7 +514,9 @@ fn a_document_print_dialog_has_compact_inline_rows() {
     let count = |text: &str| texts.iter().filter(|run| run.text == text).count();
     assert_eq!(count("Printer Setup"), 0, "the printer rows carry no heading");
     assert_eq!(fixture.by_label("Refresh").is_none(), true, "the printers are found as the dialog opens: no Refresh");
-    assert_eq!(count("Pages to Print"), 1, "the heading is shown once, not again as the radio's caption");
+    // The heading is an overline, in capitals (production's "PAGES TO PRINT"); the radio's caption is not repeated.
+    assert_eq!(count("PAGES TO PRINT") + count("Pages to Print"), 1, "the heading is shown once, not again as the radio's caption");
+    assert_eq!(count("PAGES TO PRINT"), 1, "the heading is an overline in capitals");
     let all = texts.iter().find(|run| run.text == "All pages").expect("the first option is painted");
     let current = texts.iter().find(|run| run.text == "Current page").expect("the second option is painted");
     assert!((all.rect.center().y - current.rect.center().y).abs() < 2.0, "the options stand on one line: {:?} {:?}", all.rect, current.rect);

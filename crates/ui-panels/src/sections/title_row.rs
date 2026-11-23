@@ -37,6 +37,9 @@ pub enum HeaderStrength {
     Heading,
     /// A quiet heading over a group of controls: label text, faint, as written, with no rule.
     Caption,
+    /// A small overline over a group of controls: the caption role, faint, in capitals, with no rule. A document
+    /// dialog's group names ("PAGES TO PRINT").
+    Overline,
 }
 
 /// What a title row's action parts ask the container to do.
@@ -344,6 +347,7 @@ impl Component for TitleRow<'_> {
             HeaderStrength::Section => (cx.tokens.size.panel_header, TypeRole::BodyStrong, text.normal),
             HeaderStrength::Heading => (cx.tokens.size.panel_header, TypeRole::Heading, text.normal),
             HeaderStrength::Caption => (cx.control().height, TypeRole::Label, text.faint),
+            HeaderStrength::Overline => (cx.control().height, TypeRole::Caption, text.faint),
         };
         let shade = key.tone.map_or_else(|| cx.color(shade), |tone| cx.tone_on_fill(tone));
         let (ink, disabled) = (cx.ink(key.icon_ink), cx.color(text.disabled));
@@ -496,8 +500,10 @@ impl Component for TitleRow<'_> {
             }
             ui.draw().icon(rect, icon);
         }
-        let mut title = TextRun::new(cx.resolved.label).role(role).elide();
-        if self.strength == HeaderStrength::Caption {
+        let overline = self.strength == HeaderStrength::Overline;
+        let capitals = overline.then(|| cx.resolved.label.to_uppercase());
+        let mut title = TextRun::new(capitals.as_deref().unwrap_or(cx.resolved.label)).role(role).elide();
+        if matches!(self.strength, HeaderStrength::Caption | HeaderStrength::Overline) {
             title = title.color(cx.resolve(&cx.style.text.color));
         }
         ui.draw().text_on_centre_line(placed.title, &title);

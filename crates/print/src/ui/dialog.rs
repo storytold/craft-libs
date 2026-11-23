@@ -308,7 +308,7 @@ impl PrintSection {
             });
         }
         if inline {
-            section = section.strength(HeaderStrength::Caption);
+            section = section.strength(HeaderStrength::Overline);
         }
         section.id_salt(("section", at)).show(ui, |ui, _| rows(ui, values, requests));
         if let Some(id) = pressed {
