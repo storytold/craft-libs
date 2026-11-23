@@ -428,15 +428,21 @@ impl WindowHost {
         under.into_iter().map(|(viewport, _)| viewport).collect()
     }
 
-    /// Who draws the running viewport's frame, and the caption buttons it shows.
+    /// Who draws the running viewport's frame, and the caption buttons it shows. An inset frame whose window was
+    /// measured with the traffic lights at the right end says so ([`MacInset::lights_right`](craft_window::policy::MacInset)).
     pub fn frame(&self) -> Frame {
         let viewport = pass::current_viewport(&self.ctx);
-        if viewport == ViewportId::ROOT
-            && let Some(frame) = shared(&self.ctx, |shared| shared.root_frame.clone())
-        {
-            return frame;
+        let frame = match shared(&self.ctx, |shared| shared.root_frame.clone()) {
+            Some(frame) if viewport == ViewportId::ROOT => frame,
+            _ => frame_in(&self.ctx, viewport),
+        };
+        match frame {
+            Frame::Inset(inset) if !inset.lights_right => {
+                let right = PerViewport::<Record>::with_existing(&self.ctx, viewport, |record| record.lights.lights_right()).unwrap_or(false);
+                Frame::Inset(inset.with_lights_right(right))
+            }
+            frame => frame,
         }
-        frame_in(&self.ctx, viewport)
     }
 
     /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app

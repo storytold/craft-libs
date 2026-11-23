@@ -26,6 +26,9 @@ pub(super) struct Session {
     pub dragging: Option<u32>,
     /// The chars the press selected, which a drag by word, line or paragraph keeps selected.
     pub drag_origin: Range<usize>,
+    /// The word a double press selected: the Shift-clicks after it extend from the whole word, in either direction,
+    /// while the selection holds it. A key move, Select All or a plain press ends it.
+    pub word: Option<Range<usize>>,
     /// The pass time of the last edit, move or press: the caret blink restarts from it.
     pub blink_start: f64,
     /// Length and hash of the host's text as the last pass left it.
@@ -347,6 +350,7 @@ impl Edits<'_> {
             NavMove::PageDown => chars,
             _ => caret,
         };
+        self.session.word = None;
         self.move_caret(to, mods.extend);
     }
 
@@ -377,6 +381,7 @@ impl Edits<'_> {
 
     /// Select everything.
     pub fn select_all(&mut self) {
+        self.session.word = None;
         self.selection = TextSelection { anchor: 0, caret: self.chars() };
     }
 
@@ -388,15 +393,31 @@ impl Edits<'_> {
         let chars = self.chars();
         let offset = offset.min(chars);
         let count = click_count(clicks);
-        self.selection.caret = offset;
-        if !shift {
-            self.selection.anchor = offset;
-        }
+        let selected = self.selection.range();
+        // A Shift-click after a double press extends from the whole word: the far end of the word stays, whichever
+        // side the click is on, and a click inside the word keeps just the word.
+        let word = self.session.word.take().filter(|word| shift && count == 1 && selected.start <= word.start && word.end <= selected.end);
         self.session.drag_origin = offset..offset;
+        if let Some(word) = word {
+            self.selection = if offset < word.start {
+                TextSelection { anchor: word.end, caret: offset }
+            } else if offset > word.end {
+                TextSelection { anchor: word.start, caret: offset }
+            } else {
+                TextSelection { anchor: word.start, caret: word.end }
+            };
+            self.session.word = Some(word);
+        } else {
+            self.selection.caret = offset;
+            if !shift {
+                self.selection.anchor = offset;
+            }
+        }
         if count >= 2 {
             let line = (count == 3).then(|| self.host.line_range(line));
             let range = click_selection(self.host.text(), offset, line, count);
             self.selection = TextSelection { anchor: range.start, caret: range.end };
+            self.session.word = (count == 2 && !range.is_empty()).then(|| range.clone());
             self.session.drag_origin = range;
         }
         self.session.dragging = Some(count);

@@ -700,3 +700,53 @@ fn an_editor_that_does_not_return_focus_leaves_its_opener_alone() {
         assert_eq!(focused(&fixture).as_deref() == Some("Opener"), returns, "returns {returns}: the focus went back to the opener only when asked");
     }
 }
+
+/// The screen point of document x `x` on the trial host's line: one char per document unit at 100 %.
+fn at_char(session: &Session, x: f32) -> egui::Pos2 {
+    let origin = session.fixture.by_label("Document").map_or(pos2(0.0, 0.0), |canvas| canvas.rect.min);
+    origin + vec2(x, 10.0)
+}
+
+/// A double press on a one-letter word selects only that word, from either half of its letter (production 439401188,
+/// #7413: "Take a calm" selected "Take a").
+#[trial]
+fn a_double_press_on_a_one_letter_word_selects_only_that_word() {
+    for x in [5.2, 5.8] {
+        let mut editor = session("Take a calm walk.", None);
+        let at = at_char(&editor, x);
+        editor.fixture.click_at(at).click_at(at).settle();
+        assert_eq!(editor.selection.borrow().range(), 5..6, "a double press at {x} selects the a");
+    }
+}
+
+/// After a double press selects a word, Shift-clicks extend from the whole word in either direction and keep it: before
+/// it, after it, and back before it again; a click inside it keeps just the word (production 439401188).
+#[trial]
+fn shift_clicks_after_a_word_selection_extend_from_the_whole_word() {
+    let mut editor = session("Take a calm walk.", None);
+    let calm = at_char(&editor, 9.0);
+    editor.fixture.click_at(calm).click_at(calm).settle();
+    assert_eq!(editor.selection.borrow().range(), 7..11, "the double press selects calm");
+    editor.fixture.advance(1.0).hold(Modifiers::SHIFT);
+    for (x, expected) in [(2.0, 2..11), (15.0, 7..15), (1.0, 1..11), (9.0, 7..11)] {
+        editor.fixture.click_at(at_char(&editor, x)).advance(1.0).settle();
+        assert_eq!(editor.selection.borrow().range(), expected, "a Shift-click at {x} extends from calm");
+    }
+    editor.fixture.hold(Modifiers::NONE);
+}
+
+/// A key that moves the selection ends the word anchor: a Shift-click after it extends from the selection's own anchor
+/// (production 439401188).
+#[trial]
+fn a_key_move_ends_the_word_anchor() {
+    let mut editor = session("Take a calm walk.", None);
+    let a = at_char(&editor, 5.2);
+    editor.fixture.click_at(a).click_at(a).settle();
+    assert_eq!(editor.selection.borrow().range(), 5..6, "the double press selects the a");
+    editor.fixture.key(Key::ArrowRight, Modifiers::SHIFT).settle();
+    assert_eq!(editor.selection.borrow().range(), 5..7, "Shift+Right extends by a char");
+    editor.fixture.advance(1.0).hold(Modifiers::SHIFT);
+    editor.fixture.click_at(at_char(&editor, 2.0)).settle();
+    editor.fixture.hold(Modifiers::NONE);
+    assert_eq!(editor.selection.borrow().range(), 2..5, "the Shift-click extends from the selection's anchor, not the word");
+}

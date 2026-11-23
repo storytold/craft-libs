@@ -267,3 +267,89 @@ fn an_action_title_is_a_button_and_reports_its_activation() {
         title.rect
     );
 }
+
+/// What the mirrored-title trial saw, by label: the buttons' and the tabs' rects in the settled pass.
+fn lights_right_bar(follows: bool, lights_right: bool) -> impl Fn(&str) -> Rect {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Show as _, ShowContainer as _};
+    use craft_ui::shell::MacInset;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let frame = Frame::Inset(MacInset::default().with_lights_right(lights_right));
+    let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).frame(Decision { frame, overridden: None, desktop }));
+    let tabs = [DocumentTab::new(0_usize, "first.pdf"), DocumentTab::new(1, "last.pdf")];
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            let _ = AppShell::new(WindowKey::main())
+                .title_follows_lights(follows)
+                .title_bar(|ui, _, _: &mut ()| {
+                    let _ = TitleBar::new()
+                        .trailing(|ui, _| {
+                            Button::new("Discord").show(ui);
+                            Button::new("Preferences").show(ui);
+                        })
+                        .show(ui, |ui, _| {
+                            Button::new("Home").show(ui);
+                            let _ = DocumentTabs::new("Documents", &tabs)
+                                .selected(0)
+                                .trailing(|ui| {
+                                    Button::new("Open").show(ui);
+                                })
+                                .show(ui);
+                        });
+                })
+                .body(|_, _, _| {})
+                .show(ui, &mut ());
+        })
+    };
+    for _ in 0..3 {
+        frame();
+    }
+    let settled = frame();
+    let tree = settled.trees.into_iter().rev().find(|(viewport, _)| *viewport == ViewportId::ROOT).expect("the root pass ran").1;
+    move |label: &str| {
+        tree.with_role(Role::BUTTON)
+            .into_iter()
+            .chain(tree.with_role(Role::TAB))
+            .find(|key| tree.name_of(*key) == Some(label))
+            .and_then(|key| tree.bounds_of(key))
+            .unwrap_or_else(|| panic!("{label} is in the tree"))
+    }
+}
+
+/// macOS with a right-to-left system language lays the traffic lights out from the right end. A shell whose title
+/// follows the lights mirrors the bar's flow: the lights' room is at the right, Home sits beside it, the tabs read from
+/// the right, then Open; the trailing controls are at the far left, in mirrored order. Labels keep reading left to
+/// right (production 4448ee940).
+#[trial]
+fn a_title_that_follows_the_lights_mirrors_when_they_are_at_the_right() {
+    let (width, lights) = (800.0, craft_ui::shell::MacInset::default().leading);
+    let rect = lights_right_bar(true, true);
+    let home = rect("Home");
+    for label in ["Home", "first.pdf", "last.pdf", "Open", "Discord", "Preferences"] {
+        assert!(rect(label).right() <= width - lights + 0.5, "{label} {:?} clears the lights at the right", rect(label));
+    }
+    assert!(home.right() >= width - lights - 16.0, "Home {home:?} sits beside the lights");
+    assert!(rect("first.pdf").right() <= home.left() + 0.5, "the first tab follows Home");
+    assert!(rect("last.pdf").right() <= rect("first.pdf").left() + 0.5, "the tabs read from the right");
+    assert!(rect("Open").right() <= rect("last.pdf").left() + 0.5, "Open follows the tabs");
+    let (discord, preferences) = (rect("Discord"), rect("Preferences"));
+    assert!(preferences.left() < 20.0, "Preferences {preferences:?} at the far end");
+    assert!(preferences.right() <= discord.left() + 0.5, "Preferences, then Discord, mirroring their order");
+    assert!(discord.right() < rect("Open").left(), "Discord stays clear of Open");
+}
+
+/// Without the opt-in the bar keeps its order and only the lights' room moves to the right end, so nothing sits under
+/// them; with the lights at the left the bar is as it always was.
+#[trial]
+fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
+    let (width, lights) = (800.0, craft_ui::shell::MacInset::default().leading);
+    let rect = lights_right_bar(false, true);
+    assert!(rect("Home").left() < 20.0, "Home {:?} keeps the start", rect("Home"));
+    assert!(rect("first.pdf").left() >= rect("Home").right() - 0.5, "the tabs read from the left");
+    let preferences = rect("Preferences");
+    assert!(preferences.right() <= width - lights + 0.5, "Preferences {preferences:?} clears the lights at the right");
+    let rect = lights_right_bar(true, false);
+    assert!(rect("Home").left() >= lights - 0.5, "Home {:?} after the lights at the left", rect("Home"));
+    assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
+}

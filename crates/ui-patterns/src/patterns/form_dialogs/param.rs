@@ -495,6 +495,8 @@ pub(crate) struct RowOptions {
     max_chars: Option<usize>,
     /// Whether a text row shows its text in the monospace face ([`Param::mono`]).
     mono: bool,
+    /// Whether a text row selects its text when it takes the focus ([`Param::select_on_focus`]).
+    select_on_focus: bool,
     /// The width a text row's field asks for, in characters ([`Param::field_chars`]).
     field_chars: Option<u16>,
     units: Option<UnitChoices>,
@@ -889,6 +891,14 @@ impl Param {
         self
     }
 
+    /// A [`ParamKind::Text`] row selects its whole text when it takes the focus, so typing replaces it (a Rename
+    /// dialog opening on the name); by default the caret goes to the end. Other kinds are unchanged.
+    #[must_use]
+    pub fn select_on_focus(mut self) -> Self {
+        self.options.get_or_insert_default().select_on_focus = true;
+        self
+    }
+
     /// The width of a [`ParamKind::Text`] row's field, in characters (`TextField::width_chars`): the field asks for
     /// `chars` times the width of a `0` in its face instead of the field length, so one row of a form can be wider or
     /// narrower than the others (a watermark's text against a short name). A row that lacks room still narrows it.
@@ -1201,6 +1211,11 @@ impl RowOptions {
     /// Whether a text row shows its text in the monospace face.
     pub(crate) fn mono(&self) -> bool {
         self.mono
+    }
+
+    /// Whether a text row selects its text when it takes the focus.
+    pub(crate) fn select_on_focus(&self) -> bool {
+        self.select_on_focus
     }
 
     /// The width a text row's field asks for, in characters; `None` for the field length.

@@ -26,3 +26,35 @@ fn cf_html_offsets_delimit_the_fragment_bytes() {
     assert_eq!(&data[end_html..], b"\0", "EndHTML excludes the trailing NUL");
     assert_eq!(end_html, data.len() - 1);
 }
+
+// Copied files reach the system clipboard as a file list holding the same paths, spaces and
+// non-ASCII names included; a URI that names no local file is never written as one, and a list
+// with no file in it leaves the write to the next flavour.
+#[test]
+fn a_file_list_is_written_as_files() {
+    use super::{Plan, Primary};
+    use crate::clipboard::types::{Flavor, URI_LIST};
+
+    let paths = vec![std::env::temp_dir().join("a b#1.pdf"), std::env::temp_dir().join("café 100%.png")];
+    let flavors = [Flavor::files(&paths), Flavor::text("names")];
+    let plan = Plan::new(&flavors, None);
+    assert_eq!(plan.primary(), Some(Primary::Files));
+    assert_eq!(plan.files.as_ref().map(|files| (files.index, files.paths.clone())), Some((0, paths.clone())));
+
+    let mut mixed = b"# copied\r\nhttps://example.com/a.pdf\r\n".to_vec();
+    mixed.extend(Flavor::files(&paths[..1]).data);
+    let flavors = [Flavor::new(URI_LIST, mixed)];
+    let plan = Plan::new(&flavors, None);
+    assert_eq!(plan.primary(), Some(Primary::Files));
+    assert_eq!(plan.files.as_ref().map(|files| files.paths.clone()), Some(paths[..1].to_vec()));
+
+    let flavors = [Flavor::new(URI_LIST, b"https://example.com/a.pdf\r\n".to_vec()), Flavor::text("names")];
+    let plan = Plan::new(&flavors, None);
+    assert!(plan.files.is_none());
+    assert_eq!(plan.primary(), Some(Primary::Rich));
+    assert_eq!(plan.text.as_ref().map(|text| text.index), Some(1));
+
+    // Text put first stays the write's shape even with files beside it.
+    let flavors = [Flavor::text("names"), Flavor::files(&paths)];
+    assert_eq!(Plan::new(&flavors, None).primary(), Some(Primary::Rich));
+}

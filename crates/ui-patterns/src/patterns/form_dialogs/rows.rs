@@ -1120,6 +1120,9 @@ impl<'p> Pass<'p> {
                     if options.mono() {
                         field = field.mono();
                     }
+                    if options.select_on_focus() {
+                        field = field.select_on_focus();
+                    }
                     if let Some(chars) = options.field_chars() {
                         field = field.width_chars(chars);
                     }
