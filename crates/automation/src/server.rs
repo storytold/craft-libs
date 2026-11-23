@@ -1,12 +1,12 @@
 //! The loopback JSON-lines TCP transport: one request per line, one reply per line.
 
-use std::io::{BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{BufReader, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
@@ -82,6 +82,7 @@ pub fn serve_with_deadline(
     let accept = std::thread::Builder::new().name("control server".into()).spawn(move || {
         let limiter = ConnectionLimiter::new(MAX_CONNECTIONS);
         let token = Arc::new(token);
+        let closer = refused_closer();
         for mut stream in listener.incoming().flatten() {
             if stopped.load(Ordering::Acquire) {
                 break;
@@ -89,6 +90,10 @@ pub fn serve_with_deadline(
             let Some(permit) = limiter.try_acquire() else {
                 let _ = configure_stream(&stream);
                 let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
+                // Closed on the closer thread, so the accept loop never waits; with that thread busy, at once.
+                if let Some(closer) = &closer {
+                    let _ = closer.try_send(stream);
+                }
                 continue;
             };
             let tx = tx.clone();
@@ -130,6 +135,7 @@ fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>,
                 });
                 let _ = write_reply(&mut out, &reply);
                 let _ = out.flush();
+                close_after_refusal(&out);
                 break;
             }
             Ok(LineRead::Line) if line.trim().is_empty() => continue,
@@ -141,7 +147,11 @@ fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>,
             if authenticated && reader.get_mut().authenticated().is_err() {
                 break;
             }
-            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() || step == AuthStep::Rejected {
+            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() {
+                break;
+            }
+            if step == AuthStep::Rejected {
+                close_after_refusal(&out);
                 break;
             }
             continue;
@@ -179,4 +189,47 @@ fn serve_connection(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>,
             break;
         }
     }
+}
+
+/// How long a refused connection is read and thrown away before it is closed.
+const REFUSAL_DRAIN: Duration = Duration::from_secs(1);
+/// The most a refused connection is read before it is closed regardless.
+const REFUSAL_DRAIN_BYTES: usize = 64 * 1024;
+
+/// End a connection whose refusal was just written so the client can still read it. Dropping a socket with unread
+/// input makes the system reset the connection, and a reset can discard the refusal before the client reads it: a
+/// client that wrote its request before reading the answer would see the connection reset instead. So the write side
+/// is shut first (the client reads the refusal and then the end), and what the client still sends is read and thrown
+/// away for at most [`REFUSAL_DRAIN`] and [`REFUSAL_DRAIN_BYTES`].
+fn close_after_refusal(stream: &TcpStream) {
+    let _ = stream.shutdown(Shutdown::Write);
+    let started = Instant::now();
+    let mut buf = [0u8; 4096];
+    let mut read = 0;
+    let mut reader = stream;
+    while read < REFUSAL_DRAIN_BYTES {
+        let Some(left) = REFUSAL_DRAIN.checked_sub(started.elapsed()).filter(|left| !left.is_zero()) else { break };
+        if reader.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
+        match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => read += n,
+        }
+    }
+}
+
+/// A thread that closes connections refused at the limit with [`close_after_refusal`], one at a time, so the accept
+/// loop never waits on one. Its queue holds [`MAX_CONNECTIONS`]; `None` when the thread can't be started.
+fn refused_closer() -> Option<SyncSender<TcpStream>> {
+    let (send, receive) = sync_channel::<TcpStream>(MAX_CONNECTIONS);
+    std::thread::Builder::new()
+        .name("control server closer".into())
+        .spawn(move || {
+            for stream in receive {
+                close_after_refusal(&stream);
+            }
+        })
+        .ok()?;
+    Some(send)
 }
