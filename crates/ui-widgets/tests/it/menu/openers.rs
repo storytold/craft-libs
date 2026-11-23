@@ -271,3 +271,33 @@ fn a_context_menu_near_the_top_stays_inside_the_window() {
     let window = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
     assert!(menu.min.y >= window.min.y - 0.5 && menu.max.y <= window.max.y + 0.5, "the menu lies inside the window: {menu:?}");
 }
+
+/// Edit ▸ Paste fired at the app reaches it at once with no content by default; an app that reads the clipboard
+/// through the board (`CommandInput::paste_reads_clipboard`) gets it with the clipboard's text once the platform
+/// answers, as ⌘V's paste does.
+#[trial]
+fn a_menu_paste_reads_the_clipboard_when_the_app_asks() {
+    for reads in [false, true] {
+        let mut fixture = Fixture::new(|ui| {
+            Button::new("Target").show(ui);
+        });
+        fixture.commands(commands::CommandInput::new().paste_reads_clipboard(reads)).settle();
+        let _ = take_output(fixture.ctx());
+        commands::fire(fixture.ctx(), EditCommands::Paste, FireSource::Menu);
+        fixture.settle();
+        let now = take_output(fixture.ctx()).fired;
+        if !reads {
+            assert!(now.iter().any(|fired| fired.command.id == EditCommands::Paste.id() && fired.pasted.is_none()), "at once: {now:?}");
+            continue;
+        }
+        assert!(now.is_empty(), "the paste waits for the platform's clipboard: {now:?}");
+        fixture.frame(vec![egui::Event::Paste("clipboard text".to_owned())]).settle();
+        let later = take_output(fixture.ctx()).fired;
+        assert!(
+            later.iter().any(|fired| fired.command.id == EditCommands::Paste.id()
+                && fired.source == FireSource::Menu
+                && fired.pasted.as_ref().and_then(|content| content.text.as_deref()) == Some("clipboard text")),
+            "the paste arrives with the clipboard's text: {later:?}"
+        );
+    }
+}
