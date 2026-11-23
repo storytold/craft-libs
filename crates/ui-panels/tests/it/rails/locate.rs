@@ -2,7 +2,7 @@
 //! neither chooses it.
 
 use super::{CUT, REDO, UNDO, tools};
-use craft_ui::contract::{Role, Show as _};
+use craft_ui::contract::{Role, Tracked};
 use craft_ui::display::TargetMark;
 use craft_ui::rails::{LastUsed, SlotId, ToolRail, ToolSlot};
 use craft_ui::testing::{Fixture, trial};
@@ -20,11 +20,17 @@ fn rig(reveal: Option<u8>, mark: Option<u8>) -> Rig {
     let selected = Rc::new(RefCell::new(Vec::new()));
     let flyout = Rc::new(Cell::new(None));
     let (seen, opened) = (selected.clone(), flyout.clone());
+    let slots = Tracked::new(vec![ToolSlot::new(0, tools(&[UNDO, REDO, CUT]))]);
+    let last = Tracked::new(LastUsed::default());
     let mut fixture = Fixture::new(move |ui| {
-        let slots = [ToolSlot::new(0, tools(&[UNDO, REDO, CUT]))];
-        let last = LastUsed::default();
-        let current = UNDO;
-        let out = ToolRail::new("Tools", &slots, &current, &last).reveal(reveal.as_ref()).mark(mark.as_ref()).show_rail(ui, |_, _| {});
+        let mut rail = ToolRail::new("Tools", &slots, &UNDO, &last);
+        if let Some(tool) = &reveal {
+            rail = rail.reveal(tool);
+        }
+        if let Some(tool) = &mark {
+            rail = rail.mark(tool);
+        }
+        let out = rail.show_rail(ui, |_, _| {});
         if let Some(tool) = out.select {
             seen.borrow_mut().push(tool);
         }

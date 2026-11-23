@@ -2,6 +2,7 @@
 //! click, a press dragged away, the flyout's tear-off bar and the window a torn-off group floats in.
 
 pub(crate) mod drawer;
+pub(crate) mod locate;
 
 use craft_behavior::{GesturePhase, Mixed};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
