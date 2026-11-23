@@ -749,6 +749,7 @@ fn malformed_profile_look_tags_are_ignored() {
 }
 
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
+#[cfg(feature = "jxl")]
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
     use zune_core::bit_depth::BitDepth;
     use zune_core::colorspace::ColorSpace;
@@ -765,6 +766,7 @@ fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8
 }
 
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
+#[cfg(feature = "jxl")]
 fn jxl_container(cs: &[u8]) -> Vec<u8> {
     let mut b = vec![0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a, 0, 0, 0, 0x14];
     b.extend_from_slice(b"ftypjxl \0\0\0\0jxl ");
@@ -777,6 +779,7 @@ fn jxl_container(cs: &[u8]) -> Vec<u8> {
 /// A tiled JPEG XL raw IFD of `px`. Edge tiles alternate between being coded at their in-image size
 /// and padded to the nominal tile size (with junk the decoder must drop); tiles alternate between bare
 /// codestreams and containers.
+#[cfg(feature = "jxl")]
 fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, tile: (usize, usize)) -> IfdBuilder {
     let (tw, th) = tile;
     let mut tiles = Vec::new();
@@ -804,6 +807,7 @@ fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, t
 }
 
 #[test]
+#[cfg(feature = "jxl")]
 fn jpeg_xl_tiles_decode_bit_exactly() {
     let (w, h) = (37, 29);
     // LinearRaw 3 × 16-bit, the full code range
@@ -831,6 +835,7 @@ fn jpeg_xl_tiles_decode_bit_exactly() {
 }
 
 #[test]
+#[cfg(feature = "jxl")]
 fn malformed_jpeg_xl_tiles_are_errors() {
     use craft_raw::RawError;
     let (w, h) = (16, 16);
@@ -868,6 +873,7 @@ fn malformed_jpeg_xl_tiles_are_errors() {
 
 /// One undecodable tile makes the whole image an error: it is never returned with a black tile.
 #[test]
+#[cfg(feature = "jxl")]
 fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
     use craft_raw::RawError;
     let (w, h) = (32, 16);
@@ -890,6 +896,7 @@ fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
 /// about twice what one plane may use, and is an error rather than an allocation the header asks
 /// for. The same samples without the alpha channel decode.
 #[test]
+#[cfg(feature = "jxl")]
 fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
     use craft_raw::RawError;
     use zune_core::bit_depth::BitDepth;
@@ -911,6 +918,7 @@ fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
 }
 
 #[test]
+#[cfg(feature = "jxl")]
 fn jpeg_xl_preview_ifd_is_offered() {
     let raw = synthetic(16, 16, Some(Cfa::bayer("RGGB").unwrap()), 1);
     let RawData::U16(px) = &raw.data else { unreachable!() };
