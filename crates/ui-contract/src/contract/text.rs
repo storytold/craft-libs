@@ -588,11 +588,7 @@ pub(crate) fn run<C: Component>(
         }
     }
     let resolved = resolve(&mut state, cx.value(), commit_now);
-    let keeps_escape = part.options.keep_on_escape
-        && !part.options.clear_on_escape
-        && !read_only
-        && cx.core.resolved.enabled
-        && part.options.enabled;
+    let keeps_escape = part.options.keep_on_escape && !part.options.clear_on_escape && !read_only && cx.core.resolved.enabled && part.options.enabled;
     if resolved.escaped && keeps_escape && !state.invalid {
         // The same Escape goes on to the enclosing scope in this pass, which still finds this focused stop; the field
         // lets focus go once the scopes have run.

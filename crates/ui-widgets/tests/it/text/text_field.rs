@@ -215,7 +215,6 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     assert_eq!(caret.get(), 4, "the user's caret move past the two-byte \"é\" writes its byte offset back");
 }
 
-
 /// A field that keeps its text on Escape (`keeps_on_escape`, a live filter's query) commits the typing, lets focus
 /// go and leaves the same Escape to its enclosing scope; it reports the focus loss as `text_lost_focus`.
 #[trial]

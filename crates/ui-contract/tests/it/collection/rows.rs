@@ -3,8 +3,8 @@
 
 use super::kit::{Count, Dismissed, List, ROW_H, RowOut, Words};
 use craft_behavior::{
-    CancelReason, CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, ItemSource, PartKey, ScrollPos, Selection, SelectionModel as _, Sense,
-    SheetLayout, SpanLayout, keyed,
+    CancelReason, CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, ItemSource, PartKey, ScrollPos, Selection, SelectionModel as _,
+    Sense, SheetLayout, SpanLayout, keyed,
 };
 use craft_ui::contract::{
     Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse, Focus as _,
