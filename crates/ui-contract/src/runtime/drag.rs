@@ -162,6 +162,12 @@ pub trait DropTarget<P: ?Sized> {
 
     /// Where `drop` would land, a value the ghost layer paints.
     fn mark(&self, drop: &Self::Drop) -> DropMark;
+
+    /// Whether the target takes OS file drops (`OsFiles`) while a modal layer above it holds input, as an app whose
+    /// alerts let files through (VectorCraft placed files dropped under its alert). By default a modal refuses them.
+    fn under_modal(&self) -> bool {
+        false
+    }
 }
 
 /// What a component registers with `Pointer::window_drop_target`: a target over the whole window, which needs no
@@ -175,6 +181,12 @@ pub trait WindowDropTarget<P> {
 
     /// Where `drop` would land, a value the ghost layer paints.
     fn mark(&self, drop: &Self::Drop) -> DropMark;
+
+    /// Whether the target takes OS file drops (`OsFiles`) while a modal layer holds input, as
+    /// [`DropTarget::under_modal`] says.
+    fn under_modal(&self) -> bool {
+        false
+    }
 }
 
 /// Where a drop target lies: a rect on an egui layer, in that layer's space. A component's own target lies over its
@@ -276,6 +288,8 @@ struct Registration {
     tokens: Arc<UiTokens>,
     /// The target covers the whole window: any target over a component beats it.
     window: bool,
+    /// The target takes OS files under a modal layer (`DropTarget::under_modal`).
+    under_modal: bool,
 }
 
 /// A viewport's registrations: this pass's, and the target that won last pass.
@@ -392,6 +406,11 @@ pub(crate) fn state(ctx: &Context) -> (u64, Option<(usize, Vec<usize>)>) {
 /// The mark of the target that would take a drop now, in screen space: `None` while no target accepts the payload.
 pub fn mark(ctx: &Context) -> Option<DropMark> {
     board(ctx, |board| board.session.as_ref().and_then(|session| session.mark.as_ref().map(|shown| shown.mark)))
+}
+
+/// Whether the running session carries files from the OS.
+fn carries_os_files(ctx: &Context) -> bool {
+    board(ctx, |board| board.session.as_ref().is_some_and(|session| session.os))
 }
 
 /// Whether a session runs.
@@ -556,12 +575,13 @@ pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
 }
 
 /// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer, with its mark in layer space and the
-/// tokens of the target's region. A `window` target covers the whole window.
-pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, tokens: Arc<UiTokens>, window: bool) {
+/// tokens of the target's region. A `window` target covers the whole window; an `under_modal` one takes OS files under
+/// a modal layer.
+pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, tokens: Arc<UiTokens>, window: bool, under_modal: bool) {
     crate::runtime::replay::journal(
         ctx,
-        || (owner, layer, mark, tokens.clone(), window),
-        |ctx, (owner, layer, mark, tokens, window)| register(ctx, *owner, *layer, *mark, tokens.clone(), *window),
+        || (owner, layer, mark, tokens.clone(), window, under_modal),
+        |ctx, (owner, layer, mark, tokens, window, under_modal)| register(ctx, *owner, *layer, *mark, tokens.clone(), *window, *under_modal),
     );
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
@@ -570,7 +590,7 @@ pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, t
     let scope = overlay::drawing_parent(ctx);
     PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
         let ordinal = targets.this.iter().filter(|registration| registration.owner == owner).count() as u32;
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, tokens, window });
+        targets.this.push(Registration { owner, ordinal, layer, scope, mark, tokens, window, under_modal });
     });
 }
 
@@ -641,9 +661,14 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
 ) -> Option<T::Drop> {
     let (payload, screen) = dragging_of(ctx, payload_type)?;
     let at = areas::layer_map(ctx, zone.layer).map_or(screen, |map| map.to_layer(screen));
-    let top = match moving_layer(ctx) {
-        Some(moving) => areas::layer_at_without(ctx, screen, moving),
-        None => areas::layer_at(ctx, screen),
+    let top = if carries_os_files(ctx) && target.under_modal() {
+        // A target that takes OS files under a modal sees through the modal's scrim, not through its body.
+        areas::layer_at_under_modal(ctx, screen, overlay::top_modal_in(ctx, pass::current_viewport(ctx)).and_then(|modal| modal.cover))
+    } else {
+        match moving_layer(ctx) {
+            Some(moving) => areas::layer_at_without(ctx, screen, moving),
+            None => areas::layer_at(ctx, screen),
+        }
     };
     if moves_viewport(ctx) || !zone.rect.contains(at) || top != Some(zone.layer) {
         return None;
@@ -651,7 +676,7 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     let op = current_operation(ctx);
     let drop = target.accept(&*payload, at, op)?;
     let ordinal = next_ordinal(ctx, owner);
-    register(ctx, owner, zone.layer, target.mark(&drop), tokens, false);
+    register(ctx, owner, zone.layer, target.mark(&drop), tokens, false, target.under_modal());
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
 }
 
@@ -682,6 +707,10 @@ impl<P: 'static, T: DropTarget<P>> DropTarget<dyn Any + Send + Sync> for Typed<'
     fn mark(&self, drop: &T::Drop) -> DropMark {
         self.0.mark(drop)
     }
+
+    fn under_modal(&self) -> bool {
+        self.0.under_modal()
+    }
 }
 
 /// The operation of the drop of `source`'s payload of type `P` that the previous frame took.
@@ -701,10 +730,14 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
 /// window holds the drop, it waits there for one more frame so that window's pass takes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    // A modal holds input: targets on layers below it, and on the window, never accept.
-    let scopes: Vec<Option<Id>> =
-        PerViewport::<Targets>::with(ctx, viewport, |targets| targets.this.iter().map(|registration| registration.scope).collect());
-    let open: Vec<bool> = scopes.iter().map(|scope| overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
+    // A modal holds input: targets on layers below it, and on the window, never accept, except OS files on a target
+    // that takes them there.
+    let os = carries_os_files(ctx);
+    let scopes: Vec<(Option<Id>, bool)> = PerViewport::<Targets>::with(ctx, viewport, |targets| {
+        targets.this.iter().map(|registration| (registration.scope, os && registration.under_modal)).collect()
+    });
+    let open: Vec<bool> =
+        scopes.iter().map(|(scope, through)| *through || overlay::key_layer(ctx, scope.as_slice(), None) != LayerKeys::Blocked).collect();
     let winner = PerViewport::<Targets>::with(ctx, viewport, |targets| {
         // The topmost layer in the order the overlay host handed egui wins, then the target registered last: a target
         // shown later lies over an enclosing one.

@@ -174,7 +174,7 @@ impl Pointer for CxCore<'_> {
         let op = drag::current_operation(&self.ctx);
         let drop = target.accept(&payload, op)?;
         let ordinal = drag::next_ordinal(&self.ctx, self.id);
-        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), self.env.shared_tokens(), true);
+        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), self.env.shared_tokens(), true, target.under_modal());
         drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
     }
 

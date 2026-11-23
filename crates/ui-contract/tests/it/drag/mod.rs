@@ -3,8 +3,8 @@
 use craft_behavior::{DropOperation, PartKey, PressPhase};
 use craft_host::target::ShellInfo;
 use craft_ui::contract::{
-    Common, Component, Cx, DragPreview, DropMark, DropTarget, MeasureCx, OsFiles, PartsCx, Pointer as _, Props as _, Role, Show as _,
-    WindowDropTarget,
+    Common, Component, Container, ContainerProps, Cx, DragPreview, DropMark, DropTarget, MeasureCx, Mount, OsFiles, Overlay, PartsCx, Pointer as _,
+    Props as _, Role, Show as _, ShowContainer as _, WindowDropTarget,
 };
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::drag;
@@ -251,8 +251,8 @@ fn names(files: &OsFiles) -> Vec<String> {
     files.files.iter().map(|file| file.name.clone()).collect()
 }
 
-/// A drop of files on the row under the pointer.
-struct OnRow;
+/// A drop of files on the row under the pointer; it takes them under a modal layer when it holds `true`.
+struct OnRow(bool);
 
 impl DropTarget<OsFiles> for OnRow {
     type Drop = (usize, Vec<String>);
@@ -264,10 +264,14 @@ impl DropTarget<OsFiles> for OnRow {
     fn mark(&self, (row, _): &Self::Drop) -> DropMark {
         DropMark::Into(Rect::from_min_size(LIST.min + Vec2::new(0.0, *row as f32 * ROW), Vec2::new(LIST.width(), ROW)))
     }
+
+    fn under_modal(&self) -> bool {
+        self.0
+    }
 }
 
-/// A drop of files anywhere in the window.
-struct OnWindow;
+/// A drop of files anywhere in the window; it takes them under a modal layer when it holds `true`.
+struct OnWindow(bool);
 
 impl WindowDropTarget<OsFiles> for OnWindow {
     type Drop = Vec<String>;
@@ -279,6 +283,10 @@ impl WindowDropTarget<OsFiles> for OnWindow {
     fn mark(&self, _: &Self::Drop) -> DropMark {
         DropMark::Into(WINDOW)
     }
+
+    fn under_modal(&self) -> bool {
+        self.0
+    }
 }
 
 /// A list of rows that takes files on a row, with the window as the target of every other drop.
@@ -287,6 +295,8 @@ struct FileList<'a> {
     #[common]
     common: Common,
     landed: &'a RefCell<Landed>,
+    /// The targets take files under a modal layer.
+    under_modal: bool,
 }
 
 impl Component for FileList<'_> {
@@ -303,10 +313,10 @@ impl Component for FileList<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if let Some(row) = cx.drop_target(&OnRow) {
+        if let Some(row) = cx.drop_target(&OnRow(self.under_modal)) {
             self.landed.borrow_mut().rows.push(row);
         }
-        if let Some(files) = cx.window_drop_target(&OnWindow) {
+        if let Some(files) = cx.window_drop_target(&OnWindow(self.under_modal)) {
             self.landed.borrow_mut().window.push(files);
         }
     }
@@ -321,7 +331,7 @@ fn files_that_leave_the_window_end_the_drag_without_a_drop() {
     let landed = RefCell::new(Landed::default());
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
-        FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+        FileList { common: Common::new(), landed: &landed, under_modal: false }.id_salt("files").show_at(ui, LIST);
     };
     frames.idle(2, &mut show);
     frames.hover_files(&["a.png"]);
@@ -340,7 +350,7 @@ fn files_hovering_right_after_a_drop_drag_and_drop_on_their_own() {
     let landed = RefCell::new(Landed::default());
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
-        FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+        FileList { common: Common::new(), landed: &landed, under_modal: false }.id_salt("files").show_at(ui, LIST);
     };
     let row = |n: usize| LIST.min + Vec2::new(LIST.width() / 2.0, (n as f32 + 0.5) * ROW);
     frames.idle(2, &mut show);
@@ -358,6 +368,65 @@ fn files_hovering_right_after_a_drop_drag_and_drop_on_their_own() {
     assert!(drag::active::<OsFiles>(&frames.ctx).is_none(), "the last drop ends the drag");
 }
 
+/// A modal layer with an empty body, in the middle of the window.
+#[derive(Component)]
+#[component(container, unregistered)]
+struct Modal {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl Component for Modal {
+    const ROLE: Role = Role::GROUP;
+    type Style = craft_ui_test_kit::contract::PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: ModalStyleKey) -> craft_ui_test_kit::contract::PlainStyle {
+        craft_ui_test_kit::contract::PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Modal {}
+
+/// What a file list whose targets take files `under_modal` took of a file dropped on its first row and one dropped
+/// beside it, while a modal layer is open.
+fn landed_under_a_modal(under_modal: bool) -> Landed {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        FileList { common: Common::new(), landed: &landed, under_modal }.id_salt("files").show_at(ui, LIST);
+        let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+        Modal { common: Common::new(), props }.id_salt("alert").show(ui, |_, _| {});
+    };
+    frames.idle(2, &mut show);
+    for (file, at) in [("a.png", LIST.min + Vec2::new(LIST.width() / 2.0, ROW / 2.0)), ("b.png", Pos2::new(LIST.center().x, 500.0))] {
+        frames.hover_files(&[file]);
+        frames.frame(vec![moved(at)], &mut show);
+        frames.frame(vec![], &mut show);
+        frames.drop_files(&[file]);
+        frames.frame(vec![], &mut show);
+        frames.frame(vec![], &mut show);
+    }
+    landed.into_inner()
+}
+
+/// Tb-8 (4): a modal refuses OS files on the layers below it and on the window, unless the target says it takes them
+/// there (`DropTarget::under_modal`), as VectorCraft placed files dropped under its alert.
+#[trial]
+fn files_dropped_under_a_modal_land_only_on_targets_that_take_them_there() {
+    let refused = landed_under_a_modal(false);
+    assert!(refused.rows.is_empty() && refused.window.is_empty(), "by default the modal refuses the drops");
+    let taken = landed_under_a_modal(true);
+    assert_eq!(taken.rows, vec![(0, vec!["a.png".to_owned()])], "the row below the modal takes its file");
+    assert_eq!(taken.window, vec![vec!["b.png".to_owned()]], "the window takes the file dropped beside the row");
+}
+
 /// Where the window's inner rect sits on the desktop in the desktop-pointer trial.
 const WINDOW_AT: Pos2 = Pos2::new(100.0, 50.0);
 
@@ -372,7 +441,7 @@ fn files_over_the_window_are_targeted_at_the_desktop_pointer_while_the_frame_has
     windows.root_info(ViewportInfo { inner_rect: Some(Rect::from_min_size(WINDOW_AT, WINDOW.size())), ..ViewportInfo::default() });
     let frame = |events: Vec<egui::Event>, hovered: Vec<egui::HoveredFile>, dropped: Vec<String>| {
         let _ = windows.frame_with_files(events, vec![], FilesOver::Root, hovered, dropped, |ui| {
-            FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+            FileList { common: Common::new(), landed: &landed, under_modal: false }.id_salt("files").show_at(ui, LIST);
         });
         windows.ctx.has_requested_repaint()
     };
