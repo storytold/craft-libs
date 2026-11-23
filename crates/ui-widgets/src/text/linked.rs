@@ -317,7 +317,8 @@ impl<const N: usize> Component for LinkedFields<'_, N> {
             memo.base = Some(shown_of(shown.as_ref()));
         }
         let was = std::mem::replace(&mut memo.before, memo.seen);
-        let turned_on = memo.seen == Some(true) && was == Some(false);
+        // The link showed on in the last pass and not before it; a host that has turned it off again since keeps its values.
+        let turned_on = memo.seen == Some(true) && was == Some(false) && self.link.value() != Some(&false);
         if let (true, LinkMode::Equal, Some(values)) = (turned_on, self.mode, shown)
             && let Mixed::Same(Some(first)) = values[0]
             && values.iter().any(|value| *value != Mixed::Same(Some(first)))
