@@ -17,7 +17,7 @@ use craft_behavior::canvas::zoom;
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Rect, Size, Vec2};
 use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, ZoomScheme};
-use craft_keymap::Mods;
+use craft_keymap::{Key, Mods};
 use egui::Pos2;
 
 /// The rotation step of the Rotate View commands, in degrees.
@@ -417,7 +417,8 @@ impl CanvasTool for HandTool {
 
 /// The Zoom tool: a click steps the ladder about the clicked point (Alt: out; Zoom Clicked Point to Center centres
 /// it), a press held still zooms continuously ([`HoldZoom`], Animated Zoom only), a drag scrubs or draws a zoom
-/// rectangle ([`ZoomDrag`], Scrubby Zoom). The cursor is the magnifier, with a minus while the tool zooms out. At a
+/// rectangle ([`ZoomDrag`], Scrubby Zoom), which Space moves while held. Space held since the press (Cmd+Space lends
+/// the tool) sizes the rectangle until it is let go. The cursor is the magnifier, with a minus while the tool zooms out. At a
 /// zoom limit the view stays put. The tool reads the document's size from
 /// the canvas's [`CanvasSpace`](super::CanvasSpace) (the size given to [`Canvas::document`](super::Canvas::document));
 /// on a canvas given no document it does nothing.
@@ -438,12 +439,14 @@ pub struct ZoomTool {
     last: Pos2,
     /// The host called `drag` in this press: the pointer moved past the arena's slop.
     dragged: bool,
+    /// Space moves the rectangle while held: it was up at the press, or let go since.
+    space_moves: bool,
 }
 
 impl ZoomTool {
     /// A Zoom tool under `options`.
     pub fn new(options: NavigationOptions) -> Self {
-        Self { out: false, lent: false, options, hold: None, drag: None, press: None, last: Pos2::ZERO, dragged: false }
+        Self { out: false, lent: false, options, hold: None, drag: None, press: None, last: Pos2::ZERO, dragged: false, space_moves: false }
     }
 
     /// This tool as the momentary set lends it: its direction is final.
@@ -532,6 +535,7 @@ impl CanvasTool for ZoomTool {
         self.press = Some((view, pointer.time, pointer.pos));
         self.last = pointer.pos;
         self.dragged = false;
+        self.space_moves = !cx.held(Key::Space);
         self.hold = self.options.animated_zoom.then(|| HoldZoom::press(pointer.pos, view.to_doc(pointer.pos), pointer.time));
         self.drag = Some(ZoomDrag::begin(&view, pointer.pos, self.options.scrubby_zoom, space.pixels_per_point));
         if self.hold.is_some() {
@@ -541,6 +545,11 @@ impl CanvasTool for ZoomTool {
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let space = cx.held(Key::Space);
+        self.space_moves |= !space;
+        if let (true, Some(drag), Some(view)) = (space && self.space_moves, self.drag.as_mut(), cx.space().map(|space| space.view)) {
+            drag.shift(&view, pointer.pos - self.last);
+        }
         self.last = pointer.pos;
         self.dragged = true;
         // A hold that has not started zooming is a drag now.

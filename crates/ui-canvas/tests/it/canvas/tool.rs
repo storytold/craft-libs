@@ -24,6 +24,7 @@ use craft_ui::runtime::drag;
 use craft_ui::runtime::frame;
 use craft_ui::runtime::windows::WindowHost;
 use craft_ui::style::{DataColor, StyleCx};
+use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, MemoRun, ToolFixture, last_frame_memo_runs, pointer, trial};
@@ -1182,11 +1183,20 @@ fn momentary_canvas(main: Probe) -> CanvasRig<Id> {
 }
 
 /// `momentary_canvas` with `body` as the canvas's body.
-fn momentary_canvas_with(main: Probe, mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static) -> CanvasRig<Id> {
+fn momentary_canvas_with(main: Probe, body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static) -> CanvasRig<Id> {
+    momentary_canvas_under(NavigationOptions::default(), main, body)
+}
+
+/// `momentary_canvas_with` under the navigation choices `options`.
+fn momentary_canvas_under(
+    options: NavigationOptions,
+    main: Probe,
+    mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static,
+) -> CanvasRig<Id> {
     let main = RefCell::new(main);
     let (view, canvas) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Id::NULL)));
     let (shown_view, shown_canvas) = (Rc::clone(&view), Rc::clone(&canvas));
-    let mut set = Momentary::new(NavigationOptions::default());
+    let mut set = Momentary::new(options);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
@@ -1228,6 +1238,32 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     let calls = log.borrow().clone();
     assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "only the press after the release is the selected tool's: {calls:?}");
     assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
+}
+
+/// The zoom rectangle of a momentary Zoom that Cmd+Space started keeps being sized by the drag once Cmd is let go, and
+/// moves with Space once Space is let go and pressed again, as a marquee does: the release zooms to the moved
+/// rectangle. Space held since the press sizes it until let go.
+#[trial]
+fn space_pressed_again_moves_a_cmd_space_zoom_rectangle() {
+    let log = Log::default();
+    let mut options = NavigationOptions::default();
+    options.scrubby_zoom = false;
+    options.animated_zoom = false;
+    let (mut fixture, view, _) = momentary_canvas_under(options, Probe::new("main", &log), |_, _| {});
+    let room = fixture.by_role(Role::CANVAS)[0].rect;
+    let at = room.center() - Vec2::new(180.0, 90.0);
+    let before = view.get().expect("the canvas ran").zoom;
+    let (none, by) = (Modifiers::NONE, |x: f32| at + Vec2::new(x, x / 2.0));
+    fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at), key_press(Key::Space, Modifiers::COMMAND)]);
+    fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(by(100.0))]);
+    fixture.hold(none).frame(vec![pointer::moved(by(200.0))]);
+    fixture.frame(vec![key_release(Key::Space, none)]);
+    fixture.frame(vec![key_press(Key::Space, none), pointer::moved(by(240.0))]).frame(vec![pointer::moved(by(280.0))]);
+    fixture.frame(vec![key_release(Key::Space, none), pointer::moved(by(360.0))]).frame(vec![pointer::release(by(360.0))]).settle();
+    let zoomed = view.get().expect("the canvas ran").zoom / before;
+    // Moved by Space, the rectangle spans 280 x 140 points; never moved, it would span 360 x 180.
+    let fit = |w: f32, h: f32| f64::from((room.width() / w).min(room.height() / h));
+    assert!((zoomed - fit(280.0, 140.0)).abs() < (zoomed - fit(360.0, 180.0)).abs(), "zoomed by {zoomed}: to the moved rectangle");
 }
 
 /// The momentary Zoom's direction comes from the keys that chose it: a click with Alt and Space held zooms out, and the

@@ -12,7 +12,7 @@ use crate::runtime::memory::{global, with_session};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{CanvasView, ZoomScheme};
-use egui::{Context, Id, Pos2, Rect};
+use egui::{Context, Id, Pos2, Rect, Vec2};
 
 /// How far the app's view may differ from the zoom anchor, in document units, before the anchor is dropped.
 const ANCHOR_TOLERANCE: f64 = 0.01;
@@ -232,8 +232,9 @@ impl HoldZoom {
 }
 
 /// A Zoom tool drag. With Scrubby Zoom on (Photoshop's default) the drag zooms continuously, right in and left out,
-/// [`DOUBLING`](Self::DOUBLING) points per doubling, about the press point. Off, it draws a rectangle and the release
-/// zooms to fit it (Alt: out, so the view steps one rung out about the press point). Whether a press is a drag or a
+/// [`DOUBLING`](Self::DOUBLING) points per doubling, about the press point. Off, it draws a rectangle, which Space moves
+/// as a marquee ([`shift`](Self::shift)), and the release zooms to fit it (Alt: out, so the view steps one rung out
+/// about the press point). Whether a press is a drag or a
 /// click is the host's call (`drag` reached the tool or not), not the drag's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ZoomDrag {
@@ -263,6 +264,15 @@ impl ZoomDrag {
                     zoom::anchor(view, self.anchor, self.doc, next, pixels_per_point);
                 }
             }
+        }
+    }
+
+    /// Moves a rectangle by `by` on `view`, keeping its size, as Space held during the drag moves a marquee. A rectangle
+    /// with no size yet stays at the press point, so the drag sizes it; a scrub has no rectangle to move.
+    pub fn shift(&mut self, view: &CanvasView, by: Vec2) {
+        if self.corner.is_some_and(|corner| corner != self.anchor) {
+            self.anchor += by;
+            self.doc = view.to_doc(self.anchor);
         }
     }
 
