@@ -64,6 +64,10 @@ pub struct TextOptions {
     pub live: bool,
     /// Escape clears the text and commits the empty text while text shows, and goes on to the host once it is empty.
     pub clear_on_escape: bool,
+    /// Escape keeps the text: an open typing run commits once, editing ends by leaving focus, and the same Escape
+    /// goes on to the enclosing scope. A live filter keeps its query this way. Ignored with `clear_on_escape`, and on a
+    /// disabled or read-only part.
+    pub keep_on_escape: bool,
     /// Monospace text.
     pub mono: bool,
     /// The type role the text is set in; a monospace text takes the mono role's face and size instead.
@@ -122,6 +126,7 @@ impl Default for TextOptions {
             mask: false,
             live: false,
             clear_on_escape: false,
+            keep_on_escape: false,
             mono: false,
             role: TypeRole::Body,
             ink: None,

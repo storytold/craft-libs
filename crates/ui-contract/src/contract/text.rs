@@ -167,6 +167,7 @@ type Resolve<V> = Box<dyn FnOnce(&mut TextState, Option<&V>, bool) -> Resolved<V
 /// while the component's value is mixed.
 fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: Rect, fallback: K::Value) -> Resolve<K::Value> {
     let (live, limit, clear_on_escape) = (options.live, options.limit, options.clear_on_escape);
+    let keep_on_escape = options.keep_on_escape && !clear_on_escape;
     Box::new(move |state, value, commit_now| {
         let value = value.unwrap_or(&fallback);
         let mut typing = TypingRun::new(codec).live(live);
@@ -206,6 +207,15 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
             Some(End::Revert) => {
                 if let Escaped::Restore(_) = typing.escape(&mut run) {
                     events.push(TextEvent::Cancel(CancelReason::Escape));
+                }
+            }
+            Some(End::Escape) if keep_on_escape => {
+                // The text stays: an open run commits once, neither submitted nor cancelled.
+                escaped = true;
+                if let (Ended::Commit(committed), note) = typing.commit_tagged(&mut run) {
+                    committed_note = Some(note);
+                    state.normalised = Some(typing.codec().normalise(&draft_text, &committed));
+                    events.push(TextEvent::Commit(committed));
                 }
             }
             Some(End::Escape) => {
@@ -535,6 +545,17 @@ pub(crate) fn run<C: Component>(
         }
     }
     let resolved = resolve(&mut state, cx.value(), commit_now);
+    let keeps_escape = part.options.keep_on_escape
+        && !part.options.clear_on_escape
+        && !read_only
+        && cx.core.resolved.enabled
+        && part.options.enabled;
+    if resolved.escaped && keeps_escape && !state.invalid {
+        // The same Escape goes on to the enclosing scope in this pass, which still finds this focused stop; the field
+        // lets focus go once the scopes have run.
+        cx.core.intents.pass_on(craft_behavior::Intent::Cancel);
+        crate::runtime::focus::surrender_after_scopes(&ctx, widget);
+    }
     if resolved.refused {
         crate::runtime::frame::refuse(&ctx);
     }
@@ -551,7 +572,7 @@ pub(crate) fn run<C: Component>(
     cx.core.text_invalid = state.invalid;
     cx.core.text_unparsed = part.options.unparsed.clone().filter(|_| state.invalid);
     cx.core.escape_to_list = state.completions.open || list_open;
-    if state.draft.is_some() || (part.options.clear_on_escape && !out.layout.full().is_empty()) {
+    if state.draft.is_some() || (part.options.clear_on_escape && !out.layout.full().is_empty()) || (keeps_escape && out.focused) {
         keys::hold_escape(&ctx, id);
     }
     let completions = state.completions.items.clone();
@@ -566,7 +587,9 @@ pub(crate) fn run<C: Component>(
     outcome.clicked = out.clicked;
     // The focus service moved focus off the widget with Tab before this pass's widgets ran.
     let left_by_tab = if was_focused && !out.focused { crate::runtime::focus::tabbed_off(&ctx, widget) } else { None };
-    cx.core.texts = Some((part.key, Box::new(RecordedText { outcome, submit_mods: resolved.submit_mods, left_by_tab, tab: out.tab, caret })));
+    let text_lost_focus = was_focused && !out.focused;
+    cx.core.texts =
+        Some((part.key, Box::new(RecordedText { outcome, submit_mods: resolved.submit_mods, left_by_tab, tab: out.tab, caret, text_lost_focus })));
     apply_events(cx, resolved.events);
     cx.core.memory.shown::<TextState>(state_id).seen = shown_copy(cx);
     cx.core.submitted |= resolved.submitted;

@@ -42,6 +42,8 @@ pub(crate) trait TextResult {
     fn tab(&self) -> Option<bool>;
     /// The part's caret as a byte offset into its text after the pass; `None` while its widget has no caret.
     fn caret(&self) -> Option<usize>;
+    /// Whether the part lost key focus this pass, edited or not.
+    fn text_lost_focus(&self) -> bool;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -51,6 +53,7 @@ pub(crate) struct RecordedText<V> {
     pub(crate) left_by_tab: Option<bool>,
     pub(crate) tab: Option<bool>,
     pub(crate) caret: Option<usize>,
+    pub(crate) text_lost_focus: bool,
 }
 
 impl<V: 'static> TextResult for RecordedText<V> {
@@ -68,6 +71,10 @@ impl<V: 'static> TextResult for RecordedText<V> {
 
     fn caret(&self) -> Option<usize> {
         self.caret
+    }
+
+    fn text_lost_focus(&self) -> bool {
+        self.text_lost_focus
     }
 
     fn as_any(&self) -> &dyn Any {

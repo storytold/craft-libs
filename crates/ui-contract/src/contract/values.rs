@@ -635,6 +635,10 @@ pub struct EditResponse<T> {
     /// Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the text part in this pass, which ended its
     /// edit; a list's rename continues on the next or previous row.
     pub left_by_tab: Option<bool>,
+    /// The text part lost key focus in this pass, with or without an edit: a click elsewhere, Tab, or an Escape that
+    /// keeps the text (`keep_on_escape`). It decides nothing; `submitted`, `escaped` and `left_by_tab` stay their own
+    /// facts. False for a component with no text part.
+    pub text_lost_focus: bool,
     /// The edit was abandoned with Escape.
     pub escaped: bool,
     /// A text part holds text that does not parse: the value is the last one that did, and a form that commits the
@@ -680,6 +684,7 @@ impl<T> EditResponse<T> {
             submitted: false,
             submit_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
+            text_lost_focus: false,
             escaped: false,
             unparsed: false,
             validity,
@@ -702,6 +707,7 @@ impl<T> EditResponse<T> {
             submitted: false,
             submit_mods: craft_keymap::Mods::NONE,
             left_by_tab: None,
+            text_lost_focus: false,
             escaped: false,
             unparsed: false,
             validity: Validity::Ok,
@@ -742,6 +748,7 @@ impl<T: Clone> EditResponse<T> {
             submitted: self.submitted,
             submit_mods: self.submit_mods,
             left_by_tab: self.left_by_tab,
+            text_lost_focus: self.text_lost_focus,
             escaped: self.escaped,
             unparsed: self.unparsed,
             validity,

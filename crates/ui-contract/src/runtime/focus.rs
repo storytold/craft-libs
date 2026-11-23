@@ -175,6 +175,8 @@ pub(crate) struct State {
     pub(super) arrived: Option<(u64, StopKey, FocusOrigin)>,
     /// The running pass's begin hook left a Tab to egui (`NavKeys::tab_to_egui`); its end hook takes it.
     pub(super) tab_to_egui: bool,
+    /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
+    surrender_after_scopes: Option<Id>,
 }
 
 fn viewport(ctx: &Context) -> ViewportId {
@@ -950,6 +952,12 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     }
 }
 
+/// Releases the text widget `widget` at the end of this pass, after the enclosing scopes have had its Escape: a scope
+/// deciding whether to close still finds the focused stop. No key is replayed and no other widget loses focus.
+pub(crate) fn surrender_after_scopes(ctx: &Context, widget: Id) {
+    with(ctx, |state| state.surrender_after_scopes = Some(widget));
+}
+
 /// The end hook: applies the press's focus move, returns focus to the opener of a scope that went away,
 /// moves it off a stop that was not registered, and records what the next input hook reads.
 pub(crate) fn end(ctx: &Context) {
@@ -960,6 +968,9 @@ pub(crate) fn end(ctx: &Context) {
         && let Some(id) = egui_focus::focused(ctx).filter(|id| crate::runtime::pointer::made_by_component(ctx, viewport, *id))
     {
         egui_focus::surrender(ctx, id);
+    }
+    if let Some(widget) = with(ctx, |state| state.surrender_after_scopes.take()) {
+        egui_focus::surrender(ctx, widget);
     }
     let app_widget = |id: Id| {
         let made = crate::runtime::pointer::made_by_component(ctx, viewport, id);

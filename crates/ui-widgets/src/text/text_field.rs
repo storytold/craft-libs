@@ -86,6 +86,16 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
 }
 
 impl<'a> TextField<'a, PlainText> {
+    /// Escape keeps the current text and ends editing by leaving focus: a live filter keeps its query. An open typing
+    /// run commits once, without submitting or cancelling, and the same Escape goes on to the enclosing scope. Plain
+    /// fields otherwise restore the run's start and search fields clear; neither default changes.
+    #[must_use]
+    pub fn keeps_on_escape(mut self) -> Self {
+        self.options.keep_on_escape = true;
+        self.options.clear_on_escape = false;
+        self
+    }
+
     /// A plain text field named `label`.
     pub fn new(label: impl Into<Label>, value: Bind<'a, String>) -> Self {
         let mut field = TextField::with_codec(label, value, PlainText);

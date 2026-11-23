@@ -214,3 +214,93 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     fixture.idle(2);
     assert_eq!(caret.get(), 4, "the user's caret move past the two-byte \"é\" writes its byte offset back");
 }
+
+
+/// A field that keeps its text on Escape (`keeps_on_escape`, a live filter's query) commits the typing, lets focus
+/// go and leaves the same Escape to its enclosing scope; it reports the focus loss as `text_lost_focus`.
+#[trial]
+fn a_field_that_keeps_its_text_on_escape_commits_leaves_focus_and_passes_the_escape_on() {
+    let text = Rc::new(RefCell::new(String::new()));
+    let (passed, lost, id) = (Rc::new(Cell::new(0_u32)), Rc::new(Cell::new(false)), Rc::new(Cell::new(Id::NULL)));
+    let (shown, scope_saw, lost_seen, field) = (text.clone(), passed.clone(), lost.clone(), id.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        Stack::new().show(ui, |ui, body| {
+            let out = TextField::new("Filter", Bind::bound(&mut *held)).keeps_on_escape().show(ui);
+            field.set(out.response.id);
+            lost_seen.set(lost_seen.get() || out.text_lost_focus);
+            if body.take_cancel() {
+                scope_saw.set(scope_saw.get() + 1);
+            }
+        });
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("abc");
+    fixture.idle(2);
+    assert!(!lost.get(), "typing loses no focus");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(*text.borrow(), "abc", "Escape keeps the typed text");
+    assert_eq!(passed.get(), 1, "the enclosing scope gets the one Escape");
+    assert_ne!(fixture.focused(), Some(id.get()), "the field lets focus go");
+    assert!(lost.get(), "and reports the focus loss");
+}
+
+/// Without `keeps_on_escape` a plain field keeps its default: Escape over a typing run restores the text from before
+/// it and the field takes that Escape; a search field still clears.
+#[trial]
+fn without_keeps_on_escape_plain_and_search_fields_keep_their_escape() {
+    let (plain, search) = (Rc::new(RefCell::new(String::from("old"))), Rc::new(RefCell::new(String::new())));
+    let passed = Rc::new(Cell::new(0_u32));
+    let (a, b, scope_saw) = (plain.clone(), search.clone(), passed.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut first, mut second) = (a.borrow_mut(), b.borrow_mut());
+        Stack::new().show(ui, |ui, body| {
+            TextField::new("Plain", Bind::bound(&mut *first)).id_salt("plain").select_on_focus().show(ui);
+            TextField::search("Search", Bind::bound(&mut *second)).id_salt("search").show(ui);
+            if body.take_cancel() {
+                scope_saw.set(scope_saw.get() + 1);
+            }
+        });
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("new");
+    fixture.idle(1);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(*plain.borrow(), "old", "a plain field's Escape restores the text from before the run");
+    assert_eq!(passed.get(), 0, "and the field takes that Escape");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(1);
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.type_text("q");
+    fixture.idle(1);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(*search.borrow(), "", "a search field's Escape still clears");
+}
+
+/// `text_lost_focus` reports a real focus loss without an edit, and nothing while the field keeps focus.
+#[trial]
+fn text_lost_focus_reports_a_focus_loss_without_an_edit() {
+    let (first, second) = (Rc::new(RefCell::new(String::from("one"))), Rc::new(RefCell::new(String::from("two"))));
+    let lost = Rc::new(Cell::new(0_u32));
+    let (a, b, seen) = (first.clone(), second.clone(), lost.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = TextField::new("First", Bind::bound(&mut *a.borrow_mut())).id_salt("first").show(ui);
+        if out.text_lost_focus {
+            seen.set(seen.get() + 1);
+        }
+        TextField::new("Second", Bind::bound(&mut *b.borrow_mut())).id_salt("second").show(ui);
+    });
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(lost.get(), 0, "a focused field reports no loss");
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.idle(3);
+    assert_eq!(lost.get(), 1, "Tab off the unedited field reports one loss");
+    assert_eq!(*first.borrow(), "one", "and edits nothing");
+}

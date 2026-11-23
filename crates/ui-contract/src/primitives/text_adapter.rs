@@ -471,8 +471,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
-    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
+    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first. A field that keeps
+    // its text on Escape takes every Escape while editable and hands it on after committing (`keep_on_escape`).
+    let keep_on_escape = input.options.keep_on_escape && !input.options.clear_on_escape && input.enabled && !input.read_only;
     let dialog_escape = focused_before
+        && !keep_on_escape
         && state.draft.is_some()
         && state.preedit.is_none()
         && !input.options.clear_on_escape
@@ -483,8 +486,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         state.end = Some(End::Escape);
     }
     let draft_takes = state.draft.is_some() && !dialog_escape;
-    let takes_escape =
-        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
+    let takes_escape = keep_on_escape
+        || if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
     let list_first = input.list_open && !input.options.clear_on_escape;
     if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
         // Escape over a composition alone ends the composition and leaves the text.
