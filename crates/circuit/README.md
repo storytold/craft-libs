@@ -52,6 +52,14 @@ name. Nets with no label are numbered `N$1`, `N$2`, … in the order of their lo
 `erc::Settings` changes rule levels and pin-pair levels per project. `Rule::summary` is the
 English text an app uses as its translation key; the crate holds no other user-facing text.
 
+## CSV text
+
+`Netlist::to_csv` and `bom_csv` write names as they are. Names such as `+24V`, `-K1` and `=A1`
+are ordinary in electrical drawings, and a program that reads the file back must get them
+unchanged. A spreadsheet may read a field that starts with `=`, `+`, `-` or `@` as a formula,
+so an app that exports for a spreadsheet should import the columns as text or mark the fields
+itself.
+
 ## Limits
 
 `Project::from_json` reads at most 64 MiB, 10,000 sheets, 1,000,000 parts and 4,000,000 pins,
