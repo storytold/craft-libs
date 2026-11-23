@@ -162,6 +162,11 @@ pub struct HitArea {
     pub owner: Id,
     /// The part, `None` for the component's own area.
     pub part: Option<PartRef>,
+    /// The sensing shape's original bounds, before minimum-hit-size expansion, in the points
+    /// of the region's layer. Pointer-only parts are included even without an access node or
+    /// Tab stop. This is geometry, not a promise that every point is interactable: the shape,
+    /// clipping and layer ownership still decide the hit.
+    pub bounds: Rect,
     /// The area at its least size across, in the points of the region's layer.
     pub rect: Rect,
 }
@@ -357,7 +362,7 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
     }
     let mut hits: Vec<HitArea> = pointer::hit_areas(ctx, |owner| ids.contains(&owner))
         .into_iter()
-        .map(|(owner, part, rect)| HitArea { owner, part, rect: from_screen * rect })
+        .map(|(owner, part, bounds, rect)| HitArea { owner, part, bounds: from_screen * bounds, rect: from_screen * rect })
         .collect();
     // Keep the first occurrence, matching the tree-order lookup when an id appears more than once.
     let mut index = std::collections::HashMap::new();
