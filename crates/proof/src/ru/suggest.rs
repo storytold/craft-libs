@@ -232,9 +232,10 @@ mod tests {
 
     #[test]
     fn distance_weighs_letter_groups_half() {
-        use crate::affix_suggest::{fold, weighted_distance};
+        use crate::affix_suggest::{MapLookup, weighted_distance};
         let map: Vec<Vec<char>> = MAP.iter().map(|g| g.chars().collect()).collect();
-        let related = |a: char, b: char| fold(a, &map) == fold(b, &map);
+        let map = MapLookup::new(&map);
+        let related = |a: char, b: char| map.fold(a) == map.fold(b);
         let c = |s: &str| s.chars().collect::<Vec<_>>();
         assert_eq!(weighted_distance(&c("сдесь"), &c("здесь"), &related, 9), 1);
         assert_eq!(weighted_distance(&c("ёлка"), &c("елка"), &related, 9), 1);
