@@ -450,6 +450,44 @@ fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
     assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
 }
 
+/// A text tab strip in a tool bar's row, as a window's mode strip: the row gives it unbounded room, so it measures
+/// the natural length of its tabs and every tab shows, none in the overflow menu, and the strip ends before the
+/// bar's trailing group.
+#[trial]
+fn a_tab_strip_in_a_bar_row_takes_its_tabs_natural_length() {
+    use craft_behavior::keyed;
+    use craft_ui::contract::ShowCollection as _;
+    use craft_ui::tabs::{Tab, TabKind, TabStrip};
+    const MODES: [&str; 4] = ["All tools", "Edit", "Convert", "E-Sign"];
+    let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        Row::new().show(ui, |ui, _| {
+            let mut trailing = Rect::NOTHING;
+            let mut strip = Rect::NOTHING;
+            Bar::new("Modes", BarKind::Tool)
+                .trailing(|ui, _| {
+                    trailing = IconButton::new(IconId::new("printer")).label("Print").show(ui).rect;
+                })
+                .show(ui, |ui, _| {
+                    let keys = [0_usize, 1, 2, 3];
+                    let source = keyed(&keys, |key: &usize| *key);
+                    let tabs = TabStrip::new("Modes").kind(TabKind::Text).natural_height(true).shown(1);
+                    strip = tabs.show_items(ui, &source, &mut |key, _| Tab::new(MODES[*key])).response.response.rect;
+                });
+            out.set((strip, trailing));
+        });
+    });
+    fixture.room(Vec2::new(1274.0, 200.0)).settle();
+    let (strip, trailing) = seen.get();
+    let shown: Vec<Rect> = MODES.iter().filter_map(|title| fixture.by_label(title)).map(|tab| tab.rect).collect();
+    let dump = format!("strip {strip:?}, trailing {trailing:?}, tabs {shown:?}");
+    assert_eq!(shown.len(), MODES.len(), "every tab shows: {dump}");
+    let length: f32 = shown.iter().map(Rect::width).sum();
+    assert!(strip.width() >= length - SLACK, "the strip is as long as its tabs: {dump}");
+    assert!(strip.max.x <= trailing.min.x + SLACK, "and ends before the trailing group: {dump}");
+}
+
 /// An icon-only button in an options bar draws its icon at the tool size, as the align strip's buttons do.
 #[trial]
 fn an_icon_button_in_an_options_bar_draws_its_icon_at_the_tool_size() {

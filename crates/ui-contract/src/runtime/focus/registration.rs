@@ -34,6 +34,9 @@ pub struct Stop {
     pub group: Option<Id>,
     /// The roving group of the innermost body the stop sits in, whether or not the stop joined it.
     pub body: Option<Id>,
+    /// The arena root the stop is shown in (a canvas whose body holds it), whether or not it joined the arena: a text
+    /// stop keeps its own egui widget. A removed stop hands focus back to it.
+    pub arena: Option<Id>,
     /// The app's own egui widget (`focus::host_canvas`), which reads its keys from egui's input: the key stage leaves
     /// the presses it routes to the stop there.
     pub host: bool,
@@ -54,6 +57,7 @@ impl Stop {
             name: None,
             group: None,
             body: None,
+            arena: None,
             host: false,
         }
     }
@@ -112,6 +116,12 @@ impl Stop {
         self
     }
 
+    /// Sits in the arena of the root `arena` (a canvas body), if any, whether or not it joined it.
+    pub fn in_arena(mut self, arena: Option<Id>) -> Self {
+        self.arena = arena;
+        self
+    }
+
     /// Marks the stop as the app's own egui widget.
     pub fn host(mut self) -> Self {
         self.host = true;
@@ -142,12 +152,22 @@ pub struct Group {
     pub owner: Option<Id>,
     /// The group lays out right to left: a physical Left or Right arrow moves the opposite way.
     pub rtl: bool,
+    /// The group this one is a member of: a move this group does not take passes to it, entering at its selected or
+    /// first member.
+    pub parent: Option<Id>,
 }
 
 impl Group {
     /// A group of `roving` rules.
     pub fn new(id: Id, roving: Roving) -> Group {
-        Group { id, roving, selected: None, lead: None, row: false, owner: None, rtl: false }
+        Group { id, roving, selected: None, lead: None, row: false, owner: None, rtl: false, parent: None }
+    }
+
+    /// Makes this group a member of the roving group `parent`.
+    #[must_use]
+    pub fn parent(mut self, parent: Id) -> Self {
+        self.parent = Some(parent);
+        self
     }
 
     /// Reads horizontal arrows in the group's direction.

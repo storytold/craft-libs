@@ -12,13 +12,14 @@ use crate::primitives::ContentPainterCx;
 use crate::runtime::access::Access;
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use crate::style::{ComponentStyle, FocusLook, StyleCx};
+use crate::style::{ComponentStyle, DataColor, FocusLook, StyleCx};
 use crate::text::NumberField;
 use craft_behavior::{
     AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense,
 };
+
 use egui::load::SizedTexture;
-use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
+use egui::{Mesh, Pos2, Rect, Response, Shape, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "suite")]
@@ -44,6 +45,9 @@ const ZOOM_EPSILON: f32 = 1e-4;
 /// that touches both edges can round to a hair over.
 const PAN_TOLERANCE: f32 = 0.01;
 
+/// The height of a thumbnail pane in its widths: a page's proportion, near enough.
+const THUMBNAIL_HEIGHT_IN_WIDTHS: f32 = 4.0 / 3.0;
+
 /// The share of the well an arrow key pans the view by.
 const PAN_SHARE: f32 = 0.1;
 
@@ -54,6 +58,15 @@ craft_ui::words! {
         zoom_out: "preview.zoomOut" = "Zoom out";
         zoom: "preview.zoom" = "Zoom";
         rendering: "preview.rendering" = "Rendering preview";
+        page_of: template "preview.pageOf" = "Page {p} of {n}";
+        sheet_of: template "preview.sheetOf" = "Sheet {p} of {n}";
+        /// The caption of the pager beside a document dialog's small preview picture.
+        preview_page_of: template "preview.previewPageOf" = "Preview: page {p} of {n}";
+        preview_sheet_of: template "preview.previewSheetOf" = "Preview: sheet {p} of {n}";
+        no_pages: "preview.noPages" = "No pages";
+        no_sheets: "preview.noSheets" = "No sheets";
+        previous: "preview.previous" = "Previous";
+        next: "preview.next" = "Next";
     }
 }
 
@@ -268,6 +281,10 @@ pub struct PreviewPane<'a> {
     /// one its container gives, at least the plot height.
     #[prop(quantity = "aspect ratio")]
     aspect: Option<f32>,
+    /// A small picture of the first page beside its caption, as a document dialog shows it, not a well across the
+    /// dialog: the pane is a fixed sample-sized box and the view is fitted.
+    #[prop]
+    thumbnail: bool,
     /// The view after this pass, when the user changed it.
     moved: Option<PreviewView>,
     /// The well took the second press of a double click this pass.
@@ -279,6 +296,9 @@ pub struct PreviewPane<'a> {
     /// The host's drawing over the picture of a `Ready` pane.
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     overlay: Option<PaneOverlay<'a>>,
+    /// Multiplies the `Ready` picture's colours, as `ThumbPaint::tint` does.
+    #[prop]
+    tint: Option<DataColor>,
     /// Whether the picture overflows the well horizontally, and vertically. Set by `parts`, which runs before the
     /// root's sense is read: the wheel scrolls the pane only on an axis it pans on.
     overflow: (bool, bool),
@@ -302,11 +322,13 @@ impl PreviewPane<'_> {
             view: view.clone(),
             click_centres: true,
             aspect: None,
+            thumbnail: false,
             moved: None,
             double_clicked: false,
             clicked: None,
             pressed: None,
             overlay: None,
+            tint: None,
             overflow: (false, false),
             fixed: view.fixed,
         }
@@ -441,6 +463,10 @@ impl Component for PreviewPane<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if self.thumbnail {
+            let width = cx.tokens.size.thumb.sample.lg;
+            return Vec2::new(width, width * THUMBNAIL_HEIGHT_IN_WIDTHS);
+        }
         let least = cx.tokens.size.plot.width;
         match self.aspect.filter(|aspect| *aspect > 0.0) {
             Some(aspect) => cx.picture_size(least, f32::INFINITY, |width| width / aspect),
@@ -575,7 +601,15 @@ impl Component for PreviewPane<'_> {
                             pos2((visible.min.x - picture.min.x) / size.x, (visible.min.y - picture.min.y) / size.y),
                             pos2((visible.max.x - picture.min.x) / size.x, (visible.max.y - picture.min.y) / size.y),
                         );
-                        painter.picture(texture.id, visible, uv, 0.0);
+                        match self.tint {
+                            // The tint multiplies the mesh's vertex colours; as data, a Disabled pane still dims it.
+                            Some(tint) => {
+                                let mut mesh = Mesh::with_texture(texture.id);
+                                mesh.add_rect_with_uv(visible, uv, tint.0);
+                                painter.data_shapes([Shape::mesh(mesh)]);
+                            }
+                            None => painter.picture(texture.id, visible, uv, 0.0),
+                        }
                     }
                     if let Some(PaneOverlay(overlay)) = self.overlay.take() {
                         overlay(&painter, view, picture);
@@ -677,5 +711,103 @@ impl PreviewZoom {
             }
         });
         PreviewZoomOutput { response: row.output, view: next }
+    }
+}
+
+/// What a pager row counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PagerUnit {
+    /// Pages: "Page {p} of {n}".
+    #[default]
+    Page,
+    /// Sheets: "Sheet {p} of {n}".
+    Sheet,
+}
+
+/// Which way a pager press steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PagerStep {
+    /// To the previous page or sheet.
+    Back,
+    /// To the next page or sheet.
+    Next,
+}
+
+/// The pager row of a preview: a previous button, the caption ("Page {p} of {n}", "Sheet {p} of {n}"; "No pages" or
+/// "No sheets" for a count of 0) and a next button. A press is reported in its own pass. The row is inline: each
+/// caller places it.
+#[must_use = "show the pager with `show`"]
+#[derive(Clone, Debug, Default, PartialEq, crate::contract::Pattern)]
+pub struct PanePager {
+    /// The shown page or sheet, counted from 1.
+    pub shown: usize,
+    /// How many pages or sheets there are.
+    pub count: usize,
+    /// Stands in for the number in the caption, for a page label such as "iii".
+    pub shown_label: Option<Label>,
+    /// Whether the previous button is enabled.
+    pub back: bool,
+    /// Whether the next button is enabled.
+    pub next: bool,
+    /// What the pager counts.
+    pub unit: PagerUnit,
+}
+
+impl PanePager {
+    /// The caption: "Page {p} of {n}" or "Sheet {p} of {n}", or "No pages" or "No sheets" when `count` is 0.
+    pub fn caption(&self, env: &Env) -> Label {
+        self.caption_in(env, false)
+    }
+
+    /// [`caption`](PanePager::caption), as "Preview: page {p} of {n}" when `previewing`.
+    pub fn caption_in(&self, env: &Env, previewing: bool) -> Label {
+        let words = env.words::<PreviewWords>();
+        if self.count == 0 {
+            return match self.unit {
+                PagerUnit::Page => words.no_pages.clone(),
+                PagerUnit::Sheet => words.no_sheets.clone(),
+            };
+        }
+        let shown = match &self.shown_label {
+            Some(label) => label.as_str().to_owned(),
+            None => env.format().integer(self.shown as u64),
+        };
+        let count = env.format().integer(self.count as u64);
+        let template = match (self.unit, previewing) {
+            (PagerUnit::Page, false) => &words.page_of,
+            (PagerUnit::Sheet, false) => &words.sheet_of,
+            (PagerUnit::Page, true) => &words.preview_page_of,
+            (PagerUnit::Sheet, true) => &words.preview_sheet_of,
+        };
+        Label::from(template.fill(&[("p", &shown), ("n", &count)]))
+    }
+
+    /// Shows the row; the step a press made in this pass. A second pass of a frame finds no press, so a step is
+    /// reported once.
+    pub fn show(self, ui: &mut Ui) -> Option<PagerStep> {
+        self.show_in(ui, false)
+    }
+
+    /// [`show`](PanePager::show), with the caption of [`caption_in`](PanePager::caption_in).
+    pub fn show_in(self, ui: &mut Ui, previewing: bool) -> Option<PagerStep> {
+        let env = Env::of(ui);
+        let words = env.words::<PreviewWords>();
+        let caption = self.caption_in(&env, previewing);
+        let mut step = None;
+        Row::new().show(ui, |ui, _| {
+            let back = IconButton::new(IconId::new("chevron_left")).label(words.previous.clone()).enabled(self.back).show(ui);
+            // An empty pager has no position to report: its caption says so.
+            let text = Text::new(caption.clone());
+            if self.count > 0 { text.numeric(self.shown as f64) } else { text }.show(ui);
+            let next = IconButton::new(IconId::new("chevron_right")).label(words.next.clone()).enabled(self.next).show(ui);
+            if crate::contract::clicked(&back) {
+                step = Some(PagerStep::Back);
+            }
+            if crate::contract::clicked(&next) {
+                step = Some(PagerStep::Next);
+            }
+        });
+        step
     }
 }

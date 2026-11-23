@@ -4,8 +4,8 @@ use super::button::ButtonOutput;
 use super::face::{self, tinted};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PopupKind, Props, Role, Styled as _};
 use crate::controls::disclosure::DisclosureGlyph;
-use crate::primitives::{IconSpec, PaintShape, StrokeWidth};
-use crate::runtime::commands::CommandRef;
+use crate::primitives::{Draw, IconSpec, PaintShape, StrokeWidth};
+use crate::runtime::commands::{CommandRef, ResolvedCommand};
 use crate::style::{ComponentStyle, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook};
 use craft_behavior::{Metrics, Sense};
 use craft_i18n::Direction;
@@ -14,6 +14,31 @@ use craft_theme::{
     variant::{Emphasis, Tone},
 };
 use egui::{Pos2, Vec2};
+
+/// The marker dot's look: the one reading of the tokens that `IconButton` and `Tab` paint it from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MarkerStyle {
+    /// The dot's diameter.
+    pub(crate) side: f32,
+    /// The dot's fill.
+    pub(crate) color: StyleColor,
+    /// The dot's edge.
+    pub(crate) edge: StyleColor,
+}
+
+impl MarkerStyle {
+    /// The marker look from the tokens.
+    pub(crate) fn of(cx: &StyleCx<'_>) -> MarkerStyle {
+        MarkerStyle { side: cx.tokens.size.handle.sm, color: cx.color(cx.tokens.color.accent.solid), edge: cx.color(cx.tokens.color.line.mark) }
+    }
+}
+
+/// Paints the marker dot centred on `center`.
+pub(crate) fn paint_marker(draw: &Draw<'_>, center: Pos2, style: &MarkerStyle) {
+    let dot = PaintShape::Circle(center, style.side / 2.0);
+    draw.fill(&dot, style.color);
+    draw.stroke(&dot, StrokeWidth::Thin, style.edge);
+}
 
 /// The style of an icon button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -63,6 +88,17 @@ pub enum PopupMark {
     Menu,
 }
 
+/// How an icon button's pointer press affects the focused control.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PressFocus {
+    /// Follow the standard focus policy.
+    #[default]
+    Standard,
+    /// Leave focus with the current control on press.
+    Keep,
+}
+
 /// A square button showing only an icon. Its label is its accessible name; a tooltip is the caller's. A selected
 /// button (`selected(true)`) shows the on look: the host owns the state and a click is reported in the response.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -74,6 +110,9 @@ pub struct IconButton<'a> {
     /// field's clear button repeats Escape.
     #[prop]
     focusable: bool,
+    /// The focus policy for a pointer press.
+    #[prop]
+    press_focus: PressFocus,
     /// The kind of popup the button opens: AccessKit reports it, and [`popup_mark`](Self::popup_mark) shows it.
     #[prop(into)]
     popup: Option<PopupKind>,
@@ -89,12 +128,26 @@ pub struct IconButton<'a> {
 impl<'a> IconButton<'a> {
     /// An icon button showing `icon`; `label` it with the accessible name.
     pub fn new(icon: impl Into<IconSpec<'a>>) -> Self {
-        IconButton { common: Common::new(), icon: icon.into(), focusable: true, popup: None, popup_mark: PopupMark::None, expanded: None }
+        IconButton {
+            common: Common::new(),
+            icon: icon.into(),
+            focusable: true,
+            press_focus: PressFocus::Standard,
+            popup: None,
+            popup_mark: PopupMark::None,
+            expanded: None,
+        }
     }
 
     /// An icon button bound to `command`: its label, enabled state and activation follow the command.
     pub fn command(icon: impl Into<IconSpec<'a>>, command: impl Into<CommandRef>) -> Self {
         <IconButton as Props>::command(IconButton::new(icon), command)
+    }
+
+    /// Whether `command`'s marker shows: it is marked and its content is not shown. A mark tells that the command's
+    /// content has something to show, so it shows while that content is not shown: a rail's panel that is closed.
+    pub fn shows_marker(command: &ResolvedCommand) -> bool {
+        command.marked && command.checked != Some(true)
     }
 }
 
@@ -108,14 +161,15 @@ impl Component for IconButton<'_> {
 
     fn style(cx: &StyleCx<'_>, _: IconButtonStyleKey) -> IconButtonStyle {
         let face = face::icon_face(cx);
+        let marker = MarkerStyle::of(cx);
         IconButtonStyle {
             surface: face.surface,
             metrics: face.metrics,
             focus: face::focus(cx),
             glyph: face.glyph,
-            marker: cx.tokens.size.handle.sm,
-            marker_color: cx.color(cx.tokens.color.accent.solid),
-            marker_edge: cx.color(cx.tokens.color.line.mark),
+            marker: marker.side,
+            marker_color: marker.color,
+            marker_edge: marker.edge,
             mark: cx.tokens.space.gap.tight,
             arrow: cx.tokens.size.icon.glyph_sm,
             mark_color: cx.color(cx.tokens.color.text.faint),
@@ -127,7 +181,8 @@ impl Component for IconButton<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.focusable { Sense::CLICK | Sense::FOCUS } else { Sense::CLICK }
+        let sense = if self.focusable { Sense::CLICK | Sense::FOCUS } else { Sense::CLICK };
+        if self.press_focus == PressFocus::Keep { sense | Sense::KEEP_FOCUS } else { sense }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -163,15 +218,11 @@ impl Component for IconButton<'_> {
             }
             _ => {}
         }
-        // A mark tells that the command's content has something to show, so it shows while that content is not
-        // shown: a rail's panel that is closed.
-        let marked = cx.command.as_ref().is_some_and(|command| command.marked && command.checked != Some(true));
-        if marked {
-            let radius = cx.style.marker / 2.0;
-            let x = if cx.flow.is_rtl() { glyph.left() + radius } else { glyph.right() - radius };
-            let dot = PaintShape::Circle(Pos2::new(x, glyph.bottom() - radius), radius);
-            draw.fill(&dot, cx.style.marker_color);
-            draw.stroke(&dot, StrokeWidth::Thin, cx.style.marker_edge);
+        if cx.command.as_ref().is_some_and(|command| IconButton::shows_marker(command)) {
+            let marker = MarkerStyle { side: cx.style.marker, color: cx.style.marker_color, edge: cx.style.marker_edge };
+            let radius = marker.side / 2.0;
+            let x = if rtl { glyph.left() + radius } else { glyph.right() - radius };
+            paint_marker(&draw, Pos2::new(x, glyph.bottom() - radius), &marker);
         }
     }
 

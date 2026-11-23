@@ -18,6 +18,8 @@ use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAccess, ToolAction, ToolClai
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::popover::Popover;
 use craft_ui::primitives::Draw;
+use craft_ui::runtime::commands::{self, EditCommands, FireSource};
+use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::focus::{AccessActionKind, key_release};
 use craft_ui::testing::input::key_press;
@@ -96,6 +98,40 @@ fn a_tool_whose_release_opens_an_outline_takes_alt_backspace_in_the_next_frame()
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: false }], "the outline the release opened takes Alt+Backspace");
 }
 
+/// Edit ▸ Delete from a menu or the palette, while the focused canvas's tool claims Delete, reaches the tool as that
+/// key, as the key does, and runs no app command; a tool that claims no delete gets none.
+#[trial]
+fn a_fired_command_whose_key_the_tool_claims_reaches_the_tool_as_that_key() {
+    let mut canvas = ToolFixture::new("Document", Outline::new(true));
+    canvas.fixture().settle();
+    canvas.fixture().key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(canvas.fixture().focused(), Some(canvas.canvas_id()), "Tab focuses the canvas");
+    take_output(canvas.fixture().ctx());
+    commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Menu);
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }], "the tool took Edit ▸ Delete as its Delete");
+    assert!(take_output(canvas.fixture().ctx()).fired.is_empty(), "no app command ran");
+    canvas.tool_mut().keeps = false;
+    canvas.fixture().settle();
+    commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Menu);
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen.len(), 1, "a tool that claims no delete gets none");
+}
+
+/// With nothing focused the window's canvas is the key target, as for its nudges: Edit ▸ Delete reaches the tool that
+/// claims Delete (a Select All took the focus away), and no app command runs.
+#[trial]
+fn a_fired_command_whose_key_the_tool_claims_reaches_it_with_nothing_focused() {
+    let mut canvas = ToolFixture::new("Document", Outline::new(true));
+    canvas.fixture().settle();
+    assert_eq!(canvas.fixture().focused(), None, "nothing is focused");
+    take_output(canvas.fixture().ctx());
+    commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Menu);
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }], "the tool took Edit ▸ Delete as its Delete");
+    assert!(take_output(canvas.fixture().ctx()).fired.is_empty(), "no app command ran");
+}
+
 /// A tool that takes every key the host offers it.
 #[derive(Default)]
 struct Taker {
@@ -141,7 +177,7 @@ fn session(frame: bool) -> (ToolFixture<Taker>, Rc<RefCell<CropBox>>, Reports) {
         }
         let out = CropOverlay::new("Crop", Bind::bound(&mut *c.borrow_mut())).show_at(ui, body.rect);
         let (applied, discarded) = r.get();
-        r.set((applied || out.apply, discarded || out.discard));
+        r.set((applied || out.apply.is_some(), discarded || out.discard));
     });
     (canvas, crop, reports)
 }
@@ -171,6 +207,20 @@ fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focu
     canvas.fixture().key(Key::ArrowRight, Modifiers::NONE).key(Key::Enter, Modifiers::NONE).settle();
     let seen = &canvas.tool().seen;
     assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
+}
+
+/// Escape reaches the active tool as `Cancel` with nothing focused and with the canvas focused, so a tool steps back
+/// out of what it holds (a comment or fill tool leaves for Select) without a gesture to cancel.
+#[trial]
+fn escape_reaches_the_tool_as_cancel_with_nothing_or_the_canvas_focused() {
+    let (mut canvas, ..) = session(false);
+    canvas.fixture().settle();
+    canvas.fixture().key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [ToolKey::Cancel], "nothing focused: the window's Escape is the tool's");
+    canvas.fixture().key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(canvas.fixture().focused(), Some(canvas.canvas_id()), "Tab focuses the canvas");
+    canvas.fixture().key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [ToolKey::Cancel, ToolKey::Cancel], "the focused canvas's Escape is the tool's");
 }
 
 /// The chords `Claimer` takes through `ToolClaims::keys`.

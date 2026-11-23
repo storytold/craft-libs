@@ -25,6 +25,10 @@ impl ThumbAspect {
         Self((f32::from(wide) / f32::from(high.max(1))).max(f32::EPSILON))
     }
 
+    pub(crate) fn high(self, width: f32) -> f32 {
+        width / self.0
+    }
+
     pub(crate) fn of(self, height: f32) -> f32 {
         self.0 * height
     }

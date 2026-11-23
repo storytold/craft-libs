@@ -116,7 +116,7 @@ impl ItemOutput<Vec<CardEvent>> for RowOut {
 }
 
 /// The card collection: a tree whose headings fold their cards.
-#[derive(craft_ui::contract::Component)]
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(collection)]
 pub(crate) struct CommentList<'a> {
     #[common]
@@ -126,17 +126,22 @@ pub(crate) struct CommentList<'a> {
     items: CollectionProps,
     selection: Option<Bind<'a, Selection<CardKey>>>,
     grouped: bool,
+    /// The row to scroll into view this pass; the caller sends it in one pass only.
+    #[prop(name = "revealing", vis = "pub(crate)")]
+    reveal: Option<CardKey>,
 }
 
 impl<'a> CommentList<'a> {
-    /// The list named `label` over the caller's `selection` (the list keeps its own when `None`); `grouped` lists the cards under headings.
-    pub(crate) fn new(label: impl Into<Label>, selection: Option<Bind<'a, Selection<CardKey>>>, grouped: bool) -> Self {
+    /// The list named `label` over the caller's `selection` (the list keeps its own when `None`); `grouped` lists the
+    /// cards under headings; `mode` is how a click selects.
+    pub(crate) fn new(label: impl Into<Label>, selection: Option<Bind<'a, Selection<CardKey>>>, grouped: bool, mode: SelectMode) -> Self {
         CommentList {
             common: Common::new(),
             props: ContainerProps::new().sizing(Sizing::Fill),
-            items: CollectionProps::new().select(SelectMode::Single).activate(ActivateOn::Click),
+            items: CollectionProps::new().select(mode).activate(ActivateOn::Click),
             selection,
             grouped,
+            reveal: None,
         }
         .label(label)
     }
@@ -177,6 +182,10 @@ impl Collection for CommentList<'_> {
 
     fn selection(&mut self) -> Option<BindMut<'_, Selection<CardKey>>> {
         self.selection.as_mut().map(Bind::reborrow)
+    }
+
+    fn reveal(&self) -> Option<&CardKey> {
+        self.reveal.as_ref()
     }
 
     fn item_layout(&self, source: &dyn ItemSource<CardKey>, width: f32, cx: &StyleCx<'_>) -> SpanLayout {

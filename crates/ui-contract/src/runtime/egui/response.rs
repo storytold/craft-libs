@@ -10,12 +10,6 @@ pub(crate) fn clicked(response: &Response) -> bool {
     response.flags.intersects(Flags::CLICKED | Flags::FAKE_PRIMARY_CLICKED)
 }
 
-/// Whether a key or AccessKit activation clicked the component of `response` in this pass (Enter or Space on its focused
-/// stop), not the pointer.
-pub(crate) fn key_clicked(response: &Response) -> bool {
-    response.flags.contains(Flags::FAKE_PRIMARY_CLICKED)
-}
-
 /// Whether the press path released a pointer click on the component of `response`: a root's own widget or a
 /// member's shape, never a key or AccessKit activation.
 pub(crate) fn pointer_clicked(response: &Response) -> bool {

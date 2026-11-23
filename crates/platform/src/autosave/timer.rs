@@ -82,12 +82,15 @@ pub struct Autosave {
     saved: HashMap<u64, u64>,
     in_flight: HashMap<u64, u64>,
     due_now: bool,
+    /// A document has changes no autosave holds or is writing: a dirty revision neither autosaved
+    /// nor in flight, or one whose autosave failed.
+    pending: bool,
 }
 
 impl Autosave {
     /// `None` turns autosave off (PhotoCraft's `fileHandling.autosave = false`).
     pub fn new(interval: Option<Duration>) -> Self {
-        Self { interval, next: None, saved: HashMap::new(), in_flight: HashMap::new(), due_now: false }
+        Self { interval, next: None, saved: HashMap::new(), in_flight: HashMap::new(), due_now: false, pending: false }
     }
 
     /// A changed preference; the next deadline moves to now plus the new interval.
@@ -131,6 +134,7 @@ impl Autosave {
             self.in_flight.remove(id);
         }
         let mut due = AutosaveDue { save: Vec::new(), discard };
+        self.pending = docs.iter().any(|d| self.needs_save(d));
         let Some(interval) = self.interval else {
             self.next = None;
             return due;
@@ -146,12 +150,18 @@ impl Autosave {
         }
         self.next = Some(now + interval);
         for d in docs {
-            if d.dirty && self.saved.get(&d.id) != Some(&d.revision) && !self.in_flight.contains_key(&d.id) {
+            if self.needs_save(&d) {
                 self.in_flight.insert(d.id, d.revision);
                 due.save.push(d.id);
             }
         }
+        self.pending = false;
         due
+    }
+
+    /// Whether `doc` has a revision to autosave that no autosave holds or is writing.
+    fn needs_save(&self, doc: &AutosaveDoc) -> bool {
+        doc.dirty && self.saved.get(&doc.id) != Some(&doc.revision) && !self.in_flight.contains_key(&doc.id)
     }
 
     /// An autosave ended. On success `revision` is remembered; on failure the status text
@@ -168,7 +178,10 @@ impl Autosave {
                 self.saved.insert(id, revision);
                 None
             }
-            Err(error) => Some(AUTOSAVE_FAILED.replace("{error}", &error)),
+            Err(error) => {
+                self.pending = true;
+                Some(AUTOSAVE_FAILED.replace("{error}", &error))
+            }
         }
     }
 
@@ -179,8 +192,11 @@ impl Autosave {
         self.in_flight.remove(&id);
     }
 
-    /// When the next interval ends, for `request_repaint_after`.
+    /// When the next interval ends, for `request_repaint_after`; `None` while nothing is left to
+    /// autosave (as of the last [`due`](Self::due), or a failed [`finished`](Self::finished)), so
+    /// an idle window can sleep. The clock keeps running: an edit wakes the window, and its `due`
+    /// call brings the deadline back.
     pub fn deadline(&self) -> Option<Instant> {
-        self.next
+        self.next.filter(|_| self.pending)
     }
 }
