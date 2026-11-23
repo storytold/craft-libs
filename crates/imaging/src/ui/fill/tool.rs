@@ -274,9 +274,7 @@ impl CanvasTool for FillCanvasTool<'_> {
         // The brush takes the resize chord's buttons (`BrushResize::takes`); the lasso only the primary button.
         match self.tool {
             FillTool::SamplingBrush => BrushResize::takes(button, mods),
-            FillTool::PolygonalLasso => {
-                button == PointerButton::Primary || (button == PointerButton::Secondary && self.canvas.lasso.is_some())
-            }
+            FillTool::PolygonalLasso => button == PointerButton::Primary || (button == PointerButton::Secondary && self.canvas.lasso.is_some()),
             _ => button == PointerButton::Primary,
         }
     }
@@ -308,18 +306,21 @@ impl CanvasTool for FillCanvasTool<'_> {
             }
             FillTool::Lasso | FillTool::PolygonalLasso => {
                 if pointer.button == PointerButton::Secondary {
-                    if self.tool != FillTool::PolygonalLasso { return ToolAction::Ignored; }
+                    if self.tool != FillTool::PolygonalLasso {
+                        return ToolAction::Ignored;
+                    }
                     let event = self.canvas.lasso.as_mut().and_then(|(draft, _)| draft.retract());
                     self.canvas.lasso_event(event);
                     cx.request_repaint();
                     return ToolAction::Done;
                 }
-                if pointer.button != PointerButton::Primary { return ToolAction::Ignored; }
+                if pointer.button != PointerButton::Primary {
+                    return ToolAction::Ignored;
+                }
                 let reach = f64::from(cx.slop);
                 let kind = if self.tool == FillTool::PolygonalLasso { DraftKind::Polygonal } else { DraftKind::Freehand };
-                let (draft, operation) = self.canvas.lasso.get_or_insert_with(|| {
-                    (OutlineDraft::new(kind, DraftReach::new(reach, reach)), self.options.lasso)
-                });
+                let (draft, operation) =
+                    self.canvas.lasso.get_or_insert_with(|| (OutlineDraft::new(kind, DraftReach::new(reach, reach)), self.options.lasso));
                 draft.set_reach(DraftReach::new(reach, reach));
                 let doc = space.view.to_doc(pointer.pos);
                 // The fill area always has something to combine with: Shift adds, Alt subtracts,
@@ -415,7 +416,9 @@ impl CanvasTool for FillCanvasTool<'_> {
             return true;
         }
         let Some((draft, _)) = self.canvas.lasso.as_mut() else { return false };
-        if !draft.takes_retract() || cx.mods.cmd || cx.mods.ctrl { return false; }
+        if !draft.takes_retract() || cx.mods.cmd || cx.mods.ctrl {
+            return false;
+        }
         let event = match key {
             ToolKey::Submit => draft.close(),
             ToolKey::Delete { .. } => draft.retract(),

@@ -384,9 +384,15 @@ fn polygonal_fill_commits_each_bar_mode_as_one_edit() {
         }
         assert!(!rig.events().iter().any(|event| matches!(event, FillEvent::FillArea(_))));
         match closing {
-            0 => { rig.fixture.click_at(a); }
-            1 => { rig.fixture.click_at(c); }
-            2 => { rig.fixture.key(egui::Key::Enter, NONE); }
+            0 => {
+                rig.fixture.click_at(a);
+            }
+            1 => {
+                rig.fixture.click_at(c);
+            }
+            2 => {
+                rig.fixture.key(egui::Key::Enter, NONE);
+            }
             _ => {
                 let d = rig.canvas() + vec2(60.0, 30.0);
                 rig.fixture.click_at(d);
@@ -395,7 +401,14 @@ fn polygonal_fill_commits_each_bar_mode_as_one_edit() {
         }
         rig.fixture.idle(2);
         assert!(rig.host.borrow().is_open::<Hosted>(), "Enter closes the polygon, not the workspace");
-        let edits: Vec<_> = rig.events().into_iter().filter_map(|event| match event { FillEvent::FillArea(edit) => Some(edit), _ => None }).collect();
+        let edits: Vec<_> = rig
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                FillEvent::FillArea(edit) => Some(edit),
+                _ => None,
+            })
+            .collect();
         assert_eq!(edits.len(), 1, "one completed polygon is one fill-area event");
         let correct_mode = matches!(
             (&edits[0], mode),
@@ -406,8 +419,10 @@ fn polygonal_fill_commits_each_bar_mode_as_one_edit() {
         );
         assert!(correct_mode, "the bar's operation survives every click: {edits:?}");
         let points = match &edits[0] {
-            FillAreaEdit::New { points, .. } | FillAreaEdit::Add { points, .. } | FillAreaEdit::Subtract { points, .. }
-                | FillAreaEdit::Intersect { points, .. } => points,
+            FillAreaEdit::New { points, .. }
+            | FillAreaEdit::Add { points, .. }
+            | FillAreaEdit::Subtract { points, .. }
+            | FillAreaEdit::Intersect { points, .. } => points,
             _ => panic!("the pointer committed a polygon"),
         };
         assert_eq!(points.len(), if closing == 3 { 4 } else { 3 }, "only clicked vertices enter the edit");
@@ -430,10 +445,16 @@ fn polygonal_fill_retracts_and_cancels_without_committing_a_partial_edit() {
     let b = rig.canvas() + vec2(35.0, -30.0);
     let c = rig.canvas() + vec2(0.0, 40.0);
     for retract in 0..3 {
-        for at in [a, b, c] { rig.fixture.click_at(at); }
+        for at in [a, b, c] {
+            rig.fixture.click_at(at);
+        }
         match retract {
-            0 => { rig.fixture.key(egui::Key::Backspace, NONE); }
-            1 => { rig.fixture.key(egui::Key::Delete, NONE); }
+            0 => {
+                rig.fixture.key(egui::Key::Backspace, NONE);
+            }
+            1 => {
+                rig.fixture.key(egui::Key::Delete, NONE);
+            }
             _ => {
                 rig.fixture.frame(vec![pointer::secondary(c, true)]);
                 rig.fixture.frame(vec![pointer::secondary(c, false)]);
@@ -445,17 +466,23 @@ fn polygonal_fill_retracts_and_cancels_without_committing_a_partial_edit() {
         assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "each retract leaves only two vertices, which cannot commit");
     }
 
-    for at in [a, b, c] { rig.fixture.click_at(at); }
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
     rig.fixture.key(egui::Key::Escape, NONE);
     assert!(rig.host.borrow().is_open::<Hosted>(), "Escape drops the outline before it can close the workspace");
     assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
-    for at in [a, b, c] { rig.fixture.click_at(at); }
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
     rig.fixture.key(egui::Key::H, NONE).idle(2);
     assert_eq!(rig.tool(), "hand", "tool letters still work between polygon clicks");
     assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()));
     rig.set("tool", serde_json::json!("polygonalLasso"));
     rig.fixture.idle(2);
-    for at in [a, b, c] { rig.fixture.click_at(at); }
+    for at in [a, b, c] {
+        rig.fixture.click_at(at);
+    }
     rig.set("tool", serde_json::json!("lasso"));
     rig.fixture.idle(2);
     assert!(rig.with(|workspace| workspace.session().fill_edits.is_empty()), "a tool switch drops the unfinished polygon");
