@@ -57,6 +57,24 @@ reports version 1 for the marker `e` and version 2 for the other two. A RIFF fil
 a version before 3 is refused, and so is the version 4 template form type `CDST`, which reads as
 not a `.cdr` drawing.
 
+## Previews
+
+`preview` returns the picture a `.cdr` file keeps of its drawing without reading the drawing (rows
+R75 and R76). In versions 4 to 13 the picture is the `DISP` chunk, returned as a BMP file. In versions
+14 to 16 it is the package member `metadata/thumbnails/thumbnail.bmp`, and from version 17 on it
+is `previews/thumbnail.png`. The package's drawing stream is not read, so a package that holds
+both members gives the PNG. Files of versions 1 and 3 keep no picture. A version 2 file keeps a
+1-bit picture (R40) that `preview` does not read, so it refuses the file. `preview` does not check
+the drawing's version, so a RIFF file that `read` refuses for its version, such as one that names a
+version before 3, still gives its `DISP` picture.
+
+A `DISP` bitmap must start with the 4 bytes `08 00 00 00`, have a 40-byte info header and be
+uncompressed (compression 0, or 3 with color masks at 16 or 32 bits). A `DISP` chunk of another
+kind, or a bitmap with another header length or compression, is passed over without checking the
+rest of its bytes, and a file with no other `DISP` chunk is refused. A RIFF file without a `DISP` bitmap is refused as damaged when its last chunk does not end
+where the form's length says the form ends, which includes a file cut short. The bytes are returned
+still encoded, so the caller decodes them within its own image limits.
+
 ## `.cmx` files
 
 `read_cmx` reads `.cmx` exchange files with 32-bit coordinates (rows R53 to R63) into the same
