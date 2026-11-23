@@ -324,8 +324,10 @@ impl Strip<'_> {
         let bare_tab = key == Key::Tab && !mods.cmd && !mods.ctrl && !mods.alt;
         // Alt and Shift ride along, as with Enter: a canvas tool reads them; Cmd and Ctrl chords are the app's. While
         // the focused stop records, Escape with any modifier held is a chord for the recorder; only plain Escape is a
-        // scope escape. Over an open press any Escape is the press's cancel: a borrowed tool's drag holds Cmd.
-        let escape = key == Key::Escape && (self.press_captured || (!mods.cmd && !mods.ctrl && !(self.records && !mods.is_none())));
+        // scope escape. Over an open press any Escape is the press's cancel: a borrowed tool's drag holds Cmd. Shift or
+        // Alt with Escape that the keymap binds to an enabled command is that command's chord.
+        let bound = || !mods.is_none() && self.layout.candidates(input).iter().any(|chord| (self.bound)(chord));
+        let escape = key == Key::Escape && (self.press_captured || (!mods.cmd && !mods.ctrl && !(self.records && !mods.is_none()) && !bound()));
         // A shortcut comes before a mnemonic: an Alt+letter the keymap binds to an enabled command runs it. On the
         // focused bar a letter without Alt, Ctrl or Cmd is a title's access key, and one no title holds goes nowhere
         // (the bar's access mode), so it runs no shortcut either.

@@ -527,6 +527,36 @@ fn an_app_binding_on_f6_beats_the_pane_move() {
     assert_eq!(f6_under(Some(unbound)), (true, Vec::new()), "with the pane move unbound, F6 is egui's");
 }
 
+/// What a press of Escape with `mods` did with nothing focused, under `overrides`: the window cancels it raised and the
+/// ids of the commands it fired.
+fn escape_under(overrides: Option<craft_keymap::Overrides>, mods: Modifiers) -> (usize, Vec<String>) {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    if let Some(overrides) = overrides {
+        frames.commands(CommandInput::new().overrides(Arc::new(overrides)));
+    }
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx);
+    seen(&host);
+    frames.frame(vec![key_press(Key::Escape, mods), key_release(Key::Escape, mods)], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (seen(&host).1, fired)
+}
+
+/// Tb-8 (3): Shift+Escape bound to a command runs it, as production's keymap ran it under a loaded place cursor; the
+/// key stage read every Escape without Cmd or Ctrl as the scope's escape, so the binding never fired. Plain Escape keeps
+/// its meaning, and an unbound Shift+Escape is still an escape.
+#[trial]
+fn a_command_bound_to_shift_escape_runs_and_plain_escape_still_cancels() {
+    let delete = EditCommands::Delete.id().to_owned();
+    assert_eq!(escape_under(None, Modifiers::SHIFT), (1, Vec::new()), "an unbound Shift+Escape is the window's Cancel");
+    let mut bound = craft_keymap::Overrides::default();
+    bound.insert(EditCommands::Delete.id(), vec!["Shift+Escape".to_owned()]);
+    assert_eq!(escape_under(Some(bound.clone()), Modifiers::SHIFT), (0, vec![delete]), "the bound Shift+Escape runs its command");
+    assert_eq!(escape_under(Some(bound), Modifiers::NONE), (1, Vec::new()), "a plain Escape is still the window's Cancel");
+}
+
 /// The panes the pane trials show, in order: the scope's name, its stop and its label.
 const PANES: [(&str, &str, &str); 2] = [("left pane", "left", "Left"), ("right pane", "right", "Right")];
 
