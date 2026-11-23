@@ -88,6 +88,10 @@ pub struct TaskBar<'a> {
     /// What an outside press does to the bar.
     #[prop]
     dismiss: TaskBarDismiss,
+    /// The bar is compact: its members at the small control size in a tight frame, as PdfCraft's text box bar shows
+    /// Done and Discard (production's 24-point buttons in a 2-point frame). Off by default.
+    #[prop]
+    compact: bool,
 }
 
 /// What a bar hangs from: the screen bounds of document points, or the canvas view's top edge, aligned in reading
@@ -204,7 +208,15 @@ impl MoreMenu {
 impl<'a> TaskBar<'a> {
     /// A bar named `label` hung below the screen bounds of `anchor` (document points) until `place` moves it.
     pub fn new(label: impl Into<Label>, anchor: &'a [Point], place: Bind<'a, TaskBarPlace>) -> Self {
-        TaskBar { label: label.into(), hang: Hang::Points(anchor), place, kind: TaskBarKind::Task, side: None, dismiss: TaskBarDismiss::Close }
+        TaskBar {
+            label: label.into(),
+            hang: Hang::Points(anchor),
+            place,
+            kind: TaskBarKind::Task,
+            side: None,
+            dismiss: TaskBarDismiss::Close,
+            compact: false,
+        }
     }
 
     /// A fixed bar named `label` hung below the screen bounds of `anchor`, above them when there is no room below.
@@ -226,6 +238,7 @@ impl<'a> TaskBar<'a> {
             kind,
             side: None,
             dismiss: TaskBarDismiss::Close,
+            compact: false,
         }
     }
 
@@ -237,7 +250,7 @@ impl<'a> TaskBar<'a> {
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, hang, mut place, kind, side, dismiss } = self;
+        let TaskBar { label, hang, mut place, kind, side, dismiss, compact } = self;
         let side = side.unwrap_or(match kind {
             TaskBarKind::Task | TaskBarKind::Fixed => Side::Below,
             TaskBarKind::Selection => Side::Above,
@@ -277,7 +290,9 @@ impl<'a> TaskBar<'a> {
         let grip = movable.then(|| words.task_bar_move.clone());
         let mut shown = layer.show(ui, |ui, _| {
             // The bar is the one surface: the grip is its first member, on the members' line inside its padding.
-            Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating).show(ui, |ui, _| {
+            let bar = Bar::new(Label::Empty, BarKind::Tool).surface(SurfaceKind::Floating);
+            let bar = if compact { bar.compact() } else { bar };
+            bar.show(ui, |ui, _| {
                 if let Some(grip) = &grip {
                     let _ = Icon::new(IconSpec::svg(IconId::new("grip"))).label(grip.clone()).show(ui);
                 }

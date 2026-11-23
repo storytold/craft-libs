@@ -378,3 +378,43 @@ fn a_dragged_task_bar_stands_under_the_pointer_in_each_frame_and_writes_its_plac
     fixture.settle();
     assert!((seen(&scene).rect.min - dropped_at).length() < SLACK, "the written place keeps the bar there: {:?}", seen(&scene).rect);
 }
+
+/// A fixed bar of two icon buttons (production's text box Done and Discard), compact or not: its rect, and each
+/// button's rect by name.
+fn two_buttons(compact: bool) -> (Rect, Vec<Rect>) {
+    use craft_behavior::IconId;
+    use craft_ui::buttons::IconButton;
+    use craft_ui::contract::Props as _;
+    let scene = Rc::new(RefCell::new(Rect::NOTHING));
+    let shared = Rc::clone(&scene);
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = on_canvas(ui, |ui, area, _| {
+            let anchor = frame(DocVec::ZERO);
+            let shown = TaskBar::fixed("Text box actions", &anchor).compact(compact).show(ui, area, |ui, _| {
+                let _ = IconButton::new(IconId::new("check")).label("Done adding text").show(ui);
+                let _ = IconButton::new(IconId::new("close")).label("Discard this text").show(ui);
+            });
+            *shared.borrow_mut() = shown.output.rect;
+            shown.output
+        });
+    });
+    fixture.room(Vec2::new(1120.0, 720.0));
+    fixture.settle();
+    let buttons = ["Done adding text", "Discard this text"].map(|name| fixture.by_label(name).map_or(Rect::NOTHING, |button| button.rect));
+    let bar = *scene.borrow();
+    (bar, buttons.to_vec())
+}
+
+/// A compact bar holds its members at the small control size in a tight frame: smaller than the standard bar, with
+/// every member whole inside it.
+#[trial]
+fn a_compact_task_bar_is_smaller_and_shows_every_member_whole() {
+    let (standard, _) = two_buttons(false);
+    let (compact, buttons) = two_buttons(true);
+    assert!(compact.is_positive() && standard.is_positive(), "both bars show: {standard:?} {compact:?}");
+    assert!(compact.height() + 4.0 < standard.height(), "the compact bar is lower: {compact:?} against {standard:?}");
+    assert!(compact.width() + 4.0 < standard.width(), "the compact bar is narrower: {compact:?} against {standard:?}");
+    for button in buttons {
+        assert!(button.is_positive() && compact.expand(SLACK).contains_rect(button), "each member shows whole in {compact:?}: {button:?}");
+    }
+}

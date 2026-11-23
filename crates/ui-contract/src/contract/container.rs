@@ -132,6 +132,8 @@ pub enum Pad {
     /// No padding.
     #[default]
     None,
+    /// `space.gap.tight`: a hairline frame around a compact group, as a small floating action bar's.
+    Tight,
     /// `space.pad.control`.
     Control,
     /// `space.pad.regular`.
