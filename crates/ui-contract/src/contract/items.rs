@@ -151,13 +151,15 @@ struct Renaming<K> {
     draft: String,
     gesture: GestureId,
     focused: bool,
+    /// The field has held the focus: losing it afterwards ends the rename.
+    held: bool,
     /// The field opened with a draft the collection proposed that differs from the row's text.
     proposed: bool,
 }
 
 impl<K> Default for Renaming<K> {
     fn default() -> Self {
-        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, proposed: false }
+        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, held: false, proposed: false }
     }
 }
 
