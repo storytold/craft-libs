@@ -13,8 +13,8 @@ use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _, Sampler as _, Show as _,
-    ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
+    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _, Sampler as _,
+    Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
 };
 use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -352,8 +352,14 @@ impl Line<'_> {
             return;
         }
         let mut field = Field::new(self.name.clone()).id_salt(self.key).enabled(self.enabled);
-        // In a document dialog a custom row is a group of controls (page range options, say): its name heads it.
-        if matches!(self.param.kind, ParamKind::Custom(_)) && Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline {
+        // In a document dialog a custom row is a group of controls (page range options, say): its name heads it, unless
+        // the captions share a column ([`CaptionColumn`]), where it stands beside the group as every caption does.
+        let env = Env::of(ui);
+        let view = env.view();
+        if matches!(self.param.kind, ParamKind::Custom(_))
+            && view.get::<LabelScheme>() == LabelScheme::Inline
+            && !view.get::<CaptionColumn>().shared()
+        {
             field = field.layout(FieldLayout::Above);
         }
         if self.compact {
@@ -596,8 +602,12 @@ impl<'p> Pass<'p> {
             return;
         }
         let layout = self.sliders;
+        let short = options.short_slider();
         let mut show = |ui: &mut Ui| {
             let mut slider = SliderField::new(line.name.clone(), Bind::given(value), range.clone()).scale(scale).layout(layout);
+            if short {
+                slider = slider.short(true).field_sizing(Sizing::Content);
+            }
             if let Some(places) = places {
                 slider = slider.step(10f64.powi(-(places as i32)));
             }
@@ -619,6 +629,8 @@ impl<'p> Pass<'p> {
         };
         match layout {
             SliderFieldLayout::Stacked => show(ui),
+            // A short row is as wide as its content, as a row in a shared line is.
+            _ if short => Line { compact: true, name: line.name.clone(), ..*line }.show(ui, show),
             _ => line.show(ui, show),
         }
     }

@@ -96,6 +96,10 @@ pub struct SliderField<'a> {
     /// row, the Color panel's channels) instead of the number cell, and the slider takes the room it leaves.
     #[prop]
     field_sizing: Option<Sizing>,
+    /// The slider asks for a short length ([`Slider::short`]): with a content-sized number field, the line is as wide as
+    /// a short field and the number, as production's Opacity, not the room it is offered.
+    #[prop]
+    short: bool,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -151,6 +155,7 @@ impl<'a> SliderField<'a> {
             track_face: None,
             thumb: SliderThumb::Round,
             field_sizing: None,
+            short: false,
             field_width: 0.0,
             out_of_range: None,
         }
@@ -171,6 +176,7 @@ impl<'a> SliderField<'a> {
             thumb: self.thumb,
             reset: self.value.reset_value().copied(),
             field_sizing: self.field_sizing,
+            short: self.short,
         }
     }
 }
@@ -189,6 +195,7 @@ struct Look {
     /// The reset value of the composite's own binding, which both children restore on a double click.
     reset: Option<f64>,
     field_sizing: Option<Sizing>,
+    short: bool,
 }
 
 /// The composite's check, which its children check their values with.
@@ -214,7 +221,7 @@ impl Look {
         if let Some(check) = check {
             bind = bind.check_with(check, BindCheck::validity);
         }
-        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).label(name.clone());
+        let slider = Slider::new(bind, self.range.clone()).scale(self.scale).fill(self.fill).thumb(self.thumb).short(self.short).label(name.clone());
         let slider = match face {
             Some(face) => slider.track_face(face),
             None => slider,
@@ -298,8 +305,9 @@ impl Component for SliderField<'_> {
         }
     }
 
+    /// A short slider keeps to its own length; otherwise the line takes the width it is offered.
     fn fills(&self) -> Option<craft_behavior::Axis> {
-        Some(craft_behavior::Axis::X)
+        (!self.short).then_some(craft_behavior::Axis::X)
     }
 
     fn sense(&self) -> Sense {

@@ -721,3 +721,27 @@ fn a_text_row_that_selects_on_focus_is_replaced_by_typing() {
         }
     }
 }
+
+/// Production's Opacity row: a short slider and a number field as wide as its value, the row as wide as its content.
+/// An unmarked range row's slider takes the room the form offers.
+#[trial]
+fn a_short_slider_row_is_as_wide_as_its_content() {
+    let widths = |short: bool| {
+        let row = Param::new("opacity", "Opacity", ParamKind::range(0.0, 100.0, 100.0, Default::default())).decimals(1);
+        let params = vec![if short { row.short_slider() } else { row }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+        });
+        fixture.room(egui::vec2(800.0, 400.0));
+        fixture.settle();
+        let slider = fixture.by_role(Role::SLIDER).first().map(|slider| slider.rect.width());
+        let field = fixture.by_role(Role::SPIN_BUTTON).first().map(|field| field.rect.width());
+        (slider.unwrap_or(f32::NAN), field.unwrap_or(f32::NAN))
+    };
+    let ((long, wide), (short, narrow)) = (widths(false), widths(true));
+    assert!(long > 300.0, "an unmarked slider fills the row: {long}");
+    assert!(short < 120.0 && short > 40.0, "a short slider is about a short field long: {short}");
+    assert!(narrow <= wide, "the short row's number field ({narrow}) is no wider than the unmarked one's ({wide})");
+}

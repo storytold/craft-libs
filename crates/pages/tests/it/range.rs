@@ -118,3 +118,59 @@ fn the_page_range_options_of_a_document_dialog_stack_under_their_heading_and_cou
     assert!(fixture.texts().iter().any(|run| run.text == "of 12"), "the range ends in the page count");
     assert!(fixture.by_label("Subset").is_none(), "this arrangement has no Subset");
 }
+
+/// Production's Background and Watermark dialogs put the page range options on one line: All pages, Pages from and
+/// to, then the Subset, with no page count after the range.
+#[trial]
+fn line_page_range_options_stand_on_one_line_with_no_page_count() {
+    use craft_ui::patterns::form_dialogs::{ParamDialog, ParamLayout};
+    let mut fixture = Fixture::new(|ui| {
+        let mut fields = DialogFields::new();
+        ParamDialog::new("range", "Add Background", vec![PageRangeOptions::param("range", "Page Range Options", 3, 0, PageRangeChoices::Line)])
+            .layout(ParamLayout::Document)
+            .values(Bind::bound(&mut fields))
+            .show(ui);
+    });
+    fixture.room(egui::vec2(1100.0, 700.0));
+    fixture.settle();
+    let at = |name: &str| fixture.by_label(name).unwrap_or_else(|| panic!("{name:?} is shown")).rect;
+    let (all, from, subset) = (at("All pages"), at("Pages from"), at("Subset"));
+    for (name, rect) in [("Pages from", from), ("Subset", subset)] {
+        assert!((rect.center().y - all.center().y).abs() < 4.0, "{name} {rect:?} stands on the line of All pages {all:?}");
+    }
+    assert!(all.max.x <= from.min.x && from.max.x <= subset.min.x, "in reading order: {all:?} {from:?} {subset:?}");
+    assert!(!fixture.texts().iter().any(|run| run.text == "of 3"), "the range shows no page count");
+}
+
+/// Production's Rotate Pages lines its captions up in one column with the controls after it: the Pages: caption
+/// stands beside the page range group, not over it, and the group's options start where the Direction: list does.
+/// Without the column the group's caption heads it.
+#[trial]
+fn a_caption_column_puts_a_group_caption_beside_its_group_and_lines_the_controls_up() {
+    use craft_ui::patterns::form_dialogs::{ParamDialog, ParamKind, ParamLayout};
+    let shown = |column: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut fields = DialogFields::new();
+            let direction =
+                ParamKind::choice(vec![("90".into(), "Clockwise 90 degrees".into()), ("180".into(), "180 degrees".into())], Some("90".into()));
+            let rows = vec![
+                Param::new("direction", "Direction:", direction),
+                PageRangeOptions::param("pages", "Pages:", 12, 2, PageRangeChoices::SelectedFromTo),
+            ];
+            ParamDialog::new("range", "Rotate", rows).layout(ParamLayout::Document).caption_column(column).values(Bind::bound(&mut fields)).show(ui);
+        });
+        fixture.room(egui::vec2(1100.0, 700.0));
+        fixture.settle();
+        let caption = fixture.texts().iter().find(|run| run.text.starts_with("Pages") && !run.text.contains("from")).map(|run| run.rect);
+        let caption =
+            caption.unwrap_or_else(|| panic!("the Pages caption shows: {:?}", fixture.texts().iter().map(|run| &run.text).collect::<Vec<_>>()));
+        let all = fixture.by_label("All pages").expect("All pages shows").rect;
+        let direction = fixture.by_label("Direction:").or_else(|| fixture.by_label("Direction")).expect("the Direction list shows").rect;
+        (caption, all, direction)
+    };
+    let (caption, all, direction) = shown(true);
+    assert!(caption.max.x <= all.min.x && caption.min.y >= all.min.y - 4.0, "the caption {caption:?} stands beside the group {all:?}");
+    assert!((all.min.x - direction.min.x).abs() <= 2.0, "the group {all:?} starts where the Direction list {direction:?} does");
+    let (caption, all, _) = shown(false);
+    assert!(caption.max.y <= all.min.y + 1.0, "without the column the caption {caption:?} heads the group {all:?}");
+}

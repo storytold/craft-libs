@@ -252,6 +252,9 @@ pub enum PageRangeChoices {
     /// All pages, Selected pages and From and To, with no Subset (its own row, [`PageRangeOptions::subset_select`],
     /// stands elsewhere in the dialog).
     SelectedFromTo,
+    /// Acrobat's rows on one line, as production's Background and Watermark dialogs show them: All pages, Pages from
+    /// and to, then the Subset, with no page count after the range.
+    Line,
 }
 
 impl PageRangeChoices {
@@ -267,7 +270,12 @@ impl PageRangeChoices {
 
     /// Whether the rows end with the Subset list.
     fn subset(self) -> bool {
-        matches!(self, PageRangeChoices::Acrobat | PageRangeChoices::Current | PageRangeChoices::Selection)
+        matches!(self, PageRangeChoices::Acrobat | PageRangeChoices::Current | PageRangeChoices::Selection | PageRangeChoices::Line)
+    }
+
+    /// Whether every option stands on one line.
+    fn line(self) -> bool {
+        self == PageRangeChoices::Line
     }
 }
 
@@ -368,6 +376,10 @@ impl PageRangeOptions {
             Entry::new(Subset::Odd, words.odd_only.clone()),
         ];
         let mut subset = None;
+        // One line ([`PageRangeChoices::Line`]): the subset ends the line in a document dialog and elsewhere, and the
+        // range shows no page count.
+        let line = choices.line();
+        let subset_inline = inline || line;
         let mut pick_subset = |ui: &mut Ui| {
             let picked = Select::new(words.subset.clone(), Bind::given(range.subset), &entries).show(ui);
             if let Some(chosen) = picked.value().copied() {
@@ -383,8 +395,9 @@ impl PageRangeOptions {
                 if choices.selection() {
                     cx.labelled(ui, "selection", words.selection.clone(), after.clone(), Radio::new(PageScope::Selection));
                 }
-                // Two themed fields don't fit beside the radio in a narrow panel: "to" and its field wrap together.
-                Row::new().wrap(true).show(ui, |ui, _| {
+                // Two themed fields don't fit beside the radio in a narrow panel: "to" and its field wrap together. One
+                // line keeps them on it, as production's does: the dialog takes the line's width.
+                Row::new().wrap(!line).show(ui, |ui, _| {
                     cx.labelled(ui, "range", words.pages_from.clone(), after.clone(), Radio::new(PageScope::Range));
                     let field = |label: &Label, shown: usize| {
                         NumberField::new(label.clone(), Bind::given(Some(shown as f64)))
@@ -395,12 +408,12 @@ impl PageRangeOptions {
                     Row::new().show(ui, |ui, _| {
                         Text::new(words.to.clone()).show(ui);
                         to = whole(&field(&words.to, shown_to).show(ui).edit, shown_to);
-                        if inline {
+                        if inline && !line {
                             let count = env.format().integer(last as u64);
                             Text::new(words.of_count.fill(&[("count", count.as_str())])).show(ui);
                         }
                     });
-                    if inline && choices.subset() {
+                    if subset_inline && choices.subset() {
                         Row::new().show(ui, |ui, _| {
                             Text::new(words.subset.clone()).show(ui);
                             pick_subset(ui);
@@ -409,7 +422,11 @@ impl PageRangeOptions {
                 });
             };
             // The radio buttons stack, in a document dialog as elsewhere: production's Pages group is a column.
-            Stack::new().show(ui, |ui, _| body(ui));
+            if line {
+                Row::new().show(ui, |ui, _| body(ui));
+            } else {
+                Stack::new().show(ui, |ui, _| body(ui));
+            }
         });
         if let Some(scope) = group.output.value().copied() {
             next.scope = scope;
@@ -421,7 +438,7 @@ impl PageRangeOptions {
         if let Some(value) = to {
             next.to = Some(value);
         }
-        if choices.subset() && !inline {
+        if choices.subset() && !subset_inline {
             Field::new(words.subset.clone()).show(ui, |ui, _| pick_subset(ui));
         }
         if let Some(chosen) = subset {

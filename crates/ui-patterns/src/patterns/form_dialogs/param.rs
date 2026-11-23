@@ -481,6 +481,8 @@ pub(crate) struct RowOptions {
     eyedropper_armed: bool,
     full_width: bool,
     beside_next: bool,
+    /// A range row's slider is short and its number field content-wide ([`Param::short_slider`]).
+    short_slider: bool,
     /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
     options_in_row: bool,
     /// A radio row's options stand in a column with no caption, in a document dialog too ([`Param::stacked_options`]).
@@ -970,6 +972,15 @@ impl Param {
         self
     }
 
+    /// For a [`ParamKind::Range`] row: the slider asks for a short field's length and the number field is as wide as
+    /// its widest value, so the row takes its content's width rather than the form's (production's Opacity). Other
+    /// kinds and a popup slider are unchanged.
+    #[must_use]
+    pub fn short_slider(mut self) -> Self {
+        self.options.get_or_insert_default().short_slider = true;
+        self
+    }
+
     /// For a [`ParamKind::Radio`] row: the options stand side by side in one row, with no caption over them; the label
     /// still names the group for assistive technology. Other kinds are unchanged.
     #[must_use]
@@ -1186,6 +1197,11 @@ impl RowOptions {
     /// Whether a custom row spans the width of the form.
     pub(crate) fn full_width(&self) -> bool {
         self.full_width
+    }
+
+    /// Whether a range row's slider is short.
+    pub(crate) fn short_slider(&self) -> bool {
+        self.short_slider
     }
 
     /// Whether a radio row's options stand in one row with no caption.

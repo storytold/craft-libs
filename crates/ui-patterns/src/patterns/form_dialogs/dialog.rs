@@ -40,7 +40,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 
-use crate::contract::LabelScheme;
+use crate::contract::{CaptionColumn, LabelScheme};
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use egui::{Context, Pos2, Rect, Response, Ui};
@@ -351,6 +351,12 @@ pub struct ParamDialog<'a> {
     /// How the rows, the preview pane and the buttons are arranged.
     #[prop]
     layout: Option<ParamLayout>,
+    /// In a document dialog ([`ParamLayout::Document`]), the captions share one column at the row start and the
+    /// controls line up after it, a group of controls (a custom row) with its caption beside it rather than over it:
+    /// production's Rotate Pages (Direction:, Pages: and Rotate: in a column). Off by default: each caption is as
+    /// wide as its text, and a group row's caption heads it ([`CaptionColumn`]).
+    #[prop]
+    caption_column: bool,
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
@@ -464,6 +470,7 @@ impl<'a> ParamDialog<'a> {
             collection_body: false,
             reset_to: None,
             layout: None,
+            caption_column: false,
             closable: true,
             close_unchanged: false,
             previews: false,
@@ -577,6 +584,7 @@ impl<'a> ParamDialog<'a> {
             collection_body,
             reset_to,
             layout,
+            caption_column,
             closable,
             close_unchanged,
             previews,
@@ -697,6 +705,7 @@ impl<'a> ParamDialog<'a> {
             // A tabbed document dialog (Document Properties) is an aligned form: no colons, one caption column, the
             // controls filling the rest of the row.
             labels: if layout == ParamLayout::Document && !tabs.is_empty() { Some(LabelScheme::Inspector) } else { layout.labels() },
+            caption_column: caption_column && layout == ParamLayout::Document,
             canvas,
             read_only,
         };
@@ -974,6 +983,8 @@ struct DialogRows<'p> {
     sliders: SliderFieldLayout,
     /// The label scheme the layout sets for the rows.
     labels: Option<LabelScheme>,
+    /// The rows' captions share one column ([`ParamDialog::caption_column`]).
+    caption_column: bool,
     canvas: Option<egui::Id>,
     /// The dialog shows values only.
     read_only: bool,
@@ -994,6 +1005,15 @@ impl DialogRows<'_> {
         }
         if let Some(canvas) = self.canvas {
             rows = rows.canvas(canvas);
+        }
+        if self.caption_column {
+            return crate::runtime::env::with_env(
+                ui,
+                |scope| {
+                    scope.values.set(CaptionColumn::SHARED);
+                },
+                |ui| rows.show(ui),
+            );
         }
         rows.show(ui)
     }
