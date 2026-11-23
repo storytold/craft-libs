@@ -328,7 +328,8 @@ fn an_edit_composer_reads_save_and_a_new_one_reads_post() {
 /// opens on its field as the dialog rule has it (the whole text selected).
 #[trial]
 fn an_edit_composer_opens_with_the_caret_after_the_text() {
-    for (kind, want) in [(ComposerDraft::Edit, "Original edited"), (ComposerDraft::EditVerbatim, "Original edited"), (ComposerDraft::New, " edited")] {
+    for (kind, want) in [(ComposerDraft::Edit, "Original edited"), (ComposerDraft::EditVerbatim, "Original edited"), (ComposerDraft::New, " edited")]
+    {
         let draft = Rc::new(RefCell::new(String::from("Original")));
         let shown = Rc::clone(&draft);
         let mut fixture = Fixture::new(move |ui| {
