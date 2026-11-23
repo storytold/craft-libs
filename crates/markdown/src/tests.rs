@@ -1030,3 +1030,47 @@ fn visible_comment_tails_can_open_list_comments_without_exposing_definitions() {
         }
     }
 }
+
+#[test]
+fn plain_list_tails_establish_boundaries_for_following_ordered_items() {
+    for tail in ["- text", "1. text", "- - text", "-", "2. "] {
+        let md = format!("<!-- -->{tail}\n2. <!--\n\n   [x]: /wrong\n   -->\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+}
+
+#[test]
+fn continuation_comment_tail_columns_include_the_enclosing_list_item() {
+    for (parent, pad) in [("- text", "  "), ("1. text", "   "), ("-   text", "    ")] {
+        let md = format!("{parent}\n{pad}<!-- -->- <!-- -->```\n{pad}  [x]: /wrong\n\n{pad}[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.kind == Kind::Code && p.text().contains("[x]: /wrong"))), "{md}");
+        let md = format!("{parent}\n\n{pad}    [x]: /wrong\n\n[x]: /right\n\n[x]");
+        let flow = parse(&md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.text().contains("[x]: /wrong"))), "{md}");
+    }
+}

@@ -101,29 +101,38 @@ fn block_comment_tail(mut text: &str) -> Option<&str> {
     }
 }
 
-/// The content column of a comment opened directly or after list markers.
-/// Use the list parser's whitespace rules so an indented code item stays code.
-fn list_comment_indent(mut line: &str, starts_block: bool) -> Option<usize> {
+/// Peel list markers using the block parser's whitespace and interruption rules.
+/// The returned column is relative to `line`; non-list text and indented code stay intact.
+fn list_content(mut line: &str, starts_block: bool) -> (&str, usize) {
     let mut column = 0usize;
     for depth in 0..=MAX_NEST {
         let ind = indent(line);
-        if ind >= 4 {
-            return None;
-        }
         let text = line.trim_start_matches([' ', '\t']);
-        if text.starts_with("<!--") {
-            return Some(column);
+        if ind >= 4 || thematic_break(text) {
+            break;
         }
-        let marker = list_marker(text)?;
+        let Some(marker) = list_marker(text) else { break };
         if depth == 0 && !starts_block && !list_interrupts(marker, text) {
-            return None;
+            break;
         }
-        let after = text.get(marker.len..)?;
-        let (spaces, skip) = if indent(after) > 4 { (1, 1) } else { marker_space(ind, marker.len, after) };
+        let after = text.get(marker.len..).unwrap_or("");
+        let (spaces, skip) = if is_blank(after) {
+            (1, after.len())
+        } else if indent(after) > 4 {
+            (1, 1)
+        } else {
+            marker_space(ind, marker.len, after)
+        };
         column = column.saturating_add(ind).saturating_add(marker.len).saturating_add(spaces);
-        line = after.get(skip..)?;
+        line = after.get(skip..).unwrap_or("");
     }
-    None
+    (line, column)
+}
+
+/// The content column of a comment opened directly or after list markers.
+fn list_comment_indent(line: &str, starts_block: bool) -> Option<usize> {
+    let (content, column) = list_content(line, starts_block);
+    (indent(content) < 4 && content.trim_start_matches([' ', '\t']).starts_with("<!--")).then_some(column)
 }
 
 /// Reprocess visible tails through list/comment containers, as the block pass does.
@@ -131,9 +140,12 @@ fn list_comment_indent(mut line: &str, starts_block: bool) -> Option<usize> {
 fn reference_comment_tail(mut text: &str, mut column: usize) -> (Option<&str>, usize) {
     loop {
         let Some(tail) = block_comment_tail(text) else { return (None, column) };
-        let Some(nested_column) = list_comment_indent(tail, true) else { return (Some(tail), column) };
+        let (content, nested_column) = list_content(tail, true);
         column = column.saturating_add(nested_column);
-        text = tail;
+        if indent(content) >= 4 || !content.trim_start_matches([' ', '\t']).starts_with("<!--") {
+            return (Some(content), column);
+        }
+        text = content;
     }
 }
 
@@ -183,7 +195,6 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
     // The start of the document begins a block.
     let mut starts_block = true;
     lines.retain_mut(|line| {
-        let t = line.trim_start_matches([' ', '\t']);
         if let Some((column, after_blank)) = list_item {
             if list_item_ends(line, column, after_blank) {
                 list_item = None;
@@ -223,8 +234,12 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             starts_block |= take_comment_tail_reference(line, &mut refs);
             return true;
         }
+        // A continuation is parsed in its containing item's coordinate system.
+        let enclosing_column = list_item.filter(|(column, _)| indent(line) >= *column).map_or(0, |(column, _)| column);
+        let source = strip_indent(line, enclosing_column);
+        let t = source.trim_start_matches([' ', '\t']);
         // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
-        let fence_line = if open.is_some() { strip_indent(line, fence_indent) } else { line.as_str() };
+        let fence_line = if open.is_some() { strip_indent(line, fence_indent) } else { source };
         let fence_text = fence_line.trim_start_matches([' ', '\t']);
         let marker = (indent(fence_line) < 4).then(|| fence(fence_text)).flatten();
         match open {
@@ -239,7 +254,7 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             None => {
                 if let Some(f) = marker {
                     open = Some(f);
-                    fence_indent = 0;
+                    fence_indent = enclosing_column;
                     fence_after_blank = false;
                     return true;
                 }
@@ -257,10 +272,10 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             let spaces = if is_blank(after) || indent(after) > 4 { 1 } else { marker_space(indent(line), m.len, after).0 };
             list_item = Some((indent(line).saturating_add(m.len).saturating_add(spaces), false));
         }
-        if let Some(column) = list_comment_indent(line, starts_block) {
-            comment_indent = column;
+        if let Some(column) = list_comment_indent(source, starts_block) {
+            comment_indent = enclosing_column.saturating_add(column);
             comment_after_blank = false;
-            let (tail, column) = reference_comment_tail(line, comment_indent);
+            let (tail, column) = reference_comment_tail(source, comment_indent);
             comment_indent = column;
             if list_item.is_none() && column > 0 {
                 list_item = Some((column, false));
@@ -274,13 +289,13 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
             starts_block |= take_comment_tail_reference(line, &mut refs);
             return true;
         }
-        if starts_block && let Some((label, dest)) = link_definition(line) {
+        if starts_block && let Some((label, dest)) = link_definition(source) {
             // The first definition of a label wins, as CommonMark says, and definitions may
             // follow one another.
             refs.entry(label).or_insert(dest.into());
             return false;
         }
-        starts_block = is_blank(line) || atx_heading(t).is_some() || thematic_break(t);
+        starts_block = is_blank(source) || atx_heading(t).is_some() || thematic_break(t);
         true
     });
     refs
