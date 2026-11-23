@@ -232,6 +232,8 @@ pub enum CollectionEvent<K, E> {
     },
     /// Enter or a double click on an item.
     Activate(K),
+    /// Enter on a disabled lead: nothing ran. A host that says why, or closes what the collection is in, reads it.
+    Refused(K),
     /// The pointer has rested on the hovered lead row for the tooltip delay, or the lead moved by a key: the row's
     /// key, once per lead change.
     Rested(K),

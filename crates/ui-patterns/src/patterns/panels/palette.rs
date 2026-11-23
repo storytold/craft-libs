@@ -99,6 +99,9 @@ pub struct PaletteOutput {
     pub closed: Option<CloseReason>,
     /// The query the fallback row handed back, when the user picked it in this pass.
     pub fallback: Option<String>,
+    /// The disabled command of the active row Enter was pressed on in this pass: nothing ran and the palette stays
+    /// open, its footer saying why. An app that closes the palette there and reports the reason itself reads it.
+    pub refused: Option<CommandRef>,
 }
 
 impl crate::contract::Outcome for PaletteOutput {
@@ -269,7 +272,7 @@ impl<'a> CommandPalette<'a> {
                 conclude(cx, &ctx, &chosen, &label, recent, &mut recents);
             });
         let closed = shown.output.closed;
-        PaletteOutput { response: shown.output.response, picked: chosen.picked, closed, fallback: chosen.fallback }
+        PaletteOutput { response: shown.output.response, picked: chosen.picked, closed, fallback: chosen.fallback, refused: chosen.refused }
     }
 
     fn show_in_place(self, ui: &mut Ui) -> PaletteOutput {
@@ -336,7 +339,7 @@ impl<'a> CommandPalette<'a> {
                 closed = popup.output.closed;
             });
         });
-        PaletteOutput { response: shown.output, picked: chosen.picked, closed, fallback: chosen.fallback }
+        PaletteOutput { response: shown.output, picked: chosen.picked, closed, fallback: chosen.fallback, refused: chosen.refused }
     }
 }
 
@@ -349,6 +352,7 @@ struct WasOpen(bool);
 struct Chosen {
     picked: Option<CommandRef>,
     fallback: Option<String>,
+    refused: Option<CommandRef>,
 }
 
 /// What the list body reads, the same for both faces.
@@ -407,13 +411,13 @@ fn show_rows(ui: &mut Ui, input: &RowsInput<'_>, state: &mut Session, env: &crat
     }
     let events = list.show_items(ui, &source, &mut |key, _| rows[position(&listed.keys, *key)].row()).events;
     let mut chosen = Chosen::default();
+    let command = |at: usize| input.entries.get(at).map(|entry| entry.command().clone());
     for event in events {
-        if let CollectionEvent::Activate(key) = event {
-            match key {
-                Line::Entry(at) => chosen.picked = input.entries.get(at).map(|entry| entry.command().clone()),
-                Line::Fallback => chosen.fallback = Some(found.clone()),
-                Line::Heading | Line::Separator => {}
-            }
+        match event {
+            CollectionEvent::Activate(Line::Entry(at)) => chosen.picked = command(at),
+            CollectionEvent::Activate(Line::Fallback) => chosen.fallback = Some(found.clone()),
+            CollectionEvent::Refused(Line::Entry(at)) => chosen.refused = command(at),
+            _ => {}
         }
     }
     let status = status_of(ui, input, &listed, &rows, state.selection.lead, found.is_empty(), env);

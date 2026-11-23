@@ -649,6 +649,8 @@ pub enum CollectionKind {
     Rested,
     /// Enter or a double click on an item.
     Activate,
+    /// Enter on a disabled lead.
+    Refused,
     /// A double click on the empty space.
     EmptyActivated,
     /// A secondary click on the empty space.
@@ -691,6 +693,7 @@ impl CollectionKind {
             CollectionEvent::Picked { .. } => CollectionKind::Picked,
             CollectionEvent::LeadMoved { .. } => CollectionKind::LeadMoved,
             CollectionEvent::Activate(_) => CollectionKind::Activate,
+            CollectionEvent::Refused(_) => CollectionKind::Refused,
             CollectionEvent::Rested(_) => CollectionKind::Rested,
             CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
             CollectionEvent::EmptyContextMenu { .. } => CollectionKind::EmptyContextMenu,
