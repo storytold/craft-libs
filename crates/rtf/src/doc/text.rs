@@ -310,7 +310,7 @@ impl Reader {
                 }
             }
             Dest::ShpSn | Dest::ShpSv => self.shape_text(s),
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
+            Dest::Skip | Dest::InfoRoot | Dest::Created | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

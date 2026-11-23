@@ -273,15 +273,43 @@ fn groups<'a>(d: &'a AffixDict, t: &Tuning) -> Cow<'a, [Vec<char>]> {
     Cow::Owned(d.map().iter().cloned().chain(t.map.iter().map(|g| g.chars().collect())).collect())
 }
 
-/// The other members of every MAP group of `c` (its likely confusions), each once.
-fn alternatives(c: char, map: &[Vec<char>]) -> Vec<char> {
-    let mut out: Vec<char> = Vec::new();
-    for x in map.iter().filter(|g| g.contains(&c)).flat_map(|g| g.iter().copied()) {
-        if x != c && !out.contains(&x) {
-            out.push(x);
+/// Per-call lookups over the dictionary's groups followed by the language's groups.
+/// Store memberships, not every pair of alternatives: one long group stays linear in storage.
+pub(crate) struct MapLookup<'a> {
+    groups: &'a [Vec<char>],
+    first: HashMap<char, char>,
+    groups_of: HashMap<char, Vec<usize>>,
+}
+
+impl<'a> MapLookup<'a> {
+    pub(crate) fn new(groups: &'a [Vec<char>]) -> Self {
+        let mut first = HashMap::new();
+        let mut groups_of: HashMap<char, Vec<usize>> = HashMap::new();
+        for (i, group) in groups.iter().enumerate() {
+            let Some(&representative) = group.first() else { continue };
+            for &c in group {
+                first.entry(c).or_insert(representative);
+                let memberships = groups_of.entry(c).or_default();
+                if memberships.last() != Some(&i) {
+                    memberships.push(i);
+                }
+            }
         }
+        Self { groups, first, groups_of }
     }
-    out
+
+    /// Lowercase the query only; the first group's representative keeps its authored case.
+    pub(crate) fn fold(&self, c: char) -> char {
+        let l = c.to_lowercase().next().unwrap_or(c);
+        self.first.get(&l).copied().unwrap_or(l)
+    }
+
+    /// Other members of all matching groups, once each and in original group/member order.
+    fn alternatives(&self, c: char) -> Vec<char> {
+        let mut seen = HashSet::new();
+        seen.insert(c);
+        self.groups_of.get(&c).into_iter().flatten().filter_map(|&i| self.groups.get(i)).flatten().copied().filter(|&x| seen.insert(x)).collect()
+    }
 }
 
 /// Every way of changing up to `t.max_map_changes` letters of `chars` to a MAP relative (`alts`,
@@ -314,12 +342,6 @@ fn exact_map_variants(chars: &[char], alts: &[Vec<char>], t: &Tuning, left: usiz
             buf.pop();
         }
     }
-}
-
-/// A letter's MAP representative (the first of its first group), lower case: `ż` → `z`, `ó` → `o`.
-pub(crate) fn fold(c: char, map: &[Vec<char>]) -> char {
-    let l = c.to_lowercase().next().unwrap_or(c);
-    map.iter().find(|g| g.contains(&l)).and_then(|g| g.first().copied()).unwrap_or(l)
 }
 
 /// Optimal string alignment distance where a MAP slip (`a`/`ą`, `u`/`ó`) costs 1 and any other
@@ -407,7 +429,8 @@ pub(crate) fn suggest_in(d: &AffixDict, word: &str, max: usize, t: &Tuning) -> V
         pieces: Default::default(),
     };
     add_case(&mut col, word, &input);
-    let map = groups(d, t);
+    let groups = groups(d, t);
+    let map = MapLookup::new(&groups);
     add_map_slips(&mut col, &chars, &map, t);
     add_confusions(&mut col, &input, t);
     add_splits(&mut col, &input, t);
@@ -479,8 +502,8 @@ fn add_case(col: &mut Collector, word: &str, input: &str) {
 }
 
 /// Round 2: accents and other MAP slips.
-fn add_map_slips(col: &mut Collector, chars: &[char], map: &[Vec<char>], t: &Tuning) {
-    let alts: Vec<Vec<char>> = chars.iter().map(|&c| alternatives(c, map)).collect();
+fn add_map_slips(col: &mut Collector, chars: &[char], map: &MapLookup<'_>, t: &Tuning) {
+    let alts: Vec<Vec<char>> = chars.iter().map(|&c| map.alternatives(c)).collect();
     let mut variants = Vec::new();
     map_variants(chars, &alts, t, &mut variants);
     variants.sort_by_key(|v| v.1);
@@ -599,12 +622,12 @@ fn add_typos(col: &mut Collector, chars: &[char], t: &Tuning) {
 
 /// Round 6: rank the stems starting with the word's first letter (or a MAP relative of it, either
 /// case) by shared letter pairs, then keep the forms of the best within two typos.
-fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
+fn scan(col: &mut Collector, chars: &[char], map: &MapLookup<'_>) {
     let d = col.d;
     let Some(&first) = chars.first() else { return };
-    let folded: Vec<char> = chars.iter().map(|&c| fold(c, map)).collect();
+    let folded: Vec<char> = chars.iter().map(|&c| map.fold(c)).collect();
     let pairs: HashSet<(char, char)> = std::iter::once(' ').chain(folded.iter().copied()).zip(folded.iter().copied()).collect();
-    let mut firsts: Vec<char> = std::iter::once(first).chain(alternatives(first, map)).collect();
+    let mut firsts: Vec<char> = std::iter::once(first).chain(map.alternatives(first)).collect();
     let upper: Vec<char> = firsts.iter().flat_map(|c| c.to_uppercase()).collect();
     firsts.extend(upper);
     firsts.sort_unstable();
@@ -614,7 +637,7 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
     for f in firsts {
         let prefix = f.to_string();
         for stem in d.stems_with_prefix(&prefix) {
-            let sf: Vec<char> = stem.chars().map(|c| fold(c, map)).collect();
+            let sf: Vec<char> = stem.chars().map(|c| map.fold(c)).collect();
             let shared = std::iter::once(' ').chain(sf.iter().copied()).zip(sf.iter().copied()).filter(|p| pairs.contains(p)).count();
             if shared < 2 {
                 continue;
@@ -637,7 +660,7 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
         }
     }
     best.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-    let related = |a: char, b: char| fold(a, map) == fold(b, map);
+    let related = |a: char, b: char| map.fold(a) == map.fold(b);
     let limit = 4;
     let mut budget = SCAN_FORMS_WORK;
     for (_, stem) in best {
@@ -660,6 +683,92 @@ fn scan(col: &mut Collector, chars: &[char], map: &[Vec<char>]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_lookup_preserves_first_group_case_and_ordered_alternatives() {
+        let groups = vec![vec![], vec!['A', 'a', 'ą', 'a'], vec!['b', 'ą', 'á'], vec!['a', 'A'], vec!['b', 'ą', 'á']];
+        let map = MapLookup::new(&groups);
+        assert_eq!(map.fold('Ą'), 'A');
+        assert_eq!(map.fold('á'), 'b', "overlap does not merge the groups transitively");
+        assert_eq!(map.fold('A'), 'A', "keep the representative's authored case");
+        assert_eq!(map.fold('B'), 'b');
+        assert_eq!(map.fold('İ'), 'i', "use the first lowercase scalar, as before");
+        assert_eq!(map.fold('Ω'), 'ω');
+        assert_eq!(map.alternatives('a'), ['A', 'ą']);
+        assert_eq!(map.alternatives('ą'), ['A', 'a', 'b', 'á']);
+        assert_eq!(map.alternatives('A'), ['a', 'ą']);
+        assert!(map.alternatives('Ω').is_empty(), "alternative lookup is case sensitive");
+        assert_eq!(map.groups_of.get(&'a'), Some(&vec![1, 3]), "a repeated member is indexed once per group");
+    }
+
+    #[test]
+    fn map_tuning_order_and_compact_reload_keep_suggestions() {
+        let d = AffixDict::from_hunspell("SET UTF-8\nMAP 3\nMAP cčc\nMAP cć\nMAP cčc\n", "3\nčaj\nćaj\nĉaj\n", &[]).unwrap();
+        let t = Tuning { map: &["cĉč"], ..Tuning::DEFAULT };
+        let bytes = d.to_bytes().unwrap();
+        let back = AffixDict::from_bytes(&bytes).unwrap();
+        assert_eq!(bytes, back.to_bytes().unwrap(), "the index does not change the compact format");
+        assert_eq!(d.map(), back.map(), "retain authored groups and duplicates");
+        for dict in [&d, &back] {
+            assert_eq!(suggest_in(dict, "caj", 8, &t), ["čaj", "ćaj", "ĉaj"]);
+            assert_eq!(suggest_in(dict, "Caj", 8, &t), ["Čaj", "Ćaj", "Ĉaj"]);
+            assert_eq!(suggest_in(dict, "CAJ", 8, &t), ["ČAJ", "ĆAJ", "ĈAJ"]);
+            assert!(suggest_in(dict, "", 8, &t).is_empty());
+            assert!(suggest_in(dict, "caj", 0, &t).is_empty());
+        }
+    }
+
+    #[test]
+    fn map_membership_index_does_not_expand_large_groups_into_pairs() {
+        let group: Vec<char> = (0xe000..0xf000).filter_map(char::from_u32).collect();
+        let groups = vec![group.clone()];
+        let map = MapLookup::new(&groups);
+        assert_eq!(map.first.len(), group.len());
+        assert_eq!(map.groups_of.values().map(Vec::len).sum::<usize>(), group.len());
+        assert_eq!(map.alternatives(group[0]), group[1..]);
+    }
+
+    /// MAP work should grow with the table and stems, rather than their product.
+    #[test]
+    fn large_maps_do_not_multiply_stem_scan_work() {
+        fn dictionary(scale: usize) -> AffixDict {
+            let aff = format!("SET UTF-8\nMAP {}\n{}", 1000 * scale, "MAP xX\n".repeat(1000 * scale));
+            let mut words = vec!["abcdefg".to_string()];
+            words.extend((0..1000 * scale).filter_map(|i| char::from_u32(0xe000 + i as u32)).map(|c| format!("abcde{c}")));
+            let dic = format!("{}\n{}\n", words.len(), words.join("\n"));
+            AffixDict::from_hunspell(&aff, &dic, &[]).unwrap()
+        }
+        fn cpu_cost(f: &mut impl FnMut()) -> f64 {
+            let ran = || {
+                let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+                s.split_whitespace().next()?.parse::<u64>().ok()
+            };
+            let (start, before) = (std::time::Instant::now(), ran());
+            f();
+            match (before, ran()) {
+                (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+                _ => start.elapsed().as_secs_f64(),
+            }
+        }
+        let small = dictionary(1);
+        let big = dictionary(8);
+        let run = |d: &AffixDict| {
+            let out = suggest_in(d, "abcdef", 8, &Tuning::DEFAULT);
+            let expected: Vec<String> = (0..8).map(|i| format!("abcde{}", char::from_u32(0xe000 + i).unwrap())).collect();
+            assert_eq!(out, expected);
+            std::hint::black_box(out);
+        };
+        run(&small);
+        run(&big);
+        let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+        for _ in 0..5 {
+            t1 = t1.min(cpu_cost(&mut || (0..8).for_each(|_| run(&small))) / 8.0);
+            t8 = t8.min(cpu_cost(&mut || run(&big)));
+        }
+        let ratio = t8 / t1.max(1e-9);
+        eprintln!("MAP/stem scan: small={t1:.6}s big={t8:.6}s ratio={ratio:.2}");
+        assert!(ratio < 24.0, "8x MAP and stems cost {ratio:.2}x: {t1:.6}s / {t8:.6}s");
+    }
 
     /// craft-libs#487 review: MAP variants are made by number of changes, so when a long word has
     /// more than [`MAX_MAP_VARIANTS`] of them the cap drops the most-changed ones, never a single
@@ -779,8 +888,9 @@ mod tests {
 
     #[test]
     fn distance_weighs_map_slips_half() {
-        let map = vec![vec!['a', 'ą'], vec!['o', 'ó', 'u']];
-        let related = |a: char, b: char| fold(a, &map) == fold(b, &map);
+        let groups = vec![vec!['a', 'ą'], vec!['o', 'ó', 'u']];
+        let map = MapLookup::new(&groups);
+        let related = |a: char, b: char| map.fold(a) == map.fold(b);
         let c = |s: &str| s.chars().collect::<Vec<_>>();
         assert_eq!(weighted_distance(&c("ktury"), &c("który"), &related, 9), 1);
         assert_eq!(weighted_distance(&c("kot"), &c("kto"), &related, 9), 2);

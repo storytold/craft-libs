@@ -361,3 +361,90 @@ fn failed_form_decode_reports_incomplete_content() {
     let result = raster::render(&doc.pages()[0], &RenderCache::new(), &InterpreterSettings::default(), &Options::default()).unwrap();
     assert!(result.diagnostics.content_truncated);
 }
+
+fn doubling_forms_pdf(levels: usize, leaf: &str, after: &str) -> Arc<Vec<u8>> {
+    let content = format!("/F0 Do {after}");
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /F0 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    for level in 0..=levels {
+        let (body, resources) = if level == levels {
+            (leaf.to_owned(), String::new())
+        } else {
+            ("/F Do /F Do".to_owned(), format!("/Resources << /XObject << /F {} 0 R >> >>", 6 + level))
+        };
+        objs.push(format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] {resources} /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    }
+    assemble(&objs)
+}
+
+fn render_with_coverage_budget(bytes: Arc<Vec<u8>>, max_coverage: Option<usize>) -> (raster::Raster, usize) {
+    let doc = craft_pdf::open(bytes, None).unwrap();
+    let warnings = Arc::new(AtomicUsize::new(0));
+    let count = warnings.clone();
+    let settings = InterpreterSettings {
+        warning_sink: Arc::new(move |w| {
+            if matches!(w, craft_pdf::interpret::InterpreterWarning::ContentTruncated) {
+                count.fetch_add(1, Ordering::Relaxed);
+            }
+        }),
+        ..Default::default()
+    };
+    let raster =
+        raster::render(&doc.pages()[0], &RenderCache::new(), &settings, &Options { background: [255; 4], max_coverage, ..Default::default() })
+            .unwrap();
+    (raster, warnings.load(Ordering::Relaxed))
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn max_coverage_omits_excess_fills_preserving_earlier_content_and_warns() {
+    let circle = "0 0 1 rg 100 160 m 133 160 160 133 160 100 c 160 67 133 40 100 40 c 67 40 40 67 40 100 c 40 133 67 160 100 160 c f";
+    let marker = "1 0 0 rg 170.5 10.5 20 20 re f";
+    let bytes = doubling_forms_pdf(10, circle, marker);
+    let blue = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[2] > 200 && p[0] < 50).count();
+    let red = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[2] < 50).count();
+
+    let (whole, whole_warnings) = render_with_coverage_budget(bytes.clone(), None);
+    assert!(!whole.diagnostics.content_truncated);
+    assert_eq!(whole_warnings, 0);
+    assert!(blue(whole.bytes()) > 10_000);
+    assert!(red(whole.bytes()) > 50);
+
+    let (kept, kept_warnings) = render_with_coverage_budget(bytes, Some(200_000));
+    assert!(kept.diagnostics.content_truncated);
+    assert!(kept_warnings > 0);
+    assert_eq!(kept.bytes().len(), whole.bytes().len());
+    assert!(blue(kept.bytes()) > 10_000);
+    assert_eq!(red(kept.bytes()), 0);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn max_coverage_omits_excess_strokes_and_fast_rects() {
+    let cases = [
+        (
+            "0 0 1 RG 4 w 100 160 m 133 160 160 133 160 100 c 160 67 133 40 100 40 c 67 40 40 67 40 100 c 40 133 67 160 100 160 c S",
+            "1 0 0 RG 6 w 170 10 m 180 30 190 10 195 30 c S",
+        ),
+        ("0 0 1 rg 40.5 40.5 119 119 re f", "1 0 0 rg 170.5 10.5 20 20 re f"),
+    ];
+    let red = |px: &[u8]| px.as_chunks::<4>().0.iter().filter(|p| p[0] > 200 && p[2] < 50).count();
+
+    for (leaf, marker) in cases {
+        let bytes = doubling_forms_pdf(10, leaf, marker);
+        let (whole, whole_warnings) = render_with_coverage_budget(bytes.clone(), None);
+        assert!(!whole.diagnostics.content_truncated);
+        assert_eq!(whole_warnings, 0);
+        assert!(red(whole.bytes()) > 50);
+
+        let (kept, kept_warnings) = render_with_coverage_budget(bytes, Some(200_000));
+        assert!(kept.diagnostics.content_truncated);
+        assert!(kept_warnings > 0);
+        assert_eq!(kept.bytes().len(), whole.bytes().len());
+        assert_eq!(red(kept.bytes()), 0);
+    }
+}
