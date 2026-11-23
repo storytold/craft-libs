@@ -200,9 +200,7 @@ pub struct ListRow<'a> {
     /// and mirrors.
     #[prop]
     pub(super) corner_mark: bool,
-    /// The row is its thumbnails and their link glyphs, with no label band, and as wide and high as they are. The label
-    /// stays the accessible name.
-    #[prop(flag)]
+    /// The row is its thumbnails and their link glyphs (`thumbnails_only`).
     pub(super) thumbnails_only: bool,
     /// The full-height bar at the start of the row's content (`stripe`).
     pub(super) stripe: Option<(crate::style::DataColor, crate::primitives::StrokeWidth)>,
@@ -442,6 +440,17 @@ impl<'a> ListRow<'a> {
     pub fn spacer() -> Self {
         let mut row = Self::new(Label::Empty);
         row.spacer = true;
+        row
+    }
+
+    /// The row is its thumbnails and their link glyphs, with no label band, and as wide and high as they are: it is
+    /// sized to its content (`Sizing::Content`), so a collection's row takes no more of its width than they do. The
+    /// label stays the accessible name.
+    #[must_use]
+    pub fn thumbnails_only(self) -> Self {
+        use crate::contract::Props as _;
+        let mut row = self.sizing(crate::contract::Sizing::Content);
+        row.thumbnails_only = true;
         row
     }
 

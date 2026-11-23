@@ -533,7 +533,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                     }
                     let measured_size = measured_size.filter(|size| (size.x - row.width()).abs() <= tolerance);
                     if layout.is_auto(at) && (detail.is_some() || measured_size.is_none() || restated) {
-                        let measured = item.measure_in(measure_ui, Proposal::Width(row.width())).y;
+                        let size = item.measure_in(measure_ui, Proposal::Width(row.width()));
+                        let measured = size.y;
                         #[cfg(feature = "testing")]
                         crate::runtime::measure::count_row_measure(&ctx, rows::measured_id(id, &key));
                         if detail.is_some() {
@@ -543,8 +544,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                             if measured_size.is_some_and(|before| (before.y - measured).abs() > tolerance) {
                                 layout_memory::ask_discard(&ctx);
                             }
-                            if measured != row.height() {
-                                Arc::make_mut(&mut layout).set_height(at, measured);
+                            let fit = rows::fits(&item).then_some(size.x);
+                            let refit = rows::keep_fit(&ctx, id, key_hash(&key), fit);
+                            if measured != row.height() || refit {
+                                let held = Arc::make_mut(&mut layout);
+                                held.set_height(at, measured);
+                                held.set_fit(at, fit);
                                 row = self.screen(&layout, rect, at, offset, rtl);
                             }
                         }
@@ -999,6 +1004,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let ctx = ui.ctx();
         rows::measured_heights(ctx, id, |height| layout.measured(&|at| height(rows::measured_id(id, &self.source.key(at)))));
+        rows::restore_fits(ctx, id, &mut layout, self.source.len(), |at| key_hash(&self.source.key(at)));
         if layout.auto_widths() {
             rows::measured_widths(ctx, id, |width| {
                 for at in 0..self.source.len() {

@@ -190,6 +190,34 @@ fn a_thumbnails_only_row_is_as_wide_as_its_thumbnails_and_named_by_its_label() {
     assert!(texts.iter().any(|text| text.text == NAMES[1]), "the plain row paints its label");
 }
 
+/// A thumbnails-only row keeps its width in the frames that place it without measuring it, and a press past its
+/// thumbnails is a press on no row: only a press on the row picks it.
+#[trial]
+fn a_press_past_a_thumbnails_only_row_picks_nothing() {
+    use craft_ui::list::ThumbSize;
+    let seen: Events = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = List::new("Masks").show_items(ui, &source, &mut |key, _| {
+            let row = ListRow::new(NAMES[*key]).thumb(ThumbSize::Medium, |_, _| {});
+            if *key == 0 { row.thumbnails_only() } else { row }
+        });
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(Vec2::new(300.0, 200.0)).settle();
+    fixture.idle(3);
+    let (row, other) = (fixture.by_label(NAMES[0]).expect("the row").rect, fixture.by_label(NAMES[1]).expect("the plain row").rect);
+    assert!(row.width() < other.width(), "the row stays as wide as its thumbnails: {row:?} {other:?}");
+    let picks = |seen: &Events| seen.borrow().iter().filter(|event| matches!(event, CollectionEvent::Selection { .. })).count();
+    seen.borrow_mut().clear();
+    fixture.click_at(egui::pos2(row.right() + 20.0, row.center().y)).settle();
+    assert_eq!(picks(&seen), 0, "a press past the thumbnails picks no row: {:?}", seen.borrow());
+    fixture.click_at(row.center()).settle();
+    assert!(picks(&seen) > 0, "a press on the row picks it: {:?}", seen.borrow());
+}
+
 /// A drag on a thumbnail that carries a part drag starts with the primary button only: a secondary and a middle drag
 /// start no session and report no `PartDrag`.
 #[trial]
