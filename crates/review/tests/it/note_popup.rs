@@ -323,3 +323,19 @@ fn an_edit_composer_reads_save_and_a_new_one_reads_post() {
         assert!(fixture.by_label(other).is_none(), "{kind:?}: not {other}");
     }
 }
+
+/// An edit composer opens with the caret after the comment's text, so typing adds to it; a new comment's composer
+/// opens on its field as the dialog rule has it (the whole text selected).
+#[trial]
+fn an_edit_composer_opens_with_the_caret_after_the_text() {
+    for (kind, want) in [(ComposerDraft::Edit, "Original edited"), (ComposerDraft::EditVerbatim, "Original edited"), (ComposerDraft::New, " edited")] {
+        let draft = Rc::new(RefCell::new(String::from("Original")));
+        let shown = Rc::clone(&draft);
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = CommentComposer::new(Some(pos2(200.0, 200.0)), &mut shown.borrow_mut()).draft_kind(kind).show(ui);
+        });
+        fixture.room(vec2(800.0, 600.0)).settle();
+        fixture.type_text(" edited").settle();
+        assert_eq!(draft.borrow().as_str(), want, "{kind:?}");
+    }
+}

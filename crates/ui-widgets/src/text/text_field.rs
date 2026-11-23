@@ -169,6 +169,14 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// A layer that opens on this field leaves its caret where the codec puts it (after the text) instead of selecting
+    /// the whole text, so typing adds to it: a card that opens to edit text already written. Off by default.
+    #[must_use]
+    pub fn keep_caret_on_open(mut self) -> Self {
+        self.options.keep_caret_on_open = true;
+        self
+    }
+
     /// With `on`, selects the whole text in this pass, so typing replaces it, unless the field is composing text; a
     /// request made during a composition is dropped.
     #[must_use]

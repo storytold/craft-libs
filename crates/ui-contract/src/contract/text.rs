@@ -496,9 +496,10 @@ fn prepare(core: &mut CxCore<'_>, ui: &mut Ui, decl: &TextPart, state: &mut Text
         let len = decl.shown.chars().count();
         // A dialog that opens on this field selects its whole text whatever the codec's caret, so typing replaces it
         // (photocraft#15540).
-        let opened = crate::runtime::focus::focused_rec(&ctx)
-            .and_then(|rec| crate::runtime::focus::origin(&ctx, &rec))
-            .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
+        let opened = !decl.options.keep_caret_on_open
+            && crate::runtime::focus::focused_rec(&ctx)
+                .and_then(|rec| crate::runtime::focus::origin(&ctx, &rec))
+                .is_some_and(|origin| origin == crate::runtime::focus::FocusOrigin::Open);
         match if opened || select_all { Caret::All } else { decl.caret } {
             Caret::All => adapter::select(&ctx, widget, 0, len),
             // A bound caret is where the app put it: focus arriving keeps it.

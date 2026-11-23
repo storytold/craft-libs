@@ -90,6 +90,9 @@ pub struct TextOptions {
     pub steps_value: bool,
     /// The whole text is selected when the field takes focus, whatever the codec's caret rule says.
     pub select_on_focus: bool,
+    /// A layer that opens on the field (`FocusOrigin::Open`) leaves the caret where the codec's rule puts it instead
+    /// of selecting the whole text: a field that opens to add to its text (an edited comment) rather than replace it.
+    pub keep_caret_on_open: bool,
     /// Selects the current text before this pass's typing, unless an IME composition is active.
     pub select_all: bool,
     /// Enter does something in the field itself (it saves or runs a search): the field takes the `Submit` intent, so the
@@ -153,6 +156,7 @@ impl Default for TextOptions {
             enabled: true,
             steps_value: false,
             select_on_focus: false,
+            keep_caret_on_open: false,
             select_all: false,
             submits: false,
             mixed: false,
