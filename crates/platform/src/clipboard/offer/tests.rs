@@ -26,3 +26,15 @@ fn cf_html_offsets_delimit_the_fragment_bytes() {
     assert_eq!(&data[end_html..], b"\0", "EndHTML excludes the trailing NUL");
     assert_eq!(end_html, data.len() - 1);
 }
+
+/// Ported from WordCraft (#7317). When multiple RTF targets are offered, text/rtf is preferred over application/rtf and text/richtext.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn rtf_target_prefers_text_rtf() {
+    use super::unix::rtf_target;
+    let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(rtf_target(&names(&["TARGETS", "text/richtext", "application/rtf", "text/rtf"])), Some("text/rtf"));
+    assert_eq!(rtf_target(&names(&["text/richtext", "UTF8_STRING"])), Some("text/richtext"));
+    assert_eq!(rtf_target(&names(&["text/html", "text/rtf;charset=x"])), None);
+    assert_eq!(rtf_target(&[]), None);
+}
