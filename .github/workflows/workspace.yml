@@ -32,7 +32,8 @@ jobs:
   # (`[package.metadata.craft] reads`, which this job checks is complete), and every crate that
   # depends on those. The build setup, a crate's own Cargo.toml or a file outside the crates other
   # than documentation runs every test; documentation alone runs none. The full-ci label runs
-  # everything from the next push or manual run; every other event runs everything.
+  # everything from the next push or manual run; every other event runs everything. If this job
+  # fails (an undeclared read, or the action itself), it stays red and every leg runs every test.
   platforms:
     name: select platforms
     runs-on: ubuntu-latest
@@ -70,6 +71,7 @@ jobs:
   native:
     name: Workspace
     needs: platforms
+    if: ${{ !cancelled() }}
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["ubuntu-latest"]'
@@ -97,13 +99,14 @@ jobs:
       # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
       # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
       # count 64 cases instead of 256. nightly.yml runs them all in full.
-      # CRAFT_TESTS and CRAFT_TEST_FILTER are the `platforms` job's test selection.
+      # CRAFT_TESTS and CRAFT_TEST_FILTER are the `platforms` job's test selection, or every test
+      # when that job did not succeed.
       env: &env |
         CRAFT_PRINT_REQUIRE_QUEUE=0
         CRAFT_HOSTILE_DIVISOR=8
         PROPTEST_CASES=64
-        CRAFT_TESTS=${{ needs.platforms.outputs.tests }}
-        CRAFT_TEST_FILTER=${{ needs.platforms.outputs.filter }}
+        CRAFT_TESTS=${{ needs.platforms.result == 'success' && needs.platforms.outputs.tests || 'all' }}
+        CRAFT_TEST_FILTER=${{ needs.platforms.result == 'success' && needs.platforms.outputs.filter || 'all()' }}
       setup-command: &setup bash scripts/ci-test-inputs.sh
       # The PhotoCraft corpora, keyed on the script that pins them: a hit skips the PhotoCraft
       # checkout and its xtask build (1:51 on Windows).
@@ -142,12 +145,12 @@ jobs:
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
 
-  # The macOS and Windows legs, when `platforms` says this run needs them, with the Linux leg's
-  # inputs.
+  # The macOS and Windows legs, when `platforms` says this run needs them or did not succeed, with
+  # the Linux leg's inputs.
   native-platforms:
     name: Workspace
     needs: platforms
-    if: needs.platforms.outputs.platform == 'true'
+    if: ${{ !cancelled() && (needs.platforms.result != 'success' || needs.platforms.outputs.platform == 'true') }}
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["windows-latest","macos-latest"]'
