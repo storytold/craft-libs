@@ -904,10 +904,12 @@ impl Catalog {
         }
 
         let mut files = HashMap::new();
+        let mut read = false;
         for (path, source, by_name) in walk.files {
             let Ok(meta) = std::fs::metadata(&path) else { continue };
             let (len, mtime) = (meta.len(), meta.modified().ok());
             let cached = state.files.remove(&path).filter(|c| c.len == len && c.modified == mtime);
+            read |= cached.is_none();
             let mut faces = match cached {
                 Some(c) => c.faces,
                 None if by_name || scan::is_font_file(&path) || crate::suitcase::is_suitcase(&path) => scan::file_faces(&path, MAX_SCAN_READ, source),
@@ -918,10 +920,16 @@ impl Catalog {
             }
             files.insert(path, Cached { len, modified: mtime, faces });
         }
+        // A rescan that read no file and lost none keeps the index and its generation, so the caches keyed on the
+        // generation (the picker's family infos and samples) stay.
+        let unchanged = !read && state.files.is_empty() && self.generation() > 0;
         state.files = files;
         drop(state);
 
         *lock(&self.stamp) = Stamp { app_dirs, dirs: walk.dirs, store_dirs, registered };
+        if unchanged {
+            return;
+        }
         let added = lock(&self.added);
         let scanned = self.scanned();
         self.publish(Index::build(&added.faces, &scanned));

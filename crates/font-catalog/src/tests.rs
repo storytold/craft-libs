@@ -277,6 +277,21 @@ fn installed_and_removed_fonts_are_seen_without_a_restart() {
 }
 
 #[test]
+fn a_rescan_with_no_changes_keeps_the_generation() {
+    let root = temp("rescan-same");
+    write(&root.join("home/.local/share/fonts/Same-Regular.ttf"), font(&spec("Same", "Regular", 400)));
+    let cat = Catalog::new(linux_env(&root)).with_font_service(false);
+    cat.rescan();
+    let generation = cat.generation();
+    assert_eq!(cat.families().as_ref(), ["Same"]);
+    cat.rescan();
+    assert_eq!(cat.generation(), generation, "nothing changed, so the catalog keeps its generation");
+    write(&root.join("home/.local/share/fonts/Other-Regular.ttf"), font(&spec("Other", "Regular", 400)));
+    cat.rescan();
+    assert!(cat.generation() > generation, "a new font file publishes a new generation");
+}
+
+#[test]
 fn a_font_store_install_shows_in_the_change_list() {
     let root = temp("store-watch");
     let store = root.join("home/.local/share/craft-fonts");
