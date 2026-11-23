@@ -21,13 +21,14 @@ const PDFXID_NS: &[u8] = b"http://www.npes.org/pdfx/ns/id/";
 const MAX_VALUE: usize = 64;
 /// Most bytes of the XMP packet decoded and searched.
 pub const MAX_XMP_SCAN: usize = 512 * 1024;
-/// Most namespace declarations bound to [`PDFXID_NS`] tried in one packet.
-const MAX_PREFIXES: usize = 32;
-/// Most output intents read.
+/// Most `/OutputIntents` entries inspected.
 const MAX_INTENTS: usize = 64;
-/// How far past a property or namespace name the reader looks for its value, so a packet of
-/// unterminated names costs linear work, not quadratic.
-const MAX_LOOKAHEAD: usize = 1024;
+/// Longest output condition identifier kept, in characters.
+const MAX_IDENTIFIER: usize = 256;
+/// Most elements open at once; a packet nested deeper states nothing.
+const MAX_DEPTH: usize = 256;
+/// Longest character or entity reference read, `&` through `;`.
+const MAX_REFERENCE: usize = 12;
 
 /// Every registered `GTS_PDFXVersion` value (the CGATS GTS_ registry), plus the PDF/X-6 levels of
 /// ISO 15930-9.
@@ -112,8 +113,8 @@ pub fn pdfx_claim(file: &Pdf) -> Option<PdfxClaim> {
 }
 
 /// The `/OutputConditionIdentifier` of each `/OutputIntents` entry with `/S /GTS_PDFX` (empty
-/// text where an entry has none), whether or not the file claims a PDF/X level; at most 64. A
-/// caller that counts an intent alone as PDF/X asks this beside [`pdfx_claim`].
+/// text where an entry has none) among the first 64 entries, whether or not the file claims a
+/// PDF/X level. A caller that counts an intent alone as PDF/X asks this beside [`pdfx_claim`].
 #[must_use]
 pub fn pdfx_output_intents(file: &Pdf) -> Vec<String> {
     catalog(file).as_ref().map(output_intents).unwrap_or_default()
@@ -128,10 +129,19 @@ fn output_intents(catalog: &Dict<'_>) -> Vec<String> {
     let Some(intents) = catalog.get::<Array<'_>>(b"OutputIntents") else { return Vec::new() };
     intents
         .iter::<Dict<'_>>()
-        .filter(|oi| oi.get::<Name<'_>>(b"S").is_some_and(|s| s.as_ref() == b"GTS_PDFX"))
         .take(MAX_INTENTS)
-        .map(|oi| text_entry(&oi, b"OutputConditionIdentifier").unwrap_or_default())
+        .filter(|oi| oi.get::<Name<'_>>(b"S").is_some_and(|s| s.as_ref() == b"GTS_PDFX"))
+        .map(|oi| identifier(&oi))
         .collect()
+}
+
+/// The `/OutputConditionIdentifier` text, trimmed, at most [`MAX_IDENTIFIER`] characters. Not a
+/// claim value: any text is kept.
+fn identifier(intent: &Dict<'_>) -> String {
+    intent
+        .get::<craft_pdf::syntax::object::String<'_>>(b"OutputConditionIdentifier")
+        .map(|s| text_string(s.as_bytes()).trim().chars().take(MAX_IDENTIFIER).collect())
+        .unwrap_or_default()
 }
 
 fn text_entry(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
@@ -140,12 +150,12 @@ fn text_entry(dict: &Dict<'_>, key: &[u8]) -> Option<String> {
 }
 
 /// A text string's characters (ISO 32000-2 §7.9.2.2): UTF-16BE or UTF-8 after a byte order
-/// mark, else the bytes, which for the printable ASCII a claim allows are the same in
-/// PDFDocEncoding.
+/// mark, else the bytes read as UTF-8. That matches PDFDocEncoding only for ASCII; other bytes
+/// become replacement characters.
 fn text_string(bytes: &[u8]) -> String {
     match bytes {
         [0xFE, 0xFF, rest @ ..] => {
-            let units = rest.chunks_exact(2).map(|c| c.iter().fold(0u16, |u, b| (u << 8) | u16::from(*b)));
+            let units = rest.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c));
             char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect()
         }
         [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
@@ -162,89 +172,203 @@ fn claim_value(value: &str) -> Option<String> {
 
 fn xmp_version(catalog: &Dict<'_>) -> Option<String> {
     let bytes = catalog.get::<Stream<'_>>(b"Metadata")?.decoded_within(MAX_XMP_SCAN).ok()?;
-    let window = bytes.get(..bytes.len().min(MAX_XMP_SCAN)).unwrap_or_default();
-    namespace_prefixes(window, PDFXID_NS).into_iter().find_map(|p| xml_property(window, p, b"GTS_PDFXVersion"))
+    version_in_packet(bytes.get(..bytes.len().min(MAX_XMP_SCAN)).unwrap_or_default())
 }
 
-/// The prefixes `packet` binds to `uri` (`xmlns:p="uri"`), and an empty prefix for a
-/// default-namespace declaration (`xmlns="uri"`).
-fn namespace_prefixes<'p>(packet: &'p [u8], uri: &[u8]) -> Vec<&'p [u8]> {
-    let mut out = Vec::new();
+/// The prefixes one open element declares (empty for the default namespace), each with whether
+/// it is bound to [`PDFXID_NS`].
+type Scope<'p> = Vec<(&'p [u8], bool)>;
+
+/// A start tag: its name, its attributes with their raw values, and whether it is an empty
+/// element.
+struct Tag<'p> {
+    name: &'p [u8],
+    attributes: Vec<(&'p [u8], &'p [u8])>,
+    empty: bool,
+}
+
+enum Markup<'p> {
+    Start(Tag<'p>),
+    End,
+    Other,
+}
+
+/// The first `GTS_PDFXVersion` value in `packet` whose prefix is bound to [`PDFXID_NS`] where it
+/// occurs, in attribute form (`p:GTS_PDFXVersion="v"`) or element form
+/// (`<p:GTS_PDFXVersion>v<`). One pass over the markup: a namespace declaration applies to its
+/// element and that element's content only, and comments, CDATA sections, processing
+/// instructions and declarations are skipped. A default namespace doesn't apply to attributes.
+fn version_in_packet(packet: &[u8]) -> Option<String> {
+    let mut scopes: Vec<Scope<'_>> = Vec::new();
     let mut at = 0usize;
-    while let Some(found) = find(packet.get(at..).unwrap_or_default(), b"xmlns") {
-        let start = at.saturating_add(found).saturating_add(b"xmlns".len());
-        at = start;
-        let rest = packet.get(start..).unwrap_or_default();
-        let (prefix, after) = match rest.split_first() {
-            Some((b':', tail)) => {
-                let len = tail.iter().take_while(|b| is_name_byte(**b)).count();
-                (tail.get(..len).unwrap_or_default(), tail.get(len..))
+    loop {
+        let rest = packet.get(at..)?;
+        let open = rest.iter().position(|b| *b == b'<')?;
+        let (len, markup) = markup(rest.get(open.saturating_add(1)..)?)?;
+        at = at.saturating_add(open).saturating_add(1).saturating_add(len);
+        let tag = match markup {
+            Markup::Start(tag) => tag,
+            Markup::End => {
+                scopes.pop();
+                continue;
             }
-            _ => (&[][..], Some(rest)),
+            Markup::Other => continue,
         };
-        if after.and_then(attribute_value) == Some(uri) {
-            out.push(prefix);
-            if out.len() >= MAX_PREFIXES {
-                break;
+        scopes.push(tag.attributes.iter().filter_map(|(n, v)| declared_prefix(n).map(|p| (p, *v == PDFXID_NS))).collect());
+        let attribute = tag.attributes.iter().filter(|(n, _)| is_version(&scopes, n, false)).find_map(|(_, v)| xml_value(v));
+        if attribute.is_some() {
+            return attribute;
+        }
+        if !tag.empty && is_version(&scopes, tag.name, true) {
+            let text = packet.get(at..)?;
+            if let Some(v) = xml_value(text.get(..text.iter().position(|b| *b == b'<')?)?) {
+                return Some(v);
             }
         }
+        if tag.empty {
+            scopes.pop();
+        }
+        if scopes.len() > MAX_DEPTH {
+            return None;
+        }
     }
+}
+
+/// Whether `name` is `GTS_PDFXVersion` under a prefix that `scopes`, the innermost last, bind to
+/// [`PDFXID_NS`]. Only an element name may use the default namespace.
+fn is_version(scopes: &[Scope<'_>], name: &[u8], element: bool) -> bool {
+    let (prefix, local) = match name.iter().rposition(|b| *b == b':') {
+        Some(colon) => (name.get(..colon).unwrap_or_default(), name.get(colon.saturating_add(1)..).unwrap_or_default()),
+        None => (&[][..], name),
+    };
+    if local != b"GTS_PDFXVersion" || (prefix.is_empty() && !element) {
+        return false;
+    }
+    scopes.iter().rev().flat_map(|s| s.iter().rev()).find(|(p, _)| *p == prefix).is_some_and(|(_, bound)| *bound)
+}
+
+/// The prefix an `xmlns` or `xmlns:p` attribute name declares.
+fn declared_prefix(name: &[u8]) -> Option<&[u8]> {
+    match name.strip_prefix(b"xmlns")? {
+        [] => Some(&[]),
+        [b':', prefix @ ..] => Some(prefix),
+        _ => None,
+    }
+}
+
+/// The markup after a `<`: its length through its closing `>`, and what it is. `None` when it
+/// doesn't close.
+fn markup(rest: &[u8]) -> Option<(usize, Markup<'_>)> {
+    let skip = |open: &[u8], close: &[u8]| {
+        let body = rest.get(open.len()..)?;
+        Some((open.len().saturating_add(find(body, close)?).saturating_add(close.len()), Markup::Other))
+    };
+    if rest.starts_with(b"!--") {
+        return skip(b"!--", b"-->");
+    }
+    if rest.starts_with(b"![CDATA[") {
+        return skip(b"![CDATA[", b"]]>");
+    }
+    if rest.starts_with(b"?") {
+        return skip(b"?", b"?>");
+    }
+    if rest.starts_with(b"!") {
+        return skip(b"!", b">");
+    }
+    let close = tag_end(rest)?;
+    let len = close.saturating_add(1);
+    let body = rest.get(..close)?;
+    if body.starts_with(b"/") {
+        return Some((len, Markup::End));
+    }
+    Some((len, start_tag(body).map_or(Markup::Other, Markup::Start)))
+}
+
+/// Where a tag's `>` is, outside quoted attribute values.
+fn tag_end(rest: &[u8]) -> Option<usize> {
+    let mut quote = None;
+    rest.iter().position(|&b| match quote {
+        Some(q) => {
+            if b == q {
+                quote = None;
+            }
+            false
+        }
+        None if b == b'"' || b == b'\'' => {
+            quote = Some(b);
+            false
+        }
+        None => b == b'>',
+    })
+}
+
+/// A start tag's name and attributes, from the text between `<` and `>`. Attributes stop at the
+/// first one that isn't `name="value"` or `name='value'`.
+fn start_tag(body: &[u8]) -> Option<Tag<'_>> {
+    let name_len = body.iter().take_while(|b| is_name_byte(**b)).count();
+    let name = body.get(..name_len).filter(|n| !n.is_empty())?;
+    let empty = body.trim_ascii_end().ends_with(b"/");
+    let mut attributes = Vec::new();
+    let mut rest = body.get(name_len..).unwrap_or_default();
+    loop {
+        let trimmed = rest.trim_ascii_start();
+        let len = trimmed.iter().take_while(|b| is_name_byte(**b)).count();
+        let (Some(attr), Some(after)) = (trimmed.get(..len).filter(|n| !n.is_empty()), trimmed.get(len..)) else { break };
+        let Some(after) = after.trim_ascii_start().strip_prefix(b"=").map(<[u8]>::trim_ascii_start) else { break };
+        let Some((&quote, tail)) = after.split_first().filter(|(q, _)| **q == b'"' || **q == b'\'') else { break };
+        let Some(end) = tail.iter().position(|b| *b == quote) else { break };
+        attributes.push((attr, tail.get(..end).unwrap_or_default()));
+        rest = tail.get(end.saturating_add(1)..).unwrap_or_default();
+    }
+    Some(Tag { name, attributes, empty })
+}
+
+/// A claim value from raw XML text: UTF-8, with character references and the five predefined
+/// entity references decoded.
+fn xml_value(raw: &[u8]) -> Option<String> {
+    claim_value(&decode_references(std::str::from_utf8(raw).ok()?))
+}
+
+/// `text` with `&#N;`, `&#xH;`, `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&apos;` decoded. Anything
+/// else after `&` is kept as written.
+fn decode_references(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(rest.get(..amp).unwrap_or_default());
+        let tail = rest.get(amp..).unwrap_or_default();
+        let semi = tail.as_bytes().iter().take(MAX_REFERENCE).position(|b| *b == b';');
+        let decoded = semi.and_then(|semi| Some((semi, reference(tail.get(1..semi)?)?)));
+        let (keep, skip) = match decoded {
+            Some((semi, c)) => (c, semi.saturating_add(1)),
+            None => ('&', 1),
+        };
+        out.push(keep);
+        rest = tail.get(skip..).unwrap_or_default();
+    }
+    out.push_str(rest);
     out
 }
 
-/// The first value of the property `prefix:local`, in attribute form (`prefix:local="v"`) or
-/// element form (`<prefix:local>v<`). An empty prefix matches the element form only: a default
-/// namespace doesn't apply to attributes.
-fn xml_property(packet: &[u8], prefix: &[u8], local: &[u8]) -> Option<String> {
-    let qname = if prefix.is_empty() { local.to_vec() } else { [prefix, b":", local].concat() };
-    let mut at = 0usize;
-    while let Some(found) = find(packet.get(at..)?, &qname) {
-        let start = at.saturating_add(found);
-        at = start.saturating_add(qname.len());
-        let before = start.checked_sub(1).and_then(|i| packet.get(i)).copied();
-        let rest = packet.get(at..)?;
-        let value = match before {
-            Some(b'<') => element_text(rest),
-            Some(b' ' | b'\t' | b'\r' | b'\n') if !prefix.is_empty() => attribute_value(rest),
-            _ => None,
-        };
-        if let Some(v) = value.and_then(|v| claim_value(std::str::from_utf8(v).ok()?)) {
-            return Some(v);
-        }
-    }
-    None
-}
-
-/// The text after a start tag's name, past any attributes to `>`, up to the next `<`. `None` for
-/// an empty-element tag, or when the name only begins `rest`'s real name.
-fn element_text(rest: &[u8]) -> Option<&[u8]> {
-    let rest = lookahead(rest);
-    let close = rest.iter().position(|b| *b == b'>')?;
-    let tag = rest.get(..close)?;
-    let is_name_end = tag.first().is_none_or(u8::is_ascii_whitespace);
-    if !is_name_end || tag.last() == Some(&b'/') {
-        return None;
-    }
-    let text = rest.get(close.saturating_add(1)..)?;
-    text.get(..text.iter().position(|b| *b == b'<')?)
-}
-
-/// The quoted value after `=` at the start of `rest`, in either quote.
-fn attribute_value(rest: &[u8]) -> Option<&[u8]> {
-    let rest = lookahead(rest).trim_ascii_start().strip_prefix(b"=")?.trim_ascii_start();
-    let (&quote, tail) = rest.split_first()?;
-    if quote != b'"' && quote != b'\'' {
-        return None;
-    }
-    tail.get(..tail.iter().position(|b| *b == quote)?)
-}
-
-fn lookahead(rest: &[u8]) -> &[u8] {
-    rest.get(..rest.len().min(MAX_LOOKAHEAD)).unwrap_or(rest)
+fn reference(name: &str) -> Option<char> {
+    let code = match name {
+        "amp" => return Some('&'),
+        "lt" => return Some('<'),
+        "gt" => return Some('>'),
+        "quot" => return Some('"'),
+        "apos" => return Some('\''),
+        _ => name.strip_prefix('#')?,
+    };
+    let value = match code.strip_prefix('x') {
+        Some(hex) if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) => u32::from_str_radix(hex, 16).ok()?,
+        None if !code.is_empty() && code.bytes().all(|b| b.is_ascii_digit()) => code.parse().ok()?,
+        _ => return None,
+    };
+    char::from_u32(value)
 }
 
 fn is_name_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.') || b >= 0x80
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':') || b >= 0x80
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {

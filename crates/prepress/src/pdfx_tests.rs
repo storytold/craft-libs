@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use super::{MAX_LOOKAHEAD, MAX_XMP_SCAN, pdfx_claim, pdfx_output_intents};
+use super::{MAX_DEPTH, MAX_REFERENCE, MAX_XMP_SCAN, decode_references, pdfx_claim, pdfx_output_intents};
 use craft_pdf::syntax::Pdf;
 
 /// 1 catalog with `catalog_extra`, 2 pages, 3 page, 4 the information dictionary with `info`,
@@ -160,13 +160,74 @@ fn a_truncated_packet_states_nothing_and_does_not_panic() {
 }
 
 #[test]
-fn a_value_past_the_lookahead_is_not_read() {
-    let gap = " ".repeat(MAX_LOOKAHEAD);
-    let xmp = |gap: &str| {
+fn an_identifier_is_any_text_not_a_claim_value() {
+    let identifier =
+        |text: &str| pdfx_output_intents(&pdf(&format!("/OutputIntents [<< /S /GTS_PDFX /OutputConditionIdentifier {text} >>]"), "", None));
+    // UTF-16BE "Fogra Ü".
+    assert_eq!(identifier("<FEFF0046006F0067007200610020 00DC>"), vec!["Fogra \u{dc}".to_owned()]);
+    let long = "C".repeat(80);
+    assert_eq!(identifier(&format!("({long})")), vec![long]);
+}
+
+#[test]
+fn a_binding_on_another_element_does_not_reach_the_property() {
+    let xmp = packet(
+        "<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\"/>\
+         <rdf:Description xmlns:p=\"urn:other\" p:GTS_PDFXVersion=\"PDF/X-4\"/>",
+    );
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&xmp))), None);
+    let nested = packet(
+        "<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\"><x:a xmlns:x=\"urn:x\"/>\
+         <p:GTS_PDFXVersion>PDF/X-4</p:GTS_PDFXVersion></rdf:Description>",
+    );
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&nested))).unwrap().level, "PDF/X-4");
+}
+
+#[test]
+fn a_property_inside_a_comment_is_not_read() {
+    let xmp = packet(
+        "<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\">\
+         <!-- <p:GTS_PDFXVersion>PDF/X-4</p:GTS_PDFXVersion> --></rdf:Description>",
+    );
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&xmp))), None);
+}
+
+#[test]
+fn character_references_in_a_value_are_decoded() {
+    let attribute = packet("<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\" p:GTS_PDFXVersion=\"PDF/X&#x2D;4\"/>");
+    assert!(pdfx_claim(&pdf("", "", Some(&attribute))).unwrap().is_recognised());
+    let element =
+        packet("<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\"><p:GTS_PDFXVersion>PDF&#47;X-6p</p:GTS_PDFXVersion></rdf:Description>");
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&element))).unwrap().level, "PDF/X-6p");
+    let unknown = packet("<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\" p:GTS_PDFXVersion=\"PDF/X&bogus;4\"/>");
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&unknown))).unwrap().level, "PDF/X&bogus;4");
+}
+
+#[test]
+fn a_reference_longer_than_the_cap_is_kept_as_written() {
+    let long = format!("PDF/X&#{}45;4", "0".repeat(MAX_REFERENCE));
+    let xmp = packet(&format!("<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\" p:GTS_PDFXVersion=\"{long}\"/>"));
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&xmp))).unwrap().level, long);
+}
+
+#[test]
+fn the_reference_window_is_counted_in_bytes() {
+    // A two-byte character straddles the cap and the only `;` is far past it.
+    let name = "a".repeat(MAX_REFERENCE - 2);
+    let far = "b".repeat(64);
+    let text = format!("&{name}\u{e9}{far};&amp;");
+    assert_eq!(decode_references(&text), format!("&{name}\u{e9}{far};&"));
+}
+
+#[test]
+fn a_property_nested_past_the_depth_cap_states_nothing() {
+    let nested = |depth: usize| {
         packet(&format!(
-            "<rdf:Description rdf:about=\"\" xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\">             <pdfxid:GTS_PDFXVersion{gap}>PDF/X-4</pdfxid:GTS_PDFXVersion></rdf:Description>"
+            "<rdf:Description xmlns:p=\"http://www.npes.org/pdfx/ns/id/\">{}<p:GTS_PDFXVersion>PDF/X-4</p:GTS_PDFXVersion>{}</rdf:Description>",
+            "<a>".repeat(depth),
+            "</a>".repeat(depth)
         ))
     };
-    assert!(pdfx_claim(&pdf("", "", Some(&xmp(" ")))).is_some());
-    assert!(pdfx_claim(&pdf("", "", Some(&xmp(&gap)))).is_none());
+    assert!(pdfx_claim(&pdf("", "", Some(&nested(8)))).is_some());
+    assert_eq!(pdfx_claim(&pdf("", "", Some(&nested(MAX_DEPTH)))), None);
 }
