@@ -4,7 +4,7 @@
 use craft_behavior::GesturePhase;
 use craft_text::ui::DocUnit;
 use craft_text::ui::ruler::{GapDrag, GapEdge, RulerValues, TabAlign, TabLeader, TabStop, TextRuler};
-use craft_theme::ComponentSet;
+use craft_theme::{ComponentSet, Size};
 use craft_ui::buttons::Button;
 use craft_ui::canvas::Rulers;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -448,4 +448,64 @@ fn a_component_set_change_restyles_the_ruler_in_one_pass_and_then_rests() {
     fixture.idle(1);
     assert_eq!(fixture.passes(), 1);
     assert!(!fixture.repaint_requested(), "an idle frame after the change asks for no repaint");
+}
+
+/// The corner selector's mark stands well inside its box at both densities, whatever the kind, and each kind draws its own.
+#[trial]
+fn the_corner_tab_selector_mark_stands_well_inside_its_box_and_differs_per_kind() {
+    // Clear air each side of the mark in points: the old Left/Right mark left under 3, the pre-port one about 4.
+    const INSET: f32 = 3.5;
+    // The mark is at least this share of the box tall, so its stem reads.
+    const STEM: f32 = 0.3;
+    for density in [Size::Compact, Size::Comfortable] {
+        let mut marks = Vec::new();
+        for kind in [TabAlign::Left, TabAlign::Center, TabAlign::Right, TabAlign::Decimal, TabAlign::Bar] {
+            let values = Rc::new(RefCell::new(RulerValues::default()));
+            let corner_at: Rc<RefCell<Option<egui::Rect>>> = Rc::new(RefCell::new(None));
+            let seen = corner_at.clone();
+            let mut fixture = Fixture::new(move |ui| {
+                let stage = craft_ui::testing::stage(ui);
+                let (top, _, corner) = Rulers::strips(ui, stage);
+                *seen.borrow_mut() = Some(corner);
+                TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), 300.0)
+                    .kind(kind)
+                    .corner(corner)
+                    .scale(1.0)
+                    .show_at(ui, top.union(corner));
+            });
+            fixture.density(density);
+            fixture.settle();
+            let shapes = fixture.frame_shapes();
+            let corner = corner_at.borrow().expect("the ruler showed");
+            let boxed = shapes
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Rect(r) if r.corner_radius != egui::CornerRadius::ZERO && corner.contains_rect(r.rect) => Some(r.rect),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{kind:?}: a rounded box in the corner"));
+            let mut mark: Vec<egui::Rect> =
+                shapes.iter().map(egui::Shape::visual_bounding_rect).filter(|r| r.is_finite() && boxed.contains_rect(*r) && *r != boxed).collect();
+            assert!(!mark.is_empty(), "{density:?} {kind:?}: a mark is painted");
+            let all = mark.iter().fold(mark[0], |a, r| a.union(*r));
+            let inset = (all.min - boxed.min).min(boxed.max - all.max).min_elem();
+            assert!(all.height() >= STEM * boxed.height(), "{density:?} {kind:?}: the mark {all:?} is too short for the box {boxed:?}");
+            if kind == TabAlign::Decimal {
+                let dot = shapes.iter().find_map(|shape| {
+                    matches!(shape, egui::Shape::Circle(_)).then(|| shape.visual_bounding_rect()).filter(|r| boxed.contains_rect(*r))
+                });
+                let dot = dot.expect("a decimal mark has a dot");
+                for other in mark.iter().filter(|r| **r != dot) {
+                    let gap = (other.min.x - dot.max.x).max(dot.min.x - other.max.x).max(other.min.y - dot.max.y).max(dot.min.y - other.max.y);
+                    assert!(gap >= 0.5, "{density:?}: the dot {dot:?} is clear of the stroke {other:?} (gap {gap})");
+                }
+            }
+            assert!(inset >= INSET, "{density:?} {kind:?}: the mark {all:?} stands only {inset} inside the box {boxed:?}");
+            mark.sort_by(|a, b| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
+            marks.push(mark.iter().map(|r| format!("{:.1?} {:.1?}", r.min - boxed.min, r.size())).collect::<Vec<_>>());
+        }
+        for (i, a) in marks.iter().enumerate() {
+            assert!(marks.iter().skip(i + 1).all(|b| a != b), "{density:?}: each kind paints a distinct mark: {marks:?}");
+        }
+    }
 }

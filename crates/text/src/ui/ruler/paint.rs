@@ -1,5 +1,6 @@
 //! The ruler's drawing.
 
+use super::TabAlign;
 use super::geometry::glyph;
 use super::items::{Item, SELECTOR};
 use super::run::{Held, ruler_text};
@@ -9,6 +10,12 @@ use craft_ui::contract::{Cx, Edit as _, PaintUi, Remember as _, Styled as _};
 use craft_ui::primitives::{PaintShape, RulerFace, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::style::StyleColor;
 use egui::{CornerRadius, Pos2, Rect, pos2, vec2};
+
+/// The share of the tab selector's box between its edge and the mark on each side.
+const INSET: f32 = 0.3;
+
+/// The most a decimal stop's dot takes of the way from its stem, as a share of that way.
+const DOT_CLEARANCE: f32 = 0.4;
 
 impl TextRuler<'_> {
     pub(super) fn paint_ruler(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -99,19 +106,33 @@ impl TextRuler<'_> {
             // The corner continues the strip round it, the box is the column's colour.
             let surround = if style.face == RulerFace::Centred { style.strip } else { style.margin };
             draw.fill(&rect(corner), surround);
-            let side = style.selector_side.min(corner.width()).min(corner.height());
-            let boxed = PaintShape::Rect(Rect::from_center_size(corner.center(), vec2(side, side)), style.selector_radius);
-            draw.fill(&boxed, cx.resolve_part(SELECTOR, &style.selector));
-            draw.stroke(&boxed, StrokeWidth::Thin, style.tick);
-            // The glyph is centred on the box by its own bounds: a left or right stop's foot runs to one side of its stem.
-            let (segments, dot) = glyph(&shapes, 0.0, 0.0, kind, false);
-            let bounds = Rect::from_points(&segments.iter().flatten().copied().chain(dot).collect::<Vec<_>>());
-            let shift = corner.center() - bounds.center();
-            for [a, b] in segments {
-                draw.stroke(&path(a + shift, b + shift), StrokeWidth::Thin, cx.resolve(&style.marker));
-            }
-            if let Some(centre) = dot {
-                draw.fill(&PaintShape::Circle(centre + shift, style.dot), cx.resolve(&style.marker));
+            let side = style.selector_side.min(corner.width() - style.pad).min(corner.height() - style.pad);
+            let inset = INSET * side;
+            let room = side - 2.0 * inset;
+            // A box too small to hold a mark is not drawn either.
+            if side > 0.0 && room > 0.0 {
+                let boxed = PaintShape::Rect(Rect::from_center_size(corner.center(), vec2(side, side)), style.selector_radius);
+                draw.fill(&boxed, cx.resolve_part(SELECTOR, &style.selector));
+                draw.stroke(&boxed, StrokeWidth::Thin, style.tick);
+                // One scale for every kind, set by the stem standing inside the room (never grown); a mark wider or
+                // taller than the room is squeezed along that axis only, so the stems stay alike. It is centred on the
+                // box by its own bounds (a left or right stop's foot runs to one side of its stem).
+                let stem = glyph(&shapes, 0.0, 0.0, TabAlign::Left, false).0.first().map_or(0.0, |[a, b]| (b.y - a.y).abs());
+                let scale = (room / stem.max(f32::EPSILON)).min(1.0);
+                let (segments, dot) = glyph(&shapes, 0.0, 0.0, kind, false);
+                let bounds = Rect::from_points(&segments.iter().flatten().copied().chain(dot).collect::<Vec<_>>());
+                let sx = scale.min(room / bounds.width().max(f32::EPSILON));
+                let sy = scale.min(room / bounds.height().max(f32::EPSILON));
+                let at = |p: egui::Pos2| corner.center() + (p - bounds.center()) * vec2(sx, sy);
+                for [a, b] in segments {
+                    draw.stroke(&path(at(a), at(b)), StrokeWidth::Thin, cx.resolve(&style.marker));
+                }
+                if let Some(centre) = dot {
+                    // The dot keeps clear of the stem it stands beside.
+                    let from_stem = (at(centre).x - at(pos2(0.0, 0.0)).x).abs();
+                    let radius = style.dot.min(DOT_CLEARANCE * from_stem);
+                    draw.fill(&PaintShape::Circle(at(centre), radius), cx.resolve(&style.marker));
+                }
             }
         }
     }

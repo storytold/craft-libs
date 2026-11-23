@@ -525,7 +525,7 @@ impl Component for TextRuler<'_> {
                 let (hover, pressed) = (cx.color(over(colors.state.hover, column)), cx.color(over(colors.state.pressed, column)));
                 Stateful::new(rest).off(States::new(rest, hover, pressed, rest))
             },
-            selector_side: tokens.size.icon.sm,
+            selector_side: tokens.size.icon.md,
             selector_radius: UiTokens::corner(tokens.shape.radius.sm),
             thickness: tokens.typography.get(TypeRole::Caption).line_height,
             pad: tokens.space.gap.tight,
