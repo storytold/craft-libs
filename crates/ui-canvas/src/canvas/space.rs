@@ -445,7 +445,7 @@ impl PartialEq for RulerText {
             (Ticks::Custom(a), Ticks::Custom(b)) => std::ptr::fn_addr_eq(a, b),
             _ => false,
         };
-        self.kind == other.kind && self.units.per_doc == other.units.per_doc && same_ticks
+        self.kind == other.kind && self.units.per_doc == other.units.per_doc && same_ticks && self.units.labels == other.units.labels
     }
 }
 
@@ -469,10 +469,9 @@ impl RulerText {
     }
 
     /// The number a ruler prints at the tick `value` (ruler units from the zero point) of labelled step `step`, with
-    /// no unit.
+    /// no unit, as the units' [`TickLabels`](craft_behavior::TickLabels) write it.
     pub fn tick_label(&self, numbers: &Units, value: f64, step: f64) -> String {
-        let digits = self.units.label_decimals(step);
-        numbers.number_ungrouped(self.units.label_value(value, step), digits..=digits)
+        numbers.number_ungrouped(self.units.label_value(value, step), self.units.label_decimals(step))
     }
 
     /// The unit's short name: `px`.

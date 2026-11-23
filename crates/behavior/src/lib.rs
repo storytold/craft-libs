@@ -65,7 +65,7 @@ pub use anchor::Anchor9;
 pub use arrangement::Arrangement;
 pub use canvas::CanvasTransform;
 
-pub use canvas::{CanvasView, RulerUnits, Ticks, ViewHistory, ViewPlace, ZoomFloor, ZoomScheme, resize_cursor};
+pub use canvas::{CanvasView, RulerUnits, TickLabels, Ticks, ViewHistory, ViewPlace, ZoomFloor, ZoomScheme, resize_cursor};
 /// The f64 geometry crate the canvas view and its callers share.
 pub use kurbo;
 

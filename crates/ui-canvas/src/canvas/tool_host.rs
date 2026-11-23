@@ -460,6 +460,7 @@ pub fn tool_pass(env: &EnvView<'_>) -> Option<ToolPass> {
 pub struct ToolHost<'m> {
     disabled: bool,
     momentary: Option<&'m mut Momentary>,
+    navigates: bool,
     command_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
     alt_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
     smart_guide_color: Option<DataColor>,
@@ -490,6 +491,16 @@ impl<'m> ToolHost<'m> {
         self
     }
 
+    /// Whether the pointer of this pass navigates instead of using the tool: a press then runs the momentary Hand of
+    /// [`momentary`](Self::momentary), latched for its gesture, whatever tool is selected or key is held. The host
+    /// says so for the input its platform reports, such as a finger once a pen has been seen (palm rejection);
+    /// without a momentary set it changes nothing.
+    #[must_use]
+    pub fn navigates(mut self, navigates: bool) -> Self {
+        self.navigates = navigates;
+        self
+    }
+
     /// The tool a press runs when `key` is held at the press and the selected tool does not take it, latched for the
     /// gesture. Order: `Momentary` first, then Command, then Alt.
     #[must_use]
@@ -517,7 +528,7 @@ impl<'m> ToolHost<'m> {
     /// measuring run, so the host and what the app does with its response never run in one.
     pub fn run(self, ui: &Ui, pass: &ToolPass, tool: &mut dyn CanvasTool) -> ToolHostResponse {
         let ctx = ui.ctx().clone();
-        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
+        let ToolHost { disabled, mut momentary, navigates, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
         let env = Env::of(ui);
         let key = state_id(pass.id);
         let mut state = with_session(&ctx, key, |slot: &mut HostState| slot.clone());
@@ -539,7 +550,7 @@ impl<'m> ToolHost<'m> {
                     momentary.fired(command, event.phase);
                 }
                 let injected = held_momentary(&ctx, pass.id, env.view().command_chain(), &holds, input.mods);
-                momentary.tool_holding(injected, input.mods, state.gesture.is_some())
+                momentary.tool_holding(injected, navigates, input.mods, state.gesture.is_some())
             }
             None => {
                 fired.for_each(drop);
