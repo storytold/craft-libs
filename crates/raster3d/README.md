@@ -230,9 +230,10 @@ Changes from those files:
 - A negative color is encoded on the sRGB curve with its magnitude choosing the segment and its
   sign kept, as CSS Color 4's conversion code does. EffectCraft put every negative value on the
   linear segment, so red −0.25 encoded to −3.23 instead of about −0.537.
-- A normal whose squared length overflows `f32`, and the direction to a point or spot light whose
-  squared distance overflows `f32`, are normalized in `f64`. EffectCraft divided them by an
-  infinite length, so the surface took no direct light. A distance to such a light past `f32`'s
+- A normal whose squared length overflows `f32`, and the direction to a point or spot light or to
+  a perspective eye whose difference from the fragment or its squared length overflows `f32`, are
+  normalized in `f64`. EffectCraft divided them by an infinite length, so the surface took no
+  direct light or shaded with a view direction that was not a number. A distance to such a light past `f32`'s
   range is kept in `f64` through the falloff, so a light 4.2e38 away with a radius of 3e38 and an
   inverse-square falloff passes half its light instead of none.
 - A shadow tap past the edge of one of a point light's or wide spot light's six maps reads the

@@ -474,6 +474,17 @@ fn env_shadow(s: &Scene, e: &EnvInfo, p: [f32; 3], ng: [f32; 3], n: [f32; 3]) ->
     1.0 - e.shadow_darkness * e.key * (1.0 - f)
 }
 
+/// Unit direction from `from` to `to` and the distance between them, taken in `f64`, for points
+/// whose difference or its squared length overflows `f32`. `None` when a coordinate is not finite.
+fn wide_dir(to: [f32; 3], from: [f32; 3]) -> Option<([f32; 3], f64)> {
+    if !to.iter().chain(&from).all(|c| c.is_finite()) {
+        return None;
+    }
+    let d = [0, 1, 2].map(|k| f64::from(to[k]) - f64::from(from[k]));
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    Some((d.map(|c| (c / len) as f32), len))
+}
+
 /// Unit direction from `p` to light `l`, and the distance (infinite for a parallel light). The
 /// distance is in `f64`, since the distance to a far light can exceed `f32`'s range.
 fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f64) {
@@ -482,11 +493,12 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f64) {
     }
     let d = sub(l.pos, p);
     let len = dot(d, d).sqrt();
-    // The squared distance to a far light overflows f32; such a direction is taken in f64.
-    if len.is_infinite() && d.iter().all(|c| c.is_finite()) {
-        let d = d.map(f64::from);
-        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        return (d.map(|c| (c / len) as f32), len);
+    // The difference to a far light, or its squared length, overflows f32; such a direction is
+    // taken in f64.
+    if len.is_infinite()
+        && let Some(wide) = wide_dir(l.pos, p)
+    {
+        return wide;
     }
     if len < 1e-6 { ([0.0, 0.0, -1.0], 0.0) } else { (scale(d, 1.0 / len), f64::from(len)) }
 }
@@ -627,7 +639,14 @@ pub(crate) fn shade(s: &Scene, f: &Frag) -> Option<[f32; 4]> {
         Some(t) => 1.0 + m.occlusion_strength * (t[0] - 1.0),
         None => 1.0,
     };
-    let v = if s.ortho { scale(s.cam_fwd, -1.0) } else { norm(sub(s.eye, f.pos)) };
+    let v = if s.ortho {
+        scale(s.cam_fwd, -1.0)
+    } else {
+        // The difference between an eye and a fragment far apart can overflow f32; such a
+        // direction is taken in f64.
+        let d = sub(s.eye, f.pos);
+        if d.iter().all(|c| c.is_finite()) { norm(d) } else { wide_dir(s.eye, f.pos).map_or_else(|| norm(d), |w| w.0) }
+    };
     let mut out = [0.0f32; 3];
     for l in &s.lights {
         let (to_l, dist) = to_light(l, f.pos);
@@ -763,6 +782,58 @@ mod tests {
         let light = Light { falloff: 1, falloff_distance: (2.0 * (dist - 3e38)) as f32, ..light };
         let k = attenuation(&light, [0.0; 3], to_l, dist);
         assert!((k - 0.5).abs() < 1e-5, "{k}");
+    }
+
+    #[test]
+    fn a_light_whose_difference_from_the_fragment_overflows_f32_has_a_direction() {
+        // 3e38 − (−3e38) overflows f32; the light is 6e38 away along +x.
+        let light = Light {
+            kind: 2,
+            pos: [3e38, 0.0, 0.0],
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 1.0,
+            falloff: 0,
+            radius: 0.0,
+            falloff_distance: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        };
+        let (to_l, dist) = to_light(&light, [-3e38, 0.0, 0.0]);
+        assert_eq!(to_l, [1.0, 0.0, 0.0]);
+        assert!((dist - 6e38).abs() < 1e31, "{dist}");
+    }
+
+    #[test]
+    fn an_eye_whose_difference_from_the_fragment_overflows_f32_shades_the_fragment() {
+        use super::{Frag, shade};
+        use crate::scene::{Material, Scene};
+        // The eye at x = 3e38 looks at a fragment at x = −3e38, lit by a parallel light along −x.
+        let mut s = Scene { eye: [3e38, 0.0, 0.0], ..Scene::default() };
+        s.materials.push(Material::default());
+        s.lights.push(Light {
+            kind: 0,
+            pos: [0.0; 3],
+            dir: [-1.0, 0.0, 0.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 1.0,
+            falloff: 0,
+            radius: 0.0,
+            falloff_distance: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        });
+        let f = Frag { pos: [-3e38, 0.0, 0.0], normal: [1.0, 0.0, 0.0], uv: [0.0; 2], tangent: [0.0, 0.0, 1.0, 1.0], material: 0, front: true };
+        let far = shade(&s, &f);
+        // The view direction is +x either way, so the fragment shades as it does at x = −3 seen
+        // from x = 3.
+        let near = shade(&Scene { eye: [3.0, 0.0, 0.0], ..s.clone() }, &Frag { pos: [-3.0, 0.0, 0.0], ..f });
+        assert!(near.is_some_and(|c| c[0] > 0.0), "{near:?}");
+        assert_eq!(far, near);
     }
 
     #[test]
