@@ -500,7 +500,7 @@ struct ScrubState {
 
 #[derive(Clone, Copy, Debug)]
 struct RegisteredLabel {
-    parent: Id,
+    layer: egui::LayerId,
     rect: Rect,
     pass: u64,
     link: Option<Id>,
@@ -566,7 +566,7 @@ impl Scrubber {
 
     /// Note a label drawn at `rect` for the numeric field immediately following it.
     pub fn note_label(ui: &Ui, rect: Rect) {
-        Self::note(ui, RegisteredLabel { parent: ui.scope_id(), rect, pass: 0, link: None, tab_stop: false });
+        Self::note(ui, RegisteredLabel { layer: ui.layer_id(), rect, pass: 0, link: None, tab_stop: false });
     }
 
     /// Draw a link label that scrubs the subsequent field when dragged, while retaining click dispatch.
@@ -577,7 +577,7 @@ impl Scrubber {
                 ui.link(text)
             })
             .inner;
-        Self::note(ui, RegisteredLabel { parent: ui.scope_id(), rect: link.rect, pass: 0, link: Some(link.id), tab_stop: true });
+        Self::note(ui, RegisteredLabel { layer: ui.layer_id(), rect: link.rect, pass: 0, link: Some(link.id), tab_stop: true });
         link
     }
 
@@ -587,14 +587,14 @@ impl Scrubber {
         if label.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
-        Self::note(ui, RegisteredLabel { parent: ui.scope_id(), rect: label.rect, pass: 0, link: Some(label.id), tab_stop: false });
+        Self::note(ui, RegisteredLabel { layer: ui.layer_id(), rect: label.rect, pass: 0, link: Some(label.id), tab_stop: false });
         label
     }
 
     fn note(ui: &Ui, label: RegisteredLabel) {
         let pass = ui.ctx().cumulative_pass_nr();
-        let parent = ui.scope_id();
-        ui.data_mut(|d| d.insert_temp(Self::label_id(), RegisteredLabel { pass, parent, ..label }));
+        let layer = ui.layer_id();
+        ui.data_mut(|d| d.insert_temp(Self::label_id(), RegisteredLabel { pass, layer, ..label }));
     }
 
     fn take_label(ui: &Ui, field_rect: Rect) -> Option<RegisteredLabel> {
@@ -604,7 +604,7 @@ impl Scrubber {
             l
         })?;
         let gap = field_rect.left() - l.rect.right();
-        (l.parent == ui.scope_id()
+        (l.layer == ui.layer_id()
             && l.pass == ui.ctx().cumulative_pass_nr()
             && (-1.0..=LABEL_GAP).contains(&gap)
             && field_rect.y_range().contains(l.rect.center().y))
