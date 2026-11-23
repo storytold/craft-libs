@@ -862,13 +862,28 @@ fn a_document_crop_moved_past_its_bounds_takes_in_the_area_there() {
             "image mode, auto centre {auto_center}: the frame moves past the canvas: {r:?}"
         );
     }
-    // A turned frame keeps inside the canvas.
+    // A turned frame moves past the canvas too (photocraft#16460): in Classic Mode past the right edge, in image mode
+    // (the image turned under an upright frame on screen) past the left edge.
     let mut setup = Setup::new();
     setup.bounds = Some(canvas);
     let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
     rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
     let b = rig.crop().turned_bounds();
-    assert!(b.x1 <= canvas.x1 + 1e-6, "a turned frame's move stays inside: {b:?}");
+    assert!(b.x1 > canvas.x1 + 1.0, "classic: a turned frame moves past the canvas: {b:?}");
+    assert!((rig.rect().width() - RECT.width()).abs() < 1e-6, "classic: a turned frame keeps its size: {:?}", rig.rect());
+    for auto_center in [false, true] {
+        let mut setup = Setup::image(10.0, auto_center);
+        setup.bounds = Some(canvas);
+        let mut rig = Rig::new(CropBox::new(RECT, 10.0), setup);
+        rig.drag(rig.at(200.0, 150.0), rig.at(300.0, 150.0), Modifiers::NONE);
+        let b = rig.crop().turned_bounds();
+        assert!(b.x0 < canvas.x0 - 1.0, "image mode, auto centre {auto_center}: a turned frame moves past the canvas: {b:?}");
+        assert!(
+            (rig.rect().width() - RECT.width()).abs() < 1e-6,
+            "image mode, auto centre {auto_center}: a turned frame keeps its size: {:?}",
+            rig.rect()
+        );
+    }
 }
 
 #[trial]

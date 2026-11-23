@@ -936,11 +936,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         });
         // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
         // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
-        if !sent.is_empty() {
-            let press = ui.input(|i| i.pointer.press_origin());
+        if let Some(&press) = sent.first() {
             drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
                 drag.source = Some(size);
-                drag.press = press;
+                drag.press = Some(press);
             });
         }
     }
@@ -1115,13 +1114,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
         let cells = column_cells(plan.columns, plan.rect, plan.edge, plan.flow, &scene.sizes, &spec);
-        for (column, mut cell) in plan.columns.iter().zip(cells) {
+        for (column, cell) in plan.columns.iter().zip(cells) {
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
-            // A stepped column is as tall as its bar and content, from the top of the dock; content taller than the
-            // dock gets the dock's height and scrolls inside. The rest of its slot is the dock's empty room.
-            if let Some(content) = self.stepped_height(ui, body, column, cell.width(), false) {
-                cell.max.y = (cell.top() + scene.sizes.bar + content).min(cell.bottom());
-            }
+            // A docked column takes the dock's height, a stepped one (a tool rail) too: the references' docked
+            // toolbar keeps its column's surface down to the dock's foot, with the tools at the top
+            // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
+            // tall as its content.
             self.report.placed.push((first.clone(), cell));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
             self.column(ui, body, column, at);
@@ -1582,7 +1580,7 @@ struct RailGrip<'a, P> {
     active: PanelKey,
     movable: bool,
     label: Label,
-    sent: Outbox<'a, ()>,
+    sent: Outbox<'a, Pos2>,
 }
 
 /// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
@@ -1594,8 +1592,8 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
         .ghost(props.label.clone())
         .label(props.label.clone())
         .show_at(ui, strip);
-    if held.drag_started {
-        props.sent.send(());
+    if let Some(origin) = held.drag_origin {
+        props.sent.send(origin);
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);

@@ -693,3 +693,23 @@ fn a_click_on_a_rows_sample_picks_its_family() {
     fx.settle();
     assert_eq!(seen.borrow().picks, [("Inter".to_owned(), None)], "the click picks the row");
 }
+
+/// The open list loads its rows' faces through the host's jobs, never in a pass, and a list opened again over the
+/// same rows loads none of them again.
+#[trial]
+fn the_list_loads_its_sample_faces_off_the_pass_and_once() {
+    let jobs = Arc::new(craft_host::ManualJobs::new());
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build();
+    let (mut fx, _) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
+    fx.host(Arc::new(host));
+    open(&mut fx);
+    assert!(present(&fx, "Inter"), "the rows show while their faces load");
+    assert!(jobs.waiting() > 0, "the rows' faces wait for the host's jobs");
+    jobs.run_all();
+    fx.settle();
+    fx.key(Key::Escape, Modifiers::NONE);
+    fx.settle();
+    open(&mut fx);
+    fx.frame(vec![]);
+    assert_eq!(jobs.waiting(), 0, "the list opened again loads no face");
+}

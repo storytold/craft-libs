@@ -439,8 +439,13 @@ pub struct Catalog {
     history: Mutex<History>,
     added: Mutex<Added>,
     loaded: Mutex<HashMap<String, FamilyLoad>>,
-    files: Mutex<HashMap<PathBuf, Weak<[u8]>>>,
+    /// The bytes of each file read, while a face of it is loaded. A file's own lock is held while it is read, so faces of
+    /// one collection loading on several threads read it once and share the bytes.
+    files: Mutex<HashMap<PathBuf, FileSlot>>,
 }
+
+/// One file's shared bytes while any face of it is loaded, behind the lock held while the file is read.
+type FileSlot = Arc<Mutex<Option<Weak<[u8]>>>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -750,7 +755,16 @@ impl Catalog {
     }
 
     fn file_bytes(&self, path: &Path) -> Result<Arc<[u8]>, FontFileError> {
-        if let Some(bytes) = lock(&self.files).get(path).and_then(Weak::upgrade) {
+        let slot = {
+            let mut files = lock(&self.files);
+            // A slot another thread holds (it reads the file) stays; the others go once their bytes are dropped.
+            files.retain(|_, slot| {
+                Arc::strong_count(slot) > 1 || slot.try_lock().ok().is_none_or(|held| held.as_ref().is_some_and(|w| w.strong_count() > 0))
+            });
+            Arc::clone(files.entry(path.to_path_buf()).or_default())
+        };
+        let mut held = lock(&slot);
+        if let Some(bytes) = held.as_ref().and_then(Weak::upgrade) {
             return Ok(bytes);
         }
         let size = std::fs::metadata(path)?.len();
@@ -758,9 +772,7 @@ impl Catalog {
             return Err(FontFileError::TooLarge { size, max: MAX_LOAD });
         }
         let bytes: Arc<[u8]> = read_capped(path, MAX_LOAD)?.into();
-        let mut files = lock(&self.files);
-        files.retain(|_, w| w.strong_count() > 0);
-        files.insert(path.to_path_buf(), Arc::downgrade(&bytes));
+        *held = Some(Arc::downgrade(&bytes));
         Ok(bytes)
     }
 
