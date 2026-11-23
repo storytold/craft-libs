@@ -123,7 +123,6 @@ fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
     assert!(rx.try_recv().is_err(), "nothing was dispatched");
 }
 
-<<<<<<< HEAD
 /// Whether the server closed the connection: the next read is the end of the stream, not a timeout or an error.
 fn is_closed(reader: &mut impl BufRead) -> bool {
     let mut line = String::new();
@@ -186,7 +185,8 @@ fn a_refused_first_frame_closes_the_connection() {
         assert!(is_closed(&mut reader), "{first}: the connection is closed, the second guess unanswered");
     }
     assert!(rx.try_recv().is_err(), "nothing was dispatched");
-=======
+}
+
 /// A web page can reach loopback: a browser `POST` whose body is a valid `auth` line is refused at its request line
 /// and the connection closed, so neither the body's `auth` nor a request after it reaches the app.
 #[trial]
@@ -212,7 +212,6 @@ fn a_browser_post_never_reaches_the_app() {
     };
     assert!(closed, "the connection closes after the refusal, answering nothing more: {rest:?}");
     assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "nothing reached the app");
->>>>>>> origin/next
 }
 
 /// A request line over `MAX_REQUEST_BYTES` without a newline gets an error reply and the connection is closed.

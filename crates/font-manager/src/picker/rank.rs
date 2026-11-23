@@ -366,7 +366,6 @@ pub(super) fn list(
     }
     (rows, comparable)
 }
-<<<<<<< HEAD
 
 /// The host rows the list shows for `query`, as (group, row) in group order: every row for an empty query, else the
 /// face and action rows whose name matches as a family name would. A notice speaks of its group as a whole, so it
@@ -383,31 +382,3 @@ pub(super) fn host_rows(groups: &[HostFontGroup<'_>], query: &str, folder: &Fold
         .map(|(group, at, _)| (group, at))
         .collect()
 }
-
-#[cfg(test)]
-mod tests {
-    use craft_ui::testing::trial;
-
-    use super::{ARABIC_CORE, has_arabic_sample};
-
-    const LATIN: &str = "AaBbCc";
-    /// "أبجد هوز".
-    const ARABIC: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
-
-    fn maps(chars: &str) -> impl Fn(&str) -> bool + '_ {
-        move |text| text.chars().filter(|c| !c.is_whitespace()).all(|c| chars.contains(c))
-    }
-
-    #[trial]
-    fn an_arabic_sample_needs_the_latin_sample_and_every_arabic_test_letter() {
-        let all = format!("{LATIN}{ARABIC_CORE}{ARABIC}");
-        assert!(has_arabic_sample(&maps(&all), LATIN, ARABIC));
-        assert!(!has_arabic_sample(&maps(LATIN), LATIN, ARABIC), "a Latin-only face");
-        for missing in LATIN.chars().chain(ARABIC_CORE.chars()).chain(ARABIC.chars().filter(|c| !c.is_whitespace())) {
-            let partial: String = all.chars().filter(|c| *c != missing).collect();
-            assert!(!has_arabic_sample(&maps(&partial), LATIN, ARABIC), "without U+{:04X}", missing as u32);
-        }
-    }
-}
-=======
->>>>>>> origin/next

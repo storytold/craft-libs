@@ -19,11 +19,7 @@ pub enum ReorderKeys {
 }
 
 /// What the focused stop is, as far as the table's rows differ.
-<<<<<<< HEAD
-#[derive(Clone, Copy, Debug)]
-=======
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
->>>>>>> origin/next
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyRole {
     /// A value control with a reset value and no text part: Delete resets it.

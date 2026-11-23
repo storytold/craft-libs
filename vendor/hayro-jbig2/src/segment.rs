@@ -431,17 +431,11 @@ mod tests {
             parse_segment_header(&mut Reader::new(&data)).unwrap_err()
         };
 
-<<<<<<< HEAD
-        let mut reader = Reader::new(&data);
-        let error = parse_segment_header(&mut reader).unwrap_err();
-        assert!(matches!(error, DecodeError::Segment(SegmentError::InvalidReferredCount)));
-=======
         // The 29-bit maximum, 536,870,911, would reserve about 2 GiB.
         for count in [0x1FFF_FFFF, MAX_REFERRED_TO_SEGMENTS + 1] {
             assert!(matches!(header(count), DecodeError::Segment(SegmentError::InvalidReferredCount)));
         }
         // At the cap the header is read on and ends at its missing retention bytes.
         assert!(matches!(header(MAX_REFERRED_TO_SEGMENTS), DecodeError::Parse(ParseError::UnexpectedEof)));
->>>>>>> origin/next
     }
 }

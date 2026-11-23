@@ -67,8 +67,7 @@ pub(crate) struct Rows<'a> {
 
 impl<'a> Rows<'a> {
     pub(crate) fn new(target: Target) -> Self {
-<<<<<<< HEAD
-        Rows { target, english: None, preferred: &[], icons: true, compact: false }
+        Rows { target, preferred: &[], icons: true, compact: false }
     }
 
     pub(crate) fn icons(mut self, on: bool) -> Self {
@@ -79,14 +78,6 @@ impl<'a> Rows<'a> {
     pub(crate) fn compact(mut self, on: bool) -> Self {
         self.compact = on;
         self
-    }
-
-    pub(crate) fn english(mut self, english: Option<&'a EnglishHook<'a>>) -> Self {
-        self.english = english;
-        self
-=======
-        Rows { target, preferred: &[] }
->>>>>>> origin/next
     }
 
     pub(crate) fn preferred(mut self, preferred: &'a [(&'a str, char)]) -> Self {

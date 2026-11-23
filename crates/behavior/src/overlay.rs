@@ -291,7 +291,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn an_overlay_with_no_room_on_its_side_opens_on_the_other() {
         let size = Vec2::new(200.0, 80.0);
         let low = rect(300.0, 540.0, 100.0, 30.0);
@@ -303,7 +302,9 @@ mod tests {
         let placed = place(&PlaceRequest::new(high, size, BOUNDS).side(Side::Below).gap(4.0));
         assert_eq!(placed.side, Side::Below, "room below: {placed:?}");
         assert!(placed.rect.top() >= high.bottom(), "below the anchor: {placed:?}");
-=======
+    }
+
+    #[test]
     fn a_menu_that_covers_its_anchor_and_fits_neither_side_keeps_its_height_and_slides_over_the_anchor() {
         let point = rect(300.0, 400.0, 0.0, 0.0);
         let request = PlaceRequest::new(point, Vec2::new(200.0, 450.0), BOUNDS).covers_anchor(true);
@@ -315,7 +316,6 @@ mod tests {
         assert!(above.side == Side::Above && above.rect.bottom() == point.top(), "fits above: opens above the point: {above:?}");
         let without = place(&request.covers_anchor(false));
         assert!(without.side == Side::Above && without.rect.height() < 450.0, "without it: capped to the larger side: {without:?}");
->>>>>>> origin/next
     }
 
     #[test]

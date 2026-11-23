@@ -1,33 +1,19 @@
-<<<<<<< HEAD
 //! Stories of `FontPicker`: the closed field, the list open with recents and a typed query, the list open with the
 //! class column and a filter on, and the list open with host rows above the families. They draw from the two faces
-//! egui ships in an in-memory catalog.
-=======
-//! Stories of `FontPicker`: the closed field, the list open with recents and a typed query, and the list open with
-//! the class column and a filter on. They draw from the two faces egui ships in an in-memory catalog, with Inter where a
-//! story needs a family of two styles and Noto Sans Arabic, from the craft fonts set when the build has
-//! `CRAFT_FONTS_DIR`, for the Arabic sample.
->>>>>>> origin/next
+//! egui ships in an in-memory catalog, with Inter where a story needs a family of two styles and Noto Sans Arabic,
+//! from the craft fonts set when the build has `CRAFT_FONTS_DIR`, for the Arabic sample.
 
 use std::sync::{Arc, OnceLock};
 
 use craft_behavior::Mixed;
 use craft_ui::contract::{Bind, Show as _, Validity};
-<<<<<<< HEAD
-use craft_ui::fonts::FontRef;
-=======
-use craft_ui::fonts::EmbeddedFace;
->>>>>>> origin/next
+use craft_ui::fonts::{EmbeddedFace, FontRef};
 use craft_ui::runtime::env::{Label, Message};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};
 
-<<<<<<< HEAD
-use super::{FontFilters, FontPicker, FontPickerSettings, HostFontGroup, HostFontRow};
-=======
-use super::{FontFilters, FontPicker, FontPickerKind, FontPickerSettings, MissingAdvice};
->>>>>>> origin/next
+use super::{FontFilters, FontPicker, FontPickerKind, FontPickerSettings, HostFontGroup, HostFontRow, MissingAdvice};
 use crate::Catalog;
 use crate::craft_font_catalog::{Limits, Source};
 use crate::panel::fixtures::story_catalog;
@@ -85,14 +71,11 @@ fn arabic_catalog() -> Arc<Catalog> {
 struct Extras<'a> {
     served: &'a [String],
     banner: Option<&'a str>,
-<<<<<<< HEAD
-    host: &'a [HostFontGroup<'a>],
-=======
     kind: FontPickerKind,
     actions: &'a [Label],
     shown_as: Option<&'a str>,
     advice: MissingAdvice,
->>>>>>> origin/next
+    host: &'a [HostFontGroup<'a>],
 }
 
 fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalog>, extras: &Extras<'_>) -> StoryOutput {
@@ -101,16 +84,13 @@ fn show_with(ui: &mut Ui, data: &mut StoryData, init: Demo, catalog: &Arc<Catalo
         .settings(Bind::bound(settings))
         .filters(Bind::bound(filters))
         .served(extras.served)
-<<<<<<< HEAD
-        .host(extras.host);
-=======
         .kind(extras.kind)
         .actions(extras.actions)
-        .advice(extras.advice);
+        .advice(extras.advice)
+        .host(extras.host);
     if let Some(face) = extras.shown_as {
         picker = picker.shown_as(face);
     }
->>>>>>> origin/next
     if let Some(text) = extras.banner {
         picker = picker.preview_text(text);
     }
@@ -195,7 +175,6 @@ fn font_picker_served(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         &catalog(),
         &Extras { served: &served, ..Extras::default() },
     )
-<<<<<<< HEAD
 }
 
 /// A host group above the families: a face with its sample, an action and a notice, under the group's heading.
@@ -210,8 +189,6 @@ fn font_picker_host_groups(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let host = [HostFontGroup::new(Some(Label::from("Document fonts")), &rows)];
     let extras = Extras { host: &host, ..Extras::default() };
     show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras)
-=======
->>>>>>> origin/next
 }
 
 /// The preview banner above the filters.

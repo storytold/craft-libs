@@ -19,11 +19,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
-<<<<<<< HEAD
 use std::time::Duration;
-=======
-use web_time::{Duration, Instant};
->>>>>>> origin/next
 
 use base64::Engine as _;
 use craft_ui::runtime::windows::{ScreenshotFacts, ScreenshotSlot, WindowHost};
