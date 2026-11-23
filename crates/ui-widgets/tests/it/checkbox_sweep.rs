@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Area, Id, LayerId, Order, Pos2, Rect, emath::TSTransform};
@@ -103,7 +103,9 @@ fn a_checkbox_that_becomes_enabled_during_a_sweep_and_is_crossed_engages_the_own
         });
         fixture.settle();
         let owner = fixture.by_label("Owner").expect("owner");
-        let sibling = fixture.by_label("Sibling").expect("sibling").center();
+        // A disabled check box offers no action, so `by_label` would find the text of its label beside it, and a drag
+        // there crosses no box. A sweep crosses a toggle by its box: the drag goes to the sibling's box.
+        let sibling = fixture.by_role(Role::CHECK_BOX).get(1).expect("the sibling's box").center();
         fixture.press(&owner);
         enabled.set(true);
         if released_with_the_move {
