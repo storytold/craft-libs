@@ -766,6 +766,23 @@ impl<'a> Xcf<'a> {
         self.channel_at(layer.mask, budget, keep_going).map(Some)
     }
 
+    /// Borrow ordered saved-channel properties without decoding its hierarchy.
+    /// Reuse `budget` across channels; optional framing failures return explicit
+    /// incomplete prefixes, while cancellation always propagates as an error.
+    pub fn channel_properties(
+        &self,
+        index: usize,
+        limits: records::Limits,
+        budget: &mut records::Budget,
+        keep_going: &dyn Fn() -> bool,
+    ) -> Result<records::Scan<records::Property<'a>>> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = self.channels.get(index).copied().ok_or_else(|| invalid("channel index is out of bounds"))?;
+        records::channel_properties(self.c.b, offset, limits, budget, keep_going)
+    }
+
     /// Decodes channel `index` (below [`Image::channel_count`]): the selection or an extra
     /// channel, the size of the canvas.
     pub fn channel(&self, index: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<(Channel, Pixels)> {

@@ -4,6 +4,9 @@
 //! Values are the last valid values in the inspected prefix; callers must check
 //! completeness before treating them as final in the presence of duplicates.
 
+mod channel;
+pub use channel::{ChannelColorIndicates, ChannelMetadata, channel};
+
 use super::{Budget, Diagnostic, Limits as RecordLimits, Property, Scan, StopReason};
 use crate::{Error, Guide, Orientation, Result};
 

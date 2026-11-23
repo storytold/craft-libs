@@ -157,11 +157,32 @@ pub(super) fn layer_properties<'a>(
     budget: &mut Budget,
     keep_going: &dyn Fn() -> bool,
 ) -> Result<Scan<Property<'a>>> {
+    drawable_properties(bytes, offset, 12, limits, budget, keep_going)
+}
+
+pub(super) fn channel_properties<'a>(
+    bytes: &'a [u8],
+    offset: usize,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<Property<'a>>> {
+    drawable_properties(bytes, offset, 8, limits, budget, keep_going)
+}
+
+fn drawable_properties<'a>(
+    bytes: &'a [u8],
+    offset: usize,
+    header_bytes: usize,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<Property<'a>>> {
     check(keep_going)?;
     let mut cursor = Cursor { b: bytes, pos: offset, wide: false };
     let prefix = (|| {
-        budget.work(16)?;
-        cursor.take(12).map_err(|_| StopReason::Malformed)?;
+        budget.work(header_bytes + 4)?;
+        cursor.take(header_bytes).map_err(|_| StopReason::Malformed)?;
         let length = cursor.u32().map_err(|_| StopReason::Malformed)? as usize;
         if length > limits.string_bytes {
             return Err(StopReason::StringLimit);
