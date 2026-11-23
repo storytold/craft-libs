@@ -13,6 +13,10 @@ workspace = true
 
 [features]
 default = []
+# `appearance`: also Windows' UI settings and macOS' accessibility display setting (reduced motion).
+appearance = ["dep:zbus", "dep:futures-lite", "dep:async-channel", "dep:async-io", "dep:async-process", "dep:web-sys", "dep:windows", "dep:objc2-app-kit"]
+# `browser`: downloads, and the file picker and save through `rfd`.
+browser = ["dep:wasm-bindgen", "dep:js-sys", "dep:web-sys", "dep:rfd", "dep:wasm-bindgen-futures"]
 # `SystemReader::report_contrast` and `report_reduced_motion`: preferences a test sets in place of an OS source.
 testing = ["appearance"]
 # Moving the system pointer (a scrub's screen-edge wrap).

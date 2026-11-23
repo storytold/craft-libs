@@ -1208,7 +1208,7 @@ dependencies = [
  "cap-primitives",
  "io-extras",
  "io-lifetimes 3.0.1",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -2060,8 +2060,6 @@ name = "craft-automation"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "craft-ai-agents",
- "craft-atomic",
  "craft-behavior",
  "craft-control",
  "craft-host",
@@ -3727,6 +3725,7 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-theme",
  "craft-ui",
  "craft-winprint-gdi",
@@ -3930,6 +3929,7 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
+ "wasm-bindgen-test",
  "web-sys",
  "web-time",
 ]
@@ -4352,6 +4352,7 @@ dependencies = [
  "smallvec",
  "syn 2.0.119",
  "toml",
+ "typeid",
  "wasm-bindgen-futures",
  "web-time",
 ]
