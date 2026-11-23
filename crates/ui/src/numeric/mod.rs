@@ -295,9 +295,63 @@ fn times_as_asterisks(s: &str) -> Cow<'_, str> {
     out.into()
 }
 
-/// Convert decimal commas to periods if not written as thousands separators.
+/// Convert decimal commas to periods if not written as thousands separators in an operand.
 pub fn decimal_point(text: &str) -> Cow<'_, str> {
-    if text.contains(',') && !thousands(text) { text.replace(',', ".").into() } else { text.into() }
+    if !text.contains(',') {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    for (i, c) in text.char_indices() {
+        if c == ',' {
+            let start = operand_start(text, i);
+            let end = operand_end(text, i);
+            let operand = &text[start..end];
+            if thousands(operand) {
+                out.push(',');
+            } else {
+                out.push('.');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.into()
+}
+
+fn operand_start(text: &str, comma_idx: usize) -> usize {
+    let mut prev = None;
+    let mut last_op = 0;
+    for (i, c) in text[..comma_idx].char_indices() {
+        let is_op = matches!(c, '*' | '/') || is_times(c, prev) || (matches!(c, '+' | '-') && !is_leading_sign(text, i));
+        if is_op {
+            last_op = i + c.len_utf8();
+        }
+        prev = Some(c);
+    }
+    last_op
+}
+
+fn is_leading_sign(text: &str, idx: usize) -> bool {
+    let before = text[..idx].trim_end();
+    if before.is_empty() {
+        return true;
+    }
+    let last = before.chars().last();
+    matches!(last, Some('+' | '-' | '*' | '/' | 'x' | 'X' | '×'))
+}
+
+fn operand_end(text: &str, comma_idx: usize) -> usize {
+    let mut prev = text[..comma_idx].chars().last();
+    let start_search = comma_idx + 1;
+    for (offset, c) in text[start_search..].char_indices() {
+        let i = start_search + offset;
+        let is_op = matches!(c, '*' | '/') || is_times(c, prev) || (matches!(c, '+' | '-') && !is_leading_sign(text, i));
+        if is_op {
+            return i;
+        }
+        prev = Some(c);
+    }
+    text.len()
 }
 
 fn thousands(text: &str) -> bool {
@@ -328,6 +382,13 @@ pub fn parse_number(s: &str) -> Option<f64> {
 
 /// Evaluate arithmetic expressions with unit conversions.
 pub fn parse_measure(s: &str, default: MeasureUnit) -> Option<f64> {
+    if arithmetic_signs(s) > MAX_MEASURE_OPERATORS {
+        return None;
+    }
+    parse_measure_recursive(s, default)
+}
+
+fn parse_measure_recursive(s: &str, default: MeasureUnit) -> Option<f64> {
     let s = s.trim();
     for ops in [&['+', '-'][..], &['*', '/'][..]] {
         let skip = s.chars().next().map_or(0, char::len_utf8);
@@ -344,10 +405,10 @@ pub fn parse_measure(s: &str, default: MeasureUnit) -> Option<f64> {
             let Some(op) = s[i..].chars().next() else { continue };
             return match op {
                 '+' | '-' => {
-                    let a = parse_measure(l, default)?;
+                    let a = parse_measure_recursive(l, default)?;
                     let b = match percent(r) {
                         Some(k) => a * k,
-                        None => parse_measure(r, default)?,
+                        None => parse_measure_recursive(r, default)?,
                     };
                     Some(if op == '+' { a + b } else { a - b })
                 }
@@ -356,7 +417,7 @@ pub fn parse_measure(s: &str, default: MeasureUnit) -> Option<f64> {
                         Some(k) => (k, None),
                         None => number_unit(r)?,
                     };
-                    let a = parse_measure(l, unit.unwrap_or(default))?;
+                    let a = parse_measure_recursive(l, unit.unwrap_or(default))?;
                     if op == '*' {
                         Some(a * k)
                     } else if k == 0.0 {
@@ -429,6 +490,7 @@ pub enum ScrubPhase {
 #[derive(Clone, Copy, Debug)]
 struct ScrubState {
     zone: Id,
+    field: Id,
     start: f64,
     pending: f64,
     step: f64,
@@ -438,6 +500,7 @@ struct ScrubState {
 
 #[derive(Clone, Copy, Debug)]
 struct RegisteredLabel {
+    parent: Id,
     rect: Rect,
     pass: u64,
     link: Option<Id>,
@@ -503,7 +566,7 @@ impl Scrubber {
 
     /// Note a label drawn at `rect` for the numeric field immediately following it.
     pub fn note_label(ui: &Ui, rect: Rect) {
-        Self::note(ui, RegisteredLabel { rect, pass: 0, link: None, tab_stop: false });
+        Self::note(ui, RegisteredLabel { parent: ui.scope_id(), rect, pass: 0, link: None, tab_stop: false });
     }
 
     /// Draw a link label that scrubs the subsequent field when dragged, while retaining click dispatch.
@@ -514,7 +577,7 @@ impl Scrubber {
                 ui.link(text)
             })
             .inner;
-        Self::note(ui, RegisteredLabel { rect: link.rect, pass: 0, link: Some(link.id), tab_stop: true });
+        Self::note(ui, RegisteredLabel { parent: ui.scope_id(), rect: link.rect, pass: 0, link: Some(link.id), tab_stop: true });
         link
     }
 
@@ -524,13 +587,14 @@ impl Scrubber {
         if label.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
-        Self::note(ui, RegisteredLabel { rect: label.rect, pass: 0, link: Some(label.id), tab_stop: false });
+        Self::note(ui, RegisteredLabel { parent: ui.scope_id(), rect: label.rect, pass: 0, link: Some(label.id), tab_stop: false });
         label
     }
 
     fn note(ui: &Ui, label: RegisteredLabel) {
         let pass = ui.ctx().cumulative_pass_nr();
-        ui.data_mut(|d| d.insert_temp(Self::label_id(), RegisteredLabel { pass, ..label }));
+        let parent = ui.scope_id();
+        ui.data_mut(|d| d.insert_temp(Self::label_id(), RegisteredLabel { pass, parent, ..label }));
     }
 
     fn take_label(ui: &Ui, field_rect: Rect) -> Option<RegisteredLabel> {
@@ -540,8 +604,11 @@ impl Scrubber {
             l
         })?;
         let gap = field_rect.left() - l.rect.right();
-        (l.pass == ui.ctx().cumulative_pass_nr() && (-1.0..=LABEL_GAP).contains(&gap) && field_rect.y_range().contains(l.rect.center().y))
-            .then_some(l)
+        (l.parent == ui.scope_id()
+            && l.pass == ui.ctx().cumulative_pass_nr()
+            && (-1.0..=LABEL_GAP).contains(&gap)
+            && field_rect.y_range().contains(l.rect.center().y))
+        .then_some(l)
     }
 
     /// Scrub a numeric field, stepping its value based on horizontal drag on its associated label.
@@ -580,16 +647,23 @@ impl Scrubber {
         }
         if resp.drag_started() {
             ui.memory_mut(|m| m.stop_text_input());
-            let s = ScrubState { zone: resp.id, start: value, pending: 0.0, step: 0.0, moved: false, cancelled: false };
+            let s = ScrubState { zone: resp.id, field: params.id, start: value, pending: 0.0, step: 0.0, moved: false, cancelled: false };
             ui.data_mut(|d| d.insert_temp(Self::state_id(), s));
         }
         if !(resp.dragged() || resp.drag_stopped()) {
             return None;
         }
-        let mut s = ui.data(|d| d.get_temp::<ScrubState>(Self::state_id())).filter(|s| s.zone == resp.id && !s.cancelled)?;
-        let out = if ui.input_mut(|i| i.consume_key(i.modifiers, Key::Escape)) {
+        let mut s = ui.data(|d| d.get_temp::<ScrubState>(Self::state_id())).filter(|s| s.zone == resp.id && s.field == params.id && !s.cancelled)?;
+        let escape = ui.input_mut(|i| {
+            if let Some(pos) = i.events.iter().position(|e| matches!(e, egui::Event::Key { key: Key::Escape, pressed: true, .. })) {
+                if let egui::Event::Key { modifiers, .. } = i.events[pos] { i.consume_key(modifiers, Key::Escape) } else { false }
+            } else {
+                false
+            }
+        });
+        let out = if escape {
             s.cancelled = true;
-            s.moved.then_some(s.start)
+            (s.field == params.id && s.moved).then_some(s.start)
         } else if resp.drag_stopped() {
             if !s.moved && !is_link {
                 focus_field(ui, params.id, params.text);
@@ -618,7 +692,7 @@ impl Scrubber {
         }
         s.pending += f64::from(resp.drag_delta().x / PX_PER_STEP) * size;
         let n = (s.pending / step + s.pending.signum() * 1e-9).trunc();
-        if n == 0.0 || resp.drag_started() {
+        if n == 0.0 {
             return None;
         }
         s.pending -= n * step;

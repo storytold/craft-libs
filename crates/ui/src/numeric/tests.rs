@@ -154,3 +154,139 @@ fn scrubbing_drag_lifecycle_and_modifiers() {
     out.textures_delta.clear();
     assert_eq!(Scrubber::phase(&ctx), ScrubPhase::Released);
 }
+
+#[test]
+fn thousands_separator_validation_in_expressions() {
+    let pts = MeasureUnit::Points;
+    let mm = MeasureUnit::Millimeters;
+
+    // Ambiguous grouping in operand is rejected
+    assert!(pts.parse("12,500 mm + 1mm").is_none());
+    assert!(pts.parse("1mm + 12,500 mm").is_none());
+    assert!(pts.parse("12,500 mm").is_none());
+
+    // Valid decimal commas in expressions succeed
+    let val = mm.parse("0,5 mm + 1mm");
+    assert!(val.is_some());
+    let expected = mm.to_pt(1.5);
+    assert!((val.unwrap() - expected).abs() < 1e-4);
+
+    let val2 = mm.parse("1,25 mm + 0,75 mm");
+    assert!(val2.is_some());
+    let expected2 = mm.to_pt(2.0);
+    assert!((val2.unwrap() - expected2).abs() < 1e-4);
+}
+
+#[test]
+fn operator_limit_enforced_in_parse_measure() {
+    let mut expr = "1".to_string();
+    for _ in 0..129 {
+        expr.push_str(" + 1");
+    }
+    assert!(parse_measure(&expr, MeasureUnit::Points).is_none());
+
+    let mut ok_expr = "1".to_string();
+    for _ in 0..128 {
+        ok_expr.push_str(" + 1");
+    }
+    assert_eq!(parse_measure(&ok_expr, MeasureUnit::Points), Some(129.0));
+}
+
+#[test]
+fn label_registration_scoped_to_container_id() {
+    let ctx = Context::default();
+    let label_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 20.0));
+    let field_rect = Rect::from_min_size(pos2(55.0, 10.0), vec2(60.0, 20.0));
+    let bounds = 0.0..=100.0;
+    let id = Id::unique("field-1");
+
+    let mut out = ctx.run_ui(RawInput::default(), |ui| {
+        // Register label inside child scope 1
+        ui.scope_builder(egui::UiBuilder::new().id_salt("container_1"), |ui1| {
+            Scrubber::note_label(ui1, label_rect);
+        });
+
+        // Field in child scope 2 should NOT claim label from container 1
+        ui.scope_builder(egui::UiBuilder::new().id_salt("container_2"), |ui2| {
+            let params = FieldScrubParams::new(id, field_rect, "10", Some(10.0), 1, &bounds);
+            let res = Scrubber::field(ui2, params, |_, _, _| {});
+            assert!(res.is_none());
+        });
+    });
+    out.textures_delta.clear();
+}
+
+#[test]
+fn modifier_drags_scale_step_sizes_differently() {
+    let drag_with_modifier = |mods: Modifiers| -> f64 {
+        let ctx = Context::default();
+        let label_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 20.0));
+        let field_rect = Rect::from_min_size(pos2(55.0, 10.0), vec2(60.0, 20.0));
+        let bounds = 0.0..=1000.0;
+        let id = Id::unique("field-mod");
+        let mut val = 100.0;
+
+        let center = label_rect.center();
+        // Frame 1: initial layout
+        let mut out0 = ctx.run_ui(RawInput::default(), |ui| {
+            Scrubber::note_label(ui, label_rect);
+            let params = FieldScrubParams::new(id, field_rect, "100.0", Some(val), 1, &bounds);
+            let _ = Scrubber::field(ui, params, |_, _, _| {});
+        });
+        out0.textures_delta.clear();
+
+        // Frame 2: press on label
+        let mut out1 = ctx.run_ui(
+            RawInput {
+                events: vec![
+                    Event::ModifiersChanged(mods),
+                    Event::PointerMoved(center),
+                    Event::PointerButton { pos: center, button: PointerButton::Primary, pressed: true, modifiers: mods },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                Scrubber::note_label(ui, label_rect);
+                let params = FieldScrubParams::new(id, field_rect, "100.0", Some(val), 1, &bounds);
+                let _ = Scrubber::field(ui, params, |_, _, _| {});
+            },
+        );
+        out1.textures_delta.clear();
+
+        // Frame 3: drag started
+        let moved_pos = center + vec2(10.0, 0.0);
+        let mut out2 =
+            ctx.run_ui(RawInput { events: vec![Event::ModifiersChanged(mods), Event::PointerMoved(moved_pos)], ..Default::default() }, |ui| {
+                Scrubber::note_label(ui, label_rect);
+                let params = FieldScrubParams::new(id, field_rect, "100.0", Some(val), 1, &bounds);
+                if let Some(v) = Scrubber::field(ui, params, |_, _, _| {}) {
+                    val = v;
+                }
+            });
+        out2.textures_delta.clear();
+
+        // Frame 4: drag continues
+        let drag_pos = moved_pos + vec2(40.0, 0.0);
+        let mut out3 =
+            ctx.run_ui(RawInput { events: vec![Event::ModifiersChanged(mods), Event::PointerMoved(drag_pos)], ..Default::default() }, |ui| {
+                Scrubber::note_label(ui, label_rect);
+                let params = FieldScrubParams::new(id, field_rect, "100.0", Some(val), 1, &bounds);
+                if let Some(v) = Scrubber::field(ui, params, |_, _, _| {}) {
+                    val = v;
+                }
+            });
+        out3.textures_delta.clear();
+        val
+    };
+
+    let base = drag_with_modifier(Modifiers::default());
+    let with_shift = drag_with_modifier(Modifiers::SHIFT);
+    let with_cmd = drag_with_modifier(Modifiers::COMMAND);
+
+    let delta_base = (base - 100.0).abs();
+    let delta_shift = (with_shift - 100.0).abs();
+    let delta_cmd = (with_cmd - 100.0).abs();
+
+    assert!(delta_shift > delta_base, "Shift should increase delta: shift={delta_shift}, base={delta_base}");
+    assert!(delta_cmd < delta_base, "Command should decrease delta: cmd={delta_cmd}, base={delta_base}");
+}

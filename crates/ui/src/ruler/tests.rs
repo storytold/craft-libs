@@ -55,6 +55,37 @@ fn layout_ticks_generates_bounded_ticks() {
     assert!(!ticks.is_empty());
     assert!(ticks.iter().any(|t| t.is_major && t.label.is_some()));
     assert!(ticks.iter().any(|t| !t.is_major));
+    assert!(ticks.iter().all(|t| t.distance >= 0.0 && t.distance <= 200.0));
+}
+
+#[test]
+fn layout_ticks_strictly_respects_segment_bounds() {
+    let scale = RulerScale::document(1.0, Pos2::ZERO, false);
+    let from_doc = pos2(1.0, 0.0);
+    let to_doc = pos2(4.0, 0.0);
+    let axis = Vec2::X;
+    let zoom = 1.0;
+
+    let mut ticks = Vec::new();
+    layout_ticks(from_doc, to_doc, axis, zoom, &scale, 16.0, |t| {
+        ticks.push(t);
+    });
+
+    // Segment is [1.0, 4.0]: no tick at 0.0 or distance < 0.0
+    for t in &ticks {
+        assert!(t.distance >= 0.0, "tick distance {} should be >= 0", t.distance);
+        assert!(t.value >= 1.0, "tick value {} should be >= 1.0", t.value);
+        assert!(t.value <= 4.0, "tick value {} should be <= 4.0", t.value);
+    }
+
+    // Segment [0.0, 49.99]: no tick at 50.0
+    let mut ticks2 = Vec::new();
+    layout_ticks(pos2(0.0, 0.0), pos2(49.99, 0.0), axis, zoom, &scale, 16.0, |t| {
+        ticks2.push(t);
+    });
+    for t in &ticks2 {
+        assert!(t.value <= 49.99 + 1e-4, "tick value {} should be <= 49.99", t.value);
+    }
 }
 
 #[test]

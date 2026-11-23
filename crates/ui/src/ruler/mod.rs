@@ -158,14 +158,26 @@ where
 
     let near = |v: f64, every: f64| ((v / every).round() * every - v).abs() < minor * 0.01;
 
-    let mut v = (min_val / per / minor).floor() * minor;
+    let min_unit = min_val / per;
+    let max_unit = max_val / per;
+    let eps = minor * 1e-4;
+
+    let mut v = ((min_unit - eps) / minor).ceil() * minor;
+    if v < min_unit - eps {
+        v += minor;
+    }
     let half_step = step / 2.0;
 
     let mut count = 0;
     const MAX_TICKS: usize = 10_000;
 
-    while v * per <= max_val + minor * 0.01 && count < MAX_TICKS {
+    while v <= max_unit + eps && count < MAX_TICKS {
         count += 1;
+        let pos_val = v * per;
+        if pos_val < min_val - eps || pos_val > max_val + eps {
+            v += minor;
+            continue;
+        }
         let is_major = near(v, step);
         let is_half = !is_major && near(v, half_step);
         let (len, label) = if is_major {
@@ -176,7 +188,7 @@ where
             (ruler_thickness * 0.25, None)
         };
 
-        let distance = ((v * per - a) * zoom_axis) as f32;
+        let distance = ((pos_val - a) * zoom_axis) as f32;
         draw(RulerTick { distance, length: len, label, is_major, value: v });
         v += minor;
     }
