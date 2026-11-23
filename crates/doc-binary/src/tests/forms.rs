@@ -371,3 +371,46 @@ fn form_fields_survive_conversion_to_docx() {
     let (instr, result, form) = field_of(&craft_docx::read(&docx).expect("reads back"));
     assert_eq!((instr.as_str(), result.as_str(), form.as_str()), ("FORMTEXT", "Result", TEXT_XML));
 }
+
+/// The form of a drop-down of `tabs` entries of 1,000 tabs and one entry of `pad` letters.
+fn tabbed_form(pad: usize) -> String {
+    let tabs: &'static str = Box::leak("\t".repeat(1000).into_boxed_str());
+    let letters: &'static str = Box::leak("x".repeat(pad).into_boxed_str());
+    let mut entries = vec![tabs; 14];
+    entries.push(letters);
+    let entries: &'static [&'static str] = Box::leak(entries.into_boxed_slice());
+    form_of("FORMDROPDOWN", with_picf(&ffdata_bytes(&Ff { bits: 2, name: "Tabs", entries, ..Ff::default() })))
+}
+
+#[test]
+fn tab_and_line_breaks_survive_conversion_to_docx_and_the_size_limit_is_exact() {
+    // The characters come back unchanged after .docx write, read and write again.
+    let f = Ff { name: "T", text_default: "A\tB\nC\rD", ..Ff::default() };
+    let doc = read(&doc_with("FORMTEXT", with_picf(&ffdata_bytes(&f)), true, 0)).expect("opens");
+    let (_, _, form) = field_of(&doc);
+    assert!(form.contains(r#"<w:default w:val="A&#9;B&#10;C&#13;D"/>"#), "{form}");
+    let docx = craft_docx::write(&doc).expect("writes");
+    let back = craft_docx::read(&docx).expect("reads back");
+    assert_eq!(field_of(&back).2, form);
+    assert_eq!(field_of(&craft_docx::read(&craft_docx::write(&back).expect("writes again")).expect("reads")).2, form);
+
+    // The largest whitespace-heavy form the reader makes is exactly the limit, and the .docx
+    // reader keeps it (a form over the limit is dropped there).
+    let (mut low, mut high) = (0usize, 10_000usize);
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if tabbed_form(mid).is_empty() { high = mid - 1 } else { low = mid }
+    }
+    let biggest = tabbed_form(low);
+    assert_eq!(biggest.len(), 64 * 1024, "{low}");
+    assert!(tabbed_form(low + 1).is_empty());
+    let tabs: &'static str = Box::leak("\t".repeat(1000).into_boxed_str());
+    let letters: &'static str = Box::leak("x".repeat(low).into_boxed_str());
+    let mut entries = vec![tabs; 14];
+    entries.push(letters);
+    let entries: &'static [&'static str] = Box::leak(entries.into_boxed_slice());
+    let doc =
+        read(&doc_with("FORMDROPDOWN", with_picf(&ffdata_bytes(&Ff { bits: 2, name: "Tabs", entries, ..Ff::default() })), true, 0)).expect("opens");
+    let docx = craft_docx::write(&doc).expect("writes");
+    assert_eq!(field_of(&craft_docx::read(&docx).expect("reads back")).2, biggest);
+}
