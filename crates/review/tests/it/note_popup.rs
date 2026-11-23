@@ -339,3 +339,25 @@ fn an_edit_composer_opens_with_the_caret_after_the_text() {
         assert_eq!(draft.borrow().as_str(), want, "{kind:?}");
     }
 }
+
+/// `CommentComposer::fixed_rows`: a card near the bottom of the window keeps its Post button inside it when its text
+/// runs past the field's three rows, and Post posts.
+#[trial]
+fn a_composer_with_fixed_rows_keeps_post_inside_its_card_near_the_bottom() {
+    let posted = Rc::new(RefCell::new(None));
+    let seen = Rc::clone(&posted);
+    let mut draft = String::new();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = CommentComposer::new(Some(pos2(120.0, 470.0)), &mut draft).header("Text box", "Ada").fixed_rows().show(ui);
+        if let Some(text) = out.posted {
+            *seen.borrow_mut() = Some(text);
+        }
+    });
+    fixture.room(vec2(800.0, 600.0)).settle();
+    fixture.type_text(&"word ".repeat(20)).settle();
+    let card = fixture.by_role(craft_ui::contract::Role::DIALOG).first().expect("the card").rect;
+    let post = fixture.by_label("Post").expect("the Post button");
+    assert!(card.contains_rect(post.rect), "Post {:?} lies inside the card {card:?}", post.rect);
+    fixture.click(&post).settle();
+    assert!(posted.borrow().as_deref().is_some_and(|text| text.starts_with("word word")), "Post posted: {:?}", posted.borrow());
+}
