@@ -3,7 +3,7 @@
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-use crate::contract::overlay::OverlayFit;
+use crate::contract::overlay::{OverlayFit, PlacementChange};
 use crate::contract::{
     Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, NoValue, Outcome, Overlay, Pad,
     Props as _, Role, SaveKey, Show as _, Sizing, WordSetCx as _,
@@ -49,6 +49,10 @@ pub struct DocumentWindowOutput {
     /// Whether the window took the size a zoom edit asked for in this pass (`Fits`: the host centres the document) or
     /// the work area capped it (`Capped`: the zoomed spot stays); `None` when nothing was asked or sent.
     pub wrapped: Option<Wrapped>,
+    /// Where the user's move or resize of the fallback layer took the window in this pass, in the space
+    /// [`first_placed`](DocumentWindow::first_placed) takes: on a cancel, where it was before the gesture. `None` when
+    /// nothing moved it.
+    pub placed: Option<Rect>,
 }
 
 /// How a window answered the size a zoom edit asked for ([`DocumentWindow::wrap_in`]).
@@ -102,6 +106,7 @@ pub struct DocumentWindow<'a> {
     #[prop(flag)]
     raise: bool,
     closed: Option<CloseReason>,
+    placed: Option<Rect>,
 }
 
 impl<'a> DocumentWindow<'a> {
@@ -140,14 +145,15 @@ impl<'a> DocumentWindow<'a> {
 
     /// A window titled `title`, resizable, with the installed decision's frame.
     pub fn new(title: impl Into<Label>) -> Self {
-        let fallback = Overlay::floating().resizable(true).fit(OverlayFit::Resizable).body_scroll(false);
+        let fallback = Overlay::floating().movable(true).resizable(true).fit(OverlayFit::Resizable).body_scroll(false);
         let props = ContainerProps::new()
             .surface(SurfaceKind::Background)
             .pad(Pad::None)
             .sizing(Sizing::Fill)
             .header(HeaderRegion::new().band(DragBand::Move))
             .mount(Mount::viewport_with(fallback, WindowSpec::document()));
-        DocumentWindow { common: Common::new(), props, open: Bind::given(true), activate: None, raise: false, closed: None }.label(title)
+        DocumentWindow { common: Common::new(), props, open: Bind::given(true), activate: None, raise: false, closed: None, placed: None }
+            .label(title)
     }
 
     /// Changes the layer the window falls back to, for the settings without a setter of their own: the smallest and
@@ -162,8 +168,9 @@ impl<'a> DocumentWindow<'a> {
     }
 
     /// Where the window is, as its outer rect in desktop points. A saved placement comes first. The window is kept
-    /// at `rect` while the app shows it, so an app whose user moves the window keeps `rect` where the window went
-    /// (its [`WindowHost::facts`]); else the window goes back at the next pass.
+    /// at `rect` while the app shows it, so an app whose user moves the window keeps `rect` where the window went (its
+    /// [`WindowHost::facts`], or [`DocumentWindowOutput::placed`] on the fallback layer); else the window goes back at
+    /// the next pass.
     #[must_use]
     pub fn first_placed(self, rect: Rect) -> Self {
         self.overlay(|overlay| overlay.placed(rect))
@@ -279,6 +286,7 @@ impl Component for DocumentWindow<'_> {
             cascade: cx.style.cascade,
             focus_gained,
             wrapped,
+            placed: self.placed,
         }
     }
 }
@@ -301,5 +309,9 @@ impl Container for DocumentWindow<'_> {
 
     fn closed(&mut self, why: CloseReason) {
         self.closed.get_or_insert(why);
+    }
+
+    fn placement_changed(&mut self, change: &PlacementChange) {
+        self.placed = Some(change.rect);
     }
 }

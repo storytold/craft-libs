@@ -208,3 +208,30 @@ fn a_document_window_at_the_palette_level_stands_above_the_main_window() {
     assert_eq!(level(true), Some(egui::WindowLevel::AlwaysOnTop), "a palette-level document window stands above the main window");
     assert_ne!(level(false), Some(egui::WindowLevel::AlwaysOnTop), "an ordinary document window does not");
 }
+
+/// On the fallback layer, a document window dragged by its title row reports where it went, and a host that places it
+/// there shows it there: its access node, which tests and assistive tools read its bounds from, moves with the drag.
+#[trial]
+fn a_fallback_document_window_dragged_by_its_title_reports_where_it_went() {
+    use craft_ui::testing::Fixture;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let place = Rc::new(Cell::new(Rect::from_min_size(pos2(100.0, 80.0), vec2(400.0, 300.0))));
+    let kept = place.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = DocumentWindow::new("Landscape.psd").id_salt("landscape").first_placed(kept.get()).show(ui, |_, _| {});
+        if let Some(rect) = shown.output.placed {
+            kept.set(rect);
+        }
+    });
+    fixture.settle();
+    let window = |fixture: &Fixture| fixture.by_label("Landscape.psd").expect("the window's node names it").rect;
+    let before = window(&fixture);
+    let title = fixture.by_role(craft_ui::contract::Role::HEADING).into_iter().next().expect("the fallback layer shows its title row");
+    fixture.drag(&title, vec2(50.0, 30.0)).settle();
+    let after = window(&fixture);
+    assert!(after.min.x > before.min.x && after.min.y > before.min.y, "the window follows the drag: {before:?} to {after:?}");
+    assert!(near(after.size(), before.size()), "a move keeps the window's size: {before:?} to {after:?}");
+    assert_eq!(place.get(), after, "the host keeps the window where the drag reported it");
+}
