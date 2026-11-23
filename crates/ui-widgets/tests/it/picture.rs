@@ -1,6 +1,6 @@
 //! `Picture` sized in device pixels.
 
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::display::{Picture, PictureSize};
 use craft_ui::list::ThumbAspect;
 use craft_ui::runtime::env::Scale;
@@ -36,19 +36,33 @@ fn a_device_pixel_picture_keeps_one_texel_to_a_pixel_at_every_scale() {
     }
 }
 
-/// A painter picture takes the size the caller gives, not the icon side: it is as wide and high as asked, and as large
-/// as a larger ask, so it does not collapse to the control's icon.
+/// A `Fill` painter picture takes the room its parent gives: wider in a wider room, never wider than the room, and
+/// as high as its aspect makes it at that width.
 #[trial]
-fn a_painter_picture_takes_the_size_in_points_it_is_given() {
-    let seen = Rc::new(Cell::new((Vec2::ZERO, Vec2::ZERO, Vec2::ZERO)));
+fn a_fill_painter_picture_takes_the_room_it_is_given_at_its_aspect() {
+    let rooms = [120.0_f32, 300.0];
+    let seen = Rc::new(Cell::new([Vec2::ZERO; 2]));
     let out = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
-        let mut draw = |size| Picture::painter("Preview", size, ThumbAspect::new(300, 100), |_, _| ()).show(ui).rect.size();
-        out.set((draw(PictureSize::Icon), draw(PictureSize::Points(100)), draw(PictureSize::Points(50))));
+        let mut sizes = [Vec2::ZERO; 2];
+        for (size, room) in sizes.iter_mut().zip(rooms) {
+            ui.allocate_ui(Vec2::new(room, 400.0), |ui| {
+                ui.set_max_width(room);
+                *size = Picture::painter("Preview", ThumbAspect::new(3, 1), |_, _| ())
+                    .extent(PictureSize::Fill)
+                    .id_salt(room.to_bits())
+                    .show(ui)
+                    .rect
+                    .size();
+            });
+        }
+        out.set(sizes);
     });
     fixture.settle();
-    let (icon, tall, short) = seen.get();
-    assert!((tall - Vec2::new(300.0, 100.0)).abs().max_elem() < 0.01, "a 300x100 point painter is {tall:?}");
-    assert!((short.x * 2.0 - tall.x).abs() < 0.01 && short.y < tall.y, "halving the height halves the width: {short:?} vs {tall:?}");
-    assert!(tall.y > icon.y, "an explicit size is not the icon side: {tall:?} vs {icon:?}");
+    let [narrow, wide] = seen.get();
+    assert!(wide.x > narrow.x + 1.0, "a wider room gives a wider picture: {wide:?} against {narrow:?}");
+    for (size, room) in [narrow, wide].into_iter().zip(rooms) {
+        assert!(size.x <= room + 0.01, "{size:?} fits a room {room} wide");
+        assert!((size.x / size.y - 3.0).abs() < 0.05, "{size:?} keeps the 3:1 aspect");
+    }
 }

@@ -14,7 +14,7 @@ use egui::{ColorImage, Id, Rect, Response, Vec2};
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-/// How large a picture is: its height, from a token, or in points for a preview whose size a dialog fixes.
+/// How large a picture is: its height, from a token, or the room its parent gives.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PictureSize {
@@ -27,11 +27,11 @@ pub enum PictureSize {
     /// picture.
     Sample(ThumbSize),
     /// The image at its own size in device pixels, one texel to a pixel (a bitmap drawn for the screen's density).
-    /// A painter or a picture made off the frame has no own size and takes the icon side (a painter is always given a size).
+    /// A painter or a picture made off the frame has no own size and takes the icon side.
     DevicePixels,
-    /// An explicit height in points, not from a token: for a preview whose size the dialog fixes. The width is the
-    /// height times the picture's `aspect` (`ThumbAspect::new(wide, high)` with both in points gives `wide` points).
-    Points(u16),
+    /// The full width of the room the parent gives, as high as the picture's `aspect` makes it: for a preview that
+    /// fills a dialog's slot. With no room offered it takes the icon side as its height.
+    Fill,
 }
 
 /// The style of a picture.
@@ -87,11 +87,10 @@ impl<'a> Picture<'a> {
         Picture::from_source(label, Source::Image { key, image })
     }
 
-    /// A picture of what `paint` paints into the picture's rect, `size` high and `aspect` times as wide. A painter has no
-    /// size of its own, so the caller says it: no default, which would otherwise be the icon side. `label` names it
-    /// for a screen reader; an empty one leaves it decorative.
-    pub fn painter(label: impl Into<Label>, size: PictureSize, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
-        Picture::from_source(label, Source::Painter(Box::new(paint))).extent(size).aspect(aspect)
+    /// A picture of what `paint` paints into the picture's rect, whose width is `aspect` times its height. `label`
+    /// names it for a screen reader; an empty one leaves it decorative.
+    pub fn painter(label: impl Into<Label>, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
+        Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
     }
 
     /// A picture made off the frame by `source` for `key`: pending, with the framework's placeholder, until the
@@ -122,10 +121,9 @@ impl Component for Picture<'_> {
     fn style(cx: &StyleCx<'_>, key: PictureStyleKey) -> PictureStyle {
         let thumbs = &cx.tokens.size.thumb;
         let height = match key.extent {
-            PictureSize::Icon | PictureSize::DevicePixels => cx.control().icon,
+            PictureSize::Icon | PictureSize::DevicePixels | PictureSize::Fill => cx.control().icon,
             PictureSize::Thumb(step) => step.pick([thumbs.sm, thumbs.md, thumbs.lg]),
             PictureSize::Sample(step) => step.pick([thumbs.sample.sm, thumbs.sample.md, thumbs.sample.lg]),
-            PictureSize::Points(points) => f32::from(points),
         };
         PictureStyle { metrics: Metrics::new(), height }
     }
@@ -137,6 +135,11 @@ impl Component for Picture<'_> {
             let ctx = cx.ui.ctx();
             let texture = store(ctx).get_or_put(ctx, (cx.resolved.id, *key), self.revision, *image);
             return texture.size_vec2() / ctx.pixels_per_point();
+        }
+        if self.extent == PictureSize::Fill {
+            // The room less the padding the pipeline adds, so the picture shrinks to a narrower room and never overflows it.
+            let width = cx.room.map_or_else(|| self.aspect.of(cx.style.height), |room| room.max(0.0));
+            return Vec2::new(width, self.aspect.high(width));
         }
         let height = cx.style.height;
         Vec2::new(self.aspect.of(height), height)
