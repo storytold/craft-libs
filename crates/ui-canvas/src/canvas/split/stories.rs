@@ -82,80 +82,49 @@ fn click_inactive_pane(fixture: &mut Fixture) {
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_divider))]
 fn two_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", SplitAt::default());
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at))
-=======
     let (at, at_at) = data.value_at("split", SplitAt::default());
-    let shown = at.clone();
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind(at), shown)
->>>>>>> origin/next
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind(at))
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_divider))]
 fn four_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", SplitAt::default());
-    split(ui, SplitLayout::FourUp, 4, MAIN_OF_FOUR, Bind::bound(at))
-=======
     let (at, at_at) = data.value_at("split", SplitAt::default());
-    let shown = at.clone();
-    split(ui, SplitLayout::FourUp, 4, MAIN_OF_FOUR, at_at.bind(at), shown)
->>>>>>> origin/next
+    split(ui, SplitLayout::FourUp, 4, MAIN_OF_FOUR, at_at.bind(at))
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_divider))]
 fn grid_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", SplitAt::default());
-    split(ui, SplitLayout::Tile, 5, 0, Bind::bound(at))
-=======
     let (at, at_at) = data.value_at("split", SplitAt::default());
-    let shown = at.clone();
-    split(ui, SplitLayout::Tile, 5, 0, at_at.bind(at), shown)
->>>>>>> origin/next
+    split(ui, SplitLayout::Tile, 5, 0, at_at.bind(at))
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_row_divider))]
 fn stacked_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", SplitAt::default());
-    split(ui, SplitLayout::ThreeUpStacked, 3, 0, Bind::bound(at))
-=======
     let (at, at_at) = data.value_at("split", SplitAt::default());
-    let shown = at.clone();
-    split(ui, SplitLayout::ThreeUpStacked, 3, 0, at_at.bind(at), shown)
->>>>>>> origin/next
+    split(ui, SplitLayout::ThreeUpStacked, 3, 0, at_at.bind(at))
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(click_inactive_pane))]
 fn another_view_clicked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", SplitAt::default());
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at))
+    let (at, at_at) = data.value_at("split", SplitAt::default());
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind(at))
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(click_inactive_pane))]
 fn interactive_panes(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let at = data.value("split", SplitAt::default());
-    SplitViews::new("Views", SplitLayout::TwoUpVertical, Bind::bound(at))
+    let (at, at_at) = data.value_at("split", SplitAt::default());
+    SplitViews::new("Views", SplitLayout::TwoUpVertical, at_at.bind(at))
         .active(MAIN_OF_TWO)
         .pane_press(PanePress::Interact)
         .show_panes(ui, |ui, _, pane| show_pane(ui, pane))
         .output
         .into()
-=======
-    let (at, at_at) = data.value_at("split", SplitAt::default());
-    let shown = at.clone();
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind(at), shown)
->>>>>>> origin/next
 }
 
 #[story(SplitViews<'static>, covers = [Mixed], drive = Drive::Custom(drag_divider))]
 fn splits_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", Mixed::<SplitAt>::Mixed);
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound_mixed(at))
+    let (at, at_at) = data.value_at("split", Mixed::<SplitAt>::Mixed);
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind_mixed(at))
 }
 
 /// The documents the tab story opens with.
@@ -175,32 +144,19 @@ fn drop_a_tab_to_split(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             _ => {}
         }
     }
-    let at = data.value("split", SplitAt::default());
-    let views = SplitViews::new("Views", SplitLayout::Tile, Bind::bound(at))
+    let (at, at_at) = data.value_at("split", SplitAt::default());
+    let views = SplitViews::new("Views", SplitLayout::Tile, at_at.bind(at))
         .count(1)
         .takes_tabs(|_: &[usize], _| true)
         .show_panes(ui, |ui, _, pane| show_pane(ui, pane));
     views.output.into()
-=======
-    let (at, at_at) = data.value_at("split", Mixed::<SplitAt>::Mixed);
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind_mixed(at), SplitAt::default())
->>>>>>> origin/next
 }
 
 #[story(SplitViews<'static>, covers = [Invalid], drive = Drive::Custom(drag_divider))]
 fn views_too_far_left(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-<<<<<<< HEAD
-    let at = data.value("split", SplitAt::new(MOST_LEFT + 0.1, 0.5));
-    let too_wide = |at: &SplitAt| {
-        if at.columns.first().is_some_and(|&x| x > MOST_LEFT) { Validity::Refuse(Message::new("The left view is too wide")) } else { Validity::Ok }
-    };
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at).check(too_wide))
-=======
     let (at, at_at) = data.value_at("split", SplitAt::new(MOST_LEFT + 0.1, 0.5));
-    let shown = at.clone();
     let too_wide = |at: &SplitAt| {
         if at.columns.first().is_some_and(|&x| x > MOST_LEFT) { Validity::Refuse(Message::new("The left view is too wide")) } else { Validity::Ok }
     };
-    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind(at).check(too_wide), shown)
->>>>>>> origin/next
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, at_at.bind(at).check(too_wide))
 }

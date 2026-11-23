@@ -2,13 +2,9 @@
 
 pub(crate) mod crop;
 
-<<<<<<< HEAD
-mod modal_wheel;
-
-mod navigate;
-=======
 pub(crate) mod editor;
->>>>>>> origin/next
+
+pub(crate) mod modal_wheel;
 
 pub(crate) mod navigate;
 

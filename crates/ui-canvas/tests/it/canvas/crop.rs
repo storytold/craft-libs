@@ -5,13 +5,9 @@ use craft_behavior::geometry::{
 };
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-<<<<<<< HEAD
 use craft_ui::canvas::{
-    Canvas, CanvasTool, CropApply, CropOutside, CropOverlay, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass,
+    Canvas, CanvasTool, CropApply, CropOutside, CropOverlay, CropScope, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass,
 };
-=======
-use craft_ui::canvas::{Canvas, CanvasTool, CropOverlay, CropScope, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass};
->>>>>>> origin/next
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;

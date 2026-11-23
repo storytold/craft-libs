@@ -2,15 +2,10 @@
 //! bounds and spans as the pointer drags them, and the document tabs dropped on the views.
 
 use craft_behavior::PartKey;
-<<<<<<< HEAD
 use craft_ui::canvas::{PanePress, SplitAt, SplitLayout, SplitViews, TabDrop, TabDropTarget};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Direction;
 use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
-=======
-use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
-use craft_ui::contract::ShowContainer as _;
->>>>>>> origin/next
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Pos2, Rect, Vec2};
 use std::cell::RefCell;

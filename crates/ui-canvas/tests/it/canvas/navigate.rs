@@ -2,19 +2,11 @@
 
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-<<<<<<< HEAD
-use craft_behavior::{Axis, CanvasView, GESTURE_GAP, MiddleButton, MotionMode, ZoomLadder};
-use craft_keymap::{Mods, Platform};
-use craft_ui::canvas::{
-    Autoscroll, Canvas, CanvasSpace, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, ViewCommands, ViewRequest,
-    WheelNavigation, WheelScheme,
-=======
-use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhase, WheelUnit, ZoomLadder};
+use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, ZoomLadder};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleButton, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions,
-    ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, TouchpadGlide, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
->>>>>>> origin/next
+    ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -1159,7 +1151,7 @@ type ScrollRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<Pos2>>>, Rc<RefC
 /// frame runs a second pass, and whether any pass reported a press to the tool since the flag was last cleared.
 fn autoscroll_rig() -> ScrollRig {
     let mut options = NavigationOptions::default();
-    options.middle_button = MiddleButton::Autoscroll;
+    options.middle_button = MiddleButton::AutoScroll;
     let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(500.0, 500.0), 1.0)));
     let mark = Rc::new(Cell::new(None));
     let passes = Rc::new(RefCell::new(Vec::new()));
@@ -1348,7 +1340,7 @@ fn the_wheel_scrolls_during_a_tool_drag_and_the_drag_follows_the_new_view() {
     }]);
     let after = view.get();
     assert!(
-        (after.center.y - before.center.y - f64::from(WheelNavigation::LINE)).abs() < 1e-3,
+        (after.center.y - before.center.y - f64::from(NavigationOptions::default().wheel_line)).abs() < 1e-3,
         "a wheel line scrolls the view while the drag runs: {before:?} -> {after:?}"
     );
 

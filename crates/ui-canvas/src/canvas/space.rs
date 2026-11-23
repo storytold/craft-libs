@@ -40,11 +40,8 @@ pub struct CanvasSpace {
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
-<<<<<<< HEAD
     wheel: Option<craft_behavior::Wheel>,
-=======
     zoom_anchor: Option<Pos2>,
->>>>>>> origin/next
 }
 
 impl CanvasSpace {
@@ -65,11 +62,8 @@ impl CanvasSpace {
             pasteboard: PasteboardColor::Default,
             precise: false,
             picture: None,
-<<<<<<< HEAD
             wheel: None,
-=======
             zoom_anchor: None,
->>>>>>> origin/next
         }
     }
 
@@ -233,9 +227,6 @@ impl CanvasSpace {
         self.easing
     }
 
-<<<<<<< HEAD
-    /// The page keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
-=======
     /// The screen point the wheel or a pinch zoomed about in this pass, in the canvas root's screen space; `None` when
     /// neither zoomed (a view command zooms about the centre). A body that keeps its own view state anchors its zoom
     /// here: the canvas clamps the zoomed view to the document after, which can move the centre (a document no wider
@@ -251,8 +242,7 @@ impl CanvasSpace {
         self
     }
 
-    /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
->>>>>>> origin/next
+    /// The page keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
     pub fn keys(&self) -> BodyKeys {
         self.keys
     }
@@ -270,7 +260,7 @@ impl CanvasSpace {
             return Some(nudge);
         }
         let mut nudge = None;
-        crate::runtime::keys::with_window_intents(ctx, false, |window| {
+        crate::runtime::keys::with_canvas_window_intents(ctx, false, |window| {
             nudge = window.take_nudge();
             nudge.is_some()
         });

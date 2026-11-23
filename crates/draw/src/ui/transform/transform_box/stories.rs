@@ -1,19 +1,11 @@
 //! Stories of the transform box: Free Transform with its reference point, the Move tool's controls, Distort, the
-<<<<<<< HEAD
-//! Ellipse tool's centre mark, the Line tool's live-line controls, the corner-only and side-only handle sets, sides
-//! grabbed along an edge band, and the rotate knob.
+//! Ellipse tool's centre mark, the rotate handle and the Line tool's live-line controls, with box or free ends, the
+//! corner-only and side-only handle sets, sides grabbed along an edge band, and the rotate knob.
 
-use super::{BOX, EDGE, LineLook, RotateZone, TransformBox};
+use super::{BOX, EDGE, LINE_END, LineEnd, LineEnds, LineLook, ROTATE_HANDLE, RotateZone, TransformBox, TransformBoxOutput};
+use craft_behavior::GesturePhase;
 use craft_behavior::geometry::quad::{BoxHandles, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
-=======
-//! Ellipse tool's centre mark, the rotate handle and the Line tool's live-line controls, with box or free ends.
-
-use super::{BOX, LINE_END, LineEnd, LineEnds, LineLook, ROTATE_HANDLE, RotateZone, TransformBox, TransformBoxOutput};
-use craft_behavior::GesturePhase;
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, TransformMode};
-use craft_behavior::kurbo::{Point, Rect as DocRect};
->>>>>>> origin/next
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, paint_shapes, show_document, show_quad};
@@ -37,22 +29,23 @@ fn free_box(state: Bind<'_, BoxState>) -> TransformBox<'_> {
 
 /// Shows the box `make` builds over the story's box as the only canvas control of a canvas.
 fn on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> StoryOutput {
-<<<<<<< HEAD
     show_on_canvas(ui, data, false, make)
 }
 
 /// [`on_canvas`], the view centred on the picture; `at_top` scrolls it so the picture's top side lies on the
 /// canvas's top edge.
 fn show_on_canvas(ui: &mut Ui, data: &mut StoryData, at_top: bool, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> StoryOutput {
-    let state = data.value("box", BoxState::from_rect(PICTURE));
-=======
-    shown_on_canvas(ui, data, make).map(|output| StoryOutput::from(output.edit)).unwrap_or_default()
+    shown_on_canvas(ui, data, at_top, make).map(|output| StoryOutput::from(output.edit)).unwrap_or_default()
 }
 
-/// [`on_canvas`] with the box's whole output.
-fn shown_on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> Option<TransformBoxOutput> {
+/// [`show_on_canvas`] with the box's whole output.
+fn shown_on_canvas(
+    ui: &mut Ui,
+    data: &mut StoryData,
+    at_top: bool,
+    make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>,
+) -> Option<TransformBoxOutput> {
     let (state, state_at) = data.value_at("box", BoxState::from_rect(PICTURE));
->>>>>>> origin/next
     let room = craft_ui::testing::stage(ui);
     let ppp = ui.pixels_per_point();
     let mut view = craft_ui::testing::canvas_story::story_view(room, ppp, PICTURE.center(), 100.0);
@@ -163,8 +156,9 @@ fn line_free_ends(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let quad = BoxState::from_rect(PICTURE).quad;
     let ends = *data.value("ends", [quad[3], quad[1]]);
     let line = LineLook::new(ends[0], ends[1]).ends(LineEnds::Free);
-    let shown =
-        shown_on_canvas(ui, data, move |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).line(line));
+    let shown = shown_on_canvas(ui, data, false, move |state| {
+        free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).line(line)
+    });
     let Some(output) = shown else { return StoryOutput::default() };
     if let Some(drag) = output.line_end {
         let index = usize::from(drag.end == LineEnd::To);

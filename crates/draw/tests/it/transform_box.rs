@@ -1,17 +1,10 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
-<<<<<<< HEAD
 use craft_behavior::geometry::quad::{BoxAllow, BoxHandles, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
-use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
-use craft_behavior::kurbo::{Point, Rect};
-use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
-=======
-use craft_behavior::geometry::quad::{BoxAllow, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapSuspend, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Affine, Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, GesturePhase, RulerUnits, Ticks};
->>>>>>> origin/next
 use craft_draw::ui::transform::{
     LineEnd, LineEndDrag, LineEnds, LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformReach, TransformSession,
     TransformSettings,
@@ -220,14 +213,10 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             }
             Some((control.show_at(ui, body.rect), guide_edits))
         });
-<<<<<<< HEAD
-        if let Some(Some((output, guide_edits))) = canvas.inner {
-=======
         if config.twice && ui.ctx().current_pass_index() == 0 {
             ui.ctx().request_discard("the frame runs twice");
         }
-        if let Some((output, guide_edits)) = canvas.inner {
->>>>>>> origin/next
+        if let Some(Some((output, guide_edits))) = canvas.inner {
             let mut host = shown_host.borrow_mut();
             host.shown = output.edit.shown.as_ref().and_then(|value| value.same()).map(|value| **value);
             host.guide_events += guide_edits;
@@ -535,7 +524,6 @@ fn a_text_frame_fed_back_through_an_f32_host_follows_every_move_to_the_commit() 
     assert!((h.state().quad[2].y - 280.0).abs() < 0.01 && events.last() == Some(&Seen::Commit), "the commit holds the last move");
 }
 
-<<<<<<< HEAD
 /// A hover-revealed frame remains declared through release after its drag leaves the original box.
 #[trial]
 fn a_hover_frame_commits_a_drag_released_outside() {
@@ -568,7 +556,8 @@ fn transform_box_shows_each_drag_proposal_in_the_same_frame() {
         assert_eq!(host.shown, Some(host.state), "the reported preview follows this frame's edit");
         previous = host.state;
     }
-=======
+}
+
 /// A frame egui runs twice reports each move of a drag once: its second pass proposes the box the first did, and an
 /// equal proposal reports no `Update` again, so a host that applies each `Update` (a text layer's box) applies it once
 /// per move.
@@ -588,7 +577,6 @@ fn a_frame_run_twice_reports_each_move_of_a_drag_once() {
     let updates = events.iter().filter(|seen| **seen == Seen::Update).count();
     assert_eq!(updates, 2, "two moves report two updates, a held frame none: {events:?}");
     assert!((h.state().quad[2].y - 280.0).abs() < 0.01, "the last move reached the host");
->>>>>>> origin/next
 }
 
 #[trial]

@@ -8,12 +8,8 @@ use craft_behavior::overlay::Align;
 use craft_ui::buttons::Button;
 use craft_ui::canvas_controls::{TaskBar, TaskBarDismiss, TaskBarPlace};
 use craft_ui::contract::{Bind, Show as _};
-<<<<<<< HEAD
 use craft_ui::testing::canvas_story::{StoryDocument, on_canvas, on_canvas_view};
-=======
-use craft_ui::testing::canvas_story::on_canvas;
 use craft_ui::testing::pointer::{moved, press, release};
->>>>>>> origin/next
 use craft_ui::testing::{Fixture, trial};
 use egui::{Rect, Vec2};
 use std::cell::{Cell, RefCell};
@@ -257,25 +253,15 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     assert!(inside_area(&far), "a place far outside comes back inside {:?}: {:?}", far.area, far.rect);
 }
 
-<<<<<<< HEAD
 #[trial]
 fn a_fixed_task_bar_ignores_a_drag_shows_no_more_menu_and_opens_above_with_no_room_below() {
     let scene = Rc::new(RefCell::new(Scene {
         anchor: low_frame(),
-=======
-/// The grip is one of the bar's members: it sits on the members' line, centred with them, inside the bar's padding,
-/// and a drag on it still moves the bar.
-#[trial]
-fn the_grip_sits_on_the_members_line() {
-    let scene = Rc::new(RefCell::new(Scene {
-        anchor: frame(DocVec::ZERO),
->>>>>>> origin/next
         place: TaskBarPlace::default(),
         bounds: Rect::NOTHING,
         area: Rect::NOTHING,
         rect: Rect::NOTHING,
     }));
-<<<<<<< HEAD
     let mut fixture = fixture(&scene, true);
     fixture.settle();
     let shown = seen(&scene);
@@ -324,8 +310,20 @@ fn the_grip_sits_on_the_members_line() {
         (scrolled.min - edge.min).length() < SLACK && (scrolled.size() - edge.size()).length() < SLACK,
         "the edge bar keeps its rect while the view scrolls: {edge:?} then {scrolled:?}"
     );
-=======
-    let mut fixture = fixture(&scene);
+}
+
+/// The grip is one of the bar's members: it sits on the members' line, centred with them, inside the bar's padding,
+/// and a drag on it still moves the bar.
+#[trial]
+fn the_grip_sits_on_the_members_line() {
+    let scene = Rc::new(RefCell::new(Scene {
+        anchor: frame(DocVec::ZERO),
+        place: TaskBarPlace::default(),
+        bounds: Rect::NOTHING,
+        area: Rect::NOTHING,
+        rect: Rect::NOTHING,
+    }));
+    let mut fixture = fixture(&scene, false);
     fixture.settle();
     let bar = seen(&scene).rect;
     let grip = fixture.by_label("Move bar").expect("the grip is named");
@@ -356,7 +354,7 @@ fn a_dragged_task_bar_stands_under_the_pointer_in_each_frame_and_writes_its_plac
         area: Rect::NOTHING,
         rect: Rect::NOTHING,
     }));
-    let mut fixture = fixture(&scene);
+    let mut fixture = fixture(&scene, false);
     fixture.settle();
     let start = seen(&scene).rect;
     let from = fixture.by_label("Move bar").expect("the grip is named").center();
@@ -379,5 +377,4 @@ fn a_dragged_task_bar_stands_under_the_pointer_in_each_frame_and_writes_its_plac
     assert!(at.is_some_and(|at| (at - dropped_at).length() < SLACK), "the drop writes the place: {:?}", dropped.place);
     fixture.settle();
     assert!((seen(&scene).rect.min - dropped_at).length() < SLACK, "the written place keeps the bar there: {:?}", seen(&scene).rect);
->>>>>>> origin/next
 }

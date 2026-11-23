@@ -145,13 +145,9 @@ impl RotateZone {
     fn rotates_at(self, quad: &[Point; 4], pointer: Pos2) -> bool {
         match self {
             RotateZone::Border { points } => border_distance(quad, pointer) <= points,
-<<<<<<< HEAD
             RotateZone::Outside | RotateZone::Band | RotateZone::Knob => true,
-=======
-            RotateZone::Outside | RotateZone::Band => true,
             // The handle is the zone's only outside part, so a press that reaches the outside is on it.
             RotateZone::Handle => true,
->>>>>>> origin/next
         }
     }
 }
@@ -380,8 +376,6 @@ struct Grip {
     follows: bool,
     /// An Alt press away from the handles: a click there moves the reference point.
     moves_pivot: bool,
-    /// The press is on the rotate knob: a click there is not a click outside, so it applies nothing.
-    knob: bool,
     /// The box at the press.
     pressed: BoxState,
     /// The box the drag last produced.
@@ -391,17 +385,7 @@ struct Grip {
 impl Default for Grip {
     fn default() -> Self {
         let none = BoxState::from_rect(DocRect::ZERO);
-        Grip {
-            part: BoxPart::Inside,
-            start: none,
-            from: Point::ZERO,
-            began: false,
-            follows: false,
-            moves_pivot: false,
-            knob: false,
-            pressed: none,
-            last: none,
-        }
+        Grip { part: BoxPart::Inside, start: none, from: Point::ZERO, began: false, follows: false, moves_pivot: false, pressed: none, last: none }
     }
 }
 
@@ -694,15 +678,13 @@ impl<'a> TransformBox<'a> {
         let turn = || Cursor::from(PaintedCursor::turn(quad::bisector(screen, corner)));
         let along = |from: usize| vec2_of(screen.quad[(from + 1) % 4] - screen.quad[from % 4]);
         match (kind, part) {
-<<<<<<< HEAD
             // The knob is a handle the pointer takes hold of and swings, not a stretch of the outside.
             (BoxDrag::Rotate, BoxPart::Outside) if self.rotate_zone == RotateZone::Knob => {
                 if dragging { CursorIcon::Grabbing } else { CursorIcon::Grab }.into()
-=======
+            }
             // The rotate handle turns the cursor with the box: it points in across the side the handle stands on.
             (BoxDrag::Rotate, BoxPart::Outside) if self.rotate_zone == RotateZone::Handle => {
                 Cursor::from(PaintedCursor::turn(-outward_normals(&screen.quad.map(pos))[0]))
->>>>>>> origin/next
             }
             (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
@@ -772,13 +754,8 @@ impl<'a> TransformBox<'a> {
     }
 
     /// The parts that take a press, with the box part each stands for. Mirrors what [`parts`](Component::parts)
-<<<<<<< HEAD
-    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside (the knob in
-    /// [`RotateZone::Knob`]); or only the move strips.
-=======
-    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside or the
-    /// rotate handle; or only the move strips.
->>>>>>> origin/next
+    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside, the knob in
+    /// [`RotateZone::Knob`] or the rotate handle; or only the move strips.
     fn pointer_parts(&self) -> Vec<(PartRef, BoxPart)> {
         if self.move_only().is_some() {
             let parts = if self.ring_reach().is_some() { 0..8 } else { 0..0 };
@@ -797,18 +774,14 @@ impl<'a> TransformBox<'a> {
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
         }
-<<<<<<< HEAD
         if matches!(self.rotate_zone, RotateZone::Knob) {
             if self.has_knob() {
                 parts.push((KNOB.at(0), BoxPart::Outside));
             }
-        } else if self.rules.allows(BoxPart::Outside) {
+        } else {
             parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
+            parts.push((ROTATE_HANDLE.at(0), BoxPart::Outside));
         }
-=======
-        parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
-        parts.push((ROTATE_HANDLE.at(0), BoxPart::Outside));
->>>>>>> origin/next
         parts
     }
 
@@ -836,20 +809,14 @@ impl<'a> TransformBox<'a> {
                 PressPhase::Down { start, .. } if part == BoxPart::Outside && !self.rotate_zone.rotates_at(&screen.quad, start.origin) => {}
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let from = space.view.to_doc(start.origin);
-<<<<<<< HEAD
+                    // The move reach only moves: an Alt press there is a move too. The knob and the rotate handle are
+                    // handles, so an Alt press on one turns the box rather than moving the reference point onto it.
                     let knob = reference.key == KNOB;
-                    // The move reach only moves: an Alt press there is a move too. The knob is a handle, so an Alt
-                    // press on it turns the box rather than moving the reference point onto it.
-                    let moves_pivot = mods.alt && self.move_only().is_none() && !knob && matches!(part, BoxPart::Inside | BoxPart::Outside);
-=======
-                    // The move reach only moves: an Alt press there is a move too. The rotate handle is a handle, so
-                    // an Alt press on it rotates.
-                    let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle);
+                    let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle && !knob);
                     let moves_pivot = acting.alt && self.move_only().is_none() && away_from_handles;
->>>>>>> origin/next
                     let follows = follows_in_slop(part);
                     let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
-                    held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, knob, pressed: *shown, last: *shown });
+                    held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
                 }
                 // Inside the slop a part that follows there moves the box from the first move; the outside starts at
                 // the drag.
@@ -899,11 +866,7 @@ impl<'a> TransformBox<'a> {
                         cx.cancel(CancelReason::Unchanged);
                     } else if grip.began {
                         cx.commit();
-<<<<<<< HEAD
-                    } else if grip.part == BoxPart::Outside && !grip.knob && click && start.clicks <= 1 {
-=======
                     } else if grip.part == BoxPart::Outside && reference.key == OUTSIDE && click && start.clicks <= 1 {
->>>>>>> origin/next
                         self.report.apply = Some(ApplyBy::ClickOutside { at: space.view.to_doc(start.origin) });
                     } else if grip.moves_pivot && click {
                         cx.set(grip.start);
@@ -1025,7 +988,11 @@ impl<'a> TransformBox<'a> {
 impl TransformBox<'_> {
     /// The shape of a handle of `side` at `at`: a square, or a circle of that diameter with round handles.
     fn handle_shape(&self, at: Pos2, side: f32) -> PaintShape {
-        if self.round_handles { PaintShape::Circle(at, side / 2.0) } else { PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO) }
+        if self.round_handles {
+            PaintShape::Circle(at, side / 2.0)
+        } else {
+            PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO)
+        }
     }
 
     /// The square of handle `part` at `at` on the screen, filled as the part's state shows when the rules let it take a
@@ -1033,14 +1000,7 @@ impl TransformBox<'_> {
     fn paint_handle(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, part: BoxPart, at: Pos2, enlarged: bool) {
         let look = &cx.style.handle;
         let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
-<<<<<<< HEAD
-        let square = self.handle_shape(at, side);
-        let fill = if self.rules.allows(part) { cx.resolve_part(BOX.at(part.index()), &look.fill) } else { cx.resolve(&look.fill) };
-        draw.fill(&square, fill);
-        draw.stroke(&square, StrokeWidth::Thin, look.stroke);
-=======
-        paint_square(draw, cx, at, side, self.rules.allows(part).then(|| BOX.at(part.index())));
->>>>>>> origin/next
+        paint_handle_shape(draw, cx, self.handle_shape(at, side), self.rules.allows(part).then(|| BOX.at(part.index())));
         if enlarged {
             Handle::plus(draw, look, at, side);
         }
@@ -1054,30 +1014,23 @@ impl TransformBox<'_> {
             let corners = outline.map(|corner| view.to_screen(corner));
             paint_frame(draw, style, corners);
             for k in 0..4 {
-<<<<<<< HEAD
                 let middle = corners[k].lerp(corners[(k + 1) % 4], 0.5);
-                let square = self.handle_shape(middle, look.side);
-                draw.fill(&square, cx.resolve(&look.fill));
-                draw.stroke(&square, StrokeWidth::Thin, look.stroke);
-=======
-                paint_square(draw, cx, corners[k].lerp(corners[(k + 1) % 4], 0.5), style.handle.side, None);
->>>>>>> origin/next
+                paint_handle_shape(draw, cx, self.handle_shape(middle, style.handle.side), None);
             }
         }
         for (part, end) in line.end_parts() {
             self.paint_handle(draw, cx, part, view.to_screen(end), false);
         }
         for (end, at) in line.free_ends() {
-            paint_square(draw, cx, view.to_screen(at), style.handle.side, Some(LINE_END.at(end.index())));
+            paint_handle_shape(draw, cx, self.handle_shape(view.to_screen(at), style.handle.side), Some(LINE_END.at(end.index())));
         }
         paint_widget(draw, view.to_screen(line.from.midpoint(line.to)), &style.widget);
     }
 }
 
-/// A handle square of `side` centred on `at`, filled as the state of `part` shows, or at rest without one.
-fn paint_square(draw: &Draw<'_>, cx: &Cx<'_, TransformBox<'_>>, at: Pos2, side: f32, part: Option<PartRef>) {
+/// A handle's `square` (a circle with round handles), filled as the state of `part` shows, or at rest without one.
+fn paint_handle_shape(draw: &Draw<'_>, cx: &Cx<'_, TransformBox<'_>>, square: PaintShape, part: Option<PartRef>) {
     let look = &cx.style.handle;
-    let square = PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO);
     let fill = match part {
         Some(part) => cx.resolve_part(part, &look.fill),
         None => cx.resolve(&look.fill),
@@ -1357,7 +1310,6 @@ impl Component for TransformBox<'_> {
                         .pointer_only(ROTATE_BY_KEY);
                 }
             }
-<<<<<<< HEAD
             RotateZone::Outside | RotateZone::Border { .. } | RotateZone::Band => {}
             // The knob alone turns the box; the rest of the outside is the tool's.
             RotateZone::Knob => {
@@ -1369,8 +1321,6 @@ impl Component for TransformBox<'_> {
                         .pointer_only(ROTATE_BY_KEY);
                 }
             }
-=======
-            RotateZone::Band => {}
             RotateZone::Handle if self.rules.allows(BoxPart::Outside) => {
                 let (_, knob) = rotate_handle(&quad, style.rotate_stem);
                 cx.part(ROTATE_HANDLE.at(0), HitShape::circle(knob, style.handle_reach))
@@ -1379,7 +1329,6 @@ impl Component for TransformBox<'_> {
                     .pointer_only(ROTATE_BY_KEY);
             }
             RotateZone::Handle => {}
->>>>>>> origin/next
         }
     }
 
@@ -1462,13 +1411,8 @@ impl Component for TransformBox<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TransformBoxOutput {
-<<<<<<< HEAD
-        let Report { apply, clicked, discard, hovered, picked, held, snapped } = self.report;
-        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, clicked }
-=======
-        let Report { apply, discard, hovered, picked, held, snapped, line_end } = self.report;
-        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, line_end }
->>>>>>> origin/next
+        let Report { apply, clicked, discard, hovered, picked, held, snapped, line_end } = self.report;
+        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, clicked, line_end }
     }
 }
 

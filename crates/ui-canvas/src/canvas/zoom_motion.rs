@@ -11,7 +11,7 @@ use crate::runtime::frame;
 use crate::runtime::memory::{global, with_session};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{CanvasView, MiddleScroll, ZoomLadder};
+use craft_behavior::{CanvasView, ZoomLadder};
 use egui::{Context, Id, Pos2, Rect};
 
 /// How far the app's view may differ from the zoom anchor, in document units, before the anchor is dropped.
@@ -130,17 +130,12 @@ pub(crate) struct ViewMotion {
     pub(crate) animation: ZoomAnimation,
     /// What the tool host or the Navigator asked of the ease since the canvas's last pass.
     pub(crate) steer: Option<Steer>,
-<<<<<<< HEAD
     /// The touchpad's glide after the fingers lift.
     pub(crate) glide: TouchpadGlide,
-    /// The middle button's latched scroll.
-    pub(crate) middle: MiddleScroll,
-    /// The frame of the latch's last pass: a latch whose canvas missed a frame (another tab showed) ends.
-    pub(crate) latched_in: Option<u64>,
-=======
     /// The middle button's autoscroll, with the pass clock of its last step: gesture state, as the ease is.
     pub(crate) autoscroll: super::navigate::MiddleAutoscroll,
->>>>>>> origin/next
+    /// The frame of the autoscroll's last pass: an autoscroll whose canvas missed a frame (another tab showed) ends.
+    pub(crate) scrolled_in: Option<u64>,
 }
 
 impl ViewMotion {
