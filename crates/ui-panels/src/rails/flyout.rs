@@ -8,6 +8,7 @@ use crate::contract::{
     PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, Trigger,
 };
 use crate::menu::{self, Menu, MenuItem};
+use crate::primitives::IconSpec;
 use crate::runtime::commands::{CommandRef, FireSource, ResolvedCommand};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, GlyphRole, StyleCx};
@@ -162,7 +163,11 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
     /// enabled state, marked dot).
     /// The button itself runs the command, so the face only wears it, and the button's selected state with it.
     fn face(&self, laid: &Laid, selected: bool, glyphs: GlyphRole) -> IconButton<'static> {
-        let icon = self.lead(laid).and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from);
+        // The shown tool's own icon, when it has one and the face stands for it, else its command's.
+        let own = if self.click.is_none() { self.tools.get(laid.shown).and_then(|tool| tool.icon.clone()) } else { None };
+        let icon = own.unwrap_or_else(|| {
+            IconSpec::svg(self.lead(laid).and_then(|resolved| resolved.icon.clone()).map_or_else(|| IconId::new("more"), IconId::from))
+        });
         let command = self.click.clone().or_else(|| self.tools.get(laid.shown).map(|tool| tool.command.clone()));
         let face = match command {
             Some(command) => IconButton::command(icon, command),
@@ -330,7 +335,11 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
                 .show(ui, |ui, _| {
                     let mut ran = None;
                     for (at, tool) in tools.iter().enumerate() {
-                        if MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown).show(ui).ran {
+                        let mut row = MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown);
+                        if let Some(icon) = &tool.icon {
+                            row = row.icon(icon.clone());
+                        }
+                        if row.show(ui).ran {
                             ran = Some(at);
                         }
                     }
