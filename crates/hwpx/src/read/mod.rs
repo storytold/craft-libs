@@ -9,7 +9,8 @@
 
 mod background;
 mod drawing;
-mod media;
+pub(crate) mod media;
+pub(crate) use media::pixel_size;
 mod place;
 mod props;
 mod section;

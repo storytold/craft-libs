@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::xml::Element;
 
 pub const LANGS: [&str; 7] = ["hangul", "latin", "hanja", "japanese", "other", "symbol", "user"];
+/// The same languages as hh:fontface writes them.
+pub(crate) const FONT_LANGS: [&str; 7] = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
 
 /// "1" / "true" (any case, trimmed).
 pub fn truthy(v: Option<&str>) -> bool {

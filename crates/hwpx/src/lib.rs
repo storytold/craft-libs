@@ -16,6 +16,7 @@ mod header;
 mod package;
 mod read;
 mod units;
+mod write;
 mod xml;
 
 pub use error::HwpxError;
@@ -33,6 +34,43 @@ pub fn read(bytes: &[u8]) -> Result<craft_wordmodel::Document, HwpxError> {
     let mut doc = read::read(&pkg)?;
     doc.passthrough.insert(PACKAGE_KEY.into(), std::sync::Arc::new(bytes.to_vec()));
     Ok(doc)
+}
+
+/// Write `doc` as a new HWPX package. What the format or this writer can't hold is left out
+/// and logged (`log::warn!`).
+pub fn write(doc: &craft_wordmodel::Document) -> Result<Vec<u8>, HwpxError> {
+    write_with(doc, &WriteOptions::default())
+}
+
+/// [`write`] with options.
+pub fn write_with(doc: &craft_wordmodel::Document, opts: &WriteOptions) -> Result<Vec<u8>, HwpxError> {
+    let (bytes, report) = write::new::from_document(doc, opts.hangul_font)?;
+    report.log();
+    Ok(bytes)
+}
+
+/// Options for [`write_with`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WriteOptions {
+    /// The font to write Hangul in for a run that names no East Asian font, given the run's
+    /// font: `None` when that font has Hangul itself. Hangul documents name a font per script,
+    /// and a font without Hangul glyphs leaves Hancom drawing Hangul in a fallback of its own;
+    /// an app answers from the fonts it has. Without it, the run's font is named for every
+    /// script.
+    pub hangul_font: Option<fn(&str) -> Option<String>>,
+}
+
+static APPLICATION_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Names the application written to `version.xml`, for an app that embeds this writer under its
+/// own name; "WordCraft" until set. Only the first call counts.
+pub fn set_application_name(name: &str) {
+    let _ = APPLICATION_NAME.set(name.to_owned());
+}
+
+/// The application `version.xml` names (see [`set_application_name`]).
+pub fn application_name() -> &'static str {
+    APPLICATION_NAME.get().map_or("WordCraft", String::as_str)
 }
 
 /// `Document::passthrough` key holding the file a document was read from, as read, for a writer
