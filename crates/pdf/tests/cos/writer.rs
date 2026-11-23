@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use crate::testkit::Pdf;
-use craft_pdf::cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
+use craft_pdf::cos::{
+    AppendBlocker, CosError, Dict, Document, ObjRef, Object, SaveOptions, Stream, append_blocker, write_append_only, write_full, write_incremental,
+};
 
 /// Four pages, a shared font, document info with a non-ASCII title.
 fn fixture() -> Vec<u8> {
@@ -619,4 +621,77 @@ fn document_parts_and_structure_namespaces_survive_full_and_incremental_saves() 
     let reopened = Document::open(Arc::new(updated)).unwrap();
     assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
     assert_dpart_and_namespaces(&reopened);
+}
+
+/// The fixture with its `startxref` pointing at nothing, so opening rebuilds it from object headers.
+fn broken_xref_fixture() -> Vec<u8> {
+    let bytes = fixture();
+    let at = bytes.windows(10).rposition(|w| w == b"startxref\n").expect("startxref") + 10;
+    let end = at + bytes[at..].iter().position(|b| *b == b'\n').expect("end of the offset");
+    let mut out = bytes[..at].to_vec();
+    out.extend_from_slice(b"3");
+    out.extend_from_slice(&bytes[end..]);
+    out
+}
+
+/// An edited, repaired file is not saved by `write_append_only`, which names the reason, where
+/// `write_incremental` (unchanged) rewrites it.
+#[test]
+fn append_only_save_refuses_a_repaired_file_where_incremental_rewrites_it() {
+    let original = broken_xref_fixture();
+    let mut doc = Document::open(Arc::new(original.clone())).unwrap();
+    assert!(doc.reconstructed(), "the broken chain was rebuilt");
+    doc.add(Object::Int(7));
+    assert_eq!(append_blocker(&doc), Some(AppendBlocker::Reconstructed));
+    assert_eq!(write_append_only(&doc, &SaveOptions::default()), Err(CosError::CannotAppend(AppendBlocker::Reconstructed)));
+    let rewritten = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(!rewritten.starts_with(&original), "write_incremental keeps its documented fallback");
+}
+
+/// The other two reasons, and the file that can be appended to, whose output starts with its
+/// original bytes and equals what `write_incremental` writes.
+#[test]
+fn append_only_save_names_each_reason_and_otherwise_matches_incremental() {
+    let original = fixture();
+    let mut doc = Document::open(Arc::new(original.clone())).unwrap();
+    doc.add(Object::Int(7));
+    assert_eq!(append_blocker(&doc), None);
+    let opts = SaveOptions::default();
+    let appended = write_append_only(&doc, &opts).unwrap();
+    assert!(appended.starts_with(&original));
+    assert_eq!(appended, write_incremental(&doc, &opts).unwrap());
+    assert_eq!(Document::open(Arc::new(appended)).unwrap().revisions().len(), 2);
+
+    let mut redacted = doc.clone();
+    redacted.require_full_save();
+    assert_eq!(append_blocker(&redacted), Some(AppendBlocker::FullSaveRequired));
+    assert_eq!(write_append_only(&redacted, &opts), Err(CosError::CannotAppend(AppendBlocker::FullSaveRequired)));
+}
+
+/// Adding encryption (which rewrites every object) is named `EncryptionChanged`, and
+/// `write_append_only` refuses it; removing it from an encrypted file is refused the same way.
+#[test]
+fn append_only_save_refuses_a_document_whose_encryption_changed() {
+    let opts = SaveOptions::default();
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    assert_eq!(append_blocker(&doc), None);
+    doc.set_encryption(&craft_pdf::crypt::NewEncryption {
+        algorithm: craft_pdf::crypt::Algorithm::Aes256,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    assert!(doc.encryption_changed());
+    assert_eq!(append_blocker(&doc), Some(AppendBlocker::EncryptionChanged));
+    assert_eq!(write_append_only(&doc, &opts), Err(CosError::CannotAppend(AppendBlocker::EncryptionChanged)));
+    // The encrypted file, reopened, can be appended to until its encryption is removed.
+    let saved = write_incremental(&doc, &opts).unwrap();
+    let mut reopened = Document::open_with_password(Arc::new(saved), Some("owner")).unwrap();
+    assert_eq!(append_blocker(&reopened), None);
+    reopened.remove_encryption();
+    assert_eq!(append_blocker(&reopened), Some(AppendBlocker::EncryptionChanged));
+    assert_eq!(write_append_only(&reopened, &opts), Err(CosError::CannotAppend(AppendBlocker::EncryptionChanged)));
 }

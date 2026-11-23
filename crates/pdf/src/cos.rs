@@ -34,7 +34,10 @@ pub use bytes::Bytes;
 pub use document::{DECODE_PARMS_KEYS, Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream, TextChars};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
-pub use writer::{SaveOptions, civil_from_days, new_file_id, pdf_date, reachable_objects, serialize, write_full, write_incremental};
+pub use writer::{
+    AppendBlocker, SaveOptions, append_blocker, civil_from_days, new_file_id, pdf_date, reachable_objects, serialize, write_append_only, write_full,
+    write_incremental,
+};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {
@@ -58,4 +61,7 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
+    /// [`write_append_only`] was asked to save a document that cannot be appended to.
+    #[error("the document cannot be saved as a new version of the original file: {0}")]
+    CannotAppend(AppendBlocker),
 }
