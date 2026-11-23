@@ -47,6 +47,23 @@ pub struct NavigationOptions {
     pub middle_button: craft_behavior::MiddleButton,
     /// The middle-button scroll runs the other way. Off.
     pub invert_middle: bool,
+    /// How a middle-button autoscroll feels under [`MiddleButton::AutoScroll`]. [`MiddleAutoscrollFeel::Edge`].
+    pub middle_autoscroll: MiddleAutoscrollFeel,
+}
+
+/// How a middle-button autoscroll runs: its speed, what its release does and what ends it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MiddleAutoscrollFeel {
+    /// The canvas's one autoscroll rule (`Autoscroll::step`) on the pointer's offset past the dead zone; letting go
+    /// after a drag past the drag threshold ends the run.
+    #[default]
+    Edge,
+    /// A document reader's (PdfCraft): the speed grows as the pointer's whole distance from the mark raised to the
+    /// power 2.2, times 0.04, in points per second; letting go ends the run only after the held pointer rested past
+    /// the dead zone for two stepped passes (a shorter hold is a click, which keeps it); and the run ends when the
+    /// canvas loses the focus (a modal over it, another control taking the keys).
+    Reader,
 }
 
 /// What a plain and a modified wheel do over a canvas.
@@ -90,6 +107,7 @@ impl Default for NavigationOptions {
             touchpad_glide: false,
             middle_button: craft_behavior::MiddleButton::default(),
             invert_middle: false,
+            middle_autoscroll: MiddleAutoscrollFeel::Edge,
         }
     }
 }

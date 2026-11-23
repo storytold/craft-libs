@@ -432,6 +432,12 @@ pub struct TextEditor<'a> {
     /// Whether Esc commits (Photoshop's default) or cancels the session.
     #[prop]
     esc_commits: bool,
+    /// Whether focus goes back to the stop it came from when the session ends (on by default: the canvas text editor
+    /// hands it back to the canvas). Off, the editor opens no focus scope, and an ended session leaves focus where the
+    /// removal of a stop leaves it: for a form field whose own part handed it the focus, returning there would open the
+    /// field again.
+    #[prop]
+    returns_focus: bool,
     /// What the editor is: the canvas text editor, or a one-line or multi-line form field.
     #[prop]
     mode: EditorMode,
@@ -455,6 +461,7 @@ impl<'a> TextEditor<'a> {
             selection,
             smart_quotes: None,
             esc_commits: true,
+            returns_focus: true,
             mode: EditorMode::Canvas,
             masked: false,
             changed: false,
@@ -624,6 +631,10 @@ impl Component for TextEditor<'_> {
     const FOCUS_SCOPE: FocusPolicy = FocusPolicy::TAB_LAYER;
     type Style = TextEditorStyle;
     type Output = TextEditorOutput;
+
+    fn focus_scope(&self) -> FocusPolicy {
+        if self.returns_focus { Self::FOCUS_SCOPE } else { FocusPolicy::NONE }
+    }
 
     fn style(cx: &StyleCx<'_>, _: TextEditorStyleKey) -> TextEditorStyle {
         let overlay = &cx.tokens.color.overlay;

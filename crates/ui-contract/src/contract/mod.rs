@@ -364,6 +364,11 @@ pub trait Component: Meta + Sized {
     /// goes away with focus inside (a canvas text editor hands it back to the canvas). Containers and collections take
     /// their scope from their props, not from this.
     const FOCUS_SCOPE: crate::runtime::focus::FocusPolicy = crate::runtime::focus::FocusPolicy::NONE;
+    /// The focus scope this instance runs in. The default is `FOCUS_SCOPE`; a component whose scope is a choice of its
+    /// caller (an editor that hands focus back to where it came from, or not) overrides it.
+    fn focus_scope(&self) -> crate::runtime::focus::FocusPolicy {
+        Self::FOCUS_SCOPE
+    }
     /// Keys the focused component keeps from egui and the shortcut dispatcher.
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(Self::INPUT);
     /// The keys this instance keeps in its current state. The default is `KEYS`; a component whose key use depends

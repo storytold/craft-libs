@@ -654,3 +654,49 @@ fn an_ended_session_returns_the_focus_to_the_canvas_and_the_view_stays() {
         assert_eq!(view.get(), before, "rulers {rulers}: the view stays");
     }
 }
+
+/// An editor shown with `returns_focus(false)` opens no focus scope: when its session ends, focus does not go back to
+/// the stop that handed it over (a form field's part, which would open the field again), while the default editor
+/// hands it back there.
+#[trial]
+fn an_editor_that_does_not_return_focus_leaves_its_opener_alone() {
+    const EDITOR: craft_behavior::DocKey = craft_behavior::DocKey::new("trial.field-editor");
+    const OPENER: craft_behavior::DocKey = craft_behavior::DocKey::new("trial.field-opener");
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use craft_ui::testing::access::{focused_key, name};
+
+    for returns in [true, false] {
+        let editing = Rc::new(Cell::new(false));
+        let shown_editing = Rc::clone(&editing);
+        let mut host = Host { text: "abc".to_owned(), ..Host::default() };
+        let mut selection = TextSelection::caret_at(3);
+        let mut fixture = Fixture::new(move |ui| {
+            drop(Button::new("Opener").doc_key(OPENER).show(ui));
+            if shown_editing.get() {
+                let bounds = Rect::from_min_size(ui.cursor().min, vec2(200.0, 20.0));
+                drop(
+                    TextEditor::new("Field", &mut host, Bind::bound(&mut selection))
+                        .mode(EditorMode::FieldLine)
+                        .returns_focus(returns)
+                        .doc_key(EDITOR)
+                        .show_at(ui, bounds),
+                );
+            }
+            ui.add_space(30.0);
+            drop(Button::new("After").show(ui));
+        });
+        fixture.room(vec2(400.0, 300.0)).settle();
+        let focused = |fixture: &Fixture| name(fixture.tree(), focused_key(fixture.tree())).map(str::to_owned);
+        request(fixture.ctx(), FocusTarget::Doc(OPENER));
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Opener"), "returns {returns}: the opener has the focus");
+        editing.set(true);
+        fixture.settle();
+        request(fixture.ctx(), FocusTarget::Doc(EDITOR));
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref(), Some("Field"), "returns {returns}: the editor took the focus");
+        editing.set(false);
+        fixture.settle();
+        assert_eq!(focused(&fixture).as_deref() == Some("Opener"), returns, "returns {returns}: the focus went back to the opener only when asked");
+    }
+}
