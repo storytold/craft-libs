@@ -472,6 +472,36 @@ fn a_slider_drag_on_a_given_value_runs_one_pass_a_frame() {
     assert!(passes.iter().all(|&n| n == 1), "slider drag frames ran {passes:?} passes");
 }
 
+/// A slow frame can merge the pointer's move out of an armed slider and back (or out of the window and back) into one
+/// pass: the slider still left, so the vertical wheel is disarmed though the pass ends with the pointer over it.
+#[trial]
+fn directional_slider_wheel_disarms_on_a_leave_and_return_within_one_frame() {
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    for away in [pointer::moved(Pos2::new(400.0, 200.0)), pointer::gone()] {
+        let value = RefCell::new(START);
+        let mut show = |ui: &mut Ui| {
+            with_env(
+                ui,
+                |set| set.wheel = Some(WheelScope::Directional),
+                |ui| {
+                    Slider::new(Bind::bound(&mut *value.borrow_mut()), 0.0..=100.0).step(1.0).label("Position").show_at(ui, FIELD);
+                },
+            );
+        };
+        let mut frames = Frames::new();
+        frames.idle(3, &mut show);
+        pointer::click(&mut frames, FIELD.center(), &mut show);
+        let before = *value.borrow();
+        frames.frame(vec![pointer::wheel(40.0)], &mut show);
+        frames.idle(30, &mut show);
+        assert!(*value.borrow() > before, "the press armed vertical wheel editing");
+        let armed = *value.borrow();
+        frames.frame(vec![away.clone(), pointer::moved(FIELD.center()), pointer::wheel(-80.0)], &mut show);
+        frames.idle(30, &mut show);
+        assert_eq!(*value.borrow(), armed, "the pointer left the slider within the frame ({away:?})");
+    }
+}
+
 #[trial]
 fn directional_slider_wheel_disarms_on_leave_without_losing_keyboard_focus() {
     use craft_ui::runtime::env::{WheelScope, with_env};
