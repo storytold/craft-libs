@@ -370,3 +370,21 @@ fn pict_invalid_zero_height_bitmap_does_not_report_premature_eof() {
     assert_ne!(p.truncation_reason, Some(crate::TruncationReason::PrematureEof));
     assert_eq!(p.truncation_reason, None);
 }
+
+#[test]
+fn pict_truncated_region_payload_stops_with_premature_eof() {
+    let mut pict = vec![0xA5; 512];
+    pict.extend([0, 0]);
+    pict.extend([0, 0, 0, 0, 0, 10, 0, 10]);
+    pict.extend([0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00]);
+    pict.extend([-1i16, 0].iter().flat_map(|x| x.to_be_bytes()));
+    pict.extend([0; 20]);
+    // Opcode 0x0080 (frameRgn) claiming 16 bytes for region, followed by EOF before body finishes:
+    pict.extend([0x00, 0x80]);
+    pict.extend([0x00, 0x10]);
+    pict.extend([0x00, 0xFF]);
+
+    let p = crate::parse(&pict).unwrap();
+    assert!(p.truncated);
+    assert_eq!(p.truncation_reason, Some(crate::TruncationReason::PrematureEof));
+}

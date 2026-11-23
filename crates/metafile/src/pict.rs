@@ -1489,6 +1489,10 @@ pub(crate) fn parse_nested(bytes: &[u8]) -> Result<Picture, Error> {
             }
             break;
         }
+        if r.eof {
+            reason = Some(TruncationReason::PrematureEof);
+            break;
+        }
     }
     if !reached_end && !halted_for_record_error && reason.is_none() {
         reason = Some(TruncationReason::OpcodeLimitExceeded);
