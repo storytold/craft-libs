@@ -16,6 +16,7 @@ pub(crate) mod paragraph;
 pub(crate) mod path_text;
 
 pub(crate) mod ruler;
+pub(crate) mod spelling;
 pub(crate) mod style_options;
 pub(crate) mod style_panel;
 pub(crate) mod tabs;
