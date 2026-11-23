@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::thread::ThreadId;
 
 use craft_behavior::Metrics;
 use craft_host::{AppInfo, Host, ManualJobs};
@@ -25,10 +25,11 @@ pub struct PlainStyle {
     metrics: Metrics,
 }
 
-/// What the probes asked for: how often a face was loaded and the state each key was last given.
+/// What the probes asked for: how often a face was loaded, on which threads, and the state each key was last given.
 #[derive(Clone, Default)]
 struct Tally {
     loads: Arc<AtomicUsize>,
+    threads: Arc<Mutex<Vec<ThreadId>>>,
     states: Arc<Mutex<HashMap<String, FaceState>>>,
 }
 
@@ -49,9 +50,10 @@ impl Tally {
 /// Asks for the face `key`, whose load counts itself in `tally`; a key starting with `panic` names a load that panics.
 fn ask(cx: &impl FacesCx, key: &str, tally: &Tally) -> FaceState {
     cx.document_face(key, || {
-        let (loads, panics) = (Arc::clone(&tally.loads), key.starts_with("panic"));
+        let (loads, threads, panics) = (Arc::clone(&tally.loads), Arc::clone(&tally.threads), key.starts_with("panic"));
         move || {
             loads.fetch_add(1, Ordering::Relaxed);
+            threads.lock().expect("the threads").push(std::thread::current().id());
             assert!(!panics, "a load that panics");
             Some(FaceBytes::new(Arc::from(FONT), 0))
         }
@@ -187,21 +189,19 @@ fn faces_stay_ready_after_the_definitions_are_replaced() {
     assert_eq!(tally.loads(), 3, "without loading them again");
 }
 
-/// Without a host the loads run on `default_jobs`' threads: every face asked for in one pass lands, each loaded once.
+/// Without a host the loads run on the jobs the runtime was installed with, inline in a trial: every face asked for in
+/// one pass is ready in the next on every machine, each loaded once.
 #[trial]
-fn without_a_host_every_face_asked_for_in_one_pass_lands() {
+fn without_a_host_every_face_asked_for_in_one_pass_is_ready_in_the_next() {
     let mut frames = Frames::new();
     let tally = Tally::default();
     let wanted = keys(0..8);
-    for _ in 0..1000 {
-        frame(&mut frames, &tally, &wanted);
-        if tally.all_ready(&wanted) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(tally.all_ready(&wanted), "every face lands");
+    frame(&mut frames, &tally, &wanted);
+    frame(&mut frames, &tally, &wanted);
+    assert!(tally.all_ready(&wanted), "every face lands in the next pass");
     assert_eq!(tally.loads(), 8, "and none was cancelled and loaded again");
+    let me = std::thread::current().id();
+    assert!(tally.threads.lock().expect("the threads").iter().all(|thread| *thread == me), "the loads ran on the trial's thread");
 }
 
 #[trial]

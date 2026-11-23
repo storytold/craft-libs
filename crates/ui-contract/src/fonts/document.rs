@@ -18,8 +18,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use craft_host::Wake;
 use craft_host::queue::{JobQueue, Priority, QueueOptions};
-use craft_host::{Wake, default_jobs};
 use egui::epaint::text::{Blob, FontTweak, VariationCoords};
 use egui::{Context, FontData};
 
@@ -198,13 +198,13 @@ enum Known {
     New,
 }
 
-/// The queue of `ctx`'s catalog loads: made on first use on the host's `Jobs` (`default_jobs` without a host) and kept
+/// The queue of `ctx`'s catalog loads: made on first use on the context's jobs (`Env::jobs_of`) and kept
 /// for the context's life, as `TextureLoader::in_context` keeps its own.
 fn queue_of(ctx: &Context, registry: &mut Registry) -> Arc<JobQueue<String, Option<FaceBytes>>> {
     if let Some(queue) = &registry.queue {
         return Arc::clone(&queue.queue);
     }
-    let jobs = Env::host_of(ctx).map_or_else(default_jobs, |host| Arc::clone(host.jobs_shared()));
+    let jobs = Env::jobs_of(ctx);
     let wake_ctx = ctx.clone();
     let wake = Wake::new(move || repaint::request(&wake_ctx));
     let lanes = QueueOptions::default_lanes();
