@@ -177,6 +177,9 @@ pub(crate) struct State {
     pub(super) tab_to_egui: bool,
     /// A text widget that gave its Escape on to the enclosing scopes and lets focus go at the end of the pass.
     surrender_after_scopes: Option<Id>,
+    /// A text widget in a scope that gives focus back to its opener, held one more pass: the scope the Escape closes is
+    /// closing by the next pass, and its restoration needs the widget to still hold the focus.
+    surrender_deferred: Option<Id>,
 }
 
 fn viewport(ctx: &Context) -> ViewportId {
@@ -1001,11 +1004,31 @@ pub(crate) fn end(ctx: &Context) {
     {
         egui_focus::surrender(ctx, id);
     }
+    // A field held a pass for the scope it sits in lets go now, unless that scope is going away with focus in the field:
+    // nav::end below then gives the focus back to the scope's opener from where the field holds it.
+    if let Some(widget) = with(ctx, |state| state.surrender_deferred.take())
+        && !with(ctx, |state| state.restored_focus(Some(widget)).is_some())
+    {
+        egui_focus::surrender(ctx, widget);
+    }
     if let Some(widget) = with(ctx, |state| state.surrender_after_scopes.take()) {
-        // A scope that went away with focus in this field gives the focus back to its opener below, from where the field
-        // holds it: the field is not surrendered first, which would leave that restoration nothing to start from.
-        let restores = with(ctx, |state| state.restored_focus(Some(widget)).is_some());
-        if !restores {
+        // A field in a scope that restores focus to an opener (a popover, a dialog) may be in the scope its Escape closes,
+        // which is only closing by the next pass: it is let go then, once the restoration has had its chance.
+        let restoring = with(ctx, |state| {
+            let key = state.focused.get(&widget).copied().unwrap_or((widget, None));
+            let mut at = state.stops.iter().find(|rec| rec.stop.key() == key).and_then(|rec| rec.scope);
+            while let Some(id) = at {
+                let Some(scope) = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id)) else { break };
+                if scope.opener.is_some() {
+                    return true;
+                }
+                at = scope.parent;
+            }
+            false
+        });
+        if restoring {
+            with(ctx, |state| state.surrender_deferred = Some(widget));
+        } else {
             egui_focus::surrender(ctx, widget);
         }
     }
