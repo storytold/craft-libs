@@ -41,7 +41,8 @@ impl Outcome for FillBarOutput {
 
 /// The options bar across the top, per tool:
 ///
-/// - **Sampling Brush**: Add and Subtract (a segmented choice of icons) and Size (px, 1..=5000).
+/// - **Sampling Brush**: Add to sampling area and Subtract from sampling area (a segmented choice of icons) and Size
+///   (px, 1..=5000).
 /// - **Lasso**: the four selection operations (New, Add, Subtract, Intersect), Expand and Contract with
 ///   their amount (px, 1..=100) and a Reset icon button for the fill area.
 /// - **Hand**, **Zoom**: no options.
@@ -69,8 +70,8 @@ impl<'a> FillBar<'a> {
         let shown = Bar::new(words.options.clone(), BarKind::Options).show(ui, |ui, _| match tool {
             FillTool::SamplingBrush => {
                 let modes = [
-                    Entry::new(true, words.add.clone()).icon(IconSpec::svg(IconId::new("plus"))),
-                    Entry::new(false, words.subtract.clone()).icon(IconSpec::svg(IconId::new("minus"))),
+                    Entry::new(true, words.add_to_sampling_area.clone()).icon(IconSpec::svg(IconId::new("plus"))),
+                    Entry::new(false, words.subtract_from_sampling_area.clone()).icon(IconSpec::svg(IconId::new("minus"))),
                 ];
                 if let Some(add) = Segmented::new(words.add.clone(), Bind::given(options.brush_add), &modes).show(ui).value().copied() {
                     options.brush_add = add;

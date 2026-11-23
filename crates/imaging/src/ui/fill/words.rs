@@ -10,6 +10,10 @@ craft_ui::words! {
         options: "fill.options" = "Options";
         add: "fill.add" = "Add";
         subtract: "fill.subtract" = "Subtract";
+        /// The Sampling Brush's add button, named as the reference application's options bar names it.
+        add_to_sampling_area: "fill.addToSamplingArea" = "Add to sampling area";
+        /// The Sampling Brush's subtract button.
+        subtract_from_sampling_area: "fill.subtractFromSamplingArea" = "Subtract from sampling area";
         size: "fill.size" = "Size";
         /// The caption of the Expand and Contract amount in the options bar.
         grow_by: "fill.growBy" = "By";
