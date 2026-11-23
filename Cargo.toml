@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-android-res = { path = "crates/android-res" }
 craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-xfa = { path = "crates/xfa" }
 craft-evm = { path = "crates/evm" }
@@ -152,6 +153,7 @@ craft-math = { path = "crates/math" }
 craft-media = { path = "crates/media", default-features = false }
 craft-media-source = { path = "crates/media-source" }
 craft-materialx = { path = "crates/materialx" }
+craft-material-graph = { path = "crates/material-graph" }
 craft-media-testkit = { path = "crates/media-testkit" }
 craft-midi = { path = "crates/midi" }
 craft-sf2 = { path = "crates/sf2" }

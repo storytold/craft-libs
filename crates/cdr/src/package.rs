@@ -18,7 +18,12 @@ const DATA_DIR: &[u8] = b"content/data/";
 
 /// Is `bytes` a ZIP archive with a `.cdr` drawing's root stream?
 pub(crate) fn is_package(bytes: &[u8]) -> bool {
-    zip::is_zip(bytes) && Archive::open(bytes, Limits::default().members).is_ok_and(|a| a.find(RIFF_DATA).or_else(|| a.find(ROOT)).is_some())
+    zip::is_zip(bytes) && Archive::open(bytes, Limits::default().members).is_ok_and(|a| holds_drawing(&a))
+}
+
+/// Does the archive `zip` hold a `.cdr` drawing's root stream?
+pub(crate) fn holds_drawing(zip: &Archive) -> bool {
+    zip.find(RIFF_DATA).or_else(|| zip.find(ROOT)).is_some()
 }
 
 /// The RIFF stream of the package `bytes`, and its data streams when it has them (16 on).
