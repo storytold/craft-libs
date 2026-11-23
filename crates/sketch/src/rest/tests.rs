@@ -207,6 +207,18 @@ fn a_path_past_the_point_cap_is_cut() {
     assert!(out.warnings.iter().any(|w| w == "paths with more than 100000 points were cut"), "{:?}", out.warnings);
     assert!(out.warnings.iter().any(|w| w == "path points that couldn't be read were skipped"), "{:?}", out.warnings);
     assert!(out.networks.is_empty());
+
+    // Pin truncation at the ordinary entry point's production boundary with only three readable points.
+    let mut points = vec![Value::Null; 100_001];
+    points[0] = json!({"point": "{0, 0}"});
+    points[99_999] = json!({"point": "{0.5, 0.5}"});
+    points[100_000] = json!({"point": "{1, 1}"});
+    let mut path = shape_path("L", 0.0, 0.0, 10.0, 10.0, &[], false);
+    path["points"] = Value::Array(points);
+    let z = sketch_zip("50.2", 103, document(&["P"]), &[page("P", "P", vec![path])], &[]);
+    let out = map(&z);
+    assert_eq!(out.networks[0].as_ref().map(|n| n.vertices.len()), Some(2));
+    assert!(out.warnings.iter().any(|w| w == "paths with more than 100000 points were cut"), "{:?}", out.warnings);
 }
 
 #[test]
