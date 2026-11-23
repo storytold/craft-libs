@@ -793,3 +793,65 @@ fn heading_trailing_hash_survives_round_trip() {
         assert_eq!(export(&import(&md)), want, "second export of {src:?}");
     }
 }
+
+#[test]
+fn comment_definitions_cannot_shadow_visible_definitions() {
+    for md in [
+        "<!--\n\n[x]: /wrong\n-->\n\n[x]: /right\n\n[x]",
+        "<!--\n[x]: /wrong\n-->\n[x]: /right\n\n[x]",
+        "<!-- first --> <!-- second\n\n[x]: /wrong\n-->\n[x]: /right\n\n[x]",
+    ] {
+        let flow = parse(md);
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"], "{md}");
+    }
+    for code in ["```\n<!--\n```", "    <!--"] {
+        let flow = parse(&format!("{code}\n\n[x]: /right\n\n[x]"));
+        assert!(flow.blocks.iter().any(
+            |b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.link.as_deref() == Some("/right"))))
+        ));
+    }
+}
+
+#[test]
+fn fences_after_comment_tails_keep_definitions_as_code() {
+    for (comment, marker) in [("<!-- -->", "```"), ("<!--\n-->", "~~~"), ("<!-- first --><!-- second -->  ", "```")] {
+        let flow = parse(&format!("{comment}{marker}\n\n[x]: /wrong\n{marker}\n[x]: /right\n\n[x]"));
+        assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.kind == Kind::Code && p.text() == "[x]: /wrong")));
+        let links: Vec<_> = flow
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+            .collect();
+        assert_eq!(links, ["/right"]);
+    }
+}
+
+#[test]
+fn closing_comments_keep_following_source_and_short_inline_forms() {
+    for md in ["<!-- note -->Visible text", "<!--\nnote\n-->Visible text", "<!-- first --><!-- second -->Visible text"] {
+        let flow = parse(md);
+        assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == "Visible text"), "{md}");
+    }
+    let flow = parse("<!-- note --># Heading\n\nBefore <!-->middle<!---> after");
+    assert!(matches!(&flow.blocks[0], FBlock::Para(p) if p.kind == Kind::Heading(1) && p.text() == "Heading"));
+    assert!(matches!(&flow.blocks[1], FBlock::Para(p) if p.text() == "Before middle after"));
+}
+
+#[test]
+fn long_comments_and_many_unclosed_inline_openers_preserve_text() {
+    let unmatched = format!("prefix {}suffix", "<!--".repeat(100_000));
+    let flow = parse(&unmatched);
+    assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == unmatched));
+    let matched = format!("before <!--{}-->after", "hidden ".repeat(100_000));
+    let flow = parse(&matched);
+    assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == "before after"));
+}
