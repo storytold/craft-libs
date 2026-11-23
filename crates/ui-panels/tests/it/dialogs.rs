@@ -273,6 +273,26 @@ fn a_job_window_shows_again_for_the_next_job_after_cancel() {
     assert!(fixture.by_label("Exporting").is_some(), "the window shows for the next job");
 }
 
+/// A prompt with no default answer (a job window's Cancel and Continue in Background) opens with no button focused, so
+/// Enter answers nothing; Escape still answers Cancel.
+#[trial]
+fn a_prompt_without_a_default_answer_opens_with_no_button_focused() {
+    let answered = Rc::new(Cell::new(None));
+    let got = Rc::clone(&answered);
+    let mut fixture = Fixture::new(move |ui| {
+        if let Some(answer) = JobProgress::new("Exporting", "Page 1 of 3").can_hide(true).show(ui).answer {
+            got.set(Some(answer));
+        }
+    });
+    fixture.idle(6);
+    assert!(fixture.by_label("Continue in Background").is_some(), "the window has a second answer");
+    assert_eq!(fixture.focused(), None, "no button has the focus");
+    fixture.key(egui::Key::Enter, Modifiers::NONE).idle(2);
+    assert_eq!(answered.get(), None, "Enter answers nothing");
+    fixture.key(egui::Key::Escape, Modifiers::NONE).idle(2);
+    assert_eq!(answered.get(), Some(JobAnswer::Cancel));
+}
+
 const BAND: PartKey = PartKey::new("band");
 
 /// A style with no look.
