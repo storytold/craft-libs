@@ -414,25 +414,25 @@ note = "`previews(true)` gives the Preview check box; `preview(PreviewState)` is
 
 [[setter]]
 type = "ParamDialog"
-old = ""
+old = "preview_pager(PanePager) / preview_overlay(FnOnce(&ContentPainterCx, CanvasTransform, Rect)) / preview_tint(DataColor)"
 new = "preview_pager(PanePager) / preview_overlay(FnOnce(&ContentPainterCx, CanvasTransform, Rect)) / preview_tint(DataColor)"
 note = "New: the pager row centred under the pane, its step reported as `ParamDialogOutput::preview_step`; the host's drawing over a `Ready` picture; the tint that multiplies its colours. Hosted: `set_preview_pager(Option<PanePager>)`, `set_preview_overlay(Option<SharedOverlay>)`, `set_preview_tint(Option<DataColor>)` and `take_preview_step()`."
 
 [[setter]]
 type = "ParamDialog"
-old = ""
+old = "tabs(Vec<ParamTab>) / shared_rows(SharedRows) / tab(Bind<usize>)"
 new = "tabs(Vec<ParamTab>) / shared_rows(SharedRows) / tab(Bind<usize>)"
 note = "New: a tab strip over the shown tab's rows; the dialog's own `params` are the shared rows, above the strip or below the tab's rows. Every tab's values open, are checked and answer together. Hosted: `HostedParamDialog::tab(usize)`, `set_tab(usize)`, `shown_tab()`."
 
 [[setter]]
 type = "ParamDialog"
-old = ""
+old = "read_only(bool) / title_note(impl Into<Label>)"
 new = "read_only(bool) / title_note(impl Into<Label>)"
 note = "New: `read_only` shows the values without controls, with an OK-only footer and no Alt reset, and answers with no values; `title_note` is passed to `Dialog::title_note`."
 
 [[setter]]
 type = "HostedParamDialog"
-old = ""
+old = "take_action() / take_edited()"
 new = "take_action() / take_edited()"
 note = "New: the id of the footer or row button pressed, once; the row keys an edit changed since the last take."
 

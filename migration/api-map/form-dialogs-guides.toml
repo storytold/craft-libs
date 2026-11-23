@@ -222,7 +222,7 @@ new = ""
 
 [[setter]]
 type = "PropertiesDialog"
-old = ""
+old = "tab(Bind<usize>) / extra_buttons(Vec<(String, Label)>) / shared(Vec<PropertyRow>) / shared_rows(SharedRows) / into_param_dialog()"
 new = "tab(Bind<usize>) / extra_buttons(Vec<(String, Label)>) / shared(Vec<PropertyRow>) / shared_rows(SharedRows) / into_param_dialog()"
 note = "New: the shown tab's binding; footer buttons that keep the dialog open, reported as `PropertiesOutput::action`; rows shown with every tab, above the strip or under the tab's rows; the tabbed `ParamDialog` the builder makes, which a `HostedParamDialog` owns."
 

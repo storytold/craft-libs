@@ -85,7 +85,7 @@ status = "moved"
 [[type]]
 name = "password_strength"
 old = "craft_ui::dialog::password::password_strength"
-new = "craft_ui::patterns::form_dialogs::PasswordStrength::of"
+new = ""
 status = "replaced"
 note = "Public as `PasswordStrength::of(password)`, the same rule: an app that rates a password itself calls it in place of its own copy."
 
@@ -161,3 +161,8 @@ type = "ReportDialog"
 old = "width(Width)"
 new = ""
 note = "Removed: the dialog sizes to its content."
+
+[[call]]
+old = "password_strength(password)"
+new = "PasswordStrength::of(password)"
+note = "The rule is public as an associated function of `PasswordStrength` (`craft_ui::patterns::form_dialogs`)."
