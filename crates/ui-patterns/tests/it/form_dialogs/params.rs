@@ -630,3 +630,72 @@ fn a_row_beside_the_previous_one_shares_its_line() {
     assert!(stacked.is_some_and(|gap| gap > 10.0), "unmarked rows stack: {stacked:?}");
     assert!(beside.is_some_and(|gap| gap.abs() < 3.0), "a beside row shares the line: {beside:?}");
 }
+
+/// The texts of a document form (`LabelScheme::Inline`) over `params`, with their rects.
+fn inline_texts(params: Vec<Param>) -> Vec<(String, egui::Rect)> {
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+    });
+    fixture.settle();
+    fixture.texts().iter().map(|text| (text.text.clone(), text.rect)).collect()
+}
+
+/// The rect of the first text that contains `name`.
+fn text_at(texts: &[(String, egui::Rect)], name: &str) -> Option<egui::Rect> {
+    texts.iter().find(|(text, _)| text.contains(name)).map(|(_, rect)| *rect)
+}
+
+/// Production's Split: a radio row with `stacked_options` stands its options in a column with no caption, also in a
+/// document form, and a row marked `under_option` stands under its option, before the next option.
+#[trial]
+fn stacked_options_nest_each_rows_under_its_option() {
+    let ways = vec![("pages".to_owned(), Label::from("Number of pages")), ("size".to_owned(), Label::from("File size"))];
+    let params = vec![
+        Param::new("mode", "Split by", ParamKind::radio(ways, Some("pages".to_owned()))).stacked_options(),
+        Param::number("pages", "Pages per file", 1.0, 1.0, 0).under_option("pages"),
+        Param::number("size", "At most", 2.0, 0.1, 1).under_option("size"),
+    ];
+    let texts = inline_texts(params);
+    assert!(text_at(&texts, "Split by").is_none(), "no caption over or beside stacked options: {texts:?}");
+    let (pages, per_file, size, at_most) = (
+        text_at(&texts, "Number of pages").expect("the first option"),
+        text_at(&texts, "Pages per file").expect("the first option's row"),
+        text_at(&texts, "File size").expect("the second option"),
+        text_at(&texts, "At most").expect("the second option's row"),
+    );
+    assert!(
+        pages.bottom() <= per_file.top() + 1.0 && per_file.bottom() <= size.top() + 1.0,
+        "the row stands between its option and the next: {texts:?}"
+    );
+    assert!(size.bottom() <= at_most.top() + 1.0, "the second row stands under the second option: {texts:?}");
+}
+
+/// Production's Background: a row under an option of a row of options stands right after that option on its line,
+/// its control alone (no caption), before the next option.
+#[trial]
+fn a_row_under_an_option_in_a_row_follows_it_with_no_caption() {
+    let sources = vec![("colour".to_owned(), Label::from("From colour")), ("file".to_owned(), Label::from("File"))];
+    let params = vec![
+        Param::new("source", "Source", ParamKind::radio(sources, Some("colour".to_owned()))).options_in_row(),
+        Param::number("strength", "Strength", 3.0, 1.0, 0).under_option("colour"),
+    ];
+    let texts = inline_texts(params);
+    assert!(text_at(&texts, "Strength").is_none(), "the nested control shows no caption: {texts:?}");
+    let (colour, file) = (text_at(&texts, "From colour").expect("the first option"), text_at(&texts, "File").expect("the second option"));
+    let value = texts.iter().find(|(text, _)| text.trim() == "3").map(|(_, rect)| *rect).expect("the nested field shows its value");
+    assert!((value.center().y - colour.center().y).abs() < 6.0, "on the options' line: {texts:?}");
+    assert!(value.left() > colour.right() && value.right() < file.left(), "between its option and the next: {texts:?}");
+}
+
+/// In a document form a group row under a heading of its own name shows the name once (production's Enhance: Pages
+/// over the page range options), as a radio row does.
+#[trial]
+fn a_group_row_under_a_heading_of_its_name_shows_the_name_once() {
+    let params = vec![Param::section("Pages"), Param::custom("pages", "Pages", |ui, _, _| ui.label("The options"))];
+    let texts = inline_texts(params);
+    let names = texts.iter().filter(|(text, _)| text.trim() == "Pages").count();
+    assert_eq!(names, 1, "the heading alone names the group: {texts:?}");
+    assert!(text_at(&texts, "The options").is_some(), "the group shows: {texts:?}");
+}

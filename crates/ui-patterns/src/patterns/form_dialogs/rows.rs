@@ -337,11 +337,20 @@ struct Line<'r> {
     enabled: bool,
     /// The row stands in a shared line: it takes its content's width, not the form's.
     compact: bool,
+    /// The rows that stand under this radio row's options ([`Param::under_option`]); empty for other rows.
+    nested: &'r [Param],
+    /// The row stands right after its option in a row of radio options: its control alone, which its own name
+    /// labels, with no caption.
+    bare: bool,
 }
 
 impl Line<'_> {
     /// Shows `body` in a field named by the row: its label beside the control, its tooltip over both.
     fn show(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
+        if self.bare {
+            Row::new().id_salt(self.key).enabled(self.enabled).show(ui, |ui, _| body(ui));
+            return;
+        }
         let mut field = Field::new(self.name.clone()).id_salt(self.key).enabled(self.enabled);
         // In a document dialog a custom row is a group of controls (page range options, say): its name heads it.
         if matches!(self.param.kind, ParamKind::Custom(_)) && Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline {
@@ -497,6 +506,15 @@ impl<'p> Pass<'p> {
                 });
                 continue;
             }
+            // The rows under a radio row's options stand with them, in the radio row.
+            let nested =
+                if matches!(head.kind, ParamKind::Radio { .. }) { tail.iter().take_while(|param| param.nested_under().is_some()).count() } else { 0 };
+            if nested > 0 {
+                let (under, after) = tail.split_at(nested);
+                self.row_with(ui, head, false, under);
+                rest = after;
+                continue;
+            }
             let beside = tail.iter().take_while(|param| param.option().beside()).count();
             if beside == 0 || !head.visible(&self.work) {
                 self.row(ui, head, false);
@@ -515,10 +533,20 @@ impl<'p> Pass<'p> {
     }
 
     fn row(&mut self, ui: &mut Ui, param: &Param, compact: bool) {
+        self.row_with(ui, param, compact, &[]);
+    }
+
+    /// Shows `param`'s row with the rows `nested` under its options.
+    fn row_with(&mut self, ui: &mut Ui, param: &Param, compact: bool, nested: &[Param]) {
+        self.line(ui, param, compact, nested, false);
+    }
+
+    /// Shows `param`'s row; a `bare` row is its control alone, with no caption.
+    fn line(&mut self, ui: &mut Ui, param: &Param, compact: bool, nested: &[Param], bare: bool) {
         if !param.visible(&self.work) {
             return;
         }
-        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work), compact };
+        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work), compact, nested, bare };
         let held = self.work.get(line.key).cloned();
         self.show_row(ui, &line);
         param.drop_dependents(held.as_ref(), &mut self.work);
@@ -777,8 +805,7 @@ impl<'p> Pass<'p> {
         let first = patterns.clone().next();
         let current = patterns.find(|key| Some(key.as_str()) == stored).or(first).cloned();
         // With no pattern to offer the row is disabled and writes nothing.
-        let line =
-            Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some(), compact: line.compact };
+        let line = Line { enabled: line.enabled && current.is_some(), name: line.name.clone(), ..*line };
         line.show(ui, |ui| {
             let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), source, Bind::kept()).show(ui).picked;
             if let Some(id) = picked.filter(|id| rows.iter().any(|row| matches!(row.kind, PresetKind::Item) && row.key == *id)) {
@@ -846,6 +873,10 @@ impl<'p> Pass<'p> {
             self.radio_group(ui, line, options, true);
             return;
         }
+        if line.param.option().stacked_options() {
+            self.radio_group(ui, line, options, false);
+            return;
+        }
         // A document dialog sets the caption and its options on one line, as production's do; the caption is left out
         // under a heading of the same name.
         if inline {
@@ -872,7 +903,8 @@ impl<'p> Pass<'p> {
         if let Some(tip) = line.param.tooltip_text() {
             group = group.tooltip(tip.clone());
         }
-        let radios = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
+        let nested = line.nested;
+        let mut radios = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             for (id, label) in options {
                 let mut radio = Radio::new(id.clone()).enabled(line.param.option_enabled(id) && line.enabled);
                 if let Some(reason) = line.param.disabled_reason(id) {
@@ -887,18 +919,39 @@ impl<'p> Pass<'p> {
                         radio.label(label.clone()).show(ui);
                     }
                 }
+                self.under(ui, nested, id, in_row);
             }
         };
         let group = group.show(ui, |ui, _| {
             if in_row {
-                Row::new().wrap(true).show(ui, radios);
+                Row::new().wrap(true).show(ui, &mut radios);
             } else {
-                Stack::new().show(ui, radios);
+                Stack::new().show(ui, &mut radios);
             }
         });
         if let Some(v) = group.output.value().cloned() {
             self.work.set(line.key, FieldValue::Text(v));
         }
+    }
+
+    /// The rows of `nested` that stand under the option `id`: right after it in a row of options (`in_row`), each its
+    /// control alone; otherwise one indent step in under it, each at its content's width.
+    fn under(&mut self, ui: &mut Ui, nested: &[Param], id: &str, in_row: bool) {
+        let own: Vec<&Param> = nested.iter().filter(|param| param.nested_under() == Some(id)).collect();
+        if own.is_empty() {
+            return;
+        }
+        if in_row {
+            for param in own {
+                self.line(ui, param, true, &[], true);
+            }
+            return;
+        }
+        Stack::new().id_salt(("under", id)).indent(1).show(ui, |ui, _| {
+            for param in &own {
+                self.line(ui, param, true, &[], false);
+            }
+        });
     }
 
     /// An angle row: the dial and the field over `range` at `decimals` digits. The field clamps a typed angle into
@@ -1112,6 +1165,10 @@ impl<'p> Pass<'p> {
     fn custom(&mut self, ui: &mut Ui, line: &Line<'_>) {
         let ParamKind::Custom(row) = &line.param.kind else { return };
         let mut context = CustomContext::new(line.name.clone(), self.canvas);
+        // In a document dialog a group under a heading of the same name shows no caption of its own, as a radio row's.
+        let inline = Env::of(ui).view().get::<LabelScheme>() == LabelScheme::Inline;
+        let headed = inline && self.heading.as_deref() == Some(plain(&line.name).as_str());
+        let line = &Line { bare: line.bare || headed, name: line.name.clone(), ..*line };
         line.show_body(ui, |ui| {
             let _ = row.draw(ui, &mut self.work, &mut context);
         });

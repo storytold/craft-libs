@@ -483,6 +483,10 @@ pub(crate) struct RowOptions {
     beside_next: bool,
     /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
     options_in_row: bool,
+    /// A radio row's options stand in a column with no caption, in a document dialog too ([`Param::stacked_options`]).
+    stacked_options: bool,
+    /// The option of the radio row before this one that the row stands under ([`Param::under_option`]).
+    under_option: Option<String>,
     beside: bool,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
@@ -964,6 +968,30 @@ impl Param {
         self
     }
 
+    /// For a [`ParamKind::Radio`] row: the options stand in a column with no caption over or beside them, in a document
+    /// dialog too (production's Split); the label still names the group for assistive technology. Other kinds are
+    /// unchanged.
+    #[must_use]
+    pub fn stacked_options(mut self) -> Self {
+        self.options.get_or_insert_default().stacked_options = true;
+        self
+    }
+
+    /// The row belongs to the option `id` of the radio row it follows: it stands under that option, one indent step in
+    /// (production's Pages per file under Number of pages), or right after the option, with no caption of its own,
+    /// when the radio row's options stand in a row ([`options_in_row`](Param::options_in_row); production's colour
+    /// well after From colour). Only the rows that directly follow a radio row nest; elsewhere the mark is ignored.
+    #[must_use]
+    pub fn under_option(mut self, id: impl Into<String>) -> Self {
+        self.options.get_or_insert_default().under_option = Some(id.into());
+        self
+    }
+
+    /// The option of the radio row before this one that the row stands under ([`under_option`](Param::under_option)).
+    pub(crate) fn nested_under(&self) -> Option<&str> {
+        self.options.as_deref()?.under_option.as_deref()
+    }
+
     /// The row stands on the same line as the row before it (production's Font, Size, Underline and Colour on one
     /// line), wrapping to the next line when the form is too narrow. The first row of a form or group ignores it.
     #[must_use]
@@ -1153,6 +1181,11 @@ impl RowOptions {
     /// Whether a radio row's options stand in one row with no caption.
     pub(crate) fn options_in_row(&self) -> bool {
         self.options_in_row
+    }
+
+    /// Whether a radio row's options stand in a column with no caption.
+    pub(crate) fn stacked_options(&self) -> bool {
+        self.stacked_options
     }
 
     /// The lines of a multi-line text row; `None` for a single line.
