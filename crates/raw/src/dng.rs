@@ -561,7 +561,7 @@ fn active_area_and_crop(raw: &Ifd, w: usize, h: usize, full_w: usize, full_h: us
         _ => Rect::new(0, 0, full_w, full_h),
     };
     let active_area = if active_area.width == 0 || active_area.height == 0 { Rect::new(0, 0, full_w, full_h) } else { active_area };
-    let (crop, default_crop_adjusted) = default_crop(raw, active_area, full_w, full_h);
+    let (crop, mut default_crop_adjusted) = default_crop(raw, active_area, full_w, full_h);
     if (full_w, full_h) == (w, h) {
         (active_area, crop, default_crop_adjusted)
     } else {
@@ -572,12 +572,17 @@ fn active_area_and_crop(raw: &Ifd, w: usize, h: usize, full_w: usize, full_h: us
             Rect::new(x, y, x1.saturating_sub(x).max(1), y1.saturating_sub(y).max(1))
         };
         let mut area = scale(active_area).clipped(w, h);
-        if area.width == 0 || area.height == 0 {
+        let area_fell_back = area.width == 0 || area.height == 0;
+        if area_fell_back {
             area = Rect::new(0, 0, w, h);
         }
-        let mut c = scale(crop).clipped(area.width, area.height);
+        let scaled_crop = scale(crop);
+        let mut c = if area_fell_back { Rect::new(0, 0, area.width, area.height) } else { scaled_crop.clipped(area.width, area.height) };
         if c.width == 0 || c.height == 0 {
             c = Rect::new(0, 0, area.width, area.height);
+        }
+        if (raw.contains(t::DEFAULT_CROP_ORIGIN) || raw.contains(t::DEFAULT_CROP_SIZE)) && (area_fell_back || c != scaled_crop) {
+            default_crop_adjusted = true;
         }
         (area, c, default_crop_adjusted)
     }
@@ -745,6 +750,28 @@ mod tests {
         // A hostile factor is an error, not a scrambled image.
         let mut hostile = RawData::U16(image);
         assert!(deinterleave(&mut hostile, 8, 6, 1, 1 << 20, 1).is_err());
+    }
+
+    #[test]
+    fn scaled_active_area_fallback_resets_crop_to_full_replacement_area() {
+        use craft_tiff::Entry;
+        let raw = Ifd { entries: vec![Entry { tag: t::ACTIVE_AREA, offset: 0, value: Value::Long(vec![63, 63, 64, 64]) }], ..Default::default() };
+        let (area, crop, adjusted) = active_area_and_crop(&raw, 8, 8, 64, 64);
+        assert_eq!(area, Rect::new(0, 0, 8, 8));
+        assert_eq!(crop, Rect::new(0, 0, 8, 8));
+        assert!(!adjusted);
+
+        let mut entries = vec![
+            Entry { tag: t::ACTIVE_AREA, offset: 0, value: Value::Long(vec![63, 63, 64, 64]) },
+            Entry { tag: t::DEFAULT_CROP_ORIGIN, offset: 0, value: Value::Rational(vec![(0, 1), (0, 1)]) },
+            Entry { tag: t::DEFAULT_CROP_SIZE, offset: 0, value: Value::Rational(vec![(1, 1), (1, 1)]) },
+        ];
+        entries.sort_by_key(|e| e.tag);
+        let explicit_crop_raw = Ifd { entries, ..Default::default() };
+        let (area, crop, adjusted) = active_area_and_crop(&explicit_crop_raw, 8, 8, 64, 64);
+        assert_eq!(area, Rect::new(0, 0, 8, 8));
+        assert_eq!(crop, Rect::new(0, 0, 8, 8));
+        assert!(adjusted);
     }
 }
 
