@@ -418,11 +418,12 @@ fn idle_unauthenticated_connections_are_limited() {
         let mut stream = TcpStream::connect(server.addr).expect("connected");
         stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
         let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
-        writeln!(stream, "{}", json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}})).expect("written");
-        match read_json(&mut reader) {
-            Some(r) if r["ok"] == true => break,
-            _ => assert!(started.elapsed() < Duration::from_secs(10), "no slot came back"),
+        // A refused connection may already be closed when the request is written (Windows resets it).
+        let auth = json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}});
+        if writeln!(stream, "{auth}").is_ok() && read_json(&mut reader).is_some_and(|r| r["ok"] == true) {
+            break;
         }
+        assert!(started.elapsed() < Duration::from_secs(10), "no slot came back");
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(rx.try_recv().is_err());
