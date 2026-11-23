@@ -1241,11 +1241,18 @@ pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))
 }
 
-/// Whether a command the window's keymap binds `chord` to is enabled, as the last pass resolved it for a surface with
-/// no component of its own (the state a menu row shows): a press of the chord can run something. Notes no reader.
-pub(crate) fn runs_now(ctx: &Context, chord: &Chord) -> bool {
-    let holders = with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.holders(chord)).unwrap_or_default());
-    holders.iter().any(|command| resolve_from(ctx, command, None).0.enabled)
+/// Whether a press of `chord` in `viewport` can run something: a command the window's keymap binds it to in a scope
+/// around the focus of the viewport's last pass, matched as the key stage matches a press outside typing, is enabled as
+/// that pass resolved it for a surface with no component of its own (the state a menu row shows). A binding in a scope
+/// that is not around the focus (a typing scope with no editor shown) runs nothing. Notes no reader.
+pub(crate) fn runs_now(ctx: &Context, viewport: ViewportId, chord: &Chord) -> bool {
+    let keys = with(ctx, |board| {
+        let chain = board.here.focused.iter().find(|(at, _)| *at == viewport).map(|(_, chain)| chain.clone()).unwrap_or_default();
+        board.key_scopes(&chain)
+    });
+    let Some(keys) = keys else { return false };
+    let enabled = |command: &CommandRef| resolve_from(ctx, command, None).0.enabled;
+    keys.matching(false, |active, outer| !matches!(keys.keymap.lookup_where(chord, false, active, outer, &enabled), craft_keymap::Lookup::None))
 }
 
 /// The chords bound to the window's keys, which the input hook takes before any component.
