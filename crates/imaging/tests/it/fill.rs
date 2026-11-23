@@ -342,6 +342,10 @@ fn the_fill_lasso_flyout_remembers_its_polygonal_tool() {
     let hand = rig.fixture.by_label("Hand Tool").expect("the Hand slot shows");
     rig.fixture.click(&hand).idle(2);
     assert_eq!(rig.tool(), "hand");
+    // Rail clicks select tools without taking keyboard focus. Establish the real keyboard target
+    // after the flyout before testing the workspace's letter shortcut.
+    rig.fixture.access(craft_ui::testing::focus::AccessActionKind::Focus, &hand).idle(2);
+    assert_eq!(rig.fixture.tree().focused_key(), hand.node, "the Hand button owns keyboard focus");
     rig.fixture.key(egui::Key::L, NONE).idle(2);
     assert_eq!(rig.tool(), "polygonalLasso", "L recalls the selected member of the Lasso slot");
 
