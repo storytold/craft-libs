@@ -1265,7 +1265,6 @@ pub(crate) fn parse_qt_palette(ct: &[u8]) -> Option<[u8; 768]> {
     if ct.len() < 8 {
         return None;
     }
-    let flags = u16::from_be_bytes([ct[4], ct[5]]);
     let size = u16::from_be_bytes([ct[6], ct[7]]);
     let num_entries = usize::from(size).checked_add(1)?;
     let payload = &ct[8..];
@@ -1273,18 +1272,14 @@ pub(crate) fn parse_qt_palette(ct: &[u8]) -> Option<[u8; 768]> {
         return None;
     }
     let mut palette = [0u8; 768];
-    for i in 0..num_entries {
+    for i in 0..num_entries.min(256) {
         let chunk = &payload[i * 8..(i + 1) * 8];
-        let val = u16::from_be_bytes([chunk[0], chunk[1]]);
         let r = chunk[2];
         let g = chunk[4];
         let b = chunk[6];
-        let idx = if flags & 0x8000 != 0 { usize::from(val) } else { i };
-        if idx < 256 {
-            palette[idx * 3] = r;
-            palette[idx * 3 + 1] = g;
-            palette[idx * 3 + 2] = b;
-        }
+        palette[i * 3] = r;
+        palette[i * 3 + 1] = g;
+        palette[i * 3 + 2] = b;
     }
     Some(palette)
 }
@@ -1886,6 +1881,25 @@ mod tests {
             }
             other => panic!("expected Cinepak codec, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_qt_palette_with_flags_0x8000_and_zero_values_writes_sequentially() {
+        let mut ct = Vec::new();
+        ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+        ct.extend_from_slice(&0x8000u16.to_be_bytes()); // ctFlags = 0x8000
+        ct.extend_from_slice(&2u16.to_be_bytes()); // ctSize = 2 (3 entries)
+        for i in 0..3u8 {
+            ct.extend_from_slice(&0u16.to_be_bytes()); // zero-valued entry value field
+            ct.extend_from_slice(&[10 * (i + 1), 0]); // r
+            ct.extend_from_slice(&[20 * (i + 1), 0]); // g
+            ct.extend_from_slice(&[30 * (i + 1), 0]); // b
+        }
+        let pal = parse_qt_palette(&ct).expect("parse qt palette");
+        // Entries must be written sequentially at indices 0, 1, 2 rather than all overwriting index 0
+        assert_eq!(&pal[0..3], &[10, 20, 30]);
+        assert_eq!(&pal[3..6], &[20, 40, 60]);
+        assert_eq!(&pal[6..9], &[30, 60, 90]);
     }
 
     /// A QuickTime `logs` box keeps its identifier whatever curve it names; the reader does not
