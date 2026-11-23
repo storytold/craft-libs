@@ -248,6 +248,7 @@ pub struct CommandState {
     title: Option<Arc<str>>,
     icon: Option<Cow<'static, str>>,
     hint: Option<Arc<str>>,
+    hint_alone: bool,
     marked: bool,
 }
 
@@ -300,6 +301,14 @@ impl CommandState {
         self
     }
 
+    /// Opt-in: on a control whose label shows whole and that has no tooltip of its own, the hint is the whole tooltip,
+    /// with the chord after it, in place of the label and chord over the hint (the default).
+    #[must_use]
+    pub fn hint_alone(mut self, alone: bool) -> Self {
+        self.hint_alone = alone;
+        self
+    }
+
     /// Whether the command can fire, as [`enabled`](Self::enabled) set it.
     pub fn is_enabled(&self) -> bool {
         self.flags.enabled
@@ -323,6 +332,10 @@ impl CommandState {
 
     pub(crate) fn hint_ref(&self) -> Option<&Arc<str>> {
         self.hint.as_ref()
+    }
+
+    pub(crate) fn is_hint_alone(&self) -> bool {
+        self.hint_alone
     }
 }
 
@@ -349,6 +362,8 @@ pub struct ResolvedCommand {
     pub marked: bool,
     /// The accessible description and second tooltip line.
     pub hint: Option<Arc<str>>,
+    /// The hint is the whole tooltip of a control whose label shows whole ([`CommandState::hint_alone`]).
+    pub hint_alone: bool,
     /// What the command is.
     pub kind: CommandKind,
     /// The command is an edit a focused component takes as its own (it has an `EditCommand` link): a control bound to
