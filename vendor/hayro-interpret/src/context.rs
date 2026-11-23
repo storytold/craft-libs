@@ -277,14 +277,27 @@ const MAX_SAVED_STATE_BYTES: usize = 64 << 20;
 /// Roughly what a saved copy of `state` holds.
 fn state_bytes(state: &State<'_>) -> usize {
     size_of::<State<'_>>()
-        .saturating_add(state.graphics_state.stroke_props.dash_array.len().saturating_mul(size_of::<f32>()))
+        .saturating_add(
+            state
+                .graphics_state
+                .stroke_props
+                .dash_array
+                .len()
+                .saturating_mul(size_of::<f32>()),
+        )
         .saturating_add(state.clips.len().saturating_mul(size_of::<ClipType>()))
         .saturating_add(state.text_state.clip_paths.elements().len().saturating_mul(size_of::<PathEl>()))
 }
 
 impl<'a> Context<'a> {
     /// Create a new context.
-    pub fn new(initial_transform: Affine, bbox: Rect, cache: &InterpreterCache<'a>, xref: &'a XRef, settings: InterpreterSettings) -> Self {
+    pub fn new(
+        initial_transform: Affine,
+        bbox: Rect,
+        cache: &InterpreterCache<'a>,
+        xref: &'a XRef,
+        settings: InterpreterSettings,
+    ) -> Self {
         let state = State::new(initial_transform);
         // PdfCraft patch: a page (or other top-level content) starts with fresh budgets.
         NESTED_PAINTS.with(|n| n.set(0));
@@ -312,7 +325,9 @@ impl<'a> Context<'a> {
     ) -> Self {
         let mut ocg_state = {
             let root_ref = xref.root_id();
-            xref.get::<Dict<'_>>(root_ref).map(|catalog| OcgState::from_catalog(&catalog, xref, settings.view_auto_state)).unwrap_or_default()
+            xref.get::<Dict<'_>>(root_ref)
+                .map(|catalog| OcgState::from_catalog(&catalog, xref, settings.view_auto_state))
+                .unwrap_or_default()
         };
         // PdfCraft patch: apply viewer layer toggles.
         for (num, generation, visible) in settings.ocg_overrides.iter() {
@@ -354,7 +369,10 @@ impl<'a> Context<'a> {
     /// inside it (a tiling pattern, a Type 3 glyph, a soft mask or a group), so a form that
     /// reaches itself through one of those is skipped too, while a form drawn again after it
     /// has finished draws as usual.
-    pub(crate) fn enter_form(&mut self, id: Option<hayro_syntax::object::ObjectIdentifier>) -> bool {
+    pub(crate) fn enter_form(
+        &mut self,
+        id: Option<hayro_syntax::object::ObjectIdentifier>,
+    ) -> bool {
         let Some(id) = id else {
             return true;
         };
@@ -399,7 +417,10 @@ impl<'a> Context<'a> {
         // PdfCraft patch: past either limit the `q` is recorded but nothing is copied. Its `Q`
         // still removes the clips added since; other changes made in between are kept.
         let bytes = state_bytes(cur);
-        if !self.skipped_saves.is_empty() || self.states.len() >= MAX_SAVED_STATES || self.saved_bytes.saturating_add(bytes) > MAX_SAVED_STATE_BYTES {
+        if !self.skipped_saves.is_empty()
+            || self.states.len() >= MAX_SAVED_STATES
+            || self.saved_bytes.saturating_add(bytes) > MAX_SAVED_STATE_BYTES
+        {
             if self.skipped_saves.is_empty() {
                 warn!("too many saved graphics states; further saves are not kept");
             }
@@ -425,13 +446,22 @@ impl<'a> Context<'a> {
         self.bbox.push(new);
     }
 
-    pub(crate) fn push_clip_path(&mut self, clip_path: BezPath, fill: FillRule, device: &mut impl Device<'a>) {
+    pub(crate) fn push_clip_path(
+        &mut self,
+        clip_path: BezPath,
+        fill: FillRule,
+        device: &mut impl Device<'a>,
+    ) {
         if let Some(clip_rect) = path_as_rect(&clip_path) {
             let cur_bbox = self.bbox();
 
             // If the clip path is a rect and completely covers the current bbox, don't emit it.
-            if cur_bbox.min_x().is_nearly_greater_or_equal(clip_rect.min_x())
-                && cur_bbox.min_y().is_nearly_greater_or_equal(clip_rect.min_y())
+            if cur_bbox
+                .min_x()
+                .is_nearly_greater_or_equal(clip_rect.min_x())
+                && cur_bbox
+                    .min_y()
+                    .is_nearly_greater_or_equal(clip_rect.min_y())
                 && cur_bbox.max_x().is_nearly_less_or_equal(clip_rect.max_x())
                 && cur_bbox.max_y().is_nearly_less_or_equal(clip_rect.max_y())
             {
@@ -441,7 +471,10 @@ impl<'a> Context<'a> {
         }
 
         let bbox = clip_path.bounding_box();
-        device.push_clip_path(&ClipPath { path: clip_path, fill });
+        device.push_clip_path(&ClipPath {
+            path: clip_path,
+            fill,
+        });
         self.push_bbox(bbox);
         self.get_mut().clips.push(ClipType::Real);
     }
@@ -466,7 +499,10 @@ impl<'a> Context<'a> {
     }
 
     pub(crate) fn root_transform(&self) -> Affine {
-        self.root_transforms.last().copied().unwrap_or(Affine::IDENTITY)
+        self.root_transforms
+            .last()
+            .copied()
+            .unwrap_or(Affine::IDENTITY)
     }
 
     pub(crate) fn restore_state(&mut self, device: &mut impl Device<'a>) {
@@ -478,7 +514,11 @@ impl<'a> Context<'a> {
             return;
         }
 
-        let Some(target_clips) = self.states.get(self.states.len().saturating_sub(2)).map(|s| s.clips.len()) else {
+        let Some(target_clips) = self
+            .states
+            .get(self.states.len().saturating_sub(2))
+            .map(|s| s.clips.len())
+        else {
             warn!("underflowed graphics state");
             return;
         };
@@ -496,7 +536,11 @@ impl<'a> Context<'a> {
             }
         }
 
-        device.set_soft_mask(self.states.last().and_then(|l| l.graphics_state.soft_mask.clone()));
+        device.set_soft_mask(
+            self.states
+                .last()
+                .and_then(|l| l.graphics_state.soft_mask.clone()),
+        );
     }
 
     pub(crate) fn path(&self) -> &BezPath {
@@ -545,11 +589,20 @@ impl<'a> Context<'a> {
 
     /// PdfCraft patch (80): an `/Indexed` resource with no lookup table is built, marked
     /// tableless, for the image and colour operators to handle (see `Indexed::new`).
-    pub(crate) fn get_color_space(&mut self, resources: &Resources<'_>, name: &Name<'_>) -> Option<ColorSpace> {
+    pub(crate) fn get_color_space(
+        &mut self,
+        resources: &Resources<'_>,
+        name: &Name<'_>,
+    ) -> Option<ColorSpace> {
         let cs_object = resources.get_color_space(name)?;
         self.interpreter_cache
             .object_cache
-            .get_or_insert_with(cs_object.cache_key(), || ColorSpace::new_allowing_tableless(cs_object.clone(), &self.interpreter_cache.object_cache))
+            .get_or_insert_with(cs_object.cache_key(), || {
+                ColorSpace::new_allowing_tableless(
+                    cs_object.clone(),
+                    &self.interpreter_cache.object_cache,
+                )
+            })
     }
 
     pub(crate) fn stroke_props(&self) -> StrokeProps {
@@ -609,7 +662,16 @@ impl<'a> Context<'a> {
 
         let resolved = {
             let mut font_cache = self.interpreter_cache.font_cache.borrow_mut();
-            font_cache.entry(cache_key).or_insert_with(|| Font::new(font_dict, &self.settings.font_resolver, &self.settings.cmap_resolver)).clone()
+            font_cache
+                .entry(cache_key)
+                .or_insert_with(|| {
+                    Font::new(
+                        font_dict,
+                        &self.settings.font_resolver,
+                        &self.settings.cmap_resolver,
+                    )
+                })
+                .clone()
         };
 
         // PdfCraft patch (90): tell the caller a Type 3 font lacks the /Widths it requires,
@@ -621,7 +683,8 @@ impl<'a> Context<'a> {
         if let Some(resolved) = resolved {
             Some(TextStateFont::Font(resolved))
         } else {
-            Font::new_standard(StandardFont::Helvetica, &self.settings.font_resolver).map(TextStateFont::Fallback)
+            Font::new_standard(StandardFont::Helvetica, &self.settings.font_resolver)
+                .map(TextStateFont::Fallback)
         }
     }
 }
@@ -705,7 +768,10 @@ mod saved_state_tests {
     use hayro_syntax::Pdf;
 
     fn pdf() -> Pdf {
-        let objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 0 /Kids [] >>"];
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Count 0 /Kids [] >>",
+        ];
         let mut out = b"%PDF-1.7\n".to_vec();
         let mut offsets = Vec::new();
         for (i, body) in objects.iter().enumerate() {
@@ -717,7 +783,9 @@ mod saved_state_tests {
         for offset in offsets {
             out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
         }
-        out.extend_from_slice(format!("trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        out.extend_from_slice(
+            format!("trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        );
         Pdf::new(out).expect("synthetic pdf")
     }
 
