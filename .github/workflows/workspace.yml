@@ -6,70 +6,217 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # A full run on main every 6 hours that is never cancelled, so the caches are saved while pushes
+  # to main cancel each other. The midnight run builds the Linux leg from source (`native`).
+  schedule:
+    - cron: "17 0 * * *"
+    - cron: "17 6,12,18 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (push to main, a release tag, a manual run) gets a group of its own: it is neither
-  # cancelled nor replaced while queued, so a main run always finishes and saves the dependency
-  # cache, and a release run is never cancelled.
-  group: workspace-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A pull request, and main, each have one group, so a newer push cancels the run it supersedes;
+  # the newest push's run still tests everything before it. Every other run (a release tag, a
+  # manual run, the scheduled run) gets a group of its own and is neither cancelled nor replaced
+  # while queued: a release run always finishes, and the scheduled run saves the caches.
+  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
+  # Whether this run needs the macOS and Windows legs, and which tests every leg runs
+  # (craft-common-actions' select-platforms). On a pull request the macOS and Windows legs run only
+  # when it can change platform behaviour: a crate with platform cfg code or one that depends on
+  # it, the build setup, or a file outside the crates. The tests are those of the crates a change
+  # reaches: the crates that own a changed file, the crates whose Cargo.toml declares a read of it
+  # (`[package.metadata.craft] reads`, which this job checks is complete), and every crate that
+  # depends on those. The build setup, a crate's own Cargo.toml or a file outside the crates other
+  # than documentation runs every test; documentation alone runs none. The full-ci label runs
+  # everything from the next push or manual run; every other event runs everything.
+  platforms:
+    name: select platforms
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      platform: ${{ steps.select.outputs.platform }}
+      tests: ${{ steps.select.outputs.tests }}
+      filter: ${{ steps.select.outputs.filter }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      # The merge commit and its first parent.
+      - uses: actions/checkout@v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - id: select
+        uses: storytold/craft-common-actions/actions/select-platforms@0bef64f155fcea81edbd9542381777358bfbdcf4
+        with:
+          os: '["ubuntu-latest","windows-latest","macos-latest"]'
+          select-os: '["windows-latest","macos-latest"]'
+          select-tests: true
+          label: full-ci
+
+  # The Linux leg keeps the compiled workspace crates between runs (`cache-workspace-crates`): each
+  # main run saves a rolling cache entry of its own, every run restores the newest one, and Cargo
+  # rebuilds only the crates a change reaches. `cache-prune` keeps the newest entry. The midnight
+  # scheduled run builds from source (`cold-build`) and starts the entry afresh. The macOS and
+  # Windows legs keep a dependency-only entry: their workspace crates would not fit the 10 GB cache
+  # budget beside Linux's. The lint legs keep no cache (`lint-cache: false`) for the same reason; a
+  # cold lint leg is still shorter than its gate leg.
   native:
     name: Workspace
+    needs: platforms
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
-      os: '["ubuntu-latest","windows-latest","macos-latest"]'
-      timeout-minutes: 120
-      # The Windows leg runs its tests with nextest (.config/nextest.toml).
-      tools: cargo-nextest@0.9.150
+      os: '["ubuntu-latest"]'
+      cache-workspace-crates: true
+      cold-build: ${{ github.event.schedule == '17 0 * * *' }}
+      lint-cache: false
+      timeout-minutes: &timeout 120
+      # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
+      tools: &tools cargo-nextest@0.9.150
       packages: mesa-vulkan-drivers libvulkan1
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      craft-fonts-ref: &craft-fonts b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
-      env: CRAFT_PRINT_REQUIRE_QUEUE=0
-      setup-command: |
-        set -euo pipefail
-        corpus_fetcher=.test-inputs/photocraft
-        mkdir -p "$corpus_fetcher"
-        git -C "$corpus_fetcher" init
-        git -C "$corpus_fetcher" remote add origin https://github.com/storytold/PhotoCraft.git
-        git -C "$corpus_fetcher" fetch --quiet --depth=1 origin 74330157cb601573ae4523a95bb9132822fc3918
-        git -C "$corpus_fetcher" checkout --quiet --detach FETCH_HEAD
-        (cd "$corpus_fetcher" && cargo xtask corpus --psd --psd-tools --atn --exr --heif --pngsuite)
-        mkdir -p corpus
-        cp -a "$corpus_fetcher/corpus/." corpus/
-        python scripts/test-fetch-pdf-test-fonts.py
-        python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
-        printf 'CRAFT_PSD_CORPUS=%s\n' "$GITHUB_WORKSPACE/$corpus_fetcher/corpus" >> "$GITHUB_ENV"
-        printf 'CRAFT_PDF_TEST_FONT_DIR=%s\n' "$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
-      command: |
-        python3 scripts/test-workspace-concurrency.py
-        cargo fmt --check
+      # Test binaries without debug info or symbols: about a third of the size, and a panic still
+      # names its file and line.
+      dev-strip: true
+      # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
+      # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
+      # count 64 cases instead of 256. nightly.yml runs them all in full.
+      # CRAFT_TESTS and CRAFT_TEST_FILTER are the `platforms` job's test selection.
+      env: &env |
+        CRAFT_PRINT_REQUIRE_QUEUE=0
+        CRAFT_HOSTILE_DIVISOR=8
+        PROPTEST_CASES=64
+        CRAFT_TESTS=${{ needs.platforms.outputs.tests }}
+        CRAFT_TEST_FILTER=${{ needs.platforms.outputs.filter }}
+      setup-command: &setup bash scripts/ci-test-inputs.sh
+      # The PhotoCraft corpora, keyed on the script that pins them: a hit skips the PhotoCraft
+      # checkout and its xtask build (1:51 on Windows).
+      cache-paths: &cache-paths .test-inputs/photocraft/corpus
+      cache-key: &cache-key photocraft-corpus
+      cache-key-files: &cache-key-files scripts/ci-test-inputs.sh
+      # A `lint (<os>)` leg beside each `gate (<os>)` leg, so clippy is off the tests' critical path.
+      lint-command: &lint |
+        if [ "$RUNNER_OS" = Linux ]; then
+          python3 scripts/test-workspace-concurrency.py
+          python3 scripts/test-workspace-tests.py
+        fi
+        # One rustfmt call gets every source root of the workspace, which is longer than
+        # Windows allows for a command line (os error 206). rustfmt's result is the same on
+        # every system, so the Linux and macOS legs check it.
+        if [ "$RUNNER_OS" != Windows ]; then
+          cargo fmt --check
+        fi
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        cargo test --workspace --locked
-        cargo test --workspace --all-features --locked
-      windows-command: |
-        powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo fmt --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        # The same tests as `cargo test`, run in parallel across test binaries instead of one
-        # binary at a time; nextest skips doctests, so `cargo test --doc` runs them.
-        cargo nextest run --workspace --locked --profile ci
-        cargo test --workspace --doc --locked
-        cargo nextest run --workspace --all-features --locked --profile ci
+      command: &command |
+        # The tests run once, with every feature, in parallel across test binaries; nextest skips
+        # doctests, so `cargo test --doc` runs them. Examples are not built, except the two whose
+        # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
+        # first clippy run; the last command runs the crates whose tests check behaviour with a
+        # feature off, which an all-features build cannot reach.
+        # Every build is the whole workspace's, as on main; the filter narrows only the run. The
+        # doctests run for the whole workspace: `cargo test -p <selected>` would resolve features
+        # over the selected crates only and rebuild the dependencies whose features differ.
+        if [ "$CRAFT_TESTS" = none ]; then
+          echo "No crate changed: no tests to run."
+          exit 0
+        fi
+        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
         cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+
+  # The macOS and Windows legs, when `platforms` says this run needs them, with the Linux leg's
+  # inputs.
+  native-platforms:
+    name: Workspace
+    needs: platforms
+    if: needs.platforms.outputs.platform == 'true'
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["windows-latest","macos-latest"]'
+      lint-cache: false
+      timeout-minutes: *timeout
+      tools: *tools
+      craft-fonts-ref: *craft-fonts
+      dev-strip: true
+      # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
+      # time. A panic still names its file and line; only backtrace frames lose theirs, and the
+      # Linux and macOS legs keep line tables.
+      windows-env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+        CARGO_PROFILE_DEV_DEBUG=0
+      env: *env
+      setup-command: *setup
+      cache-paths: *cache-paths
+      cache-key: *cache-key
+      cache-key-files: *cache-key-files
+      lint-command: *lint
+      command: *command
+      windows-command: |
+        if [ "$CRAFT_TESTS" = none ]; then
+          echo "No crate changed: no tests to run."
+          exit 0
+        fi
+        powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
+        cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+        cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+
+  # Each main run's Linux leg saves a rolling cache entry of its own (`cache-workspace-crates`), and
+  # every run restores only the newest. This deletes the older ones as soon as the Linux leg is
+  # done, instead of leaving them to the 10 GB budget's eviction, which would evict other entries
+  # too. The only job with `actions: write`; it checks out and runs nothing from the repository.
+  cache-prune:
+    name: cache prune
+    needs: native
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - name: Delete all but the newest rolling entry of each job and runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
+          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
+            --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
+          declare -A kept
+          while read -r id key; do
+            [[ "$key" =~ ^.+-rust-[0-9a-f]{64}-(.+-crates-[A-Za-z_]+-[a-z0-9]+)-[0-9]+-[0-9]+- ]] || continue
+            entry=${BASH_REMATCH[1]}
+            if [ -n "${kept[$entry]:-}" ]; then
+              echo "delete $key"
+              gh cache delete "$id" --repo "$REPO"
+            else
+              kept[$entry]=1
+              echo "keep $key"
+            fi
+          done < "$RUNNER_TEMP/caches"
 
   msrv:
     name: Rust 1.95
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      # Its own dependency-cache entry: the calls in this file share one job id, so without a name
+      # they would write the same key.
+      cache-name: msrv
       os: '["ubuntu-latest"]'
       toolchain: 1.95.0
       targets: ""
@@ -84,6 +231,7 @@ jobs:
     name: UI and settings WASM
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      cache-name: wasm
       os: '["ubuntu-latest"]'
       targets: wasm32-unknown-unknown
       tools: ""

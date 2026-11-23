@@ -23,8 +23,14 @@ pub(in crate::text) fn cell_starting_at(row: &[model::Cell], g: usize) -> Option
 pub(in crate::text) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Cell, cols: usize) -> String {
     let grid = (!t.borderless).then_some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0, 0, 0)), space: 0.0 });
     let line = |c: &model::Cell, pick: fn(&Borders) -> Option<Border>| match c.borders.as_ref().and_then(pick) {
-        Some(b) => Some(b).filter(|b| b.is_visible()),
+        Some(b) => Some(b).filter(Border::is_drawn),
         None => grid,
+    };
+    // An edge two cells share: a line with a width wins over one of width 0, whichever cell
+    // states it, so a neighbour's line isn't lost to a hairline.
+    let shared = |own: Option<Border>, other: Option<Border>| match (own, other) {
+        (Some(a), Some(b)) if !a.is_visible() && b.is_visible() => Some(b),
+        (a, b) => a.or(b),
     };
     let row = t.rows.get(ri).map(Vec::as_slice).unwrap_or(&[]);
     let left_cell = g0.checked_sub(1).and_then(|g| {
@@ -37,8 +43,8 @@ pub(in crate::text) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::C
         })
     });
     let below = t.rows.get(ri + 1).and_then(|r| cell_starting_at(r, g0));
-    let left = line(c, |b| b.left).or_else(|| left_cell.and_then(|l| line(l, |b| b.right)));
-    let bottom = line(c, |b| b.bottom).or_else(|| below.and_then(|b| line(b, |x| x.top)));
+    let left = shared(line(c, |b| b.left), left_cell.and_then(|l| line(l, |b| b.right)));
+    let bottom = shared(line(c, |b| b.bottom), below.and_then(|b| line(b, |x| x.top)));
     let top = if ri == 0 { line(c, |b| b.top) } else { None };
     let right = if g0 + c.colspan.clamp(1, 63) as usize >= cols { line(c, |b| b.right) } else { None };
     let m = c.margins.filter(|m| m.iter().all(|v| v.is_finite())).unwrap_or(WORD_CELL_MARGINS);

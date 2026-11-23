@@ -10,6 +10,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+# MP4 timed text (3GPP TS 26.245 / mov_text / tx3g) sample codec.
+mov-text = []
+
 [dependencies]
 craft-timeline = { workspace = true }
 craft-xml = { workspace = true }
@@ -21,3 +26,5 @@ proptest = { workspace = true }
 roxmltree = "0.21"
 # ffmpeg as the reference for the ASS tests (tests/it/ass.rs).
 craft-media-testkit = { workspace = true }
+# craft-media isobmff for mov_text oracle demuxing/muxing tests.
+craft-media = { workspace = true, features = ["isobmff"] }
