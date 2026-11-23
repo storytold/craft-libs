@@ -10,7 +10,8 @@
 use super::marquee::MarqueeDrag;
 use super::{ItemsHooks, Placement};
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnKind, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove, ToggleColumn, ToggleEdit,
+    CollectionEvent, CollectionProps, ColumnKind, ContextMenuRequest, DropAt, DropPayload, DropPlace, ListDrag, PendingDrop, ReorderMove,
+    ToggleColumn, ToggleEdit,
 };
 use crate::contract::reorder;
 use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer as _};
@@ -19,8 +20,8 @@ use crate::runtime::egui::areas;
 use crate::runtime::env::Label;
 use crate::runtime::toggle_sweep::{self, Segment, Travel};
 use craft_behavior::{
-    Axis, CancelReason, ColumnKey, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton, PressCancel,
-    PressPhase, ScrollPos,
+    Axis, CancelReason, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton,
+    PressCancel, PressPhase, ScrollPos,
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
@@ -81,8 +82,9 @@ fn drop_spot(
 ) -> Option<Spot> {
     let to_screen = |point: Pos2| xf.map_or(point, |map| map.to_screen(point));
     let nav = layout.nav();
-    let hit = layout.hit(logical_point(layout, rect, rtl, at), offset);
-    let across = !matches!(nav, NavShape::Flat | NavShape::Tree);
+    let hit = layout.drop_hit(logical_point(layout, rect, rtl, at), offset);
+    let across =
+        !matches!(nav, NavShape::Flat | NavShape::Tree | NavShape::WrappedGrid { columns: 1, .. } | NavShape::BoundedGrid { columns: 1, .. });
     // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
     // row-wise layout that is beyond the last item's end edge on its row, or below its row.
     let past = hit.is_none() && {
@@ -273,9 +275,9 @@ pub(super) struct Drags<K> {
     pub(super) slow: Option<SlowClick<K>>,
     /// The row a press an item part won landed on, and whether the row held the lead when the press began.
     pub(super) part_press: Option<(K, bool)>,
-    /// The row the collection last asked a menu for: it shows as the menu's row while a menu hung from the collection
-    /// is open.
-    pub(super) menu: Option<K>,
+    /// The request the collection last made for a row's menu: the row shows as the menu's row, and the response
+    /// reports the request (`CollectionResponse::menu`), while a menu hung from the collection is open.
+    pub(super) menu: Option<ContextMenuRequest<K>>,
 }
 
 /// A press that opens a rename when it ends as a click on the item's label and no second press follows within the
@@ -329,15 +331,15 @@ struct Landed {
 
 struct RowDrop {
     spot: Option<Spot>,
-    /// Whether the held Alt may turn the drop into a copy.
-    copy_ok: bool,
+    /// The held key that turns the drop into a copy; `None`: the drop only moves.
+    copy: Option<CopyKeys>,
 }
 
 impl<K> DropTarget<ListDrag<K>> for RowDrop {
     type Drop = Landed;
 
     fn accept(&self, _: &ListDrag<K>, _: Pos2, op: DropOperation) -> Option<Landed> {
-        if matches!(op, DropOperation::Copy) && !self.copy_ok {
+        if matches!(op, DropOperation::Copy) && self.copy.is_none() {
             return None;
         }
         self.spot.map(|spot| Landed { spot, op })
@@ -345,6 +347,10 @@ impl<K> DropTarget<ListDrag<K>> for RowDrop {
 
     fn mark(&self, drop: &Landed) -> DropMark {
         drop.spot.mark
+    }
+
+    fn copy_keys(&self) -> CopyKeys {
+        self.copy.unwrap_or_default()
     }
 }
 
@@ -483,7 +489,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let mods = crate::runtime::pointer::frame_raw(&cx.core.ctx).mods;
         self.emit_toggle(cx, at, &column, on, mods);
         if toggle.exclusive && on {
-            for other in (0..self.source.len()).filter(|&other| other != at && self.source.toggled(other, &column)) {
+            // Collected first: emitting needs `self` mutably while the source is read through it.
+            let others: Vec<usize> = (0..self.source.len()).filter(|&other| other != at && self.source.toggled(other, &column)).collect();
+            for other in others {
                 self.emit_toggle(cx, other, &column, false, mods);
             }
         }
@@ -559,8 +567,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let key = self.source.key(at);
         let keys = self.keys_at(&self.acted_on(at));
         let count = keys.len() as u64;
-        let preview = match props.drag_count {
+        let preview = match props.drag_count.filter(|_| props.drag_badge) {
             Some(word) => DragPreview::Badge(Label::from(cx.env.counted(word, count))),
+            None if !props.drag_badge => DragPreview::None,
             None if count > 1 => DragPreview::Badge(Label::from(count.to_string())),
             None => self.source.text(at).map_or(DragPreview::None, |text| DragPreview::Badge(Label::from(text.into_owned()))),
         };
@@ -584,13 +593,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if at.y < rect.min.y || self.source.is_empty() {
             return None;
         }
-        let outline = Outline::new(self.source);
+        let outline = Outline::new(&*self.source);
         drop_spot(layout, &outline, &|| self.source.len(), self.xf, (rect, offset, rtl), groups, at)
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
     fn inside_dragged(&self, payload: &ListDrag<C::Key>, parent: Option<usize>) -> bool {
-        let outline = Outline::new(self.source);
+        let outline = Outline::new(&*self.source);
         let mut held = parent;
         while let Some(row) = held {
             if payload.keys.contains(&self.source.key(row)) {
@@ -612,7 +621,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let copy = matches!(landed.op, DropOperation::Copy);
         let together = at.iter().enumerate().all(|(n, &place)| place == from + n);
         let parent = landed.spot.parent.map(|row| self.source.key(row));
-        let held = if groups { reorder::parent_of(&Outline::new(self.source), from).map(|row| self.source.key(row)) } else { None };
+        let held = if groups { reorder::parent_of(&Outline::new(&*self.source), from).map(|row| self.source.key(row)) } else { None };
         if to == from && together && !copy && parent == held {
             return None;
         }
@@ -747,15 +756,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         .filter(|spot| comp.accepts(&payload, Some(&self.source.key(spot.over)), spot.insert))
                         .filter(|spot| !groups || !self.inside_dragged(&payload, spot.parent))
                 };
-                let copy_ok = rule.copy_with_alt;
+                let copy = rule.copy;
                 let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
-                if let Some(landed) = cx.drop_target::<ListDrag<C::Key>, _>(&RowDrop { spot, copy_ok }) {
+                if let Some(landed) = cx.drop_target::<ListDrag<C::Key>, _>(&RowDrop { spot, copy }) {
                     self.land(cx, &payload, landed, groups);
                 } else if let Some(spot) = spot
                     && drag::winning(&cx.core.ctx, cx.core.id, ordinal)
                 {
-                    let op = drag::current_operation(&cx.core.ctx);
-                    if copy_ok || !matches!(op, DropOperation::Copy) {
+                    let op = drag::current_operation(&cx.core.ctx, copy.unwrap_or_default());
+                    if copy.is_some() || !matches!(op, DropOperation::Copy) {
                         self.drags.pending = self.own_move(&payload, Landed { spot, op }, groups).map(|(_, after)| PendingDrop::Reorder(after));
                     }
                 }
@@ -768,9 +777,9 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// A stacking key on the lead row `at`: the rows `acted_on` names move, as a row drag takes them
     /// (`reorder::key_move`).
-    pub(super) fn key_reorder(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
+    pub(super) fn key_reorder(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
         let groups = props.reorder.is_some_and(|rule| rule.into_groups);
-        let outline = Outline::new(self.source);
+        let outline = Outline::new(&*self.source);
         let tree = groups.then_some(&outline as &dyn craft_behavior::NavOutline);
         let mut places = self.acted_on(at);
         places.sort_unstable();
@@ -800,6 +809,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let keys = self.keys_at(&places);
         let key = self.source.key(at);
+        // The collection's own reorder rules govern a stacking key as they govern a drag.
+        if !keys.iter().all(|moved| comp.can_drag(moved)) || !comp.accepts(&ListDrag::new(cx.core.id, keys.clone(), key.clone()), None, gap.insert) {
+            return;
+        }
         let before = ReorderMove::new(key.clone(), keys.clone(), from, false).in_group(held);
         let after = ReorderMove::new(key, keys, to, false).in_group(parent);
         self.events.push(CollectionEvent::Reorder(EditEvent::set(Mixed::Same(before), after, cx.core.label_arc(), None)));

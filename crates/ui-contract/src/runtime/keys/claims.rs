@@ -49,6 +49,29 @@ pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
     current(ctx, |stage| stage.claims.push((owner, chord)));
 }
 
+/// Hands the first of `chords` (a fired command's keys, in binding order) that the focused component claims, as it is
+/// focused now, to the claim's owner in the next pass, as a press of the chord arrives: a command run from a menu or
+/// the palette whose key a component claims (a canvas tool's Delete) reaches the component as that key, so key and
+/// menu share one path. A menu pick returns focus in its pass before its command fires. With nothing focused the
+/// window's document canvas stands for the focused component, as it takes the window's nudges
+/// (`route::unfocused_canvas`). `false` when that component claims none of them.
+pub(crate) fn fire_claimed(ctx: &Context, chords: &[Chord]) -> bool {
+    let Some(rec) = crate::runtime::focus::focused_rec(ctx).or_else(|| super::route::unfocused_canvas(ctx)) else { return false };
+    let root = (rec.stop.root != rec.stop.id && !rec.stop.text).then_some(rec.stop.root);
+    let found = current(ctx, |stage| {
+        let held = |chord: &Chord| {
+            let owns = |owner: &Id| *owner == rec.stop.id || Some(*owner) == root;
+            let state = stage.last_claims.iter().chain(&stage.claims).find(|(owner, held)| held == chord && owns(owner));
+            state.map(|(owner, _)| *owner).or_else(|| rec.stop.keys.claims.contains(chord).then_some(rec.stop.id))
+        };
+        chords.iter().find_map(|chord| held(chord).map(|owner| (owner, *chord)))
+    });
+    let Some(claim) = found else { return false };
+    current(ctx, |stage| stage.fired_claims.push(claim));
+    crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
+    true
+}
+
 /// Holds `chord` for `owner` from the next input hook on, whichever component has focus: the key stage withholds
 /// it from every component and `take_claimed` reads it. Used while a container is in a mode that owns the arrow
 /// keys, Enter and Escape (the window move and size modes, 16.3); the claim lapses when it is not renewed.

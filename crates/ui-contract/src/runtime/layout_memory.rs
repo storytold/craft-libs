@@ -1285,6 +1285,10 @@ pub(crate) mod guard {
         ),
         ("runtime::derived::Store", "derived values: a pure function of their key, so a value a measuring run builds is the one a real run builds"),
         ("contract::steps::scroll_owner::", "scroll reveals and moves: read; taken through take_queued"),
+        (
+            "contract::items::request::RenameRequests",
+            "rename requests: peeked by the items read so the renamed row stays in the view; taken in real runs only",
+        ),
         ("contract::body::scroll::Jumps", "scroll jumps: taken through take_queued"),
         ("runtime::edit::CancelAll", "edit cancels: read; a measuring run ends nothing"),
         ("runtime::commands::board::Board", "commands: read; registration and publishing are effects skipped in measuring runs"),
@@ -1324,7 +1328,9 @@ pub(crate) mod guard {
         ("primitives::textures::loader::Pools", "texture loaders: cache; one per salt, made on first use, and the store's uploads"),
         ("primitives::textures::thumbnails::Hubs", "thumbnails: cache; one per salt, made on first use, and its per-frame render budget"),
         ("fonts::document::Registry", "document faces: cache; a face loads the same whichever run asks, and its repaint request is harmless"),
+        ("runtime::egui::fonts::Providers", "font providers and the served faces: cache; a face is served the same whichever run asks"),
         ("runtime::egui::fonts::Steps", "fonts plugin begin-pass steps: cache; a step added twice runs once"),
+        ("runtime::env::InstalledJobs", "the jobs install was given: set once at install, only read after"),
         // Testing logs.
         ("runtime::measure::", "measuring-run counts and the skipped-effect log (testing)"),
         ("runtime::pass_state::Parked", "pass state between passes: moved into the thread and back, not read"),

@@ -36,7 +36,7 @@ use crate::runtime::{keys, layout_memory, pointer, wheel, windows};
 use crate::style::ComponentStyle as _;
 use crate::style::{StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_style};
 use craft_behavior::layout_memory::measure_tolerance;
-use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
+use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, ReorderKeys, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use craft_theme::variant::Tone;
 use egui::emath::GuiRounding as _;
 use egui::layers::ShapeIdx;
@@ -131,7 +131,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
 
     fn key_role(&self, comp: &C) -> KeyRole {
         let props = comp.props(Internal::new());
-        KeyRole::new().reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder)).document(props.scroll_owner)
+        KeyRole::new()
+            .reorderable(props.header.is_some_and(|header| header.band == DragBand::Reorder).then_some(ReorderKeys::Stacking))
+            .document(props.scroll_owner)
     }
 
     fn position(&self, comp: &C) -> Option<SetPosition> {
@@ -556,6 +558,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             offset.y += f64::from(by.y);
             offset.x += f64::from(if rtl { -by.x } else { by.x });
             let offset = self.clamped(scroll, view.size(), offset);
+            // A reveal of what the view shows moves nothing: no jump, so no repeated pass.
             if offset != from {
                 super::scroll::queue_jump(&cx.core.ctx, id, offset);
             }

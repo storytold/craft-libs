@@ -350,6 +350,34 @@ fn clamp_axis(center: f64, len: f64, size: f64, zoom: f64) -> f64 {
     center.clamp(half, len - half)
 }
 
+/// Whether `host`, a view the app wrote back while a drag proposed `proposed`, is that proposal as the canvas settled
+/// it: the canvas settles a view it is given to whole device pixels and to its own rect, so the centre comes back moved
+/// by under a point (photocraft#16006, photocraft#16403). A different zoom, turn, mirroring or aspect, or a centre a
+/// point or more away, is the app changing the view. The drags that pan a canvas view (the scroll bar thumbs, the
+/// Navigator's view box) compare with this.
+pub(crate) fn settled_as_proposed(proposed: &CanvasView, host: &CanvasView) -> bool {
+    let reach = 1.0 / proposed.zoom.max(f64::MIN_POSITIVE);
+    proposed.zoom == host.zoom
+        && proposed.rotation == host.rotation
+        && proposed.flip_x == host.flip_x
+        && proposed.aspect == host.aspect
+        && (proposed.center.x - host.center.x).abs() < reach
+        && (proposed.center.y - host.center.y).abs() < reach
+}
+
+/// Whether `host` is `proposed` passed through f32 layout units: its centre and zoom equal in f32 and every other
+/// field equal.
+fn rounded_as_proposed(proposed: &CanvasView, host: &CanvasView) -> bool {
+    let magnitude = proposed.center.x.abs().max(proposed.center.y.abs()).max(host.center.x.abs()).max(host.center.y.abs());
+    let mut rounded = *proposed;
+    rounded.center = host.center;
+    rounded.zoom = host.zoom;
+    rounded == *host
+        && craft_behavior::same_in_f32_at(proposed.center.x, host.center.x, magnitude)
+        && craft_behavior::same_in_f32_at(proposed.center.y, host.center.y, magnitude)
+        && craft_behavior::same_in_f32(proposed.zoom, host.zoom)
+}
+
 /// The four corners of a document rectangle.
 fn doc_corners(doc: DocRect) -> [Point; 4] {
     [Point::new(doc.x0, doc.y0), Point::new(doc.x1, doc.y0), Point::new(doc.x1, doc.y1), Point::new(doc.x0, doc.y1)]
@@ -483,14 +511,11 @@ impl Component for CanvasScrollbars<'_> {
     /// comes back with its centre moved by under a point (photocraft#16006): that is the drag's own value, not the app
     /// changing the view under it, and the drag goes on. A different zoom, turn, mirroring or aspect, or a centre a
     /// point or more away, is a change.
+    ///
+    /// A host that maps a proposed centre through its own layout (a scroll offset in points) and back writes back a
+    /// view that differs from the proposal by f32 rounding only, zoom included: that is not a change either.
     fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
-        let reach = 1.0 / proposed.zoom.max(f64::MIN_POSITIVE);
-        proposed.zoom == host.zoom
-            && proposed.rotation == host.rotation
-            && proposed.flip_x == host.flip_x
-            && proposed.aspect == host.aspect
-            && (proposed.center.x - host.center.x).abs() < reach
-            && (proposed.center.y - host.center.y).abs() < reach
+        settled_as_proposed(proposed, host) || rounded_as_proposed(proposed, host)
     }
 
     /// The bars: `PartsCx::scroll` runs the thumb drag and the page press in the pipeline.

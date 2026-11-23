@@ -1,7 +1,11 @@
-//! Trials of the dialog shells' layer behaviour: initial focus, Escape and a closed dialog's keys.
+//! Trials of the dialog shells' layer behaviour: initial focus, Escape and a closed dialog's keys; and of the prompts
+//! on the dialog host: the default answer and the Apply to All box.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
-use super::{BlockingOverlay, ButtonPlace, Dialog};
+use super::{
+    BlockingOverlay, ButtonPlace, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog,
+    StandardPrompt, UnsavedChangesDialog,
+};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
 use crate::contract::{Bind, FooterSlot, Props as _, Role, Show as _, ShowContainer as _};
@@ -16,8 +20,11 @@ use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, o
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
 use craft_behavior::ColumnWidth;
+use craft_quit::{CloseAnswer, CloseScope};
 use egui::{Key, Modifiers, Rect, Ui};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::Duration;
 
 #[trial]
 fn escape_closes_a_cancellable_overlay_with_nothing_to_focus() {
@@ -62,6 +69,36 @@ fn a_footer_button_closes_the_dialog_by_its_role() {
     };
     assert_eq!(run("Cancel"), (Some(CloseReason::Requested), Some(1)), "Cancel closes as requested");
     assert_eq!(run("Delete"), (Some(CloseReason::Activated), Some(0)), "any other button closes as an outcome");
+}
+
+#[trial]
+fn a_dialog_with_unchanged_fields_shows_close_in_place_of_ok_and_cancel() {
+    let run = |changed: bool| {
+        let seen = Rc::new(Cell::new((None, None)));
+        let sink = seen.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut open = true;
+            let shown = Dialog::new("Properties")
+                .opened(Bind::bound(&mut open))
+                .close_unchanged(true)
+                .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+                .show(ui, |_, cx| Dialog::report_changed(cx, changed));
+            if shown.output.closed.is_some() {
+                sink.set((shown.output.closed, shown.output.picked));
+            }
+        });
+        fixture.idle(30);
+        // The title row's close action carries the same name; the footer's button is the last of them.
+        let closes: Vec<_> =
+            fixture.by_role(Role::BUTTON).into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("Close")).collect();
+        let labels = (fixture.by_label("OK").is_some(), fixture.by_label("Cancel").is_some(), closes.len() > 1);
+        if let Some(close) = closes.last().filter(|_| !changed) {
+            fixture.click(close);
+        }
+        (labels, seen.get())
+    };
+    assert_eq!(run(false), ((false, false, true), (Some(CloseReason::Requested), Some(1))), "unchanged: Close, which answers as the Cancel button");
+    assert_eq!(run(true).0, (true, true, false), "changed: OK and Cancel");
 }
 
 #[trial]
@@ -249,6 +286,82 @@ fn a_dialog_opens_on_its_first_field_else_its_default_button() {
     assert_eq!(focus_on_open(true, true), Some("Name"), "the first field takes the focus though a check box comes first");
     assert_eq!(focus_on_open(false, true), Some("OK"), "without a field the default button takes it");
     assert_eq!(focus_on_open(false, false), None, "without either nothing takes it");
+}
+
+/// A dialog host showing `dialog` in a fixture, once the dialog settled.
+fn hosted<D: StackDialog>(dialog: D) -> (Rc<RefCell<DialogHost>>, Fixture) {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    host.borrow_mut().open(dialog);
+    fixture.idle(30);
+    (host, fixture)
+}
+
+/// The choice a hosted `prompt` answers to `key`; Cancel when the host reports the dialog cancelled.
+fn prompt_answer_to(prompt: StandardPrompt, key: Key) -> Option<PromptChoice> {
+    let (host, mut fixture) = hosted(prompt);
+    fixture.key(key, Modifiers::NONE).idle(2);
+    let result = host.borrow_mut().take::<StandardPrompt>();
+    result.map(|result| match result {
+        DialogResult::Ok(answer) => answer.choice,
+        DialogResult::Cancel => PromptChoice::Cancel,
+    })
+}
+
+/// A prompt asking to open a link: Open (Proceed) and Cancel.
+fn link_prompt() -> StandardPrompt {
+    StandardPrompt::custom("Open the link “https://example.com”?").button(PromptChoice::Proceed, "Open").button(PromptChoice::Cancel, "Cancel")
+}
+
+#[trial]
+fn enter_answers_a_prompts_chosen_default() {
+    let safe = || link_prompt().default_choice(PromptChoice::Cancel);
+    assert_eq!(prompt_answer_to(safe(), Key::Enter), Some(PromptChoice::Cancel), "Enter answers the chosen default, so it opens no link");
+    assert_eq!(prompt_answer_to(safe(), Key::Escape), Some(PromptChoice::Cancel), "Escape still cancels");
+    assert_eq!(prompt_answer_to(link_prompt(), Key::Enter), Some(PromptChoice::Proceed), "without a chosen default Enter proceeds");
+    let missing = link_prompt().default_choice(PromptChoice::Alternate);
+    assert_eq!(prompt_answer_to(missing, Key::Enter), Some(PromptChoice::Proceed), "a default with no button leaves Proceed the default");
+}
+
+/// Shows `dialog` on a dialog host, ticks its "Apply to All" box when `tick` and the box shows, and presses the first
+/// button of `accept` that is shown. Whether the box showed, and the host's result.
+fn ticked_and_accepted<D: StackDialog>(dialog: D, tick: bool, accept: &[&str]) -> (bool, Option<DialogResult<D::Result>>) {
+    let (host, mut fixture) = hosted(dialog);
+    let offered = fixture.by_label("Apply to All");
+    if let (true, Some(apply)) = (tick, &offered) {
+        fixture.click(apply).idle(2);
+    }
+    let button = accept.iter().find_map(|label| fixture.by_label(label)).expect("the accepting button is shown");
+    fixture.click(&button).idle(2);
+    let result = host.borrow_mut().take::<D>();
+    (offered.is_some(), result)
+}
+
+#[trial]
+fn apply_to_all_shows_only_with_several_documents_and_rides_the_answer() {
+    // Save on macOS, Yes elsewhere.
+    let save = ["Save", "Yes"];
+    let unsaved = |remaining: usize, tick: bool| {
+        let (offered, result) = ticked_and_accepted(UnsavedChangesDialog::new(CloseScope::Close, "poster.pdf").remaining(remaining), tick, &save);
+        match result {
+            Some(DialogResult::Ok(answer)) => (offered, answer.answer, answer.apply_to_all),
+            other => panic!("the dialog answers Save: {other:?}"),
+        }
+    };
+    assert_eq!(unsaved(1, true), (false, CloseAnswer::Save, false), "one document: no box, and the answer applies to it alone");
+    assert_eq!(unsaved(3, true), (true, CloseAnswer::Save, true), "several documents: the ticked box rides the answer");
+    assert_eq!(unsaved(3, false), (true, CloseAnswer::Save, false), "an unticked box leaves the answer to this document");
+    let recovery = |remaining: usize, tick: bool| {
+        let document = RecoveredDocument::new("poster", "poster.pdf", Duration::from_secs(300));
+        let (offered, result) = ticked_and_accepted(RecoveryDialog::new(document).remaining(remaining), tick, &["Recover"]);
+        match result {
+            Some(DialogResult::Ok(choice)) => (offered, choice.answer, choice.apply_to_all),
+            other => panic!("the dialog answers Recover: {other:?}"),
+        }
+    };
+    assert_eq!(recovery(1, true), (false, RecoveryAnswer::Recover, false), "one document: no box");
+    assert_eq!(recovery(3, true), (true, RecoveryAnswer::Recover, true), "several documents: the ticked box rides the answer");
 }
 
 /// A progress overlay shows a spinner beside its message on its card, is named by the message, and its Cancel makes

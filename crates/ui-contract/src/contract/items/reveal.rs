@@ -3,7 +3,6 @@
 use super::measure::{Known, RowMeasure};
 use super::{ItemsHooks, rows};
 use crate::contract::Collection;
-use crate::contract::collection::LeadSource;
 use crate::runtime::env::{Env, EnvView};
 use crate::runtime::memory::MemoryStage;
 use craft_behavior::{ItemLayout, Proposal, ScrollPos};
@@ -15,7 +14,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// moves to it and it scrolls into view.
     pub(super) fn requested_reveal(&mut self, comp: &C, layout: &C::ItemLayout) {
         if let Some(at) = comp.reveal().and_then(|key| self.index_of(key)).filter(|&at| !self.source.section_stop(at)) {
-            self.move_lead(at, LeadSource::Keys);
+            let key = self.source.key(at);
+            if self.lead.key.as_ref() != Some(&key) {
+                self.lead.rested = None;
+            }
+            self.lead.key = Some(key);
+            self.lead.at = at;
             self.reveal_with(layout, at);
         }
     }
@@ -55,7 +59,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             self.aim_reveal(layout, at, view.height());
             let mut in_view = Vec::new();
             layout.visible(ScrollPos { x: self.offset_x, y: self.offset }, view.size(), &mut in_view);
-            let source = self.source;
+            let source = &*self.source;
             let unmeasured: Vec<usize> = rows::measured_heights(&ctx, id, |height| {
                 in_view
                     .into_iter()

@@ -12,14 +12,14 @@ pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotK
 pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
 
 use crate::runtime::commands::CommandChain;
-use crate::runtime::egui::memory::FastMap;
+use crate::runtime::egui::memory::{self, FastMap};
 use crate::runtime::egui::{pass, repaint, scale, stack, style};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
 use crate::style::{EnvKey, GlyphRole, Ink, SurfaceKind, UiTokens};
 use craft_behavior::{CanvasTransform, MotionMode};
-use craft_host::Host;
 use craft_host::target::{Os, ShellInfo};
+use craft_host::{Host, Jobs};
 pub use craft_i18n::Direction;
 pub use craft_i18n::{AgeStyle, Count, Counted, WordRows, WordSet, WordTemplate, Words};
 use craft_i18n::{CalendarDate, DateFormat, Format};
@@ -44,9 +44,9 @@ mod view;
 pub use app_values::{AppValues, EnvValue, StyleValue};
 pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, in_room, with_env};
 pub use root::{ResolvedRoot, RootEnv};
-pub use system::{SystemState, system_appearance};
+pub use system::{SystemState, system_appearance, system_text_scale};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
@@ -198,6 +198,8 @@ pub struct Scoped {
     /// The innermost scrolling body that encloses the scope: a collection under it owns no scroll of its own, and
     /// page and end moves a component leaves untaken go to it.
     pub(crate) scroll_owner: Option<ScrollOwner>,
+    /// The enclosing region's fallback collection for unused moves.
+    pub(crate) fallback_collection: Option<Id>,
     /// The axes (horizontal, vertical) the innermost scrolling body scrolls on: the room along them is unbounded, so
     /// a child that fills there takes its content size, except the children that fill the main axis of a body that
     /// shares it: they share what the view shows, at least their content size (`layout::view_room`).
@@ -408,6 +410,7 @@ impl Scoped {
         self.roving = None;
         self.transform = None;
         self.scroll_owner = None;
+        self.fallback_collection = None;
         self.wheel = WheelScope::Plain;
         self.unbounded = (false, false);
         self.lazy = None;
@@ -473,8 +476,13 @@ impl Scoped {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
         let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
+        // The view stands on the line of the row around it only to fill it, as a levelled unit does: a fill-width row in
+        // it (a bar in a shell slot) takes the line's height and centres on it, as shown without the view; its children
+        // take no slots on the line (photocraft#16405).
+        let line = self.row_line.map(|line| RowLine { places: false, ..line });
         self.start_room();
         (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
+        self.row_line = line;
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
@@ -678,6 +686,7 @@ impl Env {
                 offered: None,
                 measure: None,
                 scroll_owner: None,
+                fallback_collection: None,
                 unbounded: (false, false),
                 lazy: None,
                 item: None,
@@ -743,6 +752,15 @@ impl Env {
     /// The `Host` of the running viewport's root env.
     pub(crate) fn host_of(ctx: &Context) -> Option<Arc<Host>> {
         PerViewport::<ViewportEnvs>::with(ctx, pass::current_viewport(ctx), |envs| envs.root.as_ref().and_then(|env| env.host.clone()))
+    }
+
+    /// Where `ctx`'s background work runs: the host's jobs, else the jobs `install` was given, else
+    /// `craft_host::default_jobs()`.
+    pub(crate) fn jobs_of(ctx: &Context) -> Arc<dyn Jobs> {
+        if let Some(host) = Self::host_of(ctx) {
+            return Arc::clone(host.jobs_shared());
+        }
+        memory::with::<InstalledJobs, _>(ctx, |installed| installed.0.clone()).unwrap_or_else(craft_host::default_jobs)
     }
 
     /// A clone of the innermost app value, else `T::root()`. Large values hold an `Arc`.
@@ -889,4 +907,14 @@ impl Drop for Restore<'_> {
 /// The mode the root runs animations at: the app's, and off while egui's animation time is zero.
 fn motion_mode(ctx: &Context, motion: MotionMode) -> MotionMode {
     if repaint::animation_time(ctx) > 0.0 { motion } else { motion.lowered_by(MotionMode::Off) }
+}
+
+/// The jobs `install` was given, for a context with no host.
+#[derive(Default)]
+struct InstalledJobs(Option<Arc<dyn Jobs>>);
+
+/// Keeps `jobs` as where `ctx`'s background work runs while no host is installed; `None` leaves
+/// `craft_host::default_jobs()`.
+pub(crate) fn install_jobs(ctx: &Context, jobs: Option<Arc<dyn Jobs>>) {
+    memory::with::<InstalledJobs, _>(ctx, |installed| installed.0 = jobs);
 }

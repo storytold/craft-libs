@@ -133,7 +133,13 @@ impl Lazy {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
         let call = if real { Call::Real(place) } else { Call::Measuring { room: sizing.then_some(available), flow: place.flow } };
-        let settled = if memo { lazy::settled(&ctx, owner, id, call, view, key) } else { None };
+        // Scroll owners with queued moves wake the settled regions holding them, as routed intents do.
+        let settled = if memo {
+            let moving = crate::contract::steps::scroll_owner::move_targets(&ctx);
+            lazy::settled(&ctx, owner, id, call, view, key, &moving)
+        } else {
+            None
+        };
         // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
         let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
         if let Some((size, ran_at, shift)) = settled

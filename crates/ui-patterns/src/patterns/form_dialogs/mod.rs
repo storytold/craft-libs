@@ -7,7 +7,7 @@ mod param;
 pub(crate) mod rows;
 
 pub use fields::{DialogFields, FieldValue};
-pub use param::{CustomContext, CustomRow, NumberUnit, Param, ParamKind, encode, open_fields, set_color_field};
+pub use param::{CustomContext, CustomRow, Enable, NumberUnit, Param, ParamKind, encode, open_fields, set_color_field};
 pub use rows::{ParamRows, ParamRowsOutput};
 pub use words::ParamWords;
 
@@ -18,13 +18,15 @@ pub(crate) mod path_row;
 pub(crate) mod preview;
 
 pub use dialog::{
-    BelowRows, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ResetFooter, ResetPick, set_param_field,
+    BelowRows, DialogLayout, HostedParamDialog, ParamDialog, ParamDialogOutput, ParamDialogWords, ParamLayout, ParamResult, ParamTab, ResetFooter,
+    ResetPick, SharedOverlay, SharedRows, set_param_field,
 };
 pub use form::{FormButtons, FormCx, FormDialog, FormDialogWords, FormOutput};
 pub use host_requests::{HostRequests, PreviewRequest};
 pub use path_row::{PathRow, PathRowOutput, PathRowWords};
 pub use preview::{
-    PaneOverlay, PreviewOutput, PreviewPane, PreviewPaneStyle, PreviewState, PreviewView, PreviewWords, PreviewZoom, PreviewZoomOutput,
+    PagerStep, PagerUnit, PaneOverlay, PanePager, PreviewOutput, PreviewPane, PreviewPaneStyle, PreviewState, PreviewView, PreviewWords, PreviewZoom,
+    PreviewZoomOutput,
 };
 
 mod size_model;
@@ -36,7 +38,10 @@ pub(crate) mod password;
 pub(crate) mod report;
 
 pub use list_manager::{ActionEnabled, ListManager, ListManagerAction, ListManagerChoice, ListManagerEntry, ListManagerOutput, ListManagerWords};
-pub use password::{PasswordAnswer, PasswordDialog, PasswordOutput, PasswordPurpose, PasswordStrength, PasswordWords, Secret};
+pub use password::{
+    PasswordAnswer, PasswordDialog, PasswordFields, PasswordFieldsOutput, PasswordFiles, PasswordOutput, PasswordPurpose, PasswordStrength,
+    PasswordWords, Secret,
+};
 pub use report::{HostedReport, ReportDialog, ReportNote, ReportOutput, ReportWords};
 
 pub(crate) mod file_list;
@@ -61,8 +66,8 @@ pub use new_document::{
 pub(crate) mod about;
 
 pub use about::{
-    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort,
-    Credits, HostedAbout, ModelCredit, NameMode,
+    AboutAppTab, AboutDialog, AboutImage, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor,
+    ContributorSort, Credits, HostedAbout, ModelCredit, NameMode,
 };
 
 mod color_choice;
@@ -74,7 +79,7 @@ pub use guides::{
     GuideLayoutPreset, GuideLayoutResult, GuideLayoutValues, GuideLength, GuideRect, GuideTarget, GuideUnits, HostedGuideLayoutDialog,
     HostedNewGuideDialog, NEW_GUIDE_COLOR_KEY, NewGuideDialog, NewGuideOutput, NewGuideValues,
 };
-pub use properties::{HostedPropertiesDialog, PropertiesDialog, PropertiesOutput, PropertiesTab, PropertyRow};
+pub use properties::{PropertiesDialog, PropertiesOutput, PropertiesTab, PropertyRow};
 
 // canvas-navigator-a
 pub(crate) mod navigator_options;

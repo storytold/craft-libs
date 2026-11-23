@@ -96,6 +96,14 @@ pub struct FaceInfo {
     pub fs_type: u16,
     /// The OS/2 code page bits (`ulCodePageRange1`, `ulCodePageRange2`).
     pub code_pages: [u32; 2],
+    /// The OS/2 `usWeightClass` as the file states it; `None` without an OS/2 table. A named instance has its file's.
+    pub weight_class: Option<u16>,
+    /// The OS/2 `sFamilyClass` (high byte: the IBM class; 0 without an OS/2 table).
+    pub family_class: i16,
+    /// The OS/2 PANOSE digits (all 0 without an OS/2 table).
+    pub panose: [u8; 10],
+    /// The `post` table marks the face fixed-pitch.
+    pub fixed_pitch: bool,
     /// The file the face is in; `None` for a face added as bytes.
     pub path: Option<PathBuf>,
     /// The size in bytes of the file when it was scanned; `None` for a face added as bytes. A caller that draws with the
@@ -308,6 +316,15 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, outlines: Outlines, index: 
     });
     let fs_type = os2.as_ref().map_or(0, |t| t.fs_type());
     let code_pages = os2.as_ref().map_or([0, 0], |t| [t.ul_code_page_range_1().unwrap_or(0), t.ul_code_page_range_2().unwrap_or(0)]);
+    let weight_class = os2.as_ref().map(|t| t.us_weight_class());
+    let family_class = os2.as_ref().map_or(0, |t| t.s_family_class());
+    let mut panose = [0u8; 10];
+    if let Some(digits) = os2.as_ref().map(|t| t.panose_10()) {
+        for (slot, digit) in panose.iter_mut().zip(digits.iter()) {
+            *slot = *digit;
+        }
+    }
+    let fixed_pitch = font.post().ok().is_some_and(|p| p.is_fixed_pitch() != 0);
     let axes = font.axes();
     let legacy_pair = has_typo_family
         .then(|| name(font, &[StringId::FAMILY_NAME]))
@@ -331,6 +348,10 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, outlines: Outlines, index: 
         outlines,
         fs_type,
         code_pages,
+        weight_class,
+        family_class,
+        panose,
+        fixed_pitch,
         path: path.map(Path::to_path_buf),
         file_bytes: None,
         index,

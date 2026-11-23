@@ -5,26 +5,28 @@ use super::hide::{self, PruneKey};
 use crate::contract::Revision;
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Cx, Entry, MemoKey, MemoProps, MemoView, NoValue, Outbox, Outcome, Pad, Pointer as _, Props as _, Show as _,
+    Bind, BindMut, BodyCx, Cx, Entry, Gap, MemoKey, MemoProps, MemoView, NoValue, Outbox, Outcome, Pad, Pointer as _, Props as _, Show as _,
     ShowContainer as _, Sizing, Tracked, WordSetCx as _,
 };
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
+use crate::docking::tree::FrameRules;
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, GroupGrip,
-    HidePanels, IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea, Titles,
-    WindowColumn, actions, column_cells, dock_states, frame, move_actions, with_area_rules,
+    HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea,
+    Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
 };
+use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
 use crate::runtime::derived::derived;
 use crate::runtime::drag;
-use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
+use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
-use crate::sections::HeaderAction;
+use crate::sections::{HeaderAction, Panel};
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, SplitSize, Workspace, node_at,
 };
@@ -142,6 +144,12 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
+    /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
+    /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
+    /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
+    #[prop]
+    rail_footer: Option<P>,
+    top_inset: f32,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -167,6 +175,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             auto_collapse: false,
             locked: false,
             flyout: None,
+            rail_footer: None,
+            top_inset: 0.0,
         }
     }
 
@@ -180,6 +190,16 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         config: DockConfig,
     ) -> Self {
         DockArea { locked: true, ..Self::new(label, Bind::given(Arc::clone(workspace)), specs, panels, config) }
+    }
+
+    /// Keeps floating windows below the top `inset` points of the window: the height of the bars (notices) the
+    /// windows float over. A window's place is clamped to the float bounds, so one at the top of the area sits just
+    /// below the bars and moves with them as they show and close. A negative or non-finite inset is none.
+    #[must_use]
+    // design: allow[props/point-size](the inset is measured content, the height of the app's bars, not a size the area chooses)
+    pub fn top_inset(mut self, inset: f32) -> Self {
+        self.top_inset = if inset.is_finite() { inset.max(0.0) } else { 0.0 };
+        self
     }
 }
 
@@ -219,6 +239,7 @@ struct Drops<'a, P> {
     hide: HidePanels<'a>,
     maximized: Option<&'a P>,
     rtl: bool,
+    top_inset: f32,
 }
 
 impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
@@ -227,7 +248,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let ctx = cx.core.ctx.clone();
         let sizes = *cx.style.sizes();
         let shell = cx.env.get::<ShellEntry>().0;
-        let bounds = shell.as_ref().map_or(cx.rect, ShellCx::float_bounds);
+        let bounds = inset_top(shell.as_ref().map_or(cx.rect, ShellCx::float_bounds), self.top_inset);
         let space = float_space(&ctx, bounds, &sizes, self.config, self.specs);
         let spec = |panel: &P| spec_in(self.specs, panel);
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
@@ -281,6 +302,7 @@ struct Scene<'s, P> {
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
+    rail_footer: Option<&'s P>,
 }
 
 /// The spec of `panel` in `specs`, or an unnamed one.
@@ -329,6 +351,34 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
 
     fn panel(&self, key: PanelKey) -> Option<&P> {
         self.keys.get(&key)
+    }
+
+    /// Whether the docked `column` shows a rail of its icons beside it ([`IconicMode::Rail`]): an expanded column
+    /// that collapses to icons.
+    fn rail_beside(&self, column: &Column<P>) -> bool {
+        let spec = |panel: &P| self.spec(panel);
+        let collapses = column.panels().all(|panel| self.permissions(panel).collapses);
+        self.config.iconic_mode == IconicMode::Rail
+            && !column.iconic
+            && ColumnArrow::of(column, &self.sizes, &spec, collapses) == ColumnArrow::Collapse
+    }
+
+    /// The `(width, floor)` of each docked column of a dock, for [`fit_widths`]: a rail beside an expanded column adds
+    /// its width to both.
+    fn natural(&self, columns: &[Column<P>]) -> Vec<(f32, Option<f32>)> {
+        let spec = |panel: &P| self.spec(panel);
+        let natural = self.sizes.natural(columns, &spec);
+        columns
+            .iter()
+            .zip(natural)
+            .map(|(column, (width, floor))| {
+                if !self.rail_beside(column) {
+                    return (width, floor);
+                }
+                let rail = self.sizes.iconic_width(column, &spec);
+                (width + rail, floor.map(|floor| floor + rail))
+            })
+            .collect()
     }
 }
 
@@ -410,7 +460,8 @@ struct Pass<'s, P> {
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// Shows the area across the room offered.
     pub fn show(self, ui: &mut Ui) -> DockAreaOutput<P> {
-        let DockArea { label, mut workspace, specs, panels, config, hide, maximized, auto_collapse, locked, mut flyout } = self;
+        let DockArea { label, mut workspace, specs, panels, config, hide, maximized, auto_collapse, locked, mut flyout, rail_footer, top_inset } =
+            self;
         let ctx = ui.ctx().clone();
         let (rtl, window) = {
             let env = Env::of(ui);
@@ -436,6 +487,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             hide,
             maximized: maximized.as_ref(),
             rtl,
+            top_inset,
         };
         let shows = Arrangement { dock: id, generation: current.generation() };
         end_replaced_drags::<P>(&ctx, shows);
@@ -467,6 +519,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 auto_collapse,
                 sizes,
                 rtl,
+                rail_footer: rail_footer.as_ref(),
+                top_inset,
             };
             let mut result = show_area(ui, body, &input, rights, &mut *panels, flyout.as_mut());
             for edit in &result.edit {
@@ -569,6 +623,14 @@ struct Input<'i, P> {
     auto_collapse: bool,
     sizes: DockSizes,
     rtl: bool,
+    rail_footer: Option<&'i P>,
+    top_inset: f32,
+}
+
+/// `bounds` without its top `inset` points, never past its bottom.
+fn inset_top(bounds: Rect, inset: f32) -> Rect {
+    let top = (bounds.min.y + inset).min(bounds.max.y);
+    Rect::from_min_max(egui::pos2(bounds.min.x, top), bounds.max)
 }
 
 fn open_of<P: Clone + Send + Sync + 'static + PartialEq + Debug>(
@@ -593,7 +655,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl } = *input;
+    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl, rail_footer, top_inset } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
@@ -601,7 +663,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let prune = PruneKey { model, hide, floating, maximized: maximized.map(PanelKey::of) };
     let view = derived(ctx, id.with("pruned"), &prune, || frame::maximize(current.layout(), maximized, hide, &protected).into_owned());
     let layout: &Layout<P> = &view.layout;
-    let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
+    let bounds = inset_top(shell.as_ref().map_or(body.rect, ShellCx::float_bounds), top_inset);
     let space = float_space(ctx, bounds, &sizes, config, specs);
     let scene = Scene {
         dock: id,
@@ -617,6 +679,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         auto_collapse,
         rtl,
         floated: current.floated(),
+        rail_footer,
     };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
@@ -635,31 +698,32 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         dock: id,
     };
 
-    let spec_of = |panel: &P| scene.spec(panel);
+    let limits = |panel: &P| scene.spec(panel).limits;
+    let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
+    let stripless = |panel: &P| scene.spec(panel).canvas;
+    let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless);
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
     let mut leaves: Vec<(Vec<bool>, Rect)> = Vec::new();
-    let area = with_area_rules(&scene.sizes, &spec_of, |rules| {
-        SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
-            DockTargets::<P>::register_room(ctx, id, split.rect);
-            for (anchor, rect) in split.group_frames::<P>() {
-                let Some(place) = scene.layout.place(&anchor) else { continue };
-                let Some(node) = scene.layout.node_of(&place) else { continue };
-                if let PanelPlace::Node(path) = &place {
-                    leaves.push((path.clone(), rect));
-                }
-                pass.leaf(ui, split, node, rect);
-            }
-            let flow = Flow::new(split.rect, rtl);
-            for (edge, rect) in split.dock_frames() {
-                let Some(path) = scene.layout.dock_path(edge) else { continue };
-                let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
+    let area = SplitArea::new(label, Bind::given(layout.clone()), rules).show(ui, |ui, split| {
+        DockTargets::<P>::register_room(ctx, id, split.rect);
+        for (anchor, rect) in split.group_frames::<P>() {
+            let Some(place) = scene.layout.place(&anchor) else { continue };
+            let Some(node) = scene.layout.node_of(&place) else { continue };
+            if let PanelPlace::Node(path) = &place {
                 leaves.push((path.clone(), rect));
-                if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed()) {
-                    shell.reveal_rect(ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
-                }
-                pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
             }
-        })
+            pass.leaf(ui, split, node, rect);
+        }
+        let flow = Flow::new(split.rect, rtl);
+        for (edge, rect) in split.dock_frames() {
+            let Some(path) = scene.layout.dock_path(edge) else { continue };
+            let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
+            leaves.push((path.clone(), rect));
+            if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed()) {
+                shell.reveal_rect(ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
+            }
+            pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
+        }
     });
     let mut edit = area.output.edit.events.map(|edited| {
         let mut layout = current.layout().clone();
@@ -934,9 +998,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             // Keyed by the rail's group: unique among the rails a dock area shows.
             let _ = MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui);
         });
-        // The group's size goes on the drag here, outside the view, whose measuring runs see no size.
-        if !sent.is_empty() {
-            drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| drag.source = Some(size));
+        // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
+        // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
+        if let Some(&press) = sent.first() {
+            drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
+                drag.source = Some(size);
+                drag.press = Some(press);
+            });
         }
     }
 
@@ -970,7 +1038,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     Titles::from_content(
                         members
                             .iter()
-                            .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
+                            .map(|panel| {
+                                let spec = scene.spec(panel);
+                                PanelTitle::new(PanelKey::of(panel), spec.label)
+                                    .closable(scene.permissions(panel).closable)
+                                    .command(spec.command)
+                                    .count(spec.count)
+                                    .caption(spec.caption)
+                            })
                             .collect(),
                     )
                 });
@@ -997,13 +1072,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if look.in_window {
                 group = group.in_window();
             }
+            let spec = scene.spec(&members[at]);
             if minimized {
                 group = group.minimized();
-            } else if !document(&scene.spec(&members[at])) {
+            } else if !document(&spec) {
                 group = group.pad(Pad::Regular);
+            }
+            if spec.footer {
+                group = group.footer(move |ui, body| panels.borrow_mut().footer(&members[at], ui, body));
             }
             if scene.config.tab_close_buttons {
                 group = group.closable();
+            }
+            if scene.config.titled_headers {
+                group = group.titled();
             }
             if scene.config.wheel_selects_tabs {
                 group = group.wheel_selects_tabs();
@@ -1025,12 +1107,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let (strip, view) = if grip > 0.0 { rect.split_top_bottom_at_y(rect.top() + grip.min(rect.height())) } else { (Rect::NOTHING, rect) };
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                let taken = ui
-                    .scope_builder(UiBuilder::new().max_rect(view), |ui| {
-                        ui.shrink_clip_rect(view);
-                        panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body)
-                    })
-                    .inner;
+                // The view is a layout room of its own: a view that fills takes the whole group.
+                let taken = in_room(ui, view, |ui| panels.borrow_mut().group_view(members, active, ui, GroupAt::Show(view), body));
                 match taken {
                     Some(_) => None,
                     None => Some(make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output),
@@ -1108,15 +1186,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// The columns of a dock, from the window edge inwards.
     fn dock(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, plan: DockPlan<'_, P>) {
         let scene = self.scene;
-        let spec = |panel: &P| scene.spec(panel);
-        let cells = column_cells(plan.columns, plan.rect, plan.edge, plan.flow, &scene.sizes, &spec);
-        for (column, mut cell) in plan.columns.iter().zip(cells) {
+        let widths = fit_widths(&scene.natural(plan.columns), plan.rect.width());
+        let reading = plan.flow.to_physical(plan.rect);
+        let start = plan.edge == DockEdge::Start;
+        let mut cursor = if start { reading.left() } else { reading.right() };
+        for (column, width) in plan.columns.iter().zip(widths) {
+            let span = if start { (cursor, cursor + width) } else { (cursor - width, cursor) };
+            cursor = if start { span.1 } else { span.0 };
+            let cell = plan.flow.to_physical(Rect::from_x_y_ranges(span.0..=span.1, reading.y_range()));
             let Some(first) = column.groups.first().and_then(|group| group.panels.first()) else { continue };
-            // A stepped column is as tall as its bar and content, from the top of the dock; content taller than the
-            // dock gets the dock's height and scrolls inside. The rest of its slot is the dock's empty room.
-            if let Some(content) = self.stepped_height(ui, body, column, cell.width(), false) {
-                cell.max.y = (cell.top() + scene.sizes.bar + content).min(cell.bottom());
-            }
+            // A docked column takes the dock's height, a stepped one (a tool rail) too: the references' docked
+            // toolbar keeps its column's surface down to the dock's foot, with the tools at the top
+            // (photocraft#16461). Content taller than the dock scrolls inside. Only a floating stepped window is as
+            // tall as its content.
             self.report.placed.push((first.clone(), cell));
             let at = ColumnAt { cell, edge: plan.edge, bar: ColumnBar::Own, within: body.rect, open: plan.open.clone() };
             self.column(ui, body, column, at);
@@ -1211,23 +1293,70 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let spec = |panel: &P| scene.spec(panel);
         let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
         let dock = self.dock;
-        let ColumnAt { cell, edge, bar, within, open } = at;
+        let ColumnAt { mut cell, edge, bar, within, open } = at;
         let in_window = bar == ColumnBar::Window;
         if in_window {
             DockTargets::<P>::register_room(ui.ctx(), dock, cell);
         }
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
+        // Only a docked column's icons are a rail; a floating window's open flyouts.
+        let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
+        let mut icons = |cell: Rect, open: Option<P>| {
+            let footer = scene.rail_footer.filter(|panel| mode == IconicMode::Rail && column.panels().any(|item| item == *panel));
+            let pass = RefCell::new(&mut *self);
+            let draw = |ui: &mut Ui, rect: Rect, open: Option<P>| {
+                IconicColumn::new(name.clone(), dock, column, Bind::given(open), &spec)
+                    .edge(edge)
+                    .opens(opens)
+                    .bar(bar)
+                    .within(within)
+                    .auto_collapse(scene.auto_collapse)
+                    .mode(mode)
+                    .show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window))
+            };
+            if let Some(panel) = footer {
+                let height = IconicSizes::of(ui.ctx()).icons_height(column) + scene.sizes.bar;
+                Panel::new(name.clone())
+                    .id(dock.with(("rail footer", panel)))
+                    .pad(Pad::None)
+                    .footer(|ui, _| {
+                        // Compact rail controls leave room for the scrolling panel icons in short windows.
+                        Stack::new().fill_width().gap(Gap::None).show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
+                    })
+                    .show_at(ui, cell, |ui, _| {
+                        // design: allow[contract/allocate](the rail lays its icons out in a rect of its own: the panel body claims their height, so the host's footer sits under them)
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), egui::Sense::hover());
+                        draw(ui, rect, open.clone())
+                    })
+                    .inner
+            } else {
+                Some(draw(ui, cell, open))
+            }
+        };
         let work = if column.iconic {
-            let shown = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
-                .edge(edge)
-                .opens(opens)
-                .bar(bar)
-                .within(within)
-                .auto_collapse(scene.auto_collapse);
-            let output = shown.show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
+            let Some(output) = icons(cell, open) else { return };
             self.report.flyout.extend(output.edit.events);
+            self.rail_work(output.front);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
         } else {
+            if !in_window && scene.rail_beside(column) {
+                // The rail keeps to the dock's window edge and the expanded column shows inward of it.
+                let rail = scene.sizes.iconic_width(column, &spec).min(cell.width());
+                let at_left = (edge == DockEdge::Start) != scene.rtl;
+                let (rail_cell, rest) = if at_left {
+                    (cell.with_max_x(cell.left() + rail), cell.with_min_x(cell.left() + rail))
+                } else {
+                    (cell.with_min_x(cell.right() - rail), cell.with_max_x(cell.right() - rail))
+                };
+                cell = rest;
+                let Some(output) = icons(rail_cell, None) else { return };
+                self.rail_work(output.front);
+                // The rail's inner edge sets its own width, not the expanded column's.
+                self.column_work(column, ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: None, flyout: None });
+                if let (Some(width), Some(first)) = (output.width, column.groups.first().and_then(|group| group.panels.first())) {
+                    self.report.actions.push(Action::resize_iconic(first.clone(), Some(width)));
+                }
+            }
             let shown = DockColumn::new(name, dock, column, &spec)
                 .edge(edge)
                 .bar(bar)
@@ -1240,6 +1369,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
         };
         self.column_work(column, work);
+    }
+
+    /// Brings the panel a click on its rail icon chose, `front`, to the front of its group.
+    fn rail_work(&mut self, front: Option<P>) {
+        self.report.actions.extend(front.map(Action::activate));
     }
 
     /// Turns what a column reported into actions and drags.
@@ -1387,6 +1521,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .sized(Sizing::Fill)
                 .column(shape)
                 .actions(actions)
+                .grip(scene.config.floating_grip)
+                .rounded_body(scene.config.floating_rounded_body)
                 .window_of(anchor.clone())
                 .takes_drops(target, &dropped)
                 .command_scope(DockCommands::SCOPE)
@@ -1569,7 +1705,8 @@ fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, pane
     panels.borrow_mut().body(panel, ui, body);
 }
 
-/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to.
+/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to, with
+/// the point its press went down.
 #[derive(MemoProps)]
 struct RailGrip<'a, P> {
     #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
@@ -1577,7 +1714,7 @@ struct RailGrip<'a, P> {
     active: PanelKey,
     movable: bool,
     label: Label,
-    sent: Outbox<'a, ()>,
+    sent: Outbox<'a, Pos2>,
 }
 
 /// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
@@ -1589,8 +1726,8 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
         .ghost(props.label.clone())
         .label(props.label.clone())
         .show_at(ui, strip);
-    if held.drag_started {
-        props.sent.send(());
+    if let Some(origin) = held.drag_origin {
+        props.sent.send(origin);
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);

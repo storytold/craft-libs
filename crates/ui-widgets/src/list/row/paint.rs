@@ -1,9 +1,9 @@
 //! Painting a row's trailing items, toggles, thumbnails, text and cells.
 
 use super::ListRow;
-use super::placement::Placed;
-use super::show::{LINK, TEXT_CELL, TOGGLE};
-use super::style::ListRowStyle;
+use super::placement::{Placed, StatusMeasure, action_link};
+use super::show::{LINK, STATUS_ACTION, TEXT_CELL, TOGGLE};
+use super::style::{ListRowStyle, RowForm, row_ink_of};
 use super::thumb::{RowThumb, target_at};
 use super::trailing::{TrailingFace, TrailingItem, cell_key, field_key, trailing_run};
 use crate::buttons::IconButton;
@@ -11,13 +11,25 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
-use crate::primitives::{Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
+use crate::notices::tone_icon;
+use crate::primitives::{DocText, Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
 use crate::style::{Flags, GlyphRole, Ink, StateMix, StateSet, StyleColor};
 use craft_behavior::{Flow, IconId, Mixed, PartRef};
 use craft_theme::ControlSize;
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 impl ListRow<'_> {
+    /// Whether the trailing part `key` shows: a `revealed` one only on a hovered or `selected` row, while it has focus
+    /// or while the menu it opens is open. A part that does not show is neither painted nor exposed.
+    pub(super) fn part_shown(cx: &Cx<'_, Self>, key: PartRef, revealed: bool, selected: bool, menu_open: bool) -> bool {
+        !revealed
+            || cx.response.hovered()
+            || selected
+            || menu_open
+            || cx.part_state(key).flags.contains(Flags::FOCUSED)
+            || item_part_open(&cx.ctx, cx.id, key)
+    }
+
     pub(super) fn paint_trailing(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let side = Vec2::splat(cx.style.sizes.icon);
         let selected = cx.resolved.selected == Some(true) || cx.env.facts_of(cx.id).is_some_and(|facts| facts.flags.contains(Flags::SELECTED));
@@ -37,19 +49,13 @@ impl ListRow<'_> {
                 }
                 TrailingItem::Hosted(hosted) => {
                     if let Some(item) = hosted.item.take() {
-                        let height = hosted.size.map_or(cx.style.sizes.row, |size| size.ideal.y.min(cx.style.sizes.row));
+                        let height = hosted.size.map_or(slot.height(), |size| size.ideal.y.min(slot.height()));
                         item.show(ui, field_key(at), Rect::from_center_size(slot.center(), Vec2::new(slot.width(), height)));
                     }
                 }
                 TrailingItem::Part { part, face, enabled, revealed, .. } => {
                     let key = part.part();
-                    let shown = !*revealed
-                        || cx.response.hovered()
-                        || selected
-                        || self.menu_open
-                        || cx.part_state(key).flags.contains(Flags::FOCUSED)
-                        || item_part_open(&cx.ctx, cx.id, key);
-                    if !shown {
+                    if !Self::part_shown(cx, key, *revealed, selected, self.menu_open) {
                         continue;
                     }
                     match face {
@@ -154,13 +160,14 @@ impl ListRow<'_> {
     }
 
     /// Paints the label, detail and wrapped lines in the label band; returns the bottom of the text, where the component
-    /// under it (`below`) starts after a gap.
-    pub(super) fn paint_text(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, label: Rect) -> f32 {
+    /// under it (`below`) starts after a gap. `hue` is the label's ink when a colour from data inks it; `document` is
+    /// the height of the label laid out as document text, for a row of `document_rows`.
+    pub(super) fn paint_text(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, label: Rect, hue: Option<StyleColor>, document: Option<f32>) -> f32 {
         let style = cx.style;
         let sizes = &style.sizes;
         let rtl = cx.env.direction().is_rtl();
-        let wrapped = self.lines.as_ref().map(|text| {
-            let run = TextRun::new(text.as_str()).role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(self.lines_wrap());
+        let wrapped = self.lines.as_ref().map(|lines| {
+            let run = lines.run().role(style.detail.role).color(cx.resolve(&style.detail.color)).wrap(self.lines_wrap());
             draw.layout(&run, self.text_block(label, sizes, 0.0).0.width())
         });
         let lines = wrapped.as_ref().map_or(0.0, |layout| sizes.gap + layout.size().y);
@@ -179,8 +186,21 @@ impl ListRow<'_> {
         if !self.renaming && !self.label_has_field() {
             let muted = self.label_column(&self.cells).is_some_and(|column| self.muted.contains(column));
             let look = if muted { &style.cell_muted } else { &style.text };
-            let run = self.label_run(cx.resolved.label).role(look.role).color(cx.resolve(&look.color)).elide();
-            draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new((label.width() - beside).max(0.0), sizes.label_line)), &run);
+            let ink = hue.unwrap_or_else(|| cx.resolve(&look.color));
+            let width = (label.width() - beside).max(0.0);
+            match (self.document_run(cx.resolved.label, ink.egui()), document, &self.document) {
+                (Some(run), Some(height), Some(rows)) => {
+                    // The document line is centred on the label's line, which is the band's middle in a row of a label
+                    // alone; measure made the row tall enough for it.
+                    let runs = [run];
+                    let text = DocText { align: rows.align, ..DocText::new(&runs).elide() };
+                    draw.doc(Rect::from_min_size(Pos2::new(label.left(), top + (sizes.label_line - height) / 2.0), Vec2::new(width, height)), &text);
+                }
+                _ => {
+                    let run = self.label_run(cx.resolved.label).role(look.role).color(ink).elide();
+                    draw.text(Rect::from_min_size(Pos2::new(label.left(), top), Vec2::new(width, sizes.label_line)), &run);
+                }
+            }
         }
         top += sizes.label_line;
         if let Some(detail) = self.detail.as_ref().filter(|_| !self.heading) {
@@ -229,13 +249,22 @@ impl ListRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         for (at, position, cell) in &placed.texts {
             let text = &self.texts[*at];
-            if self.cell_fields.iter().any(|(column, _)| *column == text.column) {
+            let field = self.cell_fields.iter().any(|(column, _)| *column == text.column);
+            if field && !self.field_suffixes.contains(&text.column) {
                 continue;
             }
             let look = self.cell_look(cx.style, &text.column);
             let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
-            let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
+            let mut room = if field && self.label_column(&self.cells) == Some(&text.column) {
+                placed.label
+            } else {
+                Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
+            };
             let run = self.cell_run(cx.style, *at).color(cx.resolve(&look.color));
+            if field {
+                let width = ui.draw().layout(&run, f32::INFINITY).size().x;
+                room = split_field_text(room, rtl, width, sizes.gap).1;
+            }
             let layout = ui.draw().layout(&run, room.width());
             let top =
                 if text.wrap { room.top() + ((room.height() - layout.size().y) / 2.0).max(0.0) } else { room.center().y - sizes.label_line / 2.0 };
@@ -244,6 +273,41 @@ impl ListRow<'_> {
                 ui.selectable_text(TEXT_CELL.at(*position as u64), Rect::from_min_size(Pos2::new(x, top), layout.size()), &run);
             } else {
                 ui.draw().galley(Pos2::new(x, top), &layout);
+            }
+        }
+    }
+
+    /// The status cells, centred on the row's height: the tone icon and the text in the tone's ink (the selection's
+    /// paired ink on a selected row), then the action link in the link look of its own part's state.
+    pub(super) fn paint_statuses(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
+        let sizes = &cx.style.sizes;
+        let rtl = cx.env.direction().is_rtl();
+        let role = cx.style.cell.role;
+        let form = RowForm::of(self.option, self.command);
+        for (at, _, cell) in &placed.statuses {
+            let status = &self.statuses[*at].status;
+            let ink = cx.resolve(&ui.with_style(cx.resolved.variant, |scx| row_ink_of(scx, scx.tone(status.tone), form)));
+            let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
+            let part = STATUS_ACTION.at(*at as u64);
+            let action = {
+                let draw = ui.draw();
+                // The action's slot is its part's rect, which `parts` declared from the link's measured width.
+                let slots = self.status_slots(
+                    *at,
+                    cell,
+                    sizes,
+                    rtl,
+                    role,
+                    StatusMeasure { text_width: &|run| draw.layout(run, f32::INFINITY).size().x, action_width: &|_| cx.part(part).rect.width() },
+                );
+                if let (Some(slot), Some(icon)) = (slots.icon, tone_icon(status.tone)) {
+                    draw.icon(Rect::from_center_size(slot.center(), Vec2::splat(sizes.mark)), &IconSpec::svg(IconId::new(icon)).color(ink));
+                }
+                draw.text(slots.text, &TextRun::new(status.text.as_str()).role(role).color(ink).elide());
+                slots.action.and(status.action.as_ref())
+            };
+            if let Some(action) = action {
+                ui.face(part, action_link(action, role));
             }
         }
     }
@@ -262,6 +326,15 @@ impl ListRow<'_> {
         let rtl = cx.env.direction().is_rtl();
         let label = self.label_column(&self.cells).cloned();
         let band = placed.label.y_range();
+        let suffixes: Vec<_> = self
+            .texts
+            .iter()
+            .filter(|text| self.field_suffixes.contains(&text.column))
+            .map(|text| {
+                let run = TextRun::new(text.text.as_str()).role(cx.style.cell.role);
+                (text.column.clone(), ui.draw().layout(&run, f32::INFINITY).size().x)
+            })
+            .collect();
         for (at, (column, field)) in self.cell_fields.iter_mut().enumerate() {
             let (Some(item), Some(size)) = (field.item.take(), field.size) else { continue };
             let room = if label.as_ref() == Some(column) {
@@ -271,10 +344,20 @@ impl ListRow<'_> {
                 let cell = Rect::from_x_y_ranges(cell.x_range(), band);
                 Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()))
             };
+            let room = suffixes.iter().find(|(key, _)| key == column).map_or(room, |(_, width)| split_field_text(room, rtl, *width, sizes.gap).0);
             let height = size.ideal.y.min(room.height());
             item.show(ui, cell_key(at), Rect::from_center_size(room.center(), Vec2::new(room.width(), height)));
         }
     }
+}
+
+/// Divides a cell's inset room into a field and its trailing text, in reading order.
+fn split_field_text(room: Rect, rtl: bool, text_width: f32, gap: f32) -> (Rect, Rect) {
+    let text = text_width.min(room.width());
+    let gap = gap.min((room.width() - text).max(0.0));
+    let field = (room.width() - text - gap).max(0.0);
+    let flow = Flow::new(room, rtl);
+    (flow.span(0.0, field), flow.span(field + gap, text))
 }
 
 /// The ink of a toggle or link glyph that is `on` or not: its own part's hover and press, over the row's selection and
