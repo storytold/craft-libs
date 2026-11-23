@@ -7,13 +7,17 @@
 //! dialog reads each pass, so no Objective-C target or action (and no `unsafe`) is needed.
 //!
 //! AppKit objects stay on the main thread, so the panel is held there; a dialog holds a [`Shown`], which puts the
-//! panel away when the dialog goes.
+//! panel away when the dialog goes. The panel is shared, so one dialog has it at a time: another picker opened
+//! meanwhile shows in its window, and each `Shown` reads, sets and closes only its own session.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use craft_theme::Srgba;
 
 static SYSTEM: AtomicBool = AtomicBool::new(false);
+
+/// The token of the next session, so a `Shown` acts only on its own.
+static NEXT: AtomicU64 = AtomicU64::new(1);
 
 /// Shows every [`ColorPickerDialog`](super::ColorPickerDialog) as the system Colors panel, with Cancel and OK, instead
 /// of in the window. Only macOS has one; elsewhere this does nothing. An app calls it once at start; tests and apps
@@ -51,24 +55,31 @@ pub(crate) enum Answer {
 
 /// The panel is up for a dialog; dropping this puts it away.
 #[derive(Debug)]
-pub(crate) struct Shown(());
+pub(crate) struct Shown(u64);
 
 impl Shown {
-    /// Shows the panel on `color` with the buttons `ok` and `cancel`. `None` when it can't show (off the main thread,
-    /// or not macOS).
+    /// Shows the panel on `color` with the buttons `ok` and `cancel`. `None` when it can't show: off the main thread,
+    /// not macOS, or another dialog has the panel.
     pub(crate) fn open(color: Srgba, ok: &str, cancel: &str) -> Option<Shown> {
-        imp::open(color, ok, cancel).then_some(Shown(()))
+        let token = NEXT.fetch_add(1, Ordering::Relaxed);
+        imp::open(token, color, ok, cancel).then_some(Shown(token))
     }
 
-    /// The answer, once there is one: a pressed button, or the panel closed.
+    /// The answer, once there is one: a pressed button, or the panel closed. Its colour is opaque; the dialog keeps
+    /// its own alpha, as the panel shows none.
     pub(crate) fn poll(&self) -> Option<Answer> {
-        imp::poll()
+        imp::poll(self.0)
+    }
+
+    /// Shows `color` in the panel: an edit made while it is up (automation, a screen pick).
+    pub(crate) fn set(&self, color: Srgba) {
+        imp::set(self.0, color);
     }
 }
 
 impl Drop for Shown {
     fn drop(&mut self) {
-        imp::close();
+        imp::close(self.0);
     }
 }
 
@@ -92,8 +103,9 @@ mod imp {
     const MARGIN: f64 = 16.0;
     const HEIGHT: f64 = 44.0;
 
-    /// The shared Colors panel and its buttons while a dialog shows it.
+    /// The shared Colors panel and its buttons while a dialog shows it, with the dialog's session token.
     struct Panel {
+        token: u64,
         panel: Retained<NSColorPanel>,
         ok: Retained<NSButton>,
         cancel: Retained<NSButton>,
@@ -103,8 +115,11 @@ mod imp {
         static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
     }
 
-    pub(super) fn open(color: Srgba, ok: &str, cancel: &str) -> bool {
+    pub(super) fn open(token: u64, color: Srgba, ok: &str, cancel: &str) -> bool {
         let Some(mtm) = MainThreadMarker::new() else { return false };
+        if shown() {
+            return false;
+        }
         let panel = NSColorPanel::sharedColorPanel(mtm);
         let width = MARGIN * 2.0 + BUTTON * 2.0 + GAP;
         let accessory = NSView::initWithFrame(NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, HEIGHT)));
@@ -122,20 +137,24 @@ mod imp {
         let cancel = button(cancel, "\u{1b}", MARGIN);
         let ok = button(ok, "\r", MARGIN + BUTTON + GAP);
         panel.setShowsAlpha(false);
-        panel.setColor(&NSColor::colorWithSRGBRed_green_blue_alpha(color.r.into(), color.g.into(), color.b.into(), 1.0));
+        panel.setColor(&ns_color(color));
         panel.setAccessoryView(Some(&accessory));
         panel.makeKeyAndOrderFront(None);
-        PANEL.with_borrow_mut(|shown| *shown = Some(Panel { panel, ok, cancel }));
+        PANEL.with_borrow_mut(|shown| *shown = Some(Panel { token, panel, ok, cancel }));
         true
+    }
+
+    fn ns_color(color: Srgba) -> Retained<NSColor> {
+        NSColor::colorWithSRGBRed_green_blue_alpha(color.r.into(), color.g.into(), color.b.into(), color.a.into())
     }
 
     pub(super) fn shown() -> bool {
         PANEL.with_borrow(Option::is_some)
     }
 
-    pub(super) fn poll() -> Option<Answer> {
+    pub(super) fn poll(token: u64) -> Option<Answer> {
         PANEL.with_borrow(|shown| {
-            let Panel { panel, ok, cancel } = shown.as_ref()?;
+            let Panel { panel, ok, cancel, .. } = shown.as_ref().filter(|p| p.token == token)?;
             if ok.state() == NSControlStateValueOn {
                 return Some(Answer::Ok(srgb(&panel.color())));
             }
@@ -143,9 +162,18 @@ mod imp {
         })
     }
 
+    pub(super) fn set(token: u64, color: Srgba) {
+        PANEL.with_borrow(|shown| {
+            if let Some(p) = shown.as_ref().filter(|p| p.token == token) {
+                p.panel.setColor(&ns_color(color));
+            }
+        });
+    }
+
     /// The panel goes, without the buttons: the next user of the shared panel (a font panel's colour) gets it plain.
-    pub(super) fn close() {
-        if let Some(Panel { panel, .. }) = PANEL.with_borrow_mut(Option::take) {
+    pub(super) fn close(token: u64) {
+        let mine = PANEL.with_borrow_mut(|shown| if shown.as_ref().is_some_and(|p| p.token == token) { shown.take() } else { None });
+        if let Some(Panel { panel, .. }) = mine {
             panel.setAccessoryView(None);
             panel.orderOut(None);
         }
@@ -167,7 +195,7 @@ mod imp {
     use super::Answer;
     use craft_theme::Srgba;
 
-    pub(super) fn open(_: Srgba, _: &str, _: &str) -> bool {
+    pub(super) fn open(_: u64, _: Srgba, _: &str, _: &str) -> bool {
         false
     }
 
@@ -175,9 +203,11 @@ mod imp {
         false
     }
 
-    pub(super) fn poll() -> Option<Answer> {
+    pub(super) fn poll(_: u64) -> Option<Answer> {
         None
     }
 
-    pub(super) fn close() {}
+    pub(super) fn set(_: u64, _: Srgba) {}
+
+    pub(super) fn close(_: u64) {}
 }

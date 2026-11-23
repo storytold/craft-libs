@@ -172,6 +172,8 @@ pub struct ColorPickerDialog {
     started: bool,
     /// The system Colors panel while it stands in for the dialog ([`use_system_color_panel`](super::use_system_color_panel)).
     system: Option<Shown>,
+    /// The system panel couldn't show (another dialog has it, or off the main thread): this dialog stays in the window.
+    in_window: bool,
     open: bool,
     layout: ColorPickerDialogLayout,
     /// The Standard tab's honeycomb cells and grey row.
@@ -314,6 +316,7 @@ impl ColorPickerDialog {
             host: None,
             started: false,
             system: None,
+            in_window: false,
             open: true,
             layout: ColorPickerDialogLayout::default(),
             standard: None,
@@ -449,6 +452,9 @@ impl ColorPickerDialog {
     /// model values when it has them, and the colour is what OK answers. The compare swatch keeps the opening colour.
     pub fn set_color(&mut self, picked: PickedColor) {
         self.current = Some(picked);
+        if let Some(system) = &self.system {
+            system.set(picked.color);
+        }
     }
 
     /// The colour Add to Swatches was pressed for, once; `None` otherwise.
@@ -514,10 +520,14 @@ impl ColorPickerDialog {
     /// behind it, as the modal dialog does, and answers as OK or Cancel would. `None` when the panel can't show (off the
     /// main thread, as in headless tests), so the dialog shows in the window.
     fn show_system(&mut self, ui: &Ui) -> Option<Option<DialogResult<ColorPickerResult>>> {
+        if self.in_window {
+            return None;
+        }
         if self.system.is_none() {
             let common = Env::of(ui).words::<CommonWords>();
             let color = self.current.or(self.opening).map_or(Srgba::rgb(0.0, 0.0, 0.0), |picked| picked.color);
-            self.system = Some(Shown::open(color, common.ok.as_str(), common.cancel.as_str())?);
+            self.system = Shown::open(color, common.ok.as_str(), common.cancel.as_str());
+            self.in_window = self.system.is_none();
         }
         system_panel::block_behind(ui.ctx());
         let Some(answer) = self.system.as_ref()?.poll() else {
@@ -528,7 +538,9 @@ impl ColorPickerDialog {
         self.system = None;
         Some(match answer {
             Answer::Ok(color) => {
-                self.current = Some(PickedColor { color, model: None });
+                // The panel shows no alpha: the colour keeps the dialog's.
+                let a = self.current.or(self.opening).map_or(1.0, |picked| picked.color.a);
+                self.current = Some(PickedColor { color: Srgba { a, ..color }, model: None });
                 self.accept(ui.ctx()).map(DialogResult::Ok)
             }
             Answer::Cancel => {
