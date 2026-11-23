@@ -67,6 +67,9 @@ impl Opener {
         // The opener's `Response` carries the press path's verdict, for a root with its own egui widget and for an
         // arena member alike: whether the open press is on it and whether a click released on it.
         let pressed_on = response::is_pressed(anchor);
+        // Enter or Space on a focused opener, or an AccessKit click, opens a click or press opener's layer as the
+        // pointer does.
+        let by_key = response::key_clicked(anchor);
         let request = keys::context_request(&anchor.ctx, anchor.id);
         let (fired, opening, pressed, clicked) = pointer::with_pass_raw(&anchor.ctx, |pass| {
             let Some(frame) = pass.frame.as_ref() else { return (false, Opening::Plain, false, false) };
@@ -78,8 +81,8 @@ impl Opener {
             // then held; a `Click` opener's release completes the click that press began.
             let primary = pressed_on && frame.press.is_some_and(|press| press.button == PointerButton::Primary);
             let fired = match trigger {
-                Trigger::Click => primary,
-                Trigger::Press => primary || by_pointer,
+                Trigger::Click => primary || by_key,
+                Trigger::Press => primary || by_pointer || by_key,
                 Trigger::Context => by_pointer || request.is_some(),
                 Trigger::Hover | Trigger::Hold | Trigger::Manual => false,
             };

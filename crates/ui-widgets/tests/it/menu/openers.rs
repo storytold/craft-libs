@@ -148,3 +148,19 @@ fn a_menu_button_hangs_its_arrow_under_the_end_of_its_glyph() {
         }
     }
 }
+
+
+/// Space on a focused icon button that opens a menu opens the menu, as a click does.
+#[trial]
+fn space_on_a_focused_menu_opener_opens_its_menu() {
+    let mut fixture = Fixture::new(|ui| {
+        let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).label("Panel menu").show(ui);
+        Menu::new("Panel menu").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            MenuItem::new("Clear All").show(ui);
+        });
+    });
+    fixture.settle();
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    fixture.key(egui::Key::Space, egui::Modifiers::NONE).settle();
+    assert!(fixture.by_label("Clear All").is_some(), "Space on the focused opener opens the menu");
+}
