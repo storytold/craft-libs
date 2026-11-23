@@ -26,3 +26,15 @@ fn cf_html_offsets_delimit_the_fragment_bytes() {
     assert_eq!(&data[end_html..], b"\0", "EndHTML excludes the trailing NUL");
     assert_eq!(end_html, data.len() - 1);
 }
+
+/// Ported from WordCraft (#7317). An X11 property read is taken only when it came whole and within the cap: over the
+/// cap, or with bytes still left to read, it is refused rather than pasted truncated.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn property_reads_must_be_whole_and_capped() {
+    use super::unix::complete;
+    assert!(complete(10, 0, 10));
+    assert!(!complete(11, 0, 10), "over the cap");
+    assert!(!complete(8, 4, 10), "more left to read");
+    assert!(complete(0, 0, 0));
+}
