@@ -460,7 +460,7 @@ fn paint_reference_icons(ui: &egui::Ui) {
     use craft_ui::primitives::{ContentPainterCx, IconSpec};
     let env = craft_ui::runtime::env::Env::of(ui);
     // On a layer of its own, unclipped by the panel's room.
-    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("reference-icons"));
+    let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("reference-icons"));
     let painter = ContentPainterCx::new(egui::Painter::new(ui.ctx().clone(), layer, egui::Rect::EVERYTHING), &env, env.ink);
     for side in REFERENCE_SIDES {
         let y = 20.0 * f32::from(side);
