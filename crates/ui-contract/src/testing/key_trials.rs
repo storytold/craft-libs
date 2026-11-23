@@ -5,7 +5,7 @@ use crate::runtime::env::RootEnv;
 use crate::runtime::focus::{FocusTarget, KeyUse, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::{focus_holds, intents_of, take_shortcuts};
-use crate::testing::focus::{Stop, egui_focused, named_id, press_shape, register_stop, widget};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, press_shape, register_stop, widget};
 use crate::testing::input::{key_press, key_repeat};
 use crate::testing::pointer::click;
 use crate::testing::{Frames, trial};
@@ -51,8 +51,9 @@ fn shown(enabled: bool, show: &mut impl FnMut(&mut Ui)) -> Frames {
     frames
 }
 
+/// A press of `key` with `modifiers` and its release, in one frame: a second press with no release between is a repeat.
 fn press(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key, modifiers: Modifiers) -> Vec<(ViewportId, ChromeToggle)> {
-    frames.frame(vec![key_press(key, modifiers)], &mut *show);
+    frames.frame(vec![key_press(key, modifiers), key_release(key, modifiers)], &mut *show);
     take_output(&frames.ctx).chrome_toggles
 }
 

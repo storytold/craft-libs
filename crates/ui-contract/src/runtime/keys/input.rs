@@ -77,8 +77,9 @@ impl Strip<'_> {
     /// Records `event` in `batch` and returns whether egui keeps it.
     ///
     /// `consumed` holds the keys whose press the strip took and whose release has not come yet: the release goes
-    /// with the press, in this pass or a later one. `down` holds the keys down before the event. `at` is the event's
-    /// arrival time (`Arrived::at`).
+    /// with the press, in this pass or a later one. `down` holds the keys down before the event; a press of a key
+    /// already down is a repeat, as egui reads it, whatever the platform said. `at` is the event's arrival time
+    /// (`Arrived::at`).
     fn event(&self, batch: &mut Batch, alt: &mut AltTrack, consumed: &mut Vec<Key>, down: &[Key], event: KeyEvent, at: Option<f64>) -> bool {
         if matches!(event, KeyEvent::Clip { .. }) {
             // A clipboard event stands for its chord's press, which types nothing.
@@ -87,6 +88,7 @@ impl Strip<'_> {
         match event {
             KeyEvent::Press { key, input, repeat } => {
                 alt.other_key = true;
+                let repeat = repeat || input.physical.or(input.typed).is_some_and(|held| down.contains(&held));
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
                 let menu_keys = batch.menu.len();

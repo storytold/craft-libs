@@ -9,7 +9,7 @@ use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse,
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};
-use crate::testing::focus::{Stop, egui_focused, named_id, pop_scope, push_scope, register_stop, widget};
+use crate::testing::focus::{Stop, egui_focused, key_release, named_id, pop_scope, push_scope, register_stop, widget};
 use crate::testing::input::{key_press, key_reached, slop};
 use crate::testing::pointer::{self, moved, press, release};
 use crate::testing::sensing::{self, ProbeRoot};
@@ -44,8 +44,9 @@ fn seen(host: &RefCell<Host>) -> (Vec<Key>, usize) {
     (std::mem::take(&mut host.reached), std::mem::take(&mut host.cancels))
 }
 
+/// A press of `key` and its release, in one frame: a second press with no release between is a repeat.
 fn press_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key) {
-    frames.frame(vec![key_press(key, Modifiers::NONE)], &mut *show);
+    frames.frame(vec![key_press(key, Modifiers::NONE), key_release(key, Modifiers::NONE)], &mut *show);
 }
 
 /// A window with a framework button and the host's own egui text field, with what the host saw.
@@ -660,7 +661,7 @@ fn a_window_shortcut_runs_from_a_pane_title_and_not_from_a_modal_dialog_or_a_tex
     // The ids of the commands a press of the shortcut's key fired.
     let fired = |frames: &mut Frames, show: &mut dyn FnMut(&mut Ui)| -> Vec<String> {
         take_output(&frames.ctx);
-        frames.frame(vec![key_press(Key::Q, Modifiers::NONE)], &mut *show);
+        frames.frame(vec![key_press(Key::Q, Modifiers::NONE), key_release(Key::Q, Modifiers::NONE)], &mut *show);
         frames.frame(Vec::new(), &mut *show);
         take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
     };
