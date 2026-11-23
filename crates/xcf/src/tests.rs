@@ -1004,6 +1004,54 @@ fn the_pixel_budget_is_charged_before_decoding_and_decoding_can_be_cancelled() {
 }
 
 #[test]
+fn tile_tables_are_terminated_and_cannot_point_into_themselves() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.compression = Compression::None;
+    img.layers.push(TestLayer::rgba("L", 1, 1, vec![22, 44, 66, 255]));
+    let mut file = W { out: img.write(), wide: true };
+    let xcf = open(&file.out).unwrap();
+    let hierarchy = xcf.image.layers[0].hierarchy;
+    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
+    let tile_slot = level + 8;
+    let terminator = tile_slot + 8;
+    assert_eq!(pixels(&xcf, 0).data[3], 1.0);
+
+    let valid = file.out.clone();
+    file.patch(terminator, 1);
+    assert!(read_all(&file.out).is_err(), "a nonzero tile-list terminator must be rejected");
+
+    file.out = valid;
+    file.patch(tile_slot, terminator);
+    assert!(read_all(&file.out).is_err(), "a tile cannot use the pointer table as pixel data");
+}
+
+#[test]
+fn nonincreasing_tile_offsets_are_rejected() {
+    let mut img = TestImage::rgb8(TILE + 1, 1);
+    img.compression = Compression::None;
+    img.layers.push(TestLayer::rgba("L", TILE + 1, 1, rgba(TILE + 1, 1, |_, _| [22, 44, 66, 255])));
+    let mut file = W { out: img.write(), wide: true };
+    let xcf = open(&file.out).unwrap();
+    let hierarchy = xcf.image.layers[0].hierarchy;
+    let level = xcf.c.at(hierarchy + 12).ptr().unwrap();
+    let first_tile = xcf.c.at(level + 8).ptr().unwrap();
+    assert!(read_all(&file.out).is_ok());
+    file.patch(level + 16, first_tile);
+    assert!(read_all(&file.out).is_err());
+}
+
+#[test]
+fn cancellation_precedes_drawable_traversal_and_budget_charge() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.layers.push(TestLayer::rgba("L", 1, 1, vec![22, 44, 66, 255]));
+    let bytes = img.write();
+    let xcf = open(&bytes).unwrap();
+    let mut budget = 16;
+    assert_eq!(xcf.layer_pixels(0, &mut budget, &|| false), Err(Error::Cancelled));
+    assert_eq!(budget, 16);
+}
+
+#[test]
 fn parsing_layer_metadata_can_be_cancelled_between_records() {
     let mut img = TestImage::rgb8(3, 3);
     img.layers.push(TestLayer::rgba("first", 3, 3, rgba(3, 3, |_, _| [1, 2, 3, 255])));

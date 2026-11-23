@@ -661,7 +661,7 @@ impl<'a> Xcf<'a> {
 
     /// Decodes the pixels of layer `index` of [`Image::layers`]; `None` for a layer that has
     /// none (a group). The decoded samples (4 bytes each) are taken from `budget` before
-    /// anything is allocated. `keep_going` is asked every 64 tiles.
+    /// anything is allocated. `keep_going` is checked before work and during tile traversal.
     pub fn layer_pixels(&self, index: usize, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Option<Pixels>> {
         let layer = self.image.layers.get(index).ok_or_else(|| invalid("no such layer"))?;
         if layer.hierarchy == 0 {
@@ -711,6 +711,9 @@ impl<'a> Xcf<'a> {
     /// Reads a hierarchy: the first level's tiles into floats, `source_channels` as stored
     /// (indexed pixels expand to RGB here).
     fn hierarchy(&self, hptr: usize, source_channels: usize, indexed: bool, budget: &mut usize, keep_going: &dyn Fn() -> bool) -> Result<Pixels> {
+        if !keep_going() {
+            return Err(Error::Cancelled);
+        }
         let precision = self.image.precision;
         let mut c = self.c.at(hptr);
         let (w, h, bpp) = (c.u32()?, c.u32()?, c.u32()? as usize);
@@ -726,21 +729,22 @@ impl<'a> Xcf<'a> {
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
         *budget = budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the pixel limit"))?;
         let lptr = c.ptr()?;
+        if lptr == hptr {
+            return Err(invalid("a hierarchy cannot be its own level"));
+        }
         let mut l = self.c.at(lptr);
         if (l.u32()?, l.u32()?) != (w, h) {
             return Err(invalid("the level does not match its hierarchy"));
         }
         let across = w.div_ceil(TILE) as usize;
         let down = h.div_ceil(TILE) as usize;
-        let mut tiles = Vec::with_capacity(across * down);
-        for _ in 0..across * down {
-            let p = l.ptr()?;
-            if p == 0 {
-                return Err(invalid("the tile list ends before every tile"));
-            }
-            tiles.push(p);
+        let tiles = tile_offsets(&mut l, lptr, across * down, keep_going)?;
+        if !keep_going() {
+            return Err(Error::Cancelled);
         }
-        let mut data = vec![0.0f32; count];
+        let mut data = Vec::new();
+        data.try_reserve_exact(count).map_err(|_| invalid("not enough memory for drawable samples"))?;
+        data.resize(count, 0.0f32);
         let stride = w as usize * channels;
         let side = TILE as usize;
         for (i, &at) in tiles.iter().enumerate() {
@@ -749,8 +753,8 @@ impl<'a> Xcf<'a> {
             }
             let (tx, ty) = (i % across, i / across);
             let (tw, th) = ((w as usize - tx * side).min(side), (h as usize - ty * side).min(side));
-            let end = tiles.get(i + 1).copied().filter(|&n| n > at).unwrap_or(self.c.b.len());
-            let input = self.c.b.get(at..end.min(self.c.b.len())).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
+            let end = tiles.get(i + 1).copied().unwrap_or(self.c.b.len());
+            let input = self.c.b.get(at..end).ok_or_else(|| invalid("a tile pointer is outside the file"))?;
             let raw = tiles::decode(input, self.image.compression, bpp, tw * th)?;
             for (py, row) in raw.chunks_exact(tw * bpp).enumerate() {
                 let start = (ty * side + py) * stride + tx * side * channels;
@@ -773,6 +777,36 @@ impl<'a> Xcf<'a> {
         }
         Ok(Pixels { width: w, height: h, channels, data })
     }
+}
+
+/// The first level has one increasing offset per tile, then a zero terminator.
+/// Validate before allocating the output or deriving a compressed tile's byte extent.
+fn tile_offsets(level: &mut Cursor<'_>, level_start: usize, count: usize, keep_going: &dyn Fn() -> bool) -> Result<Vec<usize>> {
+    let mut tiles = Vec::new();
+    tiles.try_reserve_exact(count).map_err(|_| invalid("not enough memory for tile offsets"))?;
+    for index in 0..count {
+        if index % 64 == 0 && !keep_going() {
+            return Err(Error::Cancelled);
+        }
+        let offset = level.ptr()?;
+        if offset == 0 {
+            return Err(invalid("the tile list ends before every tile"));
+        }
+        if offset >= level.b.len() {
+            return Err(invalid("a tile pointer is outside the file"));
+        }
+        if tiles.last().is_some_and(|&previous| offset <= previous) {
+            return Err(invalid("tile offsets must increase"));
+        }
+        tiles.push(offset);
+    }
+    if level.ptr()? != 0 {
+        return Err(invalid("the tile list is missing its zero terminator"));
+    }
+    if tiles.iter().any(|offset| (level_start..level.pos).contains(offset)) {
+        return Err(invalid("a tile points into its own level table"));
+    }
+    Ok(tiles)
 }
 
 fn image_props(c: &mut Cursor<'_>, image: &mut Image) -> Result<()> {
