@@ -475,3 +475,42 @@ fn a_background_scan_that_panics_lets_the_next_call_scan_again() {
     assert!(cat.is_ready(), "a failed scan must not leave the catalog waiting on it");
     assert_eq!(calls.load(Ordering::Relaxed), 2);
 }
+
+/// An app adds its own fonts when it makes its font database: that must not wait for a scan of every installed font,
+/// neither one it starts nor one running in the background. The installed faces join the added ones when a lookup
+/// scans, and a rescan counts each listed face once.
+#[test]
+fn adding_fonts_does_not_wait_for_the_installed_fonts() {
+    let root = temp("added");
+    drop(system(&root));
+    let (entered, scan_entered) = mpsc::channel();
+    let (release, scan_released) = mpsc::channel::<()>();
+    let scan_released = std::sync::Mutex::new(scan_released);
+    let waited_out = Arc::new(AtomicUsize::new(0));
+    let flag = Arc::clone(&waited_out);
+    let lister: Lister = Arc::new(move || {
+        let _ = entered.send(());
+        if let Err(mpsc::RecvTimeoutError::Timeout) = scan_released.lock().unwrap().recv_timeout(Duration::from_secs(10)) {
+            flag.fetch_add(1, Ordering::Relaxed);
+        }
+        Vec::new()
+    });
+    let cat = Arc::new(Catalog::new(linux_env(&root)).with_font_service(false).with_lister(lister));
+    let bold = cat.add_bytes(font(&spec("Test Sans", "Bold", 700)), Source::Bundled, &Limits::default()).unwrap();
+    assert!(!cat.is_ready(), "adding started no scan");
+    cat.scan_in_background();
+    scan_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+    cat.add_bytes(font(&spec("App Face", "Regular", 400)), Source::Bundled, &Limits::default()).unwrap();
+    release.send(()).unwrap();
+    // Later scans (the rescans below) go straight through.
+    drop(release);
+    assert_eq!(cat.styles("App Face").len(), 1);
+    assert_eq!(waited_out.load(Ordering::Relaxed), 0, "the add during the scan returned before the scan did");
+    // The added Bold comes first; the installed file's Bold is another version of it, not another face.
+    assert_eq!(cat.resolve("Test Sans", "Bold").map(|(f, _)| f), bold.first().cloned());
+    assert_eq!(cat.versions(&bold[0]).len(), 2);
+    let with_added = cat.rescan();
+    assert_eq!(cat.remove_added(Source::Bundled), 2);
+    assert_eq!(cat.rescan(), with_added - 1, "only the added face no installed file has was counted");
+    assert!(cat.versions(&bold[0]).is_empty());
+}

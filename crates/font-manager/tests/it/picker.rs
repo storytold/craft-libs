@@ -32,6 +32,7 @@ fn catalog_of(faces: &[&[u8]]) -> Arc<Catalog> {
     for bytes in faces {
         catalog.add_bytes(bytes.to_vec(), Source::Bundled, &Limits::default()).expect("a font file");
     }
+    catalog.rescan();
     catalog
 }
 

@@ -313,7 +313,7 @@ type FamilyLoad = Arc<OnceLock<Arc<[LoadedFace]>>>;
 /// The installed fonts: the platform's font folders, the files its font service knows, the font
 /// store and the app's own folders, plus faces added from files or bytes.
 ///
-/// The first scan runs on first use or on a background thread ([`Catalog::scan_in_background`]);
+/// The first scan runs on the first lookup or on a background thread ([`Catalog::scan_in_background`]);
 /// lookups wait for it. Lookups read an immutable snapshot, so they never wait for a rescan.
 /// Each family's files load once ([`Catalog::load_family`]): other threads asking for the same
 /// family wait for that load, other families load at the same time.
@@ -326,6 +326,9 @@ pub struct Catalog {
     /// The first scan was started on a background thread.
     scanning: AtomicBool,
     scan: Mutex<ScanState>,
+    /// The faces the last scan found, by path: what an added face is indexed with, read without waiting for a
+    /// running scan.
+    scanned: Mutex<Arc<[Face]>>,
     stamp: Mutex<Stamp>,
     generation: AtomicU64,
     added: Mutex<Added>,
@@ -359,6 +362,7 @@ impl Catalog {
             ready: OnceLock::new(),
             scanning: AtomicBool::new(false),
             scan: Mutex::new(ScanState::default()),
+            scanned: Mutex::new(Arc::from([])),
             stamp: Mutex::new(Stamp::default()),
             generation: AtomicU64::new(0),
             added: Mutex::new(Added::default()),
@@ -456,7 +460,8 @@ impl Catalog {
 
     /// Scan again, for fonts installed or removed since; only new and changed files are read.
     /// Families loaded before load again on their next [`Catalog::load_family`]. Returns the
-    /// number of faces cataloged.
+    /// number of faces cataloged: the faces [`Catalog::faces`] lists, added faces included, each
+    /// face once however many files have it ([`Catalog::versions`]).
     pub fn rescan(&self) -> usize {
         let mut first = false;
         self.ready.get_or_init(|| {
@@ -650,7 +655,8 @@ impl Catalog {
     }
 
     /// Add the faces of a font file's `bytes` (a font or a collection) for this session, as
-    /// `source`. Returns the faces added.
+    /// `source`. Returns the faces added. Doesn't wait for or start the first scan: the installed
+    /// faces join them when a lookup scans.
     pub fn add_bytes(&self, bytes: Vec<u8>, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
         let size = bytes.len() as u64;
         if size > limits.max_file_bytes {
@@ -660,7 +666,6 @@ impl Catalog {
         if faces.is_empty() {
             return Err(FontFileError::NotAFont);
         }
-        self.ensure();
         let mut added = lock(&self.added);
         if added.faces.len() + faces.len() > limits.max_added_faces {
             return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
@@ -675,7 +680,7 @@ impl Catalog {
     }
 
     /// Add the faces of the font file at `path` for this session, as `source`, read in place.
-    /// Returns the faces added.
+    /// Returns the faces added. Like [`Catalog::add_bytes`], it doesn't scan.
     pub fn add_file(&self, path: &Path, source: Source, limits: &Limits) -> Result<Vec<FaceInfo>, FontFileError> {
         let size = std::fs::metadata(path)?.len();
         if size > limits.max_file_bytes {
@@ -690,7 +695,6 @@ impl Catalog {
         if faces.is_empty() {
             return Err(FontFileError::NotAFont);
         }
-        self.ensure();
         let added = lock(&self.added);
         if added.faces.len() + faces.len() > limits.max_added_faces {
             return Err(FontFileError::TooManyFaces { max: limits.max_added_faces });
@@ -722,11 +726,8 @@ impl Catalog {
     }
 
     /// The faces the last scan found.
-    fn scanned(&self) -> Vec<Face> {
-        let scan = lock(&self.scan);
-        let mut faces: Vec<(&PathBuf, &Cached)> = scan.files.iter().collect();
-        faces.sort_by(|a, b| a.0.cmp(b.0));
-        faces.into_iter().flat_map(|(_, c)| c.faces.iter().cloned()).collect()
+    fn scanned(&self) -> Arc<[Face]> {
+        Arc::clone(&lock(&self.scanned))
     }
 
     fn scan_now(&self, refresh: bool) {
@@ -795,6 +796,9 @@ impl Catalog {
             }
             files.insert(path, Cached { len, modified: mtime, faces });
         }
+        let mut by_path: Vec<(&PathBuf, &Cached)> = files.iter().collect();
+        by_path.sort_by(|a, b| a.0.cmp(b.0));
+        *lock(&self.scanned) = by_path.into_iter().flat_map(|(_, c)| c.faces.iter().cloned()).collect();
         state.files = files;
         drop(state);
 
