@@ -5,16 +5,9 @@
 //! `<APP>_CONFIG_DIR`, or [`Location::Memory`], means no folder at all: nothing is read or written.
 //! A portable folder that cannot be created or written to is skipped in favour of the platform
 //! folder, and the reason comes back in [`Resolved::warning`].
-//!
-//! A web build has no environment, executable folder or platform folder, so it has no rules:
-//! its location names the key root in browser storage ([`Location::Dir`]) or nothing
-//! ([`Location::Memory`]).
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::ffi::OsString;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// How an application spells portable mode: the marker files that turn it on (any one, contents
 /// ignored) and the folder created beside the executable. Comes from [`crate::Settings`], so an
@@ -35,8 +28,7 @@ impl Portable {
 /// Where the application wants its settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Location {
-    /// Apply the rules in order. Native only: the rules read the process and the disk.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Apply the rules in order.
     Auto,
     /// Use this folder, no questions asked (a `--config-dir` flag, or a library folder).
     Dir(PathBuf),
@@ -96,11 +88,9 @@ impl Resolved {
 }
 
 /// Reads an environment variable by name.
-#[cfg(not(target_arch = "wasm32"))]
 pub type EnvReader = Box<dyn Fn(&str) -> Option<OsString>>;
 
 /// What the rules look at. The defaults read the real process; tests supply their own.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct Probe {
     /// Reads an environment variable.
     pub env: EnvReader,
@@ -121,9 +111,6 @@ impl Default for Probe {
     }
 }
 
-<<<<<<< HEAD
-#[cfg(not(target_arch = "wasm32"))]
-=======
 /// A browser has no environment, executable or config folder.
 #[cfg(target_arch = "wasm32")]
 impl Default for Probe {
@@ -132,7 +119,6 @@ impl Default for Probe {
     }
 }
 
->>>>>>> origin/next
 impl std::fmt::Debug for Probe {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Probe").field("exe_dir", &self.exe_dir).field("platform_config_dir", &self.platform_config_dir).finish_non_exhaustive()
@@ -146,28 +132,8 @@ pub fn env_var_name(app_id: &str) -> String {
     name
 }
 
-/// The folder of a location that names it: [`Location::Dir`] and [`Location::Memory`]. `None` for
-/// [`Location::Auto`], which the rules decide.
-fn given(location: &Location) -> Option<Resolved> {
-    match location {
-        Location::Dir(dir) => Some(Resolved::new(Some(dir.clone()), Rule::Override)),
-        Location::Memory => Some(Resolved::new(None, Rule::Memory)),
-        #[cfg(not(target_arch = "wasm32"))]
-        Location::Auto => None,
-    }
-}
-
-/// The folder of a web build's location: the location names it, with no rules to apply.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn resolve_web(location: &Location) -> Resolved {
-    // Without `Location::Auto` every location names its folder; no folder is the answer that
-    // writes nothing should a later location not.
-    given(location).unwrap_or_else(|| Resolved::new(None, Rule::Memory))
-}
-
 /// Applies the rules for `app_id`, with the app's portable-mode names. The platform folder is
 /// named after `app_id`; see [`resolve_named`] to name it differently.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn resolve(app_id: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
     resolve_named(app_id, app_id, portable, location, probe)
 }
@@ -176,7 +142,6 @@ pub fn resolve(app_id: &str, portable: &Portable, location: &Location, probe: &P
 /// `folder` instead of the app id, so an app whose existing settings sit in a differently spelled
 /// folder (`Photocraft` on macOS and Windows) keeps them. The `<APP>_CONFIG_DIR` variable still
 /// comes from `app_id`.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_named(app_id: &str, folder: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
     resolve_checked(app_id, folder, portable, location, probe, ensure_writable)
 }
@@ -184,13 +149,11 @@ pub fn resolve_named(app_id: &str, folder: &str, portable: &Portable, location: 
 /// [`resolve_named`] without changing the disk: the portable folder is judged by its permissions (see
 /// [`accepts_files`]) instead of creating it and writing a probe, with the same fallback to the platform folder.
 /// For [`SettingsStore::read`](crate::SettingsStore::read), which writes nothing.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn resolve_unprobed(app_id: &str, folder: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
     resolve_checked(app_id, folder, portable, location, probe, accepts_files)
 }
 
 /// The folder rules, with `writable` deciding whether a portable folder is used.
-#[cfg(not(target_arch = "wasm32"))]
 fn resolve_checked(
     app_id: &str,
     folder: &str,
@@ -199,8 +162,10 @@ fn resolve_checked(
     probe: &Probe,
     writable: impl Fn(&Path) -> std::io::Result<()>,
 ) -> Resolved {
-    if let Some(resolved) = given(location) {
-        return resolved;
+    match location {
+        Location::Dir(dir) => return Resolved::new(Some(dir.clone()), Rule::Override),
+        Location::Memory => return Resolved::new(None, Rule::Memory),
+        Location::Auto => {}
     }
     // A browser has no folders: the store keeps its files in `LocalStorageFiles`.
     if cfg!(target_arch = "wasm32") {
@@ -239,7 +204,6 @@ fn resolve_checked(
 }
 
 /// Creates `dir` and proves a file can be written in it: a folder can exist and still be read-only.
-#[cfg(not(target_arch = "wasm32"))]
 fn ensure_writable(dir: &Path) -> std::io::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -256,7 +220,6 @@ fn ensure_writable(dir: &Path) -> std::io::Result<()> {
 
 /// Whether `dir`, or for a folder that doesn't exist yet its nearest existing ancestor (where
 /// [`ensure_writable`] would create it), is a folder with write permission. Reads metadata only.
-#[cfg(not(target_arch = "wasm32"))]
 fn accepts_files(dir: &Path) -> std::io::Result<()> {
     let existing = dir.ancestors().find(|ancestor| ancestor.exists()).unwrap_or(dir);
     let meta = std::fs::metadata(existing)?;
@@ -273,13 +236,11 @@ fn accepts_files(dir: &Path) -> std::io::Result<()> {
 ///
 /// On macOS the executable sits in `X.app/Contents/MacOS`; the marker is looked for next to the
 /// `.app` bundle, because writing inside a signed bundle breaks its signature.
-#[cfg(not(target_arch = "wasm32"))]
 fn portable_dir(exe_dir: &Path, portable: &Portable) -> Option<(PathBuf, PathBuf)> {
     let base = bundle_parent(exe_dir).unwrap_or(exe_dir);
     portable.markers.iter().map(|m| base.join(m)).find(|m| m.is_file()).map(|marker| (marker, base.join(portable.dir)))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn bundle_parent(exe_dir: &Path) -> Option<&Path> {
     if !cfg!(target_os = "macos") || exe_dir.file_name()? != "MacOS" {
         return None;
@@ -296,7 +257,6 @@ fn bundle_parent(exe_dir: &Path) -> Option<&Path> {
 }
 
 /// The platform cache folder for `app_id` (`%LOCALAPPDATA%` on Windows, so it does not roam).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn cache_dir(app_id: &str) -> Option<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -310,7 +270,6 @@ pub fn cache_dir(app_id: &str) -> Option<PathBuf> {
 }
 
 /// The platform data folder for `app_id`, for recovery files and other non-settings state.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn data_dir(app_id: &str) -> Option<PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
     {

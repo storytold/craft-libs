@@ -17,22 +17,15 @@ harness = false
 suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The printer and job settings widgets (`craft_print::ui`).
-<<<<<<< HEAD
-ui = ["dep:craft-behavior", "dep:craft-theme", "dep:craft-ui", "dep:egui", "dep:serde_json"]
-=======
-ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
->>>>>>> origin/next
+ui = ["dep:craft-behavior", "dep:craft-theme", "dep:craft-ui", "dep:egui"]
 # The stories and the integration binary of the print panel.
 screen-testing = ["ui", "craft-ui/testing"]
 
 [dependencies]
 craft-behavior = { workspace = true, optional = true }
-<<<<<<< HEAD
+craft-host = { workspace = true }
 # `Tone` for the dialog's refusal notice; craft-ui does not re-export it.
 craft-theme = { workspace = true, optional = true }
-=======
-craft-host = { workspace = true }
->>>>>>> origin/next
 craft-ui = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

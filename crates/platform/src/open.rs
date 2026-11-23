@@ -88,7 +88,8 @@ pub enum Intake {
         /// Where they landed.
         target: DropTarget,
     },
-<<<<<<< HEAD
+    /// The OS asked the app to quit.
+    Quit,
     /// The OS asked to open these absolute paths for the app's own action.
     OpenFor {
         /// The files, absolute and sorted.
@@ -103,10 +104,6 @@ pub enum Intake {
         /// The contents.
         bytes: Arc<[u8]>,
     },
-=======
-    /// The OS asked the app to quit.
-    Quit,
->>>>>>> origin/next
 }
 
 /// The sending side of a [`FileIntake`]: `Send + Clone`, for the threads that hear the OS (the
@@ -213,7 +210,6 @@ impl IntakeSender {
     }
 }
 
-<<<<<<< HEAD
 /// `paths` made absolute and sorted by [`natural_cmp`] of the path text, the order an OS open request opens in.
 fn ordered(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = paths.iter().map(|p| absolute(p)).collect();
@@ -221,20 +217,13 @@ fn ordered(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths
 }
 
-/// Files waiting to be opened, read once per frame on the UI thread (spec Q-S4F-7).
-///
-/// The app makes one at startup, gives [`sender`](Self::sender) to whatever hears the OS, pushes
-/// drops from its frame with [`dropped`](Self::dropped), and takes the batches with
-/// [`take`](Self::take). An [`Intake::Open`] or [`Intake::OpenFor`] batch comes made absolute and sorted by
-=======
 /// OS requests waiting for the app (files to open, files dropped, quit), read once per frame on
 /// the UI thread (spec Q-S4F-7).
 ///
 /// The app makes one at startup, gives [`sender`](Self::sender) to whatever hears the OS
 /// (`apple_events::install` on macOS, its single-instance socket elsewhere), pushes drops
 /// through a sender's [`dropped`](IntakeSender::dropped), and takes the requests with
-/// [`take`](Self::take). An [`Intake::Open`] batch comes made absolute and sorted by
->>>>>>> origin/next
+/// [`take`](Self::take). An [`Intake::Open`] or [`Intake::OpenFor`] batch comes made absolute and sorted by
 /// [`natural_cmp`] of the path text; the app focuses documents already open ([`same_file`]) and
 /// opens the rest, then brings its window to the front (on Wayland, a user-attention request).
 /// [`Intake::Quit`] closes the app the way its own Quit command does.

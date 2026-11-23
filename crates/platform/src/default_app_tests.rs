@@ -2,11 +2,6 @@
 
 use crate::default_app::{path_from_arg, rejoin_split_paths};
 
-<<<<<<< HEAD
-// file:///a%20b.pdf and file://localhost/x decode to paths; truncated and invalid escapes are
-// kept as written; http://, file://host/x, a bare file://, plain paths and non-UTF-8 escapes pass
-// through; file:///C:/x.pdf is C:/x.pdf on Windows.
-=======
 // XDG_DATA_HOME (else ~/.local/share) comes first, then each XDG_DATA_DIRS entry (else
 // /usr/local/share:/usr/share); relative and empty entries are skipped, and no home is fine.
 // Absolute here means a Unix path, so the trial runs on Unix.
@@ -27,9 +22,9 @@ fn application_dirs_follow_the_xdg_spec() {
     assert_eq!(application_dirs(Some("rel"), None, Some("also-rel")), [p("/usr/local/share/applications"), p("/usr/share/applications")]);
 }
 
-// file:///a%20b.pdf and file://localhost/x decode to paths; http://, file://host/x, plain paths
-// and non-UTF-8 escapes pass through; file:///C:/x.pdf is C:/x.pdf on Windows.
->>>>>>> origin/next
+// file:///a%20b.pdf and file://localhost/x decode to paths; truncated and invalid escapes are
+// kept as written; http://, file://host/x, a bare file://, plain paths and non-UTF-8 escapes pass
+// through; file:///C:/x.pdf is C:/x.pdf on Windows.
 #[test]
 fn file_uris_become_paths() {
     assert_eq!(path_from_arg("file:///a%20b.pdf".into()), "/a b.pdf");

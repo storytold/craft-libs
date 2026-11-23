@@ -3,34 +3,21 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-<<<<<<< HEAD
-=======
 
 use web_time::Instant;
->>>>>>> origin/next
 
 use toml_edit::DocumentMut;
-use web_time::Instant;
 
 use crate::Settings;
 use crate::document::{self, merge_changes, merge_into, set_schema_version};
 use crate::error::{LoadReport, ReadOnlyReason, SaveStatus, SettingsError, Source, TickResult};
-<<<<<<< HEAD
-#[cfg(target_arch = "wasm32")]
-use crate::files::BrowserFiles;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::files::DiskFiles;
-=======
 #[cfg(not(target_arch = "wasm32"))]
 use crate::files::DiskFiles;
 #[cfg(target_arch = "wasm32")]
 use crate::files::LocalStorageFiles;
->>>>>>> origin/next
 use crate::files::SettingsFiles;
 use crate::migrate::{self, LegacyFile, Upgrade};
-use crate::paths::{self, Location};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::paths::{Portable, Probe};
+use crate::paths::{self, Location, Portable, Probe};
 
 mod sections;
 
@@ -66,17 +53,13 @@ pub struct OpenOptions<T> {
     /// Quiet period after a change before saving.
     pub debounce: Duration,
     /// What the folder rules look at.
-    #[cfg(not(target_arch = "wasm32"))]
     pub probe: Probe,
-    /// How the files are read and written (by default `DiskFiles`, on the web `BrowserFiles`).
-    /// The store reads and writes `config.toml`, its backup and the damaged-file rename only
-    /// through it.
+    /// How the files are read and written ([`DiskFiles`] by default). The store reads and writes
+    /// `config.toml`, its backup and the damaged-file rename only through it.
     pub files: Arc<dyn SettingsFiles>,
 }
 
 impl<T> Default for OpenOptions<T> {
-    /// Native: [`Location::Auto`] on the disk.
-    #[cfg(not(target_arch = "wasm32"))]
     fn default() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         let files: Arc<dyn SettingsFiles> = Arc::new(DiskFiles);
@@ -84,13 +67,6 @@ impl<T> Default for OpenOptions<T> {
         #[cfg(target_arch = "wasm32")]
         let files: Arc<dyn SettingsFiles> = Arc::new(LocalStorageFiles::new(4 << 20));
         Self { location: Location::Auto, legacy: Vec::new(), debounce: DEFAULT_DEBOUNCE, probe: Probe::default(), files }
-    }
-
-    /// Web: browser storage, in memory until the app names its key root with [`Location::Dir`]
-    /// (there are no folder rules to find one).
-    #[cfg(target_arch = "wasm32")]
-    fn default() -> Self {
-        Self { location: Location::Memory, legacy: Vec::new(), debounce: DEFAULT_DEBOUNCE, files: Arc::new(BrowserFiles) }
     }
 }
 
@@ -113,7 +89,6 @@ impl<T> OpenOptions<T> {
     }
 
     /// What the folder rules look at.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn probe(mut self, probe: Probe) -> Self {
         self.probe = probe;
         self
@@ -179,7 +154,8 @@ impl<T: Settings> SettingsStore<T> {
 
     /// Opens the store with full options.
     pub fn open_with(options: OpenOptions<T>) -> (Self, LoadReport) {
-        let resolved = resolve(&options, Probing::Write);
+        let portable = Portable { markers: T::PORTABLE_MARKERS, dir: T::PORTABLE_DIR };
+        let resolved = paths::resolve_named(T::APP_ID, T::FOLDER_NAME, &portable, &options.location, &options.probe);
         let (mut store, mut report) = Self::unloaded(resolved, options.files, options.debounce);
 
         let (Some(dir), Some(path)) = (store.dir.clone(), store.path.clone()) else {
@@ -206,7 +182,8 @@ impl<T: Settings> SettingsStore<T> {
     /// damaged `config.toml` reads as defaults and stays where it is, and with no `config.toml` the legacy files are
     /// imported in memory only.
     pub fn read(options: &OpenOptions<T>) -> (T, LoadReport) {
-        let resolved = resolve(options, Probing::ReadOnly);
+        let portable = Portable { markers: T::PORTABLE_MARKERS, dir: T::PORTABLE_DIR };
+        let resolved = paths::resolve_unprobed(T::APP_ID, T::FOLDER_NAME, &portable, &options.location, &options.probe);
         let (mut store, mut report) = Self::unloaded(resolved, options.files.clone(), options.debounce);
         if let Some(path) = store.path.clone() {
             store.load(&path, &options.legacy, Damaged::Leave, &mut report);
@@ -558,33 +535,6 @@ impl<T: Settings> SettingsStore<T> {
         }
         Ok(((!text.trim().is_empty()).then_some(text), changed.then_some(doc)))
     }
-}
-
-/// How the folder rules may judge a portable folder.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Probing {
-    /// Create it and write a probe (an opened store).
-    Write,
-    /// Judge it by its permissions, changing nothing (a read).
-    ReadOnly,
-}
-
-/// The folder `options` asks for: by the folder rules on native, as named on the web.
-#[cfg(not(target_arch = "wasm32"))]
-fn resolve<T: Settings>(options: &OpenOptions<T>, probing: Probing) -> paths::Resolved {
-    let portable = Portable { markers: T::PORTABLE_MARKERS, dir: T::PORTABLE_DIR };
-    match probing {
-        Probing::Write => paths::resolve_named(T::APP_ID, T::FOLDER_NAME, &portable, &options.location, &options.probe),
-        Probing::ReadOnly => paths::resolve_unprobed(T::APP_ID, T::FOLDER_NAME, &portable, &options.location, &options.probe),
-    }
-}
-
-/// The folder `options` asks for: by the folder rules on native, as named on the web.
-#[cfg(target_arch = "wasm32")]
-fn resolve<T: Settings>(options: &OpenOptions<T>, probing: Probing) -> paths::Resolved {
-    // Nothing on the web is probed: the location names the key root.
-    let _ = probing;
-    paths::resolve_web(&options.location)
 }
 
 /// What a store with no file holds as its base: the defaults, so only a change from them counts

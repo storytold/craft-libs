@@ -18,16 +18,13 @@ const ICONS_KEY: &str = "icon-theme";
 const CONTRAST_KEY: &str = "contrast";
 const MOTION_KEY: &str = "reduced-motion";
 const ANIMATIONS_KEY: &str = "enable-animations";
-<<<<<<< HEAD
+const KDE: &str = "org.kde.kdeglobals.KDE";
+const KDE_MOTION_KEY: &str = "AnimationDurationFactor";
 // Read on GNOME-like sessions only (`Shared::gnome`): elsewhere the schema's key holds its default
 // or a GNOME session's value, not what this desktop applies to its own text.
 const TEXT_SCALE_KEY: &str = "text-scaling-factor";
 /// The text scales applied; outside them a desktop's factor is no scaling, never clamped.
 const TEXT_SCALES: std::ops::RangeInclusive<f64> = 0.5..=3.0;
-=======
-const KDE: &str = "org.kde.kdeglobals.KDE";
-const KDE_MOTION_KEY: &str = "AnimationDurationFactor";
->>>>>>> origin/next
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 // Outer None means unknown/malformed; Some(None) is an explicit no-preference answer.
@@ -167,25 +164,27 @@ pub(super) struct Fallbacks {
     theme_used: bool,
     layout_used: bool,
     icons_used: bool,
-<<<<<<< HEAD
-    text_scale_used: bool,
-=======
     motion_used: bool,
->>>>>>> origin/next
+    text_scale_used: bool,
     path: Option<std::ffi::OsString>,
     /// `$XDG_CONFIG_HOME`, or `~/.config` when that is empty or unset.
     config_home: Option<PathBuf>,
 }
 impl Fallbacks {
     fn from_env() -> Self {
-<<<<<<< HEAD
-        Self { theme_used: false, layout_used: false, icons_used: false, text_scale_used: false, path: std::env::var_os("PATH") }
-=======
         let config_home = std::env::var_os("XDG_CONFIG_HOME")
             .filter(|dir| !dir.is_empty())
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").filter(|home| !home.is_empty()).map(|home| PathBuf::from(home).join(".config")));
-        Self { theme_used: false, layout_used: false, icons_used: false, motion_used: false, path: std::env::var_os("PATH"), config_home }
+        Self {
+            theme_used: false,
+            layout_used: false,
+            icons_used: false,
+            motion_used: false,
+            text_scale_used: false,
+            path: std::env::var_os("PATH"),
+            config_home,
+        }
     }
     /// The settings files' motion answer, for a session with no bus or a portal that knows none
     /// of the three motion keys.
@@ -196,7 +195,6 @@ impl Fallbacks {
         if let Some(reduced) = self.config_home.as_deref().and_then(reduced_motion_from_files) {
             shared.publish_motion(reduced);
         }
->>>>>>> origin/next
     }
     async fn get(&self, schema: &str, key: &str) -> Option<String> {
         let exe = gsettings_exe(self.path.as_deref())?;
@@ -328,16 +326,12 @@ impl Answers {
                     shared.publish_contrast(contrast);
                 }
             }
-<<<<<<< HEAD
             (GNOME, TEXT_SCALE_KEY) if shared.gnome => {
                 if let Some(scale) = decode_text_scale(value) {
                     shared.publish_text_scale(scale);
                 }
             }
-            (STANDARD, MOTION_KEY) | (GNOME, ANIMATIONS_KEY) => {
-=======
             (STANDARD, MOTION_KEY) | (GNOME, ANIMATIONS_KEY) | (KDE, KDE_MOTION_KEY) => {
->>>>>>> origin/next
                 let Some(reduced) = decode_motion(namespace, value) else { return };
                 match namespace {
                     STANDARD => self.motion = Some(reduced),
@@ -400,50 +394,31 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         subscribe(&connection, rule(CONTRAST_KEY), 8).await?,
         subscribe(&connection, rule(MOTION_KEY), 8).await?,
         subscribe(&connection, rule(ANIMATIONS_KEY), 8).await?,
-<<<<<<< HEAD
+        subscribe(&connection, rule(KDE_MOTION_KEY), 8).await?,
         subscribe(&connection, rule(TEXT_SCALE_KEY), 8).await?,
     ];
     let mut owners = subscribe(&connection, owner_rule(), 8).await?;
     // Concurrent reads, so contrast, motion and text scale are known by the time the theme
     // settles `wait_first` without adding round trips before it.
-    let (((standard, gnome), (contrast, (motion, gnome_motion))), text_scale) = zip(
+    let (((standard, gnome), (contrast, (motion, gnome_motion, kde_motion))), text_scale) = zip(
         zip(
             zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
-            zip(
-                read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply),
-                zip(
-                    read_with(&connection, STANDARD, MOTION_KEY, |value, legacy| motion_reply(STANDARD, value, legacy)),
-                    read_with(&connection, GNOME, ANIMATIONS_KEY, |value, legacy| motion_reply(GNOME, value, legacy)),
-                ),
-            ),
+            zip(read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply), read_motion(&connection)),
         ),
         async { if shared.gnome { read_with(&connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None } },
-=======
-        subscribe(&connection, rule(KDE_MOTION_KEY), 8).await?,
-    ];
-    let mut owners = subscribe(&connection, owner_rule(), 8).await?;
-    // Concurrent reads, so contrast and motion are known by the time the theme settles
-    // `wait_first` without adding round trips before it.
-    let ((standard, gnome), (contrast, (motion, gnome_motion, kde_motion))) = zip(
-        zip(read(&connection, STANDARD, shared.gnome), read(&connection, GNOME, shared.gnome)),
-        zip(read_with(&connection, STANDARD, CONTRAST_KEY, contrast_reply), read_motion(&connection)),
->>>>>>> origin/next
     )
     .await;
     let mut answers = Answers { standard, gnome, motion, gnome_motion, kde_motion };
     if let Some(contrast) = contrast {
         shared.publish_contrast(contrast);
     }
-<<<<<<< HEAD
-    answers.publish_motion(shared);
-    if let Some(scale) = text_scale {
-        shared.publish_text_scale(scale);
-=======
     match answers.reduced_motion() {
         Some(reduced) => shared.publish_motion(reduced),
         // A portal that knows none of the keys (a bare window manager's) leaves the files to answer.
         None => fallbacks.motion(shared),
->>>>>>> origin/next
+    }
+    if let Some(scale) = text_scale {
+        shared.publish_text_scale(scale);
     }
     match combined(standard, gnome) {
         Some(answer) => {
@@ -467,12 +442,10 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         Some(icons) => shared.publish_icons(icons),
         None => fallbacks.icons(shared).await,
     }
-<<<<<<< HEAD
     // A portal without GNOME's keys answered nothing for the text scale either.
     if text_scale.is_none() {
         fallbacks.text_scale(shared).await;
     }
-=======
     follow(shared, &connection, &mut settings, &mut owners, &mut answers).await
 }
 /// Follows the settings after the first read until the portal's owner goes away or a stream ends.
@@ -483,7 +456,6 @@ async fn follow(
     owners: &mut zbus::MessageStream,
     answers: &mut Answers,
 ) -> Option<()> {
->>>>>>> origin/next
     loop {
         let message = match next_event(settings, owners).await? {
             Event::Owner(message) => {
