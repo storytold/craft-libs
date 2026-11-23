@@ -51,6 +51,8 @@ qoa-decode = []
 qoa-encode = []
 # ITU-T G.722 wideband sub-band ADPCM speech codec (64 kbit/s).
 g722 = []
+# ITU-T G.726 ADPCM speech codec (16/24/32/40 kbit/s).
+g726 = []
 opus-encode = []
 # GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
 gsm = ["gsm-decode", "gsm-encode"]
@@ -68,6 +70,9 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# Direct Stream Digital (DSD) files: DSF and DSDIFF decoders and DSD-to-PCM decimation.
+dsd = []
+
 # MPEG-1/2 Layer II (MP2) encoder (`mpa::encoder`). It shares the polyphase analysis filter of the
 # MP3 encoder and the tables of the MP1/MP2 decoder.
 mpa-encode = ["mpa-decode", "mp3-encode"]
@@ -150,8 +155,16 @@ name = "qoa_oracle"
 required-features = ["qoa"]
 
 [[test]]
+name = "dsd_oracle"
+required-features = ["dsd"]
+
+[[test]]
 name = "g722_oracle"
 required-features = ["g722"]
+
+[[test]]
+name = "g726_oracle"
+required-features = ["g726"]
 
 [[test]]
 name = "sbc_oracle"
@@ -172,3 +185,11 @@ required-features = ["decode"]
 [[example]]
 name = "encode"
 required-features = ["lossless-encode", "aac-encode"]
+
+[[test]]
+name = "dsd_bounds"
+required-features = ["dsd"]
+
+[[test]]
+name = "dsd_metadata"
+required-features = ["dsd"]

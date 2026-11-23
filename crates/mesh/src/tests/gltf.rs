@@ -1,7 +1,10 @@
 use serde_json::{Value, json};
 
 use super::hammer;
-use crate::gltf::{MAX_UV_SETS, MAX_ZERO_COMPONENTS, base64_decode, glb_container, read, split_glb, uri_decode, write_glb};
+use crate::gltf::{
+    GlbWriteOptions, MAX_UV_SETS, MAX_ZERO_COMPONENTS, MagFilter, MinFilter, base64_decode, glb_container, read, split_glb, uri_decode, write_glb,
+    write_glb_with_options,
+};
 use crate::{
     AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
     TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
@@ -508,7 +511,7 @@ fn what_is_not_read_is_refused_or_named() {
     assert!(matches!(parse(&doc(json!({ "extensionsRequired": ["VENDOR_something_new"] }))), Err(Error::Unsupported(_))));
     // Extensions that only change looks are named in a warning; the ones the reader handles are not.
     let s = parse(&doc(
-        json!({ "extensionsRequired": ["KHR_texture_transform", "KHR_materials_clearcoat", "KHR_mesh_quantization", "KHR_materials_unlit"] }),
+        json!({ "extensionsRequired": ["KHR_texture_transform", "KHR_materials_transmission", "KHR_mesh_quantization", "KHR_materials_unlit"] }),
     ))
     .unwrap();
     assert_eq!(s.warnings.len(), 1, "texture transforms are read: {:?}", s.warnings);
@@ -949,4 +952,92 @@ fn morph_targets_and_other_scenes_are_named_in_warnings() {
     assert_eq!(s.warnings, [morphs]);
     let s = parse(&one_mesh(&b, plain.clone())).unwrap();
     assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+}
+
+#[test]
+fn strict_uri_decoding_preserves_exact_names_and_rejects_invalid_utf8() {
+    use crate::gltf::uri_decode_strict;
+    for (input, expected) in [
+        ("", Some("")),
+        ("a+b", Some("a+b")),
+        ("a%20b", Some("a b")),
+        ("é/%E2%82%AC", Some("é/€")),
+        ("%", Some("%")),
+        ("%2", Some("%2")),
+        ("%GG", Some("%GG")),
+        ("%252e%252e", Some("%2e%2e")),
+        ("%2e%2e%2fmesh.bin", Some("../mesh.bin")),
+        ("%00", Some("\0")),
+        ("%FF", None),
+        ("%C0%AF", None),
+        ("%ED%A0%80", None),
+        ("%E2%82", None),
+    ] {
+        assert_eq!(uri_decode_strict(input).as_deref(), expected, "{input}");
+    }
+    // Keep the existing API's replacement-character behavior unchanged.
+    assert_eq!(uri_decode("%FF"), "�");
+    let input = "%41%GG+é".repeat(100_000);
+    let decoded = uri_decode_strict(&input).unwrap();
+    assert_eq!(decoded, "A%GG+é".repeat(100_000));
+    assert!(decoded.len() <= input.len());
+}
+
+#[test]
+fn glb_writer_preserves_requested_sampler_filtering() {
+    let mut scene = texture_info(json!({ "index": 0 }));
+    scene.materials[0].base_color_texture.as_mut().unwrap().wrap = [Wrap::Clamp, Wrap::Mirror];
+    let limits = Limits::default();
+    let sampler = |bytes: Vec<u8>| {
+        let (json, _) = split_glb(&bytes).unwrap();
+        let doc: Value = serde_json::from_slice(json).unwrap();
+        let texture = doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64().unwrap() as usize;
+        let sampler = doc["textures"][texture]["sampler"].as_u64().unwrap() as usize;
+        doc["samplers"][sampler].clone()
+    };
+    assert_eq!(sampler(write_glb(&scene, &limits).unwrap()), json!({ "wrapS": 33071, "wrapT": 33648 }));
+
+    let options = GlbWriteOptions { mag_filter: Some(MagFilter::Linear), min_filter: Some(MinFilter::LinearMipmapLinear) };
+    assert_eq!(
+        sampler(write_glb_with_options(&scene, &limits, &options).unwrap()),
+        json!({ "wrapS": 33071, "wrapT": 33648, "magFilter": 9729, "minFilter": 9987 }),
+    );
+
+    let options = GlbWriteOptions { mag_filter: Some(MagFilter::Nearest), ..GlbWriteOptions::default() };
+    assert_eq!(sampler(write_glb_with_options(&scene, &limits, &options).unwrap()), json!({ "wrapS": 33071, "wrapT": 33648, "magFilter": 9728 }),);
+}
+
+#[test]
+fn clearcoat_and_sheen_round_trip_through_write_glb() {
+    let mut mesh = Mesh { name: "card".into(), ..Mesh::default() };
+    mesh.positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+    mesh.parts = vec![Part { material: Some(0), corners: [0, 1, 2].map(Corner::at).to_vec(), ..Part::default() }];
+    let mat = Material {
+        name: "CoatedVelvet".into(),
+        clearcoat: 0.8,
+        clearcoat_roughness: 0.25,
+        clearcoat_texture: Some(TextureRef { image: 0, ..TextureRef::default() }),
+        clearcoat_roughness_texture: Some(TextureRef { image: 0, ..TextureRef::default() }),
+        sheen_color: [0.9, 0.2, 0.1],
+        sheen_roughness: 0.5,
+        sheen_color_texture: Some(TextureRef { image: 1, ..TextureRef::default() }),
+        sheen_roughness_texture: Some(TextureRef { image: 1, ..TextureRef::default() }),
+        ..Material::default()
+    };
+    let mut scene = Scene::from_meshes(vec![mesh], vec![mat.clone()]);
+    scene.images = vec![
+        Image { name: "coat".into(), data: Some(b"\x89PNG coat".to_vec()), ..Image::default() },
+        Image { name: "sheen".into(), data: Some(b"\x89PNG sheen".to_vec()), ..Image::default() },
+    ];
+    let glb = write_glb(&scene, &Limits::default()).unwrap();
+    let back = parse(&glb).unwrap();
+    assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+    assert_eq!(back.materials[0].clearcoat, mat.clearcoat);
+    assert_eq!(back.materials[0].clearcoat_roughness, mat.clearcoat_roughness);
+    assert_eq!(back.materials[0].clearcoat_texture.map(|t| t.image), Some(0));
+    assert_eq!(back.materials[0].clearcoat_roughness_texture.map(|t| t.image), Some(0));
+    assert_eq!(back.materials[0].sheen_color, mat.sheen_color);
+    assert_eq!(back.materials[0].sheen_roughness, mat.sheen_roughness);
+    assert_eq!(back.materials[0].sheen_color_texture.map(|t| t.image), Some(1));
+    assert_eq!(back.materials[0].sheen_roughness_texture.map(|t| t.image), Some(1));
 }

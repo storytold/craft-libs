@@ -7,6 +7,7 @@
 use crate::error::{PsdError, Result};
 use crate::io::{Reader, WriteExt, read_unicode_units, write_unicode_units};
 
+pub mod borrowed;
 mod lookup;
 
 /// Maximum nesting depth accepted when parsing (fuzz safety).
@@ -438,7 +439,9 @@ fn read_descriptor(r: &mut Reader<'_>, depth: usize, limits: ParseLimits) -> Res
     let mut items = vec_for_count(n);
     for _ in 0..n {
         let key = Id::read(r)?;
-        let v = read_value(r, depth + 1, limits)?;
+        // A descriptor item is not another container; Objc/GlbO/ObAr and lists
+        // charge their nested containers exactly once below.
+        let v = read_value(r, depth, limits)?;
         items.push((key, v));
     }
     Ok(Descriptor { name, class_id, items })
@@ -835,6 +838,30 @@ mod tests {
         b.extend_from_slice(&[0, 0, 0, 0, b'k', b'e', b'y', b' ']);
         b.extend_from_slice(b"????");
         assert!(matches!(Descriptor::from_bytes(&b), Err(PsdError::Unsupported(_))));
+    }
+
+    #[test]
+    fn container_depth_is_charged_once_and_still_bounded() {
+        for kind in ["Objc", "GlbO", "ObAr", "VlLs"] {
+            for count in [33, MAX_DEPTH, MAX_DEPTH + 1] {
+                let mut value = Value::Integer(1);
+                for _ in 0..count {
+                    value = match kind {
+                        "GlbO" => Value::GlobalObject(Descriptor::new("null").with("next", value)),
+                        "ObAr" => Value::ObjectArray(ObjectArray { prefix: 16, body: Descriptor::new("null").with("next", value) }),
+                        "VlLs" => Value::List(vec![value]),
+                        _ => Value::Descriptor(Descriptor::new("null").with("next", value)),
+                    };
+                }
+                let bytes = Descriptor::new("null").with("root", value).to_bytes();
+                let result = Descriptor::from_bytes(&bytes);
+                if count <= MAX_DEPTH {
+                    assert!(result.is_ok(), "{kind} depth {count}: {result:?}");
+                } else {
+                    assert!(matches!(result, Err(PsdError::LimitExceeded(_))), "{kind} depth {count}");
+                }
+            }
+        }
     }
 
     #[test]

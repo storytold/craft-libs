@@ -43,8 +43,9 @@ comes with its codec's feature):
 - Planes are `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]` (`ColorFamily`), plus an optional alpha plane.
   DNx, VP9 and AV1 (identity matrix) store RGB as G, B, R; the conversion reorders them.
 - Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane (HEVC chroma may
-  differ from luma). Converting moves the buffers and copies no samples, except for paletted
-  video: Smacker and VMD hold their pictures as palette indices in the decoder, so
+  differ from luma). Converting moves the buffers and copies no samples, except for Motion JPEG,
+  whose decoder returns interleaved samples (they are split into planes), and paletted video:
+  Smacker and VMD hold their pictures as palette indices in the decoder, so
   `VideoFrame::try_from(&decoder)` looks them up and writes new 8-bit R, G, B planes.
 - Chroma subsampling is a log2 shift per axis, 0 to 3 (FFV1 codes up to 3).
 - Colour is given as ITU-T H.273 code points (`ColorTags`), mapped from each codec's own
@@ -98,3 +99,43 @@ for frame in &file.frames {
   games and are not in the repository). 1,796 files from four games match on every frame: 357 `SMK2` and 1,439 `SMK4`, whose two
   extra full-block modes many of them use. ffmpeg refuses six more files (4x4 pictures that
   only carry sound); the decoder reads them without error, with nothing to compare against.
+
+## Decoding a track
+
+`TrackDecoder` is the counterpart of `craft_audio::TrackDecoder` for an app with its own demuxer.
+It picks the decoder from a track's `CodecParams`, takes packets in decode order with their
+timestamps, and returns `VideoFrame`s in display order. `flush` returns the frames still held at
+the end of the stream, and `reset` prepares for decoding from another key frame after a seek. It
+is built with any of the decoder features below and decodes the codecs whose feature is on.
+
+| Codec | Feature | `extradata` |
+|---|---|---|
+| H.264 | `h264-decode` | an `avcC` record (length-prefixed packets), Annex B parameter sets, or empty (Annex B packets) |
+| HEVC | `hevc-decode` | an `hvcC` record (length-prefixed packets), Annex B parameter sets, or empty (Annex B packets) |
+| VP9 | `vp9-decode` | ignored |
+| AV1 | `av1-decode` | an `av1C` record, or empty |
+| MPEG-2 and MPEG-1 video | `mpeg2-decode` | a sequence header and its extensions, or empty |
+| ProRes | `prores` | ignored (frame headers carry the format) |
+| DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
+| APV | `apv-decode` | ignored (access units carry the format) |
+| FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+| Motion JPEG | `mjpeg` | ignored (each packet carries its own picture) |
+| VP8 | `vp8-decode` | ignored (key frames carry the format) |
+
+Configuration that holds picture data (a slice, a frame OBU, an MPEG-2 picture) is refused.
+Errors are `VideoError`: `Unsupported`, `Malformed`, or a picture that did not convert.
+
+When a picture does not convert, the frames finished with it are kept and the next call returns
+them first. When the codec itself fails, the pictures it had finished are up to the codec:
+
+- H.264 keeps them for later calls, also when the error comes at `flush`.
+- HEVC does too, but only its newest 32 while calls keep failing, which bounds its memory.
+- VP9 keeps those of earlier packets.
+- MPEG-2 returns them with the call, unless the packet made too many pictures.
+- AV1 drops those the failing `decode` or `flush` had finished.
+
+ProRes, DNx, APV and FFV1 return one frame per successful packet, with its packet timestamp;
+VP8 returns no picture for a hidden reference frame. These codecs have no delayed output.
+APV uses the codec's default selection of the first decodable primary frame and its alpha.
+FFV1 has the underlying decoder's version 3, range-coded, key-frame-only support. Reset keeps
+its configuration and container dimensions; VP8 reset discards its reference pictures.

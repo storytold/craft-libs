@@ -124,6 +124,8 @@ pub enum CodecId {
     Vp8,
     /// VP9.
     Vp9,
+    /// FFV1 lossless video.
+    Ffv1,
     /// Apple ProRes.
     ProRes,
     /// Motion JPEG.
@@ -175,6 +177,7 @@ impl CodecId {
             CodecId::Av1 => "AV1",
             CodecId::Vp8 => "VP8",
             CodecId::Vp9 => "VP9",
+            CodecId::Ffv1 => "FFV1",
             CodecId::ProRes => "ProRes",
             CodecId::Mjpeg => "Motion JPEG",
             CodecId::Mpeg2Video => "MPEG-2",
@@ -224,6 +227,7 @@ impl CodecId {
                 | CodecId::Av1
                 | CodecId::Vp8
                 | CodecId::Vp9
+                | CodecId::Ffv1
                 | CodecId::ProRes
                 | CodecId::Mjpeg
                 | CodecId::Mpeg2Video
@@ -283,6 +287,7 @@ impl PcmFormat {
 /// | VP9 | the MP4 `vpcC` payload, or Matroska's codec feature metadata |
 /// | APV | the `apvC` record |
 /// | Smacker video | the four tree table sizes (little-endian `u32`s), then the Huffman tree data |
+/// | FFV1 | the version 3 configuration record (dimensions are required separately) |
 /// | VMD video, VMD audio | the 816-byte VMD file header |
 ///
 /// `sample_rate` and `channels` are what the container declares (for HE-AAC with implicit

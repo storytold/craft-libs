@@ -35,7 +35,7 @@ lenient = ["dep:miniz_oxide"]
 lenient-bzip2 = ["lenient", "dep:bzip2-rs"]
 # Methods 14 (ZIP LZMA) and 95 (XZ).
 lenient-lzma = ["lenient", "dep:lzma-rs"]
-# Method 93.
+# Zstandard methods 20 (legacy) and 93.
 lenient-zstd = ["lenient", "dep:ruzstd"]
 serde = ["dep:serde"]
 

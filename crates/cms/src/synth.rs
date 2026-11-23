@@ -19,6 +19,9 @@
 //!   L* is scaled onto the device black, chroma is softly compressed against a gamut boundary
 //!   descriptor sampled from the forward model — then solved as above.
 //!
+//! That is [`GamutMapping::Legacy`]. [`GamutMapping::Oklab`] maps out-of-gamut colours in Oklab
+//! instead and gives saturation its own table; the Coated FOGRA39 built-in uses it.
+//!
 //! The model is plausible for coated offset, not a measured characterisation: use a real
 //! profile from your print provider for production print.
 //!
@@ -49,6 +52,11 @@ pub struct CmykParams {
     pub k_max: f64,
     /// Exponent of the black generation curve above `gcr_start`.
     pub gcr_gamma: f64,
+    /// Black generation as a curve of `[gray component, black]` points with increasing gray
+    /// components in `[0, 1]`, interpolated linearly and held flat beyond the ends. Empty by
+    /// default: black is then `k_max` times the ramp of `gcr_start` and `gcr_gamma` (the curve
+    /// of the shipped Photocraft profile).
+    pub gcr_curve: Vec<[f64; 2]>,
     /// Tone value increase at 50 % for C, M, Y, K.
     pub tvi: [f64; 4],
     /// Grid points of the AToB (4D) and BToA (3D) tables.
@@ -60,6 +68,32 @@ pub struct CmykParams {
     /// encoding and separates to a trace of ink. Off by default, which keeps the bytes of the
     /// shipped Photocraft profile.
     pub white_on_node: bool,
+    /// How the BToA tables bring colours into the gamut. [`GamutMapping::Legacy`] by default,
+    /// which keeps the bytes of the shipped Photocraft profile.
+    pub mapping: GamutMapping,
+}
+
+/// How the BToA tables map colours the printer cannot reach.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GamutMapping {
+    /// The shipped Photocraft profile: out-of-gamut colours land on the closest reachable
+    /// colour (ΔE76); perceptual scales L* onto the device black and compresses Lab chroma;
+    /// saturation shares the perceptual table.
+    Legacy,
+    /// Gamut mapping in Oklab, whose hue lines stay perceptually constant (a CIELAB hue line
+    /// from a saturated blue toward grey drifts toward purple; an Oklab one does not):
+    ///
+    /// * **Colorimetric**: in-gamut colours separate exactly. An out-of-gamut colour takes the
+    ///   closest colour the printer reaches in Oklab, lightness and hue weighted above chroma,
+    ///   and more so the further outside it is; black is generated from the clipped colour, so
+    ///   inks the clip drives to 100 % stay there.
+    /// * **Perceptual** and **saturation**: the ICC v4 perceptual reference black is mapped
+    ///   onto the device black linearly in XYZ (as black point compensation does) for neutrals,
+    ///   fading out with Oklab chroma, so greys separate as with colorimetric + BPC and colourful
+    ///   colours keep their lightness. Perceptual then compresses Oklab chroma above `knee` ×
+    ///   the gamut boundary into the boundary; saturation scales Oklab chroma by `saturation`
+    ///   and clips as colorimetric does.
+    Oklab { knee: f64, saturation: f64 },
 }
 
 impl Default for CmykParams {
@@ -71,10 +105,12 @@ impl Default for CmykParams {
             gcr_start: 0.2,
             k_max: 0.95,
             gcr_gamma: 1.1,
+            gcr_curve: Vec::new(),
             tvi: [0.14, 0.14, 0.14, 0.17],
             grid_a2b: 11,
             grid_b2a: 21,
             white_on_node: false,
+            mapping: GamutMapping::Legacy,
         }
     }
 }
@@ -183,6 +219,11 @@ impl Forward for TableForward {
 /// Bounded least-squares solve for C, M, Y given K, minimising ΔE76 to `target`, subject to
 /// `C + M + Y ≤ limit` (projected Levenberg–Marquardt with a numerical Jacobian).
 fn solve_cmy<F: Forward + ?Sized>(model: &F, target: [f64; 3], k: f64, limit: f64, seeds: &[[f64; 3]]) -> ([f64; 3], f64) {
+    solve_cmy_by(model, k, limit, seeds, |l| [l[0] - target[0], l[1] - target[1], l[2] - target[2]])
+}
+
+/// [`solve_cmy`] minimising the norm of `residual(lab)` instead of ΔE76.
+fn solve_cmy_by<F: Forward + ?Sized>(model: &F, k: f64, limit: f64, seeds: &[[f64; 3]], residual: impl Fn([f64; 3]) -> [f64; 3]) -> ([f64; 3], f64) {
     let project = |mut x: [f64; 3]| {
         for _ in 0..4 {
             for v in &mut x {
@@ -202,10 +243,7 @@ fn solve_cmy<F: Forward + ?Sized>(model: &F, target: [f64; 3], k: f64, limit: f6
         }
         x
     };
-    let err = |x: [f64; 3]| {
-        let l = model.lab([x[0], x[1], x[2], k]);
-        [l[0] - target[0], l[1] - target[1], l[2] - target[2]]
-    };
+    let err = |x: [f64; 3]| residual(model.lab([x[0], x[1], x[2], k]));
     let norm2 = |e: [f64; 3]| e[0] * e[0] + e[1] * e[1] + e[2] * e[2];
     let mut best = ([0.0; 3], f64::INFINITY);
     for seed in seeds {
@@ -275,13 +313,32 @@ fn solve_cmy<F: Forward + ?Sized>(model: &F, target: [f64; 3], k: f64, limit: f6
 
 const SEEDS: [[f64; 3]; 5] = [[0.3, 0.3, 0.3], [0.05, 0.05, 0.05], [0.8, 0.8, 0.8], [0.9, 0.2, 0.2], [0.2, 0.9, 0.9]];
 
+/// Black for a gray component `g` (the smallest of C, M, Y without black).
+fn gcr(p: &CmykParams, g: f64) -> f64 {
+    let Some(first) = p.gcr_curve.first() else {
+        // The Photocraft profile's curve.
+        return if g <= p.gcr_start { 0.0 } else { p.k_max * ((g - p.gcr_start) / (1.0 - p.gcr_start)).powf(p.gcr_gamma) };
+    };
+    let mut k = first[1];
+    for w in p.gcr_curve.windows(2) {
+        let ([g0, k0], [g1, k1]) = (w[0], w[1]);
+        if g >= g1 {
+            k = k1;
+        } else if g > g0 {
+            k = k0 + (k1 - k0) * (g - g0) / (g1 - g0);
+            break;
+        }
+    }
+    k.clamp(0.0, 1.0)
+}
+
 /// Colorimetric separation of a relative Lab target: GCR black generation then a CMY solve.
 pub fn separate<F: Forward + ?Sized>(model: &F, p: &CmykParams, target: [f64; 3], warm: Option<[f64; 4]>) -> ([f64; 4], f64) {
     let mut seeds: Vec<[f64; 3]> = warm.map(|w| vec![[w[0], w[1], w[2]]]).unwrap_or_default();
     seeds.extend_from_slice(&SEEDS);
     let (cmy0, _) = solve_cmy(model, target, 0.0, 3.0, &seeds);
     let g = cmy0[0].min(cmy0[1]).min(cmy0[2]);
-    let k = if g <= p.gcr_start { 0.0 } else { p.k_max * ((g - p.gcr_start) / (1.0 - p.gcr_start)).powf(p.gcr_gamma) };
+    let k = gcr(p, g);
     let mut seeds2 = vec![[(cmy0[0] - k).max(0.0), (cmy0[1] - k).max(0.0), (cmy0[2] - k).max(0.0)], cmy0];
     seeds2.extend_from_slice(&seeds);
     let (cmy, de) = solve_cmy(model, target, k, (p.tac - k).max(0.0), &seeds2);
@@ -383,6 +440,187 @@ impl Gbd {
     }
 }
 
+/// ΔE76 under which a separation counts as reaching its target.
+const REACH: f64 = 1.5;
+/// Oklab chroma beyond any printable colour: the top of the boundary search.
+const OKLAB_CHROMA_MAX: f64 = 0.5;
+/// Oklab chroma above which the perceptual and saturation tables no longer lift black: they lift
+/// neutrals fully, and less the more colourful a colour is.
+const LIFT_CHROMA: f64 = 0.1;
+/// Weight of lightness and hue against chroma when a colour just outside the gamut is clipped.
+const CLIP_WEIGHT: f64 = 1.5;
+/// Growth of that weight with the squared share of chroma the clip loses.
+const CLIP_WEIGHT_GROWTH: f64 = 200.0;
+
+// Oklab (Björn Ottosson, 2020): XYZ (D65) → cone response → cube root → Lab-like axes.
+const OKLAB_M1: math::Mat3 =
+    [[0.8189330101, 0.3618667424, -0.1288597137], [0.0329845436, 0.9293118715, 0.0361456387], [0.0482003018, 0.2643662691, 0.6338517070]];
+const OKLAB_M2: math::Mat3 =
+    [[0.2104542553, 0.7936177850, -0.0040720468], [1.9779984951, -2.4285922050, 0.4505937099], [0.0259040371, 0.7827717662, -0.8086757660]];
+const OKLAB_M1_INV: math::Mat3 =
+    [[1.2270138511, -0.5577999807, 0.2812561490], [-0.0405801784, 1.1122568696, -0.0716766787], [-0.0763812845, -0.4214819784, 1.5861632204]];
+const OKLAB_M2_INV: math::Mat3 = [[1.0, 0.3963377774, 0.2158037573], [1.0, -0.1055613458, -0.0638541728], [1.0, -0.0894841775, -1.2914855480]];
+
+/// The [`GamutMapping::Oklab`] separations of one forward model.
+struct OklabMapper<'a, F: Forward + ?Sized> {
+    model: &'a F,
+    p: &'a CmykParams,
+    knee: f64,
+    saturation: f64,
+    /// XYZ scale that maps the v4 perceptual reference black onto the device black (the white
+    /// stays fixed): `v' = a·v + w·(1 − a)`.
+    black_scale: f64,
+    to_d65: math::Mat3,
+    to_d50: math::Mat3,
+}
+
+impl<'a, F: Forward + ?Sized> OklabMapper<'a, F> {
+    fn new(model: &'a F, p: &'a CmykParams, knee: f64, saturation: f64) -> Self {
+        let d65 = math::xy_to_xyz(math::D65_XY);
+        // The darkest neutral the printer reaches.
+        let (black, _) = separate(model, p, [0.0, 0.0, 0.0], None);
+        let device = math::lab_to_xyz([model.lab(black)[0], 0.0, 0.0], math::D50)[1];
+        let reference = crate::transform::PERCEPTUAL_BLACK[1];
+        OklabMapper {
+            model,
+            p,
+            knee,
+            saturation,
+            black_scale: (1.0 - device) / (1.0 - reference),
+            to_d65: math::bradford(math::D50, d65),
+            to_d50: math::bradford(d65, math::D50),
+        }
+    }
+
+    fn oklab(&self, lab: [f64; 3]) -> [f64; 3] {
+        let xyz = math::apply(&self.to_d65, math::lab_to_xyz(lab, math::D50));
+        math::apply(&OKLAB_M2, math::apply(&OKLAB_M1, xyz).map(f64::cbrt))
+    }
+
+    fn lab(&self, ok: [f64; 3]) -> [f64; 3] {
+        let lms = math::apply(&OKLAB_M2_INV, ok).map(|v| v * v * v);
+        math::xyz_to_lab(math::apply(&self.to_d50, math::apply(&OKLAB_M1_INV, lms)), math::D50)
+    }
+
+    /// The most chroma (scale of `ok`'s chroma in `[0, top]`) the printer reaches at `ok`'s
+    /// lightness and hue, and its separation; `None` when even the neutral is out of reach.
+    fn boundary(&self, ok: [f64; 3], top: f64, warm: Option<[f64; 4]>) -> Option<(f64, [f64; 4])> {
+        let (grey, d) = separate(self.model, self.p, self.lab([ok[0], 0.0, 0.0]), warm);
+        if d > REACH {
+            return None;
+        }
+        let (mut lo, mut hi, mut best) = (0.0, top, grey);
+        for _ in 0..14 {
+            let mid = 0.5 * (lo + hi);
+            let (c, d) = separate(self.model, self.p, self.lab([ok[0], ok[1] * mid, ok[2] * mid]), Some(best));
+            if d <= REACH {
+                lo = mid;
+                best = c;
+            } else {
+                hi = mid;
+            }
+        }
+        Some((lo, best))
+    }
+
+    /// Colorimetric: exact in gamut; outside, the closest colour the printer reaches in Oklab,
+    /// lightness and hue weighted above chroma, and more so the further outside the colour is.
+    fn clip(&self, lab: [f64; 3], warm: Option<[f64; 4]>) -> [f64; 4] {
+        let (cmyk, de) = separate(self.model, self.p, lab, warm);
+        if de <= REACH {
+            return cmyk;
+        }
+        let ok = self.oklab(lab);
+        let c0 = ok[1].hypot(ok[2]);
+        // Unit vectors along the colour's chroma and hue directions.
+        let (u, v) = if c0 > 1e-9 { ([ok[1] / c0, ok[2] / c0], [-ok[2] / c0, ok[1] / c0]) } else { ([1.0, 0.0], [0.0, 1.0]) };
+        // Lightness and hue errors weighted by `w`, chroma error by 1; scaled by 100 so the
+        // solver's step tolerances suit it as they suit ΔE76.
+        let residual = |w: f64| {
+            move |l: [f64; 3]| {
+                let o = self.oklab(l);
+                let (da, db) = (o[1] - ok[1], o[2] - ok[2]);
+                [100.0 * w * (o[0] - ok[0]), 100.0 * (da * u[0] + db * u[1]), 100.0 * w * (da * v[0] + db * v[1])]
+            }
+        };
+        let solve = |w: f64, k: f64, from: [f64; 3]| {
+            let mut seeds = vec![from];
+            seeds.extend_from_slice(&SEEDS);
+            solve_cmy_by(self.model, k, (self.p.tac - k).max(0.0), &seeds, residual(w)).0
+        };
+        // A first clip without black measures how far outside the colour is. A colour just
+        // outside may give up a little lightness and hue to keep its chroma (a red reaches the
+        // full magenta and yellow edge); one far outside keeps its lightness and hue and loses
+        // chroma (a saturated blue does not slide along the gamut surface).
+        let first = solve(CLIP_WEIGHT, 0.0, [cmyk[0], cmyk[1], cmyk[2]]);
+        let o = self.oklab(self.model.lab([first[0], first[1], first[2], 0.0]));
+        let loss = if c0 > 1e-9 { (1.0 - o[1].hypot(o[2]) / c0).clamp(0.0, 1.0) } else { 0.0 };
+        let w = CLIP_WEIGHT * (1.0 + CLIP_WEIGHT_GROWTH * loss * loss);
+        let free = solve(w, 0.0, first);
+        let norm = |c: [f64; 4]| residual(w)(self.model.lab(c)).iter().map(|v| v * v).sum::<f64>();
+        // Candidates, the closest kept: the separation itself (a colour it nearly reaches stays
+        // continuous with its in-gamut neighbours), the clip with the separation's black, and
+        // the clip with black generated from the black-free clip's gray component (inks the
+        // clip drives to 100 % stay there and black replaces the rest).
+        let mut best = (norm(cmyk), cmyk);
+        for k in [cmyk[3], gcr(self.p, free[0].min(free[1]).min(free[2]))] {
+            for from in [[cmyk[0], cmyk[1], cmyk[2]], free] {
+                let cmy = solve(w, k, from);
+                let c = [cmy[0], cmy[1], cmy[2], k];
+                let n = norm(c);
+                if n < best.0 {
+                    best = (n, c);
+                }
+            }
+        }
+        // Near paper white the gamut narrows to a point: the separation's closest colour keeps
+        // light tints' chroma where holding lightness would drop them toward bare paper, and
+        // the table nodes there carry the in-gamut tints between them. The inks blend from the
+        // clip at L* 85 to the separation at L* 95.
+        let clip_share = ((95.0 - lab[0]) / 10.0).clamp(0.0, 1.0);
+        std::array::from_fn(|i| clip_share * best.1[i] + (1.0 - clip_share) * cmyk[i])
+    }
+
+    /// Maps the v4 perceptual reference black onto the device black, linearly in XYZ, for
+    /// neutrals; colourful colours keep their lightness.
+    fn lift_black(&self, lab: [f64; 3]) -> [f64; 3] {
+        let ok = self.oklab(lab);
+        let neutral = (1.0 - ok[1].hypot(ok[2]) / LIFT_CHROMA).clamp(0.0, 1.0);
+        let a = 1.0 - neutral * (1.0 - self.black_scale);
+        let xyz = math::lab_to_xyz(lab, math::D50);
+        math::xyz_to_lab(std::array::from_fn(|i| a * xyz[i] + math::D50[i] * (1.0 - a)), math::D50)
+    }
+
+    fn perceptual(&self, lab: [f64; 3], warm: Option<[f64; 4]>) -> [f64; 4] {
+        let lab = self.lift_black(lab);
+        let ok = self.oklab(lab);
+        let c = ok[1].hypot(ok[2]);
+        if c < 1e-9 {
+            return self.clip(lab, warm);
+        }
+        let Some((s, edge)) = self.boundary(ok, OKLAB_CHROMA_MAX / c, warm) else {
+            return self.clip(lab, warm);
+        };
+        // Chroma above the knee is compressed smoothly into the boundary chroma `cb`.
+        let cb = s * c;
+        let knee = self.knee * cb;
+        if c <= knee {
+            return self.clip(lab, warm);
+        }
+        let c2 = knee + (cb - knee) * ((c - knee) / (cb - knee).max(1e-9)).tanh();
+        let f = c2 / c;
+        if f >= s {
+            return edge;
+        }
+        self.clip(self.lab([ok[0], ok[1] * f, ok[2] * f]), Some(edge))
+    }
+
+    fn saturation(&self, lab: [f64; 3], warm: Option<[f64; 4]>) -> [f64; 4] {
+        let ok = self.oklab(self.lift_black(lab));
+        self.clip(self.lab([ok[0], ok[1] * self.saturation, ok[2] * self.saturation]), warm)
+    }
+}
+
 fn lab_node_legacy(i: usize, n: usize) -> f64 {
     i as f64 / (n - 1) as f64
 }
@@ -419,6 +657,18 @@ fn white_node_curve(l_axis: bool, x: f64) -> f64 {
 }
 
 fn b2a_table<F: Forward + ?Sized>(model: &F, p: &CmykParams, gbd: Option<&Gbd>) -> Result<Clut, CmsError> {
+    b2a_table_with(p, |lab, warm| {
+        let target = match gbd {
+            Some(g) => g.compress(lab),
+            None => lab,
+        };
+        separate(model, p, target, warm).0
+    })
+}
+
+/// Samples a BToA table: `node` separates each relative Lab node, warm-started from the
+/// previous node along b.
+fn b2a_table_with(p: &CmykParams, node: impl Fn([f64; 3], Option<[f64; 4]>) -> [f64; 4] + Sync) -> Result<Clut, CmsError> {
     let n = p.grid_b2a.max(2);
     let nodes = n * n * n;
     let step = (n - 1) as f64;
@@ -434,11 +684,7 @@ fn b2a_table<F: Forward + ?Sized>(model: &F, p: &CmykParams, gbd: Option<&Gbd>) 
             } else {
                 decode_v2([lab_node_legacy(li, n), lab_node_legacy(ai, n), lab_node_legacy(bi, n)])
             };
-            let target = match gbd {
-                Some(g) => g.compress(lab),
-                None => lab,
-            };
-            let (cmyk, _) = if p.white_on_node && lab == [100.0, 0.0, 0.0] { ([0.0; 4], 0.0) } else { separate(model, p, target, warm) };
+            let cmyk = if p.white_on_node && lab == [100.0, 0.0, 0.0] { [0.0; 4] } else { node(lab, warm) };
             warm = Some(cmyk);
             out.extend(cmyk.map(|v| v as f32));
         }
@@ -459,6 +705,15 @@ fn check_grids(p: &CmykParams) -> Result<(), CmsError> {
     }
     if p.white_on_node && p.grid_b2a.is_multiple_of(2) {
         return Err(invalid_arg(format!("white on a node needs an odd BToA grid, not {}", p.grid_b2a)));
+    }
+    let valid = |v: &[f64; 2]| v.iter().all(|x| (0.0..=1.0).contains(x));
+    if !p.gcr_curve.iter().all(valid) || p.gcr_curve.windows(2).any(|w| w[1][0] <= w[0][0]) {
+        return Err(invalid_arg(format!("black generation curve {:?} needs points in [0, 1] with increasing gray components", p.gcr_curve)));
+    }
+    if let GamutMapping::Oklab { knee, saturation } = p.mapping
+        && !((0.0..1.0).contains(&knee) && saturation.is_finite() && saturation > 0.0)
+    {
+        return Err(invalid_arg(format!("Oklab gamut mapping needs a knee in [0, 1) and a positive saturation, not {knee} and {saturation}")));
     }
     Ok(())
 }
@@ -518,11 +773,23 @@ pub fn cmyk_profile_from_model<F: Forward + ?Sized>(model: &F, paper: [f64; 3], 
 }
 
 fn lut_profile<F: Forward + ?Sized>(model: &F, a2b: Clut, paper: [f64; 3], p: &CmykParams) -> Result<Profile, CmsError> {
-    let gbd = Gbd::new(model, p);
-    let colorimetric = b2a_table(model, p, None)?;
-    let perceptual = b2a_table(model, p, Some(&gbd))?;
+    let (perceptual, colorimetric, saturation) = match p.mapping {
+        GamutMapping::Legacy => {
+            let gbd = Gbd::new(model, p);
+            let colorimetric = b2a_table(model, p, None)?;
+            let perceptual = b2a_table(model, p, Some(&gbd))?;
+            (perceptual.clone(), colorimetric, perceptual)
+        }
+        GamutMapping::Oklab { knee, saturation } => {
+            let m = OklabMapper::new(model, p, knee, saturation);
+            let colorimetric = b2a_table_with(p, |lab, warm| m.clip(lab, warm))?;
+            let perceptual = b2a_table_with(p, |lab, warm| m.perceptual(lab, warm))?;
+            let saturation = b2a_table_with(p, |lab, warm| m.saturation(lab, warm))?;
+            (perceptual, colorimetric, saturation)
+        }
+    };
     let a2b = lut16(a2b, false);
-    let (b0, b1) = (lut16(perceptual, p.white_on_node), lut16(colorimetric, p.white_on_node));
+    let (b0, b1, b2) = (lut16(perceptual, p.white_on_node), lut16(colorimetric, p.white_on_node), lut16(saturation, p.white_on_node));
     Ok(Profile {
         version: (4, 0x30),
         class: ProfileClass::Output,
@@ -538,7 +805,7 @@ fn lut_profile<F: Forward + ?Sized>(model: &F, a2b: Clut, paper: [f64; 3], p: &C
         trc: None,
         gray_trc: None,
         a2b: [Some(a2b.clone()), Some(a2b.clone()), Some(a2b)],
-        b2a: [Some(b0.clone()), Some(b1), Some(b0)],
+        b2a: [Some(b0), Some(b1), Some(b2)],
         bytes: None,
         hash: Default::default(),
     }
@@ -574,6 +841,46 @@ mod tests {
                 prev = l;
             }
         }
+    }
+
+    #[test]
+    fn oklab_mapping_refuses_bad_parameters() {
+        for (knee, saturation) in [(1.0, 1.0), (-0.1, 1.0), (f64::NAN, 1.0), (0.5, 0.0), (0.5, f64::INFINITY), (0.5, f64::NAN)] {
+            let p = CmykParams { grid_a2b: 2, grid_b2a: 2, mapping: GamutMapping::Oklab { knee, saturation }, ..CmykParams::default() };
+            assert!(cmyk_profile(&p).is_err(), "knee {knee}, saturation {saturation}");
+        }
+    }
+
+    #[test]
+    fn black_generation_curve() {
+        let p = CmykParams { gcr_curve: vec![[0.0, 0.0], [0.5, 0.2], [1.0, 0.9]], ..CmykParams::default() };
+        for (g, k) in [(-1.0, 0.0), (0.0, 0.0), (0.25, 0.1), (0.5, 0.2), (0.75, 0.55), (1.0, 0.9), (2.0, 0.9)] {
+            assert!((gcr(&p, g) - k).abs() < 1e-12, "g {g}: {} != {k}", gcr(&p, g));
+        }
+        for curve in [vec![[0.5, 0.2], [0.5, 0.3]], vec![[0.5, 0.2], [0.2, 0.3]], vec![[0.0, 1.5]], vec![[f64::NAN, 0.0]]] {
+            let p = CmykParams { grid_a2b: 2, grid_b2a: 2, gcr_curve: curve.clone(), ..CmykParams::default() };
+            assert!(cmyk_profile(&p).is_err(), "{curve:?}");
+        }
+    }
+
+    #[test]
+    fn oklab_round_trips() {
+        let m = CmykModel::coated(CmykParams::default().tvi);
+        let p = CmykParams::default();
+        let mapper = OklabMapper::new(&m, &p, 0.65, 1.05);
+        for lab in [[50.0, 0.0, 0.0], [44.0, 63.7, 47.0], [31.9, 32.9, -76.8], [90.0, -5.0, 80.0]] {
+            let back = mapper.lab(mapper.oklab(lab));
+            // The published matrices carry 10 digits, so the inverses are exact to about 1e-5 ΔE.
+            assert!(math::delta_e76(lab, back) < 1e-3, "{lab:?} -> {back:?}");
+        }
+    }
+
+    #[test]
+    fn oklab_profile_has_three_tables() {
+        let p = CmykParams { grid_a2b: 5, grid_b2a: 5, mapping: GamutMapping::Oklab { knee: 0.65, saturation: 1.05 }, ..CmykParams::default() };
+        let profile = cmyk_profile(&p).unwrap();
+        let [Some(b0), Some(b1), Some(b2)] = &profile.b2a else { panic!("missing BToA tables") };
+        assert!(b0 != b1 && b0 != b2, "perceptual shares a table");
     }
 
     #[test]
