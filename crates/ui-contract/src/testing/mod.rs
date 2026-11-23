@@ -48,6 +48,8 @@ pub mod wheel;
 pub mod windows;
 
 pub use crate::contract::{Exemption, PatternKind, PatternProbe, Probe, Registration};
+#[cfg(feature = "testing")]
+pub use crate::fonts::document::set_budget as document_face_budget;
 pub use crate::runtime::audit::{in_run as in_audit_run, set as audit_replays};
 #[cfg(feature = "testing")]
 pub use crate::runtime::layout_memory::forget_kept as forget_measurements;

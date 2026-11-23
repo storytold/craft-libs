@@ -55,7 +55,7 @@ impl TextEditorHost for Host {
         if self.document_face {
             let hack =
                 || craft_ui::fonts::deflated_default_definitions().font_data.get("Hack").map(|data| FaceBytes::new(Arc::from(data.bytes()), 0));
-            self.face = Some(cx.document_face("editor-trial-face", hack));
+            self.face = Some(cx.document_face("editor-trial-face", || hack));
         }
     }
 

@@ -13,7 +13,7 @@
 //! (types 10 and 11), rows stored bottom-up (the bottom-left origin every reader assumes, also
 //! those that ignore the origin bits), alpha bits in the descriptor and the TGA 2.0 footer. A
 //! packet never crosses a scan line: TGA 2.0 forbids it, and readers that decode a row at a time
-//! misread files that do.
+//! misread files that do. The top-left writer also supports a footerless, uncompressed compatibility stream.
 //!
 //! Input is treated as hostile: the picture size is capped by [`Limits`], and a run-length file
 //! must be long enough to hold the pixels its header declares before anything is allocated.
@@ -428,6 +428,52 @@ fn unpack_rle(mut data: &[u8], pixels: usize, bpp: usize) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+/// Write packed 8-bit grayscale, RGB, or RGBA as a footerless, uncompressed top-left Targa.
+///
+/// Rows and pixels arrive in display order. RGB and RGBA are stored as BGR and BGRA;
+/// alpha bytes are copied verbatim. Dimensions, sample length, and the one-row conversion
+/// buffer are checked before any output is written. The caller owns flushing the sink.
+pub fn write_top_left_raw(mut out: impl std::io::Write, width: u32, height: u32, layout: Layout, data: &[u8]) -> Result<()> {
+    let (image_type, bits, alpha_bits) = match layout {
+        Layout::Gray => (3, 8, 0),
+        Layout::Rgb => (2, 24, 0),
+        Layout::Rgba => (2, 32, 8),
+        Layout::GrayAlpha => return Err(Error::Encode("footerless writer accepts grayscale, RGB or RGBA".into())),
+    };
+    let (Ok(w), Ok(h)) = (u16::try_from(width), u16::try_from(height)) else {
+        return Err(Error::Encode(format!("dimensions exceed 65535x65535: {width}x{height}")));
+    };
+    let bpp = layout.channels();
+    let row_len = usize::from(w) * bpp;
+    if w == 0 || h == 0 || row_len.checked_mul(usize::from(h)) != Some(data.len()) {
+        return Err(Error::Encode("invalid dimensions or buffer size mismatch".into()));
+    }
+    let mut row = Vec::new();
+    if bpp >= 3 {
+        row.try_reserve_exact(row_len).map_err(|_| Error::Encode("row allocation failed".into()))?;
+    }
+    let mut header = [0u8; HEADER];
+    header[2] = image_type;
+    header[12..14].copy_from_slice(&w.to_le_bytes());
+    header[14..16].copy_from_slice(&h.to_le_bytes());
+    header[16] = bits;
+    header[17] = 0x20 | alpha_bits;
+    let io_err = |err: std::io::Error| Error::Encode(err.to_string());
+    out.write_all(&header).map_err(io_err)?;
+    if bpp == 1 {
+        return out.write_all(data).map_err(io_err);
+    }
+    for line in data.chunks_exact(row_len) {
+        row.clear();
+        row.extend_from_slice(line);
+        for pixel in row.chunks_exact_mut(bpp) {
+            pixel.swap(0, 2);
+        }
+        out.write_all(&row).map_err(io_err)?;
+    }
+    Ok(())
 }
 
 /// Encodes 8-bit pixels (`height` rows of `width × layout.channels()` bytes, top row first) as a

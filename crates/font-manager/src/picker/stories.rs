@@ -1,7 +1,8 @@
 //! Stories of `FontPicker`: the closed field, the list open with recents and a typed query, the list open with the
 //! class column and a filter on, and the list open with host rows above the families. They draw from the two faces
-//! egui ships in an in-memory catalog, with Inter where a story needs a family of two styles and Noto Sans Arabic,
-//! from the craft fonts set when the build has `CRAFT_FONTS_DIR`, for the Arabic sample.
+//! egui ships in an in-memory catalog, with Inter where a story needs a family of two styles, Noto Sans Arabic, from
+//! the craft fonts set when the build has `CRAFT_FONTS_DIR`, for the Arabic sample, and the repository's Noto Sans CJK
+//! SC subset for the Chinese one.
 
 use std::sync::{Arc, OnceLock};
 
@@ -64,6 +65,12 @@ fn styled_catalog() -> Arc<Catalog> {
 fn arabic_catalog() -> Arc<Catalog> {
     static CATALOG: OnceLock<Arc<Catalog>> = OnceLock::new();
     Arc::clone(CATALOG.get_or_init(|| with_inter(&STORY_FONTS.iter().map(|face| face.bytes).collect::<Vec<_>>())))
+}
+
+/// The styled catalog with the repository's Noto Sans CJK SC subset.
+fn cjk_catalog() -> Arc<Catalog> {
+    static CATALOG: OnceLock<Arc<Catalog>> = OnceLock::new();
+    Arc::clone(CATALOG.get_or_init(|| with_inter(&[include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf").as_slice()])))
 }
 
 /// What a story adds to the picker besides its state.
@@ -206,6 +213,19 @@ fn font_picker_arabic_sample_text(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     let extras = Extras { banner: Some(ARABIC_SAMPLE_TEXT), ..Extras::default() };
     show_with(ui, data, demo("Inter", settings, FontFilters::default()), &arabic_catalog(), &extras)
 }
+
+/// A Chinese sample text, at Large: Noto Sans CJK SC (a subset in the repository) draws it in its row and the banner,
+/// on the baseline of the Latin rows and inside its band though its line is taller than Inter's, and Inter shows its
+/// name.
+#[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
+fn font_picker_cjk_sample_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let settings = FontPickerSettings { preview: crate::picker::FontPreviewSize::Large, ..FontPickerSettings::default() };
+    let extras = Extras { banner: Some(CJK_SAMPLE_TEXT), ..Extras::default() };
+    show_with(ui, data, demo("Noto Sans CJK SC", settings, FontFilters::default()), &cjk_catalog(), &extras)
+}
+
+/// "中文", which the repository's Noto Sans CJK SC subset draws.
+const CJK_SAMPLE_TEXT: &str = "\u{4E2D}\u{6587}";
 
 /// "أبجد هوز", the first words of the abjad order.
 const ARABIC_SAMPLE_TEXT: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";

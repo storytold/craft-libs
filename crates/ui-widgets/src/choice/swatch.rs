@@ -1,5 +1,6 @@
-//! `Swatch`: a colour well. It shows a colour from data, a mixed look for several colours, and reports the activation.
-//! It edits nothing: the host opens its picker on a click, or on the `ColorRequest` of a `picker` swatch.
+//! `Swatch`: a colour well. It shows a colour from data, a mixed look for several colours, a before and after pair, the
+//! hue wheel, a picture or an empty well, and reports the activation. It edits nothing: the host opens its picker on a
+//! click, or on the `ColorRequest` of a `picker` swatch.
 
 use super::radio::RadioKind;
 use super::words::ChoiceWords;
@@ -7,18 +8,27 @@ use crate::contract::{
     Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
     Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{ContentPainterCx, Draw, IconSpec, PaintShape, StrokeWidth, WellFill};
+use crate::primitives::{ContentPainterCx, IconSpec, PaintShape, StrokeWidth, TextureCache, WellFill, textures};
+use crate::runtime::focus::FocusShape;
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
 use craft_behavior::{IconId, Metrics, Mixed, Sense, Value};
-use craft_theme::{Rgba, Srgba, Stateful, States, over};
-use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
+use craft_theme::{Hsb, Rgba, Srgba, Stateful, States, over};
+use egui::{Color32, ColorImage, CornerRadius, Mesh, Pos2, Rect, Response, Shape, Vec2, pos2};
+use std::sync::Arc;
 
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 /// Opacity of the black or white ring that stands out from a well's colour.
 const INNER_EDGE_ALPHA: u8 = 0x80;
+
+/// The points a hue wheel takes along each edge of its well's outline: enough that the colours between them blend
+/// into a smooth wheel at any well size.
+const SPECTRUM_STEPS: usize = 18;
+
+/// The clear colour: an empty well shows only the checkerboard behind it.
+const CLEAR: Srgba = Srgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
 
 /// The sizes of a swatch at a control size: what a composition that lays out wells reads.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,7 +101,92 @@ pub enum SwatchShape {
     Square,
     /// A hexagon well, for a honeycomb of touching cells.
     Hexagon,
+    /// A round well: a circle in the square, a pill when the swatch fills its width. The ranges of Hue/Saturation.
+    Round,
 }
+
+/// What fills a swatch's well.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum SwatchFill {
+    /// A colour over a checkerboard where it is translucent; `Mixed` shows the mixed well with its dash.
+    Color(Mixed<Srgba>),
+    /// A colour before and after a change: the first fills the half at the start edge, the second the half at the end
+    /// edge.
+    Split(Srgba, Srgba),
+    /// The hue wheel, red at the top and the hues going clockwise: every colour, as a Master range.
+    Spectrum,
+    /// A picture filling the well over the checkerboard, cut to its middle where its aspect differs.
+    Image(SwatchImage),
+    /// Nothing: the checkerboard alone, as a clean brush.
+    Empty,
+    /// No colour: the sunken well with the "no colour" diagonal, read as "None" (an annotation with no fill).
+    None,
+}
+
+impl SwatchFill {
+    /// The fill of a colour that may be "no colour": `None` is [`SwatchFill::None`].
+    pub fn optional(color: Mixed<Option<Srgba>>) -> SwatchFill {
+        match color {
+            Mixed::Same(Some(color)) => SwatchFill::Color(Mixed::Same(color)),
+            Mixed::Same(None) => SwatchFill::None,
+            Mixed::Mixed => SwatchFill::Color(Mixed::Mixed),
+        }
+    }
+}
+
+impl From<Srgba> for SwatchFill {
+    fn from(color: Srgba) -> Self {
+        SwatchFill::Color(Mixed::Same(color))
+    }
+}
+
+impl From<Mixed<Srgba>> for SwatchFill {
+    fn from(color: Mixed<Srgba>) -> Self {
+        SwatchFill::Color(color)
+    }
+}
+
+/// A picture for a swatch's well. [`new`](Self::new) hashes the pixels once into the key the texture cache keeps the
+/// picture's texture under, so a well showing the same picture uploads it once and a new picture uploads again.
+#[derive(Clone, crate::contract::MemoProps)]
+pub struct SwatchImage {
+    key: u64,
+    #[memo_props(covered_by = "key", reason = "the key is the hash of the pixels")]
+    pixels: Arc<ColorImage>,
+}
+
+impl SwatchImage {
+    /// The picture of `pixels`.
+    pub fn new(pixels: ColorImage) -> Self {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hasher = std::hash::DefaultHasher::new();
+        pixels.size.hash(&mut hasher);
+        pixels.pixels.hash(&mut hasher);
+        SwatchImage { key: hasher.finish(), pixels: Arc::new(pixels) }
+    }
+
+    /// The pixels.
+    pub fn pixels(&self) -> &ColorImage {
+        &self.pixels
+    }
+}
+
+impl PartialEq for SwatchImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl std::fmt::Debug for SwatchImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SwatchImage").field("key", &self.key).field("size", &self.pixels.size).finish()
+    }
+}
+
+/// The texture cache's key of a swatch picture.
+#[derive(Hash)]
+struct SwatchImageKey(u64);
 
 /// What a swatch reports.
 #[derive(Clone, Debug)]
@@ -126,7 +221,8 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 /// A colour well that shows a colour from data and reports its activation; it edits nothing.
 ///
 /// The colour fills the well over a checkerboard where it has alpha, inside a thin ring that separates it from the
-/// panel. A `Mixed` colour shows a neutral well with a dash and has no colour value; an [`optional`](Swatch::optional)
+/// panel. A `Mixed` colour shows a neutral well with a dash and has no colour value. `with_fill` shows any
+/// [`SwatchFill`]: a before and after pair, the hue wheel, a picture or an empty well. An [`optional`](Swatch::optional)
 /// swatch of no colour shows the sunken well with a diagonal and reads "None". An [`icon`](Swatch::icon) swatch shows
 /// its glyph on the empty well, as a palette's Other… cell does. A click reports `clicked` and the
 /// `activation`. A swatch with a `picker` key also files a `ColorRequest` for that key, opened at the swatch's colour
@@ -135,7 +231,9 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 /// The host writes the pick to every target.
 ///
 /// AccessKit reports a colour well named by the label, whose value is the colour as `#rrggbb` (`#rrggbbaa` when
-/// translucent) and whose colour value is the colour; a mixed well has the value "Mixed" and no colour value.
+/// translucent) and whose colour value is the colour; a mixed well has the value "Mixed" and no colour value. A split
+/// well's value is both colours, "#before / #after", and its colour value the after colour; an empty well's value is
+/// "Empty"; the hue wheel and a picture have no value, their label names them.
 /// `member` makes the swatch a member of the enclosing `RadioGroup`: a radio button, checked when the group holds its
 /// value, whose keys and focus are the group's. `cell` makes it a cell of a table of touching swatches, a list box
 /// option. The selected ring is `selected` or a checked radio. `marked` draws a thin edge in the text colour just inside
@@ -145,7 +243,7 @@ impl<E> crate::contract::ItemOutput<E> for SwatchOutput {
 pub struct Swatch<T: Value + 'static = ()> {
     #[common]
     common: Common,
-    color: Mixed<Option<Srgba>>,
+    fill: SwatchFill,
     /// The value this swatch stands for in its `RadioGroup`.
     member: Option<T>,
     /// A cell of a table of touching swatches: `size.icon.md` square with square corners.
@@ -174,9 +272,14 @@ pub struct Swatch<T: Value + 'static = ()> {
 impl Swatch<()> {
     /// A swatch of `color` named `label`.
     pub fn new(label: impl Into<crate::runtime::env::Label>, color: impl Into<Mixed<Srgba>>) -> Self {
+        Swatch::with_fill(label, SwatchFill::Color(color.into()))
+    }
+
+    /// A swatch whose well shows `fill`, named `label`.
+    pub fn with_fill(label: impl Into<crate::runtime::env::Label>, fill: SwatchFill) -> Self {
         Swatch {
             common: Common::new(),
-            color: some_color(color.into()),
+            fill,
             member: None,
             cell: false,
             well: false,
@@ -190,22 +293,14 @@ impl Swatch<()> {
         .label(label)
     }
 
-    /// A swatch that can be "no colour": `None` paints the empty well and reads as "None".
+    /// A swatch that can be "no colour": `None` paints the sunken well with the diagonal and reads as "None".
     pub fn optional(label: impl Into<crate::runtime::env::Label>, color: impl Into<Mixed<Option<Srgba>>>) -> Swatch<()> {
-        Swatch { color: color.into(), ..Swatch::new(label, Mixed::<Srgba>::Mixed) }
+        Swatch::with_fill(label, SwatchFill::optional(color.into()))
     }
 
     /// A well with the catalogue glyph `icon` on top; its access node is an option named `label` with no colour value.
     pub fn icon(label: impl Into<crate::runtime::env::Label>, icon: IconId) -> Swatch<()> {
-        Swatch { icon: Some(icon), ..Swatch::new(label, Mixed::<Srgba>::Mixed) }
-    }
-}
-
-/// A colour as one that may also be "no colour".
-fn some_color(color: Mixed<Srgba>) -> Mixed<Option<Srgba>> {
-    match color {
-        Mixed::Same(color) => Mixed::Same(Some(color)),
-        Mixed::Mixed => Mixed::Mixed,
+        Swatch { icon: Some(icon), ..Swatch::with_fill(label, SwatchFill::Color(Mixed::Mixed)) }
     }
 }
 
@@ -214,7 +309,7 @@ impl<T: Value + 'static> Swatch<T> {
     pub fn member<U: Value + 'static>(self, value: U) -> Swatch<U> {
         Swatch {
             common: self.common,
-            color: self.color,
+            fill: self.fill,
             member: Some(value),
             cell: self.cell,
             well: self.well,
@@ -279,6 +374,11 @@ impl<T: Value + 'static> Component for Swatch<T> {
             cx.join_roving();
             self.checked = group.is(value);
         }
+        match self.shape {
+            SwatchShape::Square => {}
+            SwatchShape::Round => cx.focus_shape(FocusShape::Circle),
+            SwatchShape::Hexagon => cx.focus_shape(FocusShape::Polygon(hexagon(cx.rect))),
+        }
         self.activation = cx.activation().filter(|_| cx.resolved.enabled);
     }
 
@@ -297,75 +397,215 @@ impl<T: Value + 'static> Component for Swatch<T> {
         if self.icon.is_some() {
             return;
         }
-        match self.color.same().copied() {
-            Some(Some(color)) => {
+        match &self.fill {
+            SwatchFill::Color(Mixed::Same(color)) => {
                 access.value(color.to_hex());
-                access.color(color);
+                access.color(*color);
             }
-            Some(None) => {
-                access.value(cx.words::<ChoiceWords>().swatch_none.as_str());
-            }
-            None => {
+            SwatchFill::Color(Mixed::Mixed) => {
                 access.value(cx.words::<ChoiceWords>().swatch_mixed.as_str());
             }
+            SwatchFill::Split(before, after) => {
+                let (from, to) = (before.to_hex(), after.to_hex());
+                access.value(cx.words::<ChoiceWords>().swatch_split.fill(&[("before", &from), ("after", &to)]));
+                access.color(*after);
+            }
+            SwatchFill::Empty => {
+                access.value(cx.words::<ChoiceWords>().swatch_empty.as_str());
+            }
+            SwatchFill::None => {
+                access.value(cx.words::<ChoiceWords>().swatch_none.as_str());
+            }
+            SwatchFill::Spectrum | SwatchFill::Image(_) => {}
         }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let fill = if self.icon.is_some() { WellFill::Empty } else { well_fill(self.color) };
-        let face = WellFace { fill, glyph: self.icon.as_ref(), shape: self.shape };
-        paint_face(&ui.draw(), cx.rect, cx.style, cx.state(), face, self.marked);
+        let face = Face {
+            style: cx.style,
+            state: cx.state(),
+            fill: &self.fill,
+            glyph: self.icon.as_ref(),
+            marked: self.marked,
+            shape: self.shape,
+            rtl: cx.flow.is_rtl(),
+        };
+        face.paint(&ui.content_painter(cx), cx.rect);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SwatchOutput {
-        let pick_color = self
-            .picker
-            .filter(|_| self.activation.is_some())
-            .map(|key| ColorRequest::new(key, self.color.same().copied().flatten()).title(cx.label()));
+        let color = match &self.fill {
+            SwatchFill::Color(color) => color.same().copied(),
+            _ => None,
+        };
+        let pick_color = self.picker.filter(|_| self.activation.is_some()).map(|key| ColorRequest::new(key, color).title(cx.label()));
         SwatchOutput { response: cx.response.clone(), clicked: self.activation.is_some(), activation: self.activation, pick_color }
     }
 }
 
-/// What the well of a swatch of `color` shows: the colour, the "no colour" diagonal, or the mixed dash.
-fn well_fill(color: Mixed<Option<Srgba>>) -> WellFill {
-    match color {
-        Mixed::Same(Some(color)) => WellFill::Color(color),
-        Mixed::Same(None) => WellFill::None,
-        Mixed::Mixed => WellFill::Mixed,
-    }
-}
-
-/// What a swatch's well shows, and its shape.
-struct WellFace<'a> {
-    fill: WellFill,
-    /// The glyph of an icon cell, over the empty well.
+/// What the one swatch face painter paints: the well of `fill` in `shape` (the empty sunken well under the `glyph`
+/// of an icon cell, in the text colour), then the outline ring, the mark when `marked`, and the selection ring, in
+/// `state`. A split well's before half is at the start edge, mirrored when `rtl`.
+struct Face<'a> {
+    style: &'a SwatchStyle,
+    state: &'a StateSet,
+    fill: &'a SwatchFill,
     glyph: Option<&'a IconId>,
+    marked: bool,
     shape: SwatchShape,
+    rtl: bool,
 }
 
-/// The one swatch face painter: the well `face.fill` in `well` (a checkerboard behind a translucent colour, the dash of
-/// a mixed one, the diagonal of none), the glyph of an icon cell in the text colour, then the outline ring, the mark
-/// when `marked`, and the selection ring, in `state`.
-fn paint_face(draw: &Draw<'_>, well: Rect, style: &SwatchStyle, state: &StateSet, face: WellFace<'_>, marked: bool) {
-    let outline = |rect: Rect| match face.shape {
-        SwatchShape::Square => PaintShape::Rect(rect, style.radius),
-        SwatchShape::Hexagon => PaintShape::Polygon(hexagon(rect)),
+impl Face<'_> {
+    fn paint(&self, painter: &ContentPainterCx<'_>, well: Rect) {
+        let style = self.style;
+        let edge = self.outline(well);
+        if let Some(glyph) = self.glyph {
+            self.well(painter, well, WellFill::Empty);
+            painter.with_draw(|draw| {
+                let side = style.glyph.min(well.width()).min(well.height());
+                draw.icon(Rect::from_center_size(well.center(), Vec2::splat(side)), &IconSpec::svg(glyph.clone()).color(style.mark));
+            });
+        } else {
+            self.paint_fill(painter, well);
+        }
+        painter.with_draw(|draw| {
+            draw.stroke(&edge, StrokeWidth::Thin, self.state.resolve(&style.edge));
+            if self.marked {
+                let inside = self.outline(well.shrink(draw.width(StrokeWidth::Thin)));
+                draw.stroke(&inside, StrokeWidth::Thin, style.mark);
+            }
+            draw.stroke(&edge, StrokeWidth::Thick, self.state.resolve(&style.ring));
+        });
+    }
+
+    /// The corners of a well in `rect`: the style's for a square, half the shorter side for a round one (a circle,
+    /// or a pill when wider than tall).
+    fn radius(&self, rect: Rect) -> CornerRadius {
+        match self.shape {
+            SwatchShape::Round => UiTokens::corner(rect.width().min(rect.height()) / 2.0),
+            SwatchShape::Square | SwatchShape::Hexagon => self.style.radius,
+        }
+    }
+
+    /// The outline of a well in `rect`.
+    fn outline(&self, rect: Rect) -> PaintShape {
+        match self.shape {
+            SwatchShape::Square | SwatchShape::Round => PaintShape::Rect(rect, self.radius(rect)),
+            SwatchShape::Hexagon => PaintShape::Polygon(hexagon(rect)),
+        }
+    }
+
+    fn paint_fill(&self, painter: &ContentPainterCx<'_>, well: Rect) {
+        match self.fill {
+            SwatchFill::Color(color) => self.color_well(painter, well, color.same().copied()),
+            SwatchFill::Empty => self.color_well(painter, well, Some(CLEAR)),
+            SwatchFill::None => self.well(painter, well, WellFill::None),
+            SwatchFill::Split(before, after) => {
+                self.color_well(painter, well, Some(*before));
+                let middle = well.center().x;
+                let end = if self.rtl {
+                    Rect::from_x_y_ranges(well.left()..=middle, well.y_range())
+                } else {
+                    Rect::from_x_y_ranges(middle..=well.right(), well.y_range())
+                };
+                painter.clipped(end, |painter| self.color_well(painter, well, Some(*after)));
+            }
+            SwatchFill::Spectrum => {
+                let mesh = spectrum_mesh(well.center(), &self.corners(well));
+                match self.shape {
+                    SwatchShape::Hexagon => painter.data_shapes([Shape::mesh(mesh)]),
+                    SwatchShape::Square | SwatchShape::Round => painter.mesh_in(well, self.radius(well), mesh),
+                }
+            }
+            SwatchFill::Image(image) => {
+                self.color_well(painter, well, Some(CLEAR));
+                let texture = TextureCache::texture(painter.painter.ctx(), SwatchImageKey(image.key), || image.pixels().clone());
+                let uv = cover_uv(image.pixels().size, well.size());
+                match self.shape {
+                    SwatchShape::Hexagon => {
+                        let corners = hexagon(well);
+                        let mut mesh = Mesh::with_texture(texture);
+                        for &pos in &corners {
+                            let at = (pos - well.min) / well.size();
+                            mesh.vertices.push(egui::epaint::Vertex { pos, uv: uv.lerp_inside(at), color: textures::UNTINTED });
+                        }
+                        for k in 1..corners.len() as u32 - 1 {
+                            mesh.add_triangle(0, k, k + 1);
+                        }
+                        painter.data_shapes([Shape::mesh(mesh)]);
+                    }
+                    SwatchShape::Square | SwatchShape::Round => painter.picture(texture, well, uv, f32::from(self.radius(well).nw)),
+                }
+            }
+        }
+    }
+
+    /// The well of `color` (the checkerboard behind a translucent one, the dash of `None`) over `well`.
+    fn color_well(&self, painter: &ContentPainterCx<'_>, well: Rect, color: Option<Srgba>) {
+        self.well(painter, well, WellFill::from(color));
+    }
+
+    /// The well `fill` over `well`, in the swatch's shape.
+    fn well(&self, painter: &ContentPainterCx<'_>, well: Rect, fill: WellFill) {
+        painter.with_draw(|draw| match self.shape {
+            SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), fill),
+            SwatchShape::Square | SwatchShape::Round => draw.swatch_well(well, self.radius(well), fill),
+        });
+    }
+
+    /// The corners of the polygon a hue wheel is laid over: the hexagon, or the rect, whose rounded corners
+    /// `mesh_in` pulls the wheel inside.
+    fn corners(&self, well: Rect) -> Vec<Pos2> {
+        match self.shape {
+            SwatchShape::Hexagon => hexagon(well),
+            SwatchShape::Square | SwatchShape::Round => vec![well.left_top(), well.right_top(), well.right_bottom(), well.left_bottom()],
+        }
+    }
+}
+
+/// The hue wheel over the convex polygon `corners` round `centre`: full colours, each point along an edge the hue of
+/// its direction from the centre, red straight up and the hues going clockwise. Each slice has its own centre vertex
+/// in the slice's middle hue, so the hues meet at the centre without a blend towards one colour.
+fn spectrum_mesh(centre: Pos2, corners: &[Pos2]) -> Mesh {
+    let hue = |pos: Pos2| {
+        let d = pos - centre;
+        let degrees = d.x.atan2(-d.y).to_degrees().rem_euclid(360.0);
+        Color32::from(Srgba::from_hsb(Hsb { h: degrees, s: 1.0, b: 1.0 }))
     };
-    let edge = outline(well);
-    match face.shape {
-        SwatchShape::Square => draw.swatch_well(well, style.radius, face.fill),
-        SwatchShape::Hexagon => draw.swatch_polygon_well(&hexagon(well), face.fill),
+    let rim: Vec<Pos2> = corners
+        .iter()
+        .enumerate()
+        .flat_map(|(k, &from)| {
+            let to = corners[(k + 1) % corners.len()];
+            (0..SPECTRUM_STEPS).map(move |step| from.lerp(to, step as f32 / SPECTRUM_STEPS as f32))
+        })
+        .collect();
+    let mut mesh = Mesh::default();
+    for (k, &from) in rim.iter().enumerate() {
+        let to = rim[(k + 1) % rim.len()];
+        let at = mesh.vertices.len() as u32;
+        mesh.colored_vertex(centre, hue(from.lerp(to, 0.5)));
+        mesh.colored_vertex(from, hue(from));
+        mesh.colored_vertex(to, hue(to));
+        mesh.add_triangle(at, at + 1, at + 2);
     }
-    if let Some(glyph) = face.glyph {
-        let side = style.glyph.min(well.width()).min(well.height());
-        draw.icon(Rect::from_center_size(well.center(), Vec2::splat(side)), &IconSpec::svg(glyph.clone()).color(style.mark));
+    mesh
+}
+
+/// The part of a picture of `size` pixels that covers a well of `well` points at the picture's aspect: all of it
+/// along the side that fits, the middle along the other.
+fn cover_uv(size: [usize; 2], well: Vec2) -> Rect {
+    let (width, height) = (size[0].max(1) as f32, size[1].max(1) as f32);
+    let picture = width / height;
+    let room = if well.y > 0.0 { well.x / well.y } else { 1.0 };
+    if picture > room {
+        let share = room / picture;
+        Rect::from_x_y_ranges((0.5 - share / 2.0)..=(0.5 + share / 2.0), 0.0..=1.0)
+    } else {
+        let share = picture / room;
+        Rect::from_x_y_ranges(0.0..=1.0, (0.5 - share / 2.0)..=(0.5 + share / 2.0))
     }
-    draw.stroke(&edge, StrokeWidth::Thin, state.resolve(&style.edge));
-    if marked {
-        let inside = outline(well.shrink(draw.width(StrokeWidth::Thin)));
-        draw.stroke(&inside, StrokeWidth::Thin, style.mark);
-    }
-    draw.stroke(&edge, StrokeWidth::Thick, state.resolve(&style.ring));
 }
 
 /// The corners of the pointy-top hexagon inscribed in `rect`: the vertices at the middle of the top and bottom edges,
@@ -395,10 +635,14 @@ pub struct SwatchFace {
 impl SwatchFace {
     /// The face of `color`, not selected.
     pub fn new(color: impl Into<Mixed<Srgba>>) -> Self {
-        SwatchFace { color: some_color(color.into()), selected: false }
+        let color = match color.into() {
+            Mixed::Same(color) => Mixed::Same(Some(color)),
+            Mixed::Mixed => Mixed::Mixed,
+        };
+        SwatchFace { color, selected: false }
     }
 
-    /// The face of a colour that can be "no colour": `None` paints the empty well.
+    /// The face of a colour that can be "no colour": `None` paints the sunken well with the diagonal.
     pub fn optional(color: impl Into<Mixed<Option<Srgba>>>) -> SwatchFace {
         SwatchFace { color: color.into(), selected: false }
     }
@@ -417,7 +661,7 @@ impl SwatchFace {
         let style = resolve_style(&scope, key, cx.painter.ctx(), Swatch::<()>::style);
         let (flags, on) = if self.selected { (Flags::SELECTED, 1.0) } else { (Flags::empty(), 0.0) };
         let state = StateSet::new(State::Rest, flags, StateMix::new(0.0, 0.0, on));
-        let face = WellFace { fill: well_fill(self.color), glyph: None, shape: SwatchShape::Square };
-        cx.with_draw(|draw| paint_face(draw, rect, &style, &state, face, false));
+        let fill = SwatchFill::optional(self.color);
+        Face { style: &style, state: &state, fill: &fill, glyph: None, marked: false, shape: SwatchShape::Square, rtl: false }.paint(cx, rect);
     }
 }

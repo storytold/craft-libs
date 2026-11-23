@@ -82,7 +82,7 @@ impl GripMarks {
 
 /// The room a grip strip keeps above its marks beyond `space.gap.tight`, in points, in every theme: the marks stand a
 /// little below the strip's middle, clear of the column bar or icon group above (photocraft#16426).
-pub(crate) const GRIP_ABOVE: f32 = 2.0;
+pub(super) const GRIP_ABOVE: f32 = 2.0;
 
 /// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
 /// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
@@ -104,8 +104,8 @@ pub struct GroupGripOutput {
     pub double_pressed: bool,
     /// A drag of the whole group started on the grip this pass.
     pub drag_started: bool,
-    /// Where the press that started the drag went down, when one started this pass.
-    pub drag_press: Option<Pos2>,
+    /// Where the press that started that drag went down, in the grip's layer space; `None` without a drag start.
+    pub drag_origin: Option<Pos2>,
 }
 
 impl Outcome for GroupGripOutput {
@@ -137,7 +137,6 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     #[prop]
     ticks: bool,
     double: bool,
-    /// Where the press that started a group drag this pass went down.
     started: Option<Pos2>,
 }
 
@@ -171,7 +170,9 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         let phase = cx.press().phase;
-        if let (true, PressPhase::DragStart { start, .. }) = (self.movable, phase) {
+        if self.movable
+            && let PressPhase::DragStart { start, .. } = phase
+        {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
             self.started = Some(start.origin);
         }
@@ -193,7 +194,12 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> GroupGripOutput {
-        GroupGripOutput { response: cx.response.clone(), double_pressed: self.double, drag_started: self.started.is_some(), drag_press: self.started }
+        GroupGripOutput {
+            response: cx.response.clone(),
+            double_pressed: self.double,
+            drag_started: self.started.is_some(),
+            drag_origin: self.started,
+        }
     }
 }
 

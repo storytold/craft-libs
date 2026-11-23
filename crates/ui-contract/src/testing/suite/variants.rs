@@ -221,14 +221,14 @@ fn motion_modes_settle(subject: &Subject) -> Result<(), String> {
 
 /// A host whose catalogs offer `ja`, in English.
 fn hosts() -> Option<(Arc<craft_host::Host>, Arc<craft_host::Host>)> {
-    use craft_host::{AppInfo, Host};
+    use craft_host::{AppInfo, Host, InlineJobs};
     let (i18n, problems) = craft_i18n::I18n::from_owned([("ja".to_owned(), String::new(), String::new())], &["ja"]);
     if !problems.is_empty() {
         return None;
     }
     let i18n = Arc::new(i18n);
     let japanese = i18n.from_code("ja")?;
-    let english = Arc::new(Host::builder(AppInfo { id: "suite", name: "Suite", version: "0" }).i18n(i18n).build());
+    let english = Arc::new(Host::builder(AppInfo { id: "suite", name: "Suite", version: "0" }).i18n(i18n).jobs(Arc::new(InlineJobs)).build());
     Some((english.clone(), Arc::new(english.with_lang(japanese))))
 }
 

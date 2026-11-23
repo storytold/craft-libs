@@ -228,11 +228,11 @@ pub struct DocRun<'a> {
 /// baseline: an input method's composition in the face and size of the text it goes into, as Word draws it.
 ///
 /// - **Face.** `key` names the face among the context's document faces, one key per font file, face index and
-///   variation setting (a font database's face id). The caller gives the face's bytes and index through the `load` of
-///   `face_run`, which runs only the first time the key is drawn, so a face is installed once, not every frame.
-/// - **Fallback.** Characters the face lacks are drawn by the interface fonts, in their order, CJK included. The run
-///   is drawn in the interface face until its face is installed (the frame after it loads) and for a face that does
-///   not load or whose file is larger than [`MAX_INTERFACE_FACE_BYTES`](crate::fonts::MAX_INTERFACE_FACE_BYTES).
+///   variation setting (a font database's face id). The caller gives the face's bytes and index, which it holds,
+///   through the `load` of `face_run`; it runs only the first time the key is drawn, so a face is installed once, not
+///   every frame, and the run is drawn in its face in that same pass.
+/// - **Fallback.** Characters the face lacks are drawn by the interface fonts, in their order, CJK included. A face
+///   that does not load is drawn in the interface face.
 /// - **Size.** `size` points on screen (the document size times the view's zoom), at least 1 and at most
 ///   [`largest_size`](Self::largest_size): egui draws each glyph into its font atlas and fails on one wider than the
 ///   atlas, so a larger run is drawn smaller, at the cap.

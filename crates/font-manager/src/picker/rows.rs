@@ -5,6 +5,7 @@
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Preview, Selection, SizeHint};
 use craft_font_catalog::Catalog;
@@ -18,15 +19,16 @@ use craft_ui::contract::{
 use craft_ui::display::{Divider, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, ThumbSize, ToggleCell, ToggleFace, ToggleState, TreeLeaves};
+use craft_ui::primitives::FacesCx;
 use craft_ui::runtime::env::Label;
 
 use super::banner::FontPreviewBanner;
 use super::rank::{FamilyInfos, Language, Listing, host_rows, list, shown_name};
 use super::{
     FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, HostFontGroup, HostFontKind,
-    HostFontRow, POPUP, SAMPLE_EM, Typing, infos_of, read, ui_language, write,
+    HostFontRow, POPUP, SAMPLE_EM, Sample, Typing, infos_of, read, ui_language, write,
 };
-use crate::panel::faces::Owner;
+use crate::panel::faces::{self, Owner, Shown};
 use crate::panel::specimen::{FontSample, SampleFace};
 
 /// The sample column is this many times as wide as the sample band is high.
@@ -331,18 +333,39 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
     filters.class = usize::from(picked).checked_sub(1).and_then(|i| FontClass::ALL.get(i).copied());
 }
 
-/// The sample of a family row: `text` in the regular face of `family` at `points`, named "{shown}: {text}" as the font
-/// manager names its samples, so the row keeps the family's name to itself; no face for a family the catalog
-/// lacks.
-fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, points: f32) -> FontSample<'a> {
+/// The sample of a family row: its text ([`row_text`]) in the regular face of `family` at `size.side × SAMPLE_EM`, in a
+/// band of the thumbnail side `size.side` as the banner's, named "{shown}: {text}" as the font manager names its
+/// samples, so the row keeps the family's name to itself; no face for a family the catalog lacks.
+fn sample<'a>(
+    at: &impl FacesCx,
+    catalog: &'a Arc<Catalog>,
+    infos: &'a FamilyInfos,
+    family: &str,
+    shown: &str,
+    text: &str,
+    size: Sample,
+) -> FontSample<'a> {
+    let text = row_text(at, catalog, infos, family, text, shown);
     let face =
         infos.families.get(family).map_or(SampleFace::Missing, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
-    FontSample::new(format!("{shown}: {text}"), text, face, points)
+    FontSample::new(format!("{shown}: {text}"), text, face, size.side * SAMPLE_EM).band(size.side)
+}
+
+/// What `family`'s sample says ([`FamilyInfos::sample_text`]) once its regular face is ready; `text` while it loads,
+/// when the sample shows nothing yet.
+fn row_text(at: &impl FacesCx, catalog: &Arc<Catalog>, infos: &FamilyInfos, family: &str, text: &str, shown: &str) -> String {
+    let Some(info) = infos.families.get(family) else { return text.to_owned() };
+    match faces::shown(at, catalog, Owner::Installed, &info.regular) {
+        Shown::Ready(_) => {
+            faces::bytes(at, Owner::Installed, &info.regular).map_or_else(|| text.to_owned(), |face| infos.sample_text(family, text, shown, &face))
+        }
+        _ => text.to_owned(),
+    }
 }
 
 /// The line of a host row: a face with its name as the sample in its own face, an action, or a notice that takes no
 /// activation. A face row lays out in the list's columns as a family row does.
-fn host_line<'r>(row: &'r HostFontRow, checked: bool, cells: &[(ColumnKey, egui::Rect)], size: ThumbSize, points: f32) -> ListRow<'r> {
+fn host_line<'r>(row: &'r HostFontRow, checked: bool, cells: &[(ColumnKey, egui::Rect)], size: ThumbSize, sample: Sample) -> ListRow<'r> {
     match &row.kind {
         HostFontKind::Notice => ListRow::new(row.name.clone()).depth(0).enabled(false),
         HostFontKind::Action => ListRow::new(row.name.clone()).option().depth(0),
@@ -351,7 +374,7 @@ fn host_line<'r>(row: &'r HostFontRow, checked: bool, cells: &[(ColumnKey, egui:
             match face.as_ref().filter(|_| size != ThumbSize::None) {
                 Some(font) => {
                     let text = row.name.as_str();
-                    let sample = FontSample::new(format!("{text}: {text}"), text, SampleFace::Font(font), points);
+                    let sample = FontSample::new(format!("{text}: {text}"), text, SampleFace::Font(font), sample.side * SAMPLE_EM).band(sample.side);
                     line.cell_field(SAMPLE, sample, |_| {})
                 }
                 None => line,
@@ -445,7 +468,6 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     };
     let size = settings.as_ref().map_or(ThumbSize::None, |s| s.preview.thumb());
     let sample_size = cx.style.sample(size);
-    let points = sample_size.side * SAMPLE_EM;
     let mut columns = Vec::with_capacity(4);
     if !plain {
         columns.push(ColumnSpec::toggle(STAR, words.favorites.clone(), ToggleColumn::default()).icon(IconId::new("star")));
@@ -470,6 +492,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     // The field's list keys go to the family list, not to the class column beside it.
     let families = cx.id.with("families");
     let overlay = Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)).list(families);
+    let faces_at = &*cx;
     let events = ui.show(popup, overlay, |ui, _| {
         let mut events = Vec::new();
         Stack::new().show(ui, |ui, _| {
@@ -482,7 +505,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                 });
                 let label = words.preview_of.fill(&[("family", shown_name.as_str())]);
                 // What the family's row shows: the text, or its name or first glyphs when the face can't draw it.
-                let shown_text = infos.sample_text(catalog, &banner_family, text, &shown_name);
+                let shown_text = row_text(faces_at, catalog, &infos, &banner_family, text, &shown_name);
                 FontPreviewBanner::new(label, &shown_name, &shown_text, face).show(ui);
             }
             if let Some(filters) = filters.as_mut() {
@@ -525,7 +548,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                         .show_items(ui, &source, &mut |_, item| match &slots[item.at] {
                             Slot::Gap(_) => ListRow::separator(),
                             Slot::HostHeading { name, .. } => ListRow::new(name.clone()).heading(),
-                            Slot::Host { row, .. } => host_line(row, current == Some(item.at), item.cells(), size, points),
+                            Slot::Host { row, .. } => host_line(row, current == Some(item.at), item.cells(), size, sample_size),
                             Slot::Heading(Heading::Recent) => ListRow::new(words.recently_used.clone()).section_heading(),
                             Slot::Heading(Heading::All) => ListRow::new(words.all_fonts.clone()).section_heading(),
                             Slot::Action(at) => ListRow::new(actions[*at].clone()).option().depth(0),
@@ -552,8 +575,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 if size == ThumbSize::None {
                                     return line;
                                 }
-                                let text = infos.sample_text(catalog, &row.family, sample_text, &row.shown);
-                                line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, text, points), |_| {})
+                                let sample = sample(faces_at, catalog, &infos, &row.family, &row.shown, sample_text, sample_size);
+                                line.cell_field(SAMPLE, sample, |_| {})
                             }
                         });
                     over_rows = rows.response.contains_pointer();
@@ -603,7 +626,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
             _ => {}
         }
     }
-    cx.memory::<Typing>().hide_classes = hide_classes;
+    let typing = cx.memory::<Typing>();
+    typing.hide_classes = hide_classes;
+    typing.over_rows = over_rows;
     // A preview the pointer proposed ends when the pointer leaves the rows (a keyed row keeps its preview). The
     // collection keeps its lead on the row, so the pointer coming back to that row reports no move: the row under it
     // proposes again.
@@ -650,8 +675,11 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         picker.picked = Some(family.to_owned());
         picker.picked_style = style.map(str::to_owned);
         end_preview(picker, cx);
-        cx.propose(family.to_owned());
-        cx.commit();
+        // A press on a row can end a typed name first, and that commit may already have set this family.
+        if cx.value().map(String::as_str) != Some(family) {
+            cx.propose(family.to_owned());
+            cx.commit();
+        }
         popup.close(cx);
     }
 }

@@ -1742,6 +1742,7 @@ dependencies = [
  "craft-affinity",
  "craft-ai",
  "craft-ai-core",
+ "craft-android-res",
  "craft-anicraft-format",
  "craft-assuan",
  "craft-atomic",
@@ -1752,6 +1753,7 @@ dependencies = [
  "craft-ber",
  "craft-browse",
  "craft-captions",
+ "craft-cdr",
  "craft-cfb",
  "craft-cloud",
  "craft-cloud-local",
@@ -1876,6 +1878,7 @@ dependencies = [
  "craft-platform",
  "craft-plist",
  "craft-plotter",
+ "craft-png",
  "craft-ppt-binary",
  "craft-pptx",
  "craft-prc",
@@ -2013,6 +2016,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-android-res"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-anicraft-format"
 version = "0.1.0"
 dependencies = [
@@ -2131,6 +2142,16 @@ dependencies = [
  "proptest",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-cdr"
+version = "0.1.0"
+dependencies = [
+ "craft-cdr",
+ "crc32fast",
+ "flate2",
+ "proptest",
 ]
 
 [[package]]
@@ -2330,8 +2351,11 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color",
  "craft-color-transform",
  "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
  "craft-render-parity",
  "proptest",
  "rayon",
@@ -3261,6 +3285,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-y4m",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3657,6 +3682,14 @@ version = "0.1.0"
 dependencies = [
  "kurbo",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-png"
+version = "0.1.0"
+dependencies = [
+ "png 0.18.1",
  "thiserror 2.0.21",
 ]
 
@@ -4175,6 +4208,7 @@ dependencies = [
 name = "craft-tga"
 version = "0.1.0"
 dependencies = [
+ "image",
  "thiserror 2.0.21",
 ]
 
@@ -4222,9 +4256,11 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 dependencies = [
+ "image",
  "proptest",
  "serde",
  "thiserror 2.0.21",
+ "tiff",
 ]
 
 [[package]]
@@ -5980,6 +6016,7 @@ dependencies = [
  "craft-timeline",
  "craft-ui-gallery",
  "craft-update",
+ "epaint_default_fonts",
 ]
 
 [[package]]

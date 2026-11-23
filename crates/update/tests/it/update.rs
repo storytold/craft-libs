@@ -6,7 +6,7 @@ use craft_ui::dialog::{DialogHost, dialog_id};
 use craft_ui::testing::{Fixture, trial};
 use craft_update::pins::{Pins, VersionTrack};
 use craft_update::release::Release;
-use craft_update::stack_dialogs::UpdatePromptDialog;
+use craft_update::stack_dialogs::{UpdateCheckDialog, UpdatePromptDialog, UpdateWords};
 use craft_update::suite::PHOTOCRAFT;
 use craft_update::updater::{Action, CheckSource, Status, Updater};
 use std::cell::RefCell;
@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 type Dialogs = Rc<RefCell<DialogHost>>;
-type Checked = Result<Option<Release>, String>;
+type Checked = Result<Option<Release>, craft_update::CheckError>;
 
 fn newer() -> Release {
     Release { tag: "v9.0.0".into(), version: craft_update::parse_version("9.0.0"), ..Release::default() }
@@ -94,6 +94,37 @@ fn a_check_exposes_the_release_it_found_and_an_up_to_date_one_exposes_none() {
     current.check_now();
     current.settle_for_tests(&ctx);
     assert!(current.available().is_none());
+}
+
+#[trial]
+fn a_rate_limited_check_is_its_own_status_so_the_app_can_translate_it() {
+    let ctx = ctx();
+    let mut u = updater(Err(craft_update::CheckError::RateLimited));
+    u.check_now();
+    u.settle_for_tests(&ctx);
+    assert_eq!(u.status(), &Status::RateLimited);
+    let mut other = updater(Err("offline".into()));
+    other.check_now();
+    other.settle_for_tests(&ctx);
+    assert_eq!(other.status(), &Status::Failed("offline".into()), "any other reason stays data");
+}
+
+/// The check dialog open in `status`: whether `text` is on screen.
+fn check_dialog_shows(status: Status, text: &str) -> bool {
+    let mut dialog = UpdateCheckDialog::new("0.1.0");
+    dialog.set_status(status);
+    let mut dialogs = DialogHost::new();
+    dialogs.open(dialog);
+    let (fixture, _) = rig(dialogs);
+    fixture.texts().iter().any(|t| t.text.contains(text)) || fixture.by_label(text).is_some()
+}
+
+#[trial]
+fn the_check_dialog_words_a_rate_limit_itself_and_passes_other_reasons_through() {
+    let words = UpdateWords::default();
+    assert!(check_dialog_shows(Status::RateLimited, words.rate_limited.as_str()));
+    assert!(!check_dialog_shows(Status::Failed("offline".into()), words.rate_limited.as_str()));
+    assert!(check_dialog_shows(Status::Failed("offline".into()), "offline"));
 }
 
 #[trial]

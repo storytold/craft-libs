@@ -219,20 +219,38 @@ pub struct HostCx<'a> {
 }
 
 impl FacesCx for HostCx<'_> {
-    fn document_face(&self, key: &str, load: impl FnOnce() -> Option<FaceBytes>) -> FaceState {
-        let mut load = Some(load);
-        self.faces.face(key, &mut || load.take().and_then(|load| load()))
+    fn document_face<L>(&self, key: &str, job: impl FnOnce() -> L) -> FaceState
+    where
+        L: FnOnce() -> Option<FaceBytes> + Send + 'static,
+    {
+        let mut job = Some(job);
+        self.faces.face(key, &mut || job.take().map(|job| Box::new(job()) as Load))
+    }
+
+    fn document_face_bytes(&self, key: &str) -> Option<FaceBytes> {
+        self.faces.bytes(key)
     }
 }
 
+/// A face load, as [`FacesCx::document_face`]'s job makes it.
+type Load = Box<dyn FnOnce() -> Option<FaceBytes> + Send>;
+
 /// [`FacesCx`] behind a reference: the editor's context, whose type names the editor's lifetimes.
 trait Faces {
-    fn face(&self, key: &str, load: &mut dyn FnMut() -> Option<FaceBytes>) -> FaceState;
+    fn face(&self, key: &str, job: &mut dyn FnMut() -> Option<Load>) -> FaceState;
+    fn bytes(&self, key: &str) -> Option<FaceBytes>;
 }
 
 impl<T: FacesCx> Faces for T {
-    fn face(&self, key: &str, load: &mut dyn FnMut() -> Option<FaceBytes>) -> FaceState {
-        self.document_face(key, load)
+    fn face(&self, key: &str, job: &mut dyn FnMut() -> Option<Load>) -> FaceState {
+        self.document_face(key, || {
+            let load = job();
+            move || load.and_then(|load| load())
+        })
+    }
+
+    fn bytes(&self, key: &str) -> Option<FaceBytes> {
+        self.document_face_bytes(key)
     }
 }
 
