@@ -33,10 +33,10 @@ use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed, PixelSize};
 use craft_color_ui::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, SamplerCache, SamplerEvent};
 use craft_theme::TypeRole;
 use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource, ToolHost, ViewCommands, ZoomTool};
-use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::dialog::{
     DialogResult, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView,
-    FullWindowWorkspace, FullWindowZoomBar, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+    FullWindowWorkspace, FullWindowZoomBar, SideFooter, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -552,6 +552,9 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
             .opened(open)
             .command_scope(RawDevelopCommands::SCOPE)
             .buttons(buttons)
+            // Five buttons are wider than the Settings column: among the side columns they would widen the column's
+            // region to their row and leave the controls in a part of it.
+            .side_footer(SideFooter::across())
             .sides(|ui, _| {
                 let mut guard = ws.borrow_mut();
                 let w = &mut **guard;
@@ -560,7 +563,9 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                 let original = w.original.clone();
                 let (before, floating_now) = (w.before, w.floating);
                 let (at, has_selection) = (w.hover, source.has_selection());
-                FullWindowSide::new(words.settings.clone()).show(ui, |ui, _| {
+                // Above a footer across the dialog the side region is no taller than the canvas, and the column takes all
+                // of its height: as high as its content it would sit in the region's middle.
+                FullWindowSide::new(words.settings.clone()).sizing(Sizing::FillHeight).show(ui, |ui, _| {
                     let mut floating = floating_now;
                     if let Some(state) = w.scope.as_mut()
                         && !floating_now
