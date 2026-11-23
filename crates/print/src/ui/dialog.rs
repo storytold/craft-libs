@@ -1339,11 +1339,17 @@ impl StackDialog for HostedPrint {
                 self.preset_name = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?.to_owned();
             }
             "preset" => {
-                let known =
-                    |name: &str| self.presets.as_ref().is_some_and(|presets| presets.rows.iter().any(|row| !row.is_group() && row.key == name));
-                let name = value.as_str().filter(|name| known(name));
-                let name = name.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
-                self.preset_events.push(NamedPresetEvent::Apply(name.to_owned()));
+                // A row's key, else its name in any case ("proofs" applies the saved "Proofs").
+                let rows =
+                    self.presets.as_ref().map(|presets| presets.rows.iter().filter(|row| !row.is_group()).collect::<Vec<_>>()).unwrap_or_default();
+                let key = value.as_str().and_then(|name| {
+                    rows.iter()
+                        .find(|row| row.key == name)
+                        .or_else(|| rows.iter().find(|row| row.label.eq_ignore_ascii_case(name)))
+                        .map(|row| row.key.clone())
+                });
+                let key = key.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                self.preset_events.push(NamedPresetEvent::Apply(key));
             }
             _ => {
                 let section =

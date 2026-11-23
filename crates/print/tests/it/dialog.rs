@@ -178,7 +178,8 @@ fn done_by_automation_and_the_sheet_step() {
     assert_eq!(dialog.confirm(&ctx).map(|answer| answer.finish), ready.then_some(PrintFinish::Print), "the choice is used up");
 }
 
-/// A refused held OK keeps the dialog open with the reason, and a preset the row does not list is refused by name.
+/// A refused held OK keeps the dialog open with the reason, and a preset the row does not list is refused by name. A
+/// preset is named by its key or by its name in any case, and applies by its key.
 #[trial]
 fn a_refused_print_keeps_the_dialog_open_and_presets_are_named() {
     let ctx = egui::Context::default();
@@ -194,6 +195,9 @@ fn a_refused_print_keeps_the_dialog_open_and_presets_are_named() {
     assert!(dialog.set_json_field(&ctx, "preset", serde_json::json!("missing")).is_err());
     dialog.set_json_field(&ctx, "preset", serde_json::json!("proof")).expect("a listed preset applies");
     assert_eq!(dialog.take_preset_events(), vec![NamedPresetEvent::Apply("proof".to_owned())]);
+    dialog.set_presets(vec![PresetRow::item("saved-7".to_owned(), "Proofs", 0)], None, Vec::new());
+    dialog.set_json_field(&ctx, "preset", serde_json::json!("proofs")).expect("a preset named in another case applies");
+    assert_eq!(dialog.take_preset_events(), vec![NamedPresetEvent::Apply("saved-7".to_owned())], "by its row's key");
 }
 
 /// The sections layout of a hosted print dialog shows its list of sections beside the shown section, and a click on
