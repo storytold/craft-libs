@@ -4,6 +4,7 @@
 
 use super::GRIP;
 use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
     DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
 };
@@ -500,8 +501,8 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
         let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
         assert!(
-            run.top() - strip.top() >= tight + 2.0 - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
-            "group {group}: the marks keep space.gap.tight ({tight}) and 2 points more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
+            run.top() - strip.top() >= tight + GRIP_ABOVE - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
+            "group {group}: the marks keep space.gap.tight ({tight}) and GRIP_ABOVE more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
         );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
@@ -553,7 +554,10 @@ fn a_themes_grip_shape_reaches_the_grips() {
     let shapes = fixture.frame_shapes();
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
-    assert!(marks.iter().all(|m| (m.width() - 2.0).abs() < 0.01 && (m.height() - 2.0).abs() < 0.01), "two-point dots: {marks:?}");
-    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 3.0).abs() < 0.01), "three points apart: {marks:?}");
+    assert!(
+        marks.iter().all(|m| (m.width() - shape.width).abs() < 0.01 && (m.height() - shape.width).abs() < 0.01),
+        "dots the theme's width across: {marks:?}"
+    );
+    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - shape.gap).abs() < 0.01), "the theme's gap apart: {marks:?}");
     assert_ne!(ink, egui::Color32::TRANSPARENT);
 }

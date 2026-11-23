@@ -936,11 +936,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         });
         // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
         // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
-        if !sent.is_empty() {
-            let press = ui.input(|i| i.pointer.press_origin());
+        if let Some(&press) = sent.first() {
             drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
                 drag.source = Some(size);
-                drag.press = press;
+                drag.press = Some(press);
             });
         }
     }
@@ -1581,7 +1580,7 @@ struct RailGrip<'a, P> {
     active: PanelKey,
     movable: bool,
     label: Label,
-    sent: Outbox<'a, ()>,
+    sent: Outbox<'a, Pos2>,
 }
 
 /// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
@@ -1593,8 +1592,8 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
         .ghost(props.label.clone())
         .label(props.label.clone())
         .show_at(ui, strip);
-    if held.drag_started {
-        props.sent.send(());
+    if let Some(origin) = held.drag_origin {
+        props.sent.send(origin);
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);

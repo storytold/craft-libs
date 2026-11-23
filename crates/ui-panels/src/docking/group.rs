@@ -79,7 +79,7 @@ impl GripMarks {
 
 /// The room a grip strip keeps above its marks beyond `space.gap.tight`, in points, in every theme: the marks stand a
 /// little below the strip's middle, clear of the column bar or icon group above (photocraft#16426).
-const GRIP_ABOVE: f32 = 2.0;
+pub(super) const GRIP_ABOVE: f32 = 2.0;
 
 /// The height of a grip strip (above an icon group, under a tool rail's column bar): at least the least hit size, and
 /// tall enough that the theme's marks keep `space.gap.tight` below them and that plus [`GRIP_ABOVE`] above them, so
@@ -101,6 +101,8 @@ pub struct GroupGripOutput {
     pub double_pressed: bool,
     /// A drag of the whole group started on the grip this pass.
     pub drag_started: bool,
+    /// Where the press that started that drag went down, in the grip's layer space; `None` without a drag start.
+    pub drag_origin: Option<Pos2>,
 }
 
 impl Outcome for GroupGripOutput {
@@ -132,13 +134,13 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     #[prop]
     ticks: bool,
     double: bool,
-    started: bool,
+    started: Option<Pos2>,
 }
 
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, ticks: false, double: false, started: None }
     }
 }
 
@@ -165,9 +167,9 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         let phase = cx.press().phase;
-        if self.movable && matches!(phase, PressPhase::DragStart { .. }) {
+        if self.movable && let PressPhase::DragStart { start, .. } = phase {
             start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
-            self.started = true;
+            self.started = Some(start.origin);
         }
         // A marked grip is a handle: the grab cursor over it and grabbing while it is held or dragged, as the grips of
         // a collapsed column declare (photocraft#16467). A drop target's cursor during the drag still wins.
@@ -187,7 +189,12 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> GroupGripOutput {
-        GroupGripOutput { response: cx.response.clone(), double_pressed: self.double, drag_started: self.started }
+        GroupGripOutput {
+            response: cx.response.clone(),
+            double_pressed: self.double,
+            drag_started: self.started.is_some(),
+            drag_origin: self.started,
+        }
     }
 }
 
