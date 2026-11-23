@@ -110,6 +110,10 @@ pub struct FrameOutput {
     /// The commands components took since the last call, in order, whatever fired them (a key, a menu row, the
     /// palette): what ran inside the framework, for an app that records the commands it runs (an action recorder).
     pub delivered: Vec<Fired>,
+    /// The key presses since the last call that ran nothing because their chord binds only commands disabled where the
+    /// press landed, in order: each as the key would have fired its first such command. The app says why it did not
+    /// run (`commands::resolve`'s hint), as it does for a disabled menu row.
+    pub dimmed: Vec<Fired>,
     /// Text for the live announcement region.
     pub announcements: Vec<String>,
     /// The chrome toggles the windows asked for since the last call, in order: each names its viewport and whether the
@@ -427,6 +431,7 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     let mut output = pass_state::with::<FrameState, _>(ctx, |state| std::mem::take(&mut state.output));
     output.fired = commands::take_fired(ctx);
     output.delivered = commands::take_delivered(ctx);
+    output.dimmed = commands::take_dimmed(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
     // already acted in the key stage.

@@ -28,7 +28,8 @@ pub(crate) use board::publish as publish_for;
 pub(crate) use board::runs_now;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_dimmed, take_fired,
+    window_shortcuts,
 };
 #[doc(hidden)]
 pub use board::{bound_around, keymap_generation, take_around};

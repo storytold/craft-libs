@@ -170,6 +170,8 @@ pub(crate) struct Board {
     out: Vec<Fired>,
     /// The commands instances took since the last `FrameOutput`, in order.
     delivered: Vec<Fired>,
+    /// The key presses since the last `FrameOutput` that ran nothing because their chord binds only disabled commands.
+    dimmed: Vec<Fired>,
     instances: Instances,
     /// The focused component of each viewport's last step 12 and the instances around it.
     chains: HashMap<ViewportId, (Id, CommandChain)>,
@@ -1256,6 +1258,11 @@ pub(crate) fn take_delivered(ctx: &Context) -> Vec<Fired> {
     with(ctx, |board| std::mem::take(&mut board.delivered))
 }
 
+/// The key presses that hit only disabled commands since the last call.
+pub(crate) fn take_dimmed(ctx: &Context) -> Vec<Fired> {
+    with(ctx, |board| std::mem::take(&mut board.dimmed))
+}
+
 /// Whether the component that holds key focus sits inside the instance `id`.
 #[doc(hidden)]
 pub fn focus_within(ctx: &Context, id: Id) -> bool {
@@ -1985,6 +1992,17 @@ pub(crate) fn begin(ctx: &Context) {
     }
     let Some((keys, mut matcher)) = taken else { return };
     let modal_at_start = overlay::any_open(ctx, overlay::OpenFilter::Modal);
+    let key_fired = |hit: Hit, target: Option<Id>, time: f64, place: Option<usize>| Fired {
+        command: hit.command,
+        target,
+        source: FireSource::Key,
+        phase: FirePhase::Press,
+        cycle: hit.cycle.len() > 1,
+        alt_variant: hit.alt_variant,
+        mods: hit.trigger.chord.mods,
+        time,
+        place,
+    };
     let (delay, mut wait) = with(ctx, |board| {
         let wait = if board.hold_wait.as_ref().is_some_and(|wait| wait.viewport == viewport) { board.hold_wait.take() } else { None };
         (board.hold_delay, wait)
@@ -2018,17 +2036,7 @@ pub(crate) fn begin(ctx: &Context) {
                 board.held.push(Held { key, command: hit.command.clone(), target });
             });
         }
-        Some(Fired {
-            command: hit.command,
-            target,
-            source: FireSource::Key,
-            phase: FirePhase::Press,
-            cycle: hit.cycle.len() > 1,
-            alt_variant: hit.alt_variant,
-            mods: hit.trigger.chord.mods,
-            time,
-            place,
-        })
+        Some(key_fired(hit, target, time, place))
     };
     // Settles a wait by the time of the event that ends it: the hold when the key was down for the delay, else the tap.
     let settle = |wait: Option<HoldWait>, time: f64, place: Option<usize>| -> Option<Fired> {
@@ -2036,7 +2044,7 @@ pub(crate) fn begin(ctx: &Context) {
         let hit = if time - wait.since >= wait.delay { Some(wait.hold) } else { wait.tap }?;
         press(hit, Some(wait.key), time, place)
     };
-    let mut fired = Vec::new();
+    let (mut fired, mut dimmed) = (Vec::new(), Vec::new());
     let mut changes = shortcuts.mods.iter().map(|(index, _)| *index).peekable();
     for (index, shortcut) in shortcuts.keys.iter().enumerate() {
         // A change of Cmd, Ctrl or Alt before this key settles the wait first.
@@ -2069,9 +2077,15 @@ pub(crate) fn begin(ctx: &Context) {
                     .filter(|_| !typing && !modal_at_start)
                     .and_then(|key| keys.hold(&shortcuts.layout, &shortcut.input, typing).map(|hold| (key, hold)));
                 let tap = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled)));
-                match hold {
-                    Some((key, hold)) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
-                    None => fired.extend(tap.and_then(|hit| press(hit, key, time, Some(shortcut.place)))),
+                match (hold, tap) {
+                    (Some((key, hold)), tap) => wait = Some(HoldWait { key, hold, since: time, delay, tap, viewport }),
+                    (None, Some(tap)) => fired.extend(press(tap, key, time, Some(shortcut.place))),
+                    // A chord that binds only disabled commands runs nothing; the app hears of the first one, to say
+                    // why it did not run as a menu row's hint does.
+                    (None, None) => dimmed.extend(keys.press(&shortcuts.layout, &shortcut.input, typing, None).map(|hit| {
+                        let (_, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));
+                        key_fired(hit, instance, time, Some(shortcut.place))
+                    })),
                 }
             }
         }
@@ -2095,6 +2109,7 @@ pub(crate) fn begin(ctx: &Context) {
     }
     with(ctx, |board| {
         board.matcher = matcher;
+        board.dimmed.append(&mut dimmed);
         if wait.is_some() {
             board.hold_wait = wait;
         }
