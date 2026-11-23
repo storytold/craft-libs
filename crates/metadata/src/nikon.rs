@@ -742,6 +742,18 @@ mod tests {
     }
 
     #[test]
+    fn a_note_table_that_runs_past_the_note_reads_nothing_past_it() {
+        let mut file = Nef { filler: 400_000, ..at("B8") }.bytes();
+        let note = file.windows(7).position(|w| w == b"Nikon\0\x02").unwrap() + 10;
+        let ifd = note + u32::from_be_bytes(file[note + 4..note + 8].try_into().unwrap()) as usize;
+        // an entry count that puts the table's end far past the note, into the image data
+        file[ifd..ifd + 2].copy_from_slice(&8000u16.to_be_bytes());
+        let r = header_read(&file);
+        assert_eq!(r.focus, crate::read_exif(&file).focus);
+        assert!(r.bytes_read <= crate::focus::HEADER_PREFIX, "{}", r.bytes_read);
+    }
+
+    #[test]
     fn only_checked_nikon_bodies_are_opened() {
         assert!(crate::focus::camera_supported("NIKON CORPORATION NIKON D800E"));
         assert!(crate::focus::camera_supported("Nikon Corporation Nikon D800E"), "case aside");

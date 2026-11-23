@@ -278,11 +278,13 @@ struct Want<'a> {
     need: Vec<(u64, u64)>,
     /// Where value offsets count from: 0 for the file's TIFF, the embedded TIFF header of a Nikon maker note.
     base: u64,
+    /// Where the stream being walked ends: the file, or a Nikon maker note, past which no table or value is read.
+    limit: u64,
 }
 
 impl Want<'_> {
     fn len(&self) -> u64 {
-        self.buf.len() as u64
+        (self.buf.len() as u64).min(self.limit)
     }
 
     /// Whether `[start, end)` (clipped to the file) is loaded; asks for it if not.
@@ -360,7 +362,7 @@ impl Want<'_> {
 /// `craft_tiff::makernote` locates it, and the focus tags' values.
 fn plan(buf: &[u8], loaded: &Loaded) -> Step {
     let Some((order, false)) = Tiff::sniff(buf) else { return Step::Nothing };
-    let mut w = Want { buf, order, loaded, need: Vec::new(), base: 0 };
+    let mut w = Want { buf, order, loaded, need: Vec::new(), base: 0, limit: u64::MAX };
     let Some(ifd0) = order.read_u32(buf, 4).map(u64::from) else { return Step::Nothing };
     let Some(e0) = w.table(ifd0) else { return w.step() };
     let mut exif = None;
@@ -432,8 +434,8 @@ fn plan(buf: &[u8], loaded: &Loaded) -> Step {
 }
 
 /// What of a Nikon maker note whose TIFF header is at `at` (the note ending at `end`) the focus decoder still needs:
-/// that header, its IFD and the values of [`NIKON_FOCUS_TAGS`]. Nothing past the note is asked for: a value that
-/// would lie there is one the decoder rejects too.
+/// that header, its IFD and the values of [`NIKON_FOCUS_TAGS`]. Nothing past the note is asked for: a table or a
+/// value running past it is cut at its end, as the decoder, which is given the note alone, cuts it too.
 fn nikon_note(mut w: Want, at: u64, end: u64) -> Step {
     if at.saturating_add(8) > end {
         return Step::Nothing;
@@ -451,9 +453,9 @@ fn nikon_note(mut w: Want, at: u64, end: u64) -> Step {
     if ifd.saturating_add(2) > end {
         return Step::Nothing;
     }
-    let mut n = Want { buf: w.buf, order, loaded: w.loaded, need: w.need, base: at };
+    let mut n = Want { buf: w.buf, order, loaded: w.loaded, need: w.need, base: at, limit: end };
     let Some(entries) = n.table(ifd) else { return n.step() };
-    for e in entries.iter().filter(|e| NIKON_FOCUS_TAGS.contains(&e.tag) && e.end <= end) {
+    for e in entries.iter().filter(|e| NIKON_FOCUS_TAGS.contains(&e.tag)) {
         n.want(e.start, e.end);
     }
     n.step()

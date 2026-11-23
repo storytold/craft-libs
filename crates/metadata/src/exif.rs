@@ -141,8 +141,8 @@ fn from_tiff_with<'n>(tiff: &Tiff, nikon: &dyn Fn() -> Option<&'n MakerNote>) ->
     }
     .map(|v| v.min(u32::MAX as u64) as u32);
     // Nikon bodies leave ISOSpeedRatings out above their top native ISO (Hi 0.3 and up on a D800E), or write only its
-    // overflow marker: the maker note still says
-    if (m.iso.is_none() || m.iso == Some(u32::from(u16::MAX)))
+    // overflow marker (a LONG field or an extended measurement of 65535 is a real ISO): the maker note still says
+    if without_iso_overflow(m.iso, tiff).is_none()
         && let Some(iso) = nikon().and_then(|n| crate::nikon::iso(&n.ifd))
     {
         m.iso = Some(iso);
@@ -834,8 +834,8 @@ pub(crate) mod tests {
     }
 
     /// A Nikon Exif block laid out as a D800E NEF shot at Hi 0.3 is: no ISOSpeedRatings, no maker note `0x0002`, only
-    /// ISOInfo (`0x0025`, 14 bytes; byte 0 = 136, ISOExpansion `0x0101`), unless `exif_iso` / `note_iso` add them.
-    fn nikon_hi_iso_exif(make: &str, iso_info: Option<u8>, note_iso: Option<u16>, exif_iso: Option<u16>) -> Vec<u8> {
+    /// ISOInfo (`0x0025`, 14 bytes; byte 0 = 136, ISOExpansion `0x0101`), unless `note_iso` / `exif_tags` add them.
+    fn nikon_hi_iso_exif(make: &str, iso_info: Option<u8>, note_iso: Option<u16>, exif_tags: &[(u16, Value)]) -> Vec<u8> {
         let mut note = IfdBuilder::new();
         note.set(0x0001, Value::Undefined(b"0210".to_vec()));
         if let Some(v) = note_iso {
@@ -848,8 +848,8 @@ pub(crate) mod tests {
         blob.extend(TiffWriter::new(ByteOrder::Big, false).write(&[note]).unwrap());
         let mut exif = IfdBuilder::new();
         exif.set(t::MAKER_NOTE, Value::Undefined(blob));
-        if let Some(v) = exif_iso {
-            exif.set(t::ISO_SPEED, Value::Short(vec![v]));
+        for (tag, v) in exif_tags {
+            exif.set(*tag, v.clone());
         }
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::MAKE, Value::Ascii(make.into()));
@@ -860,22 +860,25 @@ pub(crate) mod tests {
     #[test]
     fn nikon_hi_iso_without_exif_iso_comes_from_the_maker_note() {
         let nikon = "NIKON CORPORATION";
+        let iso = |info, note, exif: &[(u16, Value)]| read_exif(&nikon_hi_iso_exif(nikon, info, note, exif)).iso;
+        let short = |v: u16| (t::ISO_SPEED, Value::Short(vec![v]));
         // Hi 0.3 (ISOInfo 136) is above ISO 6400 and below Hi 0.5 (138)
-        let hi03 = read_exif(&nikon_hi_iso_exif(nikon, Some(136), None, None)).iso.unwrap();
-        let hi05 = read_exif(&nikon_hi_iso_exif(nikon, Some(138), None, None)).iso.unwrap();
+        let hi03 = iso(Some(136), None, &[]).unwrap();
+        let hi05 = iso(Some(138), None, &[]).unwrap();
         assert!(6400 < hi03 && hi03 < hi05, "{hi03} {hi05}");
         // the stated ISOs win over the derived one, another make's note is not read, and a zero says nothing
-        assert_eq!(read_exif(&nikon_hi_iso_exif(nikon, Some(136), None, Some(6400))).iso, Some(6400));
-        assert_eq!(read_exif(&nikon_hi_iso_exif(nikon, Some(136), Some(3200), None)).iso, Some(3200));
-        assert_eq!(read_exif(&nikon_hi_iso_exif("Canon", Some(136), None, None)).iso, None);
-        assert_eq!(read_exif(&nikon_hi_iso_exif(nikon, Some(0), None, None)).iso, None);
-        assert_eq!(read_exif(&nikon_hi_iso_exif(nikon, Some(0xff), None, None)).iso, None, "an unset ISOInfo byte");
+        assert_eq!(iso(Some(136), None, &[short(6400)]), Some(6400));
+        assert_eq!(iso(Some(136), Some(3200), &[]), Some(3200));
+        assert_eq!(read_exif(&nikon_hi_iso_exif("Canon", Some(136), None, &[])).iso, None);
+        assert_eq!(iso(Some(0), None, &[]), None);
+        assert_eq!(iso(Some(0xff), None, &[]), None, "an unset ISOInfo byte");
         // ISOSpeedRatings holding only its overflow marker: the maker note says what the ISO was
-        assert_eq!(
-            read_exif(&nikon_hi_iso_exif(nikon, Some(136), None, Some(u16::MAX))).iso,
-            read_exif(&nikon_hi_iso_exif(nikon, Some(136), None, None)).iso
-        );
-        assert_eq!(read_exif(&nikon_hi_iso_exif(nikon, None, None, None)).iso, None);
+        assert_eq!(iso(Some(136), None, &[short(u16::MAX)]), Some(hi03));
+        assert_eq!(iso(None, None, &[]), None);
+        // but 65535 in a LONG field, or as an extended measurement, is an ISO the camera measured
+        assert_eq!(iso(Some(136), None, &[(t::ISO_SPEED, Value::Long(vec![65535]))]), Some(65535));
+        let measured = [short(u16::MAX), (t::RECOMMENDED_EXPOSURE_INDEX, Value::Long(vec![65535]))];
+        assert_eq!(iso(Some(136), None, &measured), Some(65535));
     }
 
     pub(crate) fn sample_exif(order: ByteOrder) -> Vec<u8> {
