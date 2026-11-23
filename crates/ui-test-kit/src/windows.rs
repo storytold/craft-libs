@@ -4,6 +4,7 @@
 
 use craft_host::target::ShellInfo;
 use craft_ui::runtime::InstallSpec;
+use craft_ui::runtime::commands::CommandInput;
 use craft_ui::runtime::env::RootEnv;
 use craft_ui::runtime::frame::{FrameInput, set_input};
 use craft_ui::testing::Frames;
@@ -259,6 +260,7 @@ pub struct Windows {
     /// The installed context.
     pub ctx: Context,
     root_info: RefCell<ViewportInfo>,
+    commands: RefCell<CommandInput>,
 }
 
 impl Default for Windows {
@@ -288,7 +290,7 @@ impl Windows {
         COMMANDS.with(|kept| kept.borrow_mut().clear());
         BUILDERS.with(|kept| kept.borrow_mut().clear());
         NOW.with(|now| now.set(0.0));
-        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()) }
+        Windows { ctx, root_info: RefCell::new(ViewportInfo::default()), commands: RefCell::new(CommandInput::new()) }
     }
 
     /// The window facts child passes report from now on.
@@ -310,6 +312,12 @@ impl Windows {
     /// The window facts the root viewport reports from now on.
     pub fn root_info(&self, info: ViewportInfo) {
         *self.root_info.borrow_mut() = info;
+    }
+
+    /// The command input every following frame is given, as an app's `FrameInput.commands`: its catalog, states and
+    /// gate.
+    pub fn commands(&self, commands: CommandInput) {
+        *self.commands.borrow_mut() = commands;
     }
 
     /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
@@ -335,7 +343,7 @@ impl Windows {
         let root_hovered = hovered.clone();
         CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
         TREES.with(|kept| kept.borrow_mut().clear());
-        set_input(&self.ctx, FrameInput::new(RootEnv::default()));
+        set_input(&self.ctx, FrameInput::new(RootEnv::default()).commands(self.commands.borrow().clone()));
         let mut input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
             events: root,

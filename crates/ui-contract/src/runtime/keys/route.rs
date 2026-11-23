@@ -385,7 +385,8 @@ pub(crate) fn take_shortcuts(ctx: &Context) -> Shortcuts {
 }
 
 /// Records that the shortcut dispatcher fired a command for the press `input` in the running pass, so
-/// [`unclaimed`] leaves the press, its release and the clipboard event that stood for it to the command.
+/// [`unclaimed`] leaves the press, its auto-repeats until its release, the release and the clipboard event that stood
+/// for it to the command.
 pub(crate) fn note_fired(ctx: &Context, input: &KeyInput) {
     let held = input.physical.or(input.typed);
     current(ctx, |stage| {
@@ -400,9 +401,9 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput) {
 /// keyboard focus (a framework stop or an app's own widget), and the key stage neither stripped an event for itself
 /// (Escape, Tab and focus moves, claimed and edit chords, the menu bar's keys) nor handed it to a component
 /// (typing, a list's keys), and no widget has read it from egui's input since, nor has the shortcut dispatcher fired a
-/// command for it (`note_fired`). Call it once the viewport's content has run, for a host that runs its own shortcuts
-/// on the input of a window the framework gives it no commands for: an OS window of a dock, whose keys egui hands to
-/// that window only.
+/// command for it (`note_fired`) or for the press of a key still held, whose auto-repeats are the command's too. Call
+/// it once the viewport's content has run, for a host that runs its own shortcuts on the input of a window the
+/// framework gives it no commands for: an OS window of a dock, whose keys egui hands to that window only.
 ///
 /// A clipboard chord the key stage turns into a shortcut press, which no component lists the command of, comes back
 /// as the `Copy`, `Cut` or `Paste` event. Empty while a component has focus, as that component owns the keys then.
@@ -421,9 +422,14 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
     let mut left = Vec::with_capacity(events.len());
     for event in events {
         match &event {
-            Event::Key { pressed, .. } => {
+            Event::Key { pressed, repeat, .. } => {
                 let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
                 if *pressed && fired.iter().any(|fired| same(fired, &input)) {
+                    continue;
+                }
+                // The dispatcher fires nothing for a repeat, so a later pass's repeat of a key a command took is known by
+                // the key staying down since that press.
+                if *pressed && *repeat && key_of(&input).is_some_and(|key| down.contains(&key)) {
                     continue;
                 }
                 if !*pressed && let Some(at) = key_of(&input).and_then(|key| down.iter().position(|held| *held == key)) {
