@@ -42,6 +42,8 @@ craft_ui::words! {
         save_as_pdf: "printPanel.saveAsPdf" = "Save as PDF";
         default_mark: "printPanel.defaultMark" = "(default)";
         finding: "printPanel.finding" = "Finding printers…";
+        search_printers: "printPanel.searchPrinters" = "Search printers";
+        no_printers_match: "printPanel.noPrintersMatch" = "No printers match.";
     }
 }
 
@@ -138,7 +140,15 @@ pub struct PrintPanel<'a> {
     /// Why the driver gave no page.
     #[prop]
     page_error: Option<String>,
+    /// The printer list is for a long fleet: a "Search printers" field heads it, focused as it opens, and narrows the
+    /// printers by their names (case and accents ignored) while Save as PDF stays at the end; typing changes no choice,
+    /// only a pick does, and the open list is wide enough for long names (PRINTER_LIST_WIDTH, within the screen).
+    #[prop]
+    printer_search: bool,
 }
+
+/// How wide a searchable printer list opens, in points: room for a long network queue's name.
+pub const PRINTER_LIST_WIDTH: f32 = 430.0;
 
 impl<'a> PrintPanel<'a> {
     /// The panel over `settings`, offering `printers`.
@@ -154,12 +164,14 @@ impl<'a> PrintPanel<'a> {
             inline: false,
             page: None,
             page_error: None,
+            printer_search: false,
         }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, inline, page, page_error } = self;
+        let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, inline, page, page_error, printer_search } =
+            self;
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let mut queues: Vec<Entry<Destination>> = printers
@@ -193,10 +205,20 @@ impl<'a> PrintPanel<'a> {
             let mut now = before.clone();
             Field::new(words.printer.clone()).id_salt("printer").show(ui, |ui, _| {
                 Row::new().show(ui, |ui, _| {
-                    let picked = Select::new(words.printer.clone(), Bind::given(now.destination.clone()), &queues)
+                    let select = Select::new(words.printer.clone(), Bind::given(now.destination.clone()), &queues)
                         .placeholder(placeholder.clone())
-                        .id_salt("queue")
-                        .show(ui);
+                        .id_salt("queue");
+                    let select = if printer_search {
+                        select
+                            .searchable()
+                            .search_label(words.search_printers.clone())
+                            .no_matches(words.no_printers_match.clone())
+                            .search_kept(|destination: &Destination| *destination == Destination::File)
+                            .list_width(PRINTER_LIST_WIDTH)
+                    } else {
+                        select
+                    };
+                    let picked = select.show(ui);
                     if let Some(destination) = picked.value() {
                         if *destination != now.destination {
                             printer_chosen = Some(destination.clone());

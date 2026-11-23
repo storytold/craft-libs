@@ -733,6 +733,9 @@ pub struct PrintDialog<'a> {
     /// The pager under the sheet preview in the `Document` layout.
     #[prop]
     preview_pager: Option<PanePager>,
+    /// The printer list searches a long fleet ([`PrintPanel::printer_search`]).
+    #[prop]
+    printer_search: bool,
     /// Makes Print keep the dialog open and report its press in `PrintDialogOutput::held`.
     #[prop(vis = "pub(crate)")]
     hold_ok: bool,
@@ -801,6 +804,7 @@ impl<'a> PrintDialog<'a> {
             driver: DriverControls::None,
             duplex_by_layout: false,
             preview_pager: None,
+            printer_search: false,
             hold_ok: false,
             finish_held: false,
             refusal: None,
@@ -826,6 +830,7 @@ impl<'a> PrintDialog<'a> {
             driver,
             duplex_by_layout,
             preview_pager,
+            printer_search,
             hold_ok,
             finish_held,
             refusal,
@@ -883,6 +888,7 @@ impl<'a> PrintDialog<'a> {
                         .destinations(destinations)
                         .duplex_by_layout(duplex_by_layout)
                         .inline(document)
+                        .printer_search(printer_search)
                         .show(ui);
                     refresh |= panel.refresh;
                     settings_clicked |= panel.settings_clicked;
@@ -1005,6 +1011,7 @@ pub struct HostedPrint {
     driver: DriverControls,
     duplex_by_layout: bool,
     preview_pager: Option<PanePager>,
+    printer_search: bool,
     /// The destination the user picked, or automation set, not taken yet.
     printer_chosen: Option<Destination>,
     /// Whether Print files its answer for the app instead of closing.
@@ -1038,6 +1045,7 @@ impl HostedPrint {
             driver: DriverControls::None,
             duplex_by_layout: false,
             preview_pager: None,
+            printer_search: false,
             printer_chosen: None,
             hold: false,
             held: HeldAnswer::new(),
@@ -1146,6 +1154,11 @@ impl HostedPrint {
         self.preview_pager = pager;
     }
 
+    /// Whether the printer list searches a long fleet ([`PrintPanel::printer_search`]).
+    pub fn set_printer_search(&mut self, on: bool) {
+        self.printer_search = on;
+    }
+
     /// The pager press since the last call.
     pub fn take_preview_step(&mut self) -> Option<PagerStep> {
         self.requests.take_preview_step()
@@ -1248,6 +1261,7 @@ impl StackDialog for HostedPrint {
             .layout(self.layout)
             .driver(self.driver)
             .duplex_by_layout(self.duplex_by_layout)
+            .printer_search(self.printer_search)
             .hold_ok(self.hold)
             .finish_held(finish_held);
         if let Some(pager) = self.preview_pager.clone() {
