@@ -136,7 +136,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     withdraw_taken(ctx, target.as_ref(), &batch, &held, &withdrawn_texts);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
     // PLAN: a repeat Tab of a held-over key is not gated; `take_nav` reads `batch.tabs` before this hook runs (owner: focus).
-    let kept: Vec<&EscapePress> = batch.escapes.iter().filter(|escape| !(escape.repeat && held_over.contains(&Key::Escape))).collect();
+    // One Escape press cancels once: its repeats cancel nothing more, in the layer it closed or in what that uncovered.
+    let kept: Vec<&EscapePress> = batch.escapes.iter().filter(|escape| !escape.repeat).collect();
     let escapes = craft_behavior::focus::route_escapes(kept.len(), press_captured);
     let mut cancel_mods = None;
     // With a captured press the first kept Escape is the press's; the others are the components' cancels.

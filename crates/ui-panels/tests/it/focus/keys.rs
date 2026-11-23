@@ -36,6 +36,32 @@ fn the_first_arrow_and_escape_after_a_focus_change_act_as_intents() {
     assert_eq!(focused(&frames.ctx), Some(id("a")), "Escape cleared no egui focus");
 }
 
+/// A held Escape cancels once, focused or not: its repeats raise no `Cancel`, and a fresh press after its release does.
+#[trial]
+fn a_held_escape_cancels_once() {
+    use craft_ui::testing::focus::key_release;
+    for target in [Some(id("a")), None] {
+        let mut frames = Frames::new();
+        let cancels = Cell::new(0);
+        let mut show = |ui: &mut egui::Ui| {
+            control(ui, "a");
+            cancels.set(cancels.get() + usize::from(intents_of(ui.ctx(), target, false).take(Intent::Cancel)));
+        };
+        frames.idle(2, &mut show);
+        if target.is_some() {
+            focus(&mut frames, "a", &mut show);
+        }
+        frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut show);
+        for _ in 0..3 {
+            frames.frame(vec![key_repeat(Key::Escape, Modifiers::NONE)], &mut show);
+        }
+        assert_eq!(cancels.get(), 1, "{target:?}: the press cancels and its repeats do not");
+        frames.frame(vec![key_release(Key::Escape, Modifiers::NONE)], &mut show);
+        frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut show);
+        assert_eq!(cancels.get(), 2, "{target:?}: a fresh press cancels again");
+    }
+}
+
 /// Static claims hold in the frame after focus arrives; the chord is withheld from egui and read once through
 /// `take_claimed`, and a claimed Escape is no `Cancel`.
 #[trial]
