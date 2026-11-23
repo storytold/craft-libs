@@ -34,6 +34,8 @@ const MAX_ENTRIES: u64 = 8192;
 
 /// The focus tags whose values [`crate::focus`] reads from a Sony maker note.
 const FOCUS_TAGS: [u16; 6] = [0x201b, 0x201c, 0x2021, 0x2027, 0x2037, 0x9402];
+/// The tags [`crate::nikon`] reads from a Nikon maker note for its focus point: FocusMode, CropHiSpeed, AFInfo2.
+const NIKON_FOCUS_TAGS: [u16; 3] = [0x0007, 0x001b, 0x00b7];
 
 /// What [`read_header`] found, and what it cost.
 #[derive(Clone, Debug, PartialEq)]
@@ -274,6 +276,8 @@ struct Want<'a> {
     order: ByteOrder,
     loaded: &'a Loaded,
     need: Vec<(u64, u64)>,
+    /// Where value offsets count from: 0 for the file's TIFF, the embedded TIFF header of a Nikon maker note.
+    base: u64,
 }
 
 impl Want<'_> {
@@ -325,7 +329,7 @@ impl Want<'_> {
                 field
             } else {
                 match self.order.read_u32(self.buf, p + 8) {
-                    Some(v) => u64::from(v),
+                    Some(v) => self.base.saturating_add(u64::from(v)),
                     None => continue,
                 }
             };
@@ -356,7 +360,7 @@ impl Want<'_> {
 /// `craft_tiff::makernote` locates it, and the focus tags' values.
 fn plan(buf: &[u8], loaded: &Loaded) -> Step {
     let Some((order, false)) = Tiff::sniff(buf) else { return Step::Nothing };
-    let mut w = Want { buf, order, loaded, need: Vec::new() };
+    let mut w = Want { buf, order, loaded, need: Vec::new(), base: 0 };
     let Some(ifd0) = order.read_u32(buf, 4).map(u64::from) else { return Step::Nothing };
     let Some(e0) = w.table(ifd0) else { return w.step() };
     let mut exif = None;
@@ -380,9 +384,16 @@ fn plan(buf: &[u8], loaded: &Loaded) -> Step {
     }
     let head = usize::try_from(note.start).ok().zip(usize::try_from(head_end).ok()).and_then(|(a, b)| buf.get(a..b)).unwrap_or(&[]);
     let sony = head.starts_with(b"SONY") || head.starts_with(b"VHAB     \0");
-    // another maker's header: `focus::read` only decodes Sony and header-less notes
-    let foreign: [&[u8]; 13] = [
-        b"Nikon\0",
+    // a Nikon note: "Nikon\0", a version, two bytes, then a TIFF of its own (byte order and offsets from there)
+    if head.starts_with(b"Nikon\0") {
+        // type 3 only (version 2.x); the Coolpix type 1 (version 1) is a different note
+        if head.get(6) != Some(&2) {
+            return Step::Nothing;
+        }
+        return nikon_note(w, note.start.saturating_add(10), note.end);
+    }
+    // another maker's header: `focus::read` only decodes Sony, Nikon and header-less notes
+    let foreign: [&[u8]; 12] = [
         b"FUJIFILM",
         b"GENERALE",
         b"OLYMPUS\0",
@@ -418,6 +429,34 @@ fn plan(buf: &[u8], loaded: &Loaded) -> Step {
         w.want(e.start, e.end);
     }
     w.step()
+}
+
+/// What of a Nikon maker note whose TIFF header is at `at` (the note ending at `end`) the focus decoder still needs:
+/// that header, its IFD and the values of [`NIKON_FOCUS_TAGS`]. Nothing past the note is asked for: a value that
+/// would lie there is one the decoder rejects too.
+fn nikon_note(mut w: Want, at: u64, end: u64) -> Step {
+    if at.saturating_add(8) > end {
+        return Step::Nothing;
+    }
+    if !w.want(at, at.saturating_add(8)) {
+        return w.step();
+    }
+    let Ok(pos) = usize::try_from(at) else { return Step::Nothing };
+    let order = match w.buf.get(pos..pos.saturating_add(2)) {
+        Some(b"II") => ByteOrder::Little,
+        Some(b"MM") => ByteOrder::Big,
+        _ => return Step::Nothing,
+    };
+    let Some(ifd) = order.read_u32(w.buf, pos.saturating_add(4)).map(|o| at.saturating_add(u64::from(o))) else { return Step::Nothing };
+    if ifd.saturating_add(2) > end {
+        return Step::Nothing;
+    }
+    let mut n = Want { buf: w.buf, order, loaded: w.loaded, need: w.need, base: at };
+    let Some(entries) = n.table(ifd) else { return n.step() };
+    for e in entries.iter().filter(|e| NIKON_FOCUS_TAGS.contains(&e.tag) && e.end <= end) {
+        n.want(e.start, e.end);
+    }
+    n.step()
 }
 
 #[cfg(test)]

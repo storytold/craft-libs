@@ -184,8 +184,16 @@ fn wrong_types_and_extreme_values_never_panic() {
             }
         }
     }
-    assert!(FocusPoint { rect: Rect { x0: f64::NAN, y0: 0.0, x1: 1.0, y1: 1.0 }, mode: None, area: None, tracking: None }.sanitized().is_none());
-    assert!(FocusPoint { rect: Rect { x0: 2.0, y0: 2.0, x1: 3.0, y1: 3.0 }, mode: None, area: None, tracking: None }.sanitized().is_none());
+    assert!(
+        FocusPoint { rect: Rect { x0: f64::NAN, y0: 0.0, x1: 1.0, y1: 1.0 }, mode: None, area: None, tracking: None, af_point: None }
+            .sanitized()
+            .is_none()
+    );
+    assert!(
+        FocusPoint { rect: Rect { x0: 2.0, y0: 2.0, x1: 3.0, y1: 3.0 }, mode: None, area: None, tracking: None, af_point: None }
+            .sanitized()
+            .is_none()
+    );
 }
 
 /// A whole TIFF with a `SONY DSC` maker note holding `ifd`'s entries, written for real.

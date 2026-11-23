@@ -1,5 +1,5 @@
 //! Where the camera focused: the autofocus point a camera records in its maker notes, as a box on the
-//! upright photo ([`FocusPoint`]). Sony only for now.
+//! upright photo ([`FocusPoint`]). Sony, and the Nikon D800E ([`crate::nikon`]).
 //!
 //! **Sony** (the MakerNote IFD: header-less in ARWs, after a `SONY DSC` header in JPEGs). Tag identities and value names come from the public ExifTool
 //! tag-name documentation (Sony table); every layout below was confirmed on real ILCE-1 (α1) and
@@ -50,6 +50,10 @@ pub struct FocusPoint {
     /// What the camera followed, when it says (`Animal Eye Tracking`, `Face tracking`, `Lock On AF`…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracking: Option<String>,
+    /// The camera's named AF point when it records one from a fixed grid (a Nikon `C7`): drawn as the camera draws
+    /// its active point (a red rectangle) rather than as a focus frame. Absent for Sony.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub af_point: Option<String>,
 }
 
 impl FocusPoint {
@@ -142,13 +146,22 @@ pub const SONY_MODELS: &[&str] = &[
 /// one whose files can carry a focus point, so a photo from any other camera is never opened to look.
 pub fn camera_supported(camera: &str) -> bool {
     let camera = camera.trim();
-    camera.get(..4).is_some_and(|m| m.eq_ignore_ascii_case("SONY")) && camera.rsplit(' ').next().is_some_and(|model| SONY_MODELS.contains(&model))
+    let sony = camera.get(..4).is_some_and(|m| m.eq_ignore_ascii_case("SONY"))
+        && camera.rsplit(' ').next().is_some_and(|model| SONY_MODELS.contains(&model));
+    // Nikon's Model repeats the make ("NIKON CORPORATION NIKON D800E"): the Model is the camera's whole last words
+    let nikon_model = |m: &str| {
+        let at = camera.len().checked_sub(m.len());
+        at.is_some_and(|at| {
+            camera.get(at..).is_some_and(|tail| tail.eq_ignore_ascii_case(m)) && (at == 0 || camera.as_bytes().get(at - 1) == Some(&b' '))
+        })
+    };
+    sony || (crate::nikon::is_nikon_make(camera) && crate::nikon::AF_MODELS.iter().any(|m| nikon_model(m)))
 }
 
 /// Names what [`read`] decodes (its bodies), so a record of "looked, found nothing" made by this
 /// decoder is not trusted by one that knows more bodies.
 pub fn decoder_tag() -> String {
-    format!("sony-v1:{}", SONY_MODELS.join(","))
+    format!("sony-v1:{};nikon-v1:{}", SONY_MODELS.join(","), crate::nikon::AF_MODELS.join(","))
 }
 
 const FOCUS_MODE: u16 = 0x201b;
@@ -165,17 +178,26 @@ const DEFAULT_SIDE: f64 = 0.03;
 /// The focus point a file's maker note records, or `None` (see the module notes for when).
 /// `data` is the TIFF stream the maker note's offsets refer to (a whole raw, or an Exif block).
 pub fn read(data: &[u8], tiff: &Tiff, make: Option<&str>, model: Option<&str>, orientation: Option<Orientation>) -> Option<FocusPoint> {
-    let make = make?;
-    if !make.to_ascii_uppercase().starts_with("SONY") || !SONY_MODELS.contains(&model?.trim()) {
+    let make = make?.trim();
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    if crate::nikon::is_nikon_make(make) {
+        let mn = crate::nikon::parse_note(data, e.offset, e.count() as u64, tiff.order, make)?;
+        return nikon(&mn, model?, orientation);
+    }
+    if !make.get(..4).is_some_and(|m| m.eq_ignore_ascii_case("SONY")) || !SONY_MODELS.contains(&model?.trim()) {
         return None;
     }
-    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
     let mn = makernote::parse_makernote(data, e.offset, e.count() as u64, tiff.order, make)?;
     // ARWs from these bodies carry a header-less IFD; their JPEGs the `SONY DSC` header
     if !matches!(mn.kind, makernote::MakerNoteKind::Sony | makernote::MakerNoteKind::Plain) {
         return None;
     }
     sony(&mn.ifd, mn.order, orientation.unwrap_or_default())
+}
+
+/// The focus point of a parsed Nikon type-3 maker note ([`crate::nikon::focus`]), for a checked `model`.
+pub(crate) fn nikon(note: &makernote::MakerNote, model: &str, orientation: Option<Orientation>) -> Option<FocusPoint> {
+    crate::nikon::af_model(model).then(|| crate::nikon::focus(&note.ifd, model, orientation.unwrap_or_default())).flatten()
 }
 
 fn byte(ifd: &Ifd, tag: u16) -> Option<u8> {
@@ -228,7 +250,7 @@ pub(crate) fn sony(ifd: &Ifd, order: ByteOrder, orientation: Orientation) -> Opt
     // what it followed: the area mode used when it says more than the setting (Animal Eye Tracking on
     // Wide), else the tracking setting when it is on
     let tracking = used.filter(|u| Some(u) != area.as_ref() && u != "Multi").or_else(|| name(tracking, tracking_name).filter(|t| t != "Off"));
-    FocusPoint { rect: orientation.map_norm_rect(sensor), mode: name(mode, focus_mode_name), area, tracking }.sanitized()
+    FocusPoint { rect: orientation.map_norm_rect(sensor), mode: name(mode, focus_mode_name), area, tracking, af_point: None }.sanitized()
 }
 
 /// A minimal little-endian TIFF laid out as an α1 ARW's metadata is (IFD0 with Make `SONY` and Model `ILCE-1` →
