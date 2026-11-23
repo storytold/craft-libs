@@ -14,7 +14,7 @@ use egui::{ColorImage, Id, Rect, Response, Vec2};
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
-/// How large a picture is: its height, from a token.
+/// How large a picture is: its height, from a token, or in points for a preview whose size a dialog fixes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PictureSize {
