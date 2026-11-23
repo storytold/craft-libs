@@ -165,7 +165,7 @@ impl Flyouts {
                     groups.borrow_mut().push((panel, rect));
                     let strip = Rect::from_min_size(rect.min, Vec2::new(rect.width(), STRIP.min(rect.height())));
                     let grip = GroupGrip::new(DragUnit::Group(panel), PanelKey::of(&panel)).show_at(ui, strip);
-                    dragged.set(dragged.get() || grip.drag_started.is_some());
+                    dragged.set(dragged.get() || grip.drag_started);
                     None
                 });
             // A flyout closed this pass still shows its group while it fades out: the open panel's group is the one.
