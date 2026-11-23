@@ -5,8 +5,8 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, CancelReason, CanvasView, GESTURE_GAP, MotionMode, ZoomLadder};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
-    Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleButton, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions,
-    ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
+    Autoscroll, Canvas, CanvasSpace, CanvasTool, Guide, GuideKey, MiddleAutoscrollFeel, MiddleButton, Momentary, MomentaryCommands, MomentaryTool,
+    NavigationOptions, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, ViewCommands, ViewRequest, WheelNavigation, WheelScheme, tool_pass,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -499,6 +499,55 @@ fn a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held
 
 /// The seconds of one fixture frame.
 const FRAME: f64 = 1.0 / 60.0;
+
+/// A canvas over a large document whose middle button autoscrolls with `feel`: the fixture and the view it shows.
+fn feel_rig(feel: MiddleAutoscrollFeel) -> (Fixture, Rc<Cell<CanvasView>>) {
+    let mut options = NavigationOptions::default();
+    options.middle_button = MiddleButton::AutoScroll;
+    options.middle_autoscroll = feel;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    (fixture, view)
+}
+
+/// Under `MiddleAutoscrollFeel::Reader` (a document reader's autoscroll) a held press dragged past the drag threshold
+/// but let go inside the dead zone keeps the run, where the default feel ends it; and the speed grows with the
+/// pointer's whole distance from the mark, |d|^2.2 x 0.04 points per second.
+#[trial]
+fn a_reader_autoscroll_keeps_a_short_hold_and_speeds_up_with_the_whole_distance() {
+    for feel in [MiddleAutoscrollFeel::Edge, MiddleAutoscrollFeel::Reader] {
+        let (mut fixture, view) = feel_rig(feel);
+        let anchor = view.get().rect.center();
+        let near = anchor + Vec2::new(0.0, 12.0);
+        middle(&mut fixture, anchor, true);
+        fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, 6.0))]);
+        fixture.frame(vec![pointer::moved(near)]);
+        middle(&mut fixture, near, false);
+        fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, 80.0))]);
+        let reader = feel == MiddleAutoscrollFeel::Reader;
+        assert_eq!(scrolls(&mut fixture, &view), reader, "{feel:?}: a release inside the dead zone keeps the run only for the reader");
+        fixture.key(Key::Escape, Modifiers::NONE);
+    }
+
+    let (mut fixture, view) = feel_rig(MiddleAutoscrollFeel::Reader);
+    let anchor = view.get().rect.center();
+    middle(&mut fixture, anchor, true);
+    middle(&mut fixture, anchor, false);
+    fixture.frame(vec![pointer::moved(anchor + Vec2::new(0.0, 50.0))]);
+    fixture.idle(2);
+    let before = view.get().center.y;
+    fixture.idle(60);
+    let travelled = view.get().center.y - before;
+    let expected = 50f64.powf(2.2) * 0.04 * 60.0 * FRAME;
+    assert!((travelled - expected).abs() < 1.0, "a second 50 points below the mark scrolls {expected}, not {travelled}");
+}
 
 type EasedRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<bool>>);
 

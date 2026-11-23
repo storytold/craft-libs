@@ -72,8 +72,8 @@ mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
 pub use navigate::{
-    Autoscroll, FlickPan, MiddleButton, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, WheelAction, WheelInput, WheelNavigation,
-    WheelScheme, pan,
+    Autoscroll, FlickPan, MiddleAutoscrollFeel, MiddleButton, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, WheelAction, WheelInput,
+    WheelNavigation, WheelScheme, pan,
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewRequest, ViewTarget, ZoomTool};
@@ -664,7 +664,11 @@ impl<'a> Canvas<'a> {
                 let left = crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| {
                     pointer.focus_lost || pointer.events.iter().any(|event| matches!(event, craft_behavior::PointerEvent::Gone))
                 });
-                let unfocused = left || !ctx.input(|i| i.focused);
+                let feel = self.navigation.middle_autoscroll;
+                // The reader's run lives while the canvas holds the focus: a modal over it or another control taking
+                // the keys ends it once the button is up.
+                let canvas_left = feel == MiddleAutoscrollFeel::Reader && !run.held() && !cx.is_focused();
+                let unfocused = left || !ctx.input(|i| i.focused) || canvas_left;
                 let off = self.navigation.middle_button != MiddleButton::AutoScroll;
                 if keyed || ended || down || input.press.is_some() || unfocused || input.pos.is_none() || off {
                     // Escape only stops the scroll; any other key also does its own job.
@@ -680,7 +684,7 @@ impl<'a> Canvas<'a> {
                 if phase.start().is_some_and(|start| start.button == PointerButton::Middle) {
                     match phase {
                         PressPhase::DragStart { .. } | PressPhase::Drag { .. } => run.drag(),
-                        PressPhase::Release { .. } | PressPhase::Cancel { .. } => run.release(),
+                        PressPhase::Release { .. } | PressPhase::Cancel { .. } => run.release(feel),
                         _ => {}
                     }
                 }
@@ -694,7 +698,7 @@ impl<'a> Canvas<'a> {
                 cx.focus_own();
             }
             let Some(pointer) = input.pos.filter(|_| run.mark().is_some()) else { break 'pass false };
-            let step = run.step(pointer, frame::clock(&ctx));
+            let step = run.step(pointer, frame::clock(&ctx), self.navigation.middle_autoscroll);
             let step = if self.navigation.invert_middle { -step } else { step };
             crate::runtime::cursor::request(&ctx, run.cursor(Some(pointer)).into(), CursorPriority::Drag);
             frame::request_repaint(&ctx);
