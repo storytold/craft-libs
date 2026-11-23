@@ -73,7 +73,6 @@ fn screen_row(layout: &dyn ItemLayout, view: Rect, at: usize, offset: ScrollPos,
 fn drop_spot(
     layout: &dyn ItemLayout,
     outline: &dyn craft_behavior::NavOutline,
-    len: &dyn Fn() -> usize,
     section_stop: &dyn Fn(usize) -> bool,
     xf: Option<crate::runtime::egui::areas::LayerMap>,
     (rect, offset, rtl): (Rect, ScrollPos, bool),
@@ -87,11 +86,11 @@ fn drop_spot(
     // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
     // row-wise layout that is beyond the last item's end edge on its row, or below its row.
     let past = hit.is_none() && {
-        let last = screen_row(layout, rect, len() - 1, offset, rtl);
+        let last = screen_row(layout, rect, outline.len() - 1, offset, rtl);
         let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
         !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
     };
-    let over = hit.or_else(|| past.then(|| len() - 1))?;
+    let over = hit.or_else(|| past.then(|| outline.len() - 1))?;
     let row = screen_row(layout, rect, over, offset, rtl);
     if matches!(nav, NavShape::Spatial) {
         let (low, high) = (to_screen(row.min), to_screen(row.max));
@@ -609,7 +608,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return None;
         }
         let outline = Outline::new(self.source);
-        drop_spot(layout, &outline, &|| self.source.len(), &|at| self.source.section_stop(at), self.xf, (rect, offset, rtl), groups, at)
+        drop_spot(layout, &outline, &|at| self.source.section_stop(at), self.xf, (rect, offset, rtl), groups, at)
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
