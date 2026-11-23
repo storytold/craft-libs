@@ -3,11 +3,12 @@
 use std::sync::Arc;
 
 use craft_behavior::{IconId, Metrics, PartKey, Proposal, Sense};
-use craft_theme::variant::Variant;
+use craft_theme::variant::{Emphasis, Tone as BadgeTone, Variant};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Remember as _, Role, WordSetCx as _, clicked};
 use craft_ui::controls::disclosure::DisclosureGlyph;
-use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
+use craft_ui::display::Badge;
+use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, SubmitKey, TextRun, Wrap};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::style::{ComponentStyle, DataColor, Ink, StyleColor, StyleCx, TypeRole};
@@ -15,9 +16,9 @@ use craft_ui::text::TextField;
 use egui::{Color32, CornerRadius, Pos2, Rect, Vec2, vec2};
 
 use super::list::{CardEvent, RowOut};
-use super::{CommentsWords, EDIT_LINES, Line, REPLY_LINES, age_text};
+use super::{CommentsWords, EDIT_LINES, Line, REPLY_LINES, age_text, status_label};
 use crate::annotate::AnnotationKind;
-use crate::comments::{CommentThread, ReviewStatus, ThreadId};
+use crate::comments::{CommentMessage, CommentThread, ReviewStatus, ReviewerStatus, ThreadId};
 use crate::ui::avatar::paint_face;
 
 /// The style of a card or heading row.
@@ -28,9 +29,6 @@ pub(crate) struct CommentRowStyle {
     metrics: Metrics,
     normal: StyleColor,
     muted: StyleColor,
-    good: StyleColor,
-    bad: StyleColor,
-    faint: StyleColor,
     highlight: StyleColor,
     bar: StyleColor,
     /// The surface of a balloon card.
@@ -39,8 +37,8 @@ pub(crate) struct CommentRowStyle {
     border: StyleColor,
     avatar: StyleColor,
     avatar_ink: StyleColor,
-    /// The disc behind a card's kind icon.
-    sunken: StyleColor,
+    /// The line that joins a card's avatars.
+    thread_line: StyleColor,
     /// The kind icon's side.
     kind_icon: f32,
     /// The side of a plain icon: the glyph of the icon buttons beside it.
@@ -58,6 +56,8 @@ struct Heading {
     title: String,
     count: String,
     open: bool,
+    /// The heading names a group that does not fold (not a page): the title alone, with no disclosure or count shown.
+    plain: bool,
 }
 
 /// What a revision card shows: a tracked change's heading and its detail lines.
@@ -71,9 +71,6 @@ struct Note {
 enum Tone {
     Normal,
     Muted,
-    Good,
-    Bad,
-    Faint,
 }
 
 /// How a text is set.
@@ -121,6 +118,8 @@ enum Slot {
     Resolve,
     /// The balloon button that deletes the thread.
     Delete,
+    /// The badge of the reviewer status at this index of the thread's statuses.
+    Status(usize),
 }
 
 /// How many push buttons a row sizes: `push_index` gives each its place.
@@ -141,6 +140,8 @@ trait Sink {
     fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>);
     /// The avatar of `name`.
     fn avatar(&mut self, rect: Rect, name: &str);
+    /// The line that joins the avatars above and below it, from `from` down to `to`.
+    fn connector(&mut self, from: Pos2, to: Pos2);
     /// A square icon button; it reports its press.
     fn button(&mut self, slot: Slot, rect: Rect, id: &'static str, name: &Label, on: bool);
     /// A multi-line field at `at`'s top left and width; returns its height.
@@ -149,10 +150,19 @@ trait Sink {
     fn push_size(&mut self, slot: Slot, label: &Label) -> Vec2;
     /// A push button.
     fn push(&mut self, slot: Slot, rect: Rect, label: &Label, enabled: bool);
+    /// The size the status badge `slot` with `label` measures.
+    fn badge_size(&mut self, slot: Slot, label: &str) -> Vec2;
+    /// A status badge showing `label` in the tone of `status`.
+    fn badge(&mut self, slot: Slot, rect: Rect, label: &str, status: ReviewStatus);
+    /// The extent of reply `index` (a message after the first), from its author line to the bottom of its text.
+    fn reply(&mut self, index: usize, rect: Rect);
 }
 
 /// The "..." button of message `index` of a card: a part of the row that opens the message's menu.
 pub(super) const MORE: PartKey = PartKey::new("more");
+
+/// Reply `index` of a card: the access node that names it.
+const REPLY: PartKey = PartKey::new("reply");
 
 /// What a card offers for acting on its thread.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -178,6 +188,9 @@ pub(crate) struct CommentRow<'r> {
     /// A revision card's text, which takes the row's own colours.
     note: Option<Note>,
     selected: bool,
+    /// Whether the card is the selection's lead, which shows the reply box and the editing buttons.
+    #[prop(vis = "pub(crate)")]
+    lead: bool,
     editable: bool,
     now: i64,
     editing: Option<(usize, &'r str)>,
@@ -185,6 +198,9 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
+    /// The key that submits the reply box; the inline editor keeps `CommandEnter`.
+    #[prop(vis = "pub(crate)")]
+    submit_key: SubmitKey,
     /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
     /// first click that opens an edit is enough to type.
     focus_edit: bool,
@@ -199,8 +215,12 @@ pub(crate) struct CommentRow<'r> {
     heights: [f32; 2],
     /// The sizes the push buttons measured, for the paint of the same pass.
     buttons: [Vec2; PUSH_BUTTONS],
+    /// The sizes the status badges measured, in the order of the thread's statuses, for the paint of the same pass.
+    badges: Vec<Vec2>,
     /// The messages whose "..." button the parts step declared.
     mores: Vec<usize>,
+    /// Each reply's index and its rect on the screen, from the parts step.
+    replies: Vec<(usize, Rect)>,
     events: Vec<CardEvent>,
 }
 
@@ -212,27 +232,31 @@ impl<'r> CommentRow<'r> {
             heading,
             note: None,
             selected: false,
+            lead: false,
             editable: false,
             now: 0,
             editing: None,
             reply: "",
             focus_reply: false,
+            submit_key: SubmitKey::default(),
             focus_edit: false,
             actions: CardActions::default(),
             body_rows: None,
             words: None,
             heights: [0.0; 2],
             buttons: [Vec2::ZERO; PUSH_BUTTONS],
+            badges: Vec::new(),
             mores: Vec::new(),
+            replies: Vec::new(),
             events: Vec::new(),
         }
         .label(name)
     }
 
     /// A heading row.
-    pub(crate) fn heading(title: String, count: String, open: bool) -> Self {
+    pub(crate) fn heading(title: String, count: String, open: bool, plain: bool) -> Self {
         let name = title.clone();
-        Self::bare(None, Some(Heading { title, count, open }), name)
+        Self::bare(None, Some(Heading { title, count, open, plain }), name)
     }
 
     /// A revision card: `heading` over its `details`, in the row's colours, so balloons have one card style.
@@ -275,13 +299,22 @@ fn kind_icon(kind: Option<AnnotationKind>) -> &'static str {
     }
 }
 
-fn status_icon(status: ReviewStatus) -> Option<(&'static str, Tone)> {
+/// The tone of a status badge. A status set back to None stays shown, neutral: None is a state a reviewer chose.
+fn badge_tone(status: ReviewStatus) -> BadgeTone {
     match status {
-        ReviewStatus::None => None,
-        ReviewStatus::Accepted => Some(("thumbs_up", Tone::Good)),
-        ReviewStatus::Rejected => Some(("thumbs_down", Tone::Bad)),
-        ReviewStatus::Cancelled => Some(("x_circle", Tone::Faint)),
-        ReviewStatus::Completed => Some(("check", Tone::Good)),
+        ReviewStatus::Accepted | ReviewStatus::Completed => BadgeTone::Good,
+        ReviewStatus::Rejected => BadgeTone::Bad,
+        ReviewStatus::Cancelled | ReviewStatus::None => BadgeTone::Neutral,
+    }
+}
+
+/// A status badge's text: "{reviewer}: {status}", or the status alone for a reviewer without a name.
+fn reviewer_label(words: &CommentsWords, reviewer: &ReviewerStatus) -> String {
+    let status = status_label(words, reviewer.status).as_str();
+    if reviewer.reviewer.is_empty() {
+        status.to_owned()
+    } else {
+        words.reviewer_status.fill(&[("reviewer", reviewer.reviewer.as_str()), ("status", status)])
     }
 }
 
@@ -300,6 +333,11 @@ impl CommentRow<'_> {
         let (h, gap, pad) = (st.height, st.gap, st.pad);
         let room = (width - 2.0 * pad).max(h);
         if let Some(heading) = &self.heading {
+            if heading.plain {
+                let title = Spec::new(TypeRole::BodyStrong, Tone::Muted, Wrap::Elide);
+                sink.text(strip(Pos2::new(pad, pad), room), title, &heading.title);
+                return h + 2.0 * pad;
+            }
             sink.disclosure(square(Pos2::new(pad, pad), h), heading.open);
             let count_spec = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Wrap).end();
             let count = sink.size(count_spec, &heading.count).x;
@@ -325,7 +363,7 @@ impl CommentRow<'_> {
         sink.kind(square(Pos2::new(pad, y), h), kind_icon(thread.kind), thread.color);
         let mut end = width - pad;
         let menu = self.actions == CardActions::Menu;
-        if self.selected && self.editable && menu {
+        if self.lead && self.editable && menu {
             end -= h;
             sink.button(Slot::More(0), square(Pos2::new(end, y), h), "more", &words.more, false);
         }
@@ -333,7 +371,7 @@ impl CommentRow<'_> {
             end -= h;
             sink.icon(square(Pos2::new(end, y), h), "lock", Tone::Muted);
         }
-        if self.selected && self.editable {
+        if self.lead && self.editable {
             end -= h;
             let name = if thread.marked { &words.unmark } else { &words.mark };
             sink.button(Slot::Mark, square(Pos2::new(end, y), h), "check", name, thread.marked);
@@ -341,35 +379,45 @@ impl CommentRow<'_> {
             end -= h;
             sink.icon(square(Pos2::new(end, y), h), "check", Tone::Muted);
         }
-        if let Some((icon, tone)) = status_icon(thread.status) {
-            end -= h;
-            sink.icon(square(Pos2::new(end, y), h), icon, tone);
-        }
         let name_at = pad + h + gap;
         let name_room = end - gap - name_at;
         let author = first.map_or(words.unknown_author.as_str(), |message| message.author.as_str());
         let author_spec = Spec::new(TypeRole::BodyStrong, Tone::Normal, Wrap::Elide);
         let author_size = sink.text(strip(Pos2::new(name_at, y), name_room), author_spec, author);
         let mut head = author_size.y.max(h);
+        // An undated message has no age line, so its author takes the head alone.
         if let Some(message) = first {
             let when = age(message.modified.unwrap_or(message.created));
-            let caption = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Elide);
-            let size = sink.text(strip(Pos2::new(name_at, y + author_size.y), name_room), caption, &when);
-            head = head.max(author_size.y + size.y);
+            if !when.is_empty() {
+                let caption = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Elide);
+                let size = sink.text(strip(Pos2::new(name_at, y + author_size.y), name_room), caption, &when);
+                head = head.max(author_size.y + size.y);
+            }
         }
         let mut y = y + head + gap;
-        y = self.message(0, thread, st, Line { at: Pos2::new(pad, y), room }, &words, sink) + gap;
+        // The comment's text and badges sit under the author's name, not under the kind disc.
+        let under = Line { at: Pos2::new(name_at, y), room: (width - pad - name_at).max(h) };
+        y = self.message(0, thread, st, under, &words, sink) + gap;
+        y = self.statuses(thread, st, Line { at: Pos2::new(name_at, y), room: under.room }, &words, sink);
+        // The thread line runs from the kind disc down through the replies' avatars.
+        let line_x = pad + h / 2.0;
+        let mut joined = pad + h;
         for index in 1..thread.messages.len() {
             let Some(message) = thread.messages.get(index) else { break };
+            let top = y;
+            sink.connector(Pos2::new(line_x, joined), Pos2::new(line_x, top));
+            joined = top + h;
             sink.avatar(square(Pos2::new(pad, y), h), &message.author);
             let x = pad + h + gap;
             let name_room = width - pad - h - gap - x;
             // A reply's author and age share one line, each centred on it, where both fit whole; else the age goes
-            // under the author, as on a card's first message.
+            // under the author, as on a card's first message. An undated reply shows its author alone.
             let when = age(message.modified.unwrap_or(message.created));
             let caption = Spec::new(TypeRole::Caption, Tone::Muted, Wrap::Elide);
             let (author_line, when_line) = (sink.size(author_spec, &message.author), sink.size(caption, &when));
-            let head = if author_line.x + gap + when_line.x <= name_room {
+            let head = if when.is_empty() {
+                sink.text(strip(Pos2::new(x, y), name_room), author_spec, &message.author).y
+            } else if author_line.x + gap + when_line.x <= name_room {
                 let line = author_line.y.max(when_line.y);
                 sink.text(strip(Pos2::new(x, y + (line - author_line.y) / 2.0), author_line.x), author_spec, &message.author);
                 sink.text(strip(Pos2::new(x + author_line.x + gap, y + (line - when_line.y) / 2.0), when_line.x), caption, &when);
@@ -382,10 +430,12 @@ impl CommentRow<'_> {
                 sink.button(Slot::More(index), square(Pos2::new(width - pad - h, y), h), "more", &words.more, false);
             }
             y += h.max(head) + gap;
-            y = self.message(index, thread, st, Line { at: Pos2::new(x, y), room: width - pad - x }, &words, sink) + gap;
+            let bottom = self.message(index, thread, st, Line { at: Pos2::new(x, y), room: width - pad - x }, &words, sink);
+            sink.reply(index, Rect::from_min_max(Pos2::new(pad, top), Pos2::new(width - pad, bottom)));
+            y = bottom + gap;
         }
-        if self.selected && self.editable {
-            let field = sink.field(Slot::ReplyField, strip(Pos2::new(pad, y), room), &words.reply, self.reply, REPLY_LINES);
+        if self.lead && self.editable {
+            let field = sink.field(Slot::ReplyField, strip(Pos2::new(name_at, y), under.room), &words.reply, self.reply, REPLY_LINES);
             y += field + gap;
             let button = sink.push_size(Slot::ReplyPost, &words.post);
             let post = Rect::from_min_size(Pos2::new(width - pad - button.x, y), button);
@@ -407,6 +457,30 @@ impl CommentRow<'_> {
         y - gap + pad
     }
 
+    /// One badge per reviewer's status, in lines from `line.at` that wrap at `line.room`; a badge wider than the room
+    /// takes the room and cuts its text. Returns where the next part starts.
+    fn statuses(&self, thread: &CommentThread, st: &CommentRowStyle, line: Line, words: &CommentsWords, sink: &mut dyn Sink) -> f32 {
+        let Line { at, room } = line;
+        if thread.statuses.is_empty() {
+            return at.y;
+        }
+        let (mut x, mut y, mut tallest) = (at.x, at.y, 0.0_f32);
+        for (index, reviewer) in thread.statuses.iter().enumerate() {
+            let label = reviewer_label(words, reviewer);
+            let size = sink.badge_size(Slot::Status(index), &label);
+            if x > at.x && x + size.x > at.x + room {
+                y += tallest + st.gap;
+                x = at.x;
+                tallest = 0.0;
+            }
+            let width = size.x.min(at.x + room - x);
+            sink.badge(Slot::Status(index), Rect::from_min_size(Pos2::new(x, y), vec2(width, size.y)), &label, reviewer.status);
+            x += width + st.gap;
+            tallest = tallest.max(size.y);
+        }
+        y + tallest + st.gap
+    }
+
     /// Message `index`'s text, or its inline editor; returns the bottom.
     fn message(&self, index: usize, thread: &CommentThread, st: &CommentRowStyle, line: Line, words: &CommentsWords, sink: &mut dyn Sink) -> f32 {
         let Line { at, room } = line;
@@ -415,11 +489,11 @@ impl CommentRow<'_> {
             Some((editing, draft)) if editing == index => {
                 let field = sink.field(Slot::EditField, strip(at, room), &words.edit, draft, EDIT_LINES);
                 let y = at.y + field + st.gap;
-                let (post_size, cancel_size) = (sink.push_size(Slot::EditPost, &words.post), sink.push_size(Slot::EditCancel, &words.cancel));
+                let (post_size, cancel_size) = (sink.push_size(Slot::EditPost, &words.save), sink.push_size(Slot::EditCancel, &words.cancel));
                 let right = at.x + room;
                 let cancel = Rect::from_min_size(Pos2::new(right - cancel_size.x, y), cancel_size);
                 let post = Rect::from_min_size(Pos2::new(cancel.left() - st.gap - post_size.x, y), post_size);
-                sink.push(Slot::EditPost, post, &words.post, !draft.trim().is_empty());
+                sink.push(Slot::EditPost, post, &words.save, !draft.trim().is_empty());
                 sink.push(Slot::EditCancel, cancel, &words.cancel, true);
                 y + post_size.y.max(cancel_size.y)
             }
@@ -438,6 +512,10 @@ struct Measure<'a, 'b, 'r> {
     buttons: [Vec2; PUSH_BUTTONS],
     /// The message index and left-to-right rect of each "..." button.
     more: Vec<(usize, Rect)>,
+    /// The size of each status badge, in the order the row lays them.
+    badges: Vec<Vec2>,
+    /// The message index and left-to-right rect of each reply.
+    replies: Vec<(usize, Rect)>,
 }
 
 impl Sink for Measure<'_, '_, '_> {
@@ -456,6 +534,8 @@ impl Sink for Measure<'_, '_, '_> {
     fn kind(&mut self, _: Rect, _: &'static str, _: Option<[u8; 3]>) {}
 
     fn avatar(&mut self, _: Rect, _: &str) {}
+
+    fn connector(&mut self, _: Pos2, _: Pos2) {}
 
     fn button(&mut self, slot: Slot, rect: Rect, _: &'static str, _: &Label, _: bool) {
         if let Slot::More(index) = slot {
@@ -477,6 +557,18 @@ impl Sink for Measure<'_, '_, '_> {
     }
 
     fn push(&mut self, _: Slot, _: Rect, _: &Label, _: bool) {}
+
+    fn badge_size(&mut self, slot: Slot, label: &str) -> Vec2 {
+        let size = self.cx.child(slot, &mut Badge::new(label.to_owned()), Proposal::Ideal);
+        self.badges.push(size);
+        size
+    }
+
+    fn badge(&mut self, _: Slot, _: Rect, _: &str, _: ReviewStatus) {}
+
+    fn reply(&mut self, index: usize, rect: Rect) {
+        self.replies.push((index, rect));
+    }
 }
 
 /// Where the push button `slot`'s measured size is kept.
@@ -502,6 +594,8 @@ struct Paint<'a, 'b> {
     resolved: bool,
     heights: [f32; 2],
     buttons: [Vec2; PUSH_BUTTONS],
+    badges: &'a [Vec2],
+    reply_submit: SubmitKey,
     /// The context focus requests go to.
     ctx: &'a egui::Context,
     /// Set when the reply box takes the focus as it shows.
@@ -523,9 +617,6 @@ impl Paint<'_, '_> {
         match tone {
             Tone::Normal => self.st.normal,
             Tone::Muted => self.st.muted,
-            Tone::Good => self.st.good,
-            Tone::Bad => self.st.bad,
-            Tone::Faint => self.st.faint,
         }
     }
 }
@@ -571,7 +662,7 @@ impl Sink for Paint<'_, '_> {
     fn kind(&mut self, rect: Rect, id: &'static str, color: Option<[u8; 3]>) {
         let rect = self.place(rect);
         let draw = self.ui.draw();
-        draw.fill(&PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0), self.st.sunken);
+        draw.fill(&PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0), self.st.avatar);
         let spec = IconSpec::svg(IconId::new(id));
         let spec = match color {
             Some([r, g, b]) => spec.data_color(DataColor::new(Color32::from_rgb(r, g, b))),
@@ -583,6 +674,11 @@ impl Sink for Paint<'_, '_> {
     fn avatar(&mut self, rect: Rect, name: &str) {
         let rect = self.place(rect);
         paint_face(&self.ui.draw(), rect, name, self.st.avatar, self.st.avatar_ink);
+    }
+
+    fn connector(&mut self, from: Pos2, to: Pos2) {
+        let rect = self.place(Rect::from_two_pos(from, to));
+        self.ui.draw().stroke(&PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]), StrokeWidth::Thin, self.st.thread_line);
     }
 
     fn button(&mut self, slot: Slot, rect: Rect, id: &'static str, name: &Label, on: bool) {
@@ -602,6 +698,7 @@ impl Sink for Paint<'_, '_> {
         let height = self.heights[usize::from(slot == Slot::ReplyField)];
         let rect = self.place(Rect::from_min_size(at.min, vec2(at.width(), height)));
         let field = TextField::new(label.clone(), Bind::given(text.to_owned())).lines(lines).placeholder(label.clone()).submits();
+        let field = if slot == Slot::ReplyField { field.submit_key(self.reply_submit) } else { field };
         let out = self.ui.child(slot, rect, field);
         if let Some(value) = out.value() {
             self.events.push(if slot == Slot::EditField { CardEvent::EditText(value.clone()) } else { CardEvent::ReplyText(value.clone()) });
@@ -648,6 +745,20 @@ impl Sink for Paint<'_, '_> {
             _ => {}
         }
     }
+
+    fn badge_size(&mut self, slot: Slot, _: &str) -> Vec2 {
+        match slot {
+            Slot::Status(index) => self.badges.get(index).copied().unwrap_or(Vec2::ZERO),
+            _ => Vec2::ZERO,
+        }
+    }
+
+    fn badge(&mut self, slot: Slot, rect: Rect, label: &str, status: ReviewStatus) {
+        let badge = Badge::new(label.to_owned()).variant(Variant::look(Emphasis::Soft, badge_tone(status)));
+        let _ = self.ui.child(slot, self.place(rect), badge);
+    }
+
+    fn reply(&mut self, _: usize, _: Rect) {}
 }
 
 impl Component for CommentRow<'_> {
@@ -666,9 +777,27 @@ impl Component for CommentRow<'_> {
                 access.node(MORE.at(index as u64), Role::BUTTON).name = craft_ui::contract::Name::Text(words.more.as_str().to_owned());
             }
         }
-        let Some(first) = self.thread.and_then(|thread| thread.messages.first()) else { return };
-        let age = age_text(&cx.env, first.modified.unwrap_or(first.created), self.now);
-        access.name(craft_ui::contract::Name::Joined(vec![cx.resolved.label.to_owned(), age]));
+        if let Some(heading) = &self.heading {
+            let parts = if heading.count.is_empty() { vec![heading.title.clone()] } else { vec![heading.title.clone(), heading.count.clone()] };
+            access.name(craft_ui::contract::Name::Joined(parts));
+            return;
+        }
+        let Some(thread) = self.thread else { return };
+        let Some(first) = thread.messages.first() else { return };
+        let named = |name: String, message: &CommentMessage| {
+            let age = age_text(&cx.env, message.modified.unwrap_or(message.created), self.now);
+            craft_ui::contract::Name::Joined(if age.is_empty() { vec![name] } else { vec![name, age] })
+        };
+        access.name(named(cx.resolved.label.to_owned(), first));
+        // Each reply is a node of its own inside the card, named as the card is by its comment.
+        let Some(words) = &self.words else { return };
+        for &(index, rect) in &self.replies {
+            let Some(message) = thread.messages.get(index) else { continue };
+            let name = words.card_name.fill(&[("author", &message.author), ("text", &message.text)]);
+            let node = access.node(REPLY.at(index as u64), Role::GROUP);
+            node.name = named(name, message);
+            node.bounds(rect);
+        }
     }
 
     fn style(cx: &StyleCx<'_>, _: CommentRowStyleKey) -> CommentRowStyle {
@@ -677,16 +806,13 @@ impl Component for CommentRow<'_> {
             metrics: Metrics::new(),
             normal: cx.ink(Ink::OnPanel),
             muted: cx.color(color.text.muted),
-            good: cx.color(color.status.good.fg),
-            bad: cx.color(color.status.bad.fg),
-            faint: cx.color(color.text.faint),
-            highlight: cx.color(color.state.selected),
+            highlight: cx.color(color.surface.raised),
             bar: cx.color(color.accent.solid),
             card: cx.color(color.surface.raised),
             border: cx.color(color.line.border),
-            avatar: cx.color(color.accent.strong),
-            avatar_ink: cx.color(color.text.on_strong),
-            sunken: cx.color(color.surface.sunken),
+            avatar: cx.color(color.line.border),
+            avatar_ink: cx.color(color.text.normal),
+            thread_line: cx.color(color.line.divider),
             kind_icon: cx.tokens.size.icon.sm,
             glyph: cx.glyph(),
             bar_width: cx.tokens.stroke.thick,
@@ -705,10 +831,12 @@ impl Component for CommentRow<'_> {
         self.words = Some(cx.words::<CommentsWords>());
         let now = self.now;
         let age = |then: i64| age_text(&cx.env, then, now);
-        let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; PUSH_BUTTONS], more: Vec::new() };
+        let mut sink =
+            Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; PUSH_BUTTONS], more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
         let height = self.lay(cx.style, width, &age, &mut sink);
         self.heights = sink.fields;
         self.buttons = sink.buttons;
+        self.badges = sink.badges;
         Vec2::new(width, height)
     }
 
@@ -716,9 +844,10 @@ impl Component for CommentRow<'_> {
         self.words = Some(cx.words::<CommentsWords>());
         let (now, rtl) = (self.now, cx.flow.is_rtl());
         let age = |then: i64| age_text(&cx.env, then, now);
-        let mut sink = Measure { cx, fields: self.heights, buttons: self.buttons, more: Vec::new() };
+        let mut sink = Measure { cx, fields: self.heights, buttons: self.buttons, more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
         self.lay(cx.style, rect.width(), &age, &mut sink);
         self.mores = sink.more.iter().map(|(index, _)| *index).collect();
+        self.replies = sink.replies.iter().map(|&(index, local)| (index, placed(rect.min, rect.width(), rtl, local))).collect();
         for (index, local) in sink.more {
             cx.part(MORE.at(index as u64), placed(rect.min, rect.width(), rtl, local))
                 .sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS)
@@ -768,6 +897,8 @@ impl Component for CommentRow<'_> {
             resolved: self.thread.is_some_and(|t| t.resolved),
             heights: self.heights,
             buttons: self.buttons,
+            badges: &self.badges,
+            reply_submit: self.submit_key,
             ctx: &cx.ctx,
             focus_reply: self.focus_reply,
             focus_edit: self.focus_edit,

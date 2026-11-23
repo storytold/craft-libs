@@ -11,7 +11,7 @@ use craft_behavior::geometry::{CropBox, SnapLine, crop_view};
 use craft_behavior::kurbo::Size;
 use craft_behavior::{CancelReason, CanvasView, EditEvent};
 use craft_keymap::{Chord, Key, Mods};
-use craft_ui::canvas::{CanvasTool, CropOverlay, CropOverlayOutput, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, CropApply, CropOverlay, CropOverlayOutput, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::primitives::Draw;
@@ -46,12 +46,15 @@ pub struct CropCommit {
     pub delete_pixels: bool,
     /// What fills the area beyond the canvas.
     pub fill: CropFill,
+    /// What the overlay applied for (Enter, a double click, a click away), so the app can let the selection go on
+    /// a click away; `None` for the check mark, Image > Crop and leaving the tool.
+    pub cause: Option<CropApply>,
 }
 
 impl CropCommit {
-    /// The commit of `frame` with `settings` on `document`, with the environment's `units`.
+    /// The commit of `frame` with `settings` on `document`, with the environment's `units`; it has no `cause`.
     pub fn new(frame: CropBox, settings: &CropSettings, document: &CropDocument, units: &Units) -> Self {
-        Self { frame, target: settings.target(document, units), delete_pixels: settings.delete_pixels, fill: settings.fill }
+        Self { frame, target: settings.target(document, units), delete_pixels: settings.delete_pixels, fill: settings.fill, cause: None }
     }
 
     /// The size the document has after the crop: the target's, else the frame's.
@@ -337,7 +340,9 @@ impl CropTool {
                 self.straightened(angle, fit, input.document, &mut out.events);
             }
         }
-        if apply && let Some(event) = self.apply(input.settings, input.document, units) {
+        if let Some(cause) = apply
+            && let Some(event) = self.apply_for(Some(cause), input.settings, input.document, units)
+        {
             out.events.push(event);
         }
         if discard && let Some(event) = self.discard() {
@@ -477,13 +482,18 @@ impl CropTool {
     /// The check mark in the bar, Enter or Image > Crop: [`CropEvent::Apply`] for a drawn frame or the
     /// untouched selection frame, `None` for another default frame or no frame.
     pub fn apply(&mut self, settings: &CropSettings, document: &CropDocument, units: &Units) -> Option<CropEvent> {
+        self.apply_for(None, settings, document, units)
+    }
+
+    /// [`CropTool::apply`] for what the overlay reported: the commit carries `cause`.
+    fn apply_for(&mut self, cause: Option<CropApply>, settings: &CropSettings, document: &CropDocument, units: &Units) -> Option<CropEvent> {
         if !self.session.applies() {
             return None;
         }
         let frame = self.session.frame()?;
         self.end_nudges();
         let view = self.seen_view.filter(|_| settings.image_mode());
-        let commit = CropCommit::new(frame, settings, document, units);
+        let commit = CropCommit { cause, ..CropCommit::new(frame, settings, document, units) };
         self.kept = Some((self.session.keep(view, commit.size()), false));
         Some(CropEvent::Apply(commit))
     }

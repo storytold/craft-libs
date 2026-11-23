@@ -1,7 +1,7 @@
 //! The parameter model: the spec-string parser, kinds, defaults and fit rules, and the rows' predicates, read-only
 //! text and tooltips.
 
-use craft_ui::contract::{Bind, Role};
+use craft_ui::contract::{Bind, LabelScheme, Role};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
 use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
@@ -144,6 +144,39 @@ fn rows_follow_their_predicates_and_carry_their_tooltip() {
     fixture.settle();
     let detail = fixture.by_label("Detail").expect("the detail row");
     assert!(fixture.tree().is_disabled_key(detail.node), "disabled for the third value");
+}
+
+// A row with two `visible_when` conditions is there only while both hold: the second call adds a condition, not
+// replaces the first. A `disabled` row takes no input whatever the fields hold, from a click or from automation.
+#[trial]
+fn a_row_with_two_visible_conditions_needs_both_and_a_disabled_row_takes_no_input() {
+    let params = vec![
+        Param::new("custom", "Custom", ParamKind::bool(false)),
+        Param::new("advanced", "Advanced", ParamKind::bool(false)),
+        Param::new("quality", "Quality", ParamKind::int(Some(0), Some(12), 8)).visible_when("custom", true).visible_when("advanced", true),
+        Param::new("locked", "Locked", ParamKind::bool(false)).disabled(),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(params.clone(), &values);
+    let click = |fixture: &mut Fixture, label: &str| {
+        let target = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} row"));
+        fixture.click(&target).settle();
+    };
+    assert!(fixture.by_label("Quality").is_none(), "hidden while neither condition holds");
+    click(&mut fixture, "Custom");
+    assert!(fixture.by_label("Quality").is_none(), "the first condition alone keeps the row hidden");
+    click(&mut fixture, "Advanced");
+    assert!(fixture.by_label("Quality").is_some(), "shown once both hold");
+    click(&mut fixture, "Custom");
+    assert!(fixture.by_label("Quality").is_none(), "the second condition alone keeps the row hidden");
+
+    let locked = fixture.by_label("Locked").expect("a disabled row shows");
+    assert!(fixture.tree().is_disabled_key(locked.node), "a disabled row is a disabled node");
+    fixture.click(&locked).settle();
+    assert_ne!(values.borrow().bool("locked"), Some(true), "a click on a disabled row changes nothing");
+    let mut fields = values.borrow().clone();
+    assert!(set_param_field(&params, &mut fields, "locked", json!(true)).is_err(), "automation is refused a disabled row");
+    assert_ne!(fields.bool("locked"), Some(true), "the refused value is not set");
 }
 
 // A row that resets its dependents removes them when its value changes, from the row or from automation before any
@@ -346,6 +379,39 @@ fn paired_parameter_fields_15539_leave_no_gap_when_both_are_hidden() {
     assert_eq!(gap(&hidden), gap(&absent), "a hidden pair uses no space");
 }
 
+/// `separated_at(index)` draws the framework's list separator before that option of a choice row's open list and
+/// between no other two: a separator placed by the wrong index, or one drawn on every option, would split the standard
+/// paper sizes from the wrong neighbour.
+#[trial]
+fn a_choice_row_draws_its_separator_before_the_named_option() {
+    let sizes: Vec<(String, Label)> = [("letter", "Letter"), ("legal", "Legal"), ("a4", "A4"), ("custom", "Custom")]
+        .into_iter()
+        .map(|(id, label)| (id.to_owned(), label.into()))
+        .collect();
+    let params = vec![Param::new("paper", "Paper Size", ParamKind::choice(sizes, Some("letter".to_owned()))).separated_at(3)];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Page Setup", &params, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 800.0));
+    fixture.settle();
+    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the choice field shows");
+    fixture.click(&field);
+    fixture.idle(3);
+
+    let line_of = |fixture: &Fixture, text: &str| {
+        let run = fixture.texts().iter().rev().find(|run| run.text == text).unwrap_or_else(|| panic!("the list shows {text}"));
+        run.rect
+    };
+    let (letter, legal, a4, custom) = (line_of(&fixture, "Letter"), line_of(&fixture, "Legal"), line_of(&fixture, "A4"), line_of(&fixture, "Custom"));
+    // The separator is a row of its own in the open list: the step from A4 to Custom is wider than the step between two
+    // options with none between them, and those two steps are equal.
+    let plain = legal.top() - letter.top();
+    assert!((a4.top() - legal.top() - plain).abs() < 0.5, "no separator between Legal and A4: {letter:?} {legal:?} {a4:?}");
+    assert!(custom.top() - a4.top() > plain + 1.0, "a separator between A4 and Custom: A4 {a4:?}, Custom {custom:?}, plain step {plain}");
+}
+
 /// A pattern row shows the first pattern for a stored id the rows lack without writing it, a pick writes the pattern's
 /// id, and a group header takes no pick.
 #[trial]
@@ -543,4 +609,139 @@ fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
             assert_eq!(held.int("copies"), Some(1));
         }
     }
+}
+
+/// A row marked `beside_previous` stands on the line of the row before it, where an unmarked one stands below.
+#[trial]
+fn a_row_beside_the_previous_one_shares_its_line() {
+    let top = |beside: bool| {
+        let second = Param::number("second", "Second", 1.0, 1.0, 0);
+        let params = vec![Param::number("first", "First", 1.0, 1.0, 0), if beside { second.beside_previous() } else { second }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+        });
+        fixture.settle();
+        let at = |name: &str| fixture.texts().iter().find(|text| text.text.contains(name)).map(|text| text.rect.center().y);
+        at("First").zip(at("Second")).map(|(first, second)| second - first)
+    };
+    let (stacked, beside) = (top(false), top(true));
+    assert!(stacked.is_some_and(|gap| gap > 10.0), "unmarked rows stack: {stacked:?}");
+    assert!(beside.is_some_and(|gap| gap.abs() < 3.0), "a beside row shares the line: {beside:?}");
+}
+
+/// The texts of a document form (`LabelScheme::Inline`) over `params`, with their rects.
+fn inline_texts(params: Vec<Param>) -> Vec<(String, egui::Rect)> {
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+    });
+    fixture.settle();
+    fixture.texts().iter().map(|text| (text.text.clone(), text.rect)).collect()
+}
+
+/// The rect of the first text that contains `name`.
+fn text_at(texts: &[(String, egui::Rect)], name: &str) -> Option<egui::Rect> {
+    texts.iter().find(|(text, _)| text.contains(name)).map(|(_, rect)| *rect)
+}
+
+/// Production's Split: a radio row with `stacked_options` stands its options in a column with no caption, also in a
+/// document form, and a row marked `under_option` stands under its option, before the next option.
+#[trial]
+fn stacked_options_nest_each_rows_under_its_option() {
+    let ways = vec![("pages".to_owned(), Label::from("Number of pages")), ("size".to_owned(), Label::from("File size"))];
+    let params = vec![
+        Param::new("mode", "Split by", ParamKind::radio(ways, Some("pages".to_owned()))).stacked_options(),
+        Param::number("pages", "Pages per file", 1.0, 1.0, 0).under_option("pages"),
+        Param::number("size", "At most", 2.0, 0.1, 1).under_option("size"),
+    ];
+    let texts = inline_texts(params);
+    assert!(text_at(&texts, "Split by").is_none(), "no caption over or beside stacked options: {texts:?}");
+    let (pages, per_file, size, at_most) = (
+        text_at(&texts, "Number of pages").expect("the first option"),
+        text_at(&texts, "Pages per file").expect("the first option's row"),
+        text_at(&texts, "File size").expect("the second option"),
+        text_at(&texts, "At most").expect("the second option's row"),
+    );
+    assert!(
+        pages.bottom() <= per_file.top() + 1.0 && per_file.bottom() <= size.top() + 1.0,
+        "the row stands between its option and the next: {texts:?}"
+    );
+    assert!(size.bottom() <= at_most.top() + 1.0, "the second row stands under the second option: {texts:?}");
+}
+
+/// Production's Background: a row under an option of a row of options stands right after that option on its line,
+/// its control alone (no caption), before the next option.
+#[trial]
+fn a_row_under_an_option_in_a_row_follows_it_with_no_caption() {
+    let sources = vec![("colour".to_owned(), Label::from("From colour")), ("file".to_owned(), Label::from("File"))];
+    let params = vec![
+        Param::new("source", "Source", ParamKind::radio(sources, Some("colour".to_owned()))).options_in_row(),
+        Param::number("strength", "Strength", 3.0, 1.0, 0).under_option("colour"),
+    ];
+    let texts = inline_texts(params);
+    assert!(text_at(&texts, "Strength").is_none(), "the nested control shows no caption: {texts:?}");
+    let (colour, file) = (text_at(&texts, "From colour").expect("the first option"), text_at(&texts, "File").expect("the second option"));
+    let value = texts.iter().find(|(text, _)| text.trim() == "3").map(|(_, rect)| *rect).expect("the nested field shows its value");
+    assert!((value.center().y - colour.center().y).abs() < 6.0, "on the options' line: {texts:?}");
+    assert!(value.left() > colour.right() && value.right() < file.left(), "between its option and the next: {texts:?}");
+}
+
+/// In a document form a group row under a heading of its own name shows the name once (production's Enhance: Pages
+/// over the page range options), as a radio row does.
+#[trial]
+fn a_group_row_under_a_heading_of_its_name_shows_the_name_once() {
+    let params = vec![Param::section("Pages"), Param::custom("pages", "Pages", |ui, _, _| ui.label("The options"))];
+    let texts = inline_texts(params);
+    let names = texts.iter().filter(|(text, _)| text.trim() == "Pages").count();
+    assert_eq!(names, 1, "the heading alone names the group: {texts:?}");
+    assert!(text_at(&texts, "The options").is_some(), "the group shows: {texts:?}");
+}
+
+/// A text row with `select_on_focus` selects its whole text when it takes the focus, so typing replaces it (PdfCraft's
+/// Rename opens on the name selected); a row without it keeps the text and types at the caret.
+#[trial]
+fn a_text_row_that_selects_on_focus_is_replaced_by_typing() {
+    for (select, expected) in [(true, "Draft"), (false, "")] {
+        let param = Param::new("name", "Name", ParamKind::text("Report"));
+        let params = vec![if select { param.select_on_focus() } else { param }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        values.borrow_mut().set("name", FieldValue::Text("Report".into()));
+        let mut fixture = rows(params, &values);
+        let field = fixture.by_label("Name").expect("the name row has a field");
+        fixture.click(&field).settle();
+        fixture.type_text("Draft").settle();
+        let typed = values.borrow().text("name").map(str::to_owned);
+        if select {
+            assert_eq!(typed.as_deref(), Some(expected), "typing replaced the selected name");
+        } else {
+            assert!(typed.as_deref().is_some_and(|text| text.contains("Report") && text.contains("Draft")), "typing kept the name: {typed:?}");
+        }
+    }
+}
+
+/// Production's Opacity row: a short slider and a number field as wide as its value, the row as wide as its content.
+/// An unmarked range row's slider takes the room the form offers.
+#[trial]
+fn a_short_slider_row_is_as_wide_as_its_content() {
+    let widths = |short: bool| {
+        let row = Param::new("opacity", "Opacity", ParamKind::range(0.0, 100.0, 100.0, Default::default())).decimals(1);
+        let params = vec![if short { row.short_slider() } else { row }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamRows::new("Form", &params, Bind::bound(&mut *shown.borrow_mut())).labels(LabelScheme::Inline).show(ui);
+        });
+        fixture.room(egui::vec2(800.0, 400.0));
+        fixture.settle();
+        let slider = fixture.by_role(Role::SLIDER).first().map(|slider| slider.rect.width());
+        let field = fixture.by_role(Role::SPIN_BUTTON).first().map(|field| field.rect.width());
+        (slider.unwrap_or(f32::NAN), field.unwrap_or(f32::NAN))
+    };
+    let ((long, wide), (short, narrow)) = (widths(false), widths(true));
+    assert!(long > 300.0, "an unmarked slider fills the row: {long}");
+    assert!(short < 120.0 && short > 40.0, "a short slider is about a short field long: {short}");
+    assert!(narrow <= wide, "the short row's number field ({narrow}) is no wider than the unmarked one's ({wide})");
 }

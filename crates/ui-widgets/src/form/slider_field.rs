@@ -50,9 +50,10 @@ pub struct SliderFieldStyle {
 /// A caption and number field over a full-width slider, on one value. A drag on the slider, a step key, typing in the field or a
 /// scrub by the enclosing `Field`'s label is one edit stream (begin, updates, commit) of the one binding.
 ///
-/// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it. Without
-/// a step the field steps by a hundredth on a range 10 wide or less and by 1 on a longer one, and rounds typed values
-/// to the places that step needs. The field and then the slider are Tab stops. A log or power scale curves the
+/// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it unless
+/// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
+/// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
+/// then the slider are Tab stops. A log or power scale curves the
 /// slider's track only: the field, typing and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
@@ -67,9 +68,12 @@ pub struct SliderField<'a> {
     /// How positions along the slider's track map to values.
     #[prop]
     scale: SliderScale,
-    /// The change of one arrow press, wheel notch or label scrub point, and the grid typed values snap to.
+    /// The change of one arrow press, wheel notch or label scrub point, and by default the grid typed values snap to.
     #[prop(quantity = "step")]
     step: Option<f64>,
+    /// The decimal places retained and shown for typed values (at most 12), independently of the step; typing no longer snaps to it.
+    #[prop]
+    typed_decimals: Option<usize>,
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
@@ -97,6 +101,10 @@ pub struct SliderField<'a> {
     /// row, the Color panel's channels) instead of the number cell, and the slider takes the room it leaves.
     #[prop]
     field_sizing: Option<Sizing>,
+    /// The slider asks for a short length ([`Slider::short`]): with a content-sized number field, the line is as wide as
+    /// a short field and the number, as production's Opacity, not the room it is offered.
+    #[prop]
+    short: bool,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
     /// The field's range alert of this pass, which `finish` reports.
@@ -144,6 +152,7 @@ impl<'a> SliderField<'a> {
             layout: SliderFieldLayout::Stacked,
             scale: SliderScale::Linear,
             step: None,
+            typed_decimals: None,
             wheel_step: None,
             propose_on_primary_down: false,
             unit_kind: None,
@@ -152,6 +161,7 @@ impl<'a> SliderField<'a> {
             track_face: None,
             thumb: SliderThumb::Round,
             field_sizing: None,
+            short: false,
             field_width: 0.0,
             out_of_range: None,
         }
@@ -165,6 +175,7 @@ impl<'a> SliderField<'a> {
             range: self.range.clone(),
             scale: self.scale,
             step: self.step,
+            typed_decimals: self.typed_decimals,
             wheel_step: self.wheel_step,
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
@@ -172,6 +183,7 @@ impl<'a> SliderField<'a> {
             thumb: self.thumb,
             reset: self.value.reset_value().copied(),
             field_sizing: self.field_sizing,
+            short: self.short,
         }
     }
 }
@@ -182,6 +194,7 @@ struct Look {
     range: RangeInclusive<f64>,
     scale: SliderScale,
     step: Option<f64>,
+    typed_decimals: Option<usize>,
     wheel_step: Option<f64>,
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
@@ -190,6 +203,7 @@ struct Look {
     /// The reset value of the composite's own binding, which both children restore on a double click.
     reset: Option<f64>,
     field_sizing: Option<Sizing>,
+    short: bool,
 }
 
 /// The composite's check, which its children check their values with.
@@ -220,6 +234,7 @@ impl Look {
             .scale(self.scale)
             .fill(self.fill)
             .thumb(self.thumb)
+            .short(self.short)
             .label(name.clone());
         let slider = match face {
             Some(face) => slider.track_face(face),
@@ -249,12 +264,17 @@ impl Look {
             bind = bind.check_with(check, |check, value| value.map_or(Validity::Ok, |value| lifted(check.validity(&value))));
         }
         let step = self.field_step();
+        let typed_decimals = self.typed_decimals.map(|places| places.min(12));
         let field = NumberField::new(name.clone(), bind)
             .range(self.range.clone())
             .step(step)
-            .snap_typed(self.set_step().is_some())
-            .commit_decimals(decimals_for_step(step))
+            .snap_typed(typed_decimals.is_none() && self.set_step().is_some())
+            .commit_decimals(typed_decimals.unwrap_or_else(|| decimals_for_step(step)))
             .scrub_by_label();
+        let field = match typed_decimals {
+            Some(decimals) => field.max_decimals(decimals),
+            None => field,
+        };
         let field = match self.unit_kind {
             Some(kind) => field.unit_kind(kind),
             None => field,
@@ -299,8 +319,9 @@ impl Component for SliderField<'_> {
         }
     }
 
+    /// A short slider keeps to its own length; otherwise the line takes the width it is offered.
     fn fills(&self) -> Option<craft_behavior::Axis> {
-        Some(craft_behavior::Axis::X)
+        (!self.short).then_some(craft_behavior::Axis::X)
     }
 
     fn sense(&self) -> Sense {

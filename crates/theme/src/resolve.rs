@@ -6,7 +6,7 @@ use super::ramp::Mode;
 use super::scale::{Easing, Elevation};
 use super::sizes;
 use super::theme::{Appearance, Contrast, ContrastIntent, PinLayer, Pins, ThemeDef};
-use super::tokens::{ColorToken, Edge, ElevationTokens, Motion, MotionTokens, RadiusSet, ShapeTokens, SizeTokens, Tokens};
+use super::tokens::{ColorToken, Edge, ElevationTokens, GripShape, Motion, MotionTokens, RadiusSet, ShapeTokens, SizeTokens, Tokens};
 use super::values;
 use crate::AppId;
 
@@ -201,8 +201,13 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let motion_ms = |millis: u32, easing: Easing| Motion { millis: if appearance.reduced_motion { 0 } else { millis }, easing };
 
     let radius = RadiusSet { sm: (radius.control / 2.0).round(), ..radius };
-    let shape =
-        ShapeTokens { radius, edge, knob: seed.and_then(|s| s.knob).unwrap_or_default(), wells: seed.and_then(|s| s.wells).unwrap_or_default() };
+    let shape = ShapeTokens {
+        radius,
+        edge,
+        knob: seed.and_then(|s| s.knob).unwrap_or_default(),
+        wells: seed.and_then(|s| s.wells).unwrap_or_default(),
+        grip: seed.and_then(|s| s.grip).map_or(GripShape::DEFAULT, |g| g.shape()),
+    };
     let text_factor = sizes.text_steps.factor(appearance.text_size);
     let typography = preset.typography.scaled(text_factor, values::TYPE_ROUNDING);
 

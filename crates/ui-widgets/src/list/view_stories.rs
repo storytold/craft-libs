@@ -7,17 +7,17 @@ use super::{
 };
 use crate::buttons::Button;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, Entry, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit, WordSetCx as _,
-    request_rename,
+    Bind, CollectionEvent, ColumnSpec, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, ToggleColumn, ToggleEdit,
+    WordSetCx as _, request_rename,
 };
 use crate::layout_components::Stack;
 use crate::menu::Menu;
 use crate::popover::Popover;
-use crate::primitives::{ContentPainterCx, IconSpec};
+use crate::primitives::{ContentPainterCx, IconSpec, Span};
 use crate::runtime::env::{Env, Label};
 use crate::style::{Corners, SurfaceKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
-use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection};
+use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, EditEvent, IconId, ItemSource, Selection};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Rect, Ui};
 use std::borrow::Cow;
@@ -444,7 +444,8 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// Rows with the "More" button of `row_menu`, shown on the hovered and the selected row: a click on it opens the host's
-/// row menu, whose Rename opens the row's rename field.
+/// row menu, whose rows act on the row the list reports for the open menu (`CollectionResponse::menu`); its Rename
+/// opens that row's rename field.
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = names(4);
@@ -453,13 +454,7 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         &Names(&names),
         &mut |key, _| ListRow::new(names[*key].clone()),
     );
-    let menu_row = data.value("menu", None::<usize>);
-    for event in &out.events {
-        if let CollectionEvent::ContextMenu(request) = event {
-            *menu_row = Some(request.key);
-        }
-    }
-    if let Some(row) = *menu_row {
+    if let Some(row) = out.menu.as_ref().map(|request| request.key) {
         let entries = [
             Entry::new(String::from("rename"), "Rename"),
             Entry::new(String::from("duplicate"), "Duplicate"),
@@ -469,11 +464,56 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         if menu.picked.as_deref() == Some("rename") {
             request_rename(ui.ctx(), out.response.id, &row);
         }
-        if menu.closed.is_some() {
-            *menu_row = None;
+    }
+    out.into()
+}
+
+/// A search for "Chapter" that hides "Notes": the button renames "Notes" anyway, as an app names a bookmark it just
+/// created during a search. The row stays listed while its rename runs and goes once the new name is committed, unless
+/// that name matches.
+#[story(List<'static, usize>, covers = [], drive = Drive::Never)]
+fn list_rename_while_filtered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const NOTES: usize = 2;
+    let id = crate::testing::memory::global("list_rename_while_filtered", ());
+    let names = data.value("names", vec![String::from("Chapter 1"), String::from("Chapter 2"), String::from("Notes")]).clone();
+    // The button sits at the start of the list's width, which is the right under right-to-left.
+    let start = if Env::of(ui).view().direction().is_rtl() { egui::Align::Max } else { egui::Align::Min };
+    let button = ui.with_layout(egui::Layout::top_down(start), |ui| Button::new("Rename Notes").show(ui)).inner;
+    if crate::contract::clicked(&button) {
+        request_rename(ui.ctx(), id, &NOTES);
+    }
+    let out = List::<usize>::new("Bookmarks")
+        .id(id)
+        .rename(true)
+        .natural_height(true)
+        .filter("Chapter", |key: &usize| vec![Label::from(names[*key].clone())])
+        .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
+    for event in &out.events {
+        if let CollectionEvent::Rename(EditEvent::Commit { after, .. }) = event
+            && let Some(name) = data.value("names", Vec::<String>::new()).get_mut(after.key)
+        {
+            name.clone_from(&after.name);
         }
     }
     out.into()
+}
+
+/// Search results whose wrapped text marks the match: each row's lines are spans, the match a highlighted one.
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_search_result_marked_match(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    const RESULTS: [(&str, &str, &str); 3] = [
+        ("The ", "quarterly", " report covers the first three months of the year."),
+        ("Each ", "quarterly", " figure is rounded to the nearest thousand."),
+        ("Compare these with the previous ", "quarterly", " totals."),
+    ];
+    let pages: Vec<String> = (0..RESULTS.len()).map(|at| format!("Page {}", 2 * at + 3)).collect();
+    List::<usize>::new("Search results")
+        .natural_height(true)
+        .show_items(ui, &Names(&pages), &mut |key, _| {
+            let (before, found, after) = RESULTS[*key];
+            ListRow::new(pages[*key].clone()).lines(vec![Span::new(before), Span::new(found).highlight(), Span::new(after)])
+        })
+        .into()
 }
 
 #[story(List<'static, usize>, covers = [One], drive = Drive::Never)]

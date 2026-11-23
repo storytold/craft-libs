@@ -366,6 +366,7 @@ impl LayoutQuery<'_> {
                 shortcut: span.shortcut,
                 highlight: span.highlight,
                 underline: span.underline,
+                strikethrough: span.strikethrough,
                 strong: span.strong,
                 flag: span.flag,
             })
@@ -494,7 +495,18 @@ impl TextRun<'_> {
         // readable characters.
         let galley = match &full {
             Some(full) => self.layout_cut(ctx, env, full, max_width),
-            None => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
+            None => {
+                let job = self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width);
+                let galley = text_layout::layout(ctx, job.clone());
+                if matches!(self.wrap, Wrap::Wrap | Wrap::Clamp(_)) && galley.size().x > max_width {
+                    // A single unbroken word can be wider than the room even after word wrapping.
+                    let mut job = job;
+                    job.wrap.break_anywhere = true;
+                    text_layout::layout(ctx, job)
+                } else {
+                    galley
+                }
+            }
         };
         let changed = full.as_ref().is_some_and(|full| galley.job.text != *full);
         let elided = galley.elided || changed;
@@ -595,6 +607,9 @@ impl TextRun<'_> {
             let mut format = span_format(env.tokens, env.fonts, self.role, span, color, background);
             if span.underline {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
+            }
+            if span.strikethrough {
+                format.strikethrough = egui::Stroke::new(env.tokens.stroke.thin, color);
             }
             if let Some(tone) = span.flag {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, to_color(tone.ink(env.tokens)));
