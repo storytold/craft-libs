@@ -140,6 +140,28 @@ fn tab_moves_focus_from_a_pressed_text_field() {
     assert_ne!(egui_focused(&frames.ctx), Some(id("field")), "focus left the field");
 }
 
+/// Read-only text a press focused to select from (a label's selection part, a stop only a press reaches) is no text
+/// field: Tab toggles the panels from it, as from any pressed control. Guards against a toggle that read every stop of
+/// the text class as a field that keeps Tab for the next field.
+#[trial]
+fn tab_toggles_from_pressed_read_only_text() {
+    let at = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&at);
+    let mut show = move |ui: &mut Ui| {
+        let rect = widget(ui, id("label"));
+        register_stop(ui.ctx(), Stop::new(id("label"), KeyUse::of(Input::Text)).press_only());
+        press_shape(ui, rect, Sense::CLICK | Sense::TAKE_FOCUS, id("label"));
+        seen.set(rect);
+        stop(ui, "canvas", KeyUse::CANVAS);
+    };
+    let mut frames = shown(true, &mut show);
+    click(&mut frames, at.get().center(), &mut show);
+    take_output(&frames.ctx);
+    assert_eq!(egui_focused(&frames.ctx), Some(id("label")), "the press focused the text");
+    assert_eq!(press(&mut frames, &mut show, Key::Tab, Modifiers::NONE), [(ViewportId::ROOT, ChromeToggle::Panels)], "pressed read-only text");
+    assert_eq!(egui_focused(&frames.ctx), Some(id("label")), "the toggle moved no focus");
+}
+
 #[trial]
 fn tab_in_a_window_without_a_canvas_moves_focus() {
     let mut show = without_canvas;

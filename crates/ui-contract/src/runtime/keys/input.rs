@@ -549,17 +549,18 @@ pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Ve
 ///
 /// A modal or dialog layer never toggles: Tab moves focus inside it. In a window with a canvas the toggle is on when
 /// nothing is focused, the canvas is, or a press focused a component other than a text field, as clicking a panel's row
-/// and pressing Tab hides the panels in Photoshop. Tab moves focus from a text field however it got the focus (Tab
+/// and pressing Tab hides the panels in Photoshop; read-only text a press focused to select from (a stop only a press
+/// reaches, a label's selection part) is no text field. Tab moves focus from a text field however it got the focus (Tab
 /// commits a typed value and goes to the next field) and from a component the keyboard or a request focused. Elsewhere
 /// it is on only when the canvas is focused. A component that keeps Tab never reaches this function: the press is its
 /// own.
-fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&KeyUse>, pressed: bool) -> bool {
+fn tab_toggles_chrome(enabled: bool, canvas: bool, layer: overlay::LayerKeys, focused: Option<&focus::Stop>, pressed: bool) -> bool {
     let closed = matches!(layer, overlay::LayerKeys::Blocked | overlay::LayerKeys::Class(OwnerClass::Dialog));
     if !enabled || closed {
         return false;
     }
-    let on_canvas = focused.is_some_and(|keys| keys.chrome_key);
-    let pressed_control = pressed && focused.is_some_and(|keys| keys.owner != OwnerClass::Text);
+    let on_canvas = focused.is_some_and(|stop| stop.keys.chrome_key);
+    let pressed_control = pressed && focused.is_some_and(|stop| stop.keys.owner != OwnerClass::Text || stop.press_only);
     if canvas { focused.is_none() || on_canvas || pressed_control } else { on_canvas }
 }
 
@@ -572,7 +573,7 @@ pub(super) fn tab_toggles_now(ctx: &Context) -> bool {
     let canvas = focus::canvas_keys(ctx, viewport).is_some();
     let layer = overlay::key_layer(ctx, &focused.as_ref().map(|rec| focus::scope_chain(ctx, rec)).unwrap_or_default(), None);
     let pressed = focused.as_ref().is_some_and(|rec| focus::origin(ctx, rec) == Some(focus::FocusOrigin::Press));
-    tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop.keys), pressed)
+    tab_toggles_chrome(enabled, canvas, layer, focused.as_ref().map(|rec| &rec.stop), pressed)
 }
 
 /// Whether `chord` is the key of a chrome command (`ChromeCommand`), as the window's keymap binds it.
