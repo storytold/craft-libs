@@ -10,6 +10,7 @@ pub(crate) mod mixed_blank;
 pub(crate) mod number;
 pub(crate) mod number_length;
 pub(crate) mod number_scrub_step;
+pub(crate) mod part_layout;
 pub(crate) mod rtl_paragraph;
 pub(crate) mod selectable;
 pub(crate) mod submit_key;
