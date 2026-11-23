@@ -3,8 +3,7 @@
 use super::item::{RowInput, close_on_pick};
 use super::level::{MenuLevel, Row};
 use crate::contract::{
-    Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition,
-    Styled as _,
+    Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition, Styled as _,
 };
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;

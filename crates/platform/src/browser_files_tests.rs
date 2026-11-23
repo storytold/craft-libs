@@ -42,15 +42,36 @@ fn a_rejected_picker_downloads_once_unless_cancelled() {
 fn a_write_goes_to_the_embedding_page_and_downloads_only_without_one() {
     let page = |name: &str, bytes: &[u8], save_as: bool| Some(if save_as { Err(format!("{name} {}", bytes.len())) } else { Ok(()) });
     let mut downloads = 0;
-    assert_eq!(page_or_download(Some(&page), "a.pdf", b"pdf", false, || { downloads += 1; Ok(()) }), Ok(true));
     assert_eq!(
-        page_or_download(Some(&page), "a.pdf", b"pdf", true, || { downloads += 1; Ok(()) }),
+        page_or_download(Some(&page), "a.pdf", b"pdf", false, || {
+            downloads += 1;
+            Ok(())
+        }),
+        Ok(true)
+    );
+    assert_eq!(
+        page_or_download(Some(&page), "a.pdf", b"pdf", true, || {
+            downloads += 1;
+            Ok(())
+        }),
         Err(craft_host::FileError::Other("a.pdf 3".into())),
         "the page's refusal is the write's"
     );
     assert_eq!(downloads, 0, "a page that answers is the only save");
     let unhosted = |_: &str, _: &[u8], _: bool| None;
-    assert_eq!(page_or_download(Some(&unhosted), "a.pdf", b"pdf", false, || { downloads += 1; Ok(()) }), Ok(false));
-    assert_eq!(page_or_download(None, "a.pdf", b"pdf", false, || { downloads += 1; Ok(()) }), Ok(false));
+    assert_eq!(
+        page_or_download(Some(&unhosted), "a.pdf", b"pdf", false, || {
+            downloads += 1;
+            Ok(())
+        }),
+        Ok(false)
+    );
+    assert_eq!(
+        page_or_download(None, "a.pdf", b"pdf", false, || {
+            downloads += 1;
+            Ok(())
+        }),
+        Ok(false)
+    );
     assert_eq!(downloads, 2, "without a page each write downloads once");
 }

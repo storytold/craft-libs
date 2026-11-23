@@ -553,7 +553,10 @@ fn a_selected_card_is_a_raised_surface_not_a_selection_fill() {
             _ => None,
         })
         .collect();
-    assert!(fills.iter().all(|fill| fill.r() < 0x60 && i32::from(fill.b()) - i32::from(fill.r()) < 40), "the card fill is a quiet surface: {fills:?}");
+    assert!(
+        fills.iter().all(|fill| fill.r() < 0x60 && i32::from(fill.b()) - i32::from(fill.r()) < 40),
+        "the card fill is a quiet surface: {fills:?}"
+    );
 }
 
 /// The avatars of a card's messages are muted discs, not accent-coloured ones.

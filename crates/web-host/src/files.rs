@@ -27,9 +27,7 @@ impl BrowserFiles {
     /// waiting to be taken stay under `max_read` bytes.
     pub fn new(wake: Wake, max_read: u64) -> Self {
         let limits = PickLimits { pending_bytes: usize::try_from(max_read).unwrap_or(usize::MAX), ..PickLimits::DEFAULT };
-        let inner = PlatformFiles::new(move || wake.wake())
-            .limits(limits)
-            .page_saves(page_save);
+        let inner = PlatformFiles::new(move || wake.wake()).limits(limits).page_saves(page_save);
         Self { inner }
     }
 }

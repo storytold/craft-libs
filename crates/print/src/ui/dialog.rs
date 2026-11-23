@@ -7,9 +7,8 @@ use craft_behavior::{CursorIcon, EditEvent, EditEvents, Metrics, Mixed, PartKey,
 use craft_theme::variant::Tone;
 use craft_ui::buttons::Button;
 use craft_ui::contract::{
-    LabelScheme,
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props as _, Role, Scroll, Show as _, ShowContainer as _, WordSetCx as _, clicked,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, LabelScheme, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props as _, Role, Scroll, Show as _, ShowContainer as _, WordSetCx as _, clicked,
 };
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft_ui::display::{Shade, Text};
@@ -564,7 +563,12 @@ impl Component for PrintPreview<'_> {
                         pos2((visible.min.x - image.min.x) / image.width(), (visible.min.y - image.min.y) / image.height()),
                         pos2((visible.max.x - image.min.x) / image.width(), (visible.max.y - image.min.y) / image.height()),
                     );
-                    ui.content_painter(cx).data_shapes([Shape::mesh(page_quad(picture.id, [visible.left_top(), visible.right_top(), visible.right_bottom(), visible.left_bottom()], uv, tint))]);
+                    ui.content_painter(cx).data_shapes([Shape::mesh(page_quad(
+                        picture.id,
+                        [visible.left_top(), visible.right_top(), visible.right_bottom(), visible.left_bottom()],
+                        uv,
+                        tint,
+                    ))]);
                 }
                 Some(image)
             }

@@ -9,8 +9,8 @@ use craft_behavior::{Codec, NotAValue, NumberCodec};
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::{
-    Bind, EditResponse, Entry, FieldLayout, LabelKind, LabelScheme, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel, Trigger,
-    Validity,
+    Bind, EditResponse, Entry, FieldLayout, LabelKind, LabelScheme, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _, SideLabel,
+    Trigger, Validity,
 };
 use craft_ui::display::Text;
 use craft_ui::form::Field;

@@ -78,8 +78,12 @@ fn organize_keeps_room_above_and_below_landscape_pages() {
         }
     }
     impl craft_pages::ui::PageSource for Landscape {
-        fn page_count(&self) -> usize { 1 }
-        fn page_size(&self, _: usize) -> craft_behavior::kurbo::Size { craft_behavior::kurbo::Size::new(792.0, 612.0) }
+        fn page_count(&self) -> usize {
+            1
+        }
+        fn page_size(&self, _: usize) -> craft_behavior::kurbo::Size {
+            craft_behavior::kurbo::Size::new(792.0, 612.0)
+        }
     }
     let pages = Landscape(DemoPages::new(1));
     let mut picked = Selection::default();

@@ -3,7 +3,9 @@
 use super::{Destination, Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, FieldLayout, Held, LabelScheme, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
+use craft_ui::contract::{
+    Bind, Entry, FieldLayout, Held, LabelScheme, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -230,8 +232,13 @@ impl<'a> PrintPanel<'a> {
                     if let Some(on) = collate.value().copied() {
                         now.collate = on;
                     }
-                    let grayscale =
-                        cx.labelled(ui, "grayscale", if inline { words.print_in_grayscale.clone() } else { words.grayscale.clone() }, after, Checkbox::new(Bind::given(now.grayscale)).enabled(free));
+                    let grayscale = cx.labelled(
+                        ui,
+                        "grayscale",
+                        if inline { words.print_in_grayscale.clone() } else { words.grayscale.clone() },
+                        after,
+                        Checkbox::new(Bind::given(now.grayscale)).enabled(free),
+                    );
                     if let Some(on) = grayscale.value().copied() {
                         now.grayscale = on;
                     }

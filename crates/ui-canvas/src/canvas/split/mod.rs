@@ -395,9 +395,18 @@ impl<'a> SplitViews<'a> {
     pub fn new(label: impl Into<Label>, layout: SplitLayout, at: Bind<'a, SplitAt>) -> Self {
         let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).pad(Pad::None);
         SplitViews {
-            common: Common::new(), props, layout, at, active: 0, pane_press: PanePress::default(), count: 0, activated: None, accepts: None,
+            common: Common::new(),
+            props,
+            layout,
+            at,
+            active: 0,
+            pane_press: PanePress::default(),
+            count: 0,
+            activated: None,
+            accepts: None,
             tab_drop: None,
-        }.label(label)
+        }
+        .label(label)
     }
 
     /// Takes a dragged document strip tab over the views: an unsplit body offers its reading-end half, a split body
@@ -499,7 +508,8 @@ impl<D: Clone + Send + Sync + 'static> Component for SplitViews<'_, D> {
             if pane == active {
                 cx.part(PANE.at(pane as u64), pane_rect).priority(HitPriority::new(HitLevel::Background, 0));
             } else {
-                let part = cx.part(PANE.at(pane as u64), pane_rect)
+                let part = cx
+                    .part(PANE.at(pane as u64), pane_rect)
                     .sense(Sense::CLICK | Sense::TAKE_FOCUS)
                     .priority(HitPriority::new(if self.pane_press == PanePress::Select { HitLevel::Body } else { HitLevel::Background }, 0));
                 if self.pane_press == PanePress::Select {

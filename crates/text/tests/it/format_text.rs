@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use craft_behavior::EditEvent;
 use craft_text::ui::character::{CharacterChange, CharacterValues, FormatControl, FormatText, FormatTextChange, LineSpacing, ParagraphValues};
-use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::ShowContainer as _;
+use craft_ui::contract::tooltip::DELAY;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, trial};
@@ -100,7 +100,11 @@ fn the_size_field_keeps_room_for_its_value_in_a_narrow_panel() {
     fixture.idle(10);
     let size = fixture.by_label("Font size").expect("the size field is shown");
     assert!(size.rect.width() >= 64.0, "the size field is {} wide: {:?}", size.rect.width(), size.rect);
-    assert!(fixture.texts().iter().any(|run| run.text == "Mixed"), "a mixed size reads Mixed: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+    assert!(
+        fixture.texts().iter().any(|run| run.text == "Mixed"),
+        "a mixed size reads Mixed: {:?}",
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    );
 }
 
 /// In the Tools pane's width (272 points less its padding, Comfortable density) the size field still reads its value:

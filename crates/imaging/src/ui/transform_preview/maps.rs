@@ -357,11 +357,8 @@ fn clip_quad(mesh: PreviewMesh, quad: [Point; 4], source: bool) -> PreviewMesh {
     }
     let distance = |edge: usize, p: Point| cross(quad[edge], quad[(edge + 1) % 4], p) * area.signum();
     let inside = |p: &Point| (0..4).all(|edge| distance(edge, *p) >= 0.0);
-    let entirely_inside = if source {
-        mesh.uv.iter().all(|uv| inside(&Point::new(f64::from(uv[0]), f64::from(uv[1]))))
-    } else {
-        mesh.points.iter().all(inside)
-    };
+    let entirely_inside =
+        if source { mesh.uv.iter().all(|uv| inside(&Point::new(f64::from(uv[0]), f64::from(uv[1])))) } else { mesh.points.iter().all(inside) };
     if entirely_inside {
         return mesh;
     }

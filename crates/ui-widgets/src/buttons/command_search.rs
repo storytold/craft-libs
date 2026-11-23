@@ -63,7 +63,17 @@ impl CommandSearch {
     }
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
-        FaceSpec { arrangement: Arrangement::Inline, label, role: Some(TypeRole::Body), lead: Some(&self.glyph), picture: None, trail: None, loading: false, mnemonic: None, align: HAlign::Start }
+        FaceSpec {
+            arrangement: Arrangement::Inline,
+            label,
+            role: Some(TypeRole::Body),
+            lead: Some(&self.glyph),
+            picture: None,
+            trail: None,
+            loading: false,
+            mnemonic: None,
+            align: HAlign::Start,
+        }
     }
 }
 

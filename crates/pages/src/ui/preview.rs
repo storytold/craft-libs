@@ -8,8 +8,8 @@ pub(crate) mod stories;
 use super::view::PageSource;
 use craft_behavior::{Input, Metrics, PartKey, Proposal, Sense};
 use craft_ui::contract::{
-    Bind, CommandSet, Common, Component, Cx, DisabledLook, MeasureCx, NoValue,
-    Outcome, PaintUi, PartsCx, Props as _, Role, RowAlign, Show as _, ShowContainer,
+    Bind, CommandSet, Common, Component, Cx, DisabledLook, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, RowAlign, Show as _,
+    ShowContainer,
 };
 use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Row;

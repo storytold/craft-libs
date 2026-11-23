@@ -796,32 +796,28 @@ fn the_overlay_draws_round_handles_and_no_second_leader() {
     let annotations = vec![annotation(1, AnnotationKind::Rectangle, Rect::new(20.0, 20.0, 100.0, 60.0)), callout];
     let selected = vec![AnnotationId(2)];
     let shown = annotations.clone();
-    let mut overlay = ToolFixture::with_view(
-        "Document",
-        AnnotateTool::new(AnnotationTool::Select, 0),
-        view,
-        move |ui, cx| {
-            AnnotationOverlay::new("Annotations", &shown, &selected).show_at(ui, cx.rect);
-        },
-    );
+    let mut overlay = ToolFixture::with_view("Document", AnnotateTool::new(AnnotationTool::Select, 0), view, move |ui, cx| {
+        AnnotationOverlay::new("Annotations", &shown, &selected).show_at(ui, cx.rect);
+    });
     let tip = on_screen(&overlay, Point::new(60.0, 160.0));
     let shapes = overlay.fixture().frame_shapes();
-    let leaders: Vec<&egui::epaint::PathShape> =
-        shapes.iter().filter_map(|shape| if let Shape::Path(p) = shape { Some(p) } else { None }).filter(|p| p.points.first().is_some_and(|q| (*q - tip).length() < 0.5)).collect();
+    let leaders: Vec<&egui::epaint::PathShape> = shapes
+        .iter()
+        .filter_map(|shape| if let Shape::Path(p) = shape { Some(p) } else { None })
+        .filter(|p| p.points.first().is_some_and(|q| (*q - tip).length() < 0.5))
+        .collect();
     assert!(!leaders.is_empty(), "the leader paints");
-    assert!(leaders.iter().all(|p| p.stroke.color == ColorMode::Solid(Color32::from_rgb(255, 0, 0))), "every leader stroke is the annotation's colour");
+    assert!(
+        leaders.iter().all(|p| p.stroke.color == ColorMode::Solid(Color32::from_rgb(255, 0, 0))),
+        "every leader stroke is the annotation's colour"
+    );
 
     let mut boxed = annotations;
     boxed.truncate(1);
     let selected = vec![AnnotationId(1)];
-    let mut overlay = ToolFixture::with_view(
-        "Document",
-        AnnotateTool::new(AnnotationTool::Select, 0),
-        view,
-        move |ui, cx| {
-            AnnotationOverlay::new("Annotations", &boxed, &selected).show_at(ui, cx.rect);
-        },
-    );
+    let mut overlay = ToolFixture::with_view("Document", AnnotateTool::new(AnnotationTool::Select, 0), view, move |ui, cx| {
+        AnnotationOverlay::new("Annotations", &boxed, &selected).show_at(ui, cx.rect);
+    });
     let shapes = overlay.fixture().frame_shapes();
     let discs = shapes.iter().filter(|shape| matches!(shape, Shape::Circle(c) if c.radius < 8.0)).count();
     assert!(discs >= 8, "the eight resize handles are round: {discs}");

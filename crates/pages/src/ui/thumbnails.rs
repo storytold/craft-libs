@@ -456,7 +456,13 @@ impl<'a> PageThumbnails<'a> {
         let tail: Vec<TailRow<usize>> = if new_page_row { vec![TailRow::new(new_page, words.new_page.clone())] } else { Vec::new() };
         // Organize uses a portrait page frame for every page, so landscape pages fit inside it
         // instead of collapsing the room reserved for the controls around the picture.
-        let aspect = if organize { 0.85 } else if count == 0 { 1.0 } else { aspect_of(source, 0) };
+        let aspect = if organize {
+            0.85
+        } else if count == 0 {
+            1.0
+        } else {
+            aspect_of(source, 0)
+        };
         let mut grid = TileGrid::<usize>::new(label)
             .id_source(id)
             .selection(Bind::bound(&mut *picked))
