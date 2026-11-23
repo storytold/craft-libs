@@ -9,6 +9,8 @@ mod config;
 mod envelope;
 mod inventory;
 pub use inventory::LayerInventory;
+/// Inert GEGL chain syntax, typed source declarations and backward references.
+pub mod graph;
 #[cfg(test)]
 mod tests;
 
