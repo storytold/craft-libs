@@ -202,6 +202,7 @@ struct GridProps<'a, T: PlainData> {
     hidden: Option<&'a Tracked<Vec<T>>>,
     editing: bool,
     edit_label: Option<Label>,
+    edit_icon: Option<IconId>,
     opens: Side,
     columns: usize,
     sent: Outbox<'a, RailEvent<T>>,
@@ -220,66 +221,6 @@ struct Draw<'a, T: PlainData> {
     columns: usize,
 }
 
-<<<<<<< HEAD
-impl<T: Value + 'static> Draw<'_, T> {
-    /// The grid of buttons in rows of `columns`, with the pass's results in `collected`.
-    fn run(&self, ui: &mut Ui, cx: &mut BodyCx<'_>, collected: &mut Collected<T>) {
-        let Draw { slots, current, last_used, hidden, editing, columns, opens, .. } = *self;
-        *collected = Collected::default();
-        let visible = visible_slots(slots, hidden);
-        let cells = visible.len() + usize::from(self.edit_label.is_some());
-        let enabled = |tool: &RailTool<T>| cx.resolve_command(tool.command.clone()).is_some_and(|resolved| resolved.enabled);
-        let at: Vec<usize> = visible.iter().map(|(index, _)| *index).collect();
-        // The grid of buttons sits at the centre of the rail's width.
-        Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
-            Stack::new().gap(Gap::Inline).show(ui, |ui, _| {
-                for group in row_groups(slots, &at, cells, columns) {
-                    Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-                        for &first in &group {
-                            Row::new().gap(Gap::Tight).show(ui, |ui, _| {
-                                for k in first..(first + columns).min(cells) {
-                                    match visible.get(k) {
-                                        Some((index, tools)) => {
-                                            let slot = &slots[*index];
-                                            let owned: Vec<RailTool<T>> = tools.iter().map(|tool| (*tool).clone()).collect();
-                                            let Some(shown) = shown_tool(current, slot.id, tools, last_used, enabled) else { continue };
-                                            let selected = tools.iter().any(|tool| tool.id == *current);
-                                            let mut button = FlyoutButton::new(&owned, &shown.id)
-                                                .id_salt(("slot", slot.id))
-                                                .selected(selected)
-                                                .enabled(tools.iter().any(|tool| enabled(tool)))
-                                                .opens(opens);
-                                            if editing {
-                                                button = button.edit(SlotEdit::new(slot.id, *index, slot.tools.len(), columns == 1));
-                                            }
-                                            let out = button.show(ui);
-                                            if out.select.is_some() {
-                                                collected.select = out.select;
-                                            }
-                                            if out.double_clicked {
-                                                collected.double_clicked = Some(shown.id.clone());
-                                            }
-                                            if out.opened {
-                                                collected.flyout = Some(slot.id);
-                                            }
-                                            if out.dropped.is_some() {
-                                                collected.dropped = out.dropped;
-                                            }
-                                        }
-                                        None => {
-                                            let label = self.edit_label.clone().unwrap_or(Label::Empty);
-                                            let more = IconButton::new(self.edit_icon.clone().unwrap_or_else(|| IconId::new("more"))).id_salt("edit-toolbar").label(label).show(ui);
-                                            collected.edit_toolbar = Some(more.response);
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    });
-                }
-            });
-        });
-=======
 impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
     /// Shows the grid as a memoized view; what the buttons report goes into `events` (nothing on a replay). Returns the
     /// Edit Toolbar button's id while the rail shows it.
@@ -291,12 +232,12 @@ impl<T: Value + MemoProps + PlainData> Draw<'_, T> {
             hidden: self.hidden,
             editing: self.editing,
             edit_label: self.edit_label.clone(),
+            edit_icon: self.edit_icon.clone(),
             opens: self.opens,
             columns: self.columns,
             sent: Outbox::new(events),
         };
         MemoView::new("slots", props, grid::<T>).show(ui).flatten()
->>>>>>> origin/next
     }
 }
 
@@ -349,7 +290,8 @@ fn grid<T: Value + MemoProps + PlainData>(props: &mut GridProps<'_, T>, ui: &mut
                                     }
                                     None => {
                                         let label = props.edit_label.clone().unwrap_or(Label::Empty);
-                                        let more = IconButton::new(IconId::new("more")).id_salt("edit-toolbar").label(label).show(ui);
+                                        let icon = props.edit_icon.clone().unwrap_or_else(|| IconId::new("more"));
+                                        let more = IconButton::new(icon).id_salt("edit-toolbar").label(label).show(ui);
                                         edit_toolbar = Some(more.response.id);
                                     }
                                 }

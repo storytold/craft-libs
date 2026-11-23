@@ -1,11 +1,7 @@
 //! Stories of `ToolbarDrawer`.
 
-<<<<<<< HEAD
 use super::{DrawerGroup, DrawerKind, ToolbarDrawer};
-=======
-use super::{DrawerGroup, ToolbarDrawer};
 use crate::contract::Tracked;
->>>>>>> origin/next
 use crate::rails::tool::stories::{BRUSH, tools};
 use crate::rails::tool::{LastUsed, ToolRail, ToolSlot};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};

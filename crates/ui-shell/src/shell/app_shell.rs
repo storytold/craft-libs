@@ -360,18 +360,15 @@ pub struct AppShell<'a, S> {
     /// The screen mode. Without a binding the shell keeps it, starting at `Standard`.
     #[prop]
     screen_mode: Bind<'a, ScreenMode>,
-<<<<<<< HEAD
-    /// The bottom alignment of notices in the body; without one they use its trailing bottom corner.
-    #[prop]
-    toast_alignment: Option<egui::Align2>,
-=======
     /// Which screen modes the F key cycles through. The shell publishes it to its regions.
     #[prop]
     mode_set: ScreenModeSet,
     /// Whether the drop-down slot of a Focus window is shown. A body press edge or a mode change clears it.
     #[prop]
     dropped: Bind<'a, bool>,
->>>>>>> origin/next
+    /// The bottom alignment of notices in the body; without one they use its trailing bottom corner.
+    #[prop]
+    toast_alignment: Option<egui::Align2>,
     /// Whether the Tab reveal and the edge reveal work in body-only mode. Off for a presentation.
     #[prop]
     allow_reveal: bool,
@@ -406,12 +403,9 @@ impl<'a, S> AppShell<'a, S> {
             embedded: false,
             content_room: None,
             screen_mode: Bind::kept(),
-<<<<<<< HEAD
-            toast_alignment: None,
-=======
             mode_set: ScreenModeSet::default(),
             dropped: Bind::kept(),
->>>>>>> origin/next
+            toast_alignment: None,
             allow_reveal: true,
             edge_reveal: true,
             document_tabs: true,
@@ -524,12 +518,9 @@ impl<'a, S> AppShell<'a, S> {
             embedded,
             content_room,
             mut screen_mode,
-<<<<<<< HEAD
-            toast_alignment,
-=======
             mode_set,
             mut dropped,
->>>>>>> origin/next
+            toast_alignment,
             allow_reveal,
             edge_reveal,
             document_tabs,

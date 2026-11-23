@@ -3,36 +3,23 @@
 use craft_behavior::{Metrics, MotionMode, PartKey, Sense};
 use craft_host::target::{Os, WindowChrome};
 use craft_quit::{CloseAnswer, CloseScope};
-<<<<<<< HEAD
-use craft_ui::contract::Bind;
-use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
-=======
 use craft_ui::contract::overlay::{Dismiss, Outside};
 use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _, ShowContainer as _};
->>>>>>> origin/next
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
     Alert, ChildDialog, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
     UnsavedChangesDialog, dialog_id,
 };
-<<<<<<< HEAD
+use craft_ui::display::Text;
+use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::{CommandSet as _, EditCommands};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::style::{ComponentStyle, StyleCx};
-use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
-use craft_ui::text::TextField;
-use egui::{Modifiers, Rect, Response, Ui, Vec2, ViewportId, vec2};
-=======
-use craft_ui::display::Text;
-use craft_ui::popover::Popover;
-use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::sections::{DialogRole, FooterButton};
-use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, pointer, trial};
+use craft_ui::text::TextField;
 use egui::{Modifiers, Pos2, Rect, Response, Ui, Vec2, ViewportId, vec2};
->>>>>>> origin/next
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -400,7 +387,6 @@ fn the_platform_chords_answer_dont_save() {
     }
 }
 
-<<<<<<< HEAD
 /// A long document name must remain within the unsaved question's dialog.
 #[trial]
 fn unsaved_question_keeps_long_text_inside_its_dialog() {
@@ -415,7 +401,8 @@ fn unsaved_question_keeps_long_text_inside_its_dialog() {
     let runs = fixture.texts();
     let message = runs.iter().find(|run| run.text.contains("WWWWWWWW")).expect("the document name is painted");
     assert!(message.rect.left() >= dialog.left() && message.rect.right() <= dialog.right(), "message {:?} exceeds dialog {dialog:?}", message.rect);
-=======
+}
+
 /// The unsaved-changes buttons run Yes, No, Cancel on Windows and Don't Save, Cancel, Save on macOS; on every OS Escape
 /// answers Cancel, and the Yes and No letters answer Save and Don't Save.
 #[trial]
@@ -520,7 +507,6 @@ fn a_delete_prompt_reads_delete_then_cancel_on_windows() {
         let left = |name: &str| fixture.by_label(name).expect("the button shows").rect.left();
         assert!(left("Delete") < left("Cancel"), "{os:?}: Delete, then Cancel, from the start edge");
     }
->>>>>>> origin/next
 }
 
 /// Each open of a dialog has its own serial, kept while it stays open, though its id is the same at every open: a
@@ -540,7 +526,6 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
 }
 
-<<<<<<< HEAD
 /// The commands an Undo fired that a focused, unedited name field had nothing to do for, the field in a modal dialog
 /// or in the window.
 fn undo_with_nothing_to_undo(modal: bool) -> Vec<String> {
@@ -675,7 +660,8 @@ fn an_app_can_take_the_close_x_off_every_dialog() {
     fixture.idle(4);
     assert!(fixture.by_label("Close").is_none(), "the close x is gone once the app turned it off");
     assert!(fixture.by_label("OK").is_some(), "the dialog still has its buttons");
-=======
+}
+
 /// The title of the hosted modal the nudge and popup trials open.
 const NUDGED: &str = "Nudge probe";
 
@@ -958,5 +944,4 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     }
     // Typing replaced the first field's text: the text field first, then the number field first.
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
->>>>>>> origin/next
 }

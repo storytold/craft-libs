@@ -68,7 +68,8 @@ pub struct UnsavedChangesDialog {
     open: bool,
     /// What a programmatic OK answers; the accepting answer's when `None`.
     chosen: Option<CloseAnswer>,
-<<<<<<< HEAD
+    /// Why the last save failed, shown under the message.
+    reason: Option<String>,
     /// The buttons are worded and ordered as a document app's save question: Don't save, Cancel, Save.
     document_wording: bool,
     title: Option<Label>,
@@ -77,10 +78,6 @@ pub struct UnsavedChangesDialog {
     icon: Option<IconId>,
     /// The app's word for the Don't Save button, replacing the catalog's.
     dont_save: Option<Label>,
-=======
-    /// Why the last save failed, shown under the message.
-    reason: Option<String>,
->>>>>>> origin/next
 }
 
 impl UnsavedChangesDialog {
@@ -94,16 +91,13 @@ impl UnsavedChangesDialog {
             apply_to_all: false,
             open: true,
             chosen: None,
-<<<<<<< HEAD
+            reason: None,
             document_wording: false,
             title: None,
             message: None,
             note: None,
             icon: None,
             dont_save: None,
-        }
-=======
-            reason: None,
         }
     }
 
@@ -112,7 +106,6 @@ impl UnsavedChangesDialog {
     pub fn reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
         self
->>>>>>> origin/next
     }
 
     /// The answer a host-side `confirm` gives, as pressing that button would; the accepting answer's until set. An
@@ -192,18 +185,11 @@ impl UnsavedChangesDialog {
                 let reply = match answer {
                     CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
-<<<<<<< HEAD
                     CloseAnswer::DontSave => {
                         let word = if mac { &words.unsaved_dont_save } else { &words.unsaved_no };
                         let word = self.dont_save.as_ref().unwrap_or(word);
-                        Reply::new(word.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
+                        Reply::new(word.clone(), DialogRole::Alternate).chord(Chord::new(Mods::CMD, Key::D))
                     }
-=======
-                    CloseAnswer::DontSave if mac => {
-                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Alternate).chord(Chord::new(Mods::CMD, Key::D))
-                    }
-                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Alternate),
->>>>>>> origin/next
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
                 };
                 (answer, reply)
@@ -240,20 +226,17 @@ impl UnsavedChangesDialog {
         let replies = self.replies(&words, common.cancel.clone(), env.view().shell().os);
         let answers: Vec<CloseAnswer> = replies.iter().map(|(answer, _)| *answer).collect();
         let replies: Vec<Reply> = replies.into_iter().map(|(_, reply)| reply).collect();
-<<<<<<< HEAD
         let title = self.title.clone().unwrap_or_else(|| words.unsaved_title.clone());
         let message = self.message.clone().unwrap_or_else(|| Label::from(message));
-        let mut prompt = Prompt::new(title, message).answers(buttons(&env, replies));
+        let mut prompt = Prompt::new(title, message).alert().answers(buttons(&env, replies));
+        if let Some(reason) = &self.reason {
+            prompt = prompt.tone(Tone::Bad, reason.clone());
+        }
         if let Some(icon) = self.icon.clone() {
             prompt = prompt.icon(icon);
         }
         if let Some(note) = self.note.clone() {
             prompt = prompt.note(note);
-=======
-        let mut prompt = Prompt::new(words.unsaved_title.clone(), message).alert().answers(buttons(&env, replies));
-        if let Some(reason) = &self.reason {
-            prompt = prompt.tone(Tone::Bad, reason.clone());
->>>>>>> origin/next
         }
         let mut ticked = hosted && self.apply_to_all;
         if self.offers_apply_to_all() {

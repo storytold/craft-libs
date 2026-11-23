@@ -1,19 +1,14 @@
 //! `StartScreen`: which part of the page takes a double click, what a recent file's menu offers, where host sections
 //! sit, and how a pinned folder lists its files.
 
-<<<<<<< HEAD
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::display::Text;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::shell::{
-    FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, RecentFile, RecentSort, RecentView, ShellWords, StartAction, StartLink, StartPlace,
-    StartScreen, Template,
+    FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, RecentFile, RecentList, RecentSort, RecentView, ShellWords, StartAction,
+    StartLayout, StartLink, StartPlace, StartScreen, Template,
 };
-=======
-use craft_ui::contract::{Bind, Role};
-use craft_ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartAction, StartLayout, StartLink, StartScreen, Template};
->>>>>>> origin/next
 use craft_ui::testing::pointer::{moved, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
 use egui::{Key, Modifiers};
@@ -130,11 +125,6 @@ fn a_double_click_on_the_empty_room_opens_and_one_on_a_card_opens_only_its_file(
     assert_eq!(opens(&log), 0, "a double click on a rail link opens no file: {:?}", log.borrow());
 }
 
-<<<<<<< HEAD
-/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file, and the menu key and
-/// Shift+F10 open it from the focused card. The menu is told by "Clear Recent Files", which only the menu has: the
-/// card's hover action carries "Remove from Recent" too.
-=======
 /// The row of the recent file named `file`: a list row whose name starts with the file's name and carries its folder.
 fn recent_row(fixture: &Fixture, file: &str) -> Option<Target> {
     [Role::LIST_ITEM, Role::LIST_BOX_OPTION]
@@ -206,8 +196,9 @@ fn a_recent_row_names_its_full_path_and_reveals_remove_on_hover_or_focus() {
     assert!(log.borrow().contains(&StartAction::ClearRecent), "Clear reports ClearRecent: {:?}", log.borrow());
 }
 
-/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file.
->>>>>>> origin/next
+/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file, and the menu key and
+/// Shift+F10 open it from the focused card. The menu is told by "Clear Recent Files", which only the menu has: the
+/// card's hover action carries "Remove from Recent" too.
 #[trial]
 fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     const MENU_ONLY: &str = "Clear Recent Files";

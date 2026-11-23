@@ -8,27 +8,12 @@ use crate::runtime::memory;
 use craft_behavior::dock::{Action, Permissions};
 use egui::{Context, Id, Ui};
 
-<<<<<<< HEAD
-/// The host's panels. A dock calls, in one pass and for each group it shows:
-///
-/// 1. `group_view`, with the group's panels and where the group goes. When it returns a height the host took the group
-///    itself: the dock shows no tab strip and no panel body for that group, and calls neither `group_header` nor `body`
-///    for it. A flyout measures its group before it shows it, so a host view runs at `GroupAt::Measure` too.
-/// 2. Otherwise `group_header` once, inside the group's header region before its tab strip, then `spec` for each of
-///    its panels, then `body` for the panels whose bodies are shown, and `footer` under the body of a shown panel
-///    whose spec has `PanelSpec::footer`. `panel_rows` runs when a panel's menu opens.
-///
-/// A panel's `spec` is read every pass, so a host may change a label or a limit between passes. The dock's actions
-/// name a group by one of its panels.
-pub trait DockPanels<P> {
-=======
 /// What a dock reads of the host's panels: each panel's spec and permissions. The host keeps an implementation in a
 /// [`Tracked`] and gives the dock a reference to it; the dock reads it only when the `Tracked`'s revision or the
 /// workspace changed, and keeps what it read otherwise. A host changes a label or a limit by editing its spec model,
 /// which moves the revision. The model is plain data, so nothing it answers can change without that edit; a spec
 /// needs no style either (a tool rail's grid is [`DockGrid::rail`](super::DockGrid::rail), which the dock sizes).
 pub trait PanelSpecs<P>: PlainData {
->>>>>>> origin/next
     /// What the dock reads of `panel`.
     fn spec(&self, panel: &P) -> PanelSpec;
 
@@ -72,7 +57,7 @@ impl<P, S: PanelSpecs<P>> SpecSource<P> for Tracked<S> {
 ///    itself: the dock shows no tab strip and no panel body for that group, and calls neither `group_header` nor `body`
 ///    for it. A flyout measures its group before it shows it, so a host view runs at `GroupAt::Measure` too.
 /// 2. Otherwise `group_header` once, inside the group's header before its tab strip, then `body` for the panels whose
-///    bodies are shown.
+///    bodies are shown, and `footer` under the body of a shown panel whose spec has `PanelSpec::footer`.
 ///
 /// Each of these runs every pass the group shows. A host memoizes inside them: a body or view shown through a
 /// [`MemoView`](crate::contract::MemoView) runs only when its props changed or input reached it, and otherwise repaints
@@ -87,7 +72,6 @@ pub trait DockPanels<P> {
     /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
-<<<<<<< HEAD
     /// Shows the fixed trailing controls of the rail containing `panel`, in top-to-bottom order. The dock calls this
     /// only when the area names a panel with `DockArea::rail_footer`; the controls remain in view while icons scroll.
     fn rail_footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
@@ -105,8 +89,6 @@ pub trait DockPanels<P> {
         None
     }
 
-=======
->>>>>>> origin/next
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at
     /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at
     /// `GroupAt::Measure(width)` it measures that view at `width` the way it shows it. It returns the height the view

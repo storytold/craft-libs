@@ -34,7 +34,6 @@ fn a_minimized_group_runs_no_body() {
     assert_eq!(body(true), (0, false), "a minimized group runs no body and leaves no node");
 }
 
-<<<<<<< HEAD
 // A panel's count follows its name on its tab and in the tab's name; the shown panel's caption sits in the header
 // under the tabs and above the body, and goes when another panel of the group is shown.
 #[trial]
@@ -46,7 +45,7 @@ fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
         PanelTitle::new(PanelKey::new(2), "Pages").count(Some(9)),
     ];
     let mut fixture = Fixture::new(move |ui| {
-        let group = DockGroup::new(1usize, &panels, panels[picked.get()].key);
+        let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[picked.get()].key);
         let out = group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), |ui, _| {
             Button::new("Body button").show(ui);
         });
@@ -74,7 +73,7 @@ fn a_titled_group_shows_the_panel_title_and_a_close_button_instead_of_tabs() {
     let seen = Rc::clone(&closed);
     let panels = vec![PanelTitle::new(PanelKey::new(1), "Accessibility Checker").closable(true), PanelTitle::new(PanelKey::new(2), "Pages")];
     let mut fixture = Fixture::new(move |ui| {
-        let out = DockGroup::new(1usize, &panels, panels[0].key).titled().closable().show_at(
+        let out = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).titled().closable().show_at(
             ui,
             Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)),
             |ui, _| {
@@ -115,7 +114,8 @@ fn a_grip_window_shows_a_grip_and_no_title_actions() {
     fixture.settle();
     assert_eq!(actions(&fixture), 0, "a grip window shows none");
     assert!(fixture.by_label("Select").is_some(), "the body stays");
-=======
+}
+
 // A toolbar's marked grip is a handle (photocraft#16467): the grab cursor over it and grabbing while it is held, as
 // the grips of a collapsed column show. An unmarked band and a grip that does not move keep the plain arrow.
 #[trial]
@@ -139,5 +139,4 @@ fn a_marked_grip_shows_the_grab_cursor() {
         frames.frame(vec![], &mut show);
         assert_eq!(frames.cursor_icon(), held, "the grip held (ticks {ticks}, movable {movable})");
     }
->>>>>>> origin/next
 }

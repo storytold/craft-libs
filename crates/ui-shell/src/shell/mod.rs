@@ -38,15 +38,11 @@ pub(crate) mod start;
 pub(crate) mod viewport_window;
 
 pub use recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
-<<<<<<< HEAD
-pub use start::{
-    FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, StartAction, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands,
-    StartPlace, StartRecentCommands, StartScreen,
-};
-=======
 pub use recent_list::RecentList;
-pub use start::{StartAction, StartLayout, StartLink, StartLinkTarget, StartOutput, StartPinnedCommands, StartRecentCommands, StartScreen};
->>>>>>> origin/next
+pub use start::{
+    FolderListing, PINNED_FILES_SHOWN, PinnedFile, PinnedFolder, StartAction, StartLayout, StartLink, StartLinkTarget, StartOutput,
+    StartPinnedCommands, StartPlace, StartRecentCommands, StartScreen,
+};
 pub use viewport_window::{ViewportWindow, ViewportWindowOutput};
 
 // Caption buttons: the four families' button, its slot layout and the icon-theme glyphs.

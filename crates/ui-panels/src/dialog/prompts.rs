@@ -80,11 +80,7 @@ impl PromptChoice {
     fn role(self) -> DialogRole {
         match self {
             PromptChoice::Proceed => DialogRole::Accept,
-<<<<<<< HEAD
-            PromptChoice::Alternate => DialogRole::Alternative,
-=======
             PromptChoice::Alternate => DialogRole::Alternate,
->>>>>>> origin/next
             PromptChoice::Cancel => DialogRole::Cancel,
         }
     }
@@ -390,9 +386,10 @@ impl StandardPrompt {
         if let Some(own) = &self.message {
             message = own.clone();
         }
-        let alternate = match self.kind {
-            PromptKind::ChangedOnDisk { .. } => &words.save_as,
-            _ => &words.discard,
+        // A changed file's Save as… is a second way to save, not an answer that closes the question.
+        let (alternate, alternate_role) = match self.kind {
+            PromptKind::ChangedOnDisk { .. } => (&words.save_as, DialogRole::Alternative),
+            _ => (&words.discard, DialogRole::Alternate),
         };
         // `Prompt` and the footer take the first Accept answer as the default (Enter and the default stop), so the
         // default choice's reply is the Accept one and an Accept Proceed that is not the default steps back to Other.
@@ -402,19 +399,14 @@ impl StandardPrompt {
             .offered()
             .into_iter()
             .map(|(choice, enabled)| {
-<<<<<<< HEAD
-                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| (label.clone(), choice.role()));
+                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| {
+                    let role = if choice == PromptChoice::Alternate { alternate_role } else { choice.role() };
+                    (label.clone(), role)
+                });
                 let (label, role) = own.unwrap_or_else(|| match choice {
                     PromptChoice::Proceed => (proceed.clone(), role),
-                    PromptChoice::Alternate => (alternate.clone(), DialogRole::Alternative),
+                    PromptChoice::Alternate => (alternate.clone(), alternate_role),
                     PromptChoice::Cancel => (common.cancel.clone(), DialogRole::Cancel),
-=======
-                let own = self.buttons.iter().find(|(button, _)| *button == choice).map(|(_, label)| Reply::new(label.clone(), choice.role()));
-                let reply = own.unwrap_or_else(|| match choice {
-                    PromptChoice::Proceed => Reply::new(proceed.clone(), role),
-                    PromptChoice::Alternate => Reply::new(words.discard.clone(), DialogRole::Alternate),
-                    PromptChoice::Cancel => Reply::new(common.cancel.clone(), DialogRole::Cancel),
->>>>>>> origin/next
                 });
                 let role = match role {
                     _ if default == PromptChoice::Proceed => role,

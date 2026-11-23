@@ -184,18 +184,13 @@ pub struct IconicColumnStyle {
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
 /// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 ///
-<<<<<<< HEAD
-/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar: the column shows its
-/// icons under it and keeps the divider of its inner edge, which sets its width, and registers no edge bands.
+/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's sides set
+/// its width: the column shows its icons under it, with no divider on its inner edge, and registers no edge bands.
 ///
 /// In [`IconicMode::Rail`] the icons open no flyouts and the bound open panel is not used: the column is a rail the
 /// host also shows beside the expanded column. While `Column::iconic` is off the panels in front of their groups show
 /// selected and the bar's chevron collapses the column; a click on an icon reports
 /// [`IconicColumnOutput::front`] and [`IconicColumnOutput::iconic`].
-=======
-/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's sides set
-/// its width: the column shows its icons under it, with no divider on its inner edge, and registers no edge bands.
->>>>>>> origin/next
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, overlay, probe(IconicColumn<'static, u8>))]
 pub struct IconicColumn<'a, P: Value + Hash + 'static> {
@@ -220,16 +215,12 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// Whether Auto-Collapse Iconic Panels is on.
     #[prop]
     auto_collapse: bool,
-<<<<<<< HEAD
     /// What the icons open: flyouts, or the column itself as a rail.
     #[prop]
     mode: IconicMode,
-    /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
-=======
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column, and the rect its
     /// flyouts open in. Unset, the flyouts take the room layers opened there have (`overlay::layer_room`): around a
     /// palette window, the work area.
->>>>>>> origin/next
     #[prop]
     within: Rect,
     open: Bind<'a, Option<P>>,
@@ -677,12 +668,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             access.node(GRIP.at(*group as u64), Role::BUTTON).name = Name::Text(name);
         }
         if self.bar == ColumnBar::Own {
-<<<<<<< HEAD
-            describe_chevron(access, &ColumnArrow::Collapse.name(&words, self.expanded()));
-=======
             divider::describe(access, EDGE, 0, &self.edge_divider(cx.rect, &sizes.column), words.resize.as_str(), sizes.column.step);
-            describe_chevron(access, &ColumnArrow::Collapse.name(&words, false));
->>>>>>> origin/next
+            describe_chevron(access, &ColumnArrow::Collapse.name(&words, self.expanded()));
         }
     }
 
@@ -830,15 +817,8 @@ impl<P: Value + Hash + Debug + 'static> Container for IconicColumn<'_, P> {
         if self.bar == ColumnBar::Window {
             return;
         }
-<<<<<<< HEAD
-        if let Some(grip) = column_grip(self.column, self.spec, cx) {
-            let band = bar_band(ui, self.bar_rect, self.edge);
-            self.record = show_bar(ui, cx, band, self.expanded(), self.auto_collapse, ColumnArrow::Collapse, grip.icons(true));
-        }
-=======
         let (column, spec, auto_collapse) = (self.column, self.spec, self.auto_collapse);
         let band = bar_band(ui, self.bar_rect, self.edge);
-        self.record = show_bar(ui, band, false, auto_collapse, ColumnArrow::Collapse, true, column_grip(column, spec, cx));
->>>>>>> origin/next
+        self.record = show_bar(ui, band, self.expanded(), auto_collapse, ColumnArrow::Collapse, true, column_grip(column, spec, cx));
     }
 }

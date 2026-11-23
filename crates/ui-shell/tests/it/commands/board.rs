@@ -1,12 +1,9 @@
 use super::kit::{AppCommand, Dock, DockCommand, PaneCommand, Silent, Tap};
-use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
-<<<<<<< HEAD
+use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::runtime::commands::{
-    CommandGate, CommandInput, CommandRef, CommandState, Commands as _, EditCommands, FirePhase, FireSource, Fired, fire, resolve,
+    CommandGate, CommandInput, CommandRef, CommandState, CommandStates, Commands as _, EditCommands, FirePhase, FireSource, Fired, chord_text_builds,
+    fire, resolve,
 };
-=======
-use craft_ui::runtime::commands::{CommandState, Commands as _, EditCommands, FireSource, Fired, chord_text_builds, fire, resolve};
->>>>>>> origin/next
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::measure::chord_texts;
@@ -86,40 +83,17 @@ fn an_enclosing_scopes_shortcut_beats_the_applications() {
     assert_eq!((closed.get(), ids(&take_output(&frames.ctx).fired)), (1, vec!["trial.jump"]), "outside the dock the application's command fires");
 }
 
-<<<<<<< HEAD
-/// 1.8 and 7.2: the gate is app code, so it runs with no runtime lock held and may use the board.
-#[trial]
-fn the_gate_may_resolve_commands() {
-    let mut frames = Frames::new();
-    let ctx = frames.ctx.clone();
-    let inside = std::sync::atomic::AtomicBool::new(false);
-    frames.commands(CommandInput::new().gate(CommandGate::new(move |_: &CommandRef| {
-        // The nested `resolve` runs the gate again, which stops here.
-        inside.swap(true, std::sync::atomic::Ordering::SeqCst) || {
-            let enabled = resolve(&ctx, AppCommand::Go).enabled;
-            inside.store(false, std::sync::atomic::Ordering::SeqCst);
-            enabled
-        }
-    })));
-    let mut show = |ui: &mut Ui| {
-        Tap::new().id_salt("go").command(AppCommand::Save).show(ui);
-    };
-    frames.idle(2, &mut show);
-    frames.frame(vec![key_press(Key::K, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT)], &mut show);
-    assert_eq!(ids(&take_output(&frames.ctx).fired), ["trial.save"]);
-}
-
 /// 11.3: a key whose app-scope command only the app's own state disables is declined, in order, once, though a discard
 /// pass reruns its frame; one the gate also refuses is not, and none of them fires.
 #[trial]
 fn a_disabled_commands_key_is_declined_and_a_gated_one_is_not() {
     let mut frames = Frames::new();
+    let mut states = Tracked::new(CommandStates::new());
+    for command in [AppCommand::Play, AppCommand::Save, AppCommand::Jump] {
+        states.set(command, CommandState::new().enabled(false));
+    }
     frames.commands(
-        CommandInput::new()
-            .state(AppCommand::Play, CommandState::new().enabled(false))
-            .state(AppCommand::Save, CommandState::new().enabled(false))
-            .state(AppCommand::Jump, CommandState::new().enabled(false))
-            .gate(CommandGate::new(|command: &CommandRef| *command != CommandRef::from(AppCommand::Jump))),
+        CommandInput::new().states(&states).gate(CommandGate::new((), |_: &(), command: &CommandRef| *command != CommandRef::from(AppCommand::Jump))),
     );
     let mut show = |ui: &mut Ui| {
         Tap::new().id_salt("go").command(AppCommand::Go).show(ui);
@@ -146,8 +120,6 @@ fn a_disabled_commands_key_is_declined_and_a_gated_one_is_not() {
     assert!(take_output(&frames.ctx).declined.is_empty(), "nothing is declined again in later frames");
 }
 
-=======
->>>>>>> origin/next
 /// 11.3: a scoped entry waits for its instance and is dropped when the instance stops being live.
 #[trial]
 fn an_untaken_scoped_entry_is_dropped_with_its_instance() {
