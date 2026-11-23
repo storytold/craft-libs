@@ -344,7 +344,9 @@ impl AudioEffect for VoicePitch {
         self.latency
     }
     fn tail_samples(&self) -> usize {
-        self.max_spacing.ceil() as usize
+        // A tap reads up to `latency + max_spacing` samples back and the cubic read two samples
+        // more, which is twice the latency in all.
+        self.latency
     }
     fn reset(&mut self) {
         self.lines.iter_mut().for_each(|l| l.iter_mut().for_each(|v| *v = 0.0));
@@ -474,21 +476,34 @@ mod tests {
         db((rms(tail).powi(2) - tone * tone).max(0.0).sqrt() / tone)
     }
 
-    /// With a shift, the output of a burst comes from taps within the spacing of the latency:
+    /// The output of a burst, shifted or not, comes from taps within the spacing of the latency:
     /// nothing sounds earlier than `latency - tail` or later than `latency + tail` around it.
     #[test]
     fn a_shifted_burst_stays_within_the_spacing_of_the_latency() {
-        for semis in [-24.0, -3.0, 5.0, 24.0] {
+        for semis in [0.0, -24.0, -3.0, 5.0, 24.0] {
             let mut p = shifter(semis, 0.0);
             let (n, at, len) = (8000, 1777, 1000);
             let mut rng = Rng::new(7);
             let mut x = vec![0.0f32; n];
             x[at..at + len].iter_mut().for_each(|v| *v = 0.5 * rng.uniform());
             let y = run(&mut p, &x);
-            let reach = p.tail_samples() + 2;
+            let reach = p.tail_samples();
             let (lo, hi) = (at + p.latency() - reach, at + len + p.latency() + reach);
             assert!(y.iter().enumerate().all(|(i, v)| *v == 0.0 || (lo..hi).contains(&i)), "{semis}");
             assert!(y.iter().any(|v| v.abs() > 0.05), "{semis}: the burst is lost");
+        }
+    }
+
+    /// Over whole sweeps, the oldest sample either tap reads, interpolation included, lies within
+    /// the latency plus the tail, so a render that compensates the latency and runs the tail past
+    /// the end of the input keeps every sample the taps still hold.
+    #[test]
+    fn the_tail_covers_the_oldest_sample_a_tap_reads() {
+        for semis in [-24.0, -3.0, 5.0, 24.0] {
+            let mut p = shifter(semis, 0.0);
+            let oldest = (0..SR as usize).map(|_| p.advance()).map(|t| t.delay_a.max(t.delay_b) as usize + 2).max().unwrap_or(0);
+            assert!(oldest > p.latency(), "{semis}: the taps never sweep past the latency");
+            assert!(oldest <= p.latency() + p.tail_samples(), "{semis}: a tap reads {oldest} samples back");
         }
     }
 
