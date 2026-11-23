@@ -42,8 +42,8 @@ pub use revisions::{RevisionsPanel, RevisionsPanelOutput, RevisionsWords};
 pub use signature::{ScanEvent, SignaturePadDialog, SignaturePadResult, SignatureSettings, SignatureWords, paint_signature};
 pub use thread::{
     CommentComposer, CommentComposerOutput, CommentPin, CommentPins, CommentPinsOutput, ComposerClose, ComposerDraft, NOTE_POPUP_LIMITS, NoteDrafts,
-    NotePopup, NotePopupMessage, NotePopupOutput, PinCluster, PinMove, REACTIONS, ThreadPopover, ThreadPopoverOutput, ThreadWords, cluster,
-    insert_mention, mention_matches, mention_query,
+    NotePopup, NotePopupMessage, NotePopupOutput, NoteReplyLook, PinCluster, PinMove, REACTIONS, ThreadPopover, ThreadPopoverOutput, ThreadWords,
+    cluster, insert_mention, mention_matches, mention_query,
 };
 pub use versions::{VersionAction, VersionHistoryPanel, VersionHistoryPanelOutput, VersionPreviewBanner, VersionPreviewBannerOutput, VersionsWords};
 pub use vote::{VotePill, VotePillOutput, VoteWords};

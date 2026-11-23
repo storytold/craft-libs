@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use craft_behavior::{GesturePhase, IconId, Metrics, Sense};
-use craft_theme::variant::Variant;
-use craft_theme::{ControlSize, Mode};
+use craft_theme::variant::{RadiusStep, Variant};
+use craft_theme::{ControlSize, CustomVariant, Mode, Rgba, States, Tokens, VariantLook};
 use craft_ui::buttons::{Button, IconButton, PressFocus};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use craft_ui::contract::{
@@ -184,8 +184,11 @@ impl NoteBody<'_, '_> {
         let id = self.id;
         let open = self.drafts.replies.get(&id).filter(|(target, _)| *target == to).map(|(_, text)| text.clone());
         let Some(mut typed) = open else {
+            let flat = Env::of(ui).get::<NoteReplyLook>() == NoteReplyLook::Flat;
             Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| {
-                if clicked(&Button::new(words.reply.clone()).size(ControlSize::Sm).show(ui)) {
+                let reply = Button::new(words.reply.clone()).size(ControlSize::Sm);
+                let reply = if flat { reply.variant(Variant::Custom(FLAT_REPLY)) } else { reply };
+                if clicked(&reply.show(ui)) {
                     self.drafts.replies.insert(id, (to, String::new()));
                 }
             });
@@ -373,6 +376,34 @@ impl<'a> NotePopup<'a> {
         }
         NotePopupOutput { response: out.response, closed: out.close, body, reply, placed }
     }
+}
+
+/// How a note pop-up draws its Reply button. An app sets it once at its root (`RootEnv::values`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::runtime::env::EnvValue, craft_ui::contract::MemoProps)]
+#[env(style)]
+#[non_exhaustive]
+pub enum NoteReplyLook {
+    /// The suite's small secondary button: an outlined pill.
+    #[default]
+    Standard,
+    /// PdfCraft's: a small flat rectangle, a translucent white face with a thin edge over the note's tint, as
+    /// production's pop-up footers draw it.
+    Flat,
+}
+
+/// The flat Reply face ([`NoteReplyLook::Flat`]).
+const FLAT_REPLY: CustomVariant = CustomVariant::new::<craft_ui::buttons::button::ButtonStyleKey>("craft_review.flat-reply", flat_reply_look);
+
+/// White at 60% over the note's tint, a control edge and control corners; the theme's state fills under the pointer
+/// and the press.
+fn flat_reply_look(tokens: &Tokens) -> VariantLook {
+    let c = &tokens.color;
+    let face = Rgba([255, 255, 255, 153]);
+    let text = States::new(c.text.normal, c.text.normal, c.text.normal, c.text.disabled);
+    let edge = c.line.control_edge;
+    VariantLook::new(States::new(face, c.state.hover, c.state.pressed, face), text)
+        .edge(States::new(edge, c.text.normal, c.text.normal, c.line.divider))
+        .radius(RadiusStep::Control)
 }
 
 /// The text a commit of `typed` reports for a note that reads `text`: trailing whitespace trimmed, `None` when that

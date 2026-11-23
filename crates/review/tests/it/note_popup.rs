@@ -340,3 +340,42 @@ fn an_edit_composer_opens_with_the_caret_after_the_text() {
         assert_eq!(draft.borrow().as_str(), want, "{kind:?}");
     }
 }
+
+/// The Reply variants a pop-up shows, with the app's `NoteReplyLook` when `look` names one.
+fn reply_variants(look: Option<craft_review::ui::NoteReplyLook>) -> (Vec<craft_theme::Variant>, craft_theme::Tokens) {
+    let mut drafts = NoteDrafts::default();
+    let tokens = Rc::new(RefCell::new(None));
+    let seen = Rc::clone(&tokens);
+    let mut fixture = Fixture::new(move |ui| {
+        let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 200.0));
+        let _ = NotePopup::new(1, "Note", rect, &NOTE, &mut drafts).show(ui);
+        *seen.borrow_mut() = Some((**craft_ui::runtime::env::Env::of(ui).tokens.tokens()).clone());
+    });
+    if let Some(look) = look {
+        fixture.root_value(look);
+    }
+    fixture.room(vec2(1000.0, 800.0)).settle();
+    assert!(fixture.by_label("Reply").is_some(), "the pop-up shows Reply");
+    let variants = fixture.styles_of(std::any::type_name::<Button<'static>>()).iter().map(|style| style.variant).collect();
+    let tokens = tokens.borrow().clone().expect("the fixture ran");
+    (variants, tokens)
+}
+
+/// Upstream's Reply is the suite's small outlined button; PdfCraft's (`NoteReplyLook::Flat`) is production's small flat
+/// rectangle: a translucent white face with control corners, not a pill.
+#[trial]
+fn a_flat_reply_is_a_small_rectangle_and_the_default_an_outlined_button() {
+    use craft_theme::variant::{RadiusStep, Variant};
+    let (standard, _) = reply_variants(None);
+    assert!(standard.iter().all(|variant| matches!(variant, Variant::Look { .. })), "the default Reply is a built-in look: {standard:?}");
+    let (flat, tokens) = reply_variants(Some(craft_review::ui::NoteReplyLook::Flat));
+    let custom = flat.iter().find_map(|variant| match variant {
+        Variant::Custom(custom) => Some(*custom),
+        _ => None,
+    });
+    let custom = custom.expect("the flat Reply takes its own look");
+    let look = custom.look(&tokens);
+    assert_eq!(look.radius, RadiusStep::Control, "control corners, not a pill");
+    assert!(look.fill.rest.0[3] > 0 && look.fill.rest.0[3] < 255, "a translucent face at rest: {:?}", look.fill.rest);
+    assert!(look.edge.is_some(), "a thin edge");
+}

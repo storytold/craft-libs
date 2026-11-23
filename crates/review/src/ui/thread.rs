@@ -13,7 +13,7 @@ pub(crate) mod popover;
 pub(crate) mod stories;
 
 pub use mention::{insert_mention, mention_matches, mention_query};
-pub use note_popup::{NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage, NotePopupOutput};
+pub use note_popup::{NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage, NotePopupOutput, NoteReplyLook};
 pub use pins::{CommentPin, CommentPins, CommentPinsOutput, PinCluster, PinMove, cluster};
 pub use popover::{CommentComposer, CommentComposerOutput, ComposerClose, ComposerDraft, REACTIONS, ThreadPopover, ThreadPopoverOutput};
 
