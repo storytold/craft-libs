@@ -143,6 +143,7 @@ craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
 craft-kra = { path = "crates/kra" }
+craft-asr = { path = "crates/asr" }
 craft-audio = { path = "crates/audio" }
 craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }

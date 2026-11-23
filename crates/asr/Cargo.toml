@@ -1,0 +1,34 @@
+[package]
+name = "craft-asr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Shared speech recognition for the Craft apps: a streaming recognizer protocol, bounded microphone audio, the Whisper model manifest and consent-gated downloads"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Whisper inference on candle (CPU). Heavy dependency tree; apps opt in.
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
+# The HTTPS transport for model downloads. The consent gate and the download loop work without
+# it, against a caller-supplied Transport, so tests never touch the network.
+download = ["dep:ureq"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11"
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
