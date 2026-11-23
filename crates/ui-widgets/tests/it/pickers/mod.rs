@@ -3,6 +3,7 @@
 pub(crate) mod combo_list;
 pub(crate) mod date;
 pub(crate) mod icon_picker;
+pub(crate) mod select_disabled_owner;
 pub(crate) mod select_list;
 pub(crate) mod select_measure;
 pub(crate) mod select_steps;
