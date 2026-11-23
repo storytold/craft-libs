@@ -935,9 +935,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let _ = MemoView::new(("rail grip", PanelKey::of(anchor)), props, rail_grip::<P>).show(ui);
         });
         // The group's size goes on the drag here, outside the view, whose measuring runs see no size; so does the
-        // press, which a floating rail's window keeps under the pointer when it is dropped on empty room.
-        if !sent.is_empty() {
-            let press = ui.input(|i| i.pointer.press_origin());
+        // press the grip reports, which a floating rail's window keeps under the pointer when it is dropped on empty
+        // room.
+        if let Some(&press) = sent.last() {
             drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
                 drag.source = Some(size);
                 drag.press = press;
@@ -1573,7 +1573,8 @@ fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, pane
     panels.borrow_mut().body(panel, ui, body);
 }
 
-/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to.
+/// The props of a tool rail's grip strip: the group it drags, its name, and the outbox the drag's start goes to, with
+/// the press that started it.
 #[derive(MemoProps)]
 struct RailGrip<'a, P> {
     #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
@@ -1581,7 +1582,7 @@ struct RailGrip<'a, P> {
     active: PanelKey,
     movable: bool,
     label: Label,
-    sent: Outbox<'a, ()>,
+    sent: Outbox<'a, Option<Pos2>>,
 }
 
 /// A tool rail's grip strip: the dock's grip marks over the view's room, which a drag moves the rail's group by.
@@ -1594,7 +1595,7 @@ fn rail_grip<P: Clone + Hash + Send + Sync + 'static>(props: &mut RailGrip<'_, P
         .label(props.label.clone())
         .show_at(ui, strip);
     if held.drag_started {
-        props.sent.send(());
+        props.sent.send(held.press);
     }
     // The grip takes no room in flow; the run covers the strip, so the pointer over it runs it again.
     ui.expand_to_include_rect(strip);

@@ -4,6 +4,7 @@
 
 use super::GRIP;
 use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::docking::group::GRIP_ABOVE;
 use crate::docking::{
     DockHeights, DockSizes, DockSpot, DockTargets, DragUnit, FlyoutResize, GroupAt, GroupDrag, GroupGrip, IconicColumn, PanelKey, PanelSpec,
 };
@@ -87,6 +88,16 @@ fn screen() -> Rect {
 
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1.0
+}
+
+/// `a` is `b` to a hundredth of a point: a measure the theme sets exactly.
+fn same(a: f32, b: f32) -> bool {
+    (a - b).abs() < 0.01
+}
+
+/// `a` is at least `b`, to a hundredth of a point.
+fn at_least(a: f32, b: f32) -> bool {
+    a >= b - 0.01
 }
 
 /// A point just inside the flyout's top edge, `x` along it.
@@ -500,8 +511,8 @@ fn a_groups_grip_is_a_row_of_upright_ticks_in_the_grip_ink() {
         assert_grip_ticks(&ticks, ink, strip, panel, grip, shape, &format!("group {group}"));
         let run = ticks.iter().fold(Rect::NOTHING, |run, tick| run.union(*tick));
         assert!(
-            run.top() - strip.top() >= tight + 2.0 - 0.01 && strip.bottom() - run.bottom() >= tight - 0.01,
-            "group {group}: the marks keep space.gap.tight ({tight}) and 2 points more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
+            at_least(run.top() - strip.top(), tight + GRIP_ABOVE) && at_least(strip.bottom() - run.bottom(), tight),
+            "group {group}: the marks keep space.gap.tight ({tight}) and {GRIP_ABOVE} points more off the strip's top, the tight gap off its bottom: {run:?} in {strip:?}"
         );
         fixture.frame(vec![egui::Event::PointerMoved(strip.center())]);
         let hovered = fixture.frame_shapes();
@@ -553,7 +564,7 @@ fn a_themes_grip_shape_reaches_the_grips() {
     let shapes = fixture.frame_shapes();
     let (marks, ink) = grip_ticks(&shapes, strip).expect("the grip paints its marks");
     assert_eq!(marks.len(), 6, "the theme's six dots: {marks:?}");
-    assert!(marks.iter().all(|m| (m.width() - 2.0).abs() < 0.01 && (m.height() - 2.0).abs() < 0.01), "two-point dots: {marks:?}");
-    assert!(marks.windows(2).all(|w| (w[1].min.x - w[0].max.x - 3.0).abs() < 0.01), "three points apart: {marks:?}");
+    assert!(marks.iter().all(|m| same(m.width(), shape.width) && same(m.height(), shape.width)), "dots {} points on a side: {marks:?}", shape.width);
+    assert!(marks.windows(2).all(|w| same(w[1].min.x - w[0].max.x, shape.gap)), "{} points apart: {marks:?}", shape.gap);
     assert_ne!(ink, egui::Color32::TRANSPARENT);
 }
