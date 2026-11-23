@@ -167,6 +167,25 @@ pub(crate) enum KeyEvent {
     Other,
 }
 
+/// A raw event as a host that reads what nothing took (`keys::unclaimed`) sorts it.
+pub(crate) enum Leftover {
+    /// A key press (an auto-repeat when `repeat`) or release.
+    Key { pressed: bool, repeat: bool },
+    /// Text or a clipboard event, which stands for itself.
+    Plain,
+    /// Any other event, which that host does not read.
+    Other,
+}
+
+/// How `unclaimed` sorts `event`.
+pub(crate) fn leftover(event: &Event) -> Leftover {
+    match event {
+        Event::Key { pressed, repeat, .. } => Leftover::Key { pressed: *pressed, repeat: *repeat },
+        Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) => Leftover::Plain,
+        _ => Leftover::Other,
+    }
+}
+
 /// The key stage's reading of `event`. `latin` is the raw input's Latin-layout characters.
 pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> KeyEvent {
     let read = |event: &Event| {

@@ -3,7 +3,7 @@
 use super::input::chrome_toggle_of;
 use super::{Batch, Item, MenuKey, Node, Press, Routed, Shortcuts, Taken, current, with};
 use crate::runtime::commands::{self, FirePhase};
-use crate::runtime::egui::input::{Action, ActionKind};
+use crate::runtime::egui::input::{Action, ActionKind, Leftover, leftover};
 use crate::runtime::focus::{self, StopRec};
 use crate::runtime::frame::request_chrome_toggle;
 use crate::runtime::overlay;
@@ -411,7 +411,7 @@ pub(crate) fn note_fired(ctx: &Context, input: &KeyInput) {
 pub fn unclaimed(ctx: &Context) -> Vec<Event> {
     let viewport = crate::runtime::egui::pass::current_viewport(ctx);
     let record = focus::record(ctx, viewport);
-    if record.focused.is_some() || record.foreign || ctx.memory(|memory| memory.focused().is_some()) {
+    if record.focused.is_some() || record.foreign || crate::runtime::egui::focus::focused(ctx).is_some() {
         return Vec::new();
     }
     let platform = craft_keymap::egui::platform(ctx);
@@ -421,25 +421,25 @@ pub fn unclaimed(ctx: &Context) -> Vec<Event> {
     let events = ctx.input(|input| input.events.clone());
     let mut left = Vec::with_capacity(events.len());
     for event in events {
-        match &event {
-            Event::Key { pressed, repeat, .. } => {
+        match leftover(&event) {
+            Leftover::Key { pressed, repeat } => {
                 let Some(input) = KeyInput::from_egui(&event, platform) else { continue };
-                if *pressed && fired.iter().any(|fired| same(fired, &input)) {
+                if pressed && fired.iter().any(|fired| same(fired, &input)) {
                     continue;
                 }
                 // The dispatcher fires nothing for a repeat, so a later pass's repeat of a key a command took is known by
                 // the key staying down since that press.
-                if *pressed && *repeat && key_of(&input).is_some_and(|key| down.contains(&key)) {
+                if pressed && repeat && key_of(&input).is_some_and(|key| down.contains(&key)) {
                     continue;
                 }
-                if !*pressed && let Some(at) = key_of(&input).and_then(|key| down.iter().position(|held| *held == key)) {
+                if !pressed && let Some(at) = key_of(&input).and_then(|key| down.iter().position(|held| *held == key)) {
                     down.swap_remove(at);
                     continue;
                 }
                 left.push(event);
             }
-            Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) => left.push(event),
-            _ => {}
+            Leftover::Plain => left.push(event),
+            Leftover::Other => {}
         }
     }
     for (event, input) in clips {
