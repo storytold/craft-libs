@@ -29,7 +29,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::{NamedOr, NumberName, NumberPick, NumberValue as _};
 use egui::{Response, Ui};
 
-mod format_text;
+pub(crate) mod format_text;
 pub(crate) mod paragraph;
 pub(crate) mod paragraph_dialog;
 pub(crate) mod rows;

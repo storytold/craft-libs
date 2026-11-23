@@ -33,7 +33,12 @@ pub struct BrowserFiles {
     state: Arc<Mutex<State>>,
     wake: Wake,
     limits: PickLimits,
+    page_save: Option<PageSave>,
 }
+
+/// An embedding page's save ([`BrowserFiles::page_saves`]): given the file name, the bytes and whether the user asked
+/// for Save As, `None` when no page hosts the app, else the page's answer.
+pub type PageSave = Arc<dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync>;
 
 /// Tickets of one service, shared with the tasks that answer them.
 #[derive(Default)]
@@ -89,7 +94,14 @@ fn finish(state: &Mutex<State>, wake: &Wake, id: PickId, picked: Picked) {
 impl BrowserFiles {
     /// A service whose late answers call `wake`.
     pub fn new(wake: impl Fn() + Send + Sync + 'static) -> Self {
-        Self { state: Arc::new(Mutex::new(State::default())), wake: Wake::new(wake), limits: PickLimits::DEFAULT }
+        Self { state: Arc::new(Mutex::new(State::default())), wake: Wake::new(wake), limits: PickLimits::DEFAULT, page_save: None }
+    }
+
+    /// The service whose [`Files::write`] goes to the page embedding the app (a host that saves the document back
+    /// itself, as a file manager's viewer does) whenever `save` answers; otherwise, and with no `save`, a write
+    /// downloads the bytes.
+    pub fn page_saves(self, save: impl Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync + 'static) -> Self {
+        Self { page_save: Some(Arc::new(save)), ..self }
     }
 
     /// The service with `limits` in place of [`PickLimits::DEFAULT`].
@@ -157,6 +169,27 @@ fn downloaded(name: &str, result: Result<(), String>) -> Picked {
 }
 
 /// One download of `bytes` as `name`.
+/// The name a write of `path` goes out under: its last part without control characters, `document` when that is empty.
+fn write_name(path: &Path) -> String {
+    let base: String = path.file_name().map(|n| n.to_string_lossy().chars().filter(|c| !c.is_control()).collect()).unwrap_or_default();
+    let base = base.trim();
+    if base.is_empty() { "document".to_owned() } else { base.to_owned() }
+}
+
+/// A write's route: the embedding page when `page` answers (`Ok(true)`), else `download` (`Ok(false)`).
+pub(crate) fn page_or_download(
+    page: Option<&(dyn Fn(&str, &[u8], bool) -> Option<Result<(), String>> + Send + Sync)>,
+    name: &str,
+    bytes: &[u8],
+    save_as: bool,
+    download: impl FnOnce() -> Result<(), String>,
+) -> Result<bool, FileError> {
+    match page.and_then(|save| save(name, bytes, save_as)) {
+        Some(answer) => answer.map(|()| true).map_err(FileError::Other),
+        None => download().map(|()| false).map_err(FileError::Other),
+    }
+}
+
 fn download(name: &str, mime: &str, bytes: &[u8]) -> Result<(), String> {
     download_bytes(name, mime, bytes, DownloadOptions { revoke_after_ms: REVOKE_AFTER_MS }).map_err(|e| js_text(&e))
 }
@@ -300,8 +333,10 @@ impl Files for BrowserFiles {
         Err(FileError::Unsupported)
     }
 
-    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
-        Err(FileError::Unsupported)
+    /// `Ok(true)` when the embedding page saved the bytes, `Ok(false)` when they were downloaded.
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        let name = write_name(path);
+        page_or_download(self.page_save.as_deref(), &name, bytes, intent == WriteIntent::SaveAs, || download(&name, mime_for(&name), bytes))
     }
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {

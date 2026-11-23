@@ -37,7 +37,7 @@ fn appearance_page_without_text_size(ui: &mut Ui, data: &mut StoryData) -> Story
 #[story(AppearancePage<'static>, covers = [], drive = Drive::Never)]
 fn appearance_page_with_kept_rows_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let client = SuiteClient::memory().view();
-    let draft = Bind::bound(data.value("kept", SelectionChange::default()));
+    let draft = data.bind("kept", SelectionChange::default());
     AppearancePage::new(&client, draft).can_favorite(false).size(false).text_size(false).contrast(false).show(ui).into()
 }
 
@@ -45,8 +45,7 @@ fn appearance_page_with_kept_rows_only(ui: &mut Ui, data: &mut StoryData) -> Sto
 #[story(ThemeChip<'static>, covers = [], drive = Drive::Never)]
 fn theme_chips_without_favorites(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let themes = builtins();
-    let chosen = data.value("chosen", Some(themes[1].id.clone()));
-    RadioGroup::new("Light Theme", Bind::bound(chosen))
+    RadioGroup::new("Light Theme", data.bind("chosen", Some(themes[1].id.clone())))
         .show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 for theme in themes.iter().take(4) {

@@ -127,7 +127,7 @@ fn click_and_focus_by_label_or_id_reach_the_widget_and_refuse_what_they_cannot_n
     let (host, ctx) = (WindowHost::of(fx.ctx()), fx.ctx().clone());
     host.keep_access_tree();
     fx.settle();
-    let none = |_: Pos2| None;
+    let none = |_: usize, _: Pos2| None;
     let send = |fx: &mut Fixture, method: &str, params: Value| {
         input_method(method, &params, &host, ViewportId::ROOT, &none).expect("an input method").expect("a target it can name");
         fx.run_injected().settle();

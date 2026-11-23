@@ -35,7 +35,7 @@ fn named(entries: impl IntoIterator<Item = (String, Srgba)>) -> Vec<(Label, Srgb
 #[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
 fn swatch_palette_other_and_recent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let swatches = named(PALETTE.iter().map(|(name, color)| ((*name).to_owned(), *color)));
-    let shown = SwatchPalette::new("Swatches", Bind::bound(data.value("color", PALETTE[8].1)), &swatches)
+    let shown = SwatchPalette::new("Swatches", data.bind("color", PALETTE[8].1), &swatches)
         .other("custom", "Other colour…")
         .recent("Recent colours", &RECENT)
         .show(ui);
@@ -51,7 +51,7 @@ fn swatch_palette_other_and_recent(ui: &mut Ui, data: &mut StoryData) -> StoryOu
 #[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
 fn no_colour(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let swatches = named(PALETTE.iter().map(|(name, color)| ((*name).to_owned(), *color)));
-    let shown = SwatchPalette::optional("Swatches", Bind::bound_mixed(data.value("color", Mixed::<Option<Srgba>>::Same(None))), &swatches).show(ui);
+    let shown = SwatchPalette::optional("Swatches", data.bind_mixed("color", Mixed::<Option<Srgba>>::Same(None)), &swatches).show(ui);
     let bound = *data.value("color", Mixed::<Option<Srgba>>::Same(None));
     let readout = match bound {
         Mixed::Same(Some(color)) => format!("Colour: {}", color.to_hex()),

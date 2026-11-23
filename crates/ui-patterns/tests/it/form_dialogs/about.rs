@@ -182,7 +182,7 @@ fn grab_bag(fixture: &Fixture) -> Vec<String> {
 }
 
 /// Picks `entry` from the Sort list.
-fn sort_by(fixture: &mut Fixture, entry: &str) {
+fn pick_sort(fixture: &mut Fixture, entry: &str) {
     let sort = fixture.by_label("Sort").expect("the Sort list");
     fixture.click(&sort).idle(4);
     let pick = fixture.by_label(entry).unwrap_or_else(|| panic!("the Sort list offers {entry}"));
@@ -208,12 +208,12 @@ fn contributors_sort_by_name_without_at_or_case_and_undated_last() {
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
     assert_eq!(grab_bag(&fixture), ["@carl", "@alice", "@zed"], "oldest first commit first, the undated last");
 
-    sort_by(&mut fixture, "Last commit");
+    pick_sort(&mut fixture, "Last commit");
     assert_eq!(grab_bag(&fixture), ["@alice", "@carl", "@zed"], "oldest last commit first, the undated last");
 
     let display = fixture.by_label("Display name").expect("Show offers Display name");
     fixture.click(&display).idle(10);
-    sort_by(&mut fixture, "Name (A\u{2013}Z)");
+    pick_sort(&mut fixture, "Name (A\u{2013}Z)");
     assert_eq!(grab_bag(&fixture), ["@alice", "Bea", "@carl"], "names compare without the `@` and the case");
 }
 

@@ -1038,7 +1038,7 @@ fn an_object_crop_is_bounded_by_its_source_and_a_press_outside_it_reaches_what_l
     assert_eq!(rig.events(), events, "and sends no edit");
     // Enter applies and Escape discards.
     rig.frame(vec![input::key_press(egui::Key::Enter, Modifiers::NONE)]);
-    assert!(rig.seen.borrow().applied, "Enter applies");
+    assert_eq!(rig.seen.borrow().applied, Some(CropApply::Enter), "Enter applies");
     rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
     assert!(rig.seen.borrow().discarded, "Escape discards");
 }

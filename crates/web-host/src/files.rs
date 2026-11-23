@@ -3,14 +3,19 @@
 use std::path::{Path, PathBuf};
 
 use craft_host::{FileError, Files, PickId, PickRequest, Picked, Wake, WriteIntent};
-use craft_platform::browser::{DownloadOptions, download_bytes};
 use craft_platform::browser_files::{BrowserFiles as PlatformFiles, PickLimits};
-use wasm_bindgen::JsValue;
+
+/// The hosting page's save, for [`PlatformFiles::page_saves`]: posts `bytes` to the page `Host::connect` connected
+/// (`None` when no page hosts the app). `craft_platform::browser_files::BrowserFiles::new(wake).page_saves(page_save)`
+/// is a web build's file service whose writes go back to the embedding page.
+pub fn page_save(name: &str, bytes: &[u8], save_as: bool) -> Option<Result<(), String>> {
+    crate::web::connected().map(|host| host.post_save(name, bytes, None, save_as))
+}
 
 /// The [`Files`] service of a web build, kept for apps written against it: a thin wrapper over
 /// [`craft_platform::browser_files::BrowserFiles`], which holds the picks and saves (one store).
-/// Only `write` differs: it posts to the hosting page when one is connected, and downloads
-/// otherwise.
+/// Its writes go to the hosting page when one is connected ([`PlatformFiles::page_saves`]), and
+/// download otherwise.
 #[deprecated(note = "use craft_platform::browser_files::BrowserFiles; host-page saves go through Files::save")]
 pub struct BrowserFiles {
     inner: PlatformFiles,
@@ -22,7 +27,10 @@ impl BrowserFiles {
     /// waiting to be taken stay under `max_read` bytes.
     pub fn new(wake: Wake, max_read: u64) -> Self {
         let limits = PickLimits { pending_bytes: usize::try_from(max_read).unwrap_or(usize::MAX), ..PickLimits::DEFAULT };
-        Self { inner: PlatformFiles::new(move || wake.wake()).limits(limits) }
+        let inner = PlatformFiles::new(move || wake.wake())
+            .limits(limits)
+            .page_saves(page_save);
+        Self { inner }
     }
 }
 
@@ -49,11 +57,7 @@ impl Files for BrowserFiles {
     }
 
     fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
-        let name = crate::file_name(path.file_name().map(|n| n.to_string_lossy()).as_deref(), "document");
-        if let Some(host) = crate::web::connected() {
-            return host.post_save(&name, bytes, None, intent == WriteIntent::SaveAs).map(|()| true).map_err(FileError::Other);
-        }
-        download_bytes(&name, mime_type(&name), bytes, DownloadOptions::default()).map(|()| false).map_err(|e| FileError::Other(js_error(e)))
+        self.inner.write(path, bytes, intent)
     }
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
@@ -70,33 +74,5 @@ impl Files for BrowserFiles {
 
     fn browser_saves(&self) -> bool {
         self.inner.browser_saves()
-    }
-}
-
-fn js_error(error: JsValue) -> String {
-    error.as_string().unwrap_or_else(|| format!("{error:?}"))
-}
-
-/// The MIME type a download of `name` is offered as, from its extension.
-fn mime_type(name: &str) -> &'static str {
-    let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    match ext.as_str() {
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "tif" | "tiff" => "image/tiff",
-        "svg" => "image/svg+xml",
-        "csv" => "text/csv",
-        "txt" => "text/plain",
-        "html" | "htm" => "text/html",
-        "xml" => "application/xml",
-        "json" => "application/json",
-        "xfdf" => "application/vnd.adobe.xfdf",
-        "fdf" => "application/vnd.fdf",
-        "rtf" => "application/rtf",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        _ => "application/octet-stream",
     }
 }

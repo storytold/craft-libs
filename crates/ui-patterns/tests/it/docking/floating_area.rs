@@ -709,12 +709,12 @@ fn a_floating_window_clears_the_top_inset_and_follows_it() {
     let inset = Rc::new(Cell::new(0.0_f32));
     let seen = Rc::clone(&inset);
     let layout = Layout::new(Some(Node::tabs(vec![DOCKED], 0)), vec![Floating::single(vec![WINDOW], 0, Rect::from_min_size(Pos2::new(130.0, 0.0), Vec2::new(200.0, 120.0)))]);
-    let held = Rc::new(RefCell::new(Workspace::new(layout)));
-    let shown = Rc::clone(&held);
+    let held = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
+    let (shown, specs) = (Rc::clone(&held), Tracked::new(Numbered));
     let mut fixture = Fixture::new(move |ui| {
         let given = shown.borrow().clone();
-        let mut panels = Panels { rights: |_| Permissions::ALL };
-        DockArea::new("Inset dock", Bind::given(given), &mut panels, DockConfig::default()).top_inset(seen.get()).show(ui);
+        let mut panels = Panels;
+        let _ = DockArea::new("Inset dock", Bind::given(given), &specs, &mut panels, DockConfig::default()).top_inset(seen.get()).show(ui);
     });
     fixture.settle();
     let window_top = |fixture: &Fixture| {
