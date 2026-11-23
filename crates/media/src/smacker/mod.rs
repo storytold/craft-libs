@@ -342,11 +342,19 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<SmackerFile> {
         return Err(Error::Invalid("frame tables or tree data run past the end of the file"));
     }
     let total = usize::try_from(total).map_err(|_| Error::Invalid("frame count"))?;
-    let mut sizes = vec![0u8; total.checked_mul(4).ok_or(Error::Invalid("frame count"))?];
+    let size_bytes = total.checked_mul(4).ok_or(Error::Invalid("frame count"))?;
+    let mut sizes = Vec::new();
+    sizes.try_reserve_exact(size_bytes).map_err(|_| Error::Invalid("frame sizes allocation"))?;
+    sizes.resize(size_bytes, 0);
     src.read_at(HEADER_LEN as u64, &mut sizes)?;
-    let mut types = vec![0u8; total];
+    let mut types = Vec::new();
+    types.try_reserve_exact(total).map_err(|_| Error::Invalid("frame types allocation"))?;
+    types.resize(total, 0);
     src.read_at(HEADER_LEN as u64 + sizes.len() as u64, &mut types)?;
-    let mut trees = vec![0u8; header.trees_size as usize];
+    let mut trees = Vec::new();
+    // A source length check does not guarantee enough memory for its declared tree data.
+    trees.try_reserve_exact(header.trees_size as usize).map_err(|_| Error::Invalid("tree allocation"))?;
+    trees.resize(header.trees_size as usize, 0);
     src.read_at(after_tables, &mut trees)?;
 
     let mut frames = Vec::new();

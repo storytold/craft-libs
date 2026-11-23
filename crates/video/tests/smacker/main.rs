@@ -9,8 +9,9 @@
 //! ffmpeg refuses as invalid data is run through the decoder and reported, and does not count as
 //! a difference unless the decoder fails on it too or more than one file in a hundred is refused.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use craft_media::smacker::{open, split_frame};
 use craft_video::smacker::Decoder;
@@ -60,12 +61,10 @@ fn compare(ffmpeg: &Path, path: &Path, limit: usize) -> Result<Outcome, String> 
 
     // our pictures first, so a file ffmpeg refuses still runs through the decoder
     let mut dec = Decoder::new(&file.video_params()).map_err(|e| format!("decoder: {e}"))?;
-    let mut ours: Vec<Vec<u8>> = Vec::new();
     for (i, frame) in frames.iter().take(n).enumerate() {
         let data = file.read(&bytes, frame).map_err(|e| format!("frame {i}: {e}"))?;
         let parts = split_frame(&data, frame).map_err(|e| format!("frame {i}: {e}"))?;
         dec.decode(parts.palette, parts.video).map_err(|e| format!("frame {i}: {e}"))?;
-        ours.push(dec.pixels().iter().flat_map(|&p| dec.palette()[usize::from(p)]).collect());
     }
 
     let mut cmd = Command::new(ffmpeg);
@@ -75,24 +74,50 @@ fn compare(ffmpeg: &Path, path: &Path, limit: usize) -> Result<Outcome, String> 
     if n < frames.len() {
         cmd.args(["-frames:v", &n.to_string()]);
     }
-    let out = cmd.args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).output().map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // only a file ffmpeg calls invalid is set aside; any other failure of ffmpeg is one
+    let mut child =
+        cmd.args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    // Drain stderr concurrently so diagnostics cannot block the raw-video pipe. Retain a
+    // bounded diagnostic prefix even when a corrupt input produces many repeated messages.
+    let diagnostics = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stderr.by_ref().take(65_536).read_to_end(&mut bytes).and_then(|_| std::io::copy(&mut stderr, &mut std::io::sink()).map(|_| ()));
+        (bytes, result)
+    });
+    let (w, h) = (file.header.width as usize, file.header.height as usize);
+    let compared = (|| -> Result<(), String> {
+        let mut dec = Decoder::new(&file.video_params()).map_err(|e| format!("decoder: {e}"))?;
+        let mut want = vec![0u8; w * h * 3];
+        for (i, frame) in frames.iter().take(n).enumerate() {
+            stdout.read_exact(&mut want).map_err(|e| format!("ffmpeg frame {i} of {n}: {e}"))?;
+            let data = file.read(&bytes, frame).map_err(|e| format!("frame {i}: {e}"))?;
+            let parts = split_frame(&data, frame).map_err(|e| format!("frame {i}: {e}"))?;
+            dec.decode(parts.palette, parts.video).map_err(|e| format!("frame {i}: {e}"))?;
+            if !dec.pixels().iter().flat_map(|&p| dec.palette()[usize::from(p)]).eq(want.iter().copied()) {
+                return Err(format!("frame {i} differs from ffmpeg"));
+            }
+        }
+        let extra = std::io::copy(&mut stdout, &mut std::io::sink()).map_err(|e| e.to_string())?;
+        if extra != 0 {
+            return Err(format!("ffmpeg gave {extra} extra bytes after {n} frames of {w}x{h}"));
+        }
+        Ok(())
+    })();
+    // Reap the process even after a mismatch: dropping a child neither drains it nor waits.
+    let drained = std::io::copy(&mut stdout, &mut std::io::sink());
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let (stderr, diagnostics_result) = diagnostics.join().map_err(|_| "ffmpeg diagnostics reader panicked".to_string())?;
+    diagnostics_result.map_err(|e| e.to_string())?;
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
         if stderr.contains("Invalid data found when processing input") {
             return Ok(Outcome::Refused(n));
         }
         return Err(format!("ffmpeg failed: {}", stderr.trim()));
     }
-    let (w, h) = (file.header.width as usize, file.header.height as usize);
-    if out.stdout.len() != n * w * h * 3 {
-        return Err(format!("ffmpeg gave {} bytes, {n} frames of {w}x{h} are {}", out.stdout.len(), n * w * h * 3));
-    }
-    for (i, (got, want)) in ours.iter().zip(out.stdout.chunks_exact(w * h * 3)).enumerate() {
-        if got != want {
-            return Err(format!("frame {i} differs from ffmpeg"));
-        }
-    }
+    drained.map_err(|e| e.to_string())?;
+    compared?;
     Ok(Outcome::Match(n))
 }
 
