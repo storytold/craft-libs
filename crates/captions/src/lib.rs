@@ -36,6 +36,8 @@ pub mod ass;
 pub mod cea608;
 pub mod jacosub;
 pub mod mcc;
+#[cfg(feature = "mov-text")]
+pub mod mov_text;
 pub mod pjs;
 pub mod realtext;
 pub mod scc;

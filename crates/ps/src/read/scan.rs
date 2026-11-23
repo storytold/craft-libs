@@ -294,10 +294,12 @@ pub fn number(t: &[u8]) -> Option<Obj> {
     }
     let digits_only = s.strip_prefix(['+', '-']).unwrap_or(s);
     if !digits_only.is_empty() && digits_only.bytes().all(|b| b.is_ascii_digit()) {
-        return Some(match s.parse::<i64>() {
-            Ok(i) if i32::try_from(i).is_ok() => Obj::Int(i),
-            _ => Obj::Real(s.parse::<f64>().ok()?),
-        });
+        return match s.parse::<i64>() {
+            Ok(i) if i32::try_from(i).is_ok() => Some(Obj::Int(i)),
+            // Integer-looking tokens can overflow f64 too. Apply the same finite
+            // policy as decimal/exponent reals before constructing an object.
+            _ => s.parse::<f64>().ok().filter(|value| value.is_finite()).map(Obj::Real),
+        };
     }
     // Reals: digits with a point and/or an exponent; nothing else (`1e` or `.` alone are names).
     let mut seen_digit = false;
@@ -360,6 +362,27 @@ mod tests {
                 assert_eq!(decode(input, expected.len() - 1, false).unwrap_err(), "string too long");
             }
         }
+    }
+
+    #[test]
+    fn decimal_integer_promotion_never_constructs_nonfinite_reals() {
+        for text in ["2147483647", "-2147483648"] {
+            assert!(matches!(number(text.as_bytes()), Some(Obj::Int(_))));
+        }
+        for text in ["2147483648", "-2147483649", "9223372036854775808"] {
+            assert!(matches!(number(text.as_bytes()), Some(Obj::Real(value)) if value.is_finite()));
+        }
+        let finite = "9".repeat(308);
+        assert!(matches!(number(finite.as_bytes()), Some(Obj::Real(value)) if value.is_finite()));
+        for sign in ["", "+", "-"] {
+            let overflow = format!("{sign}{}", "9".repeat(309));
+            assert!(number(overflow.as_bytes()).is_none());
+            // Follow the existing overflowing-real policy: leave the token as an
+            // executable name rather than introducing infinity into the interpreter.
+            assert!(matches!(&all(overflow.as_bytes())[..], [Obj::Name(name, true)] if name.as_ref() == overflow.as_bytes()));
+        }
+        assert!(number(b"1e309").is_none());
+        assert!(matches!(number(b"16#ffffffff"), Some(Obj::Int(-1))));
     }
 
     #[test]

@@ -114,7 +114,7 @@ impl Blip {
 /// MS-ODRAW requires MD4 of the uncompressed BLIP payload, not the original import file.
 /// This legacy-format identifier is not authentication or a security integrity check.
 fn uid(bytes: &[u8]) -> [u8; 16] {
-    md4::Md4::digest(bytes).into()
+    md4::Md4::digest(bytes).into() // NOSONAR: MS-ODRAW spec-mandated BLIP UID (non-security format identifier)
 }
 
 /// An OfficeArt record: header (version, instance, type, length) then the body.

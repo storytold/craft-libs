@@ -10,6 +10,15 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+# Files of other crates that this crate's build or tests read. CI selects this crate's tests
+# when one of them changes (craft-common-actions' select-platforms).
+[package.metadata.craft]
+reads = [
+    "crates/cms/profiles/craft-coated-fogra39.icc",
+    "crates/cms/profiles/photocraft-coated-cmyk.icc",
+    "crates/fonts-build/tests/fixture/subset/Tiny-glyf.ttf",
+]
+
 [features]
 default = []
 read = ["dep:hayro-syntax", "dep:thiserror"]
@@ -29,6 +38,8 @@ content = ["cos", "dep:hayro-syntax"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 # `testing`: a builder of small synthetic PDF files, for the tests of crates that read them.
 test-support = ["cos"]
+# Standard-14 font metrics and ISO 32000-2 Annex D single-byte encodings.
+fonts = []
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
