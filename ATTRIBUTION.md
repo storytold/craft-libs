@@ -120,6 +120,8 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 `crates/audio-dsp` combines FilmCraft `crates/audio-dsp` at `3f137a7ed420cac79b32145f5243b7f98b31f71c` and SoundCraft `crates/dsp` at `648ed9db9a0e98cc55643babffac381521a556c8` (both MIT OR Apache-2.0). `crates/audio-dsp/NOTICE` keeps the copyright notices of both projects.
 
+`crates/audio-dsp/src/effects/voice.rs` adapts the two crossfaded read taps of SoundCraft `crates/dsp/src/plugins/pitch.rs` and the YIN pitch tracker of `crates/dsp/src/pitch_detect.rs` at `915481be1b49d7e0502e07b059d0c0198c61911a` (MIT OR Apache-2.0). The taps are centered on a fixed 10 ms latency and spaced by whole periods of the tracked pitch, and the tracker runs on a decimated copy of the input in buffers sized at creation.
+
 ## GIMP palette reader
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.

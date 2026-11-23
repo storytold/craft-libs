@@ -12,3 +12,7 @@ workspace = true
 
 # No dependencies: planar `&mut [f32]` slices in, planar slices out.
 [dependencies]
+
+[dev-dependencies]
+# Counts heap allocations in tests/it, the one test binary it replaces the global allocator in.
+allocation-counter = "0.8"
