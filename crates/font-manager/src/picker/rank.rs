@@ -179,18 +179,24 @@ fn read_traits(face: &FaceInfo) -> Traits {
     Traits { class: classify(&face.family, face.family_class, face.panose, face.fixed_pitch), panose: face.panose, weight }
 }
 
-/// The scripts a face covers, from its `cmap` and its family names.
+/// The JIS/Japan bit of `ulCodePageRange1`.
+const JIS_CODE_PAGE: u32 = 1 << 17;
+/// The Hiragana (49), Katakana (50) and CJK Unified Ideographs (59) bits of `ulUnicodeRange2`, which holds bits 32 to 63.
+const JAPANESE_RANGES: u32 = (1 << (49 - 32)) | (1 << (50 - 32)) | (1 << (59 - 32));
+
+/// The scripts a face covers: Latin, the basic Latin letters in its `cmap`; Japanese, the JIS code page, the kana or
+/// CJK Unicode ranges of its `OS/2` table, or a Japanese family name; Thai, ก and า in its `cmap`.
 fn read_scripts(catalog: &Catalog, face: &FaceInfo) -> Option<Vec<FontScript>> {
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
-    let latin = ('A'..='Z').chain('a'..='z').all(|c| map.map(c).is_some());
-    let scripts =
-        [(FontScript::Latin, latin), (FontScript::Japanese, face.traits.japanese || japanese_name(face)), (FontScript::Thai, face.traits.thai)]
-            .into_iter()
-            .filter_map(|(script, covered)| covered.then_some(script))
-            .collect();
-    Some(scripts)
+    let mapped = |c: char| map.map(c).is_some();
+    let latin = ('A'..='Z').chain('a'..='z').all(&mapped);
+    let ranges = font.os2().ok().map_or(0, |os2| os2.ul_unicode_range_2());
+    let japanese = face.code_pages[0] & JIS_CODE_PAGE != 0 || ranges & JAPANESE_RANGES != 0 || japanese_name(face);
+    let thai = ['\u{0E01}', '\u{0E32}'].into_iter().all(&mapped);
+    let scripts = [(FontScript::Latin, latin), (FontScript::Japanese, japanese), (FontScript::Thai, thai)];
+    Some(scripts.into_iter().filter_map(|(script, covered)| covered.then_some(script)).collect())
 }
 
 /// The class of a family from its regular face, `None` when the catalog lacks it.

@@ -114,32 +114,8 @@ pub struct FaceInfo {
     pub index: u32,
     /// Where it comes from.
     pub source: Source,
-    /// The inputs of Show Similar Fonts, read from the tables the scan already opens.
-    pub traits: FaceTraits,
     /// For a face added as bytes: which of the catalog's added blobs holds it.
     pub(crate) blob: Option<u64>,
-}
-
-/// What Show Similar Fonts compares between faces: the typographic traits the scan reads from the OS/2, `head`,
-/// `post` and `cmap` tables. A trait the font lacks is its default.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct FaceTraits {
-    /// The OS/2 PANOSE classification; `None` without an OS/2 table.
-    pub panose: Option<[u8; 10]>,
-    /// The x-height in em units (0 when the font gives none).
-    pub x_height: f32,
-    /// The cap height in em units (0 when the font gives none).
-    pub cap_height: f32,
-    /// The average glyph width in em units (0 when the font gives none).
-    pub average_width: f32,
-    /// The italic angle in degrees, counter-clockwise from vertical.
-    pub italic_angle: f32,
-    /// The OS/2 family class (`sFamilyClass`).
-    pub class: i16,
-    /// The font covers Japanese kana.
-    pub japanese: bool,
-    /// The font covers Thai.
-    pub thai: bool,
 }
 
 /// A face record with the normalized names it answers to.
@@ -382,7 +358,6 @@ pub(crate) fn font_faces(font: &skrifa::FontRef<'_>, outlines: Outlines, index: 
         file_bytes: None,
         index,
         source,
-        traits: FaceTraits::default(), // P3(type-w2): q358
         blob: None,
     };
     let mut keys = Keys { families, styles, legacy, full_names, postscript };

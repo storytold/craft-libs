@@ -51,7 +51,7 @@ pub use ligature::ligature_caret_stops;
 pub use line_break::settle_line_break;
 pub use outline::{FontOutline, GlyphPen, OutlineError};
 pub use plan_cache::ShapePlanCache;
-pub use scan::{FaceInfo, FaceTraits, LocalizedName, Outlines, Source, is_font_file, style_italic, style_weight, style_width};
+pub use scan::{FaceInfo, LocalizedName, Outlines, Source, is_font_file, style_italic, style_weight, style_width};
 pub use segments::SegmentBoundary;
 pub use shape::{RunGlyph, RunInput, ShapeRunError, shape_run};
 pub use visual_order::{VisualGlyph, visual_order};

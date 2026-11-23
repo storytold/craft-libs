@@ -273,6 +273,27 @@ fn a_script_filter_keeps_only_the_families_whose_face_covers_the_script() {
     assert!(with(FontScript::Japanese).is_empty(), "none covers Japanese");
 }
 
+/// Thai coverage comes from the face's `cmap` and Japanese from its `OS/2` code pages and Unicode ranges, which the
+/// scan's records do not hold: a Thai face and a CJK face each pass their own script's filter and not the other's.
+#[trial]
+fn a_thai_and_a_cjk_face_each_pass_their_own_scripts_filter() {
+    const THAI: &[u8] = include_bytes!("../../../font-subset/tests/data/sarabun/Sarabun-Regular.ttf");
+    const CJK: &[u8] = include_bytes!("../../../ui-contract/tests/fonts/NotoSansCJKsc-test.otf");
+    let catalog = catalog_of(&[INTER_REGULAR, THAI, CJK]);
+    let with = |script: FontScript| {
+        let mut filters = FontFilters::default();
+        filters.script = Some(script);
+        listed(&catalog, &filters, &[])
+    };
+    let (thai, japanese) = (with(FontScript::Thai), with(FontScript::Japanese));
+    assert!(thai.iter().any(|family| family.contains("Sarabun")) && !thai.iter().any(|family| family.contains("CJK")), "Thai: {thai:?}");
+    assert!(
+        japanese.iter().any(|family| family.contains("CJK")) && !japanese.iter().any(|family| family.contains("Sarabun")),
+        "Japanese: {japanese:?}"
+    );
+    assert!(!thai.iter().chain(&japanese).any(|family| family.contains("Inter")), "Inter covers neither");
+}
+
 #[trial]
 fn a_host_set_keeps_only_its_families_and_an_ordered_one_lists_them_in_its_order() {
     let catalog = three_faces();
