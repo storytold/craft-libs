@@ -178,8 +178,11 @@ fn grid(props: &mut Grid, ui: &mut Ui) {
     Button::new(props.label).show(ui);
 }
 
+/// A recorded element and its index in the record.
+type Found<'r> = Option<(usize, &'r inspect::Element)>;
+
 /// What an inspected region records of a button in a memoized view and of a button beside it.
-fn grid_and_footer(recorded: &Recorded) -> (Option<(usize, &inspect::Element)>, Option<(usize, &inspect::Element)>) {
+fn grid_and_footer(recorded: &Recorded) -> (Found<'_>, Found<'_>) {
     let named = |name: &str| {
         recorded.elements.iter().enumerate().find(|(_, element)| {
             element.part.is_none() && element.component == "Button" && element.facts.as_ref().and_then(|facts| facts.name.as_deref()) == Some(name)

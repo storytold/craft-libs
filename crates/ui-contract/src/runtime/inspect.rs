@@ -474,7 +474,7 @@ fn apply(ctx: &Context, step: &Step) -> bool {
                 let element = Element {
                     id: *id,
                     part: None,
-                    component: *component,
+                    component,
                     depth: open.stack.len(),
                     rect: Rect::NOTHING,
                     content: Rect::NOTHING,
