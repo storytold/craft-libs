@@ -75,6 +75,27 @@ fn a_rename_draft_opens_the_field_with_it_and_without_one_the_field_holds_the_na
     assert_eq!(opened_with(empty_for_first, 1).as_deref(), Some(NAMES[1]), "a row without a draft opens with its name");
 }
 
+/// The rename field caps no name length: a draft past the text field's usual 1,024 characters opens whole, and Enter
+/// commits all of it.
+#[trial]
+fn the_rename_field_accepts_a_name_longer_than_a_thousand_characters() {
+    const LONG: usize = 1_500;
+    let (mut fixture, seen) = rig(|row| (*row == 0).then(|| "x".repeat(LONG)));
+    request_rename(fixture.ctx(), list_id(), &0_usize);
+    fixture.settle();
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE);
+    fixture.settle();
+    let committed: Vec<usize> = seen
+        .borrow()
+        .iter()
+        .filter_map(|event| match event {
+            CollectionEvent::Rename(EditEvent::Commit { after, .. }) => Some(after.name.chars().count()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(committed, [LONG], "the whole name was committed, none of it cut");
+}
+
 /// The shapes drawn wholly inside a small square around `at`: an icon's, not a row fill's.
 fn drawn_at(shapes: &[egui::Shape], at: egui::Pos2) -> usize {
     let square = egui::Rect::from_center_size(at, Vec2::splat(24.0));
