@@ -1,6 +1,6 @@
 //! Dragging a checkbox sets the related controls the pointer crosses.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_ui::choice::Checkbox;
@@ -66,6 +66,59 @@ fn a_checkbox_drag_that_reaches_no_related_box_cancels_like_any_press_released_o
     fixture.release(&pressed);
     fixture.idle(2);
     assert_eq!(*values.borrow(), [false, false], "a drag that comes back and ends on its own box sets it");
+}
+
+#[trial]
+fn a_checkbox_press_released_far_away_with_no_move_between_cancels() {
+    let values = Rc::new(RefCell::new([false; 2]));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut values = shown.borrow_mut();
+        Stack::new().show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut values[0])).label("Pressed").show(ui);
+        });
+        Stack::new().show(ui, |ui, _| {
+            Checkbox::new(Bind::bound(&mut values[1])).label("Other group").show(ui);
+        });
+    });
+    fixture.settle();
+    let pressed = fixture.by_label("Pressed").expect("pressed");
+    let other = fixture.by_label("Other group").expect("other group");
+    fixture.press(&pressed);
+    fixture.release(&other);
+    fixture.idle(2);
+    assert_eq!(*values.borrow(), [false, false], "the pointer jumped away before the button went up: no click and no sweep");
+}
+
+#[trial]
+fn a_checkbox_that_becomes_enabled_during_a_sweep_and_is_crossed_engages_the_owner() {
+    for released_with_the_move in [false, true] {
+        let values = Rc::new(RefCell::new([false; 2]));
+        let enabled = Rc::new(Cell::new(false));
+        let (shown, sibling_enabled) = (values.clone(), enabled.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let mut values = shown.borrow_mut();
+            Checkbox::new(Bind::bound(&mut values[0])).label("Owner").show(ui);
+            Checkbox::new(Bind::bound(&mut values[1])).label("Sibling").enabled(sibling_enabled.get()).show(ui);
+        });
+        fixture.settle();
+        let owner = fixture.by_label("Owner").expect("owner");
+        let sibling = fixture.by_label("Sibling").expect("sibling").center();
+        fixture.press(&owner);
+        enabled.set(true);
+        if released_with_the_move {
+            fixture.frame(vec![pointer::moved(sibling), pointer::release(sibling)]);
+        } else {
+            fixture.frame(vec![pointer::moved(sibling)]);
+            fixture.frame(vec![pointer::release(sibling)]);
+        }
+        fixture.idle(2);
+        assert_eq!(
+            *values.borrow(),
+            [true, true],
+            "the sibling enabled during the press takes the sweep, so its owner does too (released with the move: {released_with_the_move})"
+        );
+    }
 }
 
 #[trial]

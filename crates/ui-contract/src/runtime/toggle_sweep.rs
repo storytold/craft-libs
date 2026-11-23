@@ -119,7 +119,8 @@ struct Record {
     sweep: Option<Sweep>,
     path: Arc<Vec<Segment>>,
     // A press and move may arrive together; siblings drawn before the pressed control get that
-    // initial path on the following pass. Visited ids keep the edit from applying twice.
+    // initial path on the following pass. Visited ids keep the edit from applying twice. A sweep released
+    // in the pass a sibling after its owner took the value is kept the same way, for the owner (`accept`).
     replay_first_path: bool,
     // The replay survives opening another gesture in the same pass.
     completed: Option<CompletedSweep>,
@@ -175,6 +176,19 @@ impl Record {
     /// The other enabled toggles of `group` that asked in the last pass with any: the ones a drag from `owner` can reach.
     fn others(&self, owner: Id, group: Id) -> Vec<Member> {
         self.earlier.iter().filter(|other| other.group == group && other.enabled && other.id != owner).cloned().collect()
+    }
+
+    /// `sibling` took the running sweep's value, so the sweep crossed another enabled toggle of the owner's group
+    /// and the owner takes the value too: the sibling's own state in this pass decides, not the last pass's layout
+    /// the owner's probe reads. An owner that asked in this pass before the sibling gets the value in the next pass;
+    /// a sweep released in this pass is kept for it then. Returns whether that next pass must run.
+    fn accept(&mut self, sibling: Id) -> bool {
+        let Some(sweep) = &mut self.sweep else { return false };
+        sweep.visited.insert(sibling);
+        let late = !sweep.engaged && sweep.travel.released && self.members.iter().any(|member| member.id == sweep.owner);
+        sweep.engaged = true;
+        self.replay_first_path |= late;
+        late
     }
 
     fn finish(&mut self) {
@@ -243,6 +257,7 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
             PerViewport::<Record>::with(ctx, viewport, |record| {
                 if let Some(finished) = &mut record.completed {
                     finished.sweep.visited.insert(id);
+                    finished.sweep.engaged = true;
                 }
             });
             Some(on)
@@ -289,11 +304,9 @@ pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<b
             if !crosses_visible(ctx, layer, visible, &path) {
                 return completed;
             }
-            PerViewport::<Record>::with(ctx, viewport, |record| {
-                if let Some(sweep) = &mut record.sweep {
-                    sweep.visited.insert(id);
-                }
-            });
+            if PerViewport::<Record>::with(ctx, viewport, |record| record.accept(id)) {
+                ctx.request_repaint();
+            }
             Some(on)
         }
     }

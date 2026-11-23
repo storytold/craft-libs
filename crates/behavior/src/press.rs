@@ -492,6 +492,19 @@ impl<T> Open<T> {
         !self.reported || (self.dragging && !self.drag_reported)
     }
 
+    /// The pointer reached `at`, by a move or by the button going up there: once past `slop` from the press, a target
+    /// that senses a drag starts one and any other loses its click. A release with no move before it (the pointer
+    /// jumped) is judged where it went up, so only a release within slop clicks.
+    fn reach(&mut self, at: Pos2, slop: f32) {
+        if self.released_at.is_none() && !self.dragging && !self.abandoned && at.distance(self.start.origin) > slop {
+            if self.sense.contains(Sense::DRAG) {
+                self.dragging = true;
+            } else {
+                self.abandoned = true;
+            }
+        }
+    }
+
     /// A release now is a click.
     fn clicks(&self) -> bool {
         !self.dragging && !self.abandoned && !self.left && self.sense.contains(Sense::CLICK)
@@ -558,17 +571,8 @@ impl<T: Copy> PressMachine<T> {
             match *event {
                 PointerEvent::Moved { at, .. } => {
                     pos = at;
-                    if let Some(open) = &mut self.open
-                        && open.released_at.is_none()
-                        && !open.dragging
-                        && !open.abandoned
-                        && at.distance(open.start.origin) > input.slop
-                    {
-                        if open.sense.contains(Sense::DRAG) {
-                            open.dragging = true;
-                        } else {
-                            open.abandoned = true;
-                        }
+                    if let Some(open) = &mut self.open {
+                        open.reach(at, input.slop);
                     }
                 }
                 PointerEvent::Gone => {
@@ -622,6 +626,9 @@ impl<T: Copy> PressMachine<T> {
                     pos = at;
                     if self.open.is_some_and(|open| open.start.button != button || open.released_at.is_some()) {
                         continue;
+                    }
+                    if let Some(open) = &mut self.open {
+                        open.reach(at, input.slop);
                     }
                     if let Some(open) = &mut self.open
                         && open.owes_phase()
