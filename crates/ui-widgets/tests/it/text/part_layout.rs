@@ -2,11 +2,13 @@
 //! where its rows are drawn, so an editor paints gutters beside them.
 
 use craft_behavior::{Metrics, PartKey, PlainText, Sense};
-use craft_ui::contract::{Bind, BindMut, Common, Component, Cx, Input, MeasureCx, PaintUi, PartsCx, Props as _, Role, Show as _};
+use craft_ui::contract::{
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, PaintUi, PartsCx, Props as _, Role, Show as _,
+};
 use craft_ui::primitives::{TextKey, TextOptions};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers, Pos2, Rect, Response, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -47,7 +49,8 @@ impl Component for Editor<'_> {
     const INPUT: Input = Input::Text;
     const OVERLAYS: bool = false;
     type Style = PlainStyle;
-    type Output = Response;
+    // The value is the component's: its output carries the `String` it edits, so the part reads it as `cx.value()`.
+    type Output = EditResponse<String>;
 
     fn style(_: &StyleCx<'_>, _: EditorStyleKey) -> PlainStyle {
         PlainStyle::default()
@@ -84,8 +87,8 @@ impl Component for Editor<'_> {
         *self.painted.borrow_mut() = Painted { part: Some(outcome.rect), origin: Some(origin), rows };
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
+    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<String> {
+        cx.edit_response()
     }
 }
 
