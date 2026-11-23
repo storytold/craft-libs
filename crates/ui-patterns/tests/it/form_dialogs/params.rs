@@ -630,3 +630,25 @@ fn a_row_beside_the_previous_one_shares_its_line() {
     assert!(stacked.is_some_and(|gap| gap > 10.0), "unmarked rows stack: {stacked:?}");
     assert!(beside.is_some_and(|gap| gap.abs() < 3.0), "a beside row shares the line: {beside:?}");
 }
+
+/// A text row with `select_on_focus` selects its whole text when it takes the focus, so typing replaces it (PdfCraft's
+/// Rename opens on the name selected); a row without it keeps the text and types at the caret.
+#[trial]
+fn a_text_row_that_selects_on_focus_is_replaced_by_typing() {
+    for (select, expected) in [(true, "Draft"), (false, "")] {
+        let param = Param::new("name", "Name", ParamKind::text("Report"));
+        let params = vec![if select { param.select_on_focus() } else { param }];
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        values.borrow_mut().set("name", FieldValue::Text("Report".into()));
+        let mut fixture = rows(params, &values);
+        let field = fixture.by_label("Name").expect("the name row has a field");
+        fixture.click(&field).settle();
+        fixture.type_text("Draft").settle();
+        let typed = values.borrow().text("name").map(str::to_owned);
+        if select {
+            assert_eq!(typed.as_deref(), Some(expected), "typing replaced the selected name");
+        } else {
+            assert!(typed.as_deref().is_some_and(|text| text.contains("Report") && text.contains("Draft")), "typing kept the name: {typed:?}");
+        }
+    }
+}
