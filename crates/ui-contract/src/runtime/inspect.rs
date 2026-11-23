@@ -444,8 +444,9 @@ pub(crate) fn open_element(ui: &Ui, id: Id, component: &'static str) -> bool {
     let layer = ui.layer_id();
     pass_state::with::<Log, _>(ctx, |log| {
         let Some(open) = log.open.last_mut() else { return false };
-        let component = component.rsplit("::").next().unwrap_or(component);
+        // The type's own name: generic arguments go first, so `Select<'_, alloc::string::String>` is `Select`.
         let component = component.split('<').next().unwrap_or(component);
+        let component = component.rsplit("::").next().unwrap_or(component);
         let element = Element {
             id,
             part: None,
@@ -484,6 +485,18 @@ pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
         let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
         let index = open.stack[at];
         open.elements[index].0.command = command;
+    });
+}
+
+/// Notes the text value the text adapter wrote on the node of the component `id` (`report_text`), unless the node
+/// already states a value: the inspector then lists what AccessKit reads for a text field.
+pub(crate) fn note_text_value(ctx: &Context, id: Id, value: &str) {
+    pass_state::with::<Log, _>(ctx, |log| {
+        let Some(open) = log.open.last_mut() else { return };
+        let Some(owner) = open.elements.iter_mut().rev().find(|(element, _)| element.id == id) else { return };
+        if let Some(facts) = owner.0.facts.as_mut() {
+            facts.value.get_or_insert_with(|| value.to_owned());
+        }
     });
 }
 

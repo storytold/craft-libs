@@ -123,6 +123,11 @@ pub(crate) fn report_text(ctx: &Context, owner: Id, facts: &TextFacts) {
         Some((anchor_node, anchor_at, focus_node, focus_at))
     });
     let value = (!facts.masked).then_some(facts.text.as_str());
+    if let Some(value) = value
+        && crate::runtime::inspect::recording(ctx)
+    {
+        crate::runtime::inspect::note_text_value(ctx, owner, value);
+    }
     adapter::write_text(ctx, owner, &TextNode { value, editable: facts.editable, disabled: facts.disabled, selection });
     Service::<Tables>::run(ctx, |tables| tables.0.insert(owner, entries));
 }
