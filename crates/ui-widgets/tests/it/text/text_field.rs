@@ -278,16 +278,18 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     // Tab still inserts into a field that keeps the arrows.
     fixture.key(Key::Tab, Modifiers::NONE);
     fixture.idle(2);
-    assert!(text.borrow().contains('\t'), "Tab inserts a tab: {:?}", text.borrow());
+    assert_eq!(*text.borrow(), "aXé\t\nb\nc\nd\ne\nf", "Tab inserts a tab at the caret and changes nothing else");
     assert_eq!(caret.get(), 5, "the caret advances past the inserted tab");
 
-    // Page keys move the caret to the framework editor's ends.
+    // Page keys move the caret to the framework editor's ends and change no text.
+    let before = text.borrow().clone();
     fixture.key(Key::PageDown, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), text.borrow().len(), "PageDown moves the caret to the end");
     fixture.key(Key::PageUp, Modifiers::NONE);
     fixture.idle(2);
     assert_eq!(caret.get(), 0, "PageUp moves the caret to the start");
+    assert_eq!(*text.borrow(), before, "the Page keys change no text");
 }
 
 /// The clear part empties the field in the pass that takes its click: the field's node reads empty after that one pass,

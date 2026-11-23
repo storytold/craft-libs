@@ -457,6 +457,27 @@ fn arrows_from_end(ctx: &Context, widget: Id, len: usize) {
     }
 }
 
+/// `PageUp`/`PageDown` on a multiline field move its caret to the start or the end, as the framework's own text
+/// editor does. The keys are not in egui's filter and its `TextEdit` has no Page handler, so the adapter takes them
+/// when `takes` holds; `takes` is false for a list or a step field, which keeps its own Page behavior.
+fn page_keys(ctx: &Context, widget: Id, len: usize, takes: bool) {
+    if !takes {
+        return;
+    }
+    let page = ctx.input(|i| {
+        if i.key_pressed(egui::Key::PageUp) {
+            Some(0)
+        } else if i.key_pressed(egui::Key::PageDown) {
+            Some(len)
+        } else {
+            None
+        }
+    });
+    if let Some(at) = page {
+        select(ctx, widget, at, at);
+    }
+}
+
 /// The modifiers held in this pass, which are the Enter press's.
 fn held_mods(ctx: &Context) -> Mods {
     let os = crate::runtime::windows::os_of(ctx);
@@ -567,13 +588,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let env = crate::runtime::env::Env::of(input.ui);
     let multiline = input.options.multiline();
     let scroll = if multiline { scroll_before(ctx, widget) } else { 0.0 };
-    // A multiline field that inserts Tab still gets the arrows: `KeepKeys::Tab` otherwise sets
-    // `horizontal_arrows: false, vertical_arrows: false` and egui drops them before the widget.
-    let filter = if multiline {
-        egui::EventFilter { tab: input.keys.keep == KeepKeys::Tab, horizontal_arrows: true, vertical_arrows: true, escape: false }
-    } else {
-        egui_focus::event_filter(input.keys.keep, false)
-    };
+    // A multiline field keeps Tab for the widget but needs all four arrows: KeepKeys::Tab sets both
+    // arrow flags false. BlockArrows already has them true.
+    let mut filter = egui_focus::event_filter(input.keys.keep, false);
+    if multiline {
+        filter.horizontal_arrows = true;
+        filter.vertical_arrows = true;
+    }
     // A single line sits on the baseline of its control's line, whatever its face: a number field's mono digits on
     // the body text's.
     let baseline = (!input.options.multiline()).then(|| {
@@ -620,6 +641,10 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     {
         select(ctx, widget, anchor, caret);
     }
+    // Page Up/Down move a multiline field's caret to the start/end; a list or a step field keeps its own Page
+    // behavior.
+    let paged = shown.focused && multiline && !input.list_open && !state.completions.open && !input.options.steps_value;
+    page_keys(ctx, widget, base.chars().count(), paged);
     // A single line keeps its caret in view through egui's own line offset; a multi-line part scrolls its text itself.
     // The caret is revealed only when it moved (against last pass's, `state.caret`), so a wheel that scrolled it out of
     // view stays where it put the text.
