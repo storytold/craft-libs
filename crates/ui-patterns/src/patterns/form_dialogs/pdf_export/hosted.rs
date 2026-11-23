@@ -303,12 +303,16 @@ impl HostedPdfExport {
         }
     }
 
-    /// Whether a failing check or a bad artboard range keeps OK off, as the dialog's own footer has it.
+    /// Whether a failing check, a bad artboard range or, in the preset editor, an empty or refused name keeps OK off,
+    /// as the dialog's own footer has it.
     fn blocked(&self) -> bool {
         let catalog = Self::catalog_of(&self.catalog);
         let range = self.choice.range.trim();
         let range_bad = self.choice.range_only && !range.is_empty() && self.artboard_count.is_some_and(|count| check_range(range, count).is_err());
-        range_bad || self.settings.check(catalog).and_then(|()| self.settings.check_destination(catalog, self.color_mode)).is_err()
+        let name = self.draft.name.trim();
+        let name_refused =
+            self.mode == PdfExportMode::PresetEditor && (name.is_empty() || self.check_name.as_ref().is_some_and(|check| check(name).is_some()));
+        range_bad || name_refused || self.settings.check(catalog).and_then(|()| self.settings.check_destination(catalog, self.color_mode)).is_err()
     }
 
     /// Whether the four bleed sides are equal, which is what the link between them means.

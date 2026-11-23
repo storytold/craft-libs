@@ -2,7 +2,8 @@
 
 use craft_pdf::settings::{Compatibility, PdfPreset, PdfSettings, Standard};
 use craft_ui::dialog::{DialogHost, DialogId};
-use craft_ui::patterns::form_dialogs::{HostedPdfExport, PdfExportWords, summary_text};
+use craft_ui::patterns::form_dialogs::{HostedPdfExport, PdfExportMode, PdfExportWords, summary_text};
+use craft_ui::patterns::presets::PresetError;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Context, Modifiers, Vec2};
@@ -123,6 +124,22 @@ fn ok_files_the_settings_once_for_the_app() {
     let filed = pdf.take_ok().expect("OK filed an answer");
     assert_eq!(filed.result.options, mine().settings, "with the dialog's settings");
     assert!(pdf.take_ok().is_none(), "handed out once");
+}
+
+/// In the preset editor, OK by automation files nothing for an empty name or one the app's check refuses, as the
+/// footer's OK is off then.
+#[trial]
+fn ok_in_the_preset_editor_files_nothing_for_a_refused_name() {
+    let ctx = Context::default();
+    let mut host = DialogHost::new();
+    let editor = dialog().mode(PdfExportMode::PresetEditor).check_name(|name| (name == "Mine").then_some(PresetError::NameTaken));
+    let id = host.open(editor);
+    for (name, files) in [("", false), ("Mine", false), ("Fresh", true)] {
+        assert_eq!(write_field(&mut host, &ctx, id, "name", json!(name)), Ok(()), "{name}");
+        host.confirm_by_id(&ctx, id);
+        let filed = host.get_mut_by_id::<HostedPdfExport>(id).expect("open").take_ok();
+        assert_eq!(filed.is_some(), files, "{name:?}");
+    }
 }
 
 #[trial]
