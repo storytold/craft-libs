@@ -222,6 +222,17 @@ impl<'a> Dialog<'a> {
         })
     }
 
+    /// Whether Escape keeps the typing in the focused field: the field commits its draft and the dialog closes. Off
+    /// (the default), one Escape cancels the typing with the dialog. For a dialog that applies its fields as they
+    /// change, where the dialog's Escape takes nothing back (`FocusPolicy::escape_keeps_typing`).
+    #[must_use]
+    pub fn escape_keeps_typing(self, on: bool) -> Self {
+        self.overlay(|overlay| {
+            let focus = overlay.focus.escape_keeps_typing(on);
+            overlay.focus(focus)
+        })
+    }
+
     /// Where the dialog first opens, as a screen position of its `corner`; the middle of the window without it. A saved
     /// placement comes first.
     #[must_use]

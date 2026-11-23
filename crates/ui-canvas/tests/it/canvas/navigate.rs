@@ -620,6 +620,79 @@ fn an_eased_wheel_pays_the_same_distance_at_any_frame_rate_keeps_paying_after_th
     assert_eq!(view.get().center, paged, "a key move ends the owed motion");
 }
 
+/// A canvas over a large document whose app reruns the pass of a frame while the flag is set, with `eased_wheel_zoom`
+/// as `eased`: the fixture, the view it shows and the flag.
+fn zoom_rig(eased: bool) -> EasedRig {
+    let mut options = NavigationOptions::default();
+    options.eased_wheel_zoom = eased;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let rerun = Rc::new(Cell::new(false));
+    let (shown, again) = (Rc::clone(&view), Rc::clone(&rerun));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+        if again.replace(false) && frame::discardable(ui.ctx()) {
+            frame::discard_pass(ui.ctx(), "the trial's second pass");
+        }
+    });
+    fixture.settle();
+    (fixture, view, rerun)
+}
+
+/// A zoom-modifier wheel notch of 60 points.
+fn zoom_notch() -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(0.0, 60.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Wheel,
+    }
+}
+
+/// The zoom after each of the notch's frame and the `frames` frames after it, each run as two passes when `twice`.
+fn zooms_after_notch(eased: bool, frames: usize, twice: bool) -> Vec<f64> {
+    let (mut fixture, view, rerun) = zoom_rig(eased);
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+    let mut zooms = Vec::new();
+    eased_frame(&mut fixture, &rerun, twice, vec![zoom_notch()]);
+    zooms.push(view.get().zoom);
+    for _ in 0..frames {
+        eased_frame(&mut fixture, &rerun, twice, vec![]);
+        zooms.push(view.get().zoom);
+    }
+    zooms
+}
+
+#[trial]
+fn an_eased_wheel_zoom_spreads_a_notch_over_the_frames_after_it_and_lands_where_the_plain_one_jumps() {
+    let plain = zooms_after_notch(false, 3, false);
+    assert!(plain[0] > 1.0, "the notch zooms in: {plain:?}");
+    assert!(plain.windows(2).all(|pair| pair[0] == pair[1]), "upstream's default zooms at once: {plain:?}");
+
+    let eased = zooms_after_notch(true, 60, false);
+    let (first, last) = (eased[0], eased[eased.len() - 1]);
+    assert!(first > 1.0 && first < plain[0], "the notch's frame pays part of it: {first} of {}", plain[0]);
+    assert!(eased[2] > eased[1], "a frame after the notch still zooms: {eased:?}");
+    assert!((last / plain[0] - 1.0).abs() < 1e-3, "the ease lands on the plain zoom: {last} and {}", plain[0]);
+
+    let rerun = zooms_after_notch(true, 60, true);
+    assert!((rerun[1] - eased[1]).abs() < 1e-9, "a frame's second pass pays nothing more: {} and {}", rerun[1], eased[1]);
+
+    // A key move drops what is still owed.
+    let (mut fixture, view, _) = zoom_rig(true);
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    fixture.frame(vec![pointer::moved(view.get().rect.center())]);
+    fixture.frame(vec![zoom_notch()]);
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    let paged = view.get().zoom;
+    fixture.idle(5);
+    assert_eq!(view.get().zoom, paged, "a key move ends the owed zoom");
+}
+
 #[trial]
 fn a_held_alt_key_is_in_the_wheels_modifiers_when_the_wheel_events_miss_it() {
     // Windows can report a held Alt in its key events and not in the wheel's modifier state.

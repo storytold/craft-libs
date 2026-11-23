@@ -2683,3 +2683,23 @@ fn full_screen_two_page_view_fits_the_spread_it_shows() {
     let centre = offset.0 + width / 2.0;
     assert!((spread.center().x - centre).abs() < 1.0, "the spread is centred across: {} against {centre}", spread.center().x);
 }
+
+/// Full screen's edge-to-edge view (`fill_screen`) has no scroll bars, so a press along the window's edges reaches the
+/// pages; by default the bars show.
+#[trial]
+fn full_screen_shows_no_scroll_bars() {
+    let bars = |fill: bool| {
+        let state = Rc::new(RefCell::new(state_with(|s| s.fit = Fit::Width)));
+        let pages = DemoPages::new(3);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut now = state.borrow().clone();
+            let _ = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).fill_screen(fill).show(ui, |_, _| ());
+            *state.borrow_mut() = now;
+        });
+        fixture.room(vec2(900.0, 600.0));
+        fixture.settle();
+        fixture.by_label("Vertical scroll bar").is_some()
+    };
+    assert!(bars(false), "the view shows its scroll bars by default");
+    assert!(!bars(true), "full screen shows none");
+}
