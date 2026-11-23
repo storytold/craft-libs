@@ -606,7 +606,7 @@ impl State {
     }
 
     /// The opener of a scope that went away while focus was inside it.
-    fn restored_focus(&self, focused: Option<Id>) -> Option<StopRec> {
+    pub(super) fn restored_focus(&self, focused: Option<Id>) -> Option<StopRec> {
         let root = focused?;
         let key = *self.focused.get(&root).unwrap_or(&(root, None));
         let inside = self.last_stops.iter().find(|rec| rec.stop.key() == key)?;

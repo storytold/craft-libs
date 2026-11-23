@@ -419,3 +419,41 @@ fn a_field_that_went_read_only_mid_run_gives_back_the_text_on_escape() {
     assert!(!events.borrow().contains(&"commit"), "the run is not committed: {:?}", events.borrow());
     assert!(events.borrow().contains(&"cancel"), "the run is cancelled: {:?}", events.borrow());
 }
+
+/// A kept Escape that closes the popover the field sits in hands focus back to the popover's opener, as any Escape that
+/// closes it does: the field is let go only after the popover's focus restoration has found it holding the focus.
+#[trial]
+fn a_kept_escape_that_closes_its_popover_returns_focus_to_the_opener() {
+    use craft_ui::buttons::Button;
+    use craft_ui::popover::Popover;
+    use craft_ui::testing::contract::clicked;
+    let open = Rc::new(Cell::new(false));
+    let text = Rc::new(RefCell::new(String::new()));
+    let opener_id = Rc::new(Cell::new(Id::NULL));
+    let (shown, held, opener_seen) = (open.clone(), text.clone(), opener_id.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Filter options").show(ui);
+        opener_seen.set(opener.response.id);
+        let mut is_open = shown.get();
+        if clicked(&opener) {
+            is_open = !is_open;
+        }
+        Popover::new("Filter", Bind::bound(&mut is_open)).opened_by(&opener).show(ui, |ui, _| {
+            let mut query = held.borrow_mut();
+            TextField::new("Query", Bind::bound(&mut *query)).keeps_on_escape().show(ui);
+        });
+        shown.set(is_open);
+    });
+    fixture.settle();
+    let button = fixture.by_label("Filter options").expect("the opener");
+    fixture.click(&button);
+    fixture.idle(4);
+    assert!(open.get() && fixture.by_label("Query").is_some(), "the popover opened on its field");
+    fixture.type_text("ab");
+    fixture.idle(2);
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.idle(6);
+    assert_eq!(*text.borrow(), "ab", "the kept Escape keeps the text");
+    assert!(!open.get(), "the Escape closed the popover");
+    assert_eq!(fixture.focused(), Some(opener_id.get()), "focus returned to the opener");
+}

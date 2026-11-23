@@ -1002,7 +1002,12 @@ pub(crate) fn end(ctx: &Context) {
         egui_focus::surrender(ctx, id);
     }
     if let Some(widget) = with(ctx, |state| state.surrender_after_scopes.take()) {
-        egui_focus::surrender(ctx, widget);
+        // A scope that went away with focus in this field gives the focus back to its opener below, from where the field
+        // holds it: the field is not surrendered first, which would leave that restoration nothing to start from.
+        let restores = with(ctx, |state| state.restored_focus(Some(widget)).is_some());
+        if !restores {
+            egui_focus::surrender(ctx, widget);
+        }
     }
     let app_widget = |id: Id| {
         let made = crate::runtime::pointer::made_by_component(ctx, viewport, id);
