@@ -332,9 +332,7 @@ fn underlined(shapes: &[Shape], label: &str) -> String {
                     .sections
                     .iter()
                     .filter(|section| section.format.underline.width > 0.0)
-                    .map(|section| {
-                        text.galley.job.text[section.byte_range.start.0..section.byte_range.end.0].to_owned()
-                    })
+                    .map(|section| text.galley.job.text[section.byte_range.start.0..section.byte_range.end.0].to_owned())
                     .collect::<String>(),
             ),
             _ => None,
