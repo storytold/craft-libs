@@ -1324,7 +1324,9 @@ pub(crate) mod guard {
         ("primitives::textures::loader::Pools", "texture loaders: cache; one per salt, made on first use, and the store's uploads"),
         ("primitives::textures::thumbnails::Hubs", "thumbnails: cache; one per salt, made on first use, and its per-frame render budget"),
         ("fonts::document::Registry", "document faces: cache; a face loads the same whichever run asks, and its repaint request is harmless"),
+        ("runtime::egui::fonts::Providers", "font providers and the served faces: cache; a face is served the same whichever run asks"),
         ("runtime::egui::fonts::Steps", "fonts plugin begin-pass steps: cache; a step added twice runs once"),
+        ("runtime::env::InstalledJobs", "the jobs install was given: set once at install, only read after"),
         // Testing logs.
         ("runtime::measure::", "measuring-run counts and the skipped-effect log (testing)"),
         ("runtime::pass_state::Parked", "pass state between passes: moved into the thread and back, not read"),
