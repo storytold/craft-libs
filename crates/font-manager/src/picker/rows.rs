@@ -23,7 +23,7 @@ use craft_ui::runtime::env::Label;
 use super::banner::FontPreviewBanner;
 use super::rank::{FamilyInfos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, SAMPLE_EM, Typing,
+    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, SAMPLE_EM, Sample, Typing,
     infos_of, read, ui_language, write,
 };
 use crate::panel::faces::Owner;
@@ -279,13 +279,13 @@ fn class_column(ui: &mut egui::Ui, filters: &mut FontFilters, words: &FontPicker
     filters.class = usize::from(picked).checked_sub(1).and_then(|i| FontClass::ALL.get(i).copied());
 }
 
-/// The sample of a family row: `text` in the regular face of `family` at `points`, named "{shown}: {text}" as the font
-/// manager names its samples, so the row keeps the family's name to itself; no face for a family the catalog
-/// lacks.
-fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, points: f32) -> FontSample<'a> {
+/// The sample of a family row: `text` in the regular face of `family` at `size.side × SAMPLE_EM`, in a band of the
+/// thumbnail side `size.side` as the banner's, named "{shown}: {text}" as the font manager names its samples, so the
+/// row keeps the family's name to itself; no face for a family the catalog lacks.
+fn sample<'a>(catalog: &'a Catalog, infos: &'a FamilyInfos, family: &str, shown: &str, text: String, size: Sample) -> FontSample<'a> {
     let face =
         infos.families.get(family).map_or(SampleFace::Missing, |info| SampleFace::Face { catalog, owner: Owner::Installed, face: &info.regular });
-    FontSample::new(format!("{shown}: {text}"), text, face, points)
+    FontSample::new(format!("{shown}: {text}"), text, face, size.side * SAMPLE_EM).band(size.side)
 }
 
 /// The name the banner shows for `family`: its row's shown name when the list holds one, else its name in the
@@ -367,7 +367,6 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let current = slots.iter().position(|slot| matches!(slot, Slot::Family { row, .. } if row.family == family));
     let size = settings.as_ref().map_or(ThumbSize::None, |s| s.preview.thumb());
     let sample_size = cx.style.sample(size);
-    let points = sample_size.side * SAMPLE_EM;
     let mut columns = Vec::with_capacity(4);
     if !plain {
         columns.push(ColumnSpec::toggle(STAR, words.favorites.clone(), ToggleColumn::default()).icon(IconId::new("star")));
@@ -473,7 +472,7 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                     return line;
                                 }
                                 let text = infos.sample_text(catalog, &row.family, sample_text, &row.shown);
-                                line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, text, points), |_| {})
+                                line.cell_field(SAMPLE, sample(catalog, &infos, &row.family, &row.shown, text, sample_size), |_| {})
                             }
                         });
                     over_rows = rows.response.contains_pointer();
