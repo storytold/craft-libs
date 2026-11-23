@@ -21,10 +21,16 @@ fn tile(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tile::new("IMG_0001.jpg").detail("00:12").show(ui).into()
 }
 
-/// A tile that is not a card, with no sunken plate behind its picture.
+/// A tile that is not a card, with no sunken plate behind its picture: a painter with a transparent ground.
 #[story(Tile<'static>, covers = [], drive = Drive::Never)]
-fn tile_bare(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Tile::new("Painter").thumb(ThumbAspect::SQUARE, StoryPictures::of(ui.ctx()).thumb(1)).bare().show(ui).into()
+fn tile_plateless(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Painter").thumb(ThumbAspect::SQUARE, |_, _| {}).plateless().show(ui).into()
+}
+
+/// The same, selected: the ring goes around the picture and leaves it clear.
+#[story(Tile<'static>, covers = [], drive = Drive::Never)]
+fn tile_plateless_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tile::new("Painter").thumb(ThumbAspect::SQUARE, |_, _| {}).plateless().selected(true).show(ui).into()
 }
 
 #[story(Tile<'static>, covers = [LongText], drive = Drive::Never)]

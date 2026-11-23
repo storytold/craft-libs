@@ -321,9 +321,10 @@ pub struct Tile<'a> {
     #[prop(flag)]
     flat_thumbnail: bool,
     /// A tile that is not a card paints no `surface.sunken` plate behind its picture: for pictures that paint their own
-    /// ground (a painter picker whose art sits on the dialog surface). Rings, dimming and the picture itself stay.
+    /// ground (a painter picker whose art sits on the dialog surface). Rings, dimming and the picture itself stay. It
+    /// also has no loading ground while a `.picture` is still loading.
     #[prop(flag)]
-    bare: bool,
+    plateless: bool,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -401,7 +402,7 @@ impl<'a> Tile<'a> {
             card: false,
             card_text: CardText::File,
             flat_thumbnail: false,
-            bare: false,
+            plateless: false,
             detail: None,
             accessible_name: None,
             rating: None,
@@ -649,6 +650,17 @@ fn badge_rects(flow: Flow, widths: &[f32], height: f32, sizes: &Sizes, plate: Op
         .collect()
 }
 
+/// The four rects that fill `outer` around `inner`, without overlap.
+fn ring_bands(outer: Rect, inner: Rect) -> [Rect; 4] {
+    let at = egui::pos2;
+    [
+        Rect::from_min_max(outer.min, at(outer.right(), inner.top())),
+        Rect::from_min_max(at(outer.left(), inner.bottom()), outer.max),
+        Rect::from_min_max(at(outer.left(), inner.top()), at(inner.left(), inner.bottom())),
+        Rect::from_min_max(at(inner.right(), inner.top()), at(outer.right(), inner.bottom())),
+    ]
+}
+
 impl Component for Tile<'_> {
     const ROLE: Role = Role::LIST_ITEM;
     const OVERLAYS: bool = false;
@@ -861,15 +873,22 @@ impl Component for Tile<'_> {
             // Filled from the outside in, under the picture, so the rings sit outside its edge.
             let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
             let draw = ui.draw();
+            // Bands around the picture, not filled rects under it: a picture with a transparent ground (no plate) must not
+            // be flooded by the ring.
             if halo > 0.0 {
-                draw.fill(&PaintShape::Rect(picture.expand(ring + halo), flat), style.halo);
+                for side in ring_bands(picture.expand(ring + halo), picture.expand(ring)) {
+                    draw.fill(&PaintShape::Rect(side, flat), style.halo);
+                }
             }
             if ring > 0.0 {
-                draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
+                let color = cx.resolve(&style.ring);
+                for side in ring_bands(picture.expand(ring), picture) {
+                    draw.fill(&PaintShape::Rect(side, flat), color);
+                }
             }
             if style.sizes.card {
                 ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-            } else if !self.bare {
+            } else if !self.plateless {
                 let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
                 ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
             }

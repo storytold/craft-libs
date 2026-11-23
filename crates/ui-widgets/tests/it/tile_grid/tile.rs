@@ -2,7 +2,7 @@
 //! shows are apart and inside the tile, and a part that does not fit is left out.
 
 use craft_theme::Srgba;
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, trial};
 use craft_ui::tile_grid::{BadgeVisibility, CardText, Tile, TileFlag};
@@ -46,7 +46,7 @@ fn overlap(a: &Rect, b: &Rect) -> bool {
 }
 
 #[trial]
-fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlaps() {
+fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlap() {
     let (_, glyphs, dots) = badges(400.0);
     assert_eq!((glyphs.len(), dots.len()), (6, 1), "at the default card width the five stars, the flag and the dot show");
     for width in [40.0, 64.0, 80.0, 96.0, 128.0, 400.0] {
@@ -82,29 +82,52 @@ fn card_text_places_the_name_centred_for_presets_and_at_the_start_for_files() {
     assert!(name.left() - tile.left() < tile.width() / 4.0, "a file's name starts at the tile's start edge: {name:?} in {tile:?}");
 }
 
-/// Whether a tile paints a `surface.sunken` fill inside its own rect, with `bare` set or not.
-fn paints_plate(bare: bool) -> bool {
+/// The rects a tile of 200 wide paints, and its sunken plate rect when it paints one; `selected` and `hovered` ring it.
+fn painted(plateless: bool, selected: bool, hovered: bool) -> (Vec<Rect>, Option<Rect>) {
     use craft_ui::runtime::env::Env;
     use egui::Color32;
     let mut frames = Frames::new();
-    let (mut tile, mut sunken, mut shapes) = (Rect::NOTHING, Color32::TRANSPARENT, Vec::new());
-    for _ in 0..3 {
-        shapes = frames.frame_shapes(|ui| {
-            let [r, g, b, a] = Env::of(ui).tokens.tokens().color.surface.sunken.0;
-            sunken = Color32::from_rgba_unmultiplied(r, g, b, a);
-            let region = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0));
-            tile = in_region(ui, region, |ui| {
-                let tile = Tile::new("Poster");
-                (if bare { tile.bare() } else { tile }).show(ui).response.rect
-            });
+    let (mut sunken, mut shapes) = (Color32::TRANSPARENT, Vec::new());
+    let mut body = |ui: &mut egui::Ui| {
+        let [r, g, b, a] = Env::of(ui).tokens.tokens().color.surface.sunken.0;
+        sunken = Color32::from_rgba_unmultiplied(r, g, b, a);
+        let region = Rect::from_min_size(pos2(20.0, 20.0), vec2(160.0, 200.0));
+        in_region(ui, region, |ui| {
+            let tile = Tile::new("Poster").selected(selected);
+            let _ = (if plateless { tile.plateless() } else { tile }).show(ui);
         });
+    };
+    for _ in 0..3 {
+        if hovered {
+            frames.frame(vec![egui::Event::PointerMoved(pos2(100.0, 60.0))], &mut body);
+        }
+        shapes = frames.frame_shapes(&mut body);
     }
-    shapes.iter().any(|shape| matches!(shape, Shape::Rect(r) if r.fill == sunken && tile.expand(1.0).contains_rect(r.rect) && r.rect.area() > 100.0))
+    let rects: Vec<(Rect, Color32)> = shapes
+        .iter()
+        .filter_map(|shape| if let Shape::Rect(r) = shape { Some((r.rect, r.fill)).filter(|(_, fill)| fill.a() > 0) } else { None })
+        .collect();
+    let plate = rects.iter().find(|(rect, fill)| *fill == sunken && rect.area() > 100.0).map(|(rect, _)| *rect);
+    (rects.into_iter().map(|(rect, _)| rect).collect(), plate)
 }
 
-/// A non-card tile keeps its sunken plate unless it is `bare`, so a picture that paints its own ground sits on the surface.
+/// A plateless tile paints no sunken plate (a default one keeps it), and its hover and selection rings go around the
+/// picture without filling it, so a transparent painter is not flooded by the accent or the muted ink.
 #[trial]
-fn a_bare_tile_paints_no_sunken_plate_and_a_default_tile_keeps_it() {
-    assert!(paints_plate(false), "a default tile paints the plate behind its picture");
-    assert!(!paints_plate(true), "a bare tile paints none");
+fn a_plateless_tile_paints_no_plate_and_its_rings_leave_the_picture_clear() {
+    let (_, plate) = painted(false, false, false);
+    let picture = plate.expect("a default tile paints the plate behind its picture");
+    assert!(painted(true, false, false).1.is_none(), "a plateless tile paints no plate");
+    for (selected, hovered) in [(true, false), (false, true)] {
+        let (rects, _) = painted(true, selected, hovered);
+        let inside = picture.shrink(1.0);
+        assert!(
+            !rects.iter().any(|r| overlap(r, &inside)),
+            "selected {selected}, hovered {hovered}: nothing fills the picture {picture:?}: {rects:?}"
+        );
+        assert!(
+            rects.iter().any(|r| overlap(r, &picture.expand(2.0)) && !picture.contains_rect(*r)),
+            "selected {selected}, hovered {hovered}: a ring is painted around the picture"
+        );
+    }
 }
