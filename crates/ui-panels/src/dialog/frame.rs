@@ -233,6 +233,20 @@ pub(crate) fn footer_in(
     }
 }
 
+/// Whether dialogs show the close x in their title row (true until an app turns it off).
+pub fn close_button(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<CloseButton>(egui::Id::NULL)).is_none_or(|held| held.0)
+}
+
+/// Turns the close x of every dialog's title row on or off, as an app's look decides; Escape and the footer buttons
+/// still close a dialog. Call it every pass or once at start.
+pub fn set_close_button(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::NULL, CloseButton(on)));
+}
+
+#[derive(Clone, Copy)]
+struct CloseButton(bool);
+
 /// The header actions of a shell: the close action when it has one.
 #[doc(hidden)]
 pub fn close_action(closable: bool) -> &'static [HeaderAction] {
@@ -328,7 +342,7 @@ impl Component for DialogFrame<'_> {
 
 impl Container for DialogFrame<'_> {
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        header(ui, cx, close_action(self.closable), None, None);
+        header(ui, cx, close_action(self.closable && close_button(ui.ctx())), None, None);
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {

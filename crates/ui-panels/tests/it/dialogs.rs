@@ -474,3 +474,21 @@ fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
     assert!(seen.iter().any(|style| style.variant == Variant::GHOST), "Cancel is a ghost button: {:?}", seen.iter().map(|s| s.variant).collect::<Vec<_>>());
     assert!(!seen.iter().any(|style| style.variant == Variant::SECONDARY), "no outlined button in the footer");
 }
+
+/// A dialog's title row carries a close x; an app whose dialogs end with their buttons (production's) turns it off
+/// once with `dialog::set_close_button`, and no dialog of the app shows it.
+#[trial]
+fn an_app_can_take_the_close_x_off_every_dialog() {
+    let off = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&off);
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::dialog::set_close_button(ui.ctx(), !flag.get());
+        let _ = Dialog::new("Plain").buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |_, _| {});
+    });
+    fixture.idle(4);
+    assert!(fixture.by_label("Close").is_some(), "the close x is there by default");
+    off.set(true);
+    fixture.idle(4);
+    assert!(fixture.by_label("Close").is_none(), "the close x is gone once the app turned it off");
+    assert!(fixture.by_label("OK").is_some(), "the dialog still has its buttons");
+}

@@ -24,7 +24,7 @@ mod words;
 
 pub use alert::{Alert, AlertOutput, HostedAlert};
 pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
-pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks};
+pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks, close_button, set_close_button};
 pub use held::{HeldAnswer, HeldOk};
 #[doc(hidden)]
 pub use host::dialog_probe;

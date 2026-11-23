@@ -493,7 +493,7 @@ impl Container for Dialog<'_> {
         if self.holds_outer_gesture() {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable), self.title_note.as_ref(), self.title_icon.as_ref());
+        frame::header(ui, cx, frame::close_action(self.closable && frame::close_button(ui.ctx())), self.title_note.as_ref(), self.title_icon.as_ref());
         self.keep_window_draggable(ui);
     }
 
