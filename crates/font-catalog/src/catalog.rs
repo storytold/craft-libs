@@ -321,8 +321,11 @@ pub struct Catalog {
     loaded: Mutex<HashMap<String, FamilyLoad>>,
     /// The bytes of each file read, while a face of it is loaded. A file's own lock is held while it is read, so faces of
     /// one collection loading on several threads read it once and share the bytes.
-    files: Mutex<HashMap<PathBuf, Arc<Mutex<Option<Weak<[u8]>>>>>>,
+    files: Mutex<HashMap<PathBuf, FileSlot>>,
 }
+
+/// One file's shared bytes while any face of it is loaded, behind the lock held while the file is read.
+type FileSlot = Arc<Mutex<Option<Weak<[u8]>>>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
