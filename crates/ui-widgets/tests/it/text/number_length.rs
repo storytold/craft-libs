@@ -1,7 +1,8 @@
 //! A length field keeps the document's unit and shows the user's.
 
+use craft_behavior::NumberCodec;
 use craft_ui::contract::{Bind, Props as _, Show as _};
-use craft_ui::runtime::env::{LengthUnits, UnitKind};
+use craft_ui::runtime::env::{Env, LengthUnits, UnitKind};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::click;
 use craft_ui::testing::{Frames, trial};
@@ -89,4 +90,34 @@ fn picas_with_points_and_a_percentage_factor_read_as_print_apps_write_them() {
     let share = in_lengths(mm, START, type_and_commit("3cm*50%"));
     let half = in_lengths(mm, START, type_and_commit("1.5cm"));
     assert!((share - half).abs() < SAME && share != START, "3cm*50% is half of 3 cm: {share} against {half}");
+}
+
+/// With `NumberCodec::share_of_start`, a lone percentage typed key by key is that share of the length the edit began
+/// on, applied on Enter: the numbers typed before the `%` apply as typed, and the share does not read them.
+#[trial]
+fn a_lone_percentage_is_that_share_of_the_length_the_edit_began_on() {
+    let mm = LengthUnits::new(UnitKind::Points, UnitKind::Millimetres, START);
+    let mut frames = Frames::new();
+    let value = RefCell::new(Some(START));
+    let at = Cell::new(Pos2::ZERO);
+    let mut show = |ui: &mut Ui| {
+        let codec = NumberCodec::new(Env::of(ui).units().length_reader(mm), 2).share_of_start();
+        let mut guard = value.borrow_mut();
+        let field = NumberField::length("Width", Bind::bound(&mut *guard), mm).codec(codec).id_salt("width");
+        at.set(field.show(ui).response.rect.center());
+    };
+    let half = |v: Option<f64>| v.is_some_and(|v| (v - START / 2.0).abs() < SAME);
+    frames.idle(3, &mut show);
+    click(&mut frames, at.get(), &mut show);
+    frames.frame(vec![key_press(Key::A, Modifiers::COMMAND)], &mut show);
+    for typed in ["5", "0", "%"] {
+        frames.frame(vec![Event::Text(typed.into())], &mut show);
+        frames.idle(1, &mut show);
+    }
+    let typed = *value.borrow();
+    assert!(typed != Some(START) && !half(typed), "the numbers apply as typed, the share waits for Enter: {typed:?}");
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    let committed = value.into_inner();
+    assert!(half(committed), "50% is half the length the edit began on: {committed:?}");
 }

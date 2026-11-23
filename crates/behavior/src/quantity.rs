@@ -130,6 +130,16 @@ impl Reader {
         };
         (parse.at == chars.len() && value.is_finite()).then_some((value, parse.tag)).ok_or(NotAValue)
     }
+
+    /// The fraction a lone percentage writes (`50%` is 0.5): a number and `%`, with no sign, unit or operator;
+    /// `None` for any other text.
+    pub fn share(&self, text: &str) -> Option<f64> {
+        let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+        let number = chars.strip_suffix(&['%'])?;
+        let mut parse = Parse { reader: self, chars: number, at: 0, tag: None };
+        let value = parse.number().ok()?;
+        (parse.at == number.len()).then_some(value / 100.0)
+    }
 }
 
 struct Parse<'a> {
