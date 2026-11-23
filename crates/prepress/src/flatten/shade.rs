@@ -173,10 +173,16 @@ fn set(comps: &mut [f32], covered: &mut [bool], n: usize, i: usize, c: &[f32]) {
     covered[i] = true;
 }
 
-/// The pixel grid covering `area` at `scale`: its size, or `None` when empty.
+/// The most pixels [`pixel_size`] allows: twice `MAX_RASTER_PIXELS`, as `limit_scale` bounds the
+/// area before rounding and rounding adds a row and a column at most. A thinner area rounds to
+/// one pixel across and would otherwise let the other side grow without bound.
+const MAX_GRID_PIXELS: f64 = 2.0 * 16_777_216.0;
+
+/// The pixel grid covering `area` at `scale`: its size, or `None` when empty or past
+/// [`MAX_GRID_PIXELS`].
 pub(super) fn pixel_size(area: Rect, scale: f64) -> Option<(usize, usize)> {
     let (w, h) = ((area.width() * scale).ceil(), (area.height() * scale).ceil());
-    (w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0).then_some((w as usize, h as usize))
+    (w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 && w * h <= MAX_GRID_PIXELS).then_some((w as usize, h as usize))
 }
 
 /// Mesh triangles drawn into component buffers, later triangles over earlier ones.
@@ -367,7 +373,7 @@ impl<'a> Canvas<'a> {
                 Item::Image(im) => self.image(im, clip, opacity),
                 Item::Group(g) => {
                     let own = g.clip.as_ref().map(|c| {
-                        let mut cov = self.coverage(c, FillRule::NonZero);
+                        let mut cov = self.coverage(c, g.clip_rule);
                         if let Some(outer) = clip {
                             cov.iter_mut().zip(outer).for_each(|(a, b)| *a *= b);
                         }
@@ -825,4 +831,46 @@ pub(super) fn rect_path(r: Rect, t: Affine) -> BezPath {
     path.line_to(t * Point::new(r.x0, r.y1));
     path.close_path();
     path
+}
+
+#[cfg(test)]
+mod tests {
+    use kurbo::Shape;
+
+    use super::*;
+    use crate::flatten::{BlendMode, FillItem, GroupItem};
+
+    #[test]
+    fn canvas_clips_by_the_clip_rule() {
+        // Two nested squares drawn in the same direction: even-odd leaves a hole, nonzero fills it.
+        let mut ring = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.1);
+        ring.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.1));
+        let black = InkColor::Tints(vec![(InkId::process(Process::Black), 1.0)]);
+        let fill = Item::Fill(FillItem {
+            path: Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.1),
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(black),
+            overprint: Overprint::default(),
+        });
+        let inks = InkSet::new();
+        let alpha = |clip_rule| {
+            let group = GroupItem {
+                opacity: 1.0,
+                blend: BlendMode::Normal,
+                isolated: false,
+                knockout: false,
+                clip: Some(ring.clone()),
+                clip_rule,
+                mask: None,
+                actual_text: None,
+                children: vec![fill.clone()],
+            };
+            let Some(mut canvas) = Canvas::new(Rect::new(0.0, 0.0, 100.0, 100.0), 1.0, &inks) else { panic!("no canvas") };
+            canvas.draw(&[Item::Group(group)]);
+            let at = |x, y| canvas.sample(Point::new(x, y)).map(|(_, a)| a);
+            (at(10.5, 50.5), at(50.5, 50.5))
+        };
+        assert_eq!(alpha(FillRule::NonZero), (Some(1.0), Some(1.0)));
+        assert_eq!(alpha(FillRule::EvenOdd), (Some(1.0), Some(0.0)), "the hole");
+    }
 }

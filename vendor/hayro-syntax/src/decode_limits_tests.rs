@@ -142,12 +142,68 @@ fn ordinary_stream_expansion_is_document_local_and_keeps_caller_budget() {
 }
 
 #[test]
+fn uncanceled_open_preserves_stream_limits_and_repair_results() {
+    let cancel = crate::Cancellation::new(|| false);
+    for input in [ordinary_stream_pdf(), object_stream_pdf(false).0, object_stream_pdf(true).0] {
+        for cap in [0, 32, 512, MAX_DECODED_STREAM] {
+            let limits = DecodeLimits::default().with_max_decoded_stream(cap);
+            let normal = Pdf::new_with_limits(input.clone(), limits);
+            let controlled = Pdf::new_with_password_limits_and_cancel(input.clone(), "", limits, &cancel);
+            match (normal, controlled) {
+                (Ok(normal), Ok(controlled)) => {
+                    assert_eq!(controlled.decode_limits(), normal.decode_limits());
+                    assert_eq!(controlled.pages().len(), normal.pages().len());
+                    for object in [40, 41] {
+                        assert_eq!(marker(&controlled, object), marker(&normal, object));
+                    }
+                    let stream = |pdf: &Pdf| {
+                        pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).map(|s| {
+                            s.decoded().map(|bytes| bytes.into_owned()).map_err(|e| format!("{e:?}"))
+                        })
+                    };
+                    assert_eq!(stream(&controlled), stream(&normal));
+                }
+                (Err(expected), Err(crate::CancellableLoadError::Load(actual))) => assert_eq!(actual, expected),
+                _ => panic!("an uncanceled constructor changed the loading result"),
+            }
+        }
+    }
+}
+
+#[test]
 fn final_known_size_images_keep_their_distinct_pixel_budget() {
     let limits = DecodeLimits::default().with_max_decoded_stream(32);
     let params = ImageDecodeParams { width: 64, height: 1, bpc: Some(8), num_components: Some(1), ..Default::default() };
     assert_eq!(crate::filter::decode_limit(&params, false, limits), 32);
     assert_eq!(crate::filter::decode_limit(&params, true, limits), 128);
     assert_eq!(crate::filter::decode_limit(&ImageDecodeParams::default(), true, limits), 32);
+}
+
+#[test]
+fn image_limits_default_and_caller_figures() {
+    let limits = DecodeLimits::default();
+    assert_eq!((limits.max_decoded_image(), limits.max_image_pixels()), (1 << 30, 1 << 28));
+    // An image of 31404 × 31403 RGB pixels: 2.96 GB, past the default.
+    let params = ImageDecodeParams { width: 31_404, height: 31_403, bpc: Some(8), num_components: Some(3), ..Default::default() };
+    assert_eq!(crate::filter::decode_limit(&params, true, limits) as u64, 1 << 30);
+    let raised = limits.with_max_decoded_image(4 << 30).with_max_image_pixels(1 << 30);
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!((raised.max_decoded_image(), raised.max_image_pixels()), (4 << 30, 1 << 30));
+        assert_eq!(crate::filter::decode_limit(&params, true, raised) as u64, 4 << 30);
+        assert_eq!(raised.with_max_decoded_stream(32).max_decoded_image(), 4 << 30, "lowering the stream limit keeps the image limits");
+        assert_eq!(limits.with_max_image_pixels(u64::MAX).max_image_pixels(), 1 << 32);
+    }
+    #[cfg(not(target_pointer_width = "64"))]
+    assert_eq!(raised, limits, "a raise is clamped to the defaults");
+    assert_eq!(raised.max_decoded_stream(), MAX_DECODED_STREAM, "the stream limit is kept");
+    assert_eq!(raised.with_max_decoded_image(64).max_decoded_stream(), MAX_DECODED_STREAM);
+    // A context made without a document keeps every limit it is given.
+    for given in [limits, limits.with_max_decoded_stream(32), raised, limits.with_max_image_pixels(5)] {
+        assert_eq!(crate::reader::ReaderContext::dummy_with_limits(given).decode_limits(), given);
+    }
+    let small = ImageDecodeParams { width: 64, height: 1, bpc: Some(8), num_components: Some(1), ..Default::default() };
+    assert_eq!(crate::filter::decode_limit(&small, true, limits.with_max_decoded_image(100)), 100);
 }
 
 #[test]

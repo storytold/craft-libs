@@ -138,13 +138,22 @@ impl<'a> Lexer<'a> {
         self.s.get(self.pos..).unwrap_or(&[])
     }
 
+    /// Skips whitespace and comments, charged to the token budget like the tokens they sit
+    /// between: an object behind a long comment is otherwise scanned again for every reference
+    /// to it, outside every budget.
     fn skip_ws(&mut self) {
+        let start = self.pos;
+        let end = self.pos.saturating_add(self.max_tokens.saturating_sub(self.tokens));
         while let Some(b) = self.peek() {
+            if self.pos >= end {
+                self.exhausted = true;
+                break;
+            }
             if is_white(b) {
                 self.pos += 1;
             } else if b == b'%' {
                 while let Some(b) = self.peek() {
-                    if b == b'\n' || b == b'\r' {
+                    if b == b'\n' || b == b'\r' || self.pos >= end {
                         break;
                     }
                     self.pos += 1;
@@ -153,6 +162,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        self.tokens = self.tokens.saturating_add(self.pos - start);
     }
 
     /// A run of regular characters (a number, keyword or name body).
@@ -328,14 +338,15 @@ impl<'a> Lexer<'a> {
             return None;
         }
         if word.iter().all(u8::is_ascii_digit) {
-            let after = self.pos;
+            let (after, tokens, exhausted) = (self.pos, self.tokens, self.exhausted);
             if let (Some(num), Some(generation)) = (std::str::from_utf8(word).ok().and_then(|w| w.parse::<u32>().ok()), self.unsigned())
                 && let Ok(generation) = u16::try_from(generation)
                 && self.keyword(b"R")
             {
                 return Some(Obj::Ref(num, generation));
             }
-            self.pos = after;
+            // The caller rescans what the lookahead skipped: it must not be charged twice.
+            (self.pos, self.tokens, self.exhausted) = (after, tokens, exhausted);
         }
         self.tokens = self.tokens.checked_add(word.len())?;
         if self.tokens > self.max_tokens {
@@ -517,6 +528,53 @@ fn indirect<'a>(data: &'a [u8], offset: usize, budget: &mut Budget) -> Option<In
     Some(Indirect { num, obj, stream })
 }
 
+/// How an inflate ended.
+enum Inflated {
+    /// The whole stream, within the limit.
+    Done(Vec<u8>),
+    /// The output would pass the limit.
+    Exhausted,
+    /// A damaged or truncated stream: only the bytes actually written before the damage.
+    Damaged(Vec<u8>),
+}
+
+/// Inflate `raw` (zlib-wrapped or bare deflate) to at most `limit` bytes. Unlike the
+/// `decompress_to_vec*` helpers it reports the bytes the decompressor really wrote, so a stream
+/// rejected early yields an empty `Damaged`, never the zero-filled output buffer.
+fn inflate(raw: &[u8], zlib: bool, limit: usize) -> Inflated {
+    use miniz_oxide::inflate::TINFLStatus;
+    use miniz_oxide::inflate::core::{DecompressorOxide, decompress, inflate_flags};
+    let flags = inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF | if zlib { inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER } else { 0 };
+    let mut out = vec![0u8; raw.len().saturating_mul(2).max(64).min(limit)];
+    let mut state = Box::<DecompressorOxide>::default();
+    let (mut input, mut written) = (raw, 0usize);
+    loop {
+        let (status, consumed, wrote) = decompress(&mut state, input, &mut out, written, flags);
+        written = written.saturating_add(wrote).min(out.len());
+        match status {
+            TINFLStatus::Done => {
+                out.truncate(written);
+                return Inflated::Done(out);
+            }
+            TINFLStatus::HasMoreOutput => {
+                if out.len() >= limit {
+                    return Inflated::Exhausted;
+                }
+                let Some(rest) = input.get(consumed..) else {
+                    out.truncate(written);
+                    return Inflated::Damaged(out);
+                };
+                input = rest;
+                out.resize(out.len().saturating_mul(2).min(limit), 0);
+            }
+            _ => {
+                out.truncate(written);
+                return Inflated::Damaged(out);
+            }
+        }
+    }
+}
+
 /// A stream's data with its filters undone: FlateDecode (with PNG predictors), or none.
 fn decode(dict: &Dict, raw: &[u8], budget: &mut Budget) -> Option<Vec<u8>> {
     if budget.exhausted {
@@ -547,20 +605,22 @@ fn decode(dict: &Dict, raw: &[u8], budget: &mut Budget) -> Option<Vec<u8>> {
             Some(raw.to_vec())
         }
         [b"FlateDecode" | b"Fl"] => {
-            let inflated = match miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(raw, limit) {
-                Ok(v) => v,
-                Err(e) if e.status == miniz_oxide::inflate::TINFLStatus::HasMoreOutput => {
+            let inflated = match inflate(raw, true, limit) {
+                Inflated::Done(v) => v,
+                Inflated::Exhausted => {
                     budget.exhausted = true;
                     return None;
                 }
                 // A damaged stream: what inflated before the damage, as other readers do.
-                Err(e) if !e.output.is_empty() => e.output,
-                Err(_) => match miniz_oxide::inflate::decompress_to_vec_with_limit(raw, limit) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        budget.exhausted |= e.status == miniz_oxide::inflate::TINFLStatus::HasMoreOutput;
+                Inflated::Damaged(v) if !v.is_empty() => v,
+                // Rejected before any output: retry as a bare deflate stream.
+                Inflated::Damaged(_) => match inflate(raw, false, limit) {
+                    Inflated::Done(v) => v,
+                    Inflated::Exhausted => {
+                        budget.exhausted = true;
                         return None;
                     }
+                    Inflated::Damaged(_) => return None,
                 },
             };
             unpredict(&inflated, parms, limit)
@@ -769,6 +829,7 @@ impl Reader<'_> {
             let (Ok(num), Some(at)) = (u32::try_from(num), usize::try_from(at).ok().and_then(|a| a.checked_add(first))) else { break };
             objects.push((num, at));
         }
+        self.budget.parsed(&lx)?;
         Some(ObjStm { data, objects })
     }
 
@@ -1075,6 +1136,21 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
                 if scale >= 1.0 && close((w, h), paper) {
                     None
                 } else {
+                    // The matrix is written with at most four decimals and a PDF real has no
+                    // exponent, so a scale that rounds away prints nothing at all and one that
+                    // rounds up prints the wrong size. Refuse both, the way a nondefault
+                    // UserUnit is refused: an error, never a job that spools a blank page.
+                    let written = number(scale).parse::<f64>().unwrap_or(0.0);
+                    if written <= 0.0 || (written - scale).abs() > scale * 0.01 {
+                        return Err(Error::Spool(format!(
+                            "shrink to fit cannot place sheet {} ({:.2} x {:.2} in) on the {:.2} x {:.2} in paper; nothing was sent",
+                            i + 1,
+                            w / 72.0,
+                            h / 72.0,
+                            pw / 72.0,
+                            ph / 72.0
+                        )));
+                    }
                     let [x0, y0, x1, y1] = sheet.bounds;
                     let (cw, ch) = (x1 - x0, y1 - y0);
                     // The paper in the page's unrotated space.

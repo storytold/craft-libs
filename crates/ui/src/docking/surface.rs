@@ -13,6 +13,8 @@ pub(super) const TAB_PADDING: f32 = 24.0;
 pub struct DockStyle {
     pub tab_height: f32,
     pub gap: f32,
+    /// Optional gap beside attached side docks. Other split/row dividers retain `gap`.
+    pub dock_gap: Option<f32>,
     pub min_pane: f32,
     pub background: Color32,
     pub tab_background: Color32,
@@ -30,7 +32,7 @@ pub struct DockStyle {
     pub panels_label: String,
     pub resize_label: String,
     pub resize_window_label: String,
-    /// Accessibility label of a group's drag bar and top border.
+    /// Accessibility label of a group's drag bar and top border; `{name}` names the group.
     pub move_group_label: String,
     pub close_group_label: String,
     pub minimize_label: String,
@@ -113,7 +115,7 @@ pub struct DockStyle {
     /// [D] Lay docks out right to left: `Side::Start` is the right edge. egui has no app-wide
     /// layout direction, so the host sets this from its locale. Splits keep their sides.
     pub right_to_left: bool,
-    /// [D] Accessibility label of a column bar.
+    /// [D] Accessibility label of a column bar; `{name}` names the column ([`Self::localized`]).
     pub move_column_label: String,
     /// [D] Column menu and group menu items.
     pub collapse_to_icons_label: String,
@@ -175,6 +177,7 @@ impl DockStyle {
         Self {
             tab_height: 26.0,
             gap: 4.0,
+            dock_gap: None,
             min_pane: 40.0,
             background: visuals.panel_fill,
             tab_background: visuals.extreme_bg_color,
@@ -191,7 +194,7 @@ impl DockStyle {
             panels_label: "Panels".into(),
             resize_label: "Resize panels".into(),
             resize_window_label: "Resize panel window".into(),
-            move_group_label: "Move tab group".into(),
+            move_group_label: super::labels::MOVE_GROUP.into(),
             close_group_label: "Close Tab Group".into(),
             minimize_label: "Minimize".into(),
             expand_label: "Expand".into(),
@@ -218,7 +221,7 @@ impl DockStyle {
             iconic_label_width: 96.0,
             auto_collapse_label: "Auto-Collapse Iconic Panels".into(),
             right_to_left: false,
-            move_column_label: "Move panel column".into(),
+            move_column_label: super::labels::MOVE_COLUMN.into(),
             collapse_to_icons_label: "Collapse to Icons".into(),
             expand_panels_label: "Expand Panels".into(),
             collapse_column_label: "Collapse column to icons".into(),
@@ -304,6 +307,7 @@ impl DockStyle {
             && self.font.size > 0.0
             && self.drop_line_width > 0.0
             && self.side_zone_fraction <= 0.5
+            && self.dock_gap.is_none_or(|gap| gap.is_finite() && (0.0..=4096.0).contains(&gap))
     }
 }
 
@@ -832,6 +836,45 @@ pub fn send_keys(ctx: &Context, viewport: egui::ViewportId, events: Vec<egui::Ev
 /// `show*` functions override `logical_label`, `permissions` and `limits`.
 pub trait DockContent<P> {
     fn body(&mut self, ui: &mut Ui, panel: &P);
+
+    /// Observe the fitted rectangle of each attached column, before its chrome is drawn.
+    fn column_rect(&mut self, _ctx: &Context, _column: &super::Column<P>, _rect: Rect, _side: super::Side) {}
+
+    /// An exclusive host surface replaces stock iconic painting, focus, drag and resize.
+    /// Placement and column-edge drop targets still belong to the workspace renderer.
+    fn owns_iconic_column(&self, _first: &P) -> bool {
+        false
+    }
+
+    /// Draw the complete iconic column inside its fitted rectangle when owned by the host.
+    fn iconic_column(&mut self, _ui: &mut Ui, _column: &super::Column<P>, _rect: Rect, _side: super::Side) {}
+
+    /// Return true after painting an exclusive group surface; stock tabs/body/targets are skipped.
+    /// The host supplies that group's size limits through `limits`.
+    fn custom_group(&mut self, _ui: &mut Ui, _panels: &[P], _active: &P, _rect: Rect, _floating: bool) -> bool {
+        false
+    }
+
+    /// Hosts which paint shared seams can keep the stock resize input without a second fill.
+    fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        default
+    }
+    /// Presentation-only collapse of a group; its selected tab remains model state.
+    fn group_collapsed(&self, _panels: &[P]) -> bool {
+        false
+    }
+    /// Paint a fitted split gap in the owning surface, without another resize target.
+    fn split_separator(&mut self, _ui: &mut Ui, _rect: Rect) {}
+    /// The host supplies horizontal resize input at the floating frame edges.
+    /// Internal split dividers retain stock input unless `owns_floating_split_width` is true.
+    fn owns_floating_width(&self, _panel: &P) -> bool {
+        false
+    }
+    /// The host supplies horizontal resize input for every internal split in this floating tree.
+    /// This is separate from frame-edge ownership; only return true with replacement input.
+    fn owns_floating_split_width(&self, _panel: &P) -> bool {
+        false
+    }
     /// Plain text name for accessibility, menus and the default visual label.
     fn logical_label(&self, panel: &P) -> String
     where
@@ -885,6 +928,11 @@ pub trait DockContent<P> {
     fn window_kind(&self, _panel: &P) -> WindowKind {
         WindowKind::Palette
     }
+    /// A native floating window drew its panel bodies (feature `native-windows`): called once
+    /// per pass of the window, after its last body, with the window's `ui`. An app that
+    /// publishes its own IME descriptor, outside [`crate::ime::Composer`], publishes it here for
+    /// the window. Windows drawn in the main window's pass get no call.
+    fn window_drawn(&mut self, _ui: &mut Ui) {}
     /// Host-owned drop resolution for targets the renderer cannot know about. Returning
     /// feedback consumes the gesture, including no-op targets; the renderer then emits no move.
     fn resolve_drag(&mut self, _ctx: &Context, _style: &DockStyle, _request: &DropRequest<'_, P>) -> Option<DropFeedback> {
@@ -911,6 +959,19 @@ pub trait DockContent<P> {
     /// [`DockArea::new`], `active` and the widget's rect when its response reports
     /// `drag_started()`; the panel then moves as its tab would.
     fn group_header(&mut self, _ui: &mut Ui, _panels: &[P], _active: &P, _floating: bool) {}
+    /// Width the group's extra tabs want: the host's own tabs, drawn right after the group's
+    /// panel tabs (and their "…" button), before the drag bar. They fit with the panel tabs:
+    /// both shrink widest first to [`DockStyle::min_tab_width`] (the extra tabs as one tab); in a
+    /// row narrower still, the panel tabs overflow and the extra tabs keep that width. Zero draws
+    /// none.
+    fn group_extra_tabs_width(&self, _panels: &[P], _active: &P, _floating: bool) -> f32 {
+        0.0
+    }
+    /// Draw the extra tabs into `ui.max_rect()`, which can be narrower than
+    /// [`Self::group_extra_tabs_width`] asked for; the host fits its tabs into it, with an
+    /// overflow of its own. Their widgets take their own input as the header's do, and a press
+    /// among them focuses the shown panel. A drop on them adds the panel after the last panel tab.
+    fn group_extra_tabs(&mut self, _ui: &mut Ui, _panels: &[P], _active: &P, _floating: bool) {}
 }
 
 /// Host-owned drop resolution request, see [`DockContent::resolve_drag`].
@@ -950,6 +1011,33 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     fn body(&mut self, ui: &mut Ui, panel: &P) {
         self.inner.body(ui, panel);
     }
+    fn column_rect(&mut self, ctx: &Context, column: &super::Column<P>, rect: Rect, side: super::Side) {
+        self.inner.column_rect(ctx, column, rect, side);
+    }
+    fn owns_iconic_column(&self, first: &P) -> bool {
+        self.inner.owns_iconic_column(first)
+    }
+    fn iconic_column(&mut self, ui: &mut Ui, column: &super::Column<P>, rect: Rect, side: super::Side) {
+        self.inner.iconic_column(ui, column, rect, side);
+    }
+    fn custom_group(&mut self, ui: &mut Ui, panels: &[P], active: &P, rect: Rect, floating: bool) -> bool {
+        self.inner.custom_group(ui, panels, active, rect, floating)
+    }
+    fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        self.inner.resize_handle_style(default)
+    }
+    fn group_collapsed(&self, panels: &[P]) -> bool {
+        self.inner.group_collapsed(panels)
+    }
+    fn split_separator(&mut self, ui: &mut Ui, rect: Rect) {
+        self.inner.split_separator(ui, rect);
+    }
+    fn owns_floating_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_width(panel)
+    }
+    fn owns_floating_split_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_split_width(panel)
+    }
     fn logical_label(&self, panel: &P) -> String {
         (self.label)(panel)
     }
@@ -977,6 +1065,9 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     fn window_kind(&self, panel: &P) -> WindowKind {
         self.inner.window_kind(panel)
     }
+    fn window_drawn(&mut self, ui: &mut Ui) {
+        self.inner.window_drawn(ui);
+    }
     fn resolve_drag(&mut self, ctx: &Context, style: &DockStyle, request: &DropRequest<'_, P>) -> Option<DropFeedback> {
         self.inner.resolve_drag(ctx, style, request)
     }
@@ -994,6 +1085,12 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     }
     fn group_header(&mut self, ui: &mut Ui, panels: &[P], active: &P, floating: bool) {
         self.inner.group_header(ui, panels, active, floating);
+    }
+    fn group_extra_tabs_width(&self, panels: &[P], active: &P, floating: bool) -> f32 {
+        self.inner.group_extra_tabs_width(panels, active, floating)
+    }
+    fn group_extra_tabs(&mut self, ui: &mut Ui, panels: &[P], active: &P, floating: bool) {
+        self.inner.group_extra_tabs(ui, panels, active, floating);
     }
 }
 
@@ -1014,7 +1111,7 @@ pub struct DockArea<'a, P = ()> {
     #[cfg(feature = "native-windows")]
     input_hook: Option<super::render::InputHook>,
     #[cfg(feature = "native-windows")]
-    cursor: super::render::DesktopCursor,
+    window_system: super::render::WindowSystem,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -1026,7 +1123,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             locked: false,
             maximized: None,
             hide: HidePanels::None,
-            auto_collapse: true,
+            auto_collapse: false,
             float_bounds: None,
             monitors: Vec::new(),
             input_blocked: false,
@@ -1034,13 +1131,14 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             #[cfg(feature = "native-windows")]
             input_hook: None,
             #[cfg(feature = "native-windows")]
-            cursor: Default::default(),
+            window_system: Default::default(),
         }
     }
 
     /// The connected monitors (feature `native-windows`). A native floating window stores the
     /// one it is on, and a restored layout puts each window back on its monitor, or on the
-    /// main window's when that monitor is gone. egui 0.36 reports no monitors; without a list
+    /// main window's when that monitor is gone, with its bar in the monitor's
+    /// [`Monitor::work_area`] where one is given. egui 0.36 reports no monitors; without a list
     /// windows store the monitor size egui reports and restore onto the main window's monitor.
     /// eframe 0.36 keeps winit's event loop, and with it `available_monitors`, to itself, so an
     /// eframe application builds the list from the platform's own display API.
@@ -1067,6 +1165,11 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// kept for a later run with it on. By default it is on, except on Wayland: the compositor
     /// reports no window positions, so a native window could not dock again by drag or open
     /// where it was.
+    ///
+    /// A native window has no taskbar entry on Windows. Under X11 on Linux, a palette window has
+    /// the utility window type, which GNOME and KDE Plasma leave off the taskbar; taskbars that
+    /// list utility windows unless they are transient for another window (Xfce, MATE) still list
+    /// it. A native Wayland window and a window under X11 on the BSDs get neither setting.
     pub fn native_windows(mut self, on: bool) -> Self {
         self.native_windows = Some(on);
         self
@@ -1092,14 +1195,14 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         self
     }
 
-    /// Where native windows that follow a bar drag go: a stand-in window system's cursor.
+    /// A stand-in for the window system that moves native windows and tells the cursor.
     #[cfg(all(feature = "native-windows", any(test, feature = "testing")))]
-    pub(in crate::docking) fn desktop_cursor(mut self, cursor: super::render::DesktopCursor) -> Self {
-        self.cursor = cursor;
+    pub(in crate::docking) fn window_system(mut self, window_system: super::render::WindowSystem) -> Self {
+        self.window_system = window_system;
         self
     }
 
-    /// [D] Auto-Collapse Iconic Panels (default on): a flyout closes on Escape or a press
+    /// [D] Auto-Collapse Iconic Panels (default off): a flyout closes on Escape or a press
     /// outside it. Off, it stays open until its icon or another icon is clicked.
     pub fn auto_collapse_iconic(mut self, on: bool) -> Self {
         self.auto_collapse = on;
@@ -1130,6 +1233,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             return false;
         }
         super::hits::named(self.id, layout).contains_key(&focused)
+            || (super::flyout::<P>(ctx, self.id).is_some()
+                && super::chrome::RESIZE_HANDLES.iter().any(|name| self.id.with("flyout").with(name) == focused))
     }
 
     /// Raise a panel's floating window (or open its flyout) on this frame. Apply Activate
@@ -1276,7 +1381,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             #[cfg(feature = "native-windows")]
             cross: Default::default(),
             #[cfg(feature = "native-windows")]
-            cursor: self.cursor,
+            window_system: self.window_system,
         };
         if let Some(root) = &view.root {
             renderer.node(ui, root, rect, &mut Vec::new(), (root, rect));

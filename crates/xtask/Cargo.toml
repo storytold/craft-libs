@@ -1,0 +1,25 @@
+[package]
+name = "craft-xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Library for the Craft apps' cargo xtask binaries: the gate's step runner, an optional slot lock shared across processes and a per-step JSON report"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# One-at-a-time (or N-at-a-time) gate runs per machine, through file locks in a caller-chosen folder.
+lock = []
+# The per-step JSON report, replaced atomically.
+report = ["dep:serde_json", "dep:craft-atomic"]
+
+[dependencies]
+craft-atomic = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"

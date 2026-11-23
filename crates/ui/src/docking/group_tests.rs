@@ -49,6 +49,9 @@ struct TestContent {
     header_clicks: usize,
     /// The strip width the last header was sized for.
     strip_width: std::cell::Cell<f32>,
+    /// Width the extra tabs ask for, and the rect they were last drawn in.
+    extra: f32,
+    extra_rect: Option<Rect>,
     floating_size: Option<Vec2>,
     host_owned: bool,
     whole_group: bool,
@@ -94,6 +97,12 @@ impl DockContent<u32> for TestContent {
         if ui.button("≡").clicked() {
             self.header_clicks += 1;
         }
+    }
+    fn group_extra_tabs_width(&self, _: &[u32], _: &u32, _: bool) -> f32 {
+        self.extra
+    }
+    fn group_extra_tabs(&mut self, ui: &mut egui::Ui, _: &[u32], _: &u32, _: bool) {
+        self.extra_rect = Some(ui.max_rect());
     }
 }
 
@@ -286,6 +295,33 @@ fn drag_bar_survives_a_strip_full_of_tabs() {
     let out = d.drag(bar.center(), pos2(500.0, 300.0));
     assert!(matches!(moved_group(&out.actions), Some(Target::Float { .. })), "{:?}", out.actions);
     assert_eq!(d.layout.floating[0].groups()[0].panels.len(), 8);
+}
+
+#[test]
+/// The extra tabs follow the last panel tab, before the drag bar and the header. In a narrow row
+/// they shrink to the minimum tab width while the panel tabs overflow, and the bar keeps its
+/// width; a tab dropped on them goes after the last panel tab.
+fn extra_tabs_follow_the_panel_tabs_and_overflow_with_them() {
+    let content = TestContent { header: 24.0, extra: 100.0, ..Default::default() };
+    let layout = Layout { root: Some(tabs(&[1, 2], 0)), floating: Vec::new() };
+    let mut d = Driver::with(layout, content, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)));
+    let (extra, bar) = (d.content.extra_rect.expect("extra tabs drawn"), d.rect("drag-bar", 1));
+    assert_eq!((extra.left(), extra.width()), (d.tab(2).right(), 100.0));
+    assert_eq!((bar.left(), bar.right()), (extra.right(), 600.0 - 24.0), "the bar and the header follow");
+    d.drag(d.tab(1).center(), extra.center());
+    assert_eq!(d.layout.root, Some(tabs(&[2, 1], 1)), "a drop on the extra tabs appends");
+
+    let content = TestContent { header: 24.0, extra: 100.0, ..Default::default() };
+    let layout = Layout { root: Some(tabs(&[1, 2, 3], 0)), floating: Vec::new() };
+    let d = Driver::with(layout, content, Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 400.0)));
+    let overflow = d.ctx.read_response(Id::unique(AREA).with(("overflow", &1u32))).expect("the panel tabs overflow").rect;
+    let (extra, bar) = (d.content.extra_rect.expect("extra tabs drawn"), d.rect("drag-bar", 1));
+    assert_eq!(overflow.left(), d.tab(1).right());
+    assert_eq!(extra.left(), overflow.right(), "the extra tabs follow the overflow button");
+    let min = DockStyle::default().min_tab_width;
+    assert!(extra.width() >= min - 0.5 && extra.width() < 100.0, "{extra:?}");
+    assert_eq!((bar.left(), bar.right()), (extra.right(), 200.0 - 24.0));
+    assert!(bar.width() >= 40.0, "{bar:?}");
 }
 
 /// Panels with ordinary names.

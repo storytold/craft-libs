@@ -500,10 +500,13 @@ impl DialogState {
         self.field = Some(FieldChord { command, binding, holders, shadows });
     }
 
-    /// Assign in the detail pane: commits the field's chord.
+    /// Assign in the detail pane: adds the field's chord to the command. The pane already lists
+    /// its holders under "Currently assigned to", so Assign takes it from them without the
+    /// conflict bar (one undo step), or keeps both with [`ConflictMode::Keep`].
     pub(crate) fn assign_field(&mut self, env: &mut Env) {
         if let Some(f) = self.field.take() {
-            self.commit(env, &f.command, None, f.binding);
+            let mode = if env.options.conflicts == ConflictMode::Keep { ConflictMode::Keep } else { ConflictMode::Steal };
+            self.commit_with(env, &f.command, None, f.binding, mode);
         }
     }
 
@@ -524,6 +527,11 @@ impl DialogState {
     /// Reserved chord, then the app's rule, then holders: assign at once, or by
     /// [`Options::conflicts`].
     pub(crate) fn commit(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding) {
+        let mode = env.options.conflicts;
+        self.commit_with(env, command, old, binding, mode);
+    }
+
+    fn commit_with(&mut self, env: &mut Env, command: &CommandRef, old: Option<Binding>, binding: Binding, mode: ConflictMode) {
         self.conflict = None;
         self.message = None;
         let chord = env.chord_text(&binding.trigger);
@@ -542,7 +550,7 @@ impl DialogState {
             self.apply(env, command, old, binding, Policy::Steal);
             return;
         }
-        match env.options.conflicts {
+        match mode {
             ConflictMode::Ask => {
                 let text = env.ui("⚠ {chord} is used by {label}", &[("chord", &chord), ("label", &env.holder_labels(&holders))]);
                 self.conflict = Some(ConflictBar { command: command.clone(), old, binding, holders, text });
@@ -1335,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn field_waits_for_assign_and_lists_holders() {
+    fn field_waits_for_assign_lists_holders_and_takes() {
         let mut fx = Fx::new(Options::default());
         let mut st = open(&mut fx);
         record(&mut st, &mut fx, Target::Field { command: "file.save".into() }, &["Cmd+B"]);
@@ -1344,13 +1352,14 @@ mod tests {
         st.set_context(&fx.env(), Scope::new("Text"));
         assert_eq!(st.field.as_ref().map(|f| f.holders.len()), Some(1), "in Text it clashes");
         st.assign_field(&mut fx.env());
-        assert!(st.conflict.is_some());
-        assert!(fx.km.overrides().is_empty());
+        assert!(st.conflict.is_none(), "Assign takes the chord without asking");
+        assert_eq!(fx.keys("file.save"), ["Cmd+S", "Text: Cmd+B"]);
+        assert!(fx.keys("type.bold").is_empty());
 
         st.set_context(&fx.env(), None);
         assert_eq!(st.type_binding(&mut fx.env(), &"file.save".into(), "F7 F7"), Ok(()));
         st.assign_field(&mut fx.env());
-        assert_eq!(fx.keys("file.save"), ["Cmd+S", "F7 F7"]);
+        assert_eq!(fx.keys("file.save"), ["Cmd+S", "Text: Cmd+B", "F7 F7"]);
         assert_eq!(st.type_binding(&mut fx.env(), &"file.save".into(), "Cmd+Nope"), Err("unknown key Nope".into()));
     }
 

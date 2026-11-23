@@ -29,7 +29,7 @@ pub(in crate::docking) use body_drag::held_events;
 #[cfg(feature = "native-windows")]
 pub(in crate::docking) use body_drag::{cancel_body_route, mark_app_drag};
 #[cfg(feature = "native-windows")]
-pub(in crate::docking) use native::{DesktopCursor, InputHook, send_keys, set_input_hook, typing_window};
+pub(in crate::docking) use native::{InputHook, WindowSystem, send_keys, set_input_hook, typing_window};
 
 /// How long after blocking starts a native window that still has the keyboard hands it to the
 /// main window: an OS dialog the app opens with the modal (a file dialog) takes focus a little
@@ -137,9 +137,10 @@ pub(super) struct Renderer<'a, P> {
     /// The other OS windows a drag may cross into.
     #[cfg(feature = "native-windows")]
     pub(super) cross: cross::Cross<P>,
-    /// Where a native window that follows a bar drag goes.
+    /// What the window system tells of the desktop pointer, and whether it moves a native
+    /// window for a bar drag.
     #[cfg(feature = "native-windows")]
-    pub(super) cursor: DesktopCursor,
+    pub(super) window_system: WindowSystem,
 }
 
 pub(super) struct DrawnDivider {
@@ -160,6 +161,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     pub(super) fn label_of(&self, panel: &P) -> String {
         self.content.logical_label(panel)
+    }
+
+    /// The accessible name of the handle that moves the group showing `shown`.
+    pub(super) fn move_group_name(&self, shown: &P) -> String {
+        super::labels::named(&self.style.move_group_label, super::labels::MOVE_GROUP, || self.label_of(shown))
+    }
+
+    /// The accessible name of `column`'s bar: its groups' shown panels that have a title name it.
+    pub(super) fn move_column_name(&self, column: &super::Column<P>) -> String {
+        super::labels::named(&self.style.move_column_label, super::labels::MOVE_COLUMN, || {
+            let shown = column.groups.iter().filter_map(|g| g.active_panel().or(g.panels.first()));
+            let titles: Vec<String> = shown.map(|panel| self.label_of(panel).trim().to_owned()).filter(|title| !title.is_empty()).collect();
+            titles.join(", ")
+        })
     }
 
     pub(super) fn permissions(&self, panel: &P) -> Permissions {
@@ -211,13 +226,23 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 // The divider's inner-edge hit margin must win over child scrollbars, just
                 // as accordion dividers win over the adjacent panel's content.
                 // Named by its layout path, which `ResizeSplit` takes and hits report.
+                self.content.split_separator(ui, split.divider);
+                let host_width =
+                    *axis == SplitAxis::Horizontal && self.tree.as_ref().is_some_and(|(panel, _)| self.content.owns_floating_split_width(panel));
+                if host_width {
+                    return;
+                }
                 let layout_path = self.original_path(path);
                 let response = ResizeHandle::new(
                     self.split_id(&layout_path),
                     *axis,
                     split.divider,
                     &self.style.resize_label,
-                    ResizeHandleStyle { hovered: self.style.accent, dragged: self.style.accent, focused: self.style.accent },
+                    self.content.resize_handle_style(ResizeHandleStyle {
+                        hovered: self.style.accent,
+                        dragged: self.style.accent,
+                        focused: self.style.accent,
+                    }),
                 )
                 .value(split.first_size(), (split.first_size() + lo)..=(split.first_size() + hi))
                 .show(ui);
@@ -489,11 +514,15 @@ pub(in crate::docking) fn node_limits<P>(node: &Node<P>, style: &DockStyle, cont
         Node::Split { axis, first, second, .. } => {
             let a = node_limits(first, style, content);
             let b = node_limits(second, style, content);
+            let gap = if matches!(first.as_ref(), Node::Dock { .. }) || matches!(second.as_ref(), Node::Dock { .. }) {
+                style.dock_gap.unwrap_or(style.gap)
+            } else {
+                style.gap
+            };
             let limits = match axis {
-                SplitAxis::Horizontal => PanelLimits {
-                    min: vec2(a.min.x + b.min.x + style.gap, a.min.y.max(b.min.y)),
-                    max: vec2(a.max.x + b.max.x + style.gap, a.max.y.min(b.max.y)),
-                },
+                SplitAxis::Horizontal => {
+                    PanelLimits { min: vec2(a.min.x + b.min.x + gap, a.min.y.max(b.min.y)), max: vec2(a.max.x + b.max.x + gap, a.max.y.min(b.max.y)) }
+                }
                 SplitAxis::Vertical => PanelLimits {
                     min: vec2(a.min.x.max(b.min.x), a.min.y + b.min.y + style.gap),
                     max: vec2(a.max.x.min(b.max.x), a.max.y + b.max.y + style.gap),

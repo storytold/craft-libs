@@ -40,11 +40,18 @@ pub struct Group<P> {
     /// [`DockContent::dock_heights`](crate::docking::DockContent::dock_heights).
     #[cfg_attr(feature = "serde", serde(default))]
     pub height: Option<f32>,
+    /// User-set flyout width; absent in older workspaces, which use the column width.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub flyout_width: Option<f32>,
+    /// User-set offset of the flyout's top from its icons' top, in points (negative is above);
+    /// absent in older workspaces, which align the flyout with its icons.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub flyout_offset: Option<f32>,
 }
 
 impl<P> Group<P> {
     pub fn new(panels: Vec<P>, active: usize) -> Self {
-        Self { panels, active, minimized: false, height: None }
+        Self { panels, active, minimized: false, height: None, flyout_width: None, flyout_offset: None }
     }
 
     pub fn active_panel(&self) -> Option<&P> {
@@ -134,6 +141,10 @@ pub enum PanelState {
 pub struct GroupLocation {
     pub minimized: bool,
     pub height: Option<f32>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub flyout_width: Option<f32>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub flyout_offset: Option<f32>,
     /// The column, when the group was docked.
     pub column: Option<ColumnLocation>,
 }
@@ -326,17 +337,25 @@ pub(super) fn split_frame<P>(root: &mut Node<P>, path: &[bool], new: Node<P>, zo
     true
 }
 
-/// [`split_frame`] with the sizes of [`Placement::SplitSized`]: the new split takes `size`, and
-/// the nearest enclosing split whose divider runs along the frame's `zone` side takes `outer`.
-/// False when there is no such split, or a dock is beyond it.
-pub(super) fn split_frame_sized<P>(root: &mut Node<P>, path: &[bool], new: Node<P>, zone: Zone, size: SplitSize, outer: SplitSize) -> bool {
-    let axis = if matches!(zone, Zone::Top | Zone::Bottom) { SplitAxis::Vertical } else { SplitAxis::Horizontal };
+/// The depth along the frame `path` of the split whose size a [`Placement::SplitSized`] on
+/// `zone` replaces: the nearest enclosing split along the zone's axis (`on_axis` at a depth)
+/// whose divider runs along the frame's `zone` side, else, for a frame at the edge of its
+/// area on that side, the nearest one along its opposite side.
+pub(super) fn sized_split_depth(path: &[bool], zone: Zone, on_axis: impl Fn(usize) -> bool) -> Option<usize> {
     // A divider on the frame's start side (left or top) belongs to a split holding the frame
     // in its second child.
     let start = matches!(zone, Zone::Left | Zone::Top);
-    let enclosing = (0..path.len()).rev().find(|&depth| {
-        path.get(depth) == Some(&start) && matches!(node_at(root, &path[..depth]), Some(Node::Split { axis: own, .. }) if *own == axis)
-    });
+    let nearest = |second: bool| (0..path.len()).rev().find(|&depth| path.get(depth) == Some(&second) && on_axis(depth));
+    nearest(start).or_else(|| nearest(!start))
+}
+
+/// [`split_frame`] with the sizes of [`Placement::SplitSized`]: the new split takes `size`, and
+/// the split [`sized_split_depth`] finds takes `outer`. False when there is no such split, or a
+/// dock is beyond it.
+pub(super) fn split_frame_sized<P>(root: &mut Node<P>, path: &[bool], new: Node<P>, zone: Zone, size: SplitSize, outer: SplitSize) -> bool {
+    let axis = if matches!(zone, Zone::Top | Zone::Bottom) { SplitAxis::Vertical } else { SplitAxis::Horizontal };
+    let enclosing =
+        sized_split_depth(path, zone, |depth| matches!(node_at(root, &path[..depth]), Some(Node::Split { axis: own, .. }) if *own == axis));
     let Some(depth) = enclosing else { return false };
     let Some(Node::Split { size: own, first, second, .. }) = node_at_mut(root, &path[..depth]) else { return false };
     if zone == Zone::Center || matches!(**first, Node::Dock { .. }) || matches!(**second, Node::Dock { .. }) {
@@ -690,6 +709,8 @@ impl<P: Clone + Eq + Hash> Layout<P> {
         }
     }
 
+    /// Detach the panel's group, preserving dock dimensions and floating-window geometry.
+    /// A stack entry becomes a single-panel group with its saved height.
     fn take_group(&mut self, panel: &P) -> Result<Moving<P>, DockError> {
         let place = self.place(panel).ok_or(DockError::MissingPanel)?;
         match place {
@@ -710,7 +731,14 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     && let Some(index) = entries.iter().position(|e| &e.panel == panel)
                 {
                     let entry = entries.remove(index);
-                    let group = Group { panels: vec![entry.panel], active: 0, minimized: !entry.open, height: entry.height };
+                    let group = Group {
+                        panels: vec![entry.panel],
+                        active: 0,
+                        minimized: !entry.open,
+                        height: entry.height,
+                        flyout_width: None,
+                        flyout_offset: None,
+                    };
                     let moving = whole(Moving::group(group));
                     return Ok(Moving { rect: None, native: None, id: None, ..moving });
                 }
@@ -718,7 +746,14 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                     Some(Node::Tabs { panels, active }) => Ok(whole(Moving::group(Group::new(panels, active)))),
                     Some(Node::Stack { mut entries }) if entries.len() == 1 => {
                         let entry = entries.remove(0);
-                        Ok(whole(Moving::group(Group { panels: vec![entry.panel], active: 0, minimized: !entry.open, height: entry.height })))
+                        Ok(whole(Moving::group(Group {
+                            panels: vec![entry.panel],
+                            active: 0,
+                            minimized: !entry.open,
+                            height: entry.height,
+                            flyout_width: None,
+                            flyout_offset: None,
+                        })))
                     }
                     _ => Err(DockError::MissingPanel),
                 }

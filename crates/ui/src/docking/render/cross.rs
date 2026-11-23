@@ -154,9 +154,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             window: window.map(|w| w.window),
             docks: window.is_some_and(|w| w.docks),
         });
-        ctx.data_mut(|d| d.insert_temp(key, pointer));
-        self.cross.pointer = Some(pointer);
+        self.write_pointer(ctx, pointer);
         pointer
+    }
+
+    /// Write `pointer` as the drag's for this frame. An Escape from another window is no
+    /// cancel of a drag that the window system carries out.
+    pub(super) fn write_pointer(&mut self, ctx: &Context, pointer: DragPointer) {
+        let id = self.id;
+        ctx.data_mut(|d| {
+            d.remove::<bool>(id.with(ESCAPE));
+            d.insert_temp(id.with(POINTER), pointer);
+        });
+        self.cross.pointer = Some(pointer);
     }
 
     /// In a window that does not own the drag (`window`, `None` for the main window): an Escape

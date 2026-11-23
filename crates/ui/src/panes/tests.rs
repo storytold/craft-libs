@@ -128,6 +128,11 @@ impl App {
             match request {
                 PaneRequest::Close(p) => self.open.retain(|o| o != p),
                 PaneRequest::Focus(_) => {}
+                PaneRequest::Before(p, before) => {
+                    self.open.retain(|o| o != p);
+                    let at = before.and_then(|b| self.open.iter().position(|o| *o == b)).unwrap_or(self.open.len());
+                    self.open.insert(at, *p);
+                }
                 other => {
                     let pane = *other.pane();
                     let state = self.states.entry(pane).or_insert_with(|| Content.default_state(&pane));
@@ -389,12 +394,13 @@ fn a_floating_pane_near_a_side_edge_previews_the_column_it_docks_in() {
     assert!(previews(&h).is_empty(), "away from the edges");
     let to = pos2(L + 10.0, 300.0);
     send(&mut h, vec![Event::PointerMoved(to)]);
-    let landing = Rect::from_x_y_ranges(L + 250.0..=L + 550.0, 8.0..=592.0);
-    assert_eq!(previews(&h), vec![landing], "beside Nav, 300 pt wide");
+    let landing = Rect::from_x_y_ranges(L..=L + 300.0, 8.0..=592.0);
+    assert_eq!(previews(&h), vec![landing], "outside Nav, 300 pt wide");
     send(&mut h, vec![button(to, false)]);
     h.run_steps(2);
     assert_eq!(h.state().place(Pane::Styles), Place::Docked(Edge::Start));
     assert_eq!(panel(&h, Pane::Styles), landing);
+    assert_eq!(edge(&h, Pane::Nav), L + 550.0);
 }
 
 #[test]
@@ -403,25 +409,104 @@ fn a_docked_pane_dragged_across_previews_the_column_it_lands_in() {
     let from = title(&h, Pane::Comments).center();
     let to = pos2(L + 10.0, 300.0);
     hold(&mut h, from, to);
-    let landing = Rect::from_x_y_ranges(L + 250.0..=L + 500.0, 8.0..=592.0);
-    assert_eq!(previews(&h), vec![landing], "right of Nav, which comes first in open");
+    let landing = Rect::from_x_y_ranges(L..=L + 250.0, 8.0..=592.0);
+    assert_eq!(previews(&h), vec![landing], "the window edge docks outermost");
     send(&mut h, vec![button(to, false)]);
     h.run_steps(2);
-    assert_eq!(h.state().place(Pane::Comments), Place::Docked(Edge::Start));
+    assert_eq!(
+        changes(h.state()),
+        vec![PaneRequest::Place(Pane::Comments, Place::Docked(Edge::Start)), PaneRequest::Before(Pane::Comments, Some(Pane::Nav))]
+    );
     assert_eq!(panel(&h, Pane::Comments), landing);
+    assert_eq!(panel(&h, Pane::Nav), Rect::from_x_y_ranges(L + 250.0..=L + 500.0, 8.0..=592.0));
 
-    // Right to left: Start is the right edge, and Nav stays outermost there.
+    // Right to left: Start is the right edge.
     let mut app = App::new(&[Pane::Nav, Pane::Comments]);
     app.rtl = true;
     let mut h = harness(app);
     let from = title(&h, Pane::Comments).center();
     let to = pos2(R - 10.0, 300.0);
     hold(&mut h, from, to);
-    let landing = Rect::from_x_y_ranges(R - 500.0..=R - 250.0, 8.0..=592.0);
+    let landing = Rect::from_x_y_ranges(R - 250.0..=R, 8.0..=592.0);
     assert_eq!(previews(&h), vec![landing]);
     send(&mut h, vec![button(to, false)]);
     h.run_steps(2);
     assert_eq!(panel(&h, Pane::Comments), landing);
+    assert_eq!(panel(&h, Pane::Nav), Rect::from_x_y_ranges(R - 500.0..=R - 250.0, 8.0..=592.0));
+}
+
+#[test]
+fn a_pane_dropped_over_a_docked_panes_outer_or_inner_third_docks_beside_it_there() {
+    let full = |x: std::ops::RangeInclusive<f32>| Rect::from_x_y_ranges(x, 8.0..=592.0);
+    // Drags Comments' title to `to`, checks the preview, drops it and returns the harness.
+    let drop = |app: App, to: Pos2, preview: Option<Rect>| {
+        let mut h = harness(app);
+        let from = title(&h, Pane::Comments).center();
+        hold(&mut h, from, to);
+        let previewed = previews(&h);
+        match preview {
+            Some(rect) => assert_eq!(previewed, vec![rect], "at {to:?}"),
+            None => assert!(previewed.len() == 1 && previewed[0].height() == FLOAT_DEFAULT.y, "a float preview at {to:?}: {previewed:?}"),
+        }
+        send(&mut h, vec![button(to, false)]);
+        h.run_steps(2);
+        h
+    };
+
+    // Over Nav's outer third, beyond the window-edge strip: outside Nav.
+    let h = drop(App::new(&[Pane::Nav, Pane::Comments]), pos2(L + 40.0, 300.0), Some(full(L..=L + 250.0)));
+    assert_eq!(
+        changes(h.state()),
+        vec![PaneRequest::Place(Pane::Comments, Place::Docked(Edge::Start)), PaneRequest::Before(Pane::Comments, Some(Pane::Nav))]
+    );
+    assert_eq!((panel(&h, Pane::Comments), panel(&h, Pane::Nav)), (full(L..=L + 250.0), full(L + 250.0..=L + 500.0)));
+
+    // Over its inner third: inside Nav, innermost.
+    let h = drop(App::new(&[Pane::Comments, Pane::Nav]), pos2(L + 220.0, 300.0), Some(full(L + 250.0..=L + 500.0)));
+    assert_eq!(changes(h.state()), vec![PaneRequest::Place(Pane::Comments, Place::Docked(Edge::Start)), PaneRequest::Before(Pane::Comments, None)]);
+    assert_eq!(panel(&h, Pane::Comments), full(L + 250.0..=L + 500.0));
+
+    // Over its middle third: no dock target, so it floats.
+    let h = drop(App::new(&[Pane::Nav, Pane::Comments]), pos2(L + 125.0, 300.0), None);
+    assert_eq!(h.state().place(Pane::Comments), Place::Floating);
+
+    // Right to left: Nav is at the right edge, and its outer third is on its right.
+    let mut app = App::new(&[Pane::Nav, Pane::Comments]);
+    app.rtl = true;
+    let h = drop(app, pos2(R - 40.0, 300.0), Some(full(R - 250.0..=R)));
+    assert_eq!((panel(&h, Pane::Comments), panel(&h, Pane::Nav)), (full(R - 250.0..=R), full(R - 500.0..=R - 250.0)));
+
+    // One slot per edge: a pane dropped over the slot's pane takes the slot.
+    let mut app = App::new(&[Pane::Comments, Pane::Nav]);
+    app.policy = SidePolicy::OneSlot;
+    let h = drop(app, pos2(L + 40.0, 300.0), Some(full(L..=L + 250.0)));
+    assert_eq!(h.state().open, vec![Pane::Nav, Pane::Comments]);
+    assert_eq!(panel(&h, Pane::Comments), full(L..=L + 250.0));
+
+    // On the same edge: over the outer third of the pane outside it moves it outermost; over the
+    // inner third of that pane, where it already is, nothing changes.
+    let mut h = harness(App::new(&[Pane::Nav, Pane::Styles]));
+    let from = title(&h, Pane::Styles).center();
+    drag(&mut h, from, pos2(L + 200.0, 300.0));
+    assert!(changes(h.state()).is_empty(), "{:?}", h.state().log);
+    drag(&mut h, from, pos2(L + 40.0, 300.0));
+    assert_eq!(changes(h.state()), vec![PaneRequest::Before(Pane::Styles, Some(Pane::Nav))]);
+    assert_eq!((edge(&h, Pane::Styles), edge(&h, Pane::Nav)), (L + 250.0, L + 500.0));
+
+    // A floating pane: no target over Nav's middle third, beside it over its inner third.
+    let mut app = App::new(&[Pane::Nav, Pane::Styles]);
+    app.states.insert(Pane::Styles, PaneState { place: Place::Floating, size: Some(300.0), float_rect: Some([300.0, 100.0, 270.0, 400.0]) });
+    let mut h = harness(app);
+    let from = title(&h, Pane::Styles).center();
+    hold(&mut h, from, pos2(L + 125.0, 300.0));
+    assert!(previews(&h).is_empty());
+    let to = pos2(L + 220.0, 300.0);
+    send(&mut h, vec![Event::PointerMoved(to)]);
+    assert_eq!(previews(&h), vec![full(L + 250.0..=L + 550.0)]);
+    send(&mut h, vec![button(to, false)]);
+    h.run_steps(2);
+    assert_eq!(h.state().place(Pane::Styles), Place::Docked(Edge::Start));
+    assert_eq!(panel(&h, Pane::Styles), full(L + 250.0..=L + 550.0));
 }
 
 #[test]

@@ -131,7 +131,11 @@ its own command path, so pointer, keyboard and control commands share one path.
 `DockContent<P>` is the app's adapter. It draws each panel body and gives its label, icon,
 permissions, size limits, dock column heights, preferred floating size, panel menu and group header. The group header
 sits at the end of the tab strip; `group_header_width` gets the strip width, so a header that
-draws its own tabs can size them to the room left. An icon is an image (`icon`), or drawn in code by `paint_icon`, which
+draws its own tabs can size them to the room left. Extra tabs (`group_extra_tabs_width` and
+`group_extra_tabs`) sit right after the group's panel tabs, before the drag bar, and fit with
+them: both shrink widest first to `min_tab_width`, the extra tabs as one tab, and in a row
+narrower still the panel tabs overflow while the extra tabs keep that width. The host fits its
+own tabs into the rect it gets. An icon is an image (`icon`), or drawn in code by `paint_icon`, which
 gets a painter, the icon rect and the tint color and returns true when it painted. Panel bodies keep a stable egui id when they move, so widget memory
 survives.
 
@@ -154,7 +158,7 @@ Builder options on `DockArea`:
 |---|---|
 | `maximized(panel)` | Maximize Frame: that frame fills the area. |
 | `hide_panels(HidePanels)` | Hide panels for Tab and Shift+Tab. Protected panels stay. |
-| `auto_collapse_iconic(on)` | Close a flyout on Escape or a click outside (default on). |
+| `auto_collapse_iconic(on)` | Close a flyout on Escape or a click outside (default off: a flyout stays open until its icon or another icon is clicked). |
 | `raise_panel(panel)` | Raise a panel's floating window, or open its flyout, this frame. It moves no keyboard focus and does not set `DockOutput::focused`. |
 | `locked(on)` | Draw `Workspace::locked`: every panel gets `Permissions::locked`, so nothing starts a move, float or close the workspace would refuse. |
 | `blocked_rects(rects)` | App overlays that docking gestures must ignore. |
@@ -363,7 +367,9 @@ A flyout fits its content the same way, without the title bar.
   a moved window or adjust a split during the drag. Nothing is restored from before the drag;
   windows go where the new layout has them. `cancel_drag` ends the area's drags at any other
   time. A native window moved by the compositor (`ViewportCommand::StartDrag`, as on Wayland)
-  is not the area's drag: it ends when the user releases the button.
+  is not the area's drag: it ends when the user releases the button. On macOS, where AppKit
+  moves a native window by its bar, a cancel ends the area's drag, so the release drops
+  nothing, but AppKit keeps moving the window until the release.
 - With `float_on_empty_drop`, a release over no target floats what moves at the pointer, such
   as a panel dropped on a protected canvas. Without it, that release cancels the drag and
   nothing moves: the gap between two groups, a menu bar or a status bar is no target. A release
@@ -506,7 +512,8 @@ windows from the first frame. `DockArea::native_windows(bool)` overrides the cho
     app's other windows.
 - **Bar.** Each window has a bar at the top, 18 points high, in the floating title bar's style:
   the title (the shown panel of its first group) and ×. Dragging the bar moves the window. On
-  Wayland, where a window cannot be placed, the bar hands the move to the compositor. On
+  macOS the press on the bar hands the move to AppKit, and on Wayland, where a window cannot
+  be placed, the bar hands the move to the compositor. On
   Windows and Linux the OS frame is off. On macOS the frame stays, with its title bar and
   buttons hidden, for its resizing, rounded corners and standard window shadow. The dock area
   paints no shadow of its own around a native window.
@@ -568,6 +575,15 @@ windows from the first frame. `DockArea::native_windows(bool)` overrides the cho
   `Paste` without the key). The app feeds them to the shortcut handling it runs on the main
   window. A window where any widget has keyboard focus forwards nothing, and an Escape that
   cancels a drag is not forwarded.
+- **Input methods.** egui's IME descriptor (`PlatformOutput::ime`) goes out from the pass of
+  the window whose editor has the keyboard. A `craft_ui::ime::Composer` in a panel body of a
+  native window records its descriptor while the window draws, and the dock area publishes it
+  once per pass, after the window's last body. A body drawn after the editor's cannot clear it
+  (egui-winit turns the IME off in a pass without one, ending the composition). A descriptor
+  written directly in that pass, as a focused `TextEdit` writes one, is kept. An app whose own
+  editor publishes the descriptor does it in `DockContent::window_drawn`, called once per
+  window pass after the last body. Floating windows drawn in the main window (the web,
+  Wayland) are part of its pass, which publishes as it does without docking.
 - **Modal dialogs.** egui's `Modal` blocks input only in the viewport it is shown in. While the
   app shows one, it passes `DockArea::input_blocked(true)`. Each native window is then drawn
   under `DockStyle::blocked_dim` (by default the panel fill at 60 %), and its bar, tabs, body
@@ -614,10 +630,12 @@ windows from the first frame. `DockArea::native_windows(bool)` overrides the cho
     the pointer's moves and the release while the button is held, inside the window or not. So
     the pointer leaving a window (`PointerGone`) is not a release. A drag ends on release,
     Escape (pressed in any of the app's windows, since keys go to the one with keyboard focus),
-    when none of the app's windows has focus, or when its window closes or its panel goes.
+    when none of the app's windows has focus, or when its window closes or its panel goes. A
+    window that AppKit moves (macOS, below) ignores Escape.
   - *Hit-testing.* The owner adds its desktop origin to the pointer: a native window's reported
     `inner_rect.min`, or while it moves by its bar, the place it was last put less the pointer's
-    offset from the pressed point. The window under that
+    offset from the pressed point. On macOS a window moving by its bar is hit-tested at
+    AppKit's cursor (`NSEvent::mouseLocation`). The window under that
     desktop point is a floating native window in front of the main window first (palettes, then
     normal windows, most recently focused first), then the main window, then a normal window
     behind it. A window moving by its bar is never its own target. A point in no window is on the
@@ -632,26 +650,35 @@ windows from the first frame. `DockArea::native_windows(bool)` overrides the cho
     (the window's top-left is the pointer minus the grab offset, less the bar's height). A
     Ctrl/Cmd-drag floats there wherever it is released.
   - *Moving a window.* Dragging the bar, the only tab of a window, or the drag area of its only
-    group moves the window, so the pressed point stays under the pointer. On macOS each frame
-    puts the window at the cursor's desktop position (AppKit's `NSEvent::mouseLocation`) less
-    the pressed point, and targets are hit at that position. AppKit reports a window's new place
-    as soon as a move is commanded, but measures the pointer events it sends against where the
-    window server had the window, which can be a move behind; placing the window from those
-    events would overshoot and step back. Elsewhere each move is worked out from a pointer move
-    of that frame and the window's reported place, which the pointer's position is relative to;
-    a move commanded earlier may land late. A frame with no pointer move leaves the window. X11
-    sends no move whose position in the window repeats the last one, so while the pointer keeps
-    exact pace with the window the window can trail it by one move until the next. Released over
-    a target in another window, the whole window docks or
-    joins there as its groups (`Action::MoveWindow`). The bar docks only with
-    `DockStyle::title_bar_docks`; the only tab or group docks either way, since it is the way
-    back in with that flag off. Targets: in the
-    main window a dock line, a frame's tab row or edge zone, or the layout's outer edge; in a
-    floating window a frame zone or tab row. A frame body's center takes a window moved by its
-    only tab or group, as that tab or group drag would, but not one moved by its bar. Over
-    the desktop, or with Ctrl/Cmd held, it stays where it was moved, and the layout takes its
-    place once, at the release. Escape puts it back. An
-    in-window floating window's title bar still splits only groups of other floating windows.
+    group moves the window, so the pressed point stays under the pointer.
+    - *macOS.* AppKit moves the window (`ViewportCommand::StartDrag`, which winit turns into
+      `performWindowDragWithEvent`), as it moves its own windows: from the press on the bar,
+      or from the start of the tab or group drag. The dock area sends no `OuterPosition`
+      meanwhile. egui keeps running frames, but the window's reported place lags the move by up
+      to a tenth of a second, so each frame takes the window's place as AppKit's cursor
+      (`NSEvent::mouseLocation`, flipped against the primary screen's height and divided by the
+      zoom factor) less the pressed point, and hit-tests targets, fades the window and routes
+      the drag at the cursor. The drag ends on the first frame where AppKit
+      (`NSEvent::pressedMouseButtons`) or egui reports the release; egui's can come a frame
+      later, and the drag is resolved once. Ctrl/Cmd is read from AppKit's modifier flags,
+      since AppKit sends egui no key events during the move; for the same reason Escape does
+      not cancel it, as with Finder's windows. A press on the bar released within the click
+      distance docks nothing.
+    - *Elsewhere.* The dock area moves the window with `OuterPosition`. Each move is worked
+      out from a pointer move of that frame and the window's reported place, which the
+      pointer's position is relative to; a move commanded earlier may land late. A frame with
+      no pointer move leaves the window. X11 sends no move whose position in the window repeats
+      the last one, so while the pointer keeps exact pace with the window the window can trail
+      it by one move until the next. Escape puts the window back.
+    - *Drops.* Released over a target in another window, the whole window docks or joins there
+      as its groups (`Action::MoveWindow`). The bar docks only with
+      `DockStyle::title_bar_docks`; the only tab or group docks either way, since it is the way
+      back in with that flag off. Targets: in the main window a dock line, a frame's tab row or
+      edge zone, or the layout's outer edge; in a floating window a frame zone or tab row. A
+      frame body's center takes a window moved by its only tab or group, as that tab or group
+      drag would, but not one moved by its bar. Over the desktop, or with Ctrl/Cmd held, it
+      stays where it was moved, and the layout takes its place once, at the release. An
+      in-window floating window's title bar still splits only groups of other floating windows.
   - *Wayland.* With `DockArea::native_windows(true)` on Wayland, or wherever `outer_rect` is
     `None`, desktop positions are unknown, so drops across windows cannot be resolved. A drag
     works inside its own window, and a release outside it floats a new window that the
@@ -711,6 +738,18 @@ Keys are `dock.close`, `dock.float`, `dock.collapseToIcons` and so on; the rustd
 lists them all. `DockContent::label` and `action_label` can shape panel and action text further;
 the logical label stays the accessibility name.
 
+Each group and each column has one move handle in the accessibility tree: the group's drag bar
+and the column bar. A group's top border band only drags and is not announced, except in a group
+drawn without a drag bar, where the band is its move handle. By default these
+share one name per kind. Naming them is opt-in: an app puts `{name}` in `move_group_label` or
+`move_column_label`, and in each of its translations ("Move the {name} tab group"). It stands for
+what the handle moves: the logical label of the panel the group shows, or of the panels a
+column's groups show, joined by ", " (fixed, not localized). An untitled panel is left out. With
+no title at all, the placeholder goes with the brackets or quotes around it, a separator right
+after it and one of the spaces beside it ("Move the tab group", "Move tab group ({name})" gives
+"Move tab group", "移动{name}标签组" gives "移动标签组"); a label left with no letter or digit falls
+back to the English default. Two groups showing panels of the same title still get the same name.
+
 ## Testing
 
 `DockArea::hit_rects(ctx, id)` lists every gesture source drawn last frame as a `Hit` with its
@@ -743,9 +782,10 @@ runs its own frame with its own input and desktop rect (`host()`, `window_step`,
 `window_click`). `NativeHost` can report a monitor size (`monitor_size`), give windows a frame
 between their outer position and content (`frame`), land `OuterPosition` a frame late (`lag`),
 and report no positions (`no_position`, as on Wayland). `window_pointer` moves the pointer to a
-desktop point in a native window; the host can tell that point as the cursor's (`tells_cursor`,
-as AppKit does) and measure the window's pointer events against its place some frames back
-(`stale`, a pattern taken one entry per call). A `HostWindow` takes files dragged
+desktop point in a native window. With `moves_windows` the host moves a window for
+`StartDrag` itself, as AppKit does: the window keeps the pointer at the pressed point, reports
+its place as where the drag began until the release, and the host tells the cursor and the
+button (`held`; a test sets it to `false` to report a release before egui does). A `HostWindow` takes files dragged
 over it (`hovered_files`) or dropped on it (`dropped_files`), and `with_native_input_hook`
 passes a hook to `DockArea::native_input_hook` every frame.
 

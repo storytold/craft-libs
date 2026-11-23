@@ -397,6 +397,39 @@ fn a_drop_beside_a_frame_too_narrow_to_halve_takes_room_from_its_neighbour() {
     assert!(new_properties.width() < properties.width() - 200.0, "Properties gave the room");
 }
 
+/// Tools first in its row, at the area's left edge: its left side has no divider, so the room
+/// comes from beyond its right one.
+#[test]
+fn a_drop_on_the_outer_side_of_a_frame_too_narrow_to_halve_takes_room_from_the_other_side() {
+    let root = Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::FixedFirst(60.0),
+        first: Box::new(tabs(&[TOOLS])),
+        second: Box::new(tabs(&PROPERTIES)),
+    };
+    let layout = Layout { root: Some(root), floating: vec![Floating::single(vec![INFO], 0, [1100.0, 100.0, 280.0, 200.0])] };
+    let mut d = driver(layout, Film::default());
+    d.area = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, SCREEN.y));
+    d.settle();
+    let (tools, properties, info) = (group(&d, TOOLS), group(&d, PROPERTIES[0]), group(&d, INFO));
+    // Inside Tools' left zone, past the window edge band.
+    let at = pos2(tools.left() + 12.0, tools.center().y + 13.0);
+    d.hold(tab(&d, INFO), at);
+    assert!(d.filled_polygon(&zone_shape(tools, 26.0, 40.0, Zone::Left).unwrap()), "Tools' left zone is a target");
+    let out = d.release(at);
+    assert!(
+        matches!(&out.actions[..], [Action::Move { panel: INFO, anchor: TOOLS, placement: Placement::SplitSized { zone: Zone::Left, .. } }]),
+        "{:?}",
+        out.actions
+    );
+    d.settle();
+    let (new_tools, new_info, new_properties) = (group(&d, TOOLS), group(&d, INFO), group(&d, PROPERTIES[0]));
+    assert!((new_tools.width() - tools.width()).abs() < 1.0, "Tools keeps its width: {new_tools:?}");
+    assert!((new_info.width() - info.width()).abs() < 1.0, "Info keeps its floating width: {new_info:?}");
+    assert!(new_info.right() < new_tools.left() && new_tools.right() < new_properties.left());
+    assert!(new_properties.width() < properties.width() - 200.0, "Properties gave the room");
+}
+
 #[test]
 fn a_docked_panel_dropped_beside_a_frame_too_narrow_to_halve_takes_its_minimum_width() {
     // Info docked below Properties, as wide as it, beside a narrow Tools frame.

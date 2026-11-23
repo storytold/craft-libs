@@ -8,7 +8,9 @@ use crate::matroska::error::Error;
 use crate::matroska::ids::*;
 use crate::matroska::mux::{el, el_float, el_str, el_uint};
 use crate::matroska::track::ContentEncoding;
-use crate::matroska::{ByteSource, Demuxer, OpenOptions, Packet, open_with};
+use crate::matroska::{ByteSource, Demuxer, MkvFile, OpenOptions, Packet, open_with};
+
+mod hostile;
 
 fn block(track: u8, rel: i16, flags: u8, data: &[u8]) -> Vec<u8> {
     let mut b = vec![0x80 | track];
@@ -149,71 +151,81 @@ fn synthetic() -> Vec<u8> {
     f
 }
 
-#[test]
-fn synthetic_file() {
-    let bytes = synthetic();
-    let f = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
+fn assert_synthetic_metadata(f: &MkvFile, bytes: &[u8]) {
     assert!(f.live);
     assert!(f.warnings.is_empty(), "{:?}", f.warnings);
     assert_eq!((f.crc_checked, f.crc_errors.len()), (1, 0));
     assert_eq!(f.info.title.as_deref(), Some("Synthetic"));
-    let v = &f.tracks[0];
-    assert!(matches!(&v.codec, Codec::Avc { avcc } if avcc[1] == 0x64));
-    let vi = v.video.as_ref().unwrap();
-    assert_eq!(vi.pixel_aspect(), (4, 3));
-    assert_eq!(vi.projection.as_ref().map(|p| p.roll), Some(-90.0));
-    assert_eq!(vi.display_rotation(), Some(1));
-    let c = vi.color.as_ref().unwrap();
-    assert!(c.full_range());
+    let video = &f.tracks[0];
+    assert!(matches!(&video.codec, Codec::Avc { avcc } if avcc[1] == 0x64));
+    let info = video.video.as_ref().unwrap();
+    assert_eq!(info.pixel_aspect(), (4, 3));
+    assert_eq!(info.projection.as_ref().map(|projection| projection.roll), Some(-90.0));
+    assert_eq!(info.display_rotation(), Some(1));
+    let color = info.color.as_ref().unwrap();
+    assert!(color.full_range());
     assert_eq!(
-        (c.matrix_coefficients, c.transfer_characteristics, c.primaries, c.max_cll, c.max_fall),
+        (color.matrix_coefficients, color.transfer_characteristics, color.primaries, color.max_cll, color.max_fall),
         (Some(9), Some(16), Some(9), Some(1000), Some(400))
     );
-    let m = c.mastering.as_ref().unwrap();
-    assert_eq!(m.primaries[1], (0.17, 0.797));
-    assert_eq!(m.white_point, (0.3127, 0.329));
-    assert_eq!((m.luminance_max, m.luminance_min), (1000.0, 0.0001));
-    assert_eq!(v.encodings, vec![ContentEncoding::HeaderStripping { bytes: vec![0, 0, 0, 1], scope: 1 }]);
-    // legacy AAC ID: ASC synthesized with explicit SBR signaling (LC, 24 kHz, stereo → 48 kHz)
+    let mastering = color.mastering.as_ref().unwrap();
+    assert_eq!(mastering.primaries[1], (0.17, 0.797));
+    assert_eq!(mastering.white_point, (0.3127, 0.329));
+    assert_eq!((mastering.luminance_max, mastering.luminance_min), (1000.0, 0.0001));
+    assert_eq!(video.encodings, vec![ContentEncoding::HeaderStripping { bytes: vec![0, 0, 0, 1], scope: 1 }]);
+    // Legacy AAC ID synthesizes explicit SBR signaling (LC, 24 kHz, stereo to 48 kHz).
     assert_eq!(f.tracks[1].codec, Codec::Aac { asc: vec![0x13, 0x10, 0x56, 0xE5, 0x98] });
     assert_eq!(f.tracks[1].language, "ger");
     assert_eq!(f.chapters[0].chapters[0].title(), Some("Intro"));
     assert_eq!(f.chapters[0].chapters[0].end_ns, Some(40_000_000));
     assert_eq!(f.attachments.len(), 1);
-    let at = &f.attachments[0];
-    assert_eq!((at.name.as_str(), at.media_type.as_str(), at.uid), ("font.ttf", "font/ttf", 77));
-    assert_eq!(&bytes[at.data_offset as usize..][..100], &[9; 100]);
+    let attachment = &f.attachments[0];
+    assert_eq!((attachment.name.as_str(), attachment.media_type.as_str(), attachment.uid), ("font.ttf", "font/ttf", 77));
+    assert_eq!(&bytes[attachment.data_offset as usize..][..100], &[9; 100]);
     assert_eq!(f.tags[0].targets.track_uids, vec![11]);
     assert_eq!(f.tags[0].simple[0].string.as_deref(), Some("Nobody"));
     assert_eq!(f.clusters.len(), 2);
-    assert_eq!(v.samples.len(), 3);
-    assert_eq!(v.keyframes(), &[0, 2]);
+    assert_eq!(video.samples.len(), 3);
+    assert_eq!(video.keyframes(), &[0, 2]);
+}
 
-    let d = Demuxer::from_slice(&bytes).unwrap();
-    let p: Vec<Packet> = d.map(|p| p.unwrap()).collect();
-    assert_eq!(p.len(), 4);
-    assert_eq!((p[0].track, p[0].pts, p[0].keyframe, p[0].duration), (0, 1000, true, 40));
-    assert_eq!(p[0].data, [0, 0, 0, 1, 0x65, 1, 2]);
-    assert_eq!((p[1].track, p[1].pts, p[1].data.len()), (1, 1005, 10));
-    assert_eq!((p[2].pts, p[2].keyframe, p[2].duration), (1040, false, 80));
-    assert_eq!(p[2].data, [0, 0, 0, 1, 0x41, 3]);
-    assert_eq!((p[3].pts, p[3].pts_ns), (1120, 1_120_000_000));
-    assert_eq!(f.read_sample(&bytes[..], 0, 1).unwrap(), p[2].data);
+fn assert_synthetic_packets(f: &MkvFile, bytes: &[u8]) {
+    let packets: Vec<Packet> = Demuxer::from_slice(bytes).unwrap().map(|packet| packet.unwrap()).collect();
+    assert_eq!(packets.len(), 4);
+    assert_eq!((packets[0].track, packets[0].pts, packets[0].keyframe, packets[0].duration), (0, 1000, true, 40));
+    assert_eq!(packets[0].data, [0, 0, 0, 1, 0x65, 1, 2]);
+    assert_eq!((packets[1].track, packets[1].pts, packets[1].data.len()), (1, 1005, 10));
+    assert_eq!((packets[2].pts, packets[2].keyframe, packets[2].duration), (1040, false, 80));
+    assert_eq!(packets[2].data, [0, 0, 0, 1, 0x41, 3]);
+    assert_eq!((packets[3].pts, packets[3].pts_ns), (1120, 1_120_000_000));
+    assert_eq!(f.read_sample(bytes, 0, 1).unwrap(), packets[2].data);
+}
 
-    // CRC mismatch is reported, not fatal
-    let mut bad = bytes.clone();
-    let title = bad.windows(9).position(|w| w == b"Synthetic").unwrap();
-    bad[title] = b's';
-    let f = open_with(&bad[..], &OpenOptions { index: true, verify_crc: true }).unwrap();
-    assert_eq!(f.crc_errors.len(), 1);
+fn assert_crc_mismatch_is_reported(bytes: &[u8]) {
+    let mut corrupted = bytes.to_vec();
+    let title = corrupted.windows(9).position(|window| window == b"Synthetic").unwrap();
+    corrupted[title] = b's';
+    let file = open_with(&corrupted[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
+    assert_eq!(file.crc_errors.len(), 1);
+}
 
-    // seeking without index or cues builds the index
-    let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
-    assert_eq!(d.file().tracks.len(), 2);
-    assert_eq!(d.seek(0, 1_100_000_000).unwrap().pts, 1000);
-    assert_eq!(d.seek(0, 1_130_000_000).unwrap().pts, 1120);
-    assert_eq!(d.next_packet().unwrap().unwrap().pts, 1120);
-    assert!(d.file().indexed);
+fn assert_seek_builds_an_index(bytes: &[u8]) {
+    let mut demuxer = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
+    assert_eq!(demuxer.file().tracks.len(), 2);
+    assert_eq!(demuxer.seek(0, 1_100_000_000).unwrap().pts, 1000);
+    assert_eq!(demuxer.seek(0, 1_130_000_000).unwrap().pts, 1120);
+    assert_eq!(demuxer.next_packet().unwrap().unwrap().pts, 1120);
+    assert!(demuxer.file().indexed);
+}
+
+#[test]
+fn synthetic_file() {
+    let bytes = synthetic();
+    let file = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
+    assert_synthetic_metadata(&file, &bytes);
+    assert_synthetic_packets(&file, &bytes);
+    assert_crc_mismatch_is_reported(&bytes);
+    assert_seek_builds_an_index(&bytes);
 }
 
 /// One video track and one cluster at timestamp `ts` holding `content`.
@@ -317,7 +329,7 @@ fn cue_position_past_the_file_falls_back_to_the_index() {
         let mut el_cues = Vec::new();
         el(&mut el_cues, CUES, &cues);
         bytes.splice(at..at, el_cues);
-        let mut d = Demuxer::with_options(&bytes[..], OpenOptions { index: false, verify_crc: false }).unwrap();
+        let mut d = Demuxer::with_options(bytes, OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
         assert_eq!(d.file().cues.len(), 1);
         assert_eq!(d.seek(0, 0).unwrap().pts, 1000);
     }
@@ -439,7 +451,197 @@ fn overlapping_seek_head_targets_are_read_once() {
     }
     f.resize(f.len() + pad, 0xEC);
     let src = Counting(&f, std::cell::Cell::new(0));
-    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false }).unwrap();
+    let file = open_with(&src, &OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
     assert_eq!(file.seek_head.len(), n as usize);
     assert!(src.1.get() <= 4 * f.len() as u64, "read {} bytes of a {}-byte file", src.1.get(), f.len());
+}
+
+/// Fake Cluster candidates every 16 bytes: a Cluster of 512 KiB whose first child is a 64 KiB Void, so
+/// `plausible` has to look 64 KiB away from each candidate and then finds a Cluster ID, not a Timestamp.
+fn dense_fake_clusters(total: usize) -> Vec<u8> {
+    let mut unit = Vec::new();
+    write_id(&mut unit, CLUSTER);
+    ebml::write_size(&mut unit, 512 << 10, 8);
+    write_id(&mut unit, VOID);
+    ebml::write_size(&mut unit, 64 << 10, 3);
+    assert_eq!(unit.len(), 16);
+    let mut f = Vec::new();
+    let mut h = Vec::new();
+    el_str(&mut h, DOC_TYPE, "matroska");
+    el(&mut f, EBML, &h);
+    write_id(&mut f, SEGMENT);
+    write_unknown_size(&mut f, 8);
+    // an undecodable first Segment child forces a resync into the fake candidates
+    f.push(0x00);
+    while f.len() < total {
+        f.extend_from_slice(&unit);
+    }
+    f
+}
+
+#[test]
+fn resync_over_dense_fake_clusters_is_bounded_by_the_recovery_budget() {
+    let f = dense_fake_clusters(1 << 20);
+    let src = Counting(&f, std::cell::Cell::new(0));
+    let _ = open_with(&src, &OpenOptions::default());
+    let read = src.1.get();
+    // 64 MiB of recovery work plus the one candidate that overdraws it; unbounded this is gigabytes
+    assert!(read <= (64 << 20) + (1 << 20), "read {read} bytes of a {}-byte file", f.len());
+}
+
+#[test]
+fn ebml_header_as_large_as_the_file_is_rejected_without_reading_it() {
+    let mut f = Vec::new();
+    write_id(&mut f, EBML);
+    ebml::write_size(&mut f, (8 << 20) - 12, 8);
+    f.resize(8 << 20, 0);
+    let src = Counting(&f, std::cell::Cell::new(0));
+    let r = open_with(&src, &OpenOptions::default());
+    assert!(matches!(r, Err(Error::NotMatroska(_))), "{r:?}");
+    assert!(src.1.get() <= 256 << 10, "read {} bytes", src.1.get());
+}
+
+#[test]
+fn warnings_are_capped() {
+    // 3000 SeekHead entries, each pointing at a Void instead of the Tags it claims
+    let mut sh2 = Vec::new();
+    for i in 0..3000u32 {
+        let mut s = Vec::new();
+        el(&mut s, SEEK_ID, &TAGS.to_be_bytes());
+        el(&mut s, SEEK_POSITION, &(1000 + i).to_be_bytes());
+        el(&mut sh2, SEEK, &s);
+    }
+    let mut g = Vec::new();
+    let mut h = Vec::new();
+    el_str(&mut h, DOC_TYPE, "matroska");
+    el(&mut g, EBML, &h);
+    write_id(&mut g, SEGMENT);
+    write_unknown_size(&mut g, 8);
+    el(&mut g, SEEK_HEAD, &sh2);
+    el(&mut g, VOID, &vec![0xEC; 100_000]);
+    let file = open_with(&g[..], &OpenOptions::default()).unwrap();
+    assert_eq!(file.warnings.len(), 257, "256 kept and the note");
+    assert_eq!(file.warnings.last().map(String::as_str), Some("further warnings omitted"));
+}
+
+/// `prefix` followed by zeros up to `len` bytes, without holding them.
+struct Sparse {
+    prefix: Vec<u8>,
+    len: u64,
+}
+
+impl ByteSource for Sparse {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        if offset.checked_add(buf.len() as u64).is_none_or(|e| e > self.len) {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if buf.len() > 64 << 20 {
+            return Err(std::io::Error::other("a read this large is the bug under test"));
+        }
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = self.prefix.get((offset as usize).saturating_add(i)).copied().unwrap_or(0);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_block_larger_than_u32_is_not_indexed_with_a_truncated_size() {
+    let frame = (1u64 << 32) + 100;
+    let mut hdr = Vec::new();
+    write_id(&mut hdr, SIMPLE_BLOCK);
+    ebml::write_size(&mut hdr, 4 + frame, 8);
+    hdr.extend_from_slice(&[0x81, 0, 0, 0x80]);
+    let prefix = one_cluster(0, &hdr);
+    let len = prefix.len() as u64 + frame;
+    let f = open_with(Sparse { prefix, len }, &OpenOptions::default()).unwrap();
+    assert!(f.tracks[0].samples.is_empty(), "{:?}", f.tracks[0].samples);
+}
+
+#[test]
+fn a_laced_block_larger_than_the_cap_is_skipped_without_reading_its_body() {
+    // flags 0x02 / 0x06 / 0x04: Xiph, EBML and fixed-size lacing
+    for flags in [0x82u8, 0x86, 0x84] {
+        let frame = (1u64 << 32) + 100;
+        let mut hdr = Vec::new();
+        write_id(&mut hdr, SIMPLE_BLOCK);
+        ebml::write_size(&mut hdr, 4 + frame, 8);
+        hdr.extend_from_slice(&[0x81, 0, 0, flags]);
+        let prefix = one_cluster(0, &hdr);
+        let len = prefix.len() as u64 + frame;
+        let f = open_with(Sparse { prefix, len }, &OpenOptions::default());
+        let f = f.unwrap_or_else(|e| panic!("flags {flags:#x}: {e:?}"));
+        assert!(f.tracks[0].samples.is_empty(), "flags {flags:#x}: {:?}", f.tracks[0].samples);
+    }
+}
+
+/// One fake Cluster candidate: it costs the resync two window refills, about 128 KiB.
+fn fake_cluster_unit() -> Vec<u8> {
+    let mut unit = Vec::new();
+    write_id(&mut unit, CLUSTER);
+    ebml::write_size(&mut unit, 512 << 10, 8);
+    write_id(&mut unit, VOID);
+    ebml::write_size(&mut unit, 64 << 10, 3);
+    unit
+}
+
+/// Fake Cluster candidates, then a real Cluster.
+fn damaged_before_a_cluster() -> Vec<u8> {
+    let unit = fake_cluster_unit();
+    let mut f = one_cluster(0, &[]);
+    // cut the real cluster off: keep EBML, Segment, Info and Tracks
+    let cluster_at = f.windows(4).position(|w| w == CLUSTER.to_be_bytes()).unwrap();
+    f.truncate(cluster_at);
+    f.push(0x00);
+    // about 50 MiB of recovery reads: under the 64 MiB budget once, over it twice
+    for _ in 0..400 {
+        f.extend_from_slice(&unit);
+    }
+    f.resize(f.len() + (700 << 10), 0);
+    write_id(&mut f, CLUSTER);
+    write_unknown_size(&mut f, 8);
+    el_uint(&mut f, TIMESTAMP, 0);
+    el(&mut f, SIMPLE_BLOCK, &block(1, 0, 0x80, &[1, 2, 3]));
+    f
+}
+
+#[test]
+fn building_the_index_gets_its_own_recovery_budget() {
+    let f = damaged_before_a_cluster();
+    let opts = OpenOptions { index: false, verify_crc: false, index_limit: None };
+    let one = open_with(&f[..], &OpenOptions::default()).unwrap();
+    assert_eq!(one.tracks[0].samples.len(), 1, "one pass finds the cluster: {:?}", one.warnings);
+    let mut d = Demuxer::with_options(&f[..], opts).unwrap();
+    d.build_index().unwrap();
+    assert_eq!(d.file().tracks[0].samples.len(), 1, "the second pass found the cluster too: {:?}", d.file().warnings);
+}
+
+#[test]
+fn packet_reading_keeps_its_recovery_budget_after_the_index_is_built() {
+    // a Cluster, about 40 MiB of recovery reads of damage, then a second Cluster
+    let mut f = one_cluster(0, &{
+        let mut b = Vec::new();
+        el(&mut b, SIMPLE_BLOCK, &block(1, 0, 0x80, &[1]));
+        b
+    });
+    f.push(0x00);
+    for _ in 0..320 {
+        f.extend_from_slice(&fake_cluster_unit());
+    }
+    f.resize(f.len() + (700 << 10), 0);
+    write_id(&mut f, CLUSTER);
+    write_unknown_size(&mut f, 8);
+    el_uint(&mut f, TIMESTAMP, 10);
+    el(&mut f, SIMPLE_BLOCK, &block(1, 0, 0x80, &[2]));
+    let mut d = Demuxer::with_options(&f[..], OpenOptions { index: false, verify_crc: false, index_limit: None }).unwrap();
+    d.build_index().unwrap();
+    assert_eq!(d.file().tracks[0].samples.len(), 2, "the index found both clusters: {:?}", d.file().warnings);
+    let mut n = 0;
+    while d.next_packet().unwrap().is_some() {
+        n += 1;
+    }
+    assert_eq!(n, 2, "reading ended at the damage: {:?}", d.file().warnings);
 }

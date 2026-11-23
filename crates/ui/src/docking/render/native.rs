@@ -13,7 +13,7 @@ use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use egui::{
     Color32, Context, CursorIcon, Event, Id, Key, LayerId, Modifiers, Order, Pos2, RawInput, Rect, ResizeDirection, Sense, Ui, UiBuilder, Vec2,
-    ViewportBuilder, ViewportClass, ViewportCommand, ViewportId, ViewportInfo, WindowLevel, pos2, vec2,
+    ViewportBuilder, ViewportClass, ViewportCommand, ViewportId, ViewportInfo, WindowLevel, X11WindowType, pos2, vec2,
 };
 
 use super::Renderer;
@@ -128,26 +128,65 @@ fn set_window_opacity(title: &str, main: Option<&str>, opacity: f64) {
     }
 }
 
-/// Where the cursor is on the desktop, in egui's desktop points, for a native window that
-/// follows a bar drag.
+/// What the window system tells of the desktop pointer, and whether it moves a native window
+/// for a bar drag itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(in crate::docking) enum DesktopCursor {
-    /// The window system's: AppKit's on macOS, none elsewhere.
+pub(in crate::docking) enum WindowSystem {
+    /// The running one: AppKit on macOS tells the cursor, the button and the modifiers, and
+    /// moves a window for `StartDrag`; elsewhere none of these is told.
     #[default]
-    System,
-    /// A stand-in window system's (`docking::testing::NativeHost`), or none.
+    Native,
+    /// A stand-in (`docking::testing::NativeHost`).
     #[cfg(any(test, feature = "testing"))]
-    Fixed(Option<Pos2>),
+    Host {
+        /// The cursor on the desktop, where told.
+        cursor: Option<Pos2>,
+        /// Whether the primary button is down, where told.
+        held: Option<bool>,
+        /// It moves a window for `StartDrag`, as AppKit does.
+        moves: bool,
+    },
 }
 
-impl DesktopCursor {
-    fn at(self, ctx: &Context) -> Option<Pos2> {
+impl WindowSystem {
+    /// Where the cursor is on the desktop, in egui's desktop points.
+    fn cursor(self, ctx: &Context) -> Option<Pos2> {
         match self {
-            Self::System => system_cursor(ctx),
+            Self::Native => system_cursor(ctx),
             #[cfg(any(test, feature = "testing"))]
-            Self::Fixed(at) => at,
+            Self::Host { cursor, .. } => cursor,
         }
         .filter(|p| p.is_finite())
+    }
+
+    /// Whether the primary button is down now. egui can report a release a frame after it.
+    fn primary_held(self) -> Option<bool> {
+        match self {
+            Self::Native => system_primary_held(),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Host { held, .. } => held,
+        }
+    }
+
+    /// Whether Ctrl or Cmd is down now. AppKit sends no key events while it moves a window, so
+    /// egui's modifiers can be stale then.
+    fn command_held(self) -> Option<bool> {
+        match self {
+            Self::Native => system_command_held(),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Host { .. } => None,
+        }
+    }
+
+    /// Whether it moves a native window for a bar drag (`StartDrag`), and tells the cursor
+    /// and the button meanwhile: AppKit does, smoothly, while a window moved from the app by
+    /// `OuterPosition` jitters there.
+    fn moves_windows(self) -> bool {
+        match self {
+            Self::Native => cfg!(target_os = "macos"),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Host { moves, .. } => moves,
+        }
     }
 }
 
@@ -170,6 +209,29 @@ fn system_cursor(_: &Context) -> Option<Pos2> {
     None
 }
 
+/// AppKit's primary button state, current when egui's lags.
+#[cfg(target_os = "macos")]
+fn system_primary_held() -> Option<bool> {
+    Some(objc2_app_kit::NSEvent::pressedMouseButtons() & 1 != 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_primary_held() -> Option<bool> {
+    None
+}
+
+/// AppKit's Ctrl and Cmd state, current while it sends egui no key events.
+#[cfg(target_os = "macos")]
+fn system_command_held() -> Option<bool> {
+    use objc2_app_kit::{NSEvent, NSEventModifierFlags};
+    Some(NSEvent::modifierFlags_class().intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_command_held() -> Option<bool> {
+    None
+}
+
 /// Whether native windows outline their ×'s hit area, and on macOS AppKit's resize areas:
 /// `CRAFT_DOCK_DEBUG_CLOSE=1`, read once.
 fn debug_close() -> bool {
@@ -184,13 +246,19 @@ pub(in crate::docking) struct WindowDrag {
     pub window: u64,
     /// Where the pointer pressed, in the window's local points.
     pub grab: Vec2,
-    /// Desktop position of the window's content as last commanded.
+    /// Desktop position of the window's content as last commanded, or under `os`, the
+    /// cursor less `grab`.
     pub to: Pos2,
     /// Desktop position of the window's content when the drag began, for Escape.
     pub start: Pos2,
     /// The drag began on the window's only tab or group, so it docks whatever
     /// [`crate::docking::DockStyle::title_bar_docks`] says.
     pub docks: bool,
+    /// The window system moves the window ([`WindowSystem::moves_windows`]).
+    pub os: bool,
+    /// The cursor has gone past the click distance from the press. Under `os` the drag starts
+    /// on the press, and until then it is a click, which docks nothing.
+    pub moved: bool,
 }
 
 /// What the dock area knows of a shown native window's place, in the context's data under
@@ -209,6 +277,8 @@ struct Place {
     /// The height of its bar while minimized, as it was last told. `known` keeps the expanded
     /// size meanwhile.
     collapsed: Option<f32>,
+    /// The X11 window type it opened with.
+    window_type: X11WindowType,
 }
 
 /// Whether two rects differ by more than rounding.
@@ -489,6 +559,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         // A minimized window shows its bar and what `floating_body` draws below it.
         let collapsed = window.minimized.then(|| BAR_HEIGHT + self.minimized_body(window));
         let shown = |[x, y, w, h]: [f32; 4]| [x, y, w, collapsed.unwrap_or(h)];
+        // Under X11 on Linux a palette is a utility window, which GNOME and KDE Plasma leave off
+        // the taskbar. egui ignores the type elsewhere, Wayland included, so there it stays the
+        // same and egui does not recreate the window when its panels change.
+        let x11 = cfg!(target_os = "linux") && !wayland(ctx, env_session());
+        let window_type = if normal || !x11 { X11WindowType::Normal } else { X11WindowType::Utility };
         let mut place = match ctx.data(|d| d.get_temp::<Place>(key)) {
             Some(mut place) => {
                 // The application changed the window's place (undo, reset, a reloaded layout):
@@ -515,9 +590,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 };
                 seen.insert(window.id);
                 ctx.data_mut(|d| d.insert_temp(seen_key, seen));
-                Place { spawn, known: spawn, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None }
+                Place { spawn, known: spawn, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type }
             }
         };
+        // egui recreates a window whose type changes. The new window opens where the old one was:
+        // where the window system last put it, unless a move the application commanded has not
+        // landed yet. The collapsed height a minimized window reports is not the size to keep.
+        if place.window_type != window_type {
+            let waiting = place.pending.is_some_and(|until| now < until);
+            let latest = info.as_ref().and_then(placed).filter(|_| !waiting && !moving(ctx));
+            let at = latest.map_or(place.known, |[x, y, w, h]| [x, y, w, if place.collapsed.is_some() { place.known[3] } else { h }]);
+            place = Place { spawn: at, known: at, pending: Some(now + MOVE_WAIT), corrected: false, collapsed: None, window_type };
+        }
         // Minimized or expanded: the window keeps its top-left corner and width, and its
         // height is fixed while it shows only its bar.
         // The limits go first: the OS clamps the new size to the limits it has.
@@ -547,7 +631,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 (false, true) => WindowLevel::AlwaysOnTop,
                 (false, false) => INACTIVE_PALETTE,
             })
-            .with_taskbar(false);
+            // No taskbar entry. egui applies `taskbar` only on Windows, and the window type only
+            // under X11 on Linux.
+            .with_taskbar(false)
+            .with_window_type(place.window_type);
         // The bar replaces the OS title bar. macOS keeps the frame, with its title bar and
         // buttons hidden: AppKit resizes a movable window from its edges and corners with its
         // own cursors, and draws its rounded corners and standard shadow.
@@ -583,7 +670,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             let buttons = self.native_bar(ui, window);
             let body = Rect::from_min_max(pos2(full.left(), (full.top() + BAR_HEIGHT).min(full.bottom())), full.max);
             self.cross.pointed = None;
+            if own {
+                crate::ime::window::begin_window(ui.ctx());
+            }
             self.floating_body(ui, window, body, full);
+            if own {
+                self.content.window_drawn(ui);
+                crate::ime::window::finish_window(ui.ctx());
+            }
             if own && !blocked && ui.ctx().text_edit_focused() {
                 let _ = body_input(ui.ctx()).lock().typing_next.insert(viewport);
             }
@@ -705,7 +799,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         Some(key)
     }
 
-    /// The bar at the top of a native window: its title and ×. Dragging it moves the window.
+    /// The bar at the top of a native window: its ×, but no title, as the tab names the panel.
+    /// Dragging it moves the window.
     /// Returns the rects of its buttons.
     fn native_bar(&mut self, ui: &mut Ui, window: &Floating<P>) -> Vec<Rect> {
         let Some(first) = window.panels().next().cloned() else { return Vec::new() };
@@ -717,10 +812,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let movable = window.panels().all(|p| self.permissions(p).movable);
         let closable = self.style.close_button && window.panels().all(|p| self.permissions(p).closable);
         let (move_label, close_label) = (self.style.move_window_label.clone(), self.style.close_window_label.clone());
-        let title = crate::docking::dock_model::first_active(&window.root).map(|p| self.label_of(p)).unwrap_or_default();
         // On macOS the bar keeps the arrow, as native title bars do: AppKit's resize areas
         // cover its ends and top edge, and a cursor set over them flickers with AppKit's.
-        let mut bar = TitleBar::new(self.id.with(("native-bar", window.id)), &move_label).title(title).movable(movable && !OS_RESIZES);
+        let mut bar = TitleBar::new(self.id.with(("native-bar", window.id)), &move_label).movable(movable && !OS_RESIZES);
         if closable {
             bar = bar.close(&close_label).close_at(close_hit, close_glyph);
         }
@@ -728,7 +822,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if response.close.as_ref().is_some_and(|close| close.clicked()) {
             self.output.actions.push(Action::CloseWindow { panel: first });
         }
-        if movable && response.bar.drag_started() {
+        // Where the window system moves the window, it takes the press, as a title bar's;
+        // a drag that egui would only start past the click distance would lose the way there.
+        let start = if self.window_system.moves_windows() {
+            response.bar.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed())
+        } else {
+            response.bar.drag_started()
+        };
+        if movable && start {
             self.start_window_drag(ui, window.id, false);
         }
         response.close.iter().chain(&response.menu).map(|r| r.rect).collect()
@@ -753,7 +854,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         self.escape_elsewhere(ctx, Some(window.id));
         let origin = ui.input(|i| content_of(i.viewport())).map(|(origin, _)| origin);
-        if self.follow_window_drag(ui, window.id) {
+        if let Some(origin) = self.follow_window_drag(ui, window.id, origin) {
             return origin;
         }
         let owns = ctx.data(|d| d.get_temp::<Drag<P>>(drag_key).map(|d| d.panel).or(d.get_temp::<GroupDrag<P>>(group_key).map(|d| d.panel)));
@@ -765,50 +866,56 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     }
 
     /// Start moving the window with the pointer, from the position the window system reports,
-    /// or, where it reports none (Wayland), by handing the move to it. `docks`: the drag began
-    /// on the window's only tab or group.
+    /// or by handing the move to the window system: where it moves windows smoothly (macOS),
+    /// tracking the drag, and where it reports no positions (Wayland), leaving it alone. `docks`:
+    /// the drag began on the window's only tab or group.
     fn start_window_drag(&mut self, ui: &Ui, window: u64, docks: bool) {
-        let press = ui.input(|i| i.pointer.press_origin().or(i.pointer.latest_pos()));
+        let ctx = ui.ctx();
+        let key = self.id.with("window-drag");
+        if ctx.data(|d| d.get_temp::<WindowDrag>(key)).is_some_and(|d| d.window == window) {
+            return;
+        }
+        let os = self.window_system.moves_windows();
+        // The window system keeps the window where it is under the pointer now.
+        let press =
+            ui.input(|i| if os { i.pointer.latest_pos().or(i.pointer.press_origin()) } else { i.pointer.press_origin().or(i.pointer.latest_pos()) });
         match (ui.input(|i| content_of(i.viewport())), press) {
             (Some((origin, _)), Some(press)) => {
-                let drag = WindowDrag { window, grab: press.to_vec2(), to: origin, start: origin, docks };
-                ui.ctx().data_mut(|d| d.insert_temp(self.id.with("window-drag"), drag));
+                let drag = WindowDrag { window, grab: press.to_vec2(), to: origin, start: origin, docks, os, moved: !os || docks };
+                ctx.data_mut(|d| d.insert_temp(key, drag));
+                if os {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                }
             }
-            _ => ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag),
+            _ => ctx.send_viewport_cmd(ViewportCommand::StartDrag),
         }
     }
 
     /// Move the window by `OuterPosition` while the button is held, so the pressed point stays
-    /// under the pointer. Escape puts it back; losing focus leaves it. Returns whether the
-    /// window is moving.
-    fn follow_window_drag(&mut self, ui: &Ui, window: u64) -> bool {
+    /// under the pointer. Escape puts it back; losing focus leaves it. Where the window system
+    /// moves the window, follow it instead ([`Self::follow_os_drag`]). Returns the desktop
+    /// position of the window's content while it moves, `origin` as reported or where it is.
+    fn follow_window_drag(&mut self, ui: &Ui, window: u64, origin: Option<Pos2>) -> Option<Option<Pos2>> {
         let key = self.id.with("window-drag");
-        let Some(mut drag) = ui.ctx().data(|d| d.get_temp::<WindowDrag>(key)).filter(|d| d.window == window) else { return false };
+        let mut drag = ui.ctx().data(|d| d.get_temp::<WindowDrag>(key)).filter(|d| d.window == window)?;
+        if drag.os {
+            return Some(self.follow_os_drag(ui, drag, origin));
+        }
         let content = ui.input(|i| content_of(i.viewport()));
         let frame = content.map_or(Vec2::ZERO, |(_, frame)| frame);
-        // Where the window system tells the cursor on the desktop (macOS), the window goes
-        // there: AppKit reports the window's place as soon as a move is commanded, but measures
-        // the pointer events it sends against where the window server had the window, which
-        // can be a move behind. Elsewhere a pointer move of this frame is relative to where the
-        // window was when the window system sent it, which is where it reports the window now:
-        // a move commanded earlier may not have landed yet. Without one the window stays, since
-        // the last position egui keeps (button events included) was measured against an older
-        // place.
-        let to = match self.cursor.at(ui.ctx()) {
-            Some(cursor) => Some(cursor - drag.grab),
-            None => {
-                let moved = ui.input(|i| i.events.iter().rev().find_map(|e| if let Event::PointerMoved(p) = e { Some(*p) } else { None }));
-                content.zip(moved.filter(|p| p.is_finite())).map(|((origin, _), local)| origin + (local.to_vec2() - drag.grab))
-            }
-        };
+        // A pointer move of this frame is relative to where the window was when the window
+        // system sent it, which is where it reports the window now: a move commanded earlier
+        // may not have landed yet. Without one the window stays, since the last position egui
+        // keeps (button events included) was measured against an older place.
+        let moved = ui.input(|i| i.events.iter().rev().find_map(|e| if let Event::PointerMoved(p) = e { Some(*p) } else { None }));
+        let to = content.zip(moved.filter(|p| p.is_finite())).map(|((origin, _), local)| origin + (local.to_vec2() - drag.grab));
         let mut step = None;
         if let Some(to) = to.filter(|to| to.distance(drag.to) > 0.0) {
             (drag.to, step) = (to, Some(to));
             ui.ctx().data_mut(|d| d.insert_temp(key, drag));
         }
         // The pointer on the desktop is the pressed point of the window where it was last
-        // put (the cursor, where the window system tells it), so the origin is that place,
-        // less the local pointer. Targets are hit there.
+        // put, so the origin is that place, less the local pointer. Targets are hit there.
         let local = ui.input(|i| i.pointer.latest_pos()).filter(|p| p.is_finite());
         let origin = local.map(|local| drag.to + drag.grab - local.to_vec2()).or(content.map(|(origin, _)| origin));
         let pointer = self.record_pointer(ui.ctx(), Some(window), origin, Some(&drag));
@@ -822,7 +929,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
             }
             ui.ctx().data_mut(|d| d.remove::<WindowDrag>(key));
-            return true;
+            return Some(origin);
         }
         if let Some(to) = step {
             move_to(self, to);
@@ -838,7 +945,66 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             }
             self.end_window_drag(drag, pointer);
         }
-        true
+        Some(origin)
+    }
+
+    /// A bar drag that the window system carries out (`StartDrag`): the window stays under the
+    /// cursor at the pressed point, so it is where the cursor is less the grab. Its reported
+    /// place lags the move, and AppKit tells the cursor fresh each frame. The drag ends on the
+    /// first frame on which the window system or egui reports the release, and then once.
+    /// Escape does not end it, as with Finder's windows: AppKit sends no keys meanwhile.
+    /// Returns where the window's content is.
+    fn follow_os_drag(&mut self, ui: &Ui, mut drag: WindowDrag, origin: Option<Pos2>) -> Option<Pos2> {
+        let ctx = ui.ctx();
+        let key = self.id.with("window-drag");
+        let local = ui.input(|i| i.pointer.latest_pos()).filter(|p| p.is_finite());
+        let cursor = self.window_system.cursor(ctx).or_else(|| Some(origin? + local?.to_vec2()));
+        if let Some(cursor) = cursor {
+            drag.to = cursor - drag.grab;
+            drag.moved |= drag.to.distance(drag.start) > ctx.options(|o| o.input_options.max_click_dist);
+        }
+        let (egui_down, released) = ui.input(|i| (i.pointer.primary_down(), i.pointer.primary_released()));
+        let ended = self.window_system.primary_held() == Some(false) || released || !egui_down;
+        let command =
+            self.window_system.command_held().unwrap_or_else(|| ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd));
+        if self.cross.focus_lost || ended {
+            ctx.data_mut(|d| d.remove::<WindowDrag>(key));
+        } else {
+            ctx.data_mut(|d| d.insert_temp(key, drag));
+        }
+        // A click on the bar is no drop, and the window's reports say where it is.
+        if !drag.moved {
+            return origin;
+        }
+        self.cross.moved = Some(drag.to);
+        if self.cross.focus_lost {
+            return Some(drag.to);
+        }
+        let pointer = DragPointer {
+            owner: Some(drag.window),
+            origin: Some(drag.to),
+            local: Some(drag.grab.to_pos2()),
+            down: !ended,
+            released: ended,
+            escape: false,
+            command,
+            window: Some(drag.window),
+            docks: drag.docks,
+        };
+        self.write_pointer(ctx, pointer);
+        if ended {
+            // Left with too little of its bar on a monitor to grab it: back onto the nearest.
+            if let Some(size) = ui.input(|i| i.viewport().inner_rect.map(|r| r.size())) {
+                let [x, y, ..] = kept_reachable([drag.to.x, drag.to.y, size.x, size.y], &self.monitors);
+                if pos2(x, y).distance(drag.to) > 0.5 {
+                    let frame = ui.input(|i| content_of(i.viewport())).map_or(Vec2::ZERO, |(_, frame)| frame);
+                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x, y) - frame));
+                    self.cross.moved = Some(pos2(x, y));
+                }
+            }
+            self.end_window_drag(drag, pointer);
+        }
+        Some(drag.to)
     }
 
     /// Release of a bar drag. The window already sits where it was dragged; over a target in

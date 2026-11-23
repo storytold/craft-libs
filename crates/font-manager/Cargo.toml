@@ -1,0 +1,47 @@
+[package]
+name = "craft-font-manager"
+description = "Craft Font Manager as a library: search and filters over the font indexes (Google Fonts, Noto, user-added sources), installed fonts by family, the font store interface, and the egui panel the launcher and the standalone app show."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# `FontsPanel`: the whole interface as one egui panel.
+egui = ["dep:egui", "dep:craft-ui", "dep:serde", "dep:log", "dep:skrifa"]
+
+[dependencies]
+craft-font-catalog = { workspace = true }
+craft-i18n = { workspace = true }
+# The pinned built-in indexes compiled in, for browsing offline.
+craft-font-store = { workspace = true, features = ["bundled-index"] }
+# egui's default faces lead the interface font stack.
+egui = { workspace = true, features = ["default_fonts"], optional = true }
+# A host that wants installed fonts for characters its interface faces lack (language names in
+# their own scripts in the language filter) enables craft-ui's `system_fonts` itself.
+craft-ui = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+log = { version = "0.4", optional = true }
+# A variable subset's axes and their names, for the detail view's sliders.
+skrifa = { version = "0.47", default-features = false, features = ["std"], optional = true }
+# Decodes the preview service's WOFF2 subsets; pure Rust. Brotli only: WOFF 1 isn't served.
+wuff = { version = "0.2.9", default-features = false, features = ["brotli"] }
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }
+# Real fonts for the fake font store to install: egui's own Hack and Ubuntu Light.
+epaint_default_fonts = "0.37"
+image = { version = "0.25", default-features = false, features = ["png"] }
+# The system's fonts for the Japanese and Arabic screenshots.
+egui_system_font_provider = "0.37"
+# The shared preview test vectors.
+serde_json = { workspace = true }
+
+[[test]]
+name = "flows"
+required-features = ["egui"]
+
+[lints]
+workspace = true

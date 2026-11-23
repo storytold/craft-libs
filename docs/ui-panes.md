@@ -40,6 +40,8 @@ for request in out.requests {
         PaneRequest::Place(pane, place) => prefs.set_place(pane, place),
         PaneRequest::Resize(pane, size) => prefs.set_size(pane, size),
         PaneRequest::FloatRect(pane, rect) => prefs.set_float_rect(pane, rect),
+        // Move `pane` to directly before `before` in the open list (`None`: to its end).
+        PaneRequest::Before(pane, before) => app.move_pane_before(pane, before),
         PaneRequest::Focus(_) => {}
     }
 }
@@ -55,13 +57,13 @@ egui::CentralPanel::default().show(ui, |ui| {
 | Piece | Behavior |
 |---|---|
 | `Edge::{Start, End, Bottom}` | Logical edges. `Start` is left, or right with `.rtl(true)`. |
-| `SidePolicy::Columns` | Every docked pane shows; panes on one edge sit side by side in `open` order, the first outermost. |
-| `SidePolicy::OneSlot` | One closable pane per edge: the last one in `open`. Non-closable context panes (PivotTable Fields) show beside the slot. |
+| `SidePolicy::Columns` | Every docked pane shows; panes on one edge sit side by side in `open` order, the first outermost. A drop that picks a position on an edge sends `Before(pane, next)` after its `Place`, so the app's `open` order puts the pane there. |
+| `SidePolicy::OneSlot` | One closable pane per edge: the last one in `open`. Non-closable context panes (PivotTable Fields) show beside the slot. A closable pane dropped on an edge takes the slot: `Before` moves it after the slot's pane. |
 | `.max_fraction(f)` | One docked pane takes at most `f` of the host's width (height for bottom panes). |
 | Chrome | Title, ▾ menu (app items, Move to Start, Move to End, Move to Bottom for bottom panes, Float, Close), ×, a resize edge with pointer and arrow keys. The edge takes presses on both sides of its line, over the document's own widgets too, and stays under floating windows. The title bar mirrors with `.rtl(true)`. Its accessible name is `PaneLabels::move_pane` with `{title}` replaced by the pane's title ("Move Styles pane"). |
 | Size | A docked pane reserves exactly its size and clips its body, so a body wider than the pane never pushes into the document. |
-| Drag out | A docked pane's title dragged more than `DOCK_SNAP` (32 pt) out of the pane floats it under the pointer when dropped; dropped within 32 pt of the host's left or right edge it docks there. While the pointer is there, a preview shows the rect the pane will take: with `Columns`, after the panes on that edge that come before it in `open`. |
-| Floating | `FloatingFrame` with its resize handles; the title bar moves it. Escape or window focus loss during a move puts it back. A drop within 32 pt of the left or right edge docks it, with the same preview as a drag out. Rects are clamped to the host area. |
+| Drag out | A docked pane's title dragged more than `DOCK_SNAP` (32 pt) out of the pane floats it under the pointer when dropped, unless it is dropped on a dock target: within 32 pt of the host's left or right edge it docks there, outermost; over the outer third of another side pane (toward the window edge) it docks directly outside that pane, over its inner third directly inside it. The middle third is no target. While the pointer is on a target, a preview shows the rect the pane will take once the app applies the requests. A drop where the pane already is sends nothing. |
+| Floating | `FloatingFrame` with its resize handles; the title bar moves it. Escape or window focus loss during a move puts it back. A drop on a dock target docks it, with the same targets and preview as a drag out. Rects are clamped to the host area. |
 | Focus | `out.focused` is the pane holding keyboard focus or last clicked; a click or focus in the document clears it. F6 and Shift+F6 cycle through the shown panes and then report `out.to_document`: give focus to the document. `.f6(false)` leaves F6 to the app, which calls `panes::focus_next(ctx, id, reverse)` instead. |
 
 State:

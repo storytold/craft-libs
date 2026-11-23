@@ -6,8 +6,8 @@ use std::borrow::Cow;
 
 use craft_keymap::ui::{ConflictMode, DialogState, English, FixedRow, Options, Outcome, ShortcutsDialog, Text};
 use craft_keymap::{
-    Bindable, Chord, CommandRef, ConflictKind, ContextRule, Flavor, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, Keymap, Kind, Overrides,
-    Platform, Profiles, Scope, Scopes, Trigger,
+    Active, Bindable, Binding, Chord, CommandRef, ConflictKind, ContextRule, Flavor, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, Keymap,
+    Kind, Lookup, Overrides, Platform, Profiles, Scope, Scopes, Trigger,
 };
 use egui::accesskit::Role;
 use egui::{Event, Key as EguiKey, Modifiers, Vec2, vec2};
@@ -206,7 +206,9 @@ fn double_press_records_k_k() {
 
 #[test]
 fn the_new_shortcut_field_waits_for_assign() {
-    let mut h = mac();
+    let mut fx = Fx::new(fixture(Platform::Mac));
+    fx.options.conflicts = ConflictMode::Keep;
+    let mut h = open(fx);
     h.get_by_label("Save").click();
     h.run();
     click(&mut h, "New shortcut: None");
@@ -214,9 +216,9 @@ fn the_new_shortcut_field_waits_for_assign() {
     assert!(has(&h, "Currently assigned to:"));
     assert_eq!(h.state().bindings("file.save"), ["Cmd+S"]);
     click(&mut h, "Assign");
-    assert!(has(&h, "⚠ ⌘E is used by Export…"));
-    click(&mut h, "Keep Both");
+    assert!(has(&h, "Also used by Export…"), "Keep mode keeps both");
     assert_eq!(h.state().bindings("file.save"), ["Cmd+S", "Cmd+E"]);
+    assert_eq!(h.state().bindings("file.export"), ["Cmd+E"]);
 }
 
 /// Presses Tab until the control labeled `label` has focus; false after `max` presses.
@@ -292,6 +294,32 @@ fn conflict_keep_both_lists_the_clash() {
     assert!(has(&h, "Save: ⌘S"));
     assert!(has(&h, "Export…: ⌘S"));
     assert!(!has(&h, "Save As…: ⇧⌘S"), "the Conflicts filter shows only the clash");
+}
+
+#[test]
+fn assign_takes_a_held_shortcut_and_keeps_the_others() {
+    let key = |text: &str| Binding::parse(text).unwrap_or_else(|e| panic!("{e}"));
+    let catalog = vec![
+        Bindable::new("file.print", "Print…", Scope::app()).with_default(key("Cmd+P")),
+        Bindable::new("type.paragraphStyles", "Paragraph Styles", Scope::app()).with_default(key("Cmd+F11")),
+    ];
+    let mut h = open(Fx::new(Keymap::new(catalog, Scopes::new(), Platform::Mac)));
+    h.get_by_label("Paragraph Styles").click();
+    h.run();
+    click(&mut h, "New shortcut: None");
+    press(&mut h, Modifiers::COMMAND, EguiKey::P);
+    assert!(has(&h, "Currently assigned to:"));
+    assert!(has(&h, "⚠ Print…"), "the holder is listed under the field");
+    click(&mut h, "Assign");
+    assert!(has(&h, "⌘P was removed from Print…"));
+    click(&mut h, "OK");
+    assert!(h.state().outcomes.iter().any(|o| matches!(o, Outcome::Ok)));
+
+    let km = &h.state().km;
+    let run = |text: &str| km.lookup(&Chord::parse(text).unwrap_or_else(|e| panic!("{e}")), false, &Active::NONE);
+    assert_eq!(run("Cmd+P"), Lookup::Run("type.paragraphStyles".into()));
+    assert_eq!(run("Cmd+F11"), Lookup::Run("type.paragraphStyles".into()));
+    assert!(h.state().bindings("file.print").is_empty());
 }
 
 #[test]

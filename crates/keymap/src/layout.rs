@@ -15,7 +15,9 @@
 //! 3. **Punctuation:** the character typed, without Shift when the layout needs Shift for it
 //!    (German `/` is ⇧7, so ⇧⌘7 is ⌘/; US `:` is ⇧;, so ⇧; is `:`). A Shift binding on a US
 //!    base key also matches the same press (`Shift+;` matches `:`), and `=` and `+` stand for
-//!    each other so zoom keys work with and without Shift.
+//!    each other so zoom keys work with and without Shift. egui has no key for the characters the
+//!    ISO key next to left Shift types (`<` and `>` on Turkish Q) and reports both as that key,
+//!    `IntlBackslash`, so Shift stays in the chord: ⇧ on that key is `Shift+IntlBackslash`.
 //! 4. **Whether a layout is Latin** is decided for the whole layout ([`Layout::is_latin`]), never
 //!    per key: Dvorak's `'` key on the Q position stays `'`.
 //! 5. **No position fallback for unnamed characters on moved keys:** egui reports a character
@@ -293,8 +295,11 @@ impl Layout {
         if Key::from_char(typed).is_some() {
             return None;
         }
-        let own = key.name().chars().next()?;
-        if self.chars.values().any(|&c| c == own) {
+        // `IntlBackslash` types no character of its own, so only a one-character name is checked.
+        let mut name = key.name().chars();
+        if let (Some(own), None) = (name.next(), name.next())
+            && self.chars.values().any(|&c| c == own)
+        {
             return None;
         }
         let mut upper = typed.to_uppercase();

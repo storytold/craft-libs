@@ -2,8 +2,9 @@
 //! detail pane: what the set will change, what did not match and why, suggestions to pick from,
 //! and after the import the report of what was skipped, taken or failed.
 
+use craft_ui::ComboBox;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{ComboBox, Label, Rect, RichText, ScrollArea, TextEdit, TextStyle, Ui};
+use egui::{Label, Rect, RichText, ScrollArea, TextEdit, TextStyle, Ui};
 
 use super::{Draw, FIELD_W, fill};
 use crate::chord::foreign::{ForeignError, ReadNote};

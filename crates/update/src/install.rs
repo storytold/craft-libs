@@ -58,6 +58,20 @@ pub fn install(
 
 type RecordCommit<'a> = Option<&'a mut dyn FnMut(&Record) -> Result<(), String>>;
 
+/// Refuses to change an app that is running, or one whose state couldn't be checked.
+fn not_running(app: &App, answer: Result<bool, String>) -> Result<(), String> {
+    match answer {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(format!("{} is running. Quit it, then try again.", app.name)),
+        Err(reason) => Err(format!("couldn't check whether {} is running ({reason}), so nothing was changed", app.name)),
+    }
+}
+
+/// [`install`], with `commit` called once a portable ZIP's new files are in place and its version
+/// checked, so the caller can save its record; an error from it rolls the previous copy back
+/// (Windows only; ignored elsewhere). Refuses before downloading when the app is running, the
+/// asset isn't the release's version (`bind_artifact_version`), a newer copy is installed, or the
+/// link isn't the release's own (`check_download_link`).
 #[allow(clippy::too_many_arguments)]
 pub fn install_at(
     app: &App,
@@ -77,9 +91,13 @@ pub fn install_at(
     let destination = destination(app, kind, existing, previous, job.install_locations)?;
     if let Some(inst) = existing
         && inst.source.launcher_can_update()
-        && process::is_running(Path::new(&inst.location))
     {
-        return Err(format!("{} is running. Quit it, then try again.", app.name));
+        not_running(app, process::running(Path::new(&inst.location)))?;
+    }
+    if kind == PackageKind::Flatpak
+        && let Some(installed) = existing.filter(|installed| installed.source == InstallSource::Flatpak && installed.externally_managed)
+    {
+        return Err(managed_elsewhere(app, installed, false).unwrap_or_else(|| "Update this app through its Flatpak repository".into()));
     }
     bind_artifact_version(app, release, asset)?;
     if !job.replace
@@ -89,7 +107,18 @@ pub fn install_at(
     {
         return Err(format!("Cannot update {} to {}: installed version {} is newer", app.name, release.version_label(), inst_v));
     }
+    check_download_link(app, release, asset)?;
     log::info!("{}: starting {} to {} ({})", app.name, if existing.is_some() { "update" } else { "install" }, release.version_label(), kind.label());
+    #[cfg(all(target_os = "linux", feature = "oci_migration"))]
+    if kind == PackageKind::Flatpak
+        && !job.replace
+        && !release.prerelease
+        && let Some(installed) = existing
+        && let Some(expected) = release.version.as_ref()
+        && linux::migrate_bundle_to_oci(app, installed, expected, job.stop)?
+    {
+        return Ok(None);
+    }
     let file = download(release, asset, job)?;
     log::info!("{}: download ready ({}), running installer...", app.name, file.display());
     // Past this point the install can't be interrupted halfway.
@@ -99,7 +128,8 @@ pub fn install_at(
     let result = match kind {
         #[cfg(target_os = "macos")]
         PackageKind::Dmg => {
-            macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release))
+            let wait = macos::CheckTurn { stop: job.stop, phase: &mut *job.phase };
+            macos::install_dmg(app, &file, existing, destination.as_deref(), job.replace, job.paths, &macos::Expect::release(release), wait)
                 .map(|path| Some(record(&version, kind, path, Vec::new(), false)))
         }
         #[cfg(windows)]
@@ -119,7 +149,8 @@ pub fn install_at(
         }
         #[cfg(target_os = "linux")]
         PackageKind::Deb | PackageKind::Rpm | PackageKind::ArchPkg | PackageKind::Flatpak => {
-            linux::install_package(kind, &file, job.stop, &mut *job.phase).map(|_| None)
+            let id = app.bundle_id();
+            linux::install_package(kind, &file, Some(&id), job.stop, &mut *job.phase).map(|_| None)
         }
         #[cfg(target_os = "linux")]
         PackageKind::AppImage => {
@@ -170,13 +201,15 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
     }
 
     // The release tag and filename embedded in a release download URL (`.../releases/download/<tag>/<name>`).
-    if let Some(rest) = asset.url.split("/releases/download/").nth(1) {
+    // A `+` in either is `%2B` there, as GitHub and `expected_download_url` write it; no other
+    // escape is decoded, so anything else still has to match as written.
+    if let Some((_, rest)) = asset.url.split_once("/releases/download/") {
         let mut parts = rest.split('/');
-        let tag = parts.next().unwrap_or("");
-        let url_filename = parts.next().unwrap_or("");
+        let tag = parts.next().unwrap_or("").replace("%2B", "+");
+        let url_filename = parts.next().unwrap_or("").replace("%2B", "+");
         if tag.is_empty()
             || release_version
-                .map_or(tag != release.tag, |release_version| tag != release.tag && version::parse(tag).as_ref() != Some(release_version))
+                .map_or(tag != release.tag, |release_version| tag != release.tag && version::parse(&tag).as_ref() != Some(release_version))
         {
             return Err(mismatch());
         }
@@ -185,6 +218,29 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
         }
     }
     Ok(())
+}
+
+/// The last check before any bytes are fetched (storytold/craft-launcher#764): the link must be
+/// exactly the GitHub download for this release's tag and this asset's name in the release's
+/// repository ([`Release::repo`], else the app's own), whichever converter (API, feed or
+/// `SHA256SUMS.txt`) built the asset, and so must the link of the release's `SHA256SUMS.txt` that
+/// the download is checked against. A `+` may be written plainly or as `%2B`
+/// ([`release::same_download_url`]).
+///
+/// With this crate's `local-mirror` feature, the developer's loopback mirror is accepted too. The
+/// consumer confines those links (the launcher's feed parser does) and must turn the feature on
+/// itself (`craft-update/local-mirror`): its own feature of that name doesn't. This crate's tests
+/// accept loopback as well, as their downloads come from a server on 127.0.0.1.
+pub fn check_download_link(app: &App, release: &Release, asset: &Asset) -> Result<(), String> {
+    let repo = if release.repo.is_empty() { app.repo } else { release.repo.as_str() };
+    let own = |a: &Asset| {
+        ((cfg!(feature = "local-mirror") || cfg!(test)) && crate::http::is_loopback(&a.url))
+            || release::expected_download_url(repo, &release.tag, &a.name).is_some_and(|expected| release::same_download_url(&a.url, &expected))
+    };
+    if own(asset) && release.sums_asset().is_none_or(own) {
+        return Ok(());
+    }
+    Err(format!("{}'s download link isn't the one its release publishes ({}), so it wasn't downloaded.", app.name, asset.name))
 }
 
 /// What a new install would write over: something already at its destination that the launcher
@@ -322,6 +378,9 @@ pub(crate) fn choose_kinds_with(
             // opens and removes them but never replaces them.
             InstallSource::Pacman if is_release_arch_package(app, inst) => Some(PackageKind::ArchPkg),
             InstallSource::Pacman => return Vec::new(),
+            // Repository-managed Flatpaks are externally managed: the launcher will not
+            // replace them with a downloaded local .flatpak bundle.
+            InstallSource::Flatpak if inst.externally_managed => return Vec::new(),
             InstallSource::Flatpak => Some(PackageKind::Flatpak),
             InstallSource::AppImage => Some(PackageKind::AppImage),
             InstallSource::Binary => Some(PackageKind::TarGz),
@@ -422,6 +481,16 @@ fn managed_elsewhere_with(app: &App, installed: &Installed, uninstall: bool, rep
             let pkg = installed.package.clone().unwrap_or_else(|| app.id.to_string());
             Some(pacman_update_hint(app, &pkg, repo_fn(&pkg).as_deref()))
         }
+        InstallSource::Flatpak if !uninstall && installed.externally_managed => {
+            let default_pkg = app.bundle_id();
+            let pkg = installed.package.as_deref().unwrap_or(&default_pkg);
+            let scope = match installed.installation.as_deref() {
+                Some("user") => "--user".to_string(),
+                Some("system") | None => "--system".to_string(),
+                Some(name) => format!("--installation={name}"),
+            };
+            Some(format!("{} was installed from a Flatpak repository. Update it with flatpak update {scope} {pkg}", app.name))
+        }
         InstallSource::Binary => Some(format!("{} was installed outside the launcher. Update or remove it the way it was installed.", app.name)),
         _ => None,
     }
@@ -483,10 +552,8 @@ pub fn uninstall(
     if let Some(msg) = managed_elsewhere(app, installed, true) {
         return Err(msg);
     }
-    if matches!(installed.source, InstallSource::MacApp | InstallSource::Msi | InstallSource::AppImage | InstallSource::Launcher)
-        && process::is_running(&path)
-    {
-        return Err(format!("{} is running. Quit it, then try again.", app.name));
+    if matches!(installed.source, InstallSource::MacApp | InstallSource::Msi | InstallSource::AppImage | InstallSource::Launcher) {
+        not_running(app, process::running(&path))?;
     }
     match installed.source {
         #[cfg(windows)]
@@ -614,12 +681,18 @@ fn prepare_home(home: &Path) {
     }
 }
 
+/// The start of the name of the folder [`staging_dir`] makes. Six random letters and digits
+/// follow it.
+#[cfg(target_os = "linux")]
+const STAGING: &str = ".artcraft-launcher-";
+
 /// A new folder of our own inside `dir`, removed when dropped: a predictable name there may be
 /// the user's.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
     tempfile::Builder::new()
-        .prefix(".artcraft-launcher-")
+        .prefix(STAGING)
+        .rand_bytes(6)
         .tempdir_in(dir)
         .map_err(|e| format!("couldn't create a staging folder in {} ({e})", dir.display()))
 }
@@ -754,29 +827,38 @@ pub fn failed_in_shared_call(error: &str) -> bool {
 #[cfg(any(target_os = "linux", windows))]
 static INSTALLER: crate::queue::Queue = crate::queue::Queue::new();
 
-/// For [`INSTALLER`]: reports [`JobPhase::Waiting`] while a job waits, then `working` again.
-#[cfg(any(target_os = "linux", windows))]
+/// For a [`crate::queue::Queue`]: reports [`JobPhase::Waiting`] while a job waits, then `working` again.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn turn<'a>(phase: &'a mut dyn FnMut(JobPhase), working: JobPhase) -> impl FnMut(bool) + 'a {
     move |waiting| phase(if waiting { JobPhase::Waiting } else { working })
 }
 
-/// For [`INSTALLER`]: whether the user cancelled the job while it waits.
-#[cfg(any(target_os = "linux", windows))]
+/// For a [`crate::queue::Queue`]: whether the user cancelled the job while it waits.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn cancelled(stop: &Stop) -> impl Fn() -> bool + '_ {
     || stop.check().is_err_and(|e| e == crate::protocol::CANCELLED)
 }
 
+/// For a running helper command: only CANCELLED ends it. PAUSED lets the current command finish
+/// (callers check `stop` before starting the next one).
 #[cfg(target_os = "linux")]
-pub(crate) mod linux {
+fn kill_on_cancel(stop: &Stop) -> impl Fn() -> Result<(), String> + '_ {
+    || if cancelled(stop)() { Err(crate::protocol::CANCELLED.into()) } else { Ok(()) }
+}
+
+#[cfg(target_os = "linux")]
+pub mod linux {
     use std::ffi::{OsStr, OsString};
     use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
 
     use crate::distro;
     use crate::protocol::CANCELLED;
+    use crate::version::{self, Version};
 
     use super::{
         App, INSTALLER, InstallSource, Installed, JobPhase, PackageKind, Path, PathBuf, Paths, Record, SHARED_CALL, SYSTEM_BIN_DIRS, Stop, cancelled,
-        find_in, pkexec, process, run_as_root, swap_into_place, tree, turn,
+        find_in, kill_on_cancel, pkexec, process, run_as_root, swap_into_place, tree, turn,
     };
 
     /// apt waits this long for another package tool (a software centre, automatic updates) to
@@ -792,9 +874,10 @@ pub(crate) mod linux {
     pub struct Root<'a> {
         pub queue: &'a crate::queue::Queue,
         pub run: &'a (dyn Fn(&[&OsStr]) -> Result<(), String> + Sync),
+        pub flatpak: &'a (dyn Fn() -> std::process::Command + Sync),
     }
 
-    const SYSTEM: Root<'static> = Root { queue: &INSTALLER, run: &run_as_root };
+    const SYSTEM: Root<'static> = Root { queue: &INSTALLER, run: &run_as_root, flatpak: &process::flatpak_command_c };
 
     /// Runs `command target` as root. Jobs waiting for the same command go into one call
     /// (`apt-get install a.deb b.deb`), so the password is asked for once.
@@ -908,48 +991,297 @@ pub(crate) mod linux {
         kinds
     }
 
-    /// Installs (or upgrades) a downloaded package with the system's own tools.
-    pub fn install_package(kind: PackageKind, file: &Path, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+    /// Flags for `flatpak install` of one bundle. A per-user install stays noninteractive.
+    /// A system-wide install is also noninteractive: it runs under `pkexec`, which asks for the
+    /// password. Flatpak's own install-bundle action does not. Its polkit message needs `$(path)`,
+    /// and current polkit denies the action when that detail is missing, with no dialog.
+    pub(crate) fn flatpak_bundle_flags(system: bool) -> &'static [&'static str] {
+        if system {
+            &["install", "--system", "-y", "--noninteractive", "--reinstall", "--bundle"]
+        } else {
+            &["install", "--user", "-y", "--noninteractive", "--reinstall", "--bundle"]
+        }
+    }
+
+    /// Program prefix for a system-wide bundle reinstall. Inside the sandbox the host runs it,
+    /// because this process cannot see the host's `pkexec` or write `/var/lib/flatpak`.
+    pub(crate) fn system_bundle_prefix(in_sandbox: bool) -> &'static [&'static str] {
+        if in_sandbox { &["flatpak-spawn", "--host", "pkexec", "/usr/bin/flatpak"] } else { &["pkexec", "/usr/bin/flatpak"] }
+    }
+
+    fn system_bundle_command(file: &Path) -> Result<std::process::Command, String> {
+        if !process::in_sandbox() && pkexec().is_none() {
+            return Err("installing system-wide needs polkit (pkexec), which isn't installed".into());
+        }
+        let prefix = system_bundle_prefix(process::in_sandbox());
+        let Some((program, rest)) = prefix.split_first() else {
+            return Err("couldn't start Flatpak".into());
+        };
+        let mut cmd = process::command(*program);
+        cmd.args(rest);
+        cmd.args(flatpak_bundle_flags(true));
+        cmd.arg(file);
+        Ok(cmd)
+    }
+
+    pub(crate) fn flatpak_bundle_error(output: &std::process::Output) -> Result<(), String> {
+        if output.status.success() {
+            return Ok(());
+        }
+        // pkexec: 126 = the password prompt was dismissed, 127 = not authorized.
+        if matches!(output.status.code(), Some(126 | 127)) {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            log::warn!("flatpak bundle install ended with {:?}: {}", output.status.code(), detail.trim());
+            return Err(CANCELLED.into());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let err = stderr.trim();
+        let err = if err.is_empty() { String::from_utf8_lossy(&output.stdout).trim().to_string() } else { err.to_string() };
+        if err.is_empty() {
+            Err("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)".into())
+        } else {
+            let clean_err = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(&err);
+            Err(format!("Flatpak couldn't install the bundle: {clean_err}"))
+        }
+    }
+
+    /// Puts a self-update's `.flatpak` bundle in place. `system` replaces the system-wide copy
+    /// through `pkexec`. Per-user stays a normal `flatpak install --user`, which needs no password.
+    pub(crate) fn update_flatpak_bundle(file: &Path, id: &str, system: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+        update_flatpak_bundle_via(&SYSTEM, file, id, system, stop, phase)
+    }
+
+    /// An app never uninstalls itself here: its download goes after this, so a failed install would
+    /// leave nothing. "Already installed" means an earlier update landed and never restarted.
+    pub(crate) fn update_flatpak_bundle_via(
+        root: &Root<'_>,
+        file: &Path,
+        id: &str,
+        system: bool,
+        stop: &Stop,
+        phase: &mut dyn FnMut(JobPhase),
+    ) -> Result<(), String> {
+        match install_flatpak_bundle_via(root, file, None, system, stop, phase) {
+            Err(e) if already_installed(&e, id) => {
+                log::info!("{id} is already installed: only the restart is left");
+                Ok(())
+            }
+            result => result,
+        }
+    }
+
+    /// Installs a downloaded `.flatpak` bundle. `bundle` is the app id it holds, for a per-user install
+    /// that may uninstall that app first.
+    fn install_flatpak_bundle_via(
+        root: &Root<'_>,
+        file: &Path,
+        bundle: Option<&str>,
+        system: bool,
+        stop: &Stop,
+        phase: &mut dyn FnMut(JobPhase),
+    ) -> Result<(), String> {
+        let install_one = || {
+            log::info!("executing flatpak install --reinstall --bundle for {}", file.display());
+            let mut cmd = if system {
+                system_bundle_command(file)?
+            } else {
+                // The C locale keeps the "already installed" error below readable.
+                let mut cmd = (root.flatpak)();
+                cmd.args(flatpak_bundle_flags(false));
+                cmd.arg(file);
+                cmd
+            };
+            let output = cmd.output().map_err(|e| format!("couldn't start Flatpak ({e})"))?;
+            if output.status.success() {
+                log::info!("flatpak install succeeded for {}", file.display());
+            }
+            flatpak_bundle_error(&output)
+        };
+        // Inside the queue: an uninstall racing another bundle install can drop its remote.
+        let install = || {
+            let result = install_one();
+            match bundle {
+                Some(id) if result.as_ref().is_err_and(|e| already_installed(e, id)) && reinstall_by_hand(root) => {
+                    log::info!("{id} is already installed and this Flatpak can't reinstall a bundle: uninstalling it first");
+                    // No `--delete-data`: the app's files stay for the next install.
+                    if !(root.flatpak)().args(["uninstall", "--user", "-y", "--noninteractive", id]).status().is_ok_and(|s| s.success()) {
+                        log::warn!("couldn't uninstall {id} to install its bundle again");
+                        return result;
+                    }
+                    install_one()
+                        .map_err(|e| format!("{e} (It was uninstalled first. Its data is kept, and Install tries again with the same download.)"))
+                }
+                _ => result,
+            }
+        };
+        root.queue.alone(&cancelled(stop), &mut turn(phase, JobPhase::Installing), install).unwrap_or(Err(CANCELLED.into()))
+    }
+
+    /// Opt-in OCI migration; only an absent ref permits bundle fallback.
+    #[cfg(feature = "oci_migration")]
+    pub fn migrate_bundle_to_oci(app: &App, installed: &Installed, expected: &super::version::Version, stop: &Stop) -> Result<bool, String> {
+        if installed.source != InstallSource::Flatpak || installed.externally_managed || !app.repo.starts_with("storytold/") {
+            return Ok(false);
+        }
+        // Only bundle-created origins qualify; never redirect another repository's install.
+        if !installed.origin.as_deref().is_some_and(|origin| origin.ends_with("-origin")) {
+            return Ok(false);
+        }
+        let id = installed.package.as_deref().ok_or("Flatpak installation has no package ID")?;
+        let scope = match installed.installation.as_deref() {
+            Some("user") => "--user".to_string(),
+            Some("system") => "--system".to_string(),
+            Some(name) => format!("--installation={name}"),
+            None => return Err("Flatpak installation scope is unknown".into()),
+        };
+        // `cancellable` is false for steps that must not stop part-way: killing flatpak-spawn
+        // doesn't wait for the host transaction, and `--reinstall` removes the old ref first.
+        let flatpak = |args: &[&str], cancellable: bool| -> Result<String, String> {
+            let mut cmd = if process::in_sandbox() {
+                let mut cmd = process::command("flatpak-spawn");
+                cmd.args(["--host", "--watch-bus", "flatpak"]);
+                cmd
+            } else {
+                process::command("flatpak")
+            };
+            cmd.arg(&scope).args(args);
+            if cancellable {
+                stop.check()?; // paused or cancelled: start no further command
+            }
+            let end = kill_on_cancel(stop);
+            let output = process::cancellable_output(cmd, || if cancellable { end() } else { Ok(()) })?;
+            if !output.status.success() {
+                return Err(format!("Flatpak OCI migration failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let run = |args: &[&str]| flatpak(args, true);
+        let reference = run(&["info", "--show-ref", id])?;
+        let reference = reference.trim();
+        if !reference.starts_with(&format!("app/{id}/")) || !reference.ends_with("/stable") {
+            return Ok(false);
+        }
+        let remotes = run(&["remotes", "--show-disabled", "--columns=name,url"])?;
+        let remote = remotes.lines().find_map(|line| {
+            let (name, _) = line.split_once('\t')?;
+            crate::packages::is_artcraft_remote(name, line).then(|| name.to_string())
+        });
+        let remote = match remote {
+            Some(remote) => remote,
+            None => {
+                if remotes.lines().any(|line| line.split('\t').next() == Some("artcraft-oci")) {
+                    return Err("The artcraft-oci remote points to a different repository".into());
+                }
+                // Another app's migration may add the remote first; the URL is checked below.
+                run(&["remote-add", "--if-not-exists", "artcraft-oci", "https://getartcraft.com/artcraft-oci.flatpakrepo"])?;
+                let remotes = run(&["remotes", "--show-disabled", "--columns=name,url"])?;
+                if !crate::packages::is_artcraft_remote("artcraft-oci", &remotes) {
+                    return Err("The ArtCraft OCI descriptor configured an unexpected repository".into());
+                }
+                "artcraft-oci".to_string()
+            }
+        };
+        // The Version column comes from the remote's AppStream catalog, which Flatpak only fetches
+        // on demand; without a refresh a new remote lists refs with empty versions.
+        run(&["update", "--appstream", &remote])?;
+        let refs = run(&["remote-ls", "--app", "--columns=ref,version", &remote])?;
+        if !crate::packages::oci_ref_available(reference, expected, &refs)? {
+            return Ok(false);
+        }
+        stop.check()?;
+        if let Err(e) = flatpak(&["install", "--reinstall", "-y", "--noninteractive", &remote, reference], false) {
+            // The bundle origin has no repository to restore from, so point at the bundle itself.
+            if flatpak(&["info", id], false).is_err() {
+                return Err(format!("{e}. {} is no longer installed; reinstall it from the .flatpak bundle at {}", app.name, app.releases_url()));
+            }
+            return Err(e);
+        }
+        let origin = run(&["info", "--show-origin", id])?;
+        if origin.trim() != remote {
+            return Err("Flatpak did not switch the installed app to the ArtCraft OCI remote".into());
+        }
+        Ok(true)
+    }
+
+    /// Updates an installed Flatpak from its remote repository (such as FlatPark).
+    pub fn update_flatpak_app(app: &App, id: &str, installation: Option<&str>, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+        phase(JobPhase::Installing);
+        stop.check()?;
+        let scope_arg = match installation {
+            Some("user") => "--user".to_string(),
+            Some("system") | None => "--system".to_string(),
+            Some(named) => format!("--installation={named}"),
+        };
+        // Let Flatpak's system helper authorize system updates through polkit.
+        // watch-bus also terminates the host command if the sandbox proxy exits.
+        let mut cmd = if process::in_sandbox() {
+            let mut command = process::command("flatpak-spawn");
+            command.args(["--host", "--watch-bus", "flatpak"]);
+            command
+        } else {
+            process::command("flatpak")
+        };
+        cmd.args(["update", &scope_arg, "-y", "--noninteractive", id]);
+        let output = process::cancellable_output(cmd, kill_on_cancel(stop))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let err = stderr.trim();
+        if err.is_empty() {
+            Err(format!("Flatpak couldn't update {}", app.name))
+        } else {
+            let clean = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(err);
+            Err(format!("Flatpak couldn't update {}: {clean}", app.name))
+        }
+    }
+
+    /// Whether a bundle install of `id` failed because the installation already has the bundle's
+    /// commit: Flatpak's "already installed", in the C locale. Any other failure leaves the app alone.
+    pub(crate) fn already_installed(err: &str, id: &str) -> bool {
+        err.contains(&format!("{id} already installed"))
+    }
+
+    /// Whether the user's copy has to be uninstalled before its bundle installs again: Flatpak
+    /// before 1.16.2 ignores `--reinstall` for a bundle.
+    fn reinstall_by_hand(root: &Root<'_>) -> bool {
+        let mut cmd = (root.flatpak)();
+        cmd.arg("--version");
+        process::run_command(cmd, "flatpak", Duration::from_secs(10)).is_ok_and(|v| ignores_bundle_reinstall(&v))
+    }
+
+    /// Whether `flatpak --version` names a Flatpak that ignores `--reinstall` for a bundle (flatpak
+    /// commit 4c5693b8 added it in 1.16.2).
+    pub(crate) fn ignores_bundle_reinstall(flatpak_version: &str) -> bool {
+        flatpak_version.split_whitespace().last().and_then(version::parse).is_some_and(|v| v < Version::new(1, 16, 2))
+    }
+
+    /// Installs (or upgrades) a downloaded package with the system's own tools. `bundle` is the app
+    /// id a Flatpak bundle holds.
+    pub fn install_package(kind: PackageKind, file: &Path, bundle: Option<&str>, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
         if kind == PackageKind::Deb && system_tool("apt-get").is_none() {
             return Err("this system has no apt-get to install a Debian package with".into());
         }
         if kind == PackageKind::ArchPkg && system_tool("pacman").is_none() {
             return Err("this system has no pacman to install an Arch package with".into());
         }
-        install_package_via(&SYSTEM, kind, file, stop, phase)
+        install_package_via(&SYSTEM, kind, file, bundle, stop, phase)
     }
 
-    pub fn install_package_via(root: &Root<'_>, kind: PackageKind, file: &Path, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
+    pub fn install_package_via(
+        root: &Root<'_>,
+        kind: PackageKind,
+        file: &Path,
+        bundle: Option<&str>,
+        stop: &Stop,
+        phase: &mut dyn FnMut(JobPhase),
+    ) -> Result<(), String> {
         let f = file.as_os_str();
         if let Some(command) = install_command(kind) {
             return as_root(root, command, f, stop, phase, JobPhase::Installing);
         }
         match kind {
-            PackageKind::Flatpak => {
-                let install_one = || {
-                    log::info!("executing flatpak install --reinstall --bundle for {}", file.display());
-                    let output = process::flatpak_command()
-                        .args(["install", "--user", "-y", "--noninteractive", "--reinstall", "--bundle"])
-                        .arg(f)
-                        .output()
-                        .map_err(|e| format!("couldn't start Flatpak ({e})"))?;
-                    if output.status.success() {
-                        log::info!("flatpak install succeeded for {}", file.display());
-                        Ok(())
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let err = stderr.trim();
-                        let err = if err.is_empty() { String::from_utf8_lossy(&output.stdout).trim().to_string() } else { err.to_string() };
-                        if err.is_empty() {
-                            Err("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)".into())
-                        } else {
-                            let clean_err = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(&err);
-                            Err(format!("Flatpak couldn't install the bundle: {clean_err}"))
-                        }
-                    }
-                };
-                root.queue.alone(&cancelled(stop), &mut turn(phase, JobPhase::Installing), install_one).unwrap_or(Err(CANCELLED.into()))
-            }
+            PackageKind::Flatpak => install_flatpak_bundle_via(root, file, bundle, false, stop, phase),
             other => Err(format!("{} isn't a system package", other.label())),
         }
     }
@@ -1007,6 +1339,7 @@ pub(crate) mod linux {
         if std::fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir() || !(replace || ours && m.is_file())) {
             return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
         }
+        clear_staging(&dir, std::time::SystemTime::now());
         let staging = super::staging_dir(&dir)?;
         let partial = staging.path().join(name);
         std::fs::copy(file, &partial).map_err(|e| format!("couldn't copy the AppImage ({e})"))?;
@@ -1021,6 +1354,53 @@ pub(crate) mod linux {
             removed.push(old.path.clone());
         }
         Ok((dest, removed))
+    }
+
+    /// How long a staging folder stays unchanged before it counts as left by an AppImage install
+    /// that ended partway.
+    const STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Removes the staging folders in `dir` of AppImage installs that ended partway, with the
+    /// partial copies in them: folders named as [`super::STAGING`] describes that hold nothing or
+    /// only one regular file named `*.AppImage`, and have not changed for [`STAGING_AGE`] before
+    /// `now`. Other folders, backup folders included, are left alone. Failures are logged and the
+    /// install goes on.
+    pub(crate) fn clear_staging(dir: &Path, now: std::time::SystemTime) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let random = |rest: &str| rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_alphanumeric());
+        for folder in entries.flatten() {
+            let path = folder.path();
+            let ours = folder.file_name().to_str().and_then(|n| n.strip_prefix(super::STAGING)).is_some_and(random);
+            if !ours || !folder.file_type().is_ok_and(|t| t.is_dir()) || !left_by_install(&path, now) {
+                continue;
+            }
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("couldn't remove {}, left by an install that ended partway ({e})", path.display()),
+            }
+        }
+    }
+
+    /// Whether `folder` holds nothing or only one regular file named `*.AppImage`, and neither the
+    /// folder nor that file has changed for [`STAGING_AGE`] before `now`.
+    fn left_by_install(folder: &Path, now: std::time::SystemTime) -> bool {
+        let unchanged = |path: &Path| {
+            std::fs::symlink_metadata(path).and_then(|m| m.modified()).is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= STAGING_AGE))
+        };
+        let Ok(entries) = std::fs::read_dir(folder) else { return false };
+        let names: Vec<_> = entries.take(2).map(|e| e.map(|e| e.file_name())).collect();
+        let partial = match names.as_slice() {
+            [] => true,
+            [Ok(only)] => {
+                let copy = folder.join(only);
+                Path::new(only).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("AppImage"))
+                    && std::fs::symlink_metadata(&copy).is_ok_and(|m| m.is_file())
+                    && unchanged(&copy)
+            }
+            _ => false,
+        };
+        partial && unchanged(folder)
     }
 
     /// Unpacks a release tarball (`bin/<app>`, `share/…`) into `<data>/apps/<app>`, a folder
@@ -1113,13 +1493,7 @@ pub(crate) mod linux {
     /// Where menu entries and icons go: `$XDG_DATA_HOME`, else `~/.local/share`. Inside the
     /// launcher's own Flatpak that variable points into the sandbox, so the host's is used.
     pub fn host_data_dir() -> Option<PathBuf> {
-        if Path::new("/.flatpak-info").exists() {
-            if let Some(dir) = std::env::var_os("HOST_XDG_DATA_HOME").map(PathBuf::from).filter(|p| p.is_absolute()) {
-                return Some(dir);
-            }
-            return crate::folders::home_dir().map(|h| h.join(".local").join("share"));
-        }
-        crate::folders::data_local_dir()
+        crate::folders::host_data_local_dir()
     }
 
     /// The app's 128 px icon, as bundled in `assets/app-icons`.
@@ -1220,9 +1594,14 @@ pub(crate) mod linux {
 pub mod macos {
     use std::time::Duration;
 
+    use crate::process::HelperFailure;
+    use crate::protocol::CANCELLED;
+    use crate::queue::Queue;
     use crate::version::Version;
 
-    use super::{App, InstallSource, Installed, Path, PathBuf, Paths, Release, process, swap_into_place};
+    use super::{
+        App, InstallSource, Installed, JobPhase, Path, PathBuf, Paths, Release, Stop, cancelled, not_running, process, swap_into_place, turn,
+    };
 
     /// `/Applications` when we can write there, else `~/Applications`.
     fn applications_dir(existing: Option<&Installed>, destination: Option<&Path>) -> Result<PathBuf, String> {
@@ -1249,6 +1628,9 @@ pub mod macos {
     /// Machines LLC): the macOS side of the Windows publisher check.
     pub const TEAM_ID: &str = "DJ6XS33FX8";
 
+    /// The start of [`install_dmg`]'s error when hdiutil can't attach the disk image.
+    pub(crate) const IMAGE_NOT_OPENED: &str = "couldn't open the disk image";
+
     /// What a new copy must prove before it replaces anything. The checksum shows the download is
     /// the file the release lists; these show the app inside is the one the release promises.
     pub struct Expect<'a> {
@@ -1257,11 +1639,19 @@ pub mod macos {
         pub team: Option<&'a str>,
         /// The release's version, which the bundle must report. `None` when the tag isn't one.
         pub version: Option<&'a Version>,
+        /// Refuse the swap when the app it replaces is running. `false` for an app replacing
+        /// itself, which is running on purpose.
+        pub quit_first: bool,
     }
 
     impl<'a> Expect<'a> {
         pub fn release(release: &'a Release) -> Self {
-            Self { team: Some(TEAM_ID), version: release.version.as_ref() }
+            Self { team: Some(TEAM_ID), version: release.version.as_ref(), quit_first: true }
+        }
+
+        /// [`Self::release`] for an app replacing itself.
+        pub fn self_update(release: &'a Release) -> Self {
+            Self { quit_first: false, ..Self::release(release) }
         }
     }
 
@@ -1269,12 +1659,59 @@ pub mod macos {
     /// `hdiutil create` too), since it turns concurrent requests away.
     pub(crate) static DISK_IMAGES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// Blocks until no other test process (nor another thread here) holds the lock file that the
+    /// tests take around their disk-image work, and holds it until the file is dropped.
+    #[cfg(test)]
+    pub(crate) fn other_test_processes_wait() -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(std::env::temp_dir().join("craft-update-tests-disk-images.lock"))
+            .unwrap();
+        file.lock().unwrap();
+        file
+    }
+
+    /// A test's turn at the disk-image helper, taken from other test processes and from the
+    /// other threads of this one, until dropped.
+    #[cfg(test)]
+    pub(crate) struct DiskImageTurn {
+        _in_process: std::sync::MutexGuard<'static, ()>,
+        _other_processes: std::fs::File,
+    }
+
+    /// Waits for [`DiskImageTurn`]. The lock file comes first: a test that holds only the file
+    /// around an install waits for [`DISK_IMAGES`] inside it.
+    #[cfg(test)]
+    pub(crate) fn disk_image_turn() -> DiskImageTurn {
+        let other_processes = other_test_processes_wait();
+        let in_process = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        DiskImageTurn { _in_process: in_process, _other_processes: other_processes }
+    }
+
+    /// Deep signature checks wait their turn here. `codesign --deep` reads every file of the
+    /// bundle, so checks that overlap compete for the disk and all slow down. The time limit
+    /// starts when a check's turn comes.
+    static SIGNATURE_CHECKS: Queue = Queue::new();
+
+    /// How a job waits for its turn at the signature check: `phase` hears of the wait, and `stop`
+    /// can cancel it.
+    pub struct CheckTurn<'a> {
+        pub stop: &'a Stop,
+        pub phase: &'a mut dyn FnMut(JobPhase),
+    }
+
     /// Apple's tools, by full path: a launcher started from Finder or at login gets a minimal
     /// `PATH`, and nothing earlier on it should stand in for these.
     const HDIUTIL: &str = "/usr/bin/hdiutil";
     const DITTO: &str = "/usr/bin/ditto";
     const CODESIGN: &str = "/usr/bin/codesign";
 
+    /// Stops a `codesign` that hangs.
+    const CODESIGN_TIMEOUT: Duration = Duration::from_secs(600);
+
+    #[allow(clippy::too_many_arguments)]
     pub fn install_dmg(
         app: &App,
         dmg: &Path,
@@ -1283,11 +1720,13 @@ pub mod macos {
         replace: bool,
         paths: &Paths,
         expect: &Expect<'_>,
+        wait: CheckTurn<'_>,
     ) -> Result<PathBuf, String> {
         // A new, empty mount point for every install. A fixed one can still hold an image from an
         // attach that was interrupted or timed out, and hdiutil won't mount another over it.
         let attempt = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
         let mount = paths.cache.join(format!("mount-{}-{}-{attempt}", app.id, std::process::id()));
+        let _in_use = InUse::new(&mount);
         std::fs::create_dir_all(&mount).map_err(|e| format!("couldn't create a folder to open the disk image in ({e})"))?;
         let (Some(dmg_s), Some(mount_s)) = (dmg.to_str(), mount.to_str()) else {
             let _ = std::fs::remove_dir(&mount);
@@ -1300,6 +1739,8 @@ pub mod macos {
         // would only add minutes on a large image.
         let attached = {
             let _one_at_a_time = DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // An image an earlier install left attached makes hdiutil refuse the same file.
+            clear_mounts(app, &paths.cache, process_ended(), detach);
             let attach = || {
                 process::run(
                     HDIUTIL,
@@ -1307,24 +1748,47 @@ pub mod macos {
                     Duration::from_secs(300),
                 )
             };
+            // diskimages-helper can stay busy for a while on a shared runner; a minute of retries is still quick.
             let mut attached = attach();
-            for wait in [1, 2, 4, 8] {
+            for wait in [1, 2, 4, 8, 16, 32] {
                 if attached.is_ok() {
                     break;
                 }
                 let _ = detach(&mount);
+                let _ = detach_unmounted(dmg);
                 std::thread::sleep(Duration::from_secs(wait));
                 attached = attach();
             }
             attached
         };
         if let Err(reason) = attached {
-            let _ = std::fs::remove_dir(&mount);
-            return Err(format!("couldn't open the disk image: {reason}"));
+            let mut reason = format!("{IMAGE_NOT_OPENED}: {reason}");
+            if let Err(why) = detach_unmounted(dmg) {
+                log::warn!("couldn't detach the disk image {} ({why})", dmg.display());
+                reason = format!("{reason}; the disk image may still be attached ({why})");
+            }
+            // An attach that timed out can still finish mounting the image.
+            return close_image(Err(reason), &mount, detach);
         }
-        let result = copy_app(app, &mount, existing, destination, replace, expect);
-        let _ = detach(&mount);
-        let _ = std::fs::remove_dir(&mount);
+        let result = copy_app(app, &mount, existing, destination, replace, expect, wait);
+        close_image(result, &mount, detach)
+    }
+
+    /// Detaches the image at `mount` through `detach` and removes the mount point. An image that
+    /// stays attached is logged, and the error of a failed install says so after its reason. A
+    /// later install detaches it.
+    pub(crate) fn close_image(
+        result: Result<PathBuf, String>,
+        mount: &Path,
+        detach: impl Fn(&Path) -> Result<(), String>,
+    ) -> Result<PathBuf, String> {
+        if let Err(why) = detach(mount) {
+            log::warn!("couldn't detach the disk image at {} ({why})", mount.display());
+            return result.map_err(|reason| format!("{reason}; the disk image is still attached at {} ({why})", mount.display()));
+        }
+        if let Err(e) = std::fs::remove_dir(mount) {
+            log::warn!("couldn't remove the empty folder {} ({e})", mount.display());
+        }
         result
     }
 
@@ -1335,6 +1799,7 @@ pub mod macos {
         destination: Option<&Path>,
         replace: bool,
         expect: &Expect<'_>,
+        wait: CheckTurn<'_>,
     ) -> Result<PathBuf, String> {
         let bundle = format!("{}.app", app.name);
         let src = mount.join(&bundle);
@@ -1347,8 +1812,15 @@ pub mod macos {
         {
             return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
         }
-        let staging = super::staging_dir(&dir)?;
-        let staged = staging.path().join(&bundle);
+        clear_staging(app, &dir, process_ended(), std::time::SystemTime::now());
+        let staging = staging_dir(&dir)?;
+        let result = place(app, &src, staging.path(), &dest, expect, wait);
+        remove_staging(result, staging)
+    }
+
+    /// Copies the app at `src` into `staging`, checks the copy and replaces `dest` with it.
+    fn place(app: &App, src: &Path, staging: &Path, dest: &Path, expect: &Expect<'_>, wait: CheckTurn<'_>) -> Result<PathBuf, String> {
+        let staged = staging.join(format!("{}.app", app.name));
         let (Some(src_s), Some(staged_s)) = (src.to_str(), staged.to_str()) else { return Err("unusual characters in a path".into()) };
         // ditto keeps the code signature and symlinks intact. The disk image's volume adds Finder
         // metadata (com.apple.FinderInfo) to the files; leave it and the extended attributes
@@ -1356,20 +1828,57 @@ pub mod macos {
         // bundle's signature lives in its files, not in extended attributes.
         process::run(DITTO, &["--norsrc", "--noextattr", "--noacl", src_s, staged_s], Duration::from_secs(600))
             .map_err(|reason| format!("couldn't copy the app: {reason}"))?;
-        let checked = crate::detect::macos::read_bundle(app, &staged)
-            .ok_or_else(|| "the copied app is incomplete".to_string())
-            .and_then(|found| check(&staged, &found, expect));
-        checked?;
-        swap_into_place(&staged, &dest)?;
-        Ok(dest)
+        place_checked(app, &staged, dest, expect, process::run_detailed, process::running, wait)
+    }
+
+    /// Checks the copy at `staged` and replaces `dest` with it. `codesign` runs through `run`, and
+    /// `running` says whether `dest` is running. Tests pass stand-ins.
+    pub(crate) fn place_checked(
+        app: &App,
+        staged: &Path,
+        dest: &Path,
+        expect: &Expect<'_>,
+        run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
+        running: impl FnOnce(&Path) -> Result<bool, String>,
+        wait: CheckTurn<'_>,
+    ) -> Result<PathBuf, String> {
+        let found = crate::detect::macos::read_bundle(app, staged).ok_or("the copied app is incomplete")?;
+        check(staged, &found, expect, run, wait)?;
+        // The check can wait behind other apps' checks, and the user may have opened the app.
+        if expect.quit_first {
+            not_running(app, running(dest))?;
+        }
+        swap_into_place(staged, dest)?;
+        Ok(dest.to_path_buf())
+    }
+
+    /// Removes `staging` with whatever is still in it: the new copy when the install failed. A
+    /// folder that can't be removed is logged, and the error of a failed install says so after
+    /// its reason.
+    pub(crate) fn remove_staging(result: Result<PathBuf, String>, staging: tempfile::TempDir) -> Result<PathBuf, String> {
+        let path = staging.path().to_path_buf();
+        let Err(e) = staging.close() else { return result };
+        log::warn!("couldn't remove the staging folder {} ({e})", path.display());
+        result.map_err(|reason| format!("{reason}; couldn't remove the partial copy at {} ({e})", path.display()))
     }
 
     /// Checks a copied bundle against what its release promises, before it replaces anything.
-    fn check(bundle: &Path, found: &Installed, expect: &Expect<'_>) -> Result<(), String> {
-        if let Some(team) = expect.team
-            && !signed_by(bundle, team)
-        {
-            return Err("the app isn't signed by its developer, so it wasn't installed".into());
+    /// `codesign` runs through `run`.
+    pub(crate) fn check(
+        bundle: &Path,
+        found: &Installed,
+        expect: &Expect<'_>,
+        run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
+        wait: CheckTurn<'_>,
+    ) -> Result<(), String> {
+        if let Some(team) = expect.team {
+            match signature(bundle, team, run, wait) {
+                Signature::Valid => {}
+                Signature::Canceled => return Err(CANCELLED.into()),
+                Signature::Wrong => return Err("the app isn't signed by its developer, so it wasn't installed".into()),
+                Signature::Failed(reason) => return Err(format!("the app failed its signature check ({reason}), so it wasn't installed")),
+                Signature::Unchecked(reason) => return Err(format!("the app's signature couldn't be checked ({reason}), so it wasn't installed")),
+            }
         }
         if let Some(want) = expect.version
             && !found.version.as_ref().is_some_and(|v| same_release(v, want))
@@ -1381,14 +1890,49 @@ pub mod macos {
 
     /// Whether `bundle` has a valid Developer ID signature from `team`, nested code included. The
     /// requirement pins the signer, so a valid ad-hoc or other developer's signature fails it.
-    /// Unlike a Gatekeeper assessment it needs no network.
+    /// Unlike a Gatekeeper assessment it needs no network. `false` also means the check couldn't
+    /// finish, so an app that couldn't be checked never passes.
     pub fn signed_by(bundle: &Path, team: &str) -> bool {
-        let Some(path) = bundle.to_str() else { return false };
+        let stop = Stop::default();
+        matches!(signature(bundle, team, process::run_detailed, CheckTurn { stop: &stop, phase: &mut |_| {} }), Signature::Valid)
+    }
+
+    /// What `codesign` found out about a bundle.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) enum Signature {
+        Valid,
+        /// The signature isn't the developer's.
+        Wrong,
+        /// `codesign` failed the verification, with its reason: no signature at all, a damaged
+        /// signature, or a bundle it couldn't read.
+        Failed(String),
+        /// `codesign` gave no answer, with the reason why.
+        Unchecked(String),
+        /// The user canceled the job while it waited for its turn. `codesign` did not run.
+        Canceled,
+    }
+
+    /// Runs `codesign` on `bundle` through `run`, one bundle at a time.
+    pub(crate) fn signature(
+        bundle: &Path,
+        team: &str,
+        run: impl FnOnce(&str, &[&str], Duration) -> Result<String, HelperFailure>,
+        wait: CheckTurn<'_>,
+    ) -> Signature {
+        let Some(path) = bundle.to_str() else { return Signature::Unchecked("unusual characters in the app's path".into()) };
         if team.is_empty() || !team.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return false;
+            return Signature::Wrong;
         }
         let requirement = format!("=anchor apple generic and certificate leaf[subject.OU] = \"{team}\"");
-        process::capture(CODESIGN, &["--verify", "--deep", "-R", &requirement, path], Duration::from_secs(120)).is_some()
+        let verify = || match run(CODESIGN, &["--verify", "--deep", "-R", &requirement, path], CODESIGN_TIMEOUT) {
+            Ok(_) => Signature::Valid,
+            // codesign(1): 3 is a signature that fails the requirement, and 1 any other failed
+            // verification.
+            Err(HelperFailure::Exited { code: 3, .. }) => Signature::Wrong,
+            Err(HelperFailure::Exited { code: 1, reason }) => Signature::Failed(reason),
+            Err(failure) => Signature::Unchecked(failure.into_reason()),
+        };
+        SIGNATURE_CHECKS.alone(&cancelled(wait.stop), &mut turn(wait.phase, JobPhase::Installing), verify).unwrap_or(Signature::Canceled)
     }
 
     /// Whether a bundle's version is the release's. A bundle that reports only the numbers
@@ -1397,13 +1941,226 @@ pub mod macos {
         (found.major, found.minor, found.patch) == (release.major, release.minor, release.patch) && (found.pre.is_empty() || found.pre == release.pre)
     }
 
-    fn detach(mount: &Path) -> Option<String> {
-        let m = mount.to_str()?;
-        if !mount.join(".").exists() {
+    /// Detaches the image mounted at `mount`, if one is. `Ok` when none is mounted there.
+    fn detach(mount: &Path) -> Result<(), String> {
+        if !is_mounted(mount) {
+            return Ok(());
+        }
+        let m = mount.to_str().ok_or("unusual characters in the mount point's path")?;
+        process::run(HDIUTIL, &["detach", m, "-quiet"], Duration::from_secs(60))
+            .or_else(|_| process::run(HDIUTIL, &["detach", m, "-force", "-quiet"], Duration::from_secs(60)))
+            .map(drop)
+    }
+
+    /// Detaches the image file `dmg` where it is attached with no volume mounted, which a failed
+    /// attach can leave. An attachment with a mounted volume is left alone: another install may
+    /// be using it. So is every attachment while a program started with `dmg` in its arguments
+    /// (another process's `hdiutil attach`) is running, or while the check for one gets no answer;
+    /// in that case the error gives the check's reason.
+    fn detach_unmounted(dmg: &Path) -> Result<(), String> {
+        detach_unmounted_with(dmg, process::running, process::run)
+    }
+
+    /// [`detach_unmounted`], with `running` checking for a program started with `dmg` in its
+    /// arguments and `run` running `hdiutil`.
+    pub(crate) fn detach_unmounted_with(
+        dmg: &Path,
+        running: impl FnOnce(&Path) -> Result<bool, String>,
+        run: impl Fn(&str, &[&str], Duration) -> Result<String, String>,
+    ) -> Result<(), String> {
+        match running(dmg) {
+            Ok(false) => {}
+            Ok(true) => return Ok(()),
+            Err(why) => return Err(format!("couldn't check for a running attach of the image ({why})")),
+        }
+        let info = run(HDIUTIL, &["info", "-plist"], Duration::from_secs(30))?;
+        let image = [Some(dmg.to_path_buf()), std::fs::canonicalize(dmg).ok()];
+        for device in unmounted_attachments(&info, &image.into_iter().flatten().collect::<Vec<_>>()) {
+            run(HDIUTIL, &["detach", &device, "-force", "-quiet"], Duration::from_secs(60))?;
+        }
+        Ok(())
+    }
+
+    /// The devices of the attachments, in `hdiutil info -plist`'s output `info`, of an image file
+    /// at one of the paths in `image` that have no volume mounted.
+    pub(crate) fn unmounted_attachments(info: &str, image: &[PathBuf]) -> Vec<String> {
+        let Ok(info) = plist::Value::from_reader_xml(info.as_bytes()) else { return Vec::new() };
+        let images = info.as_dictionary().and_then(|d| d.get("images")).and_then(plist::Value::as_array);
+        let mut devices = Vec::new();
+        for attached in images.into_iter().flatten().filter_map(plist::Value::as_dictionary) {
+            let path = attached.get("image-path").and_then(plist::Value::as_string);
+            if !path.is_some_and(|p| image.iter().any(|i| i.as_path() == Path::new(p))) {
+                continue;
+            }
+            let entities: Vec<_> = attached
+                .get("system-entities")
+                .and_then(plist::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(plist::Value::as_dictionary)
+                .collect();
+            if entities.iter().any(|e| e.contains_key("mount-point")) {
+                continue;
+            }
+            // The first entity is the whole disk; detaching it detaches the rest.
+            if let Some(device) = entities.first().and_then(|e| e.get("dev-entry")).and_then(plist::Value::as_string) {
+                devices.push(device.to_string());
+            }
+        }
+        devices
+    }
+
+    /// Whether a volume is mounted at `dir`: it is on a different device from its parent folder.
+    fn is_mounted(dir: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        let (Ok(here), Some(Ok(above))) = (std::fs::symlink_metadata(dir), dir.parent().map(std::fs::metadata)) else { return false };
+        here.is_dir() && here.dev() != above.dev()
+    }
+
+    /// The start of the name of the folder an install copies the new app into, beside the
+    /// installed app. The installing process's id, `-` and six random letters and digits follow it.
+    const STAGING: &str = ".artcraft-launcher-staging-";
+
+    /// The empty file an install writes in its staging folder before copying anything into it.
+    const STAGING_MARKER: &str = ".artcraft-launcher-staging";
+
+    /// The mount points of this process's installs in progress.
+    static MOUNTS_IN_USE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+    /// Lists a mount point in [`MOUNTS_IN_USE`] until dropped.
+    pub(crate) struct InUse(PathBuf);
+
+    impl InUse {
+        pub(crate) fn new(mount: &Path) -> Self {
+            MOUNTS_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(mount.to_path_buf());
+            Self(mount.to_path_buf())
+        }
+    }
+
+    impl Drop for InUse {
+        fn drop(&mut self) {
+            let mut in_use = MOUNTS_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(at) = in_use.iter().position(|m| *m == self.0) {
+                in_use.swap_remove(at);
+            }
+        }
+    }
+
+    /// The process id in `name` when `name` is `prefix`, then digits, then `-` and a rest that
+    /// `rest` accepts.
+    fn owner(name: &str, prefix: &str, rest: impl Fn(&str) -> bool) -> Option<u32> {
+        let (pid, after) = name.strip_prefix(prefix)?.split_once('-')?;
+        if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) || after.is_empty() || !rest(after) {
             return None;
         }
-        process::capture(HDIUTIL, &["detach", m, "-quiet"], Duration::from_secs(60))
-            .or_else(|| process::capture(HDIUTIL, &["detach", m, "-force", "-quiet"], Duration::from_secs(60)))
+        pid.parse().ok()
+    }
+
+    /// The ids of the running processes, from one `ps` run. `None` when `ps` fails.
+    fn running_processes() -> Option<std::collections::HashSet<u32>> {
+        let out = process::run("/bin/ps", &["-A", "-o", "pid="], Duration::from_secs(10)).ok()?;
+        out.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.parse().ok()).collect()
+    }
+
+    /// Says whether the process with a given id has ended, from one `ps` run made at the first
+    /// call. No process counts as ended when `ps` fails.
+    fn process_ended() -> impl Fn(u32) -> bool {
+        let running = std::cell::OnceCell::new();
+        move |pid| running.get_or_init(running_processes).as_ref().is_some_and(|r| !r.contains(&pid))
+    }
+
+    /// Detaches the images that installs of `app` left attached in `cache` when they ended
+    /// partway, and removes their mount points. A mount point belongs to an install that ended
+    /// when `ended` says its process ended, or when it is this process's and no install here uses
+    /// it. `detach` detaches an image. Failures are logged and the install goes on.
+    pub(crate) fn clear_mounts(app: &App, cache: &Path, ended: impl Fn(u32) -> bool, detach: impl Fn(&Path) -> Result<(), String>) {
+        let Ok(entries) = std::fs::read_dir(cache) else { return };
+        let prefix = format!("mount-{}-", app.id);
+        // Read before `ended` runs `ps`, which then lists every process that made one of them.
+        let names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
+        // Listed after the folder is read: an install registers its mount point before creating it.
+        let in_use = MOUNTS_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        for name in names {
+            let Some(pid) = name.to_str().and_then(|n| owner(n, &prefix, |rest| rest.bytes().all(|b| b.is_ascii_digit()))) else { continue };
+            let mount = cache.join(&name);
+            let gone = if pid == std::process::id() { !in_use.contains(&mount) } else { ended(pid) };
+            if !gone {
+                continue;
+            }
+            match detach(&mount).and_then(|()| std::fs::remove_dir(&mount).map_err(|e| e.to_string())) {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", mount.display()),
+                Err(e) => log::warn!("couldn't clear {}, left by an install that ended partway ({e})", mount.display()),
+            }
+        }
+    }
+
+    /// The start of the name of the staging folders of launcher versions that didn't record the
+    /// installing process. Six random letters and digits follow it.
+    const OLD_STAGING: &str = ".artcraft-launcher-";
+
+    /// How long a staging folder of [`OLD_STAGING`]'s kind stays unchanged before it counts as
+    /// left by an install that ended. An install's copy times out after 10 minutes.
+    const OLD_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Removes the staging folders in `dir` of installs that ended partway, with the partial copies
+    /// in them:
+    ///
+    /// - a folder named as [`STAGING`] describes, holding [`STAGING_MARKER`], whose process
+    ///   `ended` says has ended, whichever app that install was for. Without the marker, the
+    ///   folder is removed only when it is empty.
+    /// - a folder named as [`OLD_STAGING`] describes that holds only `<app>.app` and has not
+    ///   changed for [`OLD_STAGING_AGE`] before `now`.
+    ///
+    /// Folders of this process's installs and of installs still running, [`OLD_STAGING`] folders
+    /// of other apps and backup folders (one may hold the only copy of an app) are left alone.
+    /// Failures are logged and the install goes on.
+    pub(crate) fn clear_staging(app: &App, dir: &Path, ended: impl Fn(u32) -> bool, now: std::time::SystemTime) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        // Read before `ended` runs `ps`, which then lists every process that made one of them.
+        let folders: Vec<_> = entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).collect();
+        let random = |rest: &str| rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_alphanumeric());
+        for folder in folders {
+            let (name, path) = (folder.file_name(), folder.path());
+            let Some(name) = name.to_str() else { continue };
+            let removed = match owner(name, STAGING, random) {
+                Some(pid) if pid == std::process::id() || !ended(pid) => continue,
+                Some(_) if std::fs::symlink_metadata(path.join(STAGING_MARKER)).is_ok_and(|m| m.is_file()) => std::fs::remove_dir_all(&path),
+                // Stopped before it wrote the marker. A folder with something in it may be the user's.
+                Some(_) => match std::fs::remove_dir(&path) {
+                    Ok(()) => Ok(()),
+                    Err(_) => continue,
+                },
+                None if name.strip_prefix(OLD_STAGING).is_some_and(random) && left_by_old_install(app, &path, now) => std::fs::remove_dir_all(&path),
+                None => continue,
+            };
+            match removed {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("couldn't remove {}, left by an install that ended partway ({e})", path.display()),
+            }
+        }
+    }
+
+    /// Whether `folder` holds only `<app>.app`, a folder, and has not changed for
+    /// [`OLD_STAGING_AGE`] before `now`.
+    fn left_by_old_install(app: &App, folder: &Path, now: std::time::SystemTime) -> bool {
+        let Ok(entries) = std::fs::read_dir(folder) else { return false };
+        let bundle = format!("{}.app", app.name);
+        let names: Vec<_> = entries.take(2).map(|e| e.map(|e| e.file_name())).collect();
+        let [Ok(only)] = names.as_slice() else { return false };
+        only.to_str() == Some(bundle.as_str())
+            && std::fs::symlink_metadata(folder.join(&bundle)).is_ok_and(|m| m.is_dir())
+            && std::fs::symlink_metadata(folder)
+                .and_then(|m| m.modified())
+                .is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= OLD_STAGING_AGE))
+    }
+
+    /// A new staging folder for this process in `dir`, holding [`STAGING_MARKER`]. See [`STAGING`].
+    fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
+        let failed = |e: std::io::Error| format!("couldn't create a staging folder in {} ({e})", dir.display());
+        let staging = tempfile::Builder::new().prefix(&format!("{STAGING}{}-", std::process::id())).rand_bytes(6).tempdir_in(dir).map_err(failed)?;
+        std::fs::write(staging.path().join(STAGING_MARKER), b"").map_err(failed)?;
+        Ok(staging)
     }
 
     /// Moves an app to the user's Trash (so it can be put back).
@@ -1423,19 +2180,62 @@ pub mod macos {
 /// out the same way first.
 #[cfg(unix)]
 #[allow(dead_code)]
-mod tree {
+pub(crate) mod tree {
+    use std::io::Read;
+
     use super::{App, Path, PathBuf, single_top_folder};
+
+    // Bound entry count and cumulative unpacked bytes to prevent decompression bombs (CWE-409).
+    const MAX_ENTRIES: usize = 50_000;
+    const MAX_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    /// The most decompressed tar stream either pass reads: the unpacked bytes plus room for
+    /// headers, padding and metadata records.
+    const MAX_TAR_BYTES: u64 = MAX_UNPACKED_BYTES + (1 << 30);
+    /// The most a PAX or GNU long-name record may hold. The tar crate buffers such a record
+    /// whole while the iterator advances, before the loop below sees any entry size.
+    const MAX_METADATA_BYTES: u64 = 1 << 20;
+
+    /// Walks the headers of the tarball `file` without unpacking anything, and refuses a
+    /// metadata record (PAX `x`/`g`, GNU `L`/`K`) past [`MAX_METADATA_BYTES`]. A damaged
+    /// archive passes: unpacking reports it.
+    fn check_metadata(file: &Path) -> Result<(), String> {
+        let gz = std::fs::File::open(file).map_err(|e| e.to_string())?;
+        let mut tar = flate2::read::GzDecoder::new(gz).take(MAX_TAR_BYTES);
+        let mut header = [0u8; 512];
+        while tar.read_exact(&mut header).is_ok() && header.iter().any(|b| *b != 0) {
+            let size = header_size(&header[124..136]).ok_or("invalid tar header")?;
+            if matches!(header[156], b'x' | b'g' | b'L' | b'K') && size > MAX_METADATA_BYTES {
+                return Err("archive has an oversized metadata record".into());
+            }
+            let padded = size.div_ceil(512).saturating_mul(512);
+            if std::io::copy(&mut (&mut tar).take(padded), &mut std::io::sink()).map_err(|e| e.to_string())? < padded {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// A tar header's size field: octal digits, or big-endian base-256 after a set top bit.
+    fn header_size(field: &[u8]) -> Option<u64> {
+        if field.first()? & 0x80 != 0 {
+            return field
+                .iter()
+                .enumerate()
+                .try_fold(0u64, |n, (i, b)| n.checked_mul(256)?.checked_add(u64::from(if i == 0 { b & 0x7f } else { *b })));
+        }
+        let digits = std::str::from_utf8(field).ok()?.trim_matches(|c: char| c == '\0' || c == ' ');
+        if digits.is_empty() { Some(0) } else { u64::from_str_radix(digits, 8).ok() }
+    }
 
     /// Unpacks `file` and returns a staging folder laid out like `/usr/local`.
     pub fn unpack(app: &App, file: &Path, staging: &Path) -> Result<PathBuf, String> {
+        check_metadata(file)?;
         let _ = std::fs::remove_dir_all(staging);
         std::fs::create_dir_all(staging).map_err(|e| format!("couldn't create {} ({e})", staging.display()))?;
         let gz = std::fs::File::open(file).map_err(|e| e.to_string())?;
-        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(gz));
+        // Never past what `check_metadata` read.
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(gz).take(MAX_TAR_BYTES));
         archive.set_preserve_permissions(true);
-        // Bound entry count and cumulative unpacked bytes to prevent decompression bombs (CWE-409).
-        const MAX_ENTRIES: usize = 50_000;
-        const MAX_UNPACKED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
         let mut entry_count = 0;
         let mut total_unpacked = 0u64;
         let mut directories = Vec::new();
@@ -1461,6 +2261,10 @@ mod tree {
         directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
         for mut dir in directories {
             dir.unpack_in(staging).map_err(|e| format!("couldn't unpack archive directory ({e})"))?;
+        }
+        // tar reads a limit-truncated stream as a clean end of archive, so an exhausted limit is refused here.
+        if archive.into_inner().limit() == 0 {
+            return Err("archive exceeds maximum size".into());
         }
         let top = single_top_folder(staging)?;
         if top.join("bin").join(app.id).is_file() {
@@ -1636,17 +2440,37 @@ mod freebsd {
 /// without starting an installer.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn msi_command(program: &Path, msi: &Path) -> Result<std::process::Command, String> {
+    msi_command_ui(program, msi, false)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn msi_command_ui(program: &Path, msi: &Path, quiet: bool) -> Result<std::process::Command, String> {
     let msi = msi_path(msi)?;
     let mut command = process::command(program);
     // A verbose log beside the package: Windows Installer's own errors (1603 above all) say
     // nothing without it.
-    command.arg("/i").arg(&msi).args(["/passive", "/norestart", "/l*v"]).arg(msi_log(&msi));
+    command.arg("/i").arg(&msi).args([if quiet { "/qn" } else { "/passive" }, "/norestart", "/l*v"]).arg(msi_log(&msi));
+    Ok(command)
+}
+
+/// The self-update command: [`msi_command`] plus the properties that keep the installed copy's
+/// Windows Installer context (`msi_copy::update_arguments`).
+#[cfg(test)]
+fn reinstall_command(program: &Path, msi: &Path, context: &[&str]) -> Result<std::process::Command, String> {
+    reinstall_command_ui(program, msi, context, false)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reinstall_command_ui(program: &Path, msi: &Path, context: &[&str], quiet: bool) -> Result<std::process::Command, String> {
+    // A per-machine /qn install cannot request elevation. Keep its existing visible route.
+    let mut command = msi_command_ui(program, msi, quiet && !context.contains(&"ALLUSERS=1"))?;
+    command.args(context);
     Ok(command)
 }
 
 /// Where `msi_command` asks Windows Installer to write its log.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn msi_log(msi: &Path) -> PathBuf {
+pub(crate) fn msi_log(msi: &Path) -> PathBuf {
     msi.with_extension("log")
 }
 
@@ -1699,17 +2523,45 @@ pub mod windows {
         })
     }
 
-    /// Runs the launcher's own new MSI for a self-update, with the same progress window and no
-    /// restart as [`run_msi`], and waits for it.
-    pub fn reinstall(msi: &Path) -> Result<(), String> {
-        let status = msi_command(&msiexec(), msi)?.status().map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
-        explain(status.code())
+    /// Runs an app's own new MSI for a self-update, with the same progress window and no restart
+    /// as [`run_msi`], and waits for it. `context` keeps the installed copy's Windows Installer
+    /// context; `folder`, when given, is where it goes. A failure names the installer's log,
+    /// which is the only place 1603 is explained.
+    pub fn reinstall(msi: &Path, context: &[&str], folder: Option<&Path>) -> Result<(), String> {
+        reinstall_with_ui(msi, context, folder, false)
+    }
+
+    pub(crate) fn reinstall_with_ui(msi: &Path, context: &[&str], folder: Option<&Path>, quiet: bool) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        let mut command = super::reinstall_command_ui(&msiexec(), msi, context, quiet)?;
+        if let Some(dir) = folder {
+            command.raw_arg(msi_folder_argument(dir)?);
+        }
+        let status = command.status().map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
+        explain(status.code()).map_err(|e| match status.code() {
+            Some(1602) | None => e,
+            _ => format!("{e}. Its log is at {}", msi_log(msi).display()),
+        })
     }
 
     /// Runs `work` once no other Windows Installer job of ours is running (a second one would
     /// stop with error 1618). Cancelled while it waits, it never runs.
     fn in_turn(stop: &Stop, phase: &mut dyn FnMut(JobPhase), working: JobPhase, work: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
         INSTALLER.alone(&cancelled(stop), &mut turn(phase, working), work).unwrap_or_else(|| Err(CANCELLED.into()))
+    }
+
+    /// Removes one installed product by its code, with a progress window and no restart, and waits.
+    /// A per-user product asks for no permission. `log` receives the installer's verbose log.
+    pub fn remove_product(product_code: &str, log: &Path) -> Result<(), String> {
+        if !crate::msi_context::valid_product_code(product_code) {
+            return Err(format!("{product_code} isn't a Windows Installer product code"));
+        }
+        let status = process::command(msiexec())
+            .args(["/x", product_code, "/passive", "/norestart", "/l*v"])
+            .arg(log)
+            .status()
+            .map_err(|e| format!("couldn't start the Windows Installer ({e})"))?;
+        explain(status.code()).map_err(|e| format!("{e}. Its log is at {}", log.display()))
     }
 
     pub fn uninstall_msi(app: &App, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), String> {
@@ -1734,6 +2586,52 @@ pub mod windows {
 mod tests {
     use super::*;
 
+    #[test]
+    fn quiet_self_update_keeps_logs_context_and_required_permission_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("launcher update.msi");
+        std::fs::write(&file, b"test package").unwrap();
+        for (context, quiet, expected) in [
+            (&[][..], false, "/passive"),
+            (&[][..], true, "/qn"),
+            (&["ALLUSERS=2", "MSIINSTALLPERUSER=1"][..], true, "/qn"),
+            (&["ALLUSERS=1"][..], true, "/passive"),
+        ] {
+            let cmd = reinstall_command_ui(Path::new("msiexec.exe"), &file, context, quiet).unwrap();
+            let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert_eq!(args[2], expected);
+            assert_eq!(&args[3..5], ["/norestart", "/l*v"]);
+            assert!(args[5].ends_with("launcher update.log"));
+            assert_eq!(&args[6..], context);
+            assert_eq!(args.iter().filter(|a| a.as_str() == "/qn" || a.as_str() == "/passive").count(), 1);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_system_flatpak_bundle_is_reinstalled_with_pkexec_on_that_installation() {
+        assert_eq!(super::linux::flatpak_bundle_flags(false), ["install", "--user", "-y", "--noninteractive", "--reinstall", "--bundle"]);
+        let system = super::linux::flatpak_bundle_flags(true);
+        assert_eq!(system, ["install", "--system", "-y", "--noninteractive", "--reinstall", "--bundle"]);
+        assert!(!system.contains(&"--user"));
+        assert_eq!(super::linux::system_bundle_prefix(true), ["flatpak-spawn", "--host", "pkexec", "/usr/bin/flatpak"]);
+        assert_eq!(super::linux::system_bundle_prefix(false), ["pkexec", "/usr/bin/flatpak"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_dismissed_system_bundle_password_cancels_and_a_flatpak_error_is_kept() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::Output;
+        let dismissed = Output { status: std::process::ExitStatus::from_raw(126 << 8), stdout: Vec::new(), stderr: Vec::new() };
+        assert_eq!(super::linux::flatpak_bundle_error(&dismissed).unwrap_err(), "cancelled");
+        let failed =
+            Output { status: std::process::ExitStatus::from_raw(1 << 8), stdout: Vec::new(), stderr: b"error: something went wrong\n".to_vec() };
+        assert_eq!(super::linux::flatpak_bundle_error(&failed).unwrap_err(), "Flatpak couldn't install the bundle: something went wrong");
+        let ok = Output { status: std::process::ExitStatus::from_raw(0), stdout: Vec::new(), stderr: Vec::new() };
+        assert!(super::linux::flatpak_bundle_error(&ok).is_ok());
+    }
+
     #[cfg(unix)]
     #[test]
     fn msi_install_uses_the_package_target_instead_of_a_symlinked_cache() {
@@ -1757,6 +2655,22 @@ mod tests {
                 file.canonicalize().unwrap().with_extension("log").as_os_str()
             ]
         );
+    }
+
+    #[test]
+    fn a_self_update_keeps_the_installed_copys_context_after_the_package_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("GridCraft.msi");
+        std::fs::write(&file, b"test package").unwrap();
+        let resolved = msi_path(&file).unwrap();
+        for context in [&["ALLUSERS=1"][..], &["ALLUSERS=2", "MSIINSTALLPERUSER=1"], &[]] {
+            let command = reinstall_command(Path::new("msiexec.exe"), &file, context).unwrap();
+            let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            let mut expected: Vec<String> = ["/i", &resolved.to_string_lossy(), "/passive", "/norestart", "/l*v"].map(String::from).to_vec();
+            expected.push(resolved.with_extension("log").to_string_lossy().into_owned());
+            expected.extend(context.iter().map(|p| p.to_string()));
+            assert_eq!(args, expected);
+        }
     }
 
     #[test]
@@ -1806,6 +2720,9 @@ mod tests {
             source: InstallSource::Msi,
             location: dir.path().join("MSI/PhotoCraft/photocraft.exe").display().to_string(),
             package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
         };
         assert_eq!(destination(app, PackageKind::Msi, Some(&msi), Some(&old), &unavailable).unwrap(), Some(dir.path().join("MSI/PhotoCraft")));
         assert!(destination(app, PackageKind::TarGz, None, None, &locations).unwrap_err().contains("aren't supported"));
@@ -1817,8 +2734,24 @@ mod tests {
         let app = App::by_id("photocraft").unwrap();
         let path = dir.path().join("old.AppImage");
         let rec = record("0.5.0", PackageKind::AppImage, path.clone(), vec![], false);
-        let launcher = Installed { version: None, source: InstallSource::Launcher, location: path.display().to_string(), package: None };
-        let users = Installed { version: None, source: InstallSource::AppImage, location: "/home/me/AppImages/p.AppImage".into(), package: None };
+        let launcher = Installed {
+            version: None,
+            source: InstallSource::Launcher,
+            location: path.display().to_string(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
+        let users = Installed {
+            version: None,
+            source: InstallSource::AppImage,
+            location: "/home/me/AppImages/p.AppImage".into(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let chosen = dir.path().join("New apps");
         std::fs::create_dir(&chosen).unwrap();
         let mut locations = InstallLocations { root: Some(chosen.display().to_string()), ..Default::default() };
@@ -1897,6 +2830,51 @@ mod tests {
         assert_eq!(std::fs::read(&theirs).unwrap(), b"new");
         assert_eq!(std::fs::read(&personal).unwrap(), b"user file");
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2, "staging was left behind");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_staging_left_by_an_install_that_ended_partway_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path();
+        let staging = |name: &str, files: &[&str]| {
+            let path = folder.join(name);
+            std::fs::create_dir(&path).unwrap();
+            for file in files {
+                std::fs::write(path.join(file), "partial").unwrap();
+            }
+            path
+        };
+        let left = [
+            staging(".artcraft-launcher-Ab12Cd", &["photocraft-0.6.0-linux-x86_64.AppImage"]),
+            staging(".artcraft-launcher-Ef34Gh", &["pdfcraft.appimage"]),
+            staging(".artcraft-launcher-Ij56Kl", &[]),
+        ];
+        let link = staging(".artcraft-launcher-Fg78Hi", &[]);
+        std::os::unix::fs::symlink(folder.join("elsewhere.AppImage"), link.join("linked.AppImage")).unwrap();
+        let file = folder.join(".artcraft-launcher-Jk90Lm");
+        std::fs::write(&file, "the user's").unwrap();
+        let now = std::time::SystemTime::now();
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        // An install still copying: its folder is old, its partial copy changed later.
+        let copying = staging(".artcraft-launcher-No12Pq", &["vectorcraft.AppImage"]);
+        std::fs::File::options().write(true).open(copying.join("vectorcraft.AppImage")).unwrap().set_modified(now + day).unwrap();
+        let kept = [
+            staging(".artcraft-launcher-Mn78Op", &["a.AppImage", "notes.txt"]),
+            staging(".artcraft-launcher-Qr90St", &["notes.txt"]),
+            staging(".artcraft-launcher-backup-Uv12Wx", &["old"]),
+            staging(".artcraft-launcher-Yz34A", &["a.AppImage"]),
+            staging(".artcraft-launcher-Bc56De7", &["a.AppImage"]),
+            staging("Cd78Ef", &["a.AppImage"]),
+            link,
+            file,
+            copying,
+        ];
+        linux::clear_staging(folder, now);
+        assert!(left.iter().chain(&kept).all(|p| p.exists()), "a folder changed within a day was removed");
+        linux::clear_staging(folder, now + day + std::time::Duration::from_secs(60));
+        assert!(left.iter().all(|p| !p.exists()), "a partial copy was left behind");
+        assert!(kept.iter().all(|p| p.exists()), "a folder that isn't a partial install was removed");
     }
 
     #[test]
@@ -2150,6 +3128,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn an_oversized_pax_record_is_refused_before_tar_buffers_it() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        // A PAX header claiming 1 MiB + 1 byte of records, compressed to almost nothing.
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::XHeader);
+        header.set_size((1 << 20) + 1);
+        header.set_path("pax").unwrap();
+        header.set_cksum();
+        let file = dir.path().join("pax.tar.gz");
+        let mut gz = flate2::write::GzEncoder::new(std::fs::File::create(&file).unwrap(), flate2::Compression::best());
+        gz.write_all(header.as_bytes()).unwrap();
+        gz.write_all(&vec![b'a'; (1 << 20) + 512]).unwrap();
+        gz.finish().unwrap();
+        let err = tree::unpack(App::by_id("wordcraft").unwrap(), &file, &dir.path().join("staging")).unwrap_err();
+        assert!(err.contains("oversized metadata"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn tree_files_does_not_traverse_directory_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("root");
@@ -2355,7 +3353,7 @@ mod tests {
             ran.lock().unwrap().push(args.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>());
             root_outcome(Some(code))
         };
-        let root = linux::Root { queue: &queue, run: &run };
+        let root = linux::Root { queue: &queue, run: &run, flatpak: &process::flatpak_command_c };
         let (started, has_started) = mpsc::channel();
         let (release, released) = mpsc::channel::<()>();
         let (waiting, waits) = mpsc::channel();
@@ -2376,7 +3374,7 @@ mod tests {
                             waiting.send(()).unwrap();
                         }
                     };
-                    linux::install_package_via(root, PackageKind::Deb, Path::new(file), &Stop::default(), &mut phase)
+                    linux::install_package_via(root, PackageKind::Deb, Path::new(file), None, &Stop::default(), &mut phase)
                 })
             });
             waits.recv().unwrap();
@@ -2418,11 +3416,149 @@ mod tests {
             return;
         }
         let queue = crate::queue::Queue::new();
-        let root = linux::Root { queue: &queue, run: &|_| Ok(()) };
-        let result = linux::install_package_via(&root, PackageKind::Flatpak, Path::new("/nonexistent/file.flatpak"), &Stop::default(), &mut |_| ());
+        let root = linux::Root { queue: &queue, run: &|_| Ok(()), flatpak: &process::flatpak_command_c };
+        let result =
+            linux::install_package_via(&root, PackageKind::Flatpak, Path::new("/nonexistent/file.flatpak"), None, &Stop::default(), &mut |_| ());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.starts_with("Flatpak couldn't install the bundle: "), "unexpected error: {err}");
+    }
+
+    #[cfg(target_os = "linux")]
+    const FLATPAK_ID: &str = "ai.storyteller.soundcraft";
+    #[cfg(target_os = "linux")]
+    const ALREADY_THERE: &str = "ai.storyteller.soundcraft already installed";
+    #[cfg(target_os = "linux")]
+    const INSTALL_CALL: &str = "install --user -y --noninteractive --reinstall --bundle /x.flatpak";
+
+    /// Runs `install` against a stand-in `flatpak` that logs its calls and fails its first `failures`
+    /// installs with `why`. Returns the result and the calls.
+    #[cfg(target_os = "linux")]
+    fn with_fake_flatpak(
+        flatpak_version: &str,
+        failures: u32,
+        why: &str,
+        uninstall_exit: u32,
+        install: impl FnOnce(&linux::Root<'_>) -> Result<(), String>,
+    ) -> (Result<(), String>, Vec<String>) {
+        let dir = tempfile::tempdir().unwrap();
+        let (script, calls) = (dir.path().join("flatpak"), dir.path().join("calls"));
+        let log = calls.display();
+        std::fs::write(
+            &script,
+            format!(
+                r#"echo "$*" >> "{log}"
+case "$1" in
+--version) echo "Flatpak {flatpak_version}" ;;
+uninstall) exit {uninstall_exit} ;;
+install)
+    [ "$(grep -c '^install' "{log}")" -gt {failures} ] && exit 0
+    echo "error: Failed to install bundle: {why}" >&2
+    exit 1 ;;
+esac
+"#
+            ),
+        )
+        .unwrap();
+        let flatpak = || {
+            let mut cmd = std::process::Command::new("/bin/sh");
+            cmd.arg(&script);
+            cmd
+        };
+        let queue = crate::queue::Queue::new();
+        let root = linux::Root { queue: &queue, run: &|_| Ok(()), flatpak: &flatpak };
+        let result = install(&root);
+        (result, std::fs::read_to_string(calls).unwrap().lines().map(str::to_string).collect())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn install_bundle(root: &linux::Root<'_>, bundle: Option<&str>) -> Result<(), String> {
+        linux::install_package_via(root, PackageKind::Flatpak, Path::new("/x.flatpak"), bundle, &Stop::default(), &mut |_| {})
+    }
+
+    #[cfg(target_os = "linux")]
+    fn update_bundle(root: &linux::Root<'_>, system: bool) -> Result<(), String> {
+        linux::update_flatpak_bundle_via(root, Path::new("/x.flatpak"), FLATPAK_ID, system, &Stop::default(), &mut |_| {})
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_bundle_goes_in_again_by_hand_only_when_flatpak_needs_it() {
+        let uninstall = format!("uninstall --user -y --noninteractive {FLATPAK_ID}");
+        let refused = format!("Flatpak couldn't install the bundle: Failed to install bundle: {ALREADY_THERE}");
+        let id = Some(FLATPAK_ID);
+
+        // An old Flatpak: the data stays, because nothing else goes on the uninstall's command line.
+        let (result, calls) = with_fake_flatpak("1.14.6", 1, ALREADY_THERE, 0, |root| install_bundle(root, id));
+        assert_eq!(result, Ok(()));
+        assert_eq!(calls, [INSTALL_CALL, "--version", &uninstall, INSTALL_CALL]);
+
+        // A first install that works, or a call with no bundle id, asks nothing more.
+        assert_eq!(with_fake_flatpak("1.14.6", 0, ALREADY_THERE, 0, |root| install_bundle(root, id)), (Ok(()), vec![INSTALL_CALL.to_string()]));
+        let (result, calls) = with_fake_flatpak("1.14.6", 1, ALREADY_THERE, 0, |root| install_bundle(root, None));
+        assert_eq!((result, calls), (Err(refused.clone()), vec![INSTALL_CALL.to_string()]));
+
+        // A Flatpak that can reinstall a bundle meant the refusal, so the installed copy stays.
+        let (result, calls) = with_fake_flatpak("1.16.2", 1, ALREADY_THERE, 0, |root| install_bundle(root, id));
+        assert_eq!(result, Err(refused.clone()));
+        assert_eq!(calls, [INSTALL_CALL, "--version"]);
+
+        // Any other failure leaves it alone too.
+        let (result, calls) = with_fake_flatpak("1.14.6", 1, "Invalid checksum", 0, |root| install_bundle(root, id));
+        assert_eq!(result, Err("Flatpak couldn't install the bundle: Failed to install bundle: Invalid checksum".to_string()));
+        assert_eq!(calls, [INSTALL_CALL]);
+
+        // A failed uninstall reports the first error, and the app is still there.
+        let (result, calls) = with_fake_flatpak("1.14.6", 1, ALREADY_THERE, 1, |root| install_bundle(root, id));
+        assert_eq!(result, Err(refused.clone()));
+        assert_eq!(calls, [INSTALL_CALL, "--version", &uninstall]);
+
+        // A failure after the uninstall says what happened and what to do next.
+        let (result, calls) = with_fake_flatpak("1.14.6", 2, ALREADY_THERE, 0, |root| install_bundle(root, id));
+        let error = result.unwrap_err();
+        assert!(error.starts_with(&refused) && error.contains("uninstalled first") && error.contains("Install tries again"), "{error}");
+        assert_eq!(calls, [INSTALL_CALL, "--version", &uninstall, INSTALL_CALL]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_self_update_never_uninstalls_the_app_it_runs_from() {
+        // The update landed earlier and never restarted, so only the restart is left.
+        let (result, calls) = with_fake_flatpak("1.14.6", 1, ALREADY_THERE, 0, |root| update_bundle(root, false));
+        assert_eq!((result, calls), (Ok(()), vec![INSTALL_CALL.to_string()]));
+
+        let (result, calls) = with_fake_flatpak("1.14.6", 0, ALREADY_THERE, 0, |root| update_bundle(root, false));
+        assert_eq!((result, calls), (Ok(()), vec![INSTALL_CALL.to_string()]));
+
+        // Anything else is still a failure: a broken bundle, or one holding another app.
+        for why in ["Invalid checksum", "ai.storyteller.photocraft already installed"] {
+            let (result, calls) = with_fake_flatpak("1.14.6", 1, why, 0, |root| update_bundle(root, false));
+            assert_eq!(result, Err(format!("Flatpak couldn't install the bundle: Failed to install bundle: {why}")));
+            assert_eq!(calls, [INSTALL_CALL]);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_flatpaks_already_installed_error_counts_as_installed() {
+        let id = FLATPAK_ID;
+        let failed = |why: &str| format!("Flatpak couldn't install the bundle: Failed to install bundle {id}: {why}");
+        assert!(linux::already_installed(&failed(ALREADY_THERE), id));
+        // A bundle Flatpak can't use, or one for another app, keeps the installed copy.
+        assert!(!linux::already_installed(&failed("Can't change remote during bundle install"), id));
+        assert!(!linux::already_installed(&failed("Invalid checksum of length 0 expected 32"), id));
+        assert!(!linux::already_installed(&failed("ai.storyteller.photocraft already installed"), id));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_flatpak_before_1_16_2_needs_a_bundle_reinstalled_by_hand() {
+        assert!(linux::ignores_bundle_reinstall("Flatpak 1.14.6\n"));
+        assert!(linux::ignores_bundle_reinstall("Flatpak 1.16.1"));
+        assert!(!linux::ignores_bundle_reinstall("Flatpak 1.16.2"));
+        assert!(!linux::ignores_bundle_reinstall("Flatpak 1.18.4"));
+        // An unreadable version leaves the failed install as it is.
+        assert!(!linux::ignores_bundle_reinstall(""));
     }
 
     #[cfg(target_os = "linux")]
@@ -2500,7 +3636,15 @@ mod tests {
 
     #[test]
     fn updates_keep_the_installed_format() {
-        let inst = |source| Installed { version: None, source, location: String::new(), package: None };
+        let inst = |source| Installed {
+            version: None,
+            source,
+            location: String::new(),
+            package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let app = crate::App::by_id("photocraft").unwrap();
         let available = available_kinds();
         if let Some(first) = available.first() {
@@ -2517,7 +3661,15 @@ mod tests {
 
     #[test]
     fn only_the_release_arch_package_is_updated_by_the_launcher() {
-        let pacman = |name: &str| Installed { version: None, source: InstallSource::Pacman, location: String::new(), package: Some(name.into()) };
+        let pacman = |name: &str| Installed {
+            version: None,
+            source: InstallSource::Pacman,
+            location: String::new(),
+            package: Some(name.into()),
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let app = crate::App::by_id("wordcraft").unwrap();
         assert!(is_release_arch_package(app, &pacman("ai.storyteller.wordcraft")));
         for aur in ["wordcraft", "wordcraft-bin", "wordcraft-git"] {
@@ -2545,7 +3697,15 @@ mod tests {
 
     #[test]
     fn aur_packages_are_not_updated_as_arch_pkg() {
-        let pacman = |name: &str| Installed { version: None, source: InstallSource::Pacman, location: String::new(), package: Some(name.into()) };
+        let pacman = |name: &str| Installed {
+            version: None,
+            source: InstallSource::Pacman,
+            location: String::new(),
+            package: Some(name.into()),
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let app = crate::App::by_id("filmcraft").unwrap();
         let installed = pacman("filmcraft-bin");
         assert!(managed_elsewhere_with(app, &installed, false, |_| None).is_some());
@@ -2555,12 +3715,227 @@ mod tests {
 
     #[test]
     fn release_arch_packages_are_updated_as_arch_pkg() {
-        let pacman = |name: &str| Installed { version: None, source: InstallSource::Pacman, location: String::new(), package: Some(name.into()) };
+        let pacman = |name: &str| Installed {
+            version: None,
+            source: InstallSource::Pacman,
+            location: String::new(),
+            package: Some(name.into()),
+            externally_managed: false,
+            origin: None,
+            installation: None,
+        };
         let app = crate::App::by_id("filmcraft").unwrap();
         let installed = pacman("ai.storyteller.filmcraft");
         assert_eq!(managed_elsewhere_with(app, &installed, false, |_| None), None);
         assert_eq!(choose_kinds_with(app, Some(&installed), None, &[], &[], true), vec![PackageKind::ArchPkg]);
         assert_eq!(choose_kinds_with(app, Some(&installed), None, &[], &[PackageKind::ArchPkg], false), vec![PackageKind::ArchPkg]);
+    }
+
+    #[test]
+    fn flatpark_flatpaks_are_externally_managed_and_not_updated_via_bundle() {
+        let app = crate::App::by_id("photocraft").unwrap();
+        let flatpark_installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: "ai.storyteller.photocraft".into(),
+            package: Some("ai.storyteller.photocraft".into()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("user".into()),
+        };
+        assert!(flatpark_installed.is_externally_managed());
+        assert_eq!(choose_kinds_with(app, Some(&flatpark_installed), None, &[], &[PackageKind::Flatpak], false), Vec::<PackageKind>::new());
+        let hint = managed_elsewhere_with(app, &flatpark_installed, false, |_| None);
+        assert_eq!(
+            hint.as_deref(),
+            Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --user ai.storyteller.photocraft")
+        );
+        // During uninstall, managed_elsewhere returns None so it can be removed
+        assert_eq!(managed_elsewhere_with(app, &flatpark_installed, true, |_| None), None);
+
+        // When installed under a former bundle ID, the hint targets that detected ID
+        let former_installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: "ai.storyteller.photocraft-old".into(),
+            package: Some("ai.storyteller.photocraft-old".into()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("system".into()),
+        };
+        let hint_former = managed_elsewhere_with(app, &former_installed, false, |_| None);
+        assert_eq!(
+            hint_former.as_deref(),
+            Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --system ai.storyteller.photocraft-old")
+        );
+
+        let bundle_installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: "ai.storyteller.photocraft".into(),
+            package: Some("ai.storyteller.photocraft".into()),
+            externally_managed: false,
+            origin: Some("photocraft-origin".into()),
+            installation: Some("user".into()),
+        };
+        assert!(!bundle_installed.is_externally_managed());
+        assert_eq!(choose_kinds_with(app, Some(&bundle_installed), None, &[], &[PackageKind::Flatpak], false), vec![PackageKind::Flatpak]);
+        assert_eq!(managed_elsewhere_with(app, &bundle_installed, false, |_| None), None);
+    }
+
+    /// A copy in a named Flatpak installation is addressed through that installation, not the
+    /// default system scope.
+    #[test]
+    fn a_named_flatpak_installation_is_addressed_by_name() {
+        let app = crate::App::by_id("photocraft").unwrap();
+        let installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: "ai.storyteller.photocraft".into(),
+            package: Some("ai.storyteller.photocraft".into()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("work".into()),
+        };
+        assert_eq!(
+            managed_elsewhere_with(app, &installed, false, |_| None).as_deref(),
+            Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --installation=work ai.storyteller.photocraft")
+        );
+    }
+
+    /// A Flatpak the user installed from a repository is never replaced by the launcher's bundle:
+    /// the refusal names the repository's own update command, and nothing is downloaded.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_repository_flatpak_is_not_replaced_by_a_bundle_install() {
+        let app = crate::App::by_id("photocraft").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phases = Vec::new();
+        let mut phase = |p: JobPhase| phases.push(p);
+        let mut job = Job {
+            http: &http,
+            paths: &paths,
+            stop: &Stop::default(),
+            phase: &mut phase,
+            install_locations: &InstallLocations::default(),
+            replace: false,
+        };
+        let release = Release { version: version::parse("0.20.0"), tag: "v0.20.0".into(), ..Release::default() };
+        let asset = Asset { name: "photocraft-0.20.0-linux-x86_64.flatpak".into(), ..Asset::default() };
+        let installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: app.bundle_id(),
+            package: Some(app.bundle_id()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("work".into()),
+        };
+        let error = install(app, &release, &asset, PackageKind::Flatpak, Some(&installed), None, &mut job).unwrap_err();
+        assert_eq!(
+            error,
+            "PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --installation=work ai.storyteller.photocraft"
+        );
+        assert!(phases.is_empty(), "the bundle installer started for a Flatpak the user manages");
+        assert!(!paths.cache.exists(), "the refusal must come before anything is downloaded");
+    }
+
+    /// `update_flatpak_app` drives the user's own copy: the scope flag for the installation it sits
+    /// in, a successful update, and Flatpak's error text with its `error: ` prefix removed. A
+    /// stand-in `flatpak` on PATH reports what it was asked to run; the test runs in child
+    /// processes so that PATH stays private to it (as `updater`'s pretend-version test does).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_flatpak_from_a_repository_is_updated_through_its_own_installation() {
+        const NAME: &str = "install::tests::a_flatpak_from_a_repository_is_updated_through_its_own_installation";
+        const DIR: &str = "CRAFT_UPDATE_FAKE_FLATPAK_DIR";
+        if std::env::var_os(DIR).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let script = r#"#!/bin/sh
+echo "$(basename "$0") $*" >> "$CRAFT_UPDATE_FAKE_FLATPAK_CALLS"
+case "$*" in
+*denied.app*) echo "error: Permission denied" >&2; exit 1 ;;
+*diskfull.app*) echo "Error: Disk full" >&2; exit 1 ;;
+*silent.app*) exit 1 ;;
+esac
+exit 0
+"#;
+            for program in ["flatpak", "flatpak-spawn"] {
+                let path = dir.path().join(program);
+                std::fs::write(&path, script).unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let path = format!("{}:{}", dir.path().display(), std::env::var("PATH").unwrap_or_default());
+            for sandboxed in [false, true] {
+                let calls = dir.path().join(format!("calls-{sandboxed}"));
+                let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+                cmd.args(["--exact", NAME, "--nocapture"])
+                    .env(DIR, dir.path())
+                    .env("CRAFT_UPDATE_FAKE_FLATPAK_CALLS", &calls)
+                    .env("PATH", &path)
+                    .env_remove("FLATPAK_ID");
+                if sandboxed {
+                    cmd.env("FLATPAK_ID", "ai.storyteller.photocraft");
+                }
+                let status = cmd.status().unwrap();
+                assert!(status.success(), "the sandboxed={sandboxed} run failed");
+            }
+            return;
+        }
+        let calls = std::env::var_os("CRAFT_UPDATE_FAKE_FLATPAK_CALLS").map(PathBuf::from).unwrap();
+        let app = crate::App::by_id("photocraft").unwrap();
+        let stop = Stop::default();
+        let mut phase = |_| ();
+        let id = app.bundle_id();
+        assert_eq!(linux::update_flatpak_app(app, &id, None, &stop, &mut phase), Ok(()));
+        assert_eq!(
+            linux::update_flatpak_app(app, "denied.app", Some("user"), &stop, &mut phase),
+            Err("Flatpak couldn't update PhotoCraft: Permission denied".to_string())
+        );
+        assert_eq!(
+            linux::update_flatpak_app(app, "diskfull.app", Some("work"), &stop, &mut phase),
+            Err("Flatpak couldn't update PhotoCraft: Disk full".to_string())
+        );
+        assert_eq!(
+            linux::update_flatpak_app(app, "silent.app", Some("system"), &stop, &mut phase),
+            Err("Flatpak couldn't update PhotoCraft".to_string())
+        );
+        let prefix = if process::in_sandbox() { "flatpak-spawn --host --watch-bus flatpak" } else { "flatpak" };
+        let expected: Vec<String> = vec![
+            format!("{prefix} update --system -y --noninteractive {id}"),
+            format!("{prefix} update --user -y --noninteractive denied.app"),
+            format!("{prefix} update --installation=work -y --noninteractive diskfull.app"),
+            format!("{prefix} update --system -y --noninteractive silent.app"),
+        ];
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        assert_eq!(calls.lines().map(str::to_string).collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn update_flatpak_app_respects_cancellation() {
+        let app = crate::App::by_id("photocraft").unwrap();
+        let stop = Stop::default();
+        stop.cancel();
+        let mut phase = |_| ();
+        assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(CANCELLED.into()));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn pause_lets_a_running_flatpak_command_finish_and_only_cancel_ends_it() {
+        let stop = Stop::default();
+        stop.pause();
+        assert_eq!(kill_on_cancel(&stop)(), Ok(()));
+        let app = crate::App::by_id("photocraft").unwrap();
+        let mut phase = |_| ();
+        // A paused job starts no further command.
+        assert_eq!(linux::update_flatpak_app(app, "ai.storyteller.photocraft", Some("user"), &stop, &mut phase), Err(crate::protocol::PAUSED.into()));
+        stop.cancel();
+        assert_eq!(kill_on_cancel(&stop)(), Err(CANCELLED.into()));
     }
 
     #[test]
@@ -2586,6 +3961,9 @@ mod tests {
             source: InstallSource::Launcher,
             location: dir.path().join("PhotoCraft.AppImage").display().to_string(),
             package: None,
+            externally_managed: false,
+            origin: None,
+            installation: None,
         };
         let stop = Stop::default();
         let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
@@ -2594,6 +3972,8 @@ mod tests {
         assert!(result.unwrap_err().contains("installed version 0.5.0 is newer"));
     }
 
+    /// An asset whose file name, link tag or link file name isn't the release's is refused before
+    /// the download, and so is one in another app's releases or with a foreign `SHA256SUMS.txt`.
     #[test]
     fn install_rejects_an_artifact_whose_version_is_not_the_advertised_one() {
         // The release advertises 99.0.0, but the selected artifact is an older official build
@@ -2639,6 +4019,190 @@ mod tests {
             ..Asset::default()
         };
         assert!(bind_artifact_version(app, &release, &bad_tag).is_err());
+
+        // storytold/craft-launcher#764: another app's release with the right tag and name passes
+        // the bind (it reads only the path after `/releases/download/`), but the check before the
+        // download refuses it.
+        let other_repo = Asset {
+            name: "photocraft-99.0.0-linux-x86_64.AppImage".into(),
+            url: "https://github.com/storytold/vectorcraft/releases/download/v99.0.0/photocraft-99.0.0-linux-x86_64.AppImage".into(),
+            ..Asset::default()
+        };
+        assert!(bind_artifact_version(app, &release, &other_repo).is_ok());
+        let err = install_at(app, &release, &other_repo, PackageKind::AppImage, None, None, &mut job, None).unwrap_err();
+        assert!(err.contains("isn't the one its release publishes"), "{err}");
+        assert!(check_download_link(app, &release, &good).is_ok());
+
+        // The checksums the download is verified against must come from the release too.
+        let mut foreign_sums = release.clone();
+        foreign_sums.assets.push(Asset {
+            name: "SHA256SUMS.txt".into(),
+            url: "https://github.com/storytold/vectorcraft/releases/download/v99.0.0/SHA256SUMS.txt".into(),
+            ..Asset::default()
+        });
+        assert!(check_download_link(app, &foreign_sums, &good).is_err());
+
+        // A release the feed reads from a renamed repository records it, and its links are
+        // checked against that one; the same links are refused for a release that doesn't.
+        let renamed =
+            release::release_from_sums("storytold/photocraft-next", "v0.5.0", &[("a".repeat(64), "photocraft-0.5.0-linux-x86_64.AppImage".into())]);
+        assert!(check_download_link(app, &renamed, &renamed.assets[0]).is_ok());
+        let unrecorded = Release { repo: String::new(), ..renamed.clone() };
+        assert!(check_download_link(app, &unrecorded, &unrecorded.assets[0]).is_err());
+
+        // A `+` written plainly, as an older launcher's feed and saved releases have it, passes.
+        let plus = release::release_from_sums(app.repo, "v1.0.0+b.1", &[("a".repeat(64), "photocraft-1.0.0+b.1-linux-x86_64.AppImage".into())]);
+        let mut plain = plus.clone();
+        for a in &mut plain.assets {
+            a.url = a.url.replace("%2B", "+");
+        }
+        assert!(check_download_link(app, &plain, &plain.assets[0]).is_ok());
+    }
+
+    /// A release whose tag has a `+` (semver build metadata) has `%2B` in its links. Both checks
+    /// before the download accept them, so `install_at` gets as far as the download, which the
+    /// cancelled job ends before anything is fetched. A link with another escape is still refused.
+    #[test]
+    fn install_accepts_a_plus_release_up_to_the_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let phase = &mut |_| ();
+        let locations = InstallLocations::default();
+        let app = App::by_id("photocraft").unwrap();
+        let name = "photocraft-1.0.0+build.1-linux-x86_64.AppImage";
+        let release = release::release_from_sums(app.repo, "v1.0.0+build.1", &[("a".repeat(64), name.to_string())]);
+        let asset = release.assets[0].clone();
+        assert!(asset.url.ends_with("/download/v1.0.0%2Bbuild.1/photocraft-1.0.0%2Bbuild.1-linux-x86_64.AppImage"), "{}", asset.url);
+        assert_eq!(bind_artifact_version(app, &release, &asset), Ok(()));
+
+        let stop = Stop::default();
+        stop.cancel();
+        let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
+        let result = install_at(app, &release, &asset, PackageKind::AppImage, None, None, &mut job, None);
+        assert_eq!(result.unwrap_err(), crate::protocol::CANCELLED);
+
+        let other_escape = Asset { url: asset.url.replace("%2B", "%2b"), ..asset };
+        assert!(bind_artifact_version(app, &release, &other_escape).is_err());
+    }
+
+    /// craft-launcher#764: `install_at` refuses, before downloading, an asset whose link is the
+    /// right path on another host, and a release whose `SHA256SUMS.txt` (what the download is
+    /// checked against) is linked elsewhere. The stop is cancelled, so if the check stopped working
+    /// the install would end at the download with `CANCELLED` instead of fetching anything.
+    #[test]
+    fn install_refuses_links_off_the_releases_own_before_downloading() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let locations = InstallLocations::default();
+        let app = App::by_id("photocraft").unwrap();
+        let name = "photocraft-0.5.0-linux-x86_64.AppImage";
+        let own = release::release_from_sums(app.repo, "v0.5.0", &[("a".repeat(64), name.to_string())]);
+        let refuse = |release: &Release, asset: &Asset| {
+            let stop = Stop::default();
+            stop.cancel();
+            let phase = &mut |_| ();
+            let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
+            let result = install_at(app, release, asset, PackageKind::AppImage, None, None, &mut job, None);
+            assert!(result.as_ref().is_err_and(|e| e.contains("isn't the one its release publishes")), "{}: {result:?}", asset.url);
+        };
+
+        for url in [
+            format!("https://evil.example/storytold/photocraft/releases/download/v0.5.0/{name}"),
+            format!("http://github.com/storytold/photocraft/releases/download/v0.5.0/{name}"),
+            format!("https://github.com.evil.example/storytold/photocraft/releases/download/v0.5.0/{name}"),
+        ] {
+            refuse(&own, &Asset { url, ..own.assets[0].clone() });
+        }
+
+        let mut sums_elsewhere = own.clone();
+        let sums = sums_elsewhere.assets.iter_mut().find(|a| a.name == "SHA256SUMS.txt").unwrap();
+        sums.url = "https://evil.example/storytold/photocraft/releases/download/v0.5.0/SHA256SUMS.txt".into();
+        refuse(&sums_elsewhere, &sums_elsewhere.assets[0]);
+    }
+
+    /// A download that fails its checksum (twice, as a resumed file gets one fresh try) replaces
+    /// nothing: the installed copy keeps its bytes, the install never starts, the record isn't
+    /// committed, and the bad file isn't kept for the next try.
+    #[test]
+    fn a_download_that_fails_its_checksum_replaces_nothing() {
+        use crate::http::tests::{Reply, body, serve};
+        let app = App::by_id("photocraft").unwrap();
+        let (body, sha) = body();
+        let (url, requests) = serve(body.clone(), vec![Reply::Corrupt, Reply::Corrupt]);
+        let name = "photocraft-0.5.0-linux-x86_64.AppImage";
+        let asset = Asset { name: name.into(), size: body.len() as u64, url, sha256: Some(sha) };
+        let release = Release { version: version::parse("0.5.0"), tag: "v0.5.0".into(), assets: vec![asset.clone()], ..Release::default() };
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let old = dir.path().join("Apps").join("PhotoCraft.AppImage");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"the installed 0.4.0").unwrap();
+        let installed = Installed {
+            externally_managed: false,
+            origin: None,
+            installation: None,
+            version: version::parse("0.4.0"),
+            source: InstallSource::Launcher,
+            location: old.display().to_string(),
+            package: None,
+        };
+        let previous = record("0.4.0", PackageKind::AppImage, old.clone(), vec![], false);
+        let mut phases = Vec::new();
+        let mut phase = |p: JobPhase| phases.push(p);
+        let locations = InstallLocations::default();
+        let stop = Stop::default();
+        let mut job = Job { http: &http, paths: &paths, stop: &stop, phase: &mut phase, install_locations: &locations, replace: false };
+        let mut committed = false;
+        let mut commit = |_: &Record| {
+            committed = true;
+            Ok(())
+        };
+        let result = install_at(app, &release, &asset, PackageKind::AppImage, Some(&installed), Some(&previous), &mut job, Some(&mut commit));
+        assert!(result.as_ref().is_err_and(|e| e.contains("checksum")), "{result:?}");
+        assert_eq!(std::fs::read(&old).unwrap(), b"the installed 0.4.0");
+        assert!(!phases.contains(&JobPhase::Installing), "{phases:?}");
+        assert!(!committed);
+        assert!(!download_path(&paths, &asset).exists());
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    /// A running installed copy isn't replaced; the stop is cancelled in case the check stops
+    /// working. Windows finds a process by its file name, so the running test binary stands in for
+    /// the copy. Elsewhere `pgrep -f` matches the command line, so a probe runs with the copy's path.
+    #[test]
+    fn install_refuses_while_the_installed_copy_is_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let phase = &mut |_| ();
+        let locations = InstallLocations::default();
+        let app = App::by_id("photocraft").unwrap();
+        let name = "photocraft-0.5.0-linux-x86_64.AppImage";
+        let release = release::release_from_sums(app.repo, "v0.5.0", &[("a".repeat(64), name.to_string())]);
+        #[cfg(windows)]
+        let location = std::env::current_exe().unwrap().display().to_string();
+        #[cfg(unix)]
+        let location = dir.path().join("PhotoCraft.AppImage").display().to_string();
+        #[cfg(unix)]
+        let _probe = crate::process::tests::RunningProbe::start(&location);
+        assert!(process::is_running(Path::new(&location)), "{location} should be seen as running");
+        let installed = Installed {
+            externally_managed: false,
+            origin: None,
+            installation: None,
+            version: version::parse("0.4.0"),
+            source: InstallSource::Launcher,
+            location,
+            package: None,
+        };
+        let stop = Stop::default();
+        stop.cancel();
+        let mut job = Job { http: &http, paths: &paths, stop: &stop, phase, install_locations: &locations, replace: false };
+        let result = install_at(app, &release, &release.assets[0], PackageKind::AppImage, Some(&installed), None, &mut job, None);
+        assert!(result.as_ref().is_err_and(|e| e.contains("is running")), "{result:?}");
     }
 
     #[cfg(target_os = "linux")]
@@ -2686,15 +4250,74 @@ mod tests {
         }
     }
 
+    /// Whether hdiutil's `stderr` says the disk-image helper turned the request away because it
+    /// was busy.
+    fn busy(stderr: &[u8]) -> bool {
+        String::from_utf8_lossy(stderr).contains("Resource temporarily unavailable")
+    }
+
+    #[test]
+    fn hdiutil_busy_replies_are_recognized() {
+        assert!(busy(b"hdiutil: attach failed - Resource temporarily unavailable\n"));
+        assert!(!busy(b"hdiutil: attach failed - image not recognized\n"));
+        assert!(!busy(b""));
+    }
+
     #[cfg(target_os = "macos")]
     mod macos_checks {
+        use crate::process::HelperFailure;
         use crate::{SUITE, version};
 
-        use super::macos::{Expect, TEAM_ID, install_dmg, signed_by};
+        use super::macos::{CheckTurn, Expect, Signature, TEAM_ID, signed_by};
         use super::*;
 
         fn photocraft() -> &'static App {
             SUITE.iter().find(|a| a.id == "photocraft").unwrap()
+        }
+
+        /// [`macos::install_dmg`] for a job nobody cancels.
+        fn install_dmg(
+            app: &App,
+            dmg: &Path,
+            existing: Option<&Installed>,
+            destination: Option<&Path>,
+            replace: bool,
+            paths: &Paths,
+            expect: &Expect<'_>,
+        ) -> Result<PathBuf, String> {
+            let stop = Stop::default();
+            let _other_processes = macos::other_test_processes_wait();
+            macos::install_dmg(app, dmg, existing, destination, replace, paths, expect, CheckTurn { stop: &stop, phase: &mut |_| {} })
+        }
+
+        /// [`macos::signature`] for a job nobody cancels.
+        fn signature(bundle: &Path, team: &str, run: impl FnOnce(&str, &[&str], std::time::Duration) -> Result<String, HelperFailure>) -> Signature {
+            let stop = Stop::default();
+            macos::signature(bundle, team, run, CheckTurn { stop: &stop, phase: &mut |_| {} })
+        }
+
+        /// [`macos::check`] for a job nobody cancels.
+        fn check(
+            bundle: &Path,
+            found: &Installed,
+            expect: &Expect<'_>,
+            run: impl FnOnce(&str, &[&str], std::time::Duration) -> Result<String, HelperFailure>,
+        ) -> Result<(), String> {
+            let stop = Stop::default();
+            macos::check(bundle, found, expect, run, CheckTurn { stop: &stop, phase: &mut |_| {} })
+        }
+
+        /// [`macos::place_checked`] for a job nobody cancels.
+        fn place_checked(
+            app: &App,
+            staged: &Path,
+            dest: &Path,
+            expect: &Expect<'_>,
+            run: impl FnOnce(&str, &[&str], std::time::Duration) -> Result<String, HelperFailure>,
+            running: impl FnOnce(&Path) -> Result<bool, String>,
+        ) -> Result<PathBuf, String> {
+            let stop = Stop::default();
+            macos::place_checked(app, staged, dest, expect, run, running, CheckTurn { stop: &stop, phase: &mut |_| {} })
         }
 
         /// A minimal `PhotoCraft.app` at `dir`, reporting `version`.
@@ -2716,33 +4339,44 @@ mod tests {
             app
         }
 
-        /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The
-        /// disk-image helper turns requests away while it is busy (`attach` retries for the same
-        /// reason), so `hdiutil create` is tried a few times, and what it said is kept for the
-        /// failure message.
+        /// Runs `hdiutil` with `args` (the caller holds its [`macos::disk_image_turn`]). The disk-image
+        /// helper can turn a request away with EAGAIN ("Resource temporarily unavailable") while it
+        /// is busy elsewhere, as on shared CI runners; that reply alone is retried, up to five
+        /// attempts over about eight seconds. Any other result returns at once.
+        fn hdiutil(args: &[&std::ffi::OsStr]) -> std::process::Output {
+            let mut output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+            for wait_ms in [500, 1000, 2000, 4000] {
+                if output.status.success() || !busy(&output.stderr) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+                output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+            }
+            output
+        }
+
+        /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The tests,
+        /// in this process and in others, ask the disk-image helper one at a time; when a program
+        /// that is not one of these tests keeps it busy, the test fails with what `hdiutil create`
+        /// said.
         fn dmg(dir: &Path, version: &str) -> PathBuf {
             let src = dir.join(format!("src-{version}"));
             bundle(&src, version);
             let dmg = dir.join(format!("photocraft-{version}-macos-universal.dmg"));
-            let _one_at_a_time = super::macos::DISK_IMAGES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut said = String::new();
-            for attempt in 0..5u64 {
-                if attempt > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(400 * attempt));
-                    let _ = std::fs::remove_file(&dmg);
-                }
-                let output = std::process::Command::new("hdiutil")
-                    .args(["create", "-quiet", "-format", "UDZO", "-volname", "PhotoCraft", "-srcfolder"])
-                    .arg(&src)
-                    .arg(&dmg)
-                    .output()
-                    .unwrap();
-                if output.status.success() {
-                    return dmg;
-                }
-                said = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            }
-            panic!("hdiutil create failed after 5 tries: {said}");
+            let _one_at_a_time = macos::disk_image_turn();
+            let output = hdiutil(&[
+                "create".as_ref(),
+                "-quiet".as_ref(),
+                "-format".as_ref(),
+                "UDZO".as_ref(),
+                "-volname".as_ref(),
+                "PhotoCraft".as_ref(),
+                "-srcfolder".as_ref(),
+                src.as_os_str(),
+                dmg.as_os_str(),
+            ]);
+            assert!(output.status.success(), "hdiutil create failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            dmg
         }
 
         #[test]
@@ -2752,7 +4386,7 @@ mod tests {
             std::fs::create_dir(&apps).unwrap();
             let paths = Paths::under(dir.path());
             let image = dmg(dir.path(), "0.6.0");
-            let expect = Expect { team: None, version: None };
+            let expect = Expect { team: None, version: None, quit_first: false };
             let placed = install_dmg(photocraft(), &image, None, Some(&apps), false, &paths, &expect).unwrap();
             assert_eq!(placed, apps.join("PhotoCraft.app"));
             let mut manifest = crate::manifest::Manifest::default();
@@ -2784,8 +4418,8 @@ mod tests {
             let unrelated = std::fs::read_to_string(&plist).unwrap().replace("ai.storyteller.photocraft", "com.example.other");
             std::fs::write(&plist, &unrelated).unwrap();
             let image = dmg(dir.path(), "0.6.0");
-            let result =
-                install_dmg(photocraft(), &image, None, Some(dir.path()), false, &Paths::under(dir.path()), &Expect { team: None, version: None });
+            let expect = Expect { team: None, version: None, quit_first: false };
+            let result = install_dmg(photocraft(), &image, None, Some(dir.path()), false, &Paths::under(dir.path()), &expect);
             assert!(result.unwrap_err().contains("already exists"));
             assert_eq!(std::fs::read_to_string(plist).unwrap(), unrelated);
             assert_eq!(std::fs::read(placed.join("Contents/MacOS/PhotoCraft")).unwrap(), b"0.5.0");
@@ -2807,19 +4441,236 @@ mod tests {
             assert!(!signed_by(&app, ""));
         }
 
+        /// `codesign`'s own exit codes for the two kinds of refusal, which [`signature`] reads as
+        /// answers and not as a check that couldn't finish.
+        #[test]
+        fn real_refusals_are_answers_from_codesign() {
+            let dir = tempfile::tempdir().unwrap();
+            let app = bundle(dir.path(), "0.6.0");
+            let unsigned = signature(&app, TEAM_ID, crate::process::run_detailed);
+            assert!(matches!(&unsigned, Signature::Failed(reason) if reason.contains("not signed")), "an unsigned bundle: {unsigned:?}");
+            let ok = std::process::Command::new("codesign").args(["--force", "--sign", "-"]).arg(&app).status().unwrap().success();
+            assert!(ok, "codesign failed");
+            assert_eq!(signature(&app, TEAM_ID, crate::process::run_detailed), Signature::Wrong, "an ad-hoc signature");
+        }
+
+        /// `codesign` exits 1 for a bundle it can't read too, which says nothing about who signed it.
+        #[test]
+        fn a_bundle_codesign_cannot_read_is_not_called_unsigned() {
+            let dir = tempfile::tempdir().unwrap();
+            let gone = dir.path().join("Gone.app");
+            let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: false };
+            let refusal = check(&gone, &found_at(&gone), &expect, crate::process::run_detailed).unwrap_err();
+            assert!(refusal.contains("No such file"), "{refusal}");
+            assert!(!refusal.contains("isn't signed"), "{refusal}");
+        }
+
+        fn found_at(bundle: &Path) -> Installed {
+            Installed {
+                version: None,
+                source: InstallSource::MacApp,
+                location: bundle.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            }
+        }
+
+        /// What [`check`] says when `codesign` fails with `failure`.
+        fn refusal_for(failure: HelperFailure) -> Result<(), String> {
+            let bundle = Path::new("/private/owned/PhotoCraft.app");
+            let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: false };
+            check(bundle, &found_at(bundle), &expect, |_, _, _| Err(failure))
+        }
+
+        #[test]
+        fn a_check_that_timed_out_is_not_reported_as_a_bad_signature() {
+            let result = refusal_for(HelperFailure::Unfinished("codesign didn't finish within 600 seconds".into()));
+            assert_eq!(
+                result,
+                Err("the app's signature couldn't be checked (codesign didn't finish within 600 seconds), so it wasn't installed".into())
+            );
+        }
+
+        /// Exit 2 is a bad command line, which says nothing about the bundle.
+        #[test]
+        fn a_check_with_a_bad_command_line_is_not_reported_as_a_bad_signature() {
+            let result = refusal_for(HelperFailure::Exited { code: 2, reason: "bad flag".into() });
+            assert_eq!(result, Err("the app's signature couldn't be checked (bad flag), so it wasn't installed".into()));
+        }
+
+        #[test]
+        fn a_signature_that_fails_the_requirement_is_refused_as_not_the_developers() {
+            let result = refusal_for(HelperFailure::Exited { code: 3, reason: "no".into() });
+            assert_eq!(result, Err("the app isn't signed by its developer, so it wasn't installed".into()));
+        }
+
+        #[test]
+        fn a_failed_verification_is_refused_with_codesigns_reason() {
+            let result = refusal_for(HelperFailure::Exited { code: 1, reason: "a sealed resource is missing".into() });
+            assert_eq!(result, Err("the app failed its signature check (a sealed resource is missing), so it wasn't installed".into()));
+        }
+
+        #[test]
+        fn the_signature_check_gets_a_slow_macs_time() {
+            let mut limit = None;
+            let found = signature(Path::new("/private/owned/PhotoCraft.app"), TEAM_ID, |program, args, timeout| {
+                assert_eq!(program, "/usr/bin/codesign");
+                assert_eq!(args[..3], ["--verify", "--deep", "-R"]);
+                limit = Some(timeout);
+                Ok(String::new())
+            });
+            assert_eq!(found, Signature::Valid);
+            assert!(limit.is_some_and(|limit| limit >= std::time::Duration::from_secs(600)), "{limit:?}");
+        }
+
+        /// Runs `behind` while a signature check of another app holds the turn, and frees the turn
+        /// when `behind` has returned, or when `release` is called.
+        fn behind_a_running_check<R>(behind: impl FnOnce(&dyn Fn()) -> R) -> R {
+            let (started, has_started) = std::sync::mpsc::channel();
+            let (released, wait_for_release) = std::sync::mpsc::channel::<()>();
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    signature(Path::new("/private/owned/Other.app"), TEAM_ID, |_, _, _| {
+                        started.send(()).unwrap();
+                        let _ = wait_for_release.recv();
+                        Ok(String::new())
+                    })
+                });
+                has_started.recv().unwrap();
+                let release = move || {
+                    let _ = released.send(());
+                };
+                let result = behind(&release);
+                release();
+                result
+            })
+        }
+
+        #[test]
+        fn a_second_signature_check_waits_its_turn_and_says_so() {
+            behind_a_running_check(|release| {
+                let (phases, phase) = std::sync::mpsc::channel();
+                let ran = std::sync::atomic::AtomicBool::new(false);
+                std::thread::scope(|scope| {
+                    let second = scope.spawn(|| {
+                        let stop = Stop::default();
+                        let mut report = move |p| phases.send(p).unwrap();
+                        let run = |_: &str, _: &[&str], _: std::time::Duration| {
+                            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                            Ok(String::new())
+                        };
+                        macos::signature(Path::new("/private/owned/PhotoCraft.app"), TEAM_ID, run, CheckTurn { stop: &stop, phase: &mut report })
+                    });
+                    assert_eq!(phase.recv().unwrap(), JobPhase::Waiting);
+                    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "the second check started during the first");
+                    release();
+                    assert_eq!(phase.recv().unwrap(), JobPhase::Installing);
+                    assert_eq!(second.join().unwrap(), Signature::Valid);
+                });
+            });
+        }
+
+        #[test]
+        fn a_job_canceled_while_it_waits_for_the_signature_check_stops_there() {
+            let refused = behind_a_running_check(|_| {
+                let bundle = Path::new("/private/owned/PhotoCraft.app");
+                let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: false };
+                let stop = Stop::default();
+                let mut cancel_when_waiting = |p| {
+                    if p == JobPhase::Waiting {
+                        stop.cancel();
+                    }
+                };
+                let wait = CheckTurn { stop: &stop, phase: &mut cancel_when_waiting };
+                macos::check(bundle, &found_at(bundle), &expect, |_, _, _| Err(HelperFailure::Unfinished("codesign ran".into())), wait)
+            });
+            assert_eq!(refused, Err(CANCELLED.into()));
+        }
+
+        /// A copy waiting to replace the installed 0.5.0, and the installed copy.
+        fn staged_and_installed(dir: &Path) -> (PathBuf, PathBuf) {
+            (bundle(&dir.join("staged"), "0.6.0"), bundle(&dir.join("Applications"), "0.5.0"))
+        }
+
+        fn version_at(app: &Path) -> String {
+            std::fs::read_to_string(app.join("Contents/MacOS/PhotoCraft")).unwrap()
+        }
+
+        /// The stand-in for `codesign` opens the app, so the app is running only once the check
+        /// has started.
+        #[test]
+        fn an_app_opened_during_the_signature_check_is_not_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: Some(TEAM_ID), version: None, quit_first: true };
+            let opened = std::cell::Cell::new(false);
+            let run = |_: &str, _: &[&str], _: std::time::Duration| {
+                opened.set(true);
+                Ok(String::new())
+            };
+            let result = place_checked(photocraft(), &staged, &installed, &expect, run, |_| Ok(opened.get()));
+            assert_eq!(result, Err("PhotoCraft is running. Quit it, then try again.".into()));
+            assert_eq!(version_at(&installed), "0.5.0");
+        }
+
+        #[test]
+        fn an_app_whose_state_could_not_be_checked_is_not_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: None, version: None, quit_first: true };
+            let result = place_checked(photocraft(), &staged, &installed, &expect, |_, _, _| Ok(String::new()), |_| Err("too slow".into()));
+            assert_eq!(result, Err("couldn't check whether PhotoCraft is running (too slow), so nothing was changed".into()));
+            assert_eq!(version_at(&installed), "0.5.0");
+        }
+
+        #[test]
+        fn a_closed_app_is_replaced() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: None, version: None, quit_first: true };
+            place_checked(photocraft(), &staged, &installed, &expect, |_, _, _| Ok(String::new()), |_| Ok(false)).unwrap();
+            assert_eq!(version_at(&installed), "0.6.0");
+        }
+
+        #[test]
+        fn an_app_replacing_itself_is_replaced_while_it_runs() {
+            let dir = tempfile::tempdir().unwrap();
+            let (staged, installed) = staged_and_installed(dir.path());
+            let expect = Expect { team: None, version: None, quit_first: false };
+            place_checked(photocraft(), &staged, &installed, &expect, |_, _, _| Ok(String::new()), |_| Ok(true)).unwrap();
+            assert_eq!(version_at(&installed), "0.6.0");
+        }
+
+        #[test]
+        fn only_a_self_update_replaces_an_app_that_is_running() {
+            let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
+            assert!(Expect::release(&release).quit_first);
+            assert!(!Expect::self_update(&release).quit_first);
+        }
+
         #[test]
         fn the_bundle_must_be_the_releases_version() {
             let dir = tempfile::tempdir().unwrap();
             let apps = dir.path().join("Applications");
             let current = bundle(&apps, "0.5.0");
-            let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+            let existing = Installed {
+                version: None,
+                source: InstallSource::MacApp,
+                location: current.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            };
             let paths = Paths::under(dir.path());
             let image = dmg(dir.path(), "0.6.0");
 
             for (release, ok) in [("0.6.0", true), ("0.7.0", false), ("0.6.0-rc.1", true), ("0.5.0", false)] {
                 std::fs::write(current.join("Contents/MacOS/PhotoCraft"), "0.5.0").unwrap();
                 let want = version::parse(release).unwrap();
-                let expect = Expect { team: None, version: Some(&want) };
+                let expect = Expect { team: None, version: Some(&want), quit_first: false };
                 let result = install_dmg(photocraft(), &image, Some(&existing), None, false, &paths, &expect);
                 assert_eq!(result.is_ok(), ok, "release {release}: {result:?}");
                 let now = std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap();
@@ -2836,7 +4687,7 @@ mod tests {
             // A bundle that names a pre-release must name the release's.
             let rc = dmg(dir.path(), "0.8.0-rc.2");
             let want = version::parse("0.8.0-rc.1").unwrap();
-            let expect = Expect { team: None, version: Some(&want) };
+            let expect = Expect { team: None, version: Some(&want), quit_first: false };
             assert!(install_dmg(photocraft(), &rc, Some(&existing), None, false, &paths, &expect).is_err());
         }
 
@@ -2845,17 +4696,331 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let apps = dir.path().join("Applications");
             let current = bundle(&apps, "0.5.0");
-            let existing = Installed { version: None, source: InstallSource::MacApp, location: current.display().to_string(), package: None };
+            let existing = Installed {
+                version: None,
+                source: InstallSource::MacApp,
+                location: current.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            };
             let image = dmg(dir.path(), "0.6.0");
             let release = Release { tag: "v0.6.0".into(), version: version::parse("0.6.0"), ..Release::default() };
 
             let result = install_dmg(photocraft(), &image, Some(&existing), None, false, &Paths::under(dir.path()), &Expect::release(&release));
-            assert_eq!(result, Err("the app isn't signed by its developer, so it wasn't installed".into()));
+            let refusal = result.unwrap_err();
+            assert!(refusal.starts_with("the app failed its signature check (") && refusal.contains("not signed"), "{refusal}");
             assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.5.0");
             assert_eq!(
                 std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),
                 [std::ffi::OsString::from("PhotoCraft.app")]
             );
+        }
+
+        /// Detaches the image at a mount point when dropped, so a failing test leaves none attached.
+        struct Attached(PathBuf);
+
+        impl Drop for Attached {
+            fn drop(&mut self) {
+                if self.0.exists() {
+                    let _ = std::process::Command::new("hdiutil").args(["detach", "-force", "-quiet"]).arg(&self.0).status();
+                }
+            }
+        }
+
+        #[test]
+        fn an_install_that_ended_partway_does_not_block_the_next() {
+            let dir = tempfile::tempdir().unwrap();
+            let apps = dir.path().join("Applications");
+            let current = bundle(&apps, "0.5.0");
+            let existing = Installed {
+                version: None,
+                source: InstallSource::MacApp,
+                location: current.display().to_string(),
+                package: None,
+                externally_managed: false,
+                origin: None,
+                installation: None,
+            };
+            let paths = Paths::under(dir.path());
+            let image = dmg(dir.path(), "0.6.0");
+
+            // What an install in a process that has ended left behind: its image still attached,
+            // and the copy it was making beside the app.
+            let mut ended = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+            let pid = ended.id();
+            ended.wait().unwrap();
+            let mount = paths.cache.join(format!("mount-photocraft-{pid}-1"));
+            std::fs::create_dir_all(&mount).unwrap();
+            // One request at a time, as in `dmg`. A detach elsewhere can still keep the disk-image
+            // helper busy, and it turns the attach away; the attach is tried a few times, as
+            // `install_dmg` does.
+            let output = {
+                let _one_at_a_time = macos::disk_image_turn();
+                hdiutil(&[
+                    "attach".as_ref(),
+                    "-nobrowse".as_ref(),
+                    "-readonly".as_ref(),
+                    "-noautoopen".as_ref(),
+                    "-noverify".as_ref(),
+                    "-mountpoint".as_ref(),
+                    mount.as_os_str(),
+                    image.as_os_str(),
+                ])
+            };
+            let _attached = Attached(mount.clone());
+            if !output.status.success() && busy(&output.stderr) {
+                eprintln!("skipped: the disk-image helper stayed busy: {}", String::from_utf8_lossy(&output.stderr).trim());
+                return;
+            }
+            assert!(output.status.success(), "hdiutil attach failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            let staging = apps.join(format!(".artcraft-launcher-staging-{pid}-Ab12Cd"));
+            bundle(&staging, "0.6.0");
+            std::fs::write(staging.join(".artcraft-launcher-staging"), "").unwrap();
+
+            let result =
+                install_dmg(photocraft(), &image, Some(&existing), None, false, &paths, &Expect { team: None, version: None, quit_first: false });
+            assert_eq!(result, Ok(current.clone()));
+            assert_eq!(std::fs::read_to_string(current.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.6.0");
+            assert!(!mount.exists(), "the earlier install's image is still attached");
+            assert_eq!(
+                std::fs::read_dir(&apps).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>(),
+                [std::ffi::OsString::from("PhotoCraft.app")]
+            );
+            let mounts = std::fs::read_dir(&paths.cache).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("mount-"));
+            assert_eq!(mounts.count(), 0);
+        }
+
+        #[test]
+        fn only_staging_folders_of_installs_that_ended_are_removed() {
+            let dir = tempfile::tempdir().unwrap();
+            let apps = dir.path().join("Applications");
+            let (ended, running, ours) = (4_000_001, 4_000_002, std::process::id());
+            let staging = |pid: u32, rest: &str| {
+                let folder = apps.join(format!(".artcraft-launcher-staging-{pid}-{rest}"));
+                bundle(&folder, "0.6.0");
+                std::fs::write(folder.join(".artcraft-launcher-staging"), "").unwrap();
+                folder
+            };
+            let left = staging(ended, "Ab12Cd");
+            let kept = [
+                staging(running, "Ef34Gh"),
+                staging(ours, "Ij56Kl"),
+                // Not the name or the contents of a staging folder.
+                staging(ended, "photo"),
+                staging(ended, "Ab12Cd7"),
+                staging(ended, "Ab-2Cd"),
+                // Without the marker, a folder with something in it may be the user's.
+                bundle(&apps.join(format!(".artcraft-launcher-staging-{ended}-Yz34Ab")), "0.6.0"),
+                // A backup may hold the only copy of the app.
+                bundle(&apps.join(".artcraft-launcher-backup-Mn78Op/old"), "0.5.0"),
+                bundle(&apps.join(format!(".artcraft-launcher-staging-{ended}")), "0.6.0"),
+                bundle(&apps.join(format!(".artcraft-launcher-staging-x{ended}-Uv12Wx")), "0.6.0"),
+                bundle(&apps, "0.5.0"),
+            ];
+            // An install that stopped before it wrote the marker.
+            let empty = apps.join(format!(".artcraft-launcher-staging-{ended}-Zz99Yy"));
+            std::fs::create_dir(&empty).unwrap();
+            let file = apps.join(format!(".artcraft-launcher-staging-{ended}-file"));
+            std::fs::write(&file, "the user's").unwrap();
+            let elsewhere = bundle(&dir.path().join("Elsewhere"), "0.4.0");
+            let link = apps.join(format!(".artcraft-launcher-staging-{ended}-link"));
+            std::os::unix::fs::symlink(elsewhere.parent().unwrap(), &link).unwrap();
+            // Staging folders of launcher versions that didn't record the process.
+            let old = bundle(&apps.join(".artcraft-launcher-Qr90St"), "0.6.0");
+            let old_kept = [
+                bundle(&apps.join(".artcraft-launcher-Qr90St7"), "0.6.0"),
+                {
+                    let two = bundle(&apps.join(".artcraft-launcher-St12Uv"), "0.6.0");
+                    std::fs::write(apps.join(".artcraft-launcher-St12Uv/notes.txt"), "the user's").unwrap();
+                    two
+                },
+                {
+                    let other = apps.join(".artcraft-launcher-Wx34Yz/VectorCraft.app");
+                    std::fs::create_dir_all(&other).unwrap();
+                    other
+                },
+            ];
+            // The earlier launcher versions' folders last changed at a fixed time, which stands
+            // for now.
+            let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+            for copy in [&old].into_iter().chain(&old_kept) {
+                std::fs::File::open(copy.parent().unwrap()).unwrap().set_modified(now).unwrap();
+            }
+
+            super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now);
+            assert!(!left.exists(), "the partial copy of an install that ended is still there");
+            assert!(!empty.exists(), "the empty staging folder of an install that ended is still there");
+            for path in kept.iter().chain([&file, &link, &old]).chain(&old_kept) {
+                assert!(path.exists(), "{} was removed", path.display());
+            }
+            assert_eq!(std::fs::read_to_string(elsewhere.join("Contents/MacOS/PhotoCraft")).unwrap(), "0.4.0");
+
+            // A minute short of a day later, and then a day later, with every process still in the
+            // same state.
+            let day = std::time::Duration::from_secs(24 * 60 * 60);
+            super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day - std::time::Duration::from_secs(60));
+            assert!(old.exists(), "the copy of an earlier launcher version's install was removed before a day had passed");
+            super::macos::clear_staging(photocraft(), &apps, |pid| pid == ended, now + day + std::time::Duration::from_secs(60));
+            assert!(!old.exists(), "the partial copy of an earlier launcher version's install is still there");
+            for path in kept.iter().chain([&file, &link]).chain(&old_kept) {
+                assert!(path.exists(), "{} was removed", path.display());
+            }
+        }
+
+        #[test]
+        fn only_mount_points_of_installs_that_ended_are_cleared() {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = dir.path();
+            let (ended, running, ours) = (4_000_001, 4_000_002, std::process::id());
+            let folder = |name: String| {
+                let path = cache.join(name);
+                std::fs::create_dir(&path).unwrap();
+                path
+            };
+            let left = folder(format!("mount-photocraft-{ended}-1"));
+            let busy = folder(format!("mount-photocraft-{ended}-2"));
+            let own_left = folder(format!("mount-photocraft-{ours}-3"));
+            let own_in_use = folder(format!("mount-photocraft-{ours}-4"));
+            let _in_use = super::macos::InUse::new(&own_in_use);
+            let kept = [
+                folder(format!("mount-photocraft-{running}-5")),
+                folder(format!("mount-vectorcraft-{ended}-6")),
+                folder(format!("mount-photocraft-{ended}-x7")),
+                folder(format!("mount-photocraft-{ended}")),
+                folder("downloads".into()),
+            ];
+
+            let asked = std::cell::RefCell::new(Vec::new());
+            super::macos::clear_mounts(
+                photocraft(),
+                cache,
+                |pid| pid == ended,
+                |mount| {
+                    asked.borrow_mut().push(mount.to_path_buf());
+                    if mount == busy { Err("Resource busy".into()) } else { Ok(()) }
+                },
+            );
+            let mut asked = asked.into_inner();
+            asked.sort();
+            let mut cleared = vec![left.clone(), busy.clone(), own_left.clone()];
+            cleared.sort();
+            assert_eq!(asked, cleared);
+            assert!(!left.exists() && !own_left.exists());
+            for path in kept.iter().chain([&busy, &own_in_use]) {
+                assert!(path.exists(), "{} was removed", path.display());
+            }
+        }
+
+        #[test]
+        fn a_failed_attach_detaches_only_unmounted_attachments_of_its_image() {
+            let image = |path: &str, entities: &[(&str, Option<&str>)]| {
+                let entities: String = entities
+                    .iter()
+                    .map(|(dev, mount)| {
+                        let mount = mount.map(|m| format!("<key>mount-point</key><string>{m}</string>")).unwrap_or_default();
+                        format!("<dict><key>dev-entry</key><string>{dev}</string>{mount}</dict>")
+                    })
+                    .collect();
+                format!("<dict><key>image-path</key><string>{path}</string><key>system-entities</key><array>{entities}</array></dict>")
+            };
+            let ours = "/Users/a/Library/Caches/craft/photocraft-0.6.0.dmg";
+            let info = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>images</key><array>{}{}{}{}</array></dict></plist>",
+                image(ours, &[("/dev/disk5", None), ("/dev/disk5s1", None), ("/dev/disk9", None)]),
+                image(ours, &[("/dev/disk6", None), ("/dev/disk6s1", Some("/Users/a/Library/Caches/craft/mount-photocraft-1-2"))]),
+                image("/Users/a/Downloads/other.dmg", &[("/dev/disk7", None)]),
+                image(&format!("/private{ours}"), &[("/dev/disk8", None)]),
+            );
+            let paths = [PathBuf::from(ours)];
+            assert_eq!(super::macos::unmounted_attachments(&info, &paths), ["/dev/disk5"]);
+            let both = [PathBuf::from(ours), PathBuf::from(format!("/private{ours}"))];
+            assert_eq!(super::macos::unmounted_attachments(&info, &both), ["/dev/disk5", "/dev/disk8"]);
+            assert!(super::macos::unmounted_attachments("hdiutil: info failed", &paths).is_empty());
+        }
+
+        #[test]
+        fn attachments_are_left_alone_unless_no_attach_of_the_image_is_running() {
+            let dmg = Path::new("/Users/a/Library/Caches/craft/photocraft-0.6.0.dmg");
+            let info = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>images</key><array><dict><key>image-path</key><string>{}</string><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk5</string></dict></array></dict></array></dict></plist>",
+                dmg.display()
+            );
+            for (answer, expected, outcome) in [
+                (Ok(true), vec![], Ok(())),
+                // pgrep gave no answer: an attach of the image may still be running, and the image
+                // may still be attached.
+                (
+                    Err("pgrep didn't finish within 30 seconds".to_string()),
+                    vec![],
+                    Err("couldn't check for a running attach of the image (pgrep didn't finish within 30 seconds)".to_string()),
+                ),
+                (Ok(false), vec!["info -plist".to_string(), "detach /dev/disk5 -force -quiet".to_string()], Ok(())),
+            ] {
+                let ran = std::cell::RefCell::new(Vec::new());
+                let result = super::macos::detach_unmounted_with(
+                    dmg,
+                    |path| {
+                        assert_eq!(path, dmg);
+                        answer.clone()
+                    },
+                    |program, args, _| {
+                        assert_eq!(program, "/usr/bin/hdiutil");
+                        ran.borrow_mut().push(args.join(" "));
+                        Ok(if args[0] == "info" { info.clone() } else { String::new() })
+                    },
+                );
+                assert_eq!(result, outcome, "with the process check giving {answer:?}");
+                assert_eq!(ran.into_inner(), expected, "with the process check giving {answer:?}");
+            }
+        }
+
+        #[test]
+        fn a_failed_cleanup_is_reported_after_the_reason_the_install_failed() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempfile::tempdir().unwrap();
+            let placed = PathBuf::from("/Applications/PhotoCraft.app");
+            let mount = dir.path().join("mount-photocraft-1-2");
+            std::fs::create_dir(&mount).unwrap();
+            let busy = |_: &Path| Err("Resource busy".to_string());
+            assert_eq!(
+                super::macos::close_image(Err("the copied app is incomplete".into()), &mount, busy),
+                Err(format!("the copied app is incomplete; the disk image is still attached at {} (Resource busy)", mount.display()))
+            );
+            assert_eq!(super::macos::close_image(Ok(placed.clone()), &mount, busy), Ok(placed.clone()));
+            assert!(mount.exists());
+            assert_eq!(super::macos::close_image(Err("failed".into()), &mount, |_| Ok(())), Err("failed".into()));
+            assert!(!mount.exists());
+
+            // A staging folder with a copy that can't be removed.
+            let locked_staging = || {
+                let staging = tempfile::Builder::new().prefix(".artcraft-launcher-staging-").tempdir_in(dir.path()).unwrap();
+                let copy = bundle(staging.path(), "0.6.0").join("Contents");
+                std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o555)).unwrap();
+                (staging, copy)
+            };
+            let (staging, copy) = locked_staging();
+            let path = staging.path().to_path_buf();
+            let failed = super::macos::remove_staging(Err("the app isn't signed by its developer, so it wasn't installed".into()), staging);
+            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let message = failed.unwrap_err();
+            let start =
+                format!("the app isn't signed by its developer, so it wasn't installed; couldn't remove the partial copy at {} (", path.display());
+            assert!(message.starts_with(&start), "{message}");
+            assert!(path.exists());
+
+            let (staging, copy) = locked_staging();
+            let placed_anyway = super::macos::remove_staging(Ok(placed.clone()), staging);
+            std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(placed_anyway, Ok(placed.clone()));
+
+            let staging = tempfile::Builder::new().prefix(".artcraft-launcher-staging-").tempdir_in(dir.path()).unwrap();
+            let path = staging.path().to_path_buf();
+            bundle(&path, "0.6.0");
+            assert_eq!(super::macos::remove_staging(Err("failed".into()), staging), Err("failed".into()));
+            assert!(!path.exists());
         }
 
         /// A real release passes. Run with `CRAFT_APP=/path/to/PhotoCraft.app cargo test -p

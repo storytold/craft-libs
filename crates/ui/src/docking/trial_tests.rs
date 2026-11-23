@@ -467,6 +467,7 @@ fn every_flyout_change_reports_one_event_whatever_caused_it() {
         floating: Vec::new(),
     };
     let mut d = DockDriver::new(layout, Icons);
+    d.auto_collapse = true;
     let flyouts = |outputs: Vec<DockOutput<u32>>| -> Vec<Option<u32>> {
         outputs
             .into_iter()

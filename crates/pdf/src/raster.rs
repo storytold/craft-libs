@@ -29,11 +29,15 @@ pub struct Options {
     /// It also maps a plate's gray film (`InterpreterSettings::plate`), so a plate render that
     /// must keep its tints leaves it `None`. Knockout clears are never mapped.
     pub color_replacement: Option<ColorReplacement>,
+    /// Maximum coverage (alpha) values the rasterizer keeps for the page; paths past it are
+    /// omitted while preserving what already fitted, and `Diagnostics::content_truncated` is set
+    /// alongside `InterpreterWarning::ContentTruncated`. `None` keeps up to `2^31` values.
+    pub max_coverage: Option<usize>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { scale: [1.0, 1.0], size: None, offset: [0.0, 0.0], background: [0; 4], color_replacement: None }
+        Self { scale: [1.0, 1.0], size: None, offset: [0.0, 0.0], background: [0; 4], color_replacement: None, max_coverage: None }
     }
 }
 
@@ -131,6 +135,7 @@ pub fn render_into<'a>(
     };
     let rs = hayro::RenderSettings {
         color_replacement: options.color_replacement,
+        max_coverage: options.max_coverage,
         x_scale: options.scale[0],
         y_scale: options.scale[1],
         width: Some(width as u16),

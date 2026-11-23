@@ -77,8 +77,10 @@ impl Stage {
         Stage::Matrix { rows: 3, cols: 3, m: m.iter().flatten().copied().collect(), offset: vec![0.0; 3] }
     }
 
+    /// Runs the stage on `n` channels. `edges` holds, for inverse curves, each curve's
+    /// [`Curve::inverse_edges`].
     #[inline]
-    fn run(&self, v: &mut [f32; MAX], n: usize) -> usize {
+    fn run(&self, v: &mut [f32; MAX], n: usize, edges: &[Option<(f32, f32)>]) -> usize {
         match self {
             Stage::Curves(cs) => {
                 for (x, c) in v.iter_mut().zip(cs) {
@@ -87,8 +89,8 @@ impl Stage {
                 n
             }
             Stage::InvCurves(cs) => {
-                for (x, c) in v.iter_mut().zip(cs) {
-                    *x = c.eval_inverse(*x);
+                for (i, (x, c)) in v.iter_mut().zip(cs).enumerate() {
+                    *x = c.eval_inverse_with(*x, edges.get(i).copied().flatten());
                 }
                 n
             }
@@ -174,6 +176,18 @@ pub struct Pipeline {
     inputs: usize,
     outputs: usize,
     stages: Vec<Stage>,
+    /// For each stage, the flat-run ends of its inverse curves ([`Curve::inverse_edges`]), so
+    /// evaluating a long, flat sampled curve does not scan it again for every pixel. Empty for
+    /// other stages.
+    edges: Vec<Vec<Option<(f32, f32)>>>,
+}
+
+/// The [`Pipeline::edges`] entry for `stage`.
+fn stage_edges(stage: &Stage) -> Vec<Option<(f32, f32)>> {
+    match stage {
+        Stage::InvCurves(cs) => cs.iter().map(Curve::inverse_edges).collect(),
+        _ => Vec::new(),
+    }
 }
 
 impl Pipeline {
@@ -183,7 +197,7 @@ impl Pipeline {
         if !(1..=MAX).contains(&inputs) {
             return Err(invalid_arg(format!("pipeline with {inputs} inputs (1 to {MAX})")));
         }
-        let mut p = Pipeline { inputs, outputs: inputs, stages: Vec::with_capacity(stages.len()) };
+        let mut p = Pipeline { inputs, outputs: inputs, stages: Vec::with_capacity(stages.len()), edges: Vec::with_capacity(stages.len()) };
         p.extend(stages)?;
         Ok(p)
     }
@@ -207,6 +221,7 @@ impl Pipeline {
             n = s.outputs(n);
             added.push(s);
         }
+        self.edges.extend(added.iter().map(stage_edges));
         self.stages.extend(added);
         self.outputs = n;
         Ok(())
@@ -227,8 +242,18 @@ impl Pipeline {
         let mut v = [0.0f32; MAX];
         v[..self.inputs].copy_from_slice(&input[..self.inputs]);
         let mut n = self.inputs;
-        for s in &self.stages {
-            n = s.run(&mut v, n);
+        for (s, edges) in self.stages.iter().zip(&self.edges) {
+            n = s.run(&mut v, n, edges);
+        }
+        out[..self.outputs].copy_from_slice(&v[..self.outputs]);
+    }
+
+    /// Evaluates the stages after the first one on values already passed through it.
+    #[inline]
+    pub(crate) fn eval_after_first(&self, v: &mut [f32; MAX], out: &mut [f32]) {
+        let mut n = self.inputs;
+        for (s, edges) in self.stages.iter().zip(&self.edges).skip(1) {
+            n = s.run(v, n, edges);
         }
         out[..self.outputs].copy_from_slice(&v[..self.outputs]);
     }
@@ -286,6 +311,37 @@ impl Pipeline {
             }
             out.push(s);
         }
+        self.edges = out.iter().map(stage_edges).collect();
         self.stages = out;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inverse_curves_keep_their_flat_ends_through_extend_and_optimize() {
+        let mut flat = vec![0.25f32; 300];
+        flat.extend((0..300).map(|i| 0.25 + i as f32 / 600.0));
+        flat.extend([0.75f32; 300]);
+        let curves = vec![Curve::Table(flat.clone()), Curve::Table(flat.iter().rev().copied().collect()), Curve::Table(vec![0.5; 1000])];
+        let mut p = Pipeline::new(3, vec![Stage::Clamp01]).unwrap();
+        p.extend([Stage::matrix3(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]), Stage::InvCurves(curves.clone())]).unwrap();
+        let check = |p: &Pipeline| {
+            assert_eq!(p.edges.len(), p.stages.len());
+            for i in 0..=200 {
+                let y = i as f32 / 200.0;
+                let mut out = [0.0f32; 3];
+                p.eval(&[y; 3], &mut out).unwrap();
+                let want: Vec<f32> = curves.iter().map(|c| c.eval_inverse(y)).collect();
+                assert_eq!(out.to_vec(), want, "{y}");
+            }
+        };
+        check(&p);
+        // Optimising drops the identity matrix; the cached ends must follow the stages.
+        p.optimize();
+        assert_eq!(p.stages().len(), 2);
+        check(&p);
     }
 }

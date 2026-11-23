@@ -6,7 +6,7 @@ use super::{DROP_MARGIN, Drawn, Renderer, clamp_float, dock::group_action};
 use crate::docking::chrome::drop_preview;
 use crate::docking::{
     Action, Drag, DropProposal, DropRequest, DropTarget, GroupDrag, GroupGesture, Layout, Node, Placement, Target, Zone, cancel_drag,
-    dock_model::Place,
+    dock_model::{Place, sized_split_depth},
     surface::TAB_PADDING,
     targets::{DockDrop, SIDE_EDGE_ZONE_DEPTH, resolve_drop_on},
 };
@@ -117,7 +117,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             // release outside the window floats.
             let gone = !has_pointer && !touch_ended;
             let floats_outside = !self.style.float_on_empty_drop && drag.gesture != GroupGesture::Window;
-            if !(released && !gone) && !(gone && floats_outside) {
+            if !(released && !gone || gone && floats_outside) {
                 return;
             }
             let Some(pointer) = pointer.filter(|p| !self.blockers.iter().any(|r| r.contains(*p))) else { return };
@@ -235,7 +235,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
 
     /// The side split of `proposal`'s frame when halving it leaves no room
     /// ([`Placement::SplitSized`]): the frame keeps its size, and the frames beyond the divider
-    /// on that side give the new frame its minimum (with [`DROP_MARGIN`]). A floating panel
+    /// on that side, or on the opposite side for a frame at the edge of its area, give the new
+    /// frame its minimum (with [`DROP_MARGIN`]). A floating panel
     /// keeps its size along the split instead, and one in a dock column its column's width or
     /// its group's height, when that fits. `None` without such a divider, or when those frames
     /// cannot give the new frame its minimum.
@@ -243,8 +244,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let Placement::Split(zone) = proposal.placement else { return None };
         let axis = if matches!(zone, Zone::Top | Zone::Bottom) { SplitAxis::Vertical } else { SplitAxis::Horizontal };
         let along = |v: Vec2| if axis == SplitAxis::Horizontal { v.x } else { v.y };
-        // The divider on the frame's start side (left or top) belongs to a split holding the
-        // frame in its second child, as `split_frame_sized` finds it.
         let start = matches!(zone, Zone::Left | Zone::Top);
         let anchor = &proposal.anchor;
         let now = self.drawn_groups(self.layout);
@@ -271,19 +270,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
         let &(Node::Split { first, second, .. }, halved) = chain.last()? else { return None };
         let new = if start { first } else { second };
-        let depth = (0..split_path.len()).rev().find(|&d| {
-            split_path.get(d) == Some(&start) && chain.get(d).is_some_and(|(n, _)| matches!(n, Node::Split { axis: own, .. } if *own == axis))
-        })?;
+        let depth =
+            sized_split_depth(split_path, zone, |d| chain.get(d).is_some_and(|(n, _)| matches!(n, Node::Split { axis: own, .. } if *own == axis)))?;
+        // The frame is in the outer split's second child when the divider is on its start side.
+        let in_second = *split_path.get(depth)?;
         let &(outer, outer_rect) = chain.get(depth)?;
         let Node::Split { size: outer_size, first: a, second: b, .. } = outer else { return None };
         if matches!(**a, Node::Dock { .. }) || matches!(**b, Node::Dock { .. }) {
             return None;
         }
         let [a, b] = sizer.children(outer, outer_rect)?;
-        let far = if start { a } else { b };
-        // The far side's edge at the divider is its end edge when the divider is on the start
-        // side of the frame.
-        let room = sizer.travel(far.0, far.1, axis, start).0 - DROP_MARGIN;
+        let far = if in_second { a } else { b };
+        // The far side's edge at the divider is its end edge when the frame is in the second
+        // child.
+        let room = sizer.travel(far.0, far.1, axis, in_second).0 - DROP_MARGIN;
         let least = along(super::node_limits(new, self.style, &*self.content).min) + DROP_MARGIN;
         let gap = self.style.gap;
         // A split frame's width is its share of the room, not one of its own.
@@ -300,7 +300,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let size = saved.filter(|width| (least..=most).contains(width)).unwrap_or(least);
         // The anchor's side of the outer split grows by what the halves did not take already.
         let grow = frame + gap + size - along(halved.size());
-        let first = along(a.1.size()) + if start { -grow } else { grow };
+        let first = along(a.1.size()) + if in_second { -grow } else { grow };
         let outer = super::sizes::resized(*outer_size, first, along(a.1.size()) + along(b.1.size()))?;
         let size = super::sizes::resized(SplitSize::Ratio(0.5), if start { size } else { frame }, frame + size)?;
         Some(Placement::SplitSized { zone, size, outer })
@@ -599,12 +599,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             if self.style.side_edge_zones {
                 drop_preview(painter, proposal.preview.shrink(1.0), self.style.accent, filled);
             } else if matches!(proposal.placement, Placement::Edge(_)) {
-                self.paint_drop_line(ctx, proposal.preview);
+                self.paint_drop_line(ctx, proposal.preview, true);
             } else if beside {
                 let to = Target::At { anchor: proposal.anchor.clone(), placement: proposal.placement.clone() };
                 match self.result_rect(action(to), members) {
                     Some(rect) => tab_outline(painter, rect.shrink(1.0), self.style.accent),
-                    None => self.paint_drop_line(ctx, proposal.preview),
+                    None => self.paint_drop_line(ctx, proposal.preview, false),
                 }
             } else {
                 tab_outline(painter, proposal.preview.shrink(1.0), self.style.accent);
@@ -621,7 +621,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let rect = (!self.style.side_edge_zones && !drop.outer).then_some(action).and_then(|action| self.result_rect(action, members));
         match rect {
             Some(rect) => tab_outline(painter, rect.shrink(1.0), self.style.accent),
-            None => self.paint_drop_line(ctx, drop.line),
+            None => self.paint_drop_line(ctx, drop.line, drop.outer),
         }
     }
 

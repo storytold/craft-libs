@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 
 /// Largest JSON or text answer we read.
 const MAX_SMALL: u64 = 4 << 20;
+/// Largest GitHub API answer we read: 100 releases of an app with 49 assets are about 10 MB.
+const MAX_API: u64 = 16 << 20;
 
 /// What a GET of a small resource produced.
 #[derive(Debug, PartialEq, Eq)]
@@ -63,6 +65,15 @@ impl Http {
     /// `user_agent` names the product and its version (`PhotoCraft/0.9.0`) and nothing about the
     /// person using it.
     pub fn new(user_agent: &str) -> Result<Self, String> {
+        // Tests and a local mirror serve plain HTTP on loopback, which `get_api` and
+        // `redirect_target` reach through the remote agents.
+        Self::build(user_agent, !(cfg!(feature = "local-mirror") || cfg!(test)))
+    }
+
+    /// `https_only` keeps the agents for remote hosts, and every redirect they follow, on HTTPS:
+    /// a release download that GitHub's file host redirected to `http://` is refused, not read in
+    /// plain text. The `direct` agents only ever fetch `is_loopback` links, which are plain HTTP.
+    fn build(user_agent: &str, https_only: bool) -> Result<Self, String> {
         // The OS checks each certificate chain itself: Windows fetches roots it hasn't stored yet
         // and trusts what antivirus HTTPS scanning installs. Reading the store ourselves missed
         // both ("invalid peer certificate: UnknownIssuer").
@@ -72,6 +83,7 @@ impl Http {
         let small = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
+            .https_only(https_only)
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
             .user_agent(user_agent)
@@ -80,6 +92,7 @@ impl Http {
         let feed = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
+            .https_only(https_only)
             .timeout_connect(Some(Duration::from_secs(5)))
             .timeout_global(Some(Duration::from_secs(10)))
             .http_status_as_error(false)
@@ -89,6 +102,7 @@ impl Http {
         let no_redirect = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
+            .https_only(https_only)
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
             .max_redirects(0)
@@ -99,6 +113,7 @@ impl Http {
         let download = ureq::Agent::config_builder()
             .tls_config(tls())
             .proxy(proxy.clone())
+            .https_only(https_only)
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_recv_response(Some(Duration::from_secs(60)))
             // ureq has no idle timeout: cap each attempt instead, and resume where it stopped.
@@ -131,6 +146,11 @@ impl Http {
 
     /// An optional token raises GitHub's limit from 60 to 5000 requests an hour. Only ever sent
     /// to api.github.com. Blank means none.
+    ///
+    /// ureq's Debug logs list only an allow-list of safe headers and leave `Authorization` out,
+    /// but its Trace logs are the unredacted wire, this token's `Authorization: Bearer` among it:
+    /// an app that sets one should redact Bearer tokens in its logger, or keep `ureq` and
+    /// `ureq_proto` at Debug or quieter.
     #[must_use]
     pub fn with_github_token(mut self, token: Option<String>) -> Self {
         self.token = token.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
@@ -148,13 +168,13 @@ impl Http {
         {
             req = req.header("Authorization", &format!("Bearer {token}"));
         }
-        let mut resp = req.call().map_err(|e| format!("couldn't reach GitHub ({e})"))?;
+        let mut resp = req.call().map_err(|e| format!("couldn't reach GitHub ({})", call_failed(&e)))?;
         let header = |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
         let status = resp.status().as_u16();
         match status {
             200 => {
                 let etag = header("etag");
-                let text = read_text_capped(&mut resp, MAX_SMALL).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
+                let text = read_text_capped(&mut resp, MAX_API).map_err(|e| format!("unreadable answer from GitHub ({e})"))?;
                 Ok(Fetched::Body { text, etag })
             }
             304 => Ok(Fetched::NotModified),
@@ -176,8 +196,11 @@ impl Http {
     pub fn get_feed(&self, url: &str) -> Result<String, FeedError> {
         let failed = |why: String| FeedError { why, throttled: false, retry_after: None };
         let agent = if is_loopback(url) { &self.direct } else { &self.feed };
-        let mut resp =
-            agent.get(url).header("Accept", "application/json").call().map_err(|e| failed(format!("couldn't reach {} ({e})", host(url))))?;
+        let mut resp = agent
+            .get(url)
+            .header("Accept", "application/json")
+            .call()
+            .map_err(|e| failed(format!("couldn't reach {} ({})", host(url), call_failed(&e))))?;
         // Seconds only; an HTTP date falls back to our own backoff.
         let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|r| r.trim().parse::<i64>().ok());
         match resp.status().as_u16() {
@@ -189,7 +212,7 @@ impl Http {
     /// GET a small text file (following redirects).
     pub fn get_text(&self, url: &str) -> Result<Option<String>, String> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
-        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({e})", host(url)))?;
+        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
         match resp.status().as_u16() {
             200 => read_text_capped(&mut resp, MAX_SMALL).map(Some).map_err(|e| format!("unreadable answer ({e})")),
             404 => Ok(None),
@@ -202,7 +225,7 @@ impl Http {
     /// on the body when the length wasn't announced or was wrong.
     pub fn get_bytes(&self, url: &str, max: usize) -> Result<Option<Vec<u8>>, String> {
         let agent = if is_loopback(url) { &self.direct } else { &self.small };
-        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({e})", host(url)))?;
+        let mut resp = agent.get(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
         match resp.status().as_u16() {
             200 => {
                 let announced = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
@@ -221,7 +244,7 @@ impl Http {
 
     /// Where `url` redirects to, without following it.
     pub fn redirect_target(&self, url: &str) -> Result<Option<String>, String> {
-        let resp = self.no_redirect.head(url).call().map_err(|e| format!("couldn't reach {} ({e})", host(url)))?;
+        let resp = self.no_redirect.head(url).call().map_err(|e| format!("couldn't reach {} ({})", host(url), call_failed(&e)))?;
         match resp.status().as_u16() {
             300..=399 => Ok(resp.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string)),
             404 => Ok(None),
@@ -334,6 +357,10 @@ impl Http {
         }
         let mut resp = match req.call() {
             Ok(r) => r,
+            // Asking again gets the same answer.
+            Err(ureq::Error::RequireHttpsOnly(to)) => {
+                return Err(AttemptError::Fatal(format!("the download led to plain HTTP at {}, so it wasn't fetched", host(&to))));
+            }
             Err(e) => return Err(retry(format!("couldn't connect: {e}"), false)),
         };
         let status = resp.status().as_u16();
@@ -599,7 +626,19 @@ fn refused_until(status: u16, remaining: Option<&str>, reset: Option<i64>, retry
 
 /// The host of `url` for error messages, or all of it when it has no scheme.
 fn host(url: &str) -> &str {
-    url.split_once("://").and_then(|(_, rest)| rest.split('/').next()).unwrap_or(url)
+    let Some((_, rest)) = url.split_once("://") else { return url };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Never `user:password@`.
+    authority.rsplit_once('@').map_or(authority, |(_, host)| host)
+}
+
+/// Why a request failed, for a message. A hop refused for plain HTTP names only its host:
+/// ureq's own message holds the whole link, and a redirect's link can carry a signed query.
+fn call_failed(e: &ureq::Error) -> String {
+    match e {
+        ureq::Error::RequireHttpsOnly(to) => format!("refused plain HTTP to {}", host(to)),
+        e => e.to_string(),
+    }
 }
 
 /// Reads a text body, rejecting one whose *decoded* size exceeds `max`.
@@ -642,6 +681,8 @@ pub(crate) mod tests {
         assert_eq!(host("https://api.github.com/repos/storytold/wordcraft"), "api.github.com");
         assert_eq!(host("http://127.0.0.1:8080"), "127.0.0.1:8080");
         assert_eq!(host("not a url"), "not a url");
+        assert_eq!(host("http://objects.example.com?X-Amz-Signature=abc"), "objects.example.com");
+        assert_eq!(host("http://user:secret@example.com/x"), "example.com");
     }
 
     #[test]
@@ -997,6 +1038,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_long_release_list_is_read_up_to_the_api_cap() {
+        // SolidCraft's list of 100 releases was 6.5 MB, past MAX_SMALL (craft-launcher#1021).
+        let long = vec![b' '; (MAX_SMALL as usize) + 1024];
+        let (url, _) = serve(long.clone(), vec![Reply::Full]);
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        assert!(matches!(http.get_api(&url, None), Ok(Fetched::Body { text, .. }) if text.len() == long.len()));
+        // Past MAX_API it is refused outright, not truncated and parsed.
+        let (url, _) = serve(vec![b' '; (MAX_API as usize) + 1024], vec![Reply::Full]);
+        let err = http.get_api(&url, None).unwrap_err();
+        assert!(err.contains("larger than"), "{err}");
+    }
+
+    #[test]
     fn a_gzip_bomb_answer_is_refused_before_parsing() {
         // A few hundred bytes on the wire that decode to more than MAX_SMALL. ureq's own limit
         // sits below the transparent gzip decoder, so only a cap on the decoded stream (CWE-409)
@@ -1099,6 +1153,34 @@ pub(crate) mod tests {
     #[test]
     fn partial_files_are_named_after_the_file_and_size() {
         assert_eq!(part_path(Path::new("/d/photocraft.dmg"), 9), Path::new("/d/photocraft.dmg.9.part"));
+    }
+
+    #[test]
+    fn the_remote_agents_refuse_plain_http_before_connecting() {
+        // ureq checks every hop, redirects included, before it connects; `.invalid` never
+        // resolves, so an agent that tried would fail on DNS instead.
+        let http = Http::build(crate::TEST_AGENT, true).unwrap();
+        let refused = |r: Result<_, String>| r.is_err_and(|e| e.contains("refused plain HTTP to example.invalid") && !e.contains("secret"));
+        assert!(refused(http.get_api("http://example.invalid/repos/x/y/releases?secret", None).map(|_| ())));
+        assert!(refused(http.get_text("http://example.invalid/SHA256SUMS.txt?secret").map(|_| ())));
+        // The scheme is case-insensitive, and an upper-case one isn't a loopback link either.
+        assert!(refused(http.get_text("HTTP://example.invalid/SHA256SUMS.txt").map(|_| ())));
+        assert!(refused(http.get_bytes("http://example.invalid/icon.png", 100).map(|_| ())));
+        assert!(refused(http.redirect_target("http://example.invalid/releases/latest").map(|_| ())));
+        assert!(http.get_feed("http://example.invalid/feed.json").is_err_and(|e| e.why.contains("refused plain HTTP")));
+        // A download fails at once rather than retrying until it pauses.
+        let dir = tempfile::tempdir().unwrap();
+        let (_, sha) = body();
+        let result = http.download("http://example.invalid/file.bin?secret", &dir.path().join("file.bin"), 10, &sha, &Stop::default(), &mut |_| {});
+        assert_eq!(result.unwrap_err(), "the download led to plain HTTP at example.invalid, so it wasn't fetched");
+    }
+
+    #[test]
+    fn https_only_still_reaches_a_loopback_link() {
+        let (body, _) = body();
+        let (url, _) = serve(body.clone(), vec![Reply::Full]);
+        let http = Http::build(crate::TEST_AGENT, true).unwrap();
+        assert_eq!(http.get_bytes(&url, body.len()).unwrap(), Some(body));
     }
 
     #[test]

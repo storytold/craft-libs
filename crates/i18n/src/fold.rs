@@ -15,7 +15,7 @@
 //! `IRMAK` and `ırmak`. Plain `str::to_lowercase` follows no locale and turns `İ` into `i` plus a
 //! combining dot, which nothing typed would match.
 //!
-//! The Turkish i handling and sigma folding come from PdfCraft's `fold_case` (snipeTR,
+//! The Turkish i handling and sigma folding come from `PdfCraft`'s `fold_case` (snipeTR,
 //! nevicia2010-hub).
 
 use std::ops::Range;
@@ -85,7 +85,7 @@ impl Folder {
     }
 
     /// One cluster, already in NFKD.
-    fn fold_cluster(&self, cluster: &str, out: &mut String) {
+    fn fold_cluster(self, cluster: &str, out: &mut String) {
         let mut chars = cluster.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
@@ -191,6 +191,23 @@ fn continues_syllable(prev: HangulSyllableType, next: HangulSyllableType) -> boo
     )
 }
 
+/// For each prefix of `n`, the length of its longest proper prefix that is also its suffix: the
+/// Knuth-Morris-Pratt failure links.
+fn prefix_links(n: &[u8]) -> Vec<usize> {
+    let mut links = vec![0; n.len()];
+    let mut k = 0;
+    for i in 1..n.len() {
+        while k > 0 && n[k] != n[i] {
+            k = links[k - 1];
+        }
+        if n[k] == n[i] {
+            k += 1;
+        }
+        links[i] = k;
+    }
+    links
+}
+
 /// Folded text and where each part came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Folded {
@@ -244,8 +261,13 @@ impl Folded {
             let inside = self.starts.binary_search_by_key(&at, |&(f, _)| f).is_err();
             inside && self.text[..at].chars().next_back().is_some_and(|p| continues_syllable(hangul.get(p), hangul.get(c)))
         };
-        let n = needle.text.as_str();
-        let mut from = 0;
+        // Every occurrence, overlapping ones included, is found in one left-to-right pass, so a
+        // run of occurrences turned down at a mark doesn't search the needle again from each
+        // one. Both texts are UTF-8, so a byte match starts and ends on character boundaries.
+        let n = needle.text.as_bytes();
+        let hay = self.text.as_bytes();
+        let links = prefix_links(n);
+        let (mut at, mut k) = (0, 0);
         let mut done = false;
         std::iter::from_fn(move || {
             if done {
@@ -255,14 +277,22 @@ impl Folded {
                 done = true;
                 return Some(0..0);
             }
-            while let Some(i) = self.text.get(from..).and_then(|t| t.find(n)) {
-                let start = from + i;
-                let end = start + n.len();
-                if !starts_mark(start) && !starts_mark(end) {
-                    from = end;
-                    return Some(self.source_range(start..end));
+            while let Some(&b) = hay.get(at) {
+                while k > 0 && n[k] != b {
+                    k = links[k - 1];
                 }
-                from = start + self.text[start..].chars().next().map_or(1, char::len_utf8);
+                if n[k] == b {
+                    k += 1;
+                }
+                at += 1;
+                if k == n.len() {
+                    let (start, end) = (at - k, at);
+                    if !starts_mark(start) && !starts_mark(end) {
+                        k = 0;
+                        return Some(self.source_range(start..end));
+                    }
+                    k = links[k - 1];
+                }
             }
             done = true;
             None
@@ -333,10 +363,10 @@ mod tests {
 
     #[test]
     fn matches_map_back_to_the_source() {
-        let f = Folder::new("en");
         fn find<'a>(f: Folder, haystack: &'a str, needle: &str) -> Option<&'a str> {
             f.fold(haystack).find(&f.fold(needle)).map(|r| &haystack[r])
         }
+        let f = Folder::new("en");
         let find = |haystack, needle| find(f, haystack, needle);
         assert_eq!(find("Große Straße", "strasse"), Some("Straße"));
         assert_eq!(find("Große Straße", "SS"), Some("ß"));
@@ -351,6 +381,23 @@ mod tests {
 
         let all: Vec<_> = f.fold("Ab ab AB").matches(&f.fold("ab")).collect();
         assert_eq!(all, [0..2, 3..5, 6..8]);
+        let all: Vec<_> = f.fold("aaaaa").matches(&f.fold("aa")).collect();
+        assert_eq!(all, [0..2, 2..4]);
+        assert_eq!(find("abababc", "ababc"), Some("ababc"));
+    }
+
+    #[test]
+    fn occurrences_turned_down_at_a_mark_are_not_searched_again() {
+        // Every occurrence of the needle ends just before an accent, except the one at the end:
+        // each is turned down, and the next one overlaps it.
+        let f = Folder::new("en").keep_accents();
+        let haystack = format!("{}a", "a\u{301}".repeat(100_000));
+        let needle = format!("{}a", "a\u{301}".repeat(50_000));
+        let folded = f.fold(&haystack);
+        let start = std::time::Instant::now();
+        let found = folded.find(&f.fold(&needle));
+        assert_eq!(found, Some(haystack.len() - needle.len()..haystack.len()));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
     }
 
     #[test]

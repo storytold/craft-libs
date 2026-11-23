@@ -77,11 +77,12 @@ pub fn double_click_command(action: DoubleClick, maximized: bool) -> Option<egui
 /// The area senses clicks only. A drag-sensing background would also receive drags that start
 /// on a click-only control (egui gives clicks and drags to different widgets), so a drag is
 /// detected here as a press on the empty area that has stopped being a click.
+/// It takes no keyboard focus: Tab goes to the strip's controls.
 ///
 /// Returns the empty area's response, for an accessible label or a tooltip.
 pub fn empty_area(ui: &mut egui::Ui, rect: egui::Rect) -> egui::Response {
     prefetch();
-    let resp = ui.interact(rect, ui.scope_id().with("title_bar_empty"), egui::Sense::click());
+    let resp = ui.interact(rect, ui.scope_id().with("title_bar_empty"), egui::Sense::CLICK);
     let covered = ui.ctx().pointer_hover_pos().filter(|p| rect.contains(*p)).and_then(|p| ui.ctx().layer_id_at(p));
     let covered = covered.is_some_and(|top| covers(top, ui.layer_id(), resp.hovered()));
     let pass = ui.ctx().cumulative_pass_nr();
@@ -184,6 +185,17 @@ mod tests {
         for junk in ["", "Fill", "minimize", "1", "The domain/default pair of (kCFPreferencesAnyApplication, X) does not exist"] {
             assert_eq!(parse(junk), DoubleClick::Zoom, "{junk:?}");
         }
+    }
+
+    #[test]
+    fn tab_skips_the_empty_area() {
+        let mut bar = Bar::new();
+        bar.frame(vec![]);
+        let tab = Event::Key { key: egui::Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        bar.frame(vec![tab]);
+        bar.frame(vec![]);
+        let focused = bar.ctx.memory(|m| m.focused()).and_then(|id| bar.ctx.read_response(id)).map(|r| r.rect);
+        assert!(focused.is_some_and(|r| r.contains(BUTTON) && r.width() < 100.0), "the first Tab goes to the strip's button: {focused:?}");
     }
 
     #[test]
