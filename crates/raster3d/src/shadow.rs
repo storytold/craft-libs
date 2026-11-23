@@ -226,11 +226,11 @@ fn raster_triangle(s: &Scene, m: &ShadowMap, tri: [MapCorner; 3], alpha: Option<
             if z >= *px {
                 continue;
             }
-            let uv = [0, 1].map(|i| caster_uv(&tri, l, z, i, m.ortho));
-            if let Some(t) = alpha
-                && t.discards(sample(t.tex, &s.texels, uv[0], uv[1])[3] * t.factor)
-            {
-                continue;
+            if let Some(t) = alpha {
+                let uv = [0, 1].map(|i| caster_uv(&tri, l, z, i, m.ortho));
+                if t.discards(sample(t.tex, &s.texels, uv[0], uv[1])[3] * t.factor) {
+                    continue;
+                }
             }
             *px = z;
         }

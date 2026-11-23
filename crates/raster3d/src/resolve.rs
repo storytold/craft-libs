@@ -114,32 +114,36 @@ fn mean_f64(t: &Target, k: usize, x: usize, y: usize) -> ([f32; 4], f32) {
 /// whose color divided by its alpha is not finite,
 /// and [`RenderError::BadDataLength`] when the image does not hold width × height pixels.
 pub fn try_encode(img: &mut Image) -> Result<(), RenderError> {
+    encode_with(img, |data| map_collect(data, |&p| encode_pixel(p)))
+}
+
+/// Whether [`try_encode`] rejects pixel `p`.
+fn bad_pixel(p: &[f32; 4]) -> bool {
+    !p.iter().all(|c| c.is_finite()) || p[3] < 0.0 || p[3] > 1.0 + ALPHA_SLACK || (p[3] > 1e-6 && !p[..3].iter().all(|c| (c / p[3]).is_finite()))
+}
+
+/// Pixel `p` with its color channels on the sRGB transfer curve.
+fn encode_pixel(mut p: [f32; 4]) -> [f32; 4] {
+    let a = p[3];
+    if a > 1e-6 {
+        for c in &mut p[..3] {
+            *c = linear_to_srgb(*c / a) * a;
+        }
+    }
+    p
+}
+
+/// [`try_encode`] with the conversion of the checked pixels into a new buffer as `convert`. The
+/// pixels are checked in order before `convert` allocates anything.
+fn encode_with(img: &mut Image, convert: impl FnOnce(&[[f32; 4]]) -> Result<Vec<[f32; 4]>, RenderError>) -> Result<(), RenderError> {
     let expected = area(img.width, img.height).ok_or(RenderError::TooLarge(img.width, img.height))?;
     if img.data.len() != expected {
         return Err(RenderError::BadDataLength { expected, found: img.data.len() });
     }
-    let bad = |p: &[f32; 4]| {
-        !p.iter().all(|c| c.is_finite()) || p[3] < 0.0 || p[3] > 1.0 + ALPHA_SLACK || (p[3] > 1e-6 && !p[..3].iter().all(|c| (c / p[3]).is_finite()))
-    };
-    // A pixel that fails the checks above is written as NaN, so the first invalid pixel is
-    // reported.
-    let encoded: Vec<[f32; 4]> = map_collect(&img.data, |&p| {
-        if bad(&p) {
-            return [f32::NAN; 4];
-        }
-        let mut p = p;
-        let a = p[3];
-        if a > 1e-6 {
-            for c in &mut p[..3] {
-                *c = linear_to_srgb(*c / a) * a;
-            }
-        }
-        p
-    })?;
-    if let Some(i) = encoded.iter().position(|p| !p.iter().all(|c| c.is_finite())) {
+    if let Some(i) = img.data.iter().position(bad_pixel) {
         return Err(RenderError::BadPixel(i));
     }
-    img.data = encoded;
+    img.data = convert(&img.data)?;
     Ok(())
 }
 
@@ -152,4 +156,25 @@ pub fn try_render_cpu(s: &Scene, limits: &Limits) -> Result<(Image, Vec<f32>), R
         return Err(RenderError::BadFactor { k, width: s.width, height: s.height });
     }
     try_resolve(&try_render(s, limits)?, k)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Image, encode_with};
+    use crate::RenderError;
+
+    #[test]
+    fn a_bad_pixel_is_reported_before_the_encoded_buffer_is_allocated() {
+        // Pixel 0 has a negative alpha; the conversion fails as an allocation that cannot be
+        // reserved does.
+        let mut img = Image { width: 2, height: 1, data: vec![[0.0, 0.0, 0.0, -1.0], [0.5, 0.5, 0.5, 1.0]] };
+        let before = img.clone();
+        assert_eq!(encode_with(&mut img, |_| Err(RenderError::OutOfMemory)), Err(RenderError::BadPixel(0)));
+        assert_eq!(img, before);
+        // With every pixel valid, the conversion's error is returned and the image is unchanged.
+        img.data[0][3] = 1.0;
+        let before = img.clone();
+        assert_eq!(encode_with(&mut img, |_| Err(RenderError::OutOfMemory)), Err(RenderError::OutOfMemory));
+        assert_eq!(img, before);
+    }
 }

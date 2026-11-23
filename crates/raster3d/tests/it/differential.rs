@@ -1,7 +1,9 @@
 //! This crate against the app's previous code (`crate::reference`), on the same scenes. For the
 //! scenes in this module, every shadow texel, raster pixel, depth, resolved pixel and encoded
-//! pixel matches bit for bit; the README's Origin section lists the scenes that differ. Each test
-//! prints the 64-bit FNV-1a hash of each output from both sides.
+//! pixel matches bit for bit, with the rasters drawn without point lights' shadows. With them, a
+//! pixel whose shadow taps reach past a cube face's edge can be darker here. The README's Origin
+//! section lists the scenes that differ. Each test prints the 64-bit FNV-1a hash of each
+//! output from both sides.
 
 use craft_raster3d::{Limits, Scene, try_encode, try_render, try_render_cpu, try_resolve, try_shadow_maps};
 
@@ -20,6 +22,28 @@ fn compare(name: &str, scene: &Scene, shadows: Option<bool>) {
         assert_eq!(ours.lights, theirs.lights, "{name}: light marks");
         assert_eq!(ours.env, theirs.env, "{name}: environment mark");
         println!("{name} shadow texels: ours {:016x} theirs {:016x}", fnv(&[], &ours.shadow_texels), fnv(&[], &theirs.shadow_texels));
+        // This crate reads a point light's shadow taps past a cube face's edge from the adjacent
+        // face, and EffectCraft's code reads them as unoccluded. With the point lights' shadows,
+        // every depth matches, and every pixel matches or is darker here: a color channel is no
+        // larger, and the alpha no smaller (a shadows-only surface draws a stronger shadow).
+        if ours.lights.iter().any(|l| l.kind == 2 && l.shadow >= 0) {
+            let (t, r) = (try_render(&ours, &Limits::default()).unwrap(), ec::raster::render(&theirs));
+            assert_eq!(bits(&t.depth), bits(&r.depth), "{name}: raster depth with point-light shadows");
+            let mut differ = 0;
+            for (i, (a, b)) in t.color.iter().zip(&r.color).enumerate() {
+                if bits4(&[*a]) == bits4(&[*b]) {
+                    continue;
+                }
+                differ += 1;
+                assert!(a[..3].iter().zip(&b[..3]).all(|(x, y)| x <= y) && a[3] >= b[3], "{name}: pixel {i}: ours {a:?} theirs {b:?}");
+            }
+            println!("{name} raster with point-light shadows: {differ} of {} pixels differ", t.color.len());
+            assert!(differ * 10 < t.color.len(), "{name}: {differ} of {} pixels differ", t.color.len());
+        }
+        // The rest of the comparison runs without the point lights' shadows, bit for bit.
+        for l in ours.lights.iter_mut().chain(theirs.lights.iter_mut()).filter(|l| l.kind == 2) {
+            l.shadow = -1;
+        }
     }
     let t = try_render(&ours, &Limits::default()).unwrap();
     let r = ec::raster::render(&theirs);

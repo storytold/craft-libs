@@ -64,7 +64,9 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   plane. A spot or point light's maps hold casters at a light-space depth of 0.001 or more, and a
   receiver at that depth or nearer is not shadowed. A spot light's map covers its outer cone's half
   angle plus 0.05 radians. A spot light whose half angle with that margin is over 1.45 radians
-  (about 83°) gets six maps, as a point light does. A masked caster drops texels whose material alpha is below the
+  (about 83°) gets six maps, as a point light does. A receiver of six maps reads the face of its
+  direction's major axis, and a tap past that face's edge reads the adjacent face's texel along the
+  tap's ray, with its depth converted to the receiver's face. A tap past the edge of a single map is unoccluded. A masked caster drops texels whose material alpha is below the
   material's cutoff, as shading does. A blended caster drops texels whose alpha times the opacity
   is below 0.5. A masked or blended caster without a base texture is tested the same way with its
   material's alpha. An opaque-mode or masked caster with an opacity below 0.5 casts no shadow.
@@ -105,7 +107,8 @@ Building a scene from an app's document (layers, cameras, models, text) stays in
   light's key outside 0 to 1, a negative shadow diffusion or shadow-map radius, a parallel or spot light direction or an environment light direction
   (other than zero) whose length differs from 1 by more than 0.001, a spot light whose inner cone
   cosine is below its outer one, a light kind, light falloff
-  or alpha mode other than 0 to 2, or a clip-space position past `f32`. `try_render` also returns
+  or alpha mode other than 0 to 2. `try_render` and `try_render_cpu` also return `BadClipPosition`
+  for a vertex whose clip-space position is past `f32`. `try_render` also returns
   `ShadowsOnlyOpaque` for a triangle in the opaque range whose material is shadows-only and
   visible, and
   `BadPixel` when a rendered color or depth overflows `f32` (finite inputs near the top of its
@@ -165,13 +168,15 @@ The renderer comes from EffectCraft's `crates/render/src/three_d/adv.rs` (`resol
 `2f16feb12f`. `tests/it/differential.rs` runs a copy of EffectCraft's code with the alpha-mask
 change of storytold/effectcraft#4075 applied on the scenes in that module, and for those scenes
 every shadow texel, raster pixel, depth, resolved pixel and encoded pixel matches EffectCraft's bit
-for bit. Each test prints the FNV-1a hashes of both sides' outputs. Other valid scenes can differ
+for bit, with the rasters drawn without point lights' shadows. With them, every depth matches and
+every pixel matches or is darker here. Each test prints the FNV-1a hashes of both sides' outputs. Other valid scenes can differ
 through the changes listed below, for example where triangles leave the guard band or reach the
 far plane, where depth-range crossings lie within 1/4096 of an edge from its inside corner, where
 texture coordinates times the texture's width or height reach 2^23 in magnitude, where normals'
 squared lengths, squared distances from fragments to point and spot lights, or casters'
 light-space coordinates times a map's focal length overflow `f32`, where shadow-casting spot
-lights' outer cones are over 1.40 radians wide, where resolve blocks hold more than 2^24
+lights' outer cones are over 1.40 radians wide, where a point light's shadow taps reach past a cube
+face's edge, where resolve blocks hold more than 2^24
 subsamples, where shadows-only materials do not receive shadows, where fragments under discarded
 opaque pixels leave the depth range, where blended casters have no base texture, where
 opaque-mode and masked casters have an opacity below 0.5, where casters reach within 1 unit of
@@ -227,7 +232,13 @@ Changes from those files:
   linear segment, so red −0.25 encoded to −3.23 instead of about −0.537.
 - A normal whose squared length overflows `f32`, and the direction to a point or spot light whose
   squared distance overflows `f32`, are normalized in `f64`. EffectCraft divided them by an
-  infinite length, so the surface took no direct light.
+  infinite length, so the surface took no direct light. A distance to such a light past `f32`'s
+  range is kept in `f64` through the falloff, so a light 4.2e38 away with a radius of 3e38 and an
+  inverse-square falloff passes half its light instead of none.
+- A shadow tap past the edge of one of a point light's or wide spot light's six maps reads the
+  adjacent face's texel along the tap's ray, with its depth converted to the receiver's face.
+  EffectCraft read such a tap as unoccluded, so a receiver on a seam between two faces inside a
+  shadow was about half lit.
 - A caster corner or a receiver whose light-space coordinate times the map's focal length overflows
   `f32` is projected in `f64`. EffectCraft's map coordinates for it were infinite.
 - A spot light whose outer cone's half angle plus 0.05 radians is over 1.45 radians gets six maps,

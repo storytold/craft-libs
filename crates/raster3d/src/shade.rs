@@ -306,15 +306,54 @@ const PCF_MAX_TAPS: i32 = 10;
 /// texel (about 89°). Steeper planes are clamped to this slope.
 const PLANE_SLOPE_MAX: f32 = 64.0;
 
+/// The cube face of a direction from a point or wide spot light: its major axis, in the order
+/// +x, −x, +y, −y, +z, −z of the light's six maps.
+fn cube_face(d: [f32; 3]) -> usize {
+    let (ax, ay, az) = (d[0].abs(), d[1].abs(), d[2].abs());
+    if ax >= ay && ax >= az {
+        if d[0] > 0.0 { 0 } else { 1 }
+    } else if ay >= az {
+        if d[1] > 0.0 { 2 } else { 3 }
+    } else if d[2] > 0.0 {
+        4
+    } else {
+        5
+    }
+}
+
+/// For texel (`xi`, `yi`) of cube face `m`, which lies outside `m`, the depth of the texel of the
+/// face the ray through its center enters (clamped to that face's edge), and that ray's depth in
+/// that face per unit of depth in `m`. A missing face reads as unoccluded.
+fn cube_texel(m: &ShadowMap, faces: &[ShadowMap], texels: &[f32], xi: i64, yi: i64) -> (f32, f32) {
+    let c = m.size as f32 * 0.5;
+    let (a, b) = ((xi as f32 + 0.5 - c) / m.focal, (yi as f32 + 0.5 - c) / m.focal);
+    // The ray in world space: the light-space direction (a, b, 1) through `m`'s rows.
+    let r = &m.view;
+    let w = [0, 1, 2].map(|k| a * r[0][k] + b * r[1][k] + r[2][k]);
+    let Some(g) = faces.get(cube_face(w)) else { return (f32::INFINITY, 1.0) };
+    let q = [0, 1, 2].map(|row| g.view[row][0] * w[0] + g.view[row][1] * w[1] + g.view[row][2] * w[2]);
+    let (n, cg) = (g.size as i64, g.size as f32 * 0.5);
+    // A face that the ray does not enter from the front, or that has no texels, does not block it.
+    if q[2] <= 0.0 || q[2].is_nan() || n == 0 {
+        return (f32::INFINITY, 1.0);
+    }
+    let x = ((q[0] / q[2] * g.focal + cg).floor() as i64).clamp(0, n - 1);
+    let y = ((q[1] / q[2] * g.focal + cg).floor() as i64).clamp(0, n - 1);
+    let d = texels.get(g.offset as usize + (y * n + x) as usize).copied().unwrap_or(f32::INFINITY);
+    (d, q[2])
+}
+
 /// Fraction of light reaching `p` through shadow map `m` (1 = lit). `ng` is the receiver's
-/// geometric (not normal-mapped) normal facing the viewer.
+/// geometric (not normal-mapped) normal facing the viewer. `cube` holds the six faces when `m` is
+/// one of a cube's: a texel past `m`'s edge is then read from the adjacent face, so a receiver
+/// near a seam is not lit through it. Past the edge of a single map nothing blocks the light.
 ///
 /// PCF over an N×N tap grid (5 ≤ N ≤ `PCF_MAX_TAPS`) spread over a reach derived from `radius`
 /// (the penumbra in output pixels) divided by the receiver's texel footprint, each tap jittered
 /// by [`tap_jitter`] and comparing against the four nearest texel centers with bilinear weights.
 /// Every texel is compared against the depth the receiver's own plane has at that texel's
 /// center, not the receiver point's depth.
-fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: f32) -> f32 {
+fn shadow_factor(m: &ShadowMap, cube: Option<&[ShadowMap]>, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: f32) -> f32 {
     let Some((u, v, z)) = shadow_coord(m, p) else { return 1.0 };
     let size = m.size as i64;
     // Slope-scaled bias at texel scale (world units are pixels), steeper for grazing light.
@@ -344,13 +383,22 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     // depth reaches 0 is behind the light and cannot be occluded.
     let (iz, iq) = (1.0 / z, 1.0 / (m.focal * z));
     let open = |xi: i64, yi: i64| -> f32 {
-        let s = at(xi, yi) + bias;
         let g = tx * (xi as f32 + 0.5 - u) + ty * (yi as f32 + 0.5 - v);
+        let outside = xi < 0 || yi < 0 || xi >= size || yi >= size;
         let lit = if m.ortho {
-            z - g * texel <= s
+            z - g * texel <= at(xi, yi) + bias
         } else {
             let inv = iz + g * iq;
-            inv <= 0.0 || inv * s >= 1.0
+            // Past a cube face's edge, the adjacent face's depth along the texel's ray is converted
+            // to this face's depth, where the receiver plane and the bias are.
+            let d = match cube {
+                Some(faces) if outside => {
+                    let (d, k) = cube_texel(m, faces, texels, xi, yi);
+                    d / k
+                }
+                _ => at(xi, yi),
+            };
+            inv <= 0.0 || inv * (d + bias) >= 1.0
         };
         if lit { 1.0 } else { 0.0 }
     };
@@ -362,7 +410,8 @@ fn shadow_factor(m: &ShadowMap, texels: &[f32], p: [f32; 3], ng: [f32; 3], n_l: 
     }
     // Every tap of a receiver more than `reach + 1` texels outside the map reads only texels
     // outside it, so the light is unblocked there. Returning here also keeps the jitter
-    // lattice finite for map coordinates near `f32::MAX`.
+    // lattice finite for map coordinates near `f32::MAX`. A cube's receiver projects onto the face
+    // of its major axis, inside that face.
     let (lo, hi) = (-(reach + 1.0), size as f32 + reach + 1.0);
     if !(u >= lo && u <= hi && v >= lo && v <= hi) {
         return 1.0;
@@ -398,26 +447,16 @@ fn light_shadow(s: &Scene, l: &Light, p: [f32; 3], ng: [f32; 3], n_l: f32) -> f3
         return 1.0;
     }
     let first = l.shadow as usize;
-    let m = if cube_maps(l) {
+    let (m, cube) = if cube_maps(l) {
         // Point light, or a spot light wider than one map: the cube face of the major axis of
         // the light → point direction.
-        let d = sub(p, l.pos);
-        let (ax, ay, az) = (d[0].abs(), d[1].abs(), d[2].abs());
-        let face = if ax >= ay && ax >= az {
-            if d[0] > 0.0 { 0 } else { 1 }
-        } else if ay >= az {
-            if d[1] > 0.0 { 2 } else { 3 }
-        } else if d[2] > 0.0 {
-            4
-        } else {
-            5
-        };
-        s.shadows.get(first + face)
+        let faces = s.shadows.get(first..first.saturating_add(6));
+        (s.shadows.get(first + cube_face(sub(p, l.pos))), faces)
     } else {
-        s.shadows.get(first)
+        (s.shadows.get(first), None)
     };
     let Some(m) = m else { return 1.0 };
-    let f = shadow_factor(m, &s.shadow_texels, p, ng, n_l);
+    let f = shadow_factor(m, cube, &s.shadow_texels, p, ng, n_l);
     1.0 - l.shadow_darkness * (1.0 - f)
 }
 
@@ -431,14 +470,15 @@ fn env_shadow(s: &Scene, e: &EnvInfo, p: [f32; 3], ng: [f32; 3], n: [f32; 3]) ->
     }
     let Some(m) = s.shadows.get(e.shadow as usize) else { return 1.0 };
     let n_l = dot(n, e.sun).clamp(0.0, 1.0);
-    let f = shadow_factor(m, &s.shadow_texels, p, ng, n_l);
+    let f = shadow_factor(m, None, &s.shadow_texels, p, ng, n_l);
     1.0 - e.shadow_darkness * e.key * (1.0 - f)
 }
 
-/// Unit direction from `p` to light `l`, and the distance (infinite for a parallel light).
-fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
+/// Unit direction from `p` to light `l`, and the distance (infinite for a parallel light). The
+/// distance is in `f64`, since the distance to a far light can exceed `f32`'s range.
+fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f64) {
     if l.kind == 0 {
-        return (scale(l.dir, -1.0), f32::INFINITY);
+        return (scale(l.dir, -1.0), f64::INFINITY);
     }
     let d = sub(l.pos, p);
     let len = dot(d, d).sqrt();
@@ -446,14 +486,53 @@ fn to_light(l: &Light, p: [f32; 3]) -> ([f32; 3], f32) {
     if len.is_infinite() && d.iter().all(|c| c.is_finite()) {
         let d = d.map(f64::from);
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        return (d.map(|c| (c / len) as f32), len as f32);
+        return (d.map(|c| (c / len) as f32), len);
     }
-    if len < 1e-6 { ([0.0, 0.0, -1.0], 0.0) } else { (scale(d, 1.0 / len), len) }
+    if len < 1e-6 { ([0.0, 0.0, -1.0], 0.0) } else { (scale(d, 1.0 / len), f64::from(len)) }
+}
+
+/// The distance falloff of a point or spot light at a finite distance past `f32`'s range, taken
+/// in `f64`. The distance is beyond any radius there.
+fn falloff_wide(l: &Light, dist: f64) -> f32 {
+    match l.falloff {
+        1 if l.kind != 0 => {
+            if l.falloff_distance <= 0.0 {
+                0.0
+            } else {
+                let t = ((dist - f64::from(l.radius)) / f64::from(l.falloff_distance)).clamp(0.0, 1.0);
+                (1.0 - t * t * (3.0 - 2.0 * t)) as f32
+            }
+        }
+        2 if l.kind != 0 => (f64::from(l.radius.max(1.0)) / dist).powi(2).min(1.0) as f32,
+        _ => 1.0,
+    }
 }
 
 /// Distance attenuation × spot cone of a light at `p`.
-fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f32) -> f32 {
-    let mut k = match l.falloff {
+fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f64) -> f32 {
+    let narrow = dist as f32;
+    let mut k = if dist.is_finite() && !narrow.is_finite() { falloff_wide(l, dist) } else { falloff(l, narrow) };
+    let _ = p;
+    if l.kind == 1 {
+        let cos_a = dot(scale(to_l, -1.0), l.dir).clamp(-1.0, 1.0);
+        k *= if cos_a >= l.cos_inner {
+            1.0
+        } else if cos_a <= l.cos_outer {
+            0.0
+        } else {
+            // Smoothstep across the feather in angle.
+            let a = cos_a.acos();
+            let (ai, ao) = (l.cos_inner.acos(), l.cos_outer.acos());
+            let t = ((a - ai) / (ao - ai).max(1e-6)).clamp(0.0, 1.0);
+            1.0 - t * t * (3.0 - 2.0 * t)
+        };
+    }
+    k
+}
+
+/// The distance falloff of light `l` at `dist`.
+fn falloff(l: &Light, dist: f32) -> f32 {
+    match l.falloff {
         1 if l.kind != 0 => {
             if dist <= l.radius {
                 1.0
@@ -473,23 +552,7 @@ fn attenuation(l: &Light, p: [f32; 3], to_l: [f32; 3], dist: f32) -> f32 {
             }
         }
         _ => 1.0,
-    };
-    let _ = p;
-    if l.kind == 1 {
-        let cos_a = dot(scale(to_l, -1.0), l.dir).clamp(-1.0, 1.0);
-        k *= if cos_a >= l.cos_inner {
-            1.0
-        } else if cos_a <= l.cos_outer {
-            0.0
-        } else {
-            // Smoothstep across the feather in angle.
-            let a = cos_a.acos();
-            let (ai, ao) = (l.cos_inner.acos(), l.cos_outer.acos());
-            let t = ((a - ai) / (ao - ai).max(1e-6)).clamp(0.0, 1.0);
-            1.0 - t * t * (3.0 - 2.0 * t)
-        };
     }
-    k
 }
 
 /// Inputs of one fragment.
@@ -630,7 +693,7 @@ fn shadow_only(s: &Scene, m: &Material, f: &Frag, alpha: f32) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrdfSurface, attenuation, brdf, mip_levels, shadow_coord};
+    use super::{BrdfSurface, attenuation, brdf, light_shadow, mip_levels, shadow_coord, to_light};
     use crate::scene::{Light, ShadowMap};
 
     #[test]
@@ -667,11 +730,79 @@ mod tests {
             shadow_darkness: 0.0,
             shadow_diffusion: 0.0,
         };
-        let at = |radius: f32, dist: f32| attenuation(&light(radius), [0.0; 3], [0.0, 0.0, 1.0], dist);
+        let at = |radius: f32, dist: f32| attenuation(&light(radius), [0.0; 3], [0.0, 0.0, 1.0], f64::from(dist));
         assert_eq!(at(0.5, 0.5), 1.0);
         assert_eq!(at(0.5, 0.75), 1.0);
         assert_eq!(at(0.5, 2.0), 0.25);
         assert_eq!(at(4.0, 8.0), 0.25);
+    }
+
+    #[test]
+    fn a_light_farther_than_f32_reaches_keeps_its_falloff() {
+        // The light is 3e38 × √2 ≈ 4.24e38 away, past f32::MAX; with a radius of 3e38 the inverse
+        // square falloff is (3e38 / 4.24e38)² = 0.5.
+        let light = Light {
+            kind: 2,
+            pos: [3e38, 0.0, 3e38],
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 1.0,
+            falloff: 2,
+            radius: 3e38,
+            falloff_distance: 0.0,
+            shadow: -1,
+            shadow_darkness: 0.0,
+            shadow_diffusion: 0.0,
+        };
+        let (to_l, dist) = to_light(&light, [0.0; 3]);
+        let k = attenuation(&light, [0.0; 3], to_l, dist);
+        assert!((k - 0.5).abs() < 1e-5, "{k}");
+        // The smoothstep falloff is taken the same way: 1.24e38 past the radius over a falloff
+        // distance of 2.48e38 is halfway, 0.5.
+        let light = Light { falloff: 1, falloff_distance: (2.0 * (dist - 3e38)) as f32, ..light };
+        let k = attenuation(&light, [0.0; 3], to_l, dist);
+        assert!((k - 0.5).abs() < 1e-5, "{k}");
+    }
+
+    #[test]
+    fn a_receiver_on_a_cube_seam_is_shadowed_through_both_faces() {
+        use crate::scene::{Material, Scene, Vertex};
+        use crate::{Limits, try_shadow_maps};
+        use std::f32::consts::FRAC_1_SQRT_2 as H;
+        // A point light at the origin, a square caster across the +x/+z seam in the plane
+        // x + z = 100, and a receiver behind it at (100, 0, 100), on the seam. The receiver takes
+        // the +x face, and half of its taps fall past that face's edge, into the +z face.
+        let mut s = Scene { width: 64, height: 64, ssaa: 1, ..Scene::default() };
+        s.materials.push(Material { casts_shadows: true, double_sided: true, ..Material::default() });
+        let normal = [-H, 0.0, -H];
+        for (i, j) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            let pos = [50.0 + 100.0 * H * i, 100.0 * j, 50.0 - 100.0 * H * i];
+            s.vertices.push(Vertex { pos, normal, uv: [0.0; 2], tangent: [1.0, 0.0, 0.0, 1.0], material: 0 });
+        }
+        s.indices = vec![0, 1, 2, 0, 2, 3];
+        s.opaque_count = 6;
+        s.lights.push(Light {
+            kind: 2,
+            pos: [0.0; 3],
+            dir: [0.0, 0.0, 1.0],
+            color: [1.0; 3],
+            cos_inner: 1.0,
+            cos_outer: 1.0,
+            falloff: 0,
+            radius: 0.0,
+            falloff_distance: 0.0,
+            shadow: 0,
+            shadow_darkness: 1.0,
+            shadow_diffusion: 0.0,
+        });
+        try_shadow_maps(&mut s, true, &Limits::default()).unwrap();
+        assert_eq!(s.shadows.len(), 6);
+        let seam = light_shadow(&s, &s.lights[0], [100.0, 0.0, 100.0], normal, 1.0);
+        assert!(seam < 0.01, "{seam}");
+        // A receiver inside the +x face is shadowed as before.
+        let inside = light_shadow(&s, &s.lights[0], [100.0, 0.0, 60.0], [-1.0, 0.0, 0.0], 1.0);
+        assert!(inside < 0.01, "{inside}");
     }
 
     #[test]
