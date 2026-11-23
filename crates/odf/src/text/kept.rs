@@ -883,7 +883,9 @@ fn same_columns(a: &str, b: &str) -> bool {
         with_widths(columns, &specs, 1000.0)
     };
     let (a, b) = (said(a), said(b));
-    let close = |x: f32, y: f32| (x - y).abs() < 2.0;
+    // Compare at the writer's precision: small intentional gaps must not inherit an edit,
+    // while equivalent lengths expressed in different units still compare equal.
+    let close = |x: f32, y: f32| super::writer::pt(x) == super::writer::pt(y);
     a.count == b.count
         && (a.count < 2
             || (a.separator == b.separator
@@ -1404,6 +1406,15 @@ mod tests {
         assert!(later.contains(own), "{later}");
         let same = patch_layout(&page(&at("10pt"), ""), &then, &now, Place::default()).unwrap();
         assert!(same.contains(&at("20pt")), "follows: {same}");
+        for gap in ["11pt", "10.01pt"] {
+            let own = at(gap);
+            let later = patch_layout(&page(&own, ""), &then, &now, Place::default()).unwrap();
+            assert!(later.contains(&own), "distinct gap {gap} must stay: {later}");
+        }
+        for gap in ["0.1388888889in", "0.3527777778cm"] {
+            let same = patch_layout(&page(&at(gap), ""), &then, &now, Place::default()).unwrap();
+            assert!(same.contains(&at("20pt")), "equivalent units follow: {same}");
+        }
         let first = patch_layout(&page(own, ""), &then, &now, Place { own: true, ..Place::default() }).unwrap();
         assert!(first.contains(&at("20pt")), "the section's own: {first}");
     }
