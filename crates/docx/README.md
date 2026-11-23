@@ -21,6 +21,8 @@ assert_eq!(back.plain_text(craft_wordmodel::StoryRef::Body), doc.plain_text(craf
 - `read(bytes)`, `read_with(bytes, &ReadOptions { password, chunks })`, `read_with_password`.
 - `read_xml(bytes)`: a Word XML Document or a Word 2003 XML Document, told apart by its root.
 - `package_title(reader, max_part)`: the title in `docProps/core.xml`, inflating only that part.
+- The page background (`w:background`) in its VML fill (ECMA-376 Part 4 §2.2.1): a solid colour,
+  a gradient, one of DrawingML's 48 preset patterns, or a picture with transparency.
 
 The reader is lenient (unknown markup is skipped, bad numbers fall back to defaults) and bounded:
 

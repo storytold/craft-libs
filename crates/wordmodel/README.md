@@ -26,7 +26,7 @@ assert!(matches!(&*doc.body[0], Block::Para(p) if p.text == "One"));
 - `props`, `styles`, `resolve`, `numbering`, `section`: formatting and its resolution.
 - `math`, `math_latex`, `math_linear`, `math_symbols`: the equation tree (`MNode`) and its
   linear and LaTeX forms.
-- `chart`, `smart_art`, `graphic`, `fill`, `connector`, `freeform`, `wordart`, `effects`,
+- `chart`, `smart_art`, `graphic`, `fill`, `pattern`, `connector`, `freeform`, `wordart`, `effects`,
   `picfx`, `line_dash`: drawing objects as the model holds them. Reading and writing their
   DrawingML is `craft-drawingml`'s job, in the format crates.
 - `kept`: markup kept from the file a document was read from, so what is not edited is written

@@ -260,7 +260,8 @@ fn background_plus_small_header_logo_keeps_background() {
     };
     let mut d = Document::new();
     let bg_media = d.add_media(png, "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into(), transparency: 0.0 });
     let logo_media = d.add_media(logo_png, "png");
     let mut hp = craft_wordmodel::Paragraph::new();
     hp.text = format!("Company {}", craft_wordmodel::para::OBJ);
@@ -314,7 +315,8 @@ fn full_page_header_picture_with_background_round_trips() {
     };
     let mut d = Document::new();
     let bg_media = d.add_media(bg_png.clone(), "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: "PageBackground".into(), transparency: 0.0 });
     let header_media = d.add_media(header_png.clone(), "png");
     let mut hp = craft_wordmodel::Paragraph::new();
     hp.text = format!("{}", craft_wordmodel::para::OBJ);
@@ -408,7 +410,8 @@ fn text_header_keeps_page_background_picture() {
     };
     let mut d = Document::new();
     let bg_media = d.add_media(png, "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new(), transparency: 0.0 });
     let mut hp = craft_wordmodel::Paragraph::new();
     hp.text = "Header text".into();
     hp.runs = vec![craft_wordmodel::para::Run { len: hp.text.len(), props: Default::default() }];
@@ -506,7 +509,8 @@ fn inactive_header_picture_does_not_suppress_page_background() {
     };
     let mut d = Document::new();
     let bg_media = d.add_media(png.clone(), "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new(), transparency: 0.0 });
 
     let header_media = d.add_media(png, "png");
     let mut hp = craft_wordmodel::Paragraph::new();
@@ -549,7 +553,8 @@ fn continuous_section_header_picture_does_not_suppress_page_background() {
     };
     let mut d = Document::new();
     let bg_media = d.add_media(png.clone(), "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new(), transparency: 0.0 });
 
     // Body with a first section ending paragraph
     let mut p1 = craft_wordmodel::Paragraph::new();
@@ -602,7 +607,8 @@ fn trailing_empty_last_section_header_picture_does_not_suppress_page_background(
     };
     let mut d = Document::new();
     let bg_media = d.add_media(png.clone(), "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: bg_media, fill_type: "frame".into(), title: String::new(), transparency: 0.0 });
 
     // Body with a single paragraph ending section 1 (nothing follows it)
     let mut p1 = craft_wordmodel::Paragraph::new();
@@ -669,7 +675,8 @@ fn replaced_page_picture_allocates_distinct_fill_name_and_keeps_retained_def() {
         crate::text::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/original.png", &orig_png)]);
     let mut d = import(&pkg).unwrap();
     let new_media = d.add_media(new_png.clone(), "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media: new_media, fill_type: "stretch".into(), title: "SharedBg".into() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media: new_media, fill_type: "stretch".into(), title: "SharedBg".into(), transparency: 0.0 });
 
     let saved = export(&d).unwrap();
     let s = crate::text::tests::entry(&saved, "styles.xml");
@@ -703,7 +710,8 @@ fn page_background_round_trips_do_not_grow_the_package() {
     };
     let mut d = Document::new();
     let media = d.add_media(png, "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media, fill_type: "frame".into(), title: "PageBackground".into() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media, fill_type: "frame".into(), title: "PageBackground".into(), transparency: 0.0 });
     let mut current = d;
     for generation in 1..=4 {
         let saved = export(&current).unwrap();
@@ -781,7 +789,8 @@ fn a_texture_name_is_written_as_an_ncname() {
     };
     let mut d = Document::new();
     let media = d.add_media(png, "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media, fill_type: "frame".into(), title: "Blue tissue paper".into() });
+    d.settings.page_picture =
+        Some(craft_wordmodel::PagePicture { media, fill_type: "frame".into(), title: "Blue tissue paper".into(), transparency: 0.0 });
     let saved = export(&d).unwrap();
     let s = crate::text::tests::entry(&saved, "styles.xml");
     assert!(s.contains(r#"<draw:fill-image draw:name="Blue_tissue_paper""#), "the fill name is an NCName: {s}");
@@ -836,7 +845,7 @@ fn many_colliding_fill_image_names_export_in_linear_time() {
     let mut d = import(&pkg).unwrap();
     // The user replaces the picture: its fill-image name now meets every kept name.
     let media = d.add_media(replacement, "png");
-    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media, fill_type: "stretch".into(), title: "X".into() });
+    d.settings.page_picture = Some(craft_wordmodel::PagePicture { media, fill_type: "stretch".into(), title: "X".into(), transparency: 0.0 });
     let start = std::time::Instant::now();
     let saved = export(&d).unwrap();
     assert!(start.elapsed() < std::time::Duration::from_secs(5), "export took {:?}", start.elapsed());

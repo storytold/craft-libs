@@ -9,6 +9,7 @@ pub(crate) use mail_merge::keep_rels as mail_merge_rels;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
 mod math;
+mod page_fill;
 mod props;
 mod sdt;
 mod story;
@@ -156,6 +157,9 @@ pub(crate) struct Writer<'d> {
     inline_controls: Vec<usize>,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Pictures the writer makes as it goes (a pattern's tile): `word/media` file name and bytes,
+    /// written after the document's own media.
+    pub(crate) extra_media: Vec<(String, Vec<u8>)>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
     boxes: craft_wordmodel::BoxBudget,
     /// Text box stories already written: a story shown by many shapes is written once, the other
@@ -225,6 +229,19 @@ impl Writer<'_> {
     fn next_docpr(&mut self) -> String {
         self.docpr = self.docpr.saturating_add(1);
         self.docpr.to_string()
+    }
+
+    /// A name under `word/media/` for a picture the writer makes, unique (any case) among the
+    /// document's media files and those already made.
+    pub(crate) fn extra_media_name(&mut self, stem: &str, ext: &str) -> String {
+        let taken = |name: &str| self.media_files.values().chain(self.extra_media.iter().map(|(f, _)| f)).any(|f| f.eq_ignore_ascii_case(name));
+        let mut name = format!("{stem}.{ext}");
+        let mut n = 1;
+        while taken(&name) {
+            n += 1;
+            name = format!("{stem}-{n}.{ext}");
+        }
+        name
     }
 
     /// The drawing id of a shape: its own (once; a copy gets a fresh one), else a fresh one.

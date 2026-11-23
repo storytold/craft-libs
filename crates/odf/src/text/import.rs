@@ -1123,6 +1123,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
             media,
             fill_type: fill.to_string(),
             title: name.map(|n| n.chars().take(255).collect()).unwrap_or_default(),
+            transparency: 0.0,
         });
     }
     if let Some((fmt, props)) = page_doc.notes[0] {

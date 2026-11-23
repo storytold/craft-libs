@@ -5,7 +5,7 @@ use super::settings::{
 use super::styles::{numbering_xml, styles_xml};
 use super::{
     BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, WriteOptions,
-    Writer, embed, glossary, mail_merge, rt, settings_merge, watermark, xml,
+    Writer, embed, glossary, mail_merge, page_fill, rt, settings_merge, watermark, xml,
 };
 use crate::package::FONT_TABLE_PART;
 
@@ -52,6 +52,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
         toc_end_here: false,
         inline_controls: Vec::new(),
         used_media: Default::default(),
+        extra_media: Vec::new(),
         boxes: craft_wordmodel::BoxBudget::default(),
         written_boxes: std::collections::HashSet::new(),
         embeds: embed::EmbedWriter::new(doc),
@@ -169,6 +170,12 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor, options: WriteOptions)
             media_types.insert(ext, content_type_for(file));
             entries.push((format!("word/media/{file}"), bytes.to_vec()));
         }
+    }
+    // Pictures this save made (a pattern's tile).
+    for (file, bytes) in std::mem::take(&mut wr.extra_media) {
+        let ext = file.rsplit('.').next().unwrap_or("bin").to_ascii_lowercase();
+        media_types.insert(ext, content_type_for(&file));
+        entries.push((format!("word/media/{file}"), bytes));
     }
 
     wr.embeds.custom_xml_rels("D", &mut rels);
@@ -311,31 +318,7 @@ fn write_settings(doc: &Document, wr: &Writer<'_>, options: WriteOptions) -> Res
 fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels, ns_refs: &[(&str, &str)]) -> Vec<u8> {
     let mut w = W::new();
     w.open("w:document", ns_refs);
-    let pic = doc.settings.page_picture.as_ref().filter(|p| wr.media_files.contains_key(&p.media) && doc.media.contains_key(&p.media));
-    if pic.is_some() || doc.settings.page_color.is_some() {
-        let color = doc.settings.page_color.map(|c| c.hex());
-        let attrs: Vec<(&str, &str)> = color.iter().map(|c| ("w:color", c.as_str())).collect();
-        w.open("w:background", &attrs);
-        if let Some(p) = pic
-            && let Some(file) = wr.media_files.get(&p.media)
-        {
-            let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-            wr.used_media.insert(p.media.clone());
-            w.open("v:background", &[("id", "_x0000_s1025"), ("o:bwmode", "white")]);
-            let mut fa: Vec<(&str, &str)> = vec![("r:id", &rid)];
-            // VML has no centred fill (an ODT page background's): stretched to the page.
-            let kind = if p.fill_type.eq_ignore_ascii_case("center") { "frame" } else { p.fill_type.as_str() };
-            if !kind.is_empty() {
-                fa.push(("type", kind));
-            }
-            if !p.title.is_empty() {
-                fa.push(("o:title", &p.title));
-            }
-            w.empty("v:fill", &fa);
-            w.close("v:background");
-        }
-        w.close("w:background");
-    }
+    page_fill::background(&mut w, doc, wr, rels);
     w.open("w:body", &[]);
     wr.blocks(&mut w, &doc.body, rels, true, 0);
     let last = doc.last_section.clone();
