@@ -225,3 +225,19 @@ fn the_sections_layout_shows_the_picked_section() {
     assert!(fixture.by_label("Mark weight").is_some(), "the picked section shows");
     assert!(fixture.by_label("Copies").is_none(), "in place of the first");
 }
+
+/// In the sections layout the printer panel shows only the printer, so the app's own Copies row is the one automation
+/// sets and lists; the dialog's hidden copies setting keeps its value.
+#[trial]
+fn a_section_row_takes_a_printer_setting_set_by_automation_in_the_sections_layout() {
+    use craft_print::ui::{PrintLayout, PrintSection};
+    use craft_ui::patterns::form_dialogs::{Param, ParamKind};
+    let ctx = egui::Context::default();
+    let general = vec![Param::new("copies", "Copies", ParamKind::int(Some(1), Some(99), 1))];
+    let mut dialog =
+        HostedPrint::new(State::default(), DialogFields::default(), vec![PrintSection::new("General", general)]).layout(PrintLayout::Sections);
+    dialog.set_json_field(&ctx, "copies", serde_json::json!(4)).expect("the row takes the copies");
+    assert_eq!(dialog.fields().number("copies"), Some(4.0), "the app's row holds the value");
+    let listed = dialog.json_fields().expect("a listing");
+    assert_eq!(listed["copies"].as_f64(), Some(4.0), "the listing reports the row: {listed}");
+}

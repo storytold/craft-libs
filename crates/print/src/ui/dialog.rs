@@ -557,6 +557,17 @@ fn name_row(ui: &mut Ui, words: &PrintDialogWords, check: Option<&NameRefuses<'_
     usable_name(&shown, check.and_then(|check| check(&shown)))
 }
 
+/// The rows that show `Settings` key `key` (`copies`, `duplex`, `grayscale`) in place of the printer panel: in the
+/// sections layout the panel shows only the printer, and an app's section or header row with the key is the one the user
+/// sees, so automation sets and lists that row.
+fn row_of_setting<'p>(layout: PrintLayout, sections: &'p [PrintSection], header: &'p [Param], key: &str) -> Option<&'p [Param]> {
+    if layout != PrintLayout::Sections || !matches!(key, "copies" | "duplex" | "grayscale") {
+        return None;
+    }
+    let mut rows = sections.iter().map(|section| section.params.as_slice()).chain([header]);
+    rows.find(|params| params.iter().any(|param| param.key == key))
+}
+
 /// `params` as rows over `values`; the colour, path and eyedropper requests they file go to `requests`.
 fn param_rows(ui: &mut Ui, requests: &mut HostRequests, title: &Label, params: &[Param], values: &mut DialogFields) {
     let mut rows = ParamRows::new(title.clone(), params, Bind::bound(values)).show(ui);
@@ -1253,7 +1264,8 @@ impl StackDialog for HostedPrint {
 
     /// The `Settings` keys (`printer`, `copies`, `duplex`, `grayscale`), each section parameter's value as
     /// [`DialogFields`] serializes it, and the dialog's own: `section` (the shown section), `sheet`, `preset` (the held
-    /// preset) and, in the preset editor, `name`.
+    /// preset) and, in the preset editor, `name`. A `Settings` key an app's row shows in the sections layout lists the
+    /// row's value.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut map = match serde_json::to_value(&self.fields).ok()? {
             serde_json::Value::Object(map) => map,
@@ -1261,9 +1273,11 @@ impl StackDialog for HostedPrint {
         };
         let settings = &self.state.settings;
         map.insert("printer".to_owned(), settings.printer.clone().into());
-        map.insert("copies".to_owned(), settings.copies.into());
-        map.insert("duplex".to_owned(), duplex_json(settings.duplex));
-        map.insert("grayscale".to_owned(), settings.grayscale.into());
+        for (key, value) in [("copies", settings.copies.into()), ("duplex", duplex_json(settings.duplex)), ("grayscale", settings.grayscale.into())] {
+            if row_of_setting(self.layout, &self.sections, &self.header, key).is_none() {
+                map.insert(key.to_owned(), value);
+            }
+        }
         map.insert("section".to_owned(), self.shown_section().map_or(serde_json::Value::Null, Into::into));
         map.insert("sheet".to_owned(), self.sheet_index.into());
         let held = self.presets.as_ref().and_then(|presets| presets.held.clone());
@@ -1278,8 +1292,12 @@ impl StackDialog for HostedPrint {
     }
 
     /// Sets a `Settings` key, the dialog's own (`section`, `sheet`, `name`, `preset`, and `choice` = `"done"`), or a
-    /// section parameter through the shared parameter-field rule.
+    /// section parameter through the shared parameter-field rule. A `Settings` key an app's row shows in the sections
+    /// layout sets the row.
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        if let Some(params) = row_of_setting(self.layout, &self.sections, &self.header, field) {
+            return set_param_field(params, &mut self.fields, field, value);
+        }
         match field {
             "printer" => {
                 let name = value.as_str().filter(|name| self.state.printers.iter().any(|printer| printer.name == *name));
