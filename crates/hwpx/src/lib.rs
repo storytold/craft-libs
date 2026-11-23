@@ -15,6 +15,8 @@ mod error;
 mod header;
 mod package;
 mod read;
+#[cfg(test)]
+mod test_log;
 mod units;
 mod write;
 mod xml;

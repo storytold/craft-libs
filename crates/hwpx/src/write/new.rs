@@ -230,11 +230,11 @@ pub(crate) struct Tables {
     pub(crate) char_order: Vec<CharKey>,
     paras: BTreeMap<ParaKey, usize>,
     pub(crate) para_order: Vec<ParaKey>,
-    /// Numbered lists (hh:numbering id = index + 1), with the WordCraft list each came from.
+    /// Numbered lists (hh:numbering id = index + 1), with the document's list each came from.
     lists: Vec<(u32, ListDef)>,
     /// Bullet characters (hh:bullet id = index + 1).
     bullets: Vec<char>,
-    /// Paragraph styles after the Normal style, 바탕글 (hh:style id = index + 1): WordCraft id, name, paraPr, charPr.
+    /// Paragraph styles after the Normal style, 바탕글 (hh:style id = index + 1): the document's style id, name, paraPr, charPr.
     styles: Vec<(String, String, usize, usize)>,
     /// The caller's font for Hangul beside a font with none ([`crate::WriteOptions::hangul_font`]).
     hangul_font: HangulFont,
@@ -852,7 +852,7 @@ fn text_height(text: &str, size: f32, line: f32, width: f32) -> f32 {
 }
 
 impl Builder<'_> {
-    /// The text of one WordCraft paragraph as HWPX paragraphs (a page or column break starts a
+    /// The text of one paragraph of the document as HWPX paragraphs (a page or column break starts a
     /// new one, as HWP marks breaks on the paragraph that follows them).
     fn paragraph(&mut self, p: &Paragraph, out: &mut Vec<OutPara>, ts: Option<&TableStyleProps>, width: f32) {
         let style = p.props.style.as_deref();
@@ -937,7 +937,7 @@ impl Builder<'_> {
     }
 
     /// The list `p` is in, as HWP's paragraph heading, with the list level's indents put into
-    /// `rp` where WordCraft's layout puts them (unless the paragraph or its style sets its own).
+    /// `rp` where the model's layout puts them (unless the paragraph or its style sets its own).
     /// Hancom draws the number itself, at the start of the first line.
     fn list_heading(&mut self, p: &Paragraph, rp: &mut ResolvedPara) -> (&'static str, usize, u8) {
         let numbering = &self.doc.numbering;
@@ -1082,7 +1082,7 @@ impl Builder<'_> {
                     return None;
                 };
                 // Hancom's brightness, contrast and transparency aren't read, and how they map to
-                // WordCraft's isn't known: written as none, and said so
+                // the model's isn't known: written as none, and said so
                 if !fx.is_identity() {
                     self.missing("picture brightness, contrast or transparency");
                 }

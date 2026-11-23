@@ -1,6 +1,6 @@
-//! Formatting and table edits for [`crate::write_back`]: the document before and after editing
-//! (both as WordCraft documents, the "before" one read from the original's conversion) are
-//! compared paragraph by paragraph (by their source marks) and table by table.
+//! Formatting and table edits for the write-back ([`crate::write::back`]): the document before
+//! editing (the original read again) and after are compared paragraph by paragraph (by their
+//! source marks) and table by table.
 //!
 //! - A character or paragraph shape that changed becomes a new hh:charPr / hh:paraPr: a copy of
 //!   the original shape with only the changed properties set (every other Hancom property kept),
@@ -24,9 +24,9 @@ use crate::write::new::{CharKey, FillKey, ParaKey, Tables, char_pr_xml, fill_xml
 /// Deepest nesting followed (hostile documents).
 const MAX_DEPTH: usize = 32;
 
-/// A source paragraph as WordCraft shows it.
+/// A source paragraph as the model holds it.
 pub(crate) struct ParaInfo {
-    /// The paragraph's text as the DOCX reading of write-back sees it, with each character's
+    /// The paragraph's text as the write-back compares it, with each character's
     /// formatting.
     pub chars: Vec<(char, ResolvedChar)>,
     pub para: ParaKey,

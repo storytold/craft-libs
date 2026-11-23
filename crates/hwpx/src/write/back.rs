@@ -1,9 +1,8 @@
-//! Write a document edited in WordCraft back into its original HWPX.
+//! Write a document read from an HWPX, then edited, back into that file.
 //!
-//! The converter marks every DOCX paragraph with a hidden bookmark naming the HWPX paragraph it
-//! came from ("_hp_<section>_<ordinal>", see `Converter::mark_origin`). To save, the original is
-//! converted again (the "before" picture) and compared with the edited DOCX paragraph by
-//! paragraph:
+//! The original is read again (the "before" picture), each of its paragraphs knowing the HWPX
+//! paragraph it came from; the edited document's paragraphs are lined up with those
+//! ([`crate::write::marks`]) and compared paragraph by paragraph:
 //!
 //! - unchanged paragraphs keep their original XML byte for byte;
 //! - a changed paragraph gets its text runs rebuilt: typed characters take the character shape
@@ -13,9 +12,9 @@
 //! - a new paragraph copies the shape of the paragraph before it; a deleted one is removed.
 //!
 //! Only "plain" paragraphs are rewritten: text runs that hold nothing but text, tabs, line breaks
-//! and spaces, not interleaved with fields, notes or objects, and whose text the converter shows
+//! and spaces, not interleaved with fields, notes or objects, and whose text the reader shows
 //! unchanged. Page controls among the text (page hiding, page numbers) are kept in a run of their
-//! own after it. Edits elsewhere are reported, not written. The original XML is never
+//! own after it. Edits elsewhere are logged, not written. The original XML is never
 //! re-serialised: edits are spliced into the raw text of the section parts, and every other part
 //! of the package keeps its content (written again in order, stored or deflated as it was).
 //!
@@ -401,7 +400,7 @@ struct Plain {
 }
 
 /// Controls that act on the page or section, not at a place in the text: nothing of them is in
-/// the converted paragraph, so the text around them can be rewritten with them kept in a run of
+/// the paragraph read, so the text around them can be rewritten with them kept in a run of
 /// their own after it. (Hancom puts the section's controls in such a run, before the text.)
 const PAGE_CONTROLS: &[&str] = &["colPr", "pageHiding", "pageNum", "newNum"];
 
@@ -807,7 +806,8 @@ fn trace_back(ends: &[Vec<i32>], n: i64, m: i64) -> Option<Vec<Block>> {
     Some(runs)
 }
 
-/// Apply the edit before -> after (DOCX texts) to the original characters.
+/// Apply the edit before -> after (the paragraph's texts as read and as edited) to the original
+/// characters.
 fn rewrite(before: &str, after: &str, chars: &[Ch], key: &Key) -> Vec<Ch> {
     let a: Vec<char> = before.chars().collect();
     let b: Vec<char> = after.chars().collect();
@@ -918,7 +918,7 @@ impl Restyle<'_> {
     }
 
     /// New character shapes for `chars` (paragraph `m` after the edit; `orig` its characters as
-    /// written in the original) where WordCraft shows other formatting than the original had.
+    /// written in the original) where the edited document has other formatting than the one read.
     fn restyle_chars(&mut self, m: Mark, orig: &[Ch], chars: &mut [Ch]) {
         let (Some(b), Some(a)) = (self.before.paras.get(&m), self.after.paras.get(&m)) else { return };
         if b.chars.len() != orig.len() || b.chars.iter().zip(orig).any(|(x, o)| x.0 != o.0) {
@@ -927,7 +927,7 @@ impl Restyle<'_> {
         if a.chars.len() != chars.len() || a.chars.iter().zip(chars.iter()).any(|(x, c)| x.0 != c.0) {
             return;
         }
-        // each original shape's formatting as WordCraft showed it before
+        // each original shape's formatting as read
         let mut was: HashMap<String, &craft_wordmodel::resolve::ResolvedChar> = HashMap::new();
         for (o, (_, rc)) in orig.iter().zip(&b.chars) {
             was.entry(o.1.0.clone()).or_insert(rc);
@@ -977,7 +977,7 @@ impl Job<'_> {
             Err(why) => return self.skip(m, &why),
         };
         if plain.chars.iter().map(|c| c.0).collect::<String>() != before {
-            return self.skip(m, "the paragraph holds content shown differently in WordCraft");
+            return self.skip(m, "the paragraph holds content the reader shows differently");
         }
         let mut chars = rewrite(before, after, &plain.chars, &plain.key);
         if let Some(st) = self.style.as_mut() {
@@ -1338,7 +1338,7 @@ impl Job<'_> {
         let runs = sec.kids(p, Some("run"));
         let nodes: Vec<usize> = runs.iter().flat_map(|&r| sec.kids(r, None)).filter(|&q| DRAWING_TAGS.contains(&sec.local(q))).collect();
         if nodes.len() != before.len() {
-            return self.skip(m, "its pictures are not where WordCraft shows them; picture edits not written");
+            return self.skip(m, "its pictures are not where the reader shows them; picture edits not written");
         }
         // which picture became which: in place when as many are left, else by image
         let pairs: Vec<(Option<usize>, Option<usize>)> =
@@ -1737,7 +1737,7 @@ pub(crate) fn plan(
         }
     }
     let mut pieces_seen: HashMap<Mark, usize> = HashMap::new();
-    // Paragraphs the converter adds itself (separators, spacers) carry no mark; they are not
+    // Paragraphs the reader adds itself (separators, spacers) carry no mark; they are not
     // new if the "before" picture has them at the same place with the same text.
     let mut synthetic: HashMap<(&'static str, Option<Mark>, Option<String>), usize> = HashMap::new();
     for (i, place) in unmarked(&before) {
@@ -1978,7 +1978,7 @@ fn para_changes(a: &crate::write::new::ParaKey, b: &crate::write::new::ParaKey) 
     .count()
 }
 
-/// Comments (Hancom's memos) added or deleted in WordCraft aren't written into the original
+/// Comments (Hancom's memos) added or deleted aren't written into the original
 /// file: the write-back changes text, not the memo fields around it. Each is reported, so the
 /// user knows the file doesn't have the new one, or still has the deleted one, instead of a
 /// silent difference. A comment is matched by its author and time, so one whose text was
@@ -2005,7 +2005,7 @@ fn comment_changes(before: &craft_wordmodel::Document, after: &craft_wordmodel::
     }
 }
 
-/// One part of a package read back (the original HWPX, or the DOCX of the edited document).
+/// One part of the original package read back.
 const MAX_PART: u64 = 256 * 1024 * 1024;
 const ZIP_LIMITS: craft_zip::Limits = craft_zip::Limits { max_entries: 65_536, max_total_bytes: 1024 * 1024 * 1024 };
 

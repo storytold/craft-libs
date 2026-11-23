@@ -22,9 +22,9 @@ Hangul documents (craft-hwpx)
 (This product was developed with reference to Hancom's public document on the Hangul document
 file (.hwp) format; Hancom's terms for that document require this sentence.) Hangul and HWP are
 trademarks of Hancom Inc.; craft-libs is not affiliated with Hancom Inc. The element and attribute
-names `craft-hwpx` reads come from Hancom's OWPML model (https://github.com/hancom-io/hwpx-owpml-model,
-Apache License 2.0); names only, no code. The reader was moved from WordCraft `crates/hwp`
-(storytold/wordcraft#6915) at revision `f68cfa0b4b948e07173e23703d4260d268f361a6`.
+names `craft-hwpx` reads and writes come from Hancom's OWPML model (https://github.com/hancom-io/hwpx-owpml-model,
+Apache License 2.0); names only, no code. The reader and writer were moved from WordCraft
+`crates/hwp` (storytold/wordcraft#6915) at revision `f68cfa0b4b948e07173e23703d4260d268f361a6`.
 
 This product bundles third-party material under its own licenses, listed below. The per-file
 list (author, source, license) is in ATTRIBUTION.md.

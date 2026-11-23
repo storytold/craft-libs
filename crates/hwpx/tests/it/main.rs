@@ -29,18 +29,62 @@ fn the_sweep_seed_reads_whole() {
     assert!(doc.parts.values().any(|p| p.kind == craft_wordmodel::PartKind::TextBox), "no text box");
 }
 
+/// Read `bytes`; when it reads, type into its first paragraph and write it back into the file,
+/// and write it as a new package too.
+fn read_edit_write(bytes: &[u8]) {
+    let Ok(mut doc) = craft_hwpx::read(bytes) else { return };
+    if let Some(craft_wordmodel::Block::Para(p)) = doc.body.first_mut().map(std::sync::Arc::make_mut) {
+        let props = p.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+        let _ = p.insert_text(0, "새 ", &props);
+    }
+    let _ = craft_hwpx::write(&doc);
+    doc.passthrough.remove(craft_hwpx::PACKAGE_KEY);
+    let _ = craft_hwpx::write(&doc);
+}
+
 /// Damaged packages (every truncation and many mutations, of the package and of its section
-/// XML) give a document or an error, never a panic or a hang. The rounds go through the shared
-/// budget (`CRAFT_HOSTILE_DIVISOR`).
+/// XML) give a document or an error, never a panic or a hang; so does writing what they read,
+/// edited, back into them or as a new package. The rounds go through the shared budget
+/// (`CRAFT_HOSTILE_DIVISOR`).
 #[test]
 fn damaged_packages_never_panic() {
     let seed = package(HEAD, SECTION);
-    hammer(&HammerConfig::new("hwpx package", 400), &seed, |b| {
-        let _ = craft_hwpx::read(b);
-    });
+    hammer(&HammerConfig::new("hwpx package", 400), &seed, read_edit_write);
     hammer(&HammerConfig::new("hwpx section xml", 400), SECTION.as_bytes(), |b| {
-        let _ = craft_hwpx::read(&package(HEAD, &String::from_utf8_lossy(b)));
+        read_edit_write(&package(HEAD, &String::from_utf8_lossy(b)));
     });
+}
+
+/// The sweep's package, every paragraph of its body typed into, written back and read again:
+/// each paragraph reads as edited, or as it was where the edit can't be written (text beside a
+/// field, note or equation in one run is left as it was, and logged), never anything else; the
+/// plain one reads as edited, and the header stays.
+#[test]
+fn the_sweep_seed_writes_back_its_edits() {
+    let original = package(HEAD, SECTION);
+    let texts = |doc: &craft_wordmodel::Document| doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect::<Vec<_>>();
+    let mut doc = craft_hwpx::read(&original).unwrap();
+    let was = texts(&doc);
+    for b in doc.body.iter_mut() {
+        if let craft_wordmodel::Block::Para(p) = std::sync::Arc::make_mut(b)
+            && !p.text.trim().is_empty()
+        {
+            let props = p.runs.last().map(|r| r.props.clone()).unwrap_or_default();
+            let end = p.text.len();
+            p.insert_text(end, " 고침", &props).unwrap();
+        }
+    }
+    let want = texts(&doc);
+    let out = craft_hwpx::write(&doc).unwrap();
+    let back = craft_hwpx::read(&out).unwrap();
+    let got = texts(&back);
+    assert_eq!(got.len(), want.len());
+    for ((g, w), o) in got.iter().zip(&want).zip(&was) {
+        assert!(g == w || g == o, "{g:?} is neither {w:?} nor {o:?}");
+    }
+    assert!(got.iter().any(|t| t == "둘째 단 고침"), "{got:?}");
+    let header = |b: &[u8]| craft_hwpx::read(b).unwrap().parts.values().filter(|p| p.kind == craft_wordmodel::PartKind::Header).count();
+    assert_eq!(header(&out), header(&original), "the header stays");
 }
 
 /// Deep nesting (tables in cells, shapes in shapes) stops at the reader's limits instead of
@@ -87,6 +131,34 @@ fn local_samples_read() {
         assert!(!doc.body.is_empty(), "sample #{} has an empty body", k + 1);
     }
     println!("{} samples read", files.len());
+}
+
+/// Every `.hwpx` in `CRAFT_HWP_SAMPLES`, read and written back unedited, keeps every part of
+/// its package as it was. Skipped as `local_samples_read` is.
+#[test]
+fn local_samples_write_back_unedited() {
+    let Some(dir) = std::env::var_os("CRAFT_HWP_SAMPLES").filter(|d| !d.is_empty()) else {
+        println!("SKIPPED: CRAFT_HWP_SAMPLES is not set (a folder of .hwpx files to write back)");
+        return;
+    };
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .map(|r| r.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("hwpx"))).collect())
+        .unwrap_or_default();
+    files.sort();
+    let limits = craft_zip::Limits { max_entries: 65_536, max_total_bytes: 1 << 30 };
+    for (k, f) in files.iter().enumerate() {
+        let bytes = std::fs::read(f).unwrap_or_default();
+        let doc = craft_hwpx::read(&bytes).unwrap_or_else(|e| panic!("sample #{} did not read: {e}", k + 1));
+        let out = craft_hwpx::write(&doc).unwrap_or_else(|e| panic!("sample #{} did not write: {e}", k + 1));
+        let (mut a, mut b) = (craft_zip::Archive::open(&bytes, limits).unwrap(), craft_zip::Archive::open(&out, limits).unwrap());
+        assert_eq!(a.len(), b.len(), "sample #{}: entries", k + 1);
+        for i in 0..a.len() {
+            let name = a.entry_name(i).unwrap().unwrap_or_default();
+            assert_eq!(b.entry_name(i).unwrap().unwrap_or_default(), name, "sample #{}: entry {i}", k + 1);
+            assert!(a.read(&name, u64::MAX).unwrap() == b.read(&name, u64::MAX).unwrap(), "sample #{}: entry {i} changed", k + 1);
+        }
+    }
+    println!("{} samples written back", files.len());
 }
 
 /// Every number attribute of the sweep's package set to the extremes a file can write, one at a

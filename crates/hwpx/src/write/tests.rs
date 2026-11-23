@@ -412,3 +412,16 @@ fn table_rows_without_a_height_stay_without_one() {
     let t = back.body.iter().find_map(|b| b.as_table()).expect("the table");
     assert!(t.rows.iter().all(|r| r.props.height.is_none()), "no row height on reopening");
 }
+
+/// What a save leaves out is logged by the public writer (a new package naming a hyperlink's
+/// text but not its destination).
+#[test]
+fn what_isnt_written_is_logged() {
+    use craft_wordmodel::{CharProps, Paragraph};
+    let linked = CharProps { link: Some("https://example.com/".into()), ..CharProps::default() };
+    let mut doc = craft_wordmodel::Document::from_text("");
+    doc.body = vec![std::sync::Arc::new(craft_wordmodel::Block::Para(Paragraph::with_text("연결된 글", linked)))];
+    let (bytes, warnings) = crate::test_log::warnings(|| crate::write(&doc));
+    assert!(bytes.is_ok());
+    assert!(warnings.iter().any(|w| w.contains("hyperlink destinations")), "{warnings:?}");
+}
