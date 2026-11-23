@@ -9,9 +9,9 @@ use crate::contract::{
 use crate::contract::{NoValue, Outcome};
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
-use crate::style::Ink;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterBar, FooterButton, HeaderAction, HeaderStrength, TitleRow};
+use crate::style::Ink;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::{Metrics, Sense};
 use egui::{Response, Ui};

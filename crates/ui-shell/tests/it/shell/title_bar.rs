@@ -167,3 +167,39 @@ fn a_document_tab_strip_in_the_bar_takes_the_free_width() {
     let settings = fixture.by_label("Settings").expect("the Settings button").rect;
     assert!(strip.width() > (settings.left() - home.right()) / 2.0, "the strip takes the free width: {strip:?} up to {settings:?}");
 }
+
+/// With tabs that overflow the strip, the trailing control stays in sight at the end of the strip's row, left of the
+/// bar's own trailing controls (it runs under none of them).
+#[trial]
+fn a_trailing_control_of_overflowing_tabs_stays_clear_of_the_bars_controls() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    use craft_ui::testing::Fixture;
+    let mut fixture = Fixture::new(|ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let tabs: Vec<_> = (0..9).map(|i| DocumentTab::new(i, format!("Statement {i} for the office records, scanned.pdf")).closable(true)).collect();
+        let _ = TitleBar::new().frame(frame).show_titled(
+            ui,
+            Title::new("x"),
+            |ui, _| {
+                Button::new("Home").show(ui);
+                DocumentTabs::new("Documents", &tabs)
+                    .reorderable(true)
+                    .selected(0)
+                    .trailing(|ui| {
+                        Button::new("Open").show(ui);
+                    })
+                    .show(ui);
+            },
+            |ui, _| {
+                Button::new("Discord").show(ui);
+            },
+        );
+    });
+    fixture.room(vec2(1200.0, 300.0)).settle();
+    let open = fixture.by_label("Open").expect("the Open button").rect;
+    let discord = fixture.by_label("Discord").expect("the Discord button").rect;
+    assert!(open.right() <= discord.left() + 0.5, "Open {open:?} runs under Discord {discord:?}");
+}

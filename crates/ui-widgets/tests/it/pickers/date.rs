@@ -122,7 +122,11 @@ fn a_date_format_starts_its_weeks_where_the_app_says() {
     let sunday = europe.with_first_weekday(Weekday::Sunday);
     assert_eq!(sunday.first_weekday(), Weekday::Sunday, "the app's week");
     let week = CalendarView::open(Some(PickedDate::day(YEAR, FEBRUARY, 1)), None, &[DatePrecision::Day], &sunday);
-    assert_eq!(craft_ui::pickers::month_grid(YEAR, FEBRUARY, sunday.first_weekday()).iter().position(Option::is_some), Some(0), "{week:?}: February 2026 starts a Sunday-first week");
+    assert_eq!(
+        craft_ui::pickers::month_grid(YEAR, FEBRUARY, sunday.first_weekday()).iter().position(Option::is_some),
+        Some(0),
+        "{week:?}: February 2026 starts a Sunday-first week"
+    );
 }
 
 /// A calendar page starts its weeks on the day it is given: February 2026 begins on a Sunday, so its 1st is in the first
@@ -131,7 +135,12 @@ fn a_date_format_starts_its_weeks_where_the_app_says() {
 fn a_calendar_page_starts_its_weeks_on_the_day_it_is_given() {
     use craft_ui::pickers::Calendar;
     let first_cell = |day: Weekday| {
-        let view = CalendarView::open(Some(PickedDate::day(YEAR, FEBRUARY, 1)), None, &[DatePrecision::Day], &DateFormat::from_tag("en-US").with_first_weekday(day));
+        let view = CalendarView::open(
+            Some(PickedDate::day(YEAR, FEBRUARY, 1)),
+            None,
+            &[DatePrecision::Day],
+            &DateFormat::from_tag("en-US").with_first_weekday(day),
+        );
         let mut fixture = Fixture::new(move |ui| {
             Calendar::new("Due date", view, None).first_weekday(day).show(ui);
         });

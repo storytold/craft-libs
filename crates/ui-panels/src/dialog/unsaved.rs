@@ -77,7 +77,11 @@ pub struct UnsavedChangesDialog {
 impl UnsavedChangesDialog {
     /// The question for the document `document_name`, closing under `scope`; the guard asks about one document.
     pub fn new(scope: CloseScope, document_name: impl Into<String>) -> Self {
-        Self { id: dialog_id("unsaved-changes"), scope, name: document_name.into(), remaining: 1,
+        Self {
+            id: dialog_id("unsaved-changes"),
+            scope,
+            name: document_name.into(),
+            remaining: 1,
             apply_to_all: false,
             open: true,
             chosen: None,

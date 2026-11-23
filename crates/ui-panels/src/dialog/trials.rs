@@ -86,7 +86,8 @@ fn a_dialog_with_unchanged_fields_shows_close_in_place_of_ok_and_cancel() {
         });
         fixture.idle(30);
         // The title row's close action carries the same name; the footer's button is the last of them.
-        let closes: Vec<_> = fixture.by_role(Role::BUTTON).into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("Close")).collect();
+        let closes: Vec<_> =
+            fixture.by_role(Role::BUTTON).into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("Close")).collect();
         let labels = (fixture.by_label("OK").is_some(), fixture.by_label("Cancel").is_some(), closes.len() > 1);
         if let Some(close) = closes.last().filter(|_| !changed) {
             fixture.click(close);

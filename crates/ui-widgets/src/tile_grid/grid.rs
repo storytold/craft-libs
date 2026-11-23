@@ -1005,7 +1005,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     /// Every tile gets the grid's caption place, detail line and actions' place, the card look, and its row's rename
     /// state. Under `checks` a tile's check is its own selection, so the app keeps no second copy of it.
     fn dress<'r>(&self, tile: Self::Item<'r>, row: &RowState) -> Self::Item<'r> {
-        let tile = tile.caption(self.caption).detail_line(self.detail_line).action_place(self.action_place).renaming(row.renaming).selected(row.selected);
+        let tile =
+            tile.caption(self.caption).detail_line(self.detail_line).action_place(self.action_place).renaming(row.renaming).selected(row.selected);
         let tile = if self.checks { tile.check(if row.selected { ToggleState::On } else { ToggleState::Off }) } else { tile };
         if self.card { tile.card() } else { tile }
     }

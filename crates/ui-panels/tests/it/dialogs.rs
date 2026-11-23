@@ -471,7 +471,11 @@ fn a_footer_cancel_is_a_ghost_button_beside_the_accent_answer() {
     });
     fixture.settle();
     let seen = fixture.styles_of(std::any::type_name::<craft_ui::buttons::Button<'static>>());
-    assert!(seen.iter().any(|style| style.variant == Variant::GHOST), "Cancel is a ghost button: {:?}", seen.iter().map(|s| s.variant).collect::<Vec<_>>());
+    assert!(
+        seen.iter().any(|style| style.variant == Variant::GHOST),
+        "Cancel is a ghost button: {:?}",
+        seen.iter().map(|s| s.variant).collect::<Vec<_>>()
+    );
     assert!(!seen.iter().any(|style| style.variant == Variant::SECONDARY), "no outlined button in the footer");
 }
 

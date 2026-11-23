@@ -482,8 +482,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         let words = cx.words::<DockWords>();
         let from = PanelKey::of(&self.anchor);
         let started = drop::started(&cx.env);
-        let (panels, active, closable, wheel_selects, titled) =
-            (self.panels, self.active, self.closable, self.wheel_selects_tabs, self.titled);
+        let (panels, active, closable, wheel_selects, titled) = (self.panels, self.active, self.closable, self.wheel_selects_tabs, self.titled);
         let close_name = words.close_panel.clone();
         let menu_rows = self.menu.clone();
         let panel_menu = words.panel_menu.clone();
@@ -520,7 +519,12 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 let can_close = closable && shown.is_some_and(|panel| panel.closable);
                 if can_close {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if IconButton::new(IconId::new("close")).size(ControlSize::Sm).label(Label::from(close_name.fill(&[("name", panel_name.as_str())]))).show(ui).clicked() {
+                        if IconButton::new(IconId::new("close"))
+                            .size(ControlSize::Sm)
+                            .label(Label::from(close_name.fill(&[("name", panel_name.as_str())])))
+                            .show(ui)
+                            .clicked()
+                        {
                             reported.closed.push(active);
                         }
                     });

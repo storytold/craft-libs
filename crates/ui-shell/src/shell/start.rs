@@ -500,12 +500,37 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, offers_new, offers_open, pinned_title, sections } = self;
+        let StartScreen {
+            view,
+            sort,
+            recent,
+            pinned,
+            templates,
+            max_recent,
+            now,
+            thumbnails,
+            links,
+            drop_hint,
+            offers_new,
+            offers_open,
+            pinned_title,
+            sections,
+        } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, offers_new, offers_open, pinned_title: pinned_title.as_ref(), actions: &actions };
+        let page = Page {
+            env: &env,
+            words: &words,
+            thumbnails,
+            drop_hint: drop_hint.as_ref(),
+            now,
+            offers_new,
+            offers_open,
+            pinned_title: pinned_title.as_ref(),
+            actions: &actions,
+        };
         let view = RefCell::new(view);
         let sort = RefCell::new(sort);
 
@@ -919,11 +944,7 @@ fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
             if let Some(note) = folder_note(words, folder) {
                 heading = heading.trailing(note);
             }
-            heading.trailing_part(
-                UNPIN,
-                TrailingFace::Strong(words.unpin.clone()),
-                words.unpin_folder.fill(&[("name", folder.name.as_str())]),
-            )
+            heading.trailing_part(UNPIN, TrailingFace::Strong(words.unpin.clone()), words.unpin_folder.fill(&[("name", folder.name.as_str())]))
         }
         PinnedRow::File(file) => {
             let row = ListRow::new(Label::from(file.name.clone()))

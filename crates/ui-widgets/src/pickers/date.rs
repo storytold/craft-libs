@@ -221,7 +221,8 @@ pub struct DatePicker<'a> {
 impl<'a> DatePicker<'a> {
     /// A date picker named `label` over `value`, at every precision.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<PickedDate>>) -> Self {
-        DatePicker { common: Common::new(), value, precisions: &DatePrecision::ALL, min: None, max: None, today: None, first_weekday: None }.label(label)
+        DatePicker { common: Common::new(), value, precisions: &DatePrecision::ALL, min: None, max: None, today: None, first_weekday: None }
+            .label(label)
     }
 
     fn offered(&self) -> &'a [DatePrecision] {

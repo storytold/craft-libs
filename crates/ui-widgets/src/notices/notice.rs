@@ -414,7 +414,9 @@ impl<'a> Notice<'a> {
         let dismiss_width = dismiss.map_or(0.0, |size| size.x + gap);
         let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
         let remaining = width - icon_width - dismiss_width - actions_width - gap;
-        let inline_actions = matches!(self.layout, NoticeLayout::Inline | NoticeLayout::Bar) && !actions.is_empty() && (!width.is_finite() || remaining >= actions_width);
+        let inline_actions = matches!(self.layout, NoticeLayout::Inline | NoticeLayout::Bar)
+            && !actions.is_empty()
+            && (!width.is_finite() || remaining >= actions_width);
         let action_width = if inline_actions { actions_width + gap } else { 0.0 };
         let column = if width.is_finite() { (width - icon_width - dismiss_width - action_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();

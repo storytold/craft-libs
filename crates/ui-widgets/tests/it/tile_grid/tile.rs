@@ -54,7 +54,13 @@ fn summary_card_paints_title_description_and_action() {
             Tile::new("Arrange").icon(craft_behavior::IconId::new("grid")).detail("Move pages").summary_action("Use now").card().show(ui);
         });
     }
-    let texts: Vec<_> = shapes.iter().filter_map(|shape| match shape { Shape::Text(text) => Some(text.galley.job.text.as_str()), _ => None }).collect();
+    let texts: Vec<_> = shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::Text(text) => Some(text.galley.job.text.as_str()),
+            _ => None,
+        })
+        .collect();
     for text in ["Arrange", "Move pages", "Use now"] {
         assert!(texts.contains(&text), "missing {text}: {texts:?}");
     }

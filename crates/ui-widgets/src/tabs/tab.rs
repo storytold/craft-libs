@@ -60,7 +60,6 @@ const TEXT: PartKey = PartKey::new("text");
 const CLOSE: PartKey = PartKey::new("close");
 const PROGRESS: PartKey = PartKey::new("progress");
 
-
 const CLOSE_REASON: &str = "The Close command closes the focused tab";
 
 /// The sizes a tab takes from its kind and the tokens.

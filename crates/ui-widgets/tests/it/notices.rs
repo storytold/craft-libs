@@ -212,7 +212,11 @@ fn a_toast_is_light_on_a_dark_theme_and_dark_on_a_light_one() {
         let mut fills = Vec::new();
         rect_fills(&shapes, &mut fills);
         let text = fixture.texts().iter().find(|run| run.text == "No recent files").expect("the message is painted").rect;
-        let card = fills.iter().filter(|(rect, _)| rect.contains_rect(text)).min_by(|a, b| a.0.area().total_cmp(&b.0.area())).expect("a card under the text");
+        let card = fills
+            .iter()
+            .filter(|(rect, _)| rect.contains_rect(text))
+            .min_by(|a, b| a.0.area().total_cmp(&b.0.area()))
+            .expect("a card under the text");
         assert_eq!(luminance(card.1) > 128.0, light_card, "{mode:?}: the toast's card is {:?}", card.1);
     }
 }

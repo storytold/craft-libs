@@ -752,9 +752,12 @@ impl Component for Tile<'_> {
         let sizes = Sizes::of(cx, key.card, key.caption);
         // Band tiles use the collection's selection fill over the whole tile.
         let fill = if key.action_place == TileActionPlace::Band {
-            Stateful::new(c(clear))
-                .off(States::new(c(clear), c(state.hover), c(state.pressed), c(clear)))
-                .on(States::new(c(state.selected), c(state.selected_hover), c(state.selected), c(state.selected)))
+            Stateful::new(c(clear)).off(States::new(c(clear), c(state.hover), c(state.pressed), c(clear))).on(States::new(
+                c(state.selected),
+                c(state.selected_hover),
+                c(state.selected),
+                c(state.selected),
+            ))
         } else if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
@@ -768,10 +771,14 @@ impl Component for Tile<'_> {
             .on(States::new(accent, accent, accent, accent))
             .when(Flags::CURRENT, accent);
         let (thin, thick) = (tokens.stroke.thin, tokens.stroke.thick);
-        let ring_width = if key.action_place == TileActionPlace::Band { Stateful::new(0.0) } else {
+        let ring_width = if key.action_place == TileActionPlace::Band {
+            Stateful::new(0.0)
+        } else {
             Stateful::new(0.0).off(States::new(0.0, thin, thin, 0.0)).on(States::new(thick, thick, thick, thick)).when(Flags::CURRENT, thick)
         };
-        let halo_width = if key.action_place == TileActionPlace::Band { Stateful::new(0.0) } else {
+        let halo_width = if key.action_place == TileActionPlace::Band {
+            Stateful::new(0.0)
+        } else {
             Stateful::new(0.0).on(States::new(thin, thin, thin, thin)).when(Flags::CURRENT, thin)
         };
         let radius = UiTokens::corner(tokens.shape.radius.control);
@@ -786,12 +793,14 @@ impl Component for Tile<'_> {
         let on_bar = |ink: StyleColor, side: f32| IconLook::new(side, Stateful::new(ink)).on(Stateful::new(plate));
         TileStyle {
             surface,
-            metrics: Metrics::new().padding(Insets::new(
-                if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
-                if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
-                sizes.inset,
-                sizes.inset,
-            )).gap(sizes.tight),
+            metrics: Metrics::new()
+                .padding(Insets::new(
+                    if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
+                    if key.action_place == TileActionPlace::Band { sizes.glyph } else { sizes.inset },
+                    sizes.inset,
+                    sizes.inset,
+                ))
+                .gap(sizes.tight),
             name: if key.card {
                 TextLook::new(TypeRole::BodyStrong, ink(c(text.normal)))
             } else {
@@ -992,7 +1001,8 @@ impl Component for Tile<'_> {
                 flow.take_start(icon_side + style.sizes.tight).1.rect()
             };
             let title_layout = draw.layout(&title, title_area.width());
-            let title_x = if centered { title_area.center().x - title_layout.size().x / 2.0 } else { self.text_x(title_area, title_layout.size().x, cx) };
+            let title_x =
+                if centered { title_area.center().x - title_layout.size().x / 2.0 } else { self.text_x(title_area, title_layout.size().x, cx) };
             draw.galley(egui::pos2(title_x, title_area.top()), &title_layout);
             if !centered {
                 if let Some(detail) = &self.detail {
@@ -1063,7 +1073,9 @@ impl Component for Tile<'_> {
         self.paint_bar(ui, cx, &placed);
         self.paint_pills(ui, cx, &placed);
         // The action icons use interface ink; a document picture can have any colour behind them.
-        if self.action_place != TileActionPlace::Band && let Some(plate) = placed.actions.iter().copied().reduce(|all, rect| all.union(rect)) {
+        if self.action_place != TileActionPlace::Band
+            && let Some(plate) = placed.actions.iter().copied().reduce(|all, rect| all.union(rect))
+        {
             ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);
         }
         for (at, ((icon, command, _), _)) in self.actions.iter().zip(&placed.actions).enumerate() {

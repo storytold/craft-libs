@@ -547,8 +547,20 @@ pub struct Calendar {
 impl Calendar {
     /// The page of `view` named `label`, with the cell of `value` selected.
     pub fn new(label: impl Into<crate::runtime::env::Label>, view: CalendarView, value: Option<PickedDate>) -> Self {
-        Calendar { common: Common::new(), view, value, min: None, max: None, today: None, first_weekday: None, picked: None, hovered: None, moved: None, lines: [0.0; 3] }
-            .label(label)
+        Calendar {
+            common: Common::new(),
+            view,
+            value,
+            min: None,
+            max: None,
+            today: None,
+            first_weekday: None,
+            picked: None,
+            hovered: None,
+            moved: None,
+            lines: [0.0; 3],
+        }
+        .label(label)
     }
 
     /// The scope's dates, with this calendar's first weekday when it sets one.

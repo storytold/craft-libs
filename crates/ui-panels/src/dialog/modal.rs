@@ -11,11 +11,11 @@ use crate::contract::{
 use crate::edit::outer::{self, OuterEnd};
 use crate::runtime::access::Access;
 use crate::runtime::env::{Env, Label};
-use crate::runtime::words::CommonWords;
 use crate::runtime::focus::Initial;
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::{self, Backdrop, CloseReason, Rank};
 use crate::runtime::windows::{self, WindowHost};
+use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{CancelRule, Metrics, Sense};
@@ -493,7 +493,13 @@ impl Container for Dialog<'_> {
         if self.holds_outer_gesture() {
             outer::keep(ui.ctx(), cx);
         }
-        frame::header(ui, cx, frame::close_action(self.closable && frame::close_button(ui.ctx())), self.title_note.as_ref(), self.title_icon.as_ref());
+        frame::header(
+            ui,
+            cx,
+            frame::close_action(self.closable && frame::close_button(ui.ctx())),
+            self.title_note.as_ref(),
+            self.title_icon.as_ref(),
+        );
         self.keep_window_draggable(ui);
     }
 

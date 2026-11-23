@@ -6,8 +6,8 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::display::{Icon, Shade, Text};
 use crate::layout_components::{Row, Stack};
-use crate::primitives::IconSpec;
 use crate::notices::{Notice, NoticeLayout};
+use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::focus::Initial;
 use crate::runtime::overlay::CloseReason;
@@ -161,7 +161,12 @@ pub(super) struct Extras<'a> {
 
 impl Extras<'_> {
     fn is_empty(&self) -> bool {
-        self.tone.is_none() && self.paragraphs.is_empty() && self.note.is_none() && self.lines.is_empty() && self.details.is_none() && self.below.is_none()
+        self.tone.is_none()
+            && self.paragraphs.is_empty()
+            && self.note.is_none()
+            && self.lines.is_empty()
+            && self.details.is_none()
+            && self.below.is_none()
     }
 
     fn show(&mut self, ui: &mut Ui) {

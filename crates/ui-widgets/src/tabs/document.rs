@@ -349,12 +349,26 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                         None => Some(strip.response.response.rect.left()),
                         _ => None,
                     };
-                    let left = match after {
-                        Some(at) if !ui.layout().prefer_right_to_left() => at.min(slot.left()),
-                        _ => slot.left(),
+                    // Overflowing, the control ends at the row's end edge; it never runs past it.
+                    let (room, layout) = match after {
+                        Some(at) if !ui.layout().prefer_right_to_left() => {
+                            let end = slot.right().min(ui.clip_rect().right().max(slot.left()));
+                            let left = at.min(slot.left()).min(end - held).max(strip.response.response.rect.left());
+                            (
+                                egui::Rect::from_min_max(egui::pos2(left, slot.top()), egui::pos2(slot.right().max(left + 400.0), slot.bottom())),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                            )
+                        }
+                        _ => {
+                            // The row's own edge can lie past what the bar leaves it: end at the visible edge.
+                            let end = slot.right().min(ui.clip_rect().right().max(slot.left()));
+                            (
+                                egui::Rect::from_min_max(egui::pos2(end - slot.width(), slot.top()), egui::pos2(end, slot.bottom())),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                            )
+                        }
                     };
-                    let room = egui::Rect::from_min_max(egui::pos2(left, slot.top()), egui::pos2(slot.right().max(left + 400.0), slot.bottom()));
-                    let builder = egui::UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(egui::Align::Center));
+                    let builder = egui::UiBuilder::new().max_rect(room).layout(layout);
                     let drawn = ui.scope_builder(builder, |ui| area(ui)).response.rect.width();
                     if (drawn - held).abs() > 0.5 {
                         ui.ctx().data_mut(|data| data.insert_temp(memory, drawn));

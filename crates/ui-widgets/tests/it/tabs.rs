@@ -28,11 +28,12 @@ fn overflowing_document_tabs_remain_readable_and_list_every_document() {
         let _ = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
     });
     fixture.room(egui::vec2(600.0, 100.0)).settle();
-    let shown: Vec<_> = (0..12)
-        .filter_map(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).map(|node| node.rect))
-        .collect();
+    let shown: Vec<_> = (0..12).filter_map(|i| fixture.by_label(&format!("Document number {i}, scanned.pdf")).map(|node| node.rect)).collect();
     assert!(shown.len() > 1, "more than one tab remains visible: {shown:?}");
-    assert!(shown.iter().all(|tab| tab.width() + 0.5 >= minimum), "tabs fit their first 12 characters and close button: {shown:?}, minimum {minimum}");
+    assert!(
+        shown.iter().all(|tab| tab.width() + 0.5 >= minimum),
+        "tabs fit their first 12 characters and close button: {shown:?}, minimum {minimum}"
+    );
     let more = fixture.by_label("More tabs").expect("overflow button").center();
     fixture.click_at(more).settle();
     for i in 0..12 {

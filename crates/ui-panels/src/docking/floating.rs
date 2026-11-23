@@ -17,12 +17,12 @@ use crate::contract::{
     Mount, NoValue, OsFiles, Outcome, Overlay, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing,
     WordSetCx as _,
 };
+use crate::display::Icon;
+use crate::primitives::IconSpec;
 use crate::runtime::drag::OsFile;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::windows::WindowSpec;
-use crate::display::Icon;
-use crate::primitives::IconSpec;
 use crate::sections::{HeaderAction, HeaderStrength, MenuRows, TitleRow};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::dock::DockEdge;

@@ -46,7 +46,11 @@ fn a_mixed_number_field_can_read_mixed() {
         NumberField::new("Size", Bind::given(Mixed::<Option<f64>>::Mixed)).mixed_word(true).show(ui);
     });
     fixture.settle();
-    assert!(fixture.texts().iter().any(|run| run.text == "Mixed"), "reads Mixed: {:?}", fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>());
+    assert!(
+        fixture.texts().iter().any(|run| run.text == "Mixed"),
+        "reads Mixed: {:?}",
+        fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    );
 }
 
 /// The word takes the room of the unit: a mixed field that reads "Mixed" shows no unit after it.

@@ -728,7 +728,8 @@ fn a_percent_field_reads_one_decimal_then_the_sign() {
     });
     fixture.settle();
     let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
-    let number = painted("100.0").unwrap_or_else(|| panic!("the value shows one decimal: {:?}", fixture.texts().iter().map(|r| r.text.clone()).collect::<Vec<_>>()));
+    let number = painted("100.0")
+        .unwrap_or_else(|| panic!("the value shows one decimal: {:?}", fixture.texts().iter().map(|r| r.text.clone()).collect::<Vec<_>>()));
     let sign = painted("%").unwrap_or_else(|| panic!("the field shows the sign"));
     assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
 }

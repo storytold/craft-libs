@@ -71,10 +71,7 @@ fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
 fn a_titled_group_shows_the_panel_title_and_a_close_button_instead_of_tabs() {
     let closed = Rc::new(Cell::new(false));
     let seen = Rc::clone(&closed);
-    let panels = vec![
-        PanelTitle::new(PanelKey::new(1), "Accessibility Checker").closable(true),
-        PanelTitle::new(PanelKey::new(2), "Pages"),
-    ];
+    let panels = vec![PanelTitle::new(PanelKey::new(1), "Accessibility Checker").closable(true), PanelTitle::new(PanelKey::new(2), "Pages")];
     let mut fixture = Fixture::new(move |ui| {
         let out = DockGroup::new(1usize, &panels, panels[0].key).titled().closable().show_at(
             ui,
