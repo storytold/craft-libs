@@ -20,8 +20,9 @@
 use crate::layout::channel_map;
 use crate::{AudioError, ChannelLayout, CodecId, CodecParams, EncodeFormat, EncodeOptions, RateControl, Result};
 
-/// Frames handed to a codec at a time, so its buffers and the packets returned for one call stay
-/// small however long a block is. Also the frames of an ALAC packet.
+/// Maximum frames handed to a codec per internal call, bounding that call's input and output.
+/// `PacketEncoder::encode` collects packets across all chunks, so its returned vector grows with
+/// the caller's input block. Also the frames of an ALAC packet.
 pub(crate) const CHUNK: usize = 4096;
 
 /// Bits per second per channel when no rate is asked for: AAC and Opus.
@@ -475,6 +476,11 @@ impl PacketEncoder {
     /// Encodes the first `frames` frames of `block`, one slice per channel in WAV order
     /// (`&[Vec<f32>]`, `&[&[f32]]`, …), and returns the packets completed. Samples are full scale
     /// at ±1; NaN is taken as 0, and what a codec cannot carry above full scale is clipped.
+    ///
+    /// Internal codec calls process at most 4096 frames at a time, but this method collects their
+    /// packets in one returned vector whose memory use grows with `frames`. For streaming with
+    /// bounded memory, pass bounded input blocks and consume each returned batch before encoding
+    /// the next block, as [`FileEncoder`](crate::FileEncoder) does for coded formats.
     ///
     /// `block` must have one slice per channel, each at least `frames` long; otherwise nothing is
     /// encoded and the error is [`AudioError::Encode`]. A call after [`finish`](Self::finish) is
