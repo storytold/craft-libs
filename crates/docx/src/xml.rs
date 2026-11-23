@@ -49,6 +49,8 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("cx6", "http://schemas.microsoft.com/office/drawing/2016/5/12/chartex"),
     ("cx7", "http://schemas.microsoft.com/office/drawing/2016/5/13/chartex"),
     ("cx8", "http://schemas.microsoft.com/office/drawing/2016/5/14/chartex"),
+    // A tracked change's UTC time (`w16du:dateUtc`).
+    ("w16du", "http://schemas.microsoft.com/office/word/2023/wordml/word16du"),
 ];
 
 /// The `a:ext` URI under which a drawing is marked decorative ([MS-ODRAWXML]), and the
@@ -531,7 +533,7 @@ impl W {
 /// `xmlns:` declarations for the body-part namespaces, plus `mc:Ignorable`.
 pub fn body_ns() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = NAMESPACES.iter().map(|(p, u)| (format!("xmlns:{p}"), (*u).to_string())).collect();
-    v.push(("mc:Ignorable".into(), "w14 w15 wp14".into()));
+    v.push(("mc:Ignorable".into(), "w14 w15 wp14 w16du".into()));
     v
 }
 

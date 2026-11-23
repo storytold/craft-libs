@@ -74,17 +74,20 @@ impl Reader<'_> {
     pub(super) fn revision_named(&mut self, kind: RevisionKind, e: &El, move_name: Option<String>) -> u32 {
         let author = e.attr("w:author").unwrap_or("").chars().take(256).collect::<String>();
         let date = e.attr("w:date").unwrap_or("").chars().take(64).collect::<String>();
+        let date_utc = e.attr("w16du:dateUtc").filter(|d| !d.is_empty()).map(|d| d.chars().take(64).collect::<String>());
         let k = match kind {
             RevisionKind::Insert => 0,
             RevisionKind::Delete => 1,
             RevisionKind::Format => 2,
         };
-        let key = (k, author.clone(), date.clone(), move_name.clone());
+        // Two changes with one local `w:date` (the hour the clocks go back over) are told apart
+        // by their UTC time.
+        let key = (k, author.clone(), date.clone(), move_name.clone(), date_utc.clone());
         if let Some(i) = self.revs.get(&key) {
             return *i;
         }
         let i = self.doc.revisions.len() as u32;
-        self.doc.revisions.push(Revision { kind, author, date, move_name });
+        self.doc.revisions.push(Revision { kind, author, date, move_name, date_utc });
         self.revs.insert(key, i);
         i
     }
