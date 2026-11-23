@@ -351,6 +351,8 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
     }
 }
 
+/// The run's `CxCore`, on the heap: a measuring run and a body recurse while their run's core is alive, so a core in
+/// their frames would sit on the stack once per nesting level.
 #[allow(clippy::too_many_arguments, reason = "one argument per field of the context the pipeline builds once per show")]
 fn blank_core<'a>(
     env: EnvView<'a>,
@@ -360,9 +362,9 @@ fn blank_core<'a>(
     ink: Ink,
     response: Response,
     command: Option<Arc<crate::runtime::commands::ResolvedCommand>>,
-) -> CxCore<'a> {
+) -> Box<CxCore<'a>> {
     let rect = Rect::NOTHING;
-    CxCore {
+    Box::new(CxCore {
         env,
         resolved,
         id: resolved.id,
@@ -434,7 +436,7 @@ fn blank_core<'a>(
         value_text: std::cell::RefCell::new(None),
         submitted: false,
         escaped: false,
-    }
+    })
 }
 
 /// What the pipeline reads of a component type's constants.
@@ -874,7 +876,7 @@ fn create_node(ctx: &Context, ui: &Ui, id: Id, member: bool, role: Role) -> bool
 
 /// Steps 6 to 16, in the `Ui` the host gives, inside the component's focus scope. Children run inside the overlay
 /// step, `paint`, the content and `paint_over`; each step group is its own function, so during a child's run this
-/// level keeps only `HostStep` on the stack.
+/// level keeps only its `HostStep`, on the heap.
 fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
     let scope = enter_scope(p, ui);
     let env = host_env.unwrap_or(p.env);
@@ -933,7 +935,7 @@ struct HostStep {
 /// inert component.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<HostStep> {
+fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<Box<HostStep>> {
     let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
     let (resolved, inert, facts) = (p.resolved, p.inert, p.facts);
@@ -1109,7 +1111,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         super::text::run_selections(e.core(), &parts.text.selections);
         e.core().selections = parts.text.selections.iter().map(|decl| decl.part).collect();
     }
-    Some(HostStep {
+    Some(Box::new(HostStep {
         ctx,
         id,
         rtl,
@@ -1126,7 +1128,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         values: AppValues::default(),
         outer_clip: Rect::NOTHING,
         inside: Rect::NOTHING,
-    })
+    }))
 }
 
 /// Step 9, update, with the body's roving group, which registers after `update`.
@@ -1469,7 +1471,8 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>
     }
 }
 
-/// What steps 1 to 4 found, which the rest of the run reads.
+/// What steps 1 to 4 found, which the rest of the run reads. It lives on the heap ([`begin`]): `run_steps` holds it
+/// while step 5's measuring runs recurse.
 struct Begun {
     ctx: Context,
     facts: TypeFacts,
@@ -1518,7 +1521,7 @@ impl Begun {
 /// Steps 1 to 3: env, style and id.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
+fn begin(t: &mut dyn Erased, ui: &Ui) -> Box<Begun> {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1549,7 +1552,7 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     }
     // The command instance the component is, which steps 4 to 17 run under.
     let own_env = t.instance_scope().map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
-    Begun { ctx, facts, shape, sizing, recording, env, own_env, common, step1, style, id }
+    Box::new(Begun { ctx, facts, shape, sizing, recording, env, own_env, common, step1, style, id })
 }
 
 /// Step 4, value: returns whether the binding holds a mixed value. A sizing pass reads the cancel and ends nothing:
@@ -1780,9 +1783,10 @@ fn measure_step(
     Sizes { room, measured, size, inert, dropped }
 }
 
-/// Steps 6 to 17 under the run's one `CxCore`, which lives in this frame: a sizing child that recurses inside step 5
-/// finds no core of its level on the stack. Returns whether a pass ran past the sizing check.
-// Holds the run's `CxCore`, which opt-level 2 would merge into `run_steps`, on the stack of every measuring run below.
+/// Steps 6 to 17 under the run's one `CxCore`, which this frame owns: a sizing child that recurses inside step 5
+/// finds no core of its level. Returns whether a pass ran past the sizing check.
+// Holds the locals of steps 6 to 17, which opt-level 2 would merge into `run_steps`, on the stack of every measuring run
+// below.
 #[inline(never)]
 fn run_passes(
     t: &mut dyn Erased,

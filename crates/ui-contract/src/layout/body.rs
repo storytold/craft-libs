@@ -930,7 +930,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         again
     };
     let (inner, rect, mut leaves, fixed, probe, again) = crate::contract::keeping_ids(&ctx, || {
-        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+        let mut first = laid_out_child(ui, layout);
         pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.insert(id, Vec::new()));
         let inner = sweep(&mut first, Shrink::Count(id), &mut body);
         let leaves = pass_state::with::<ShrinkReports, _>(&ctx, |reports| reports.0.remove(&id)).unwrap_or_default();
@@ -948,7 +948,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.insert(id, IdMap::default()));
         crate::contract::keeping_ids(&ctx, || {
             layout_memory::probing(&ctx, || {
-                let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
+                let mut least = laid_out_child(ui, layout);
                 sweep(&mut least, Shrink::Least(id), &mut body);
             });
             ((), true)
@@ -1013,9 +1013,10 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     .0
 }
 
-/// A child of `ui` with `layout`, built outside the generic sweeps that run a body in it.
-fn laid_out_child(ui: &mut Ui, layout: egui::Layout) -> Ui {
-    ui.new_child(egui::UiBuilder::new().layout(layout))
+/// A child of `ui` with `layout`, built outside the generic sweeps that run a body in it, on the heap: the body's
+/// children run in it.
+fn laid_out_child(ui: &mut Ui, layout: egui::Layout) -> Box<Ui> {
+    Box::new(ui.new_child(egui::UiBuilder::new().layout(layout)))
 }
 
 /// Whether a body given `axis` shares it among the children that fill it.
@@ -1292,7 +1293,7 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
     }
     let room = ui.available_rect_before_wrap().size();
     let ((inner, spread), rect, short) = crate::contract::keeping_ids(&ctx, || {
-        let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+        let mut first = laid_out_child(ui, layout);
         let (inner, spread) = sweep(&mut first, &env, None, Vec::new(), false, body);
         // Half a point: less than a pixel shows at any scale the box runs.
         let short = spread.as_ref().is_some_and(|spread| spread.count >= 2 && room.x.is_finite() && spread.natural > room.x + 0.5);
@@ -1307,7 +1308,7 @@ fn run_spread<R>(ui: &mut Ui, id: Id, gap: f32, rtl: bool, body: &mut dyn FnMut(
         });
         let leasts = crate::contract::keeping_ids(&ctx, || {
             let leasts = layout_memory::probing(&ctx, || {
-                let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
+                let mut least = laid_out_child(ui, layout);
                 let (_, spread) = sweep(&mut least, &probe, None, Vec::new(), true, body);
                 spread.map_or_else(Vec::new, |spread| spread.widths)
             });
@@ -1732,7 +1733,7 @@ fn run_grid<R>(
     });
     let least = crate::contract::keeping_ids(&ctx, || {
         let least = layout_memory::probing(&ctx, || {
-            let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));
+            let mut least = laid_out_child(ui, layout);
             sweep(&mut least, &probe, None, columns, &|flow| GridCursor::unbounded(flow, columns, gap)).1.columns
         });
         (least, true)

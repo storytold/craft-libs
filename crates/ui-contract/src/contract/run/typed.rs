@@ -579,7 +579,7 @@ pub(crate) fn show_container<C: Container, R>(
         inner = Some(body(ui, cx));
     };
     let mut hooks = crate::contract::body::BodyHooks::of(held(slot), &mut call);
-    let mut typed = Typed::owned(slot, &mut hooks);
+    let mut typed = Typed::owned(slot, &mut *hooks);
     super::run(&mut typed, ui, at, tip);
     let output = typed.output();
     let id = crate::contract::Outcome::response(&output).id;
@@ -667,7 +667,7 @@ pub(crate) fn measure_container<C: Container, R>(
         body(ui, cx);
     };
     let mut hooks = crate::contract::body::BodyHooks::of(comp, &mut call);
-    measure_shape(comp, ui, None, proposal, None, &mut hooks, super::MeasureFor::Component)
+    measure_shape(comp, ui, None, proposal, None, &mut *hooks, super::MeasureFor::Component)
 }
 
 /// A measuring run's extent: the shape's `measured_extent` under a `Cx` that senses nothing and writes only to the
