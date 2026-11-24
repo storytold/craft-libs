@@ -77,39 +77,41 @@ impl<'a> Xcf<'a> {
         let pointer = usize::try_from(offset).map_err(|_| invalid("effect mask offset does not fit in memory"))?;
         // This shared traversal admits the name/property work before decoding or
         // copying it; never rescan an unmetered property list after it stops.
-        let properties = records::channel_properties(self.c.b, pointer, records::Limits::default(), metadata, keep_going)?;
-        if let Some(stopped) = properties.stopped {
-            return Err(EffectMaskError::Metadata(stopped.reason));
-        }
-        let mut cursor = self.c.at(pointer);
-        let dimensions = (cursor.u32()?, cursor.u32()?);
-        let name = cursor.string()?;
-        self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
-        let channel = Channel { name, selection: properties.records.iter().any(|p| p.kind == 4) };
-        let hierarchy = self.c.at(properties.end_offset).ptr()?;
-        let head = self.hierarchy_head(hierarchy, 1)?;
-        if dimensions != (head.width, head.height) {
-            return Err(invalid("effect mask dimensions do not match their hierarchy").into());
-        }
-        let bytes = (head.width as usize)
-            .checked_mul(head.height as usize)
-            .and_then(|pixels| pixels.checked_mul(head.bpp))
-            .ok_or_else(|| invalid("effect mask byte count overflow"))?;
-        if bytes > crate::MAX_PIXEL_BYTES {
-            return Err(invalid("effect mask exceeds the source pixel limit").into());
-        }
-        if !keep_going() {
-            return Err(Error::Cancelled.into());
-        }
-        Ok(Some(EffectMaskHeader {
-            source: self.c.b,
-            version: self.image.version,
-            offset,
-            dimensions,
-            channel,
-            properties: properties.records,
-            hierarchy,
-        }))
+        metadata.retain_on_success(|metadata| {
+            let properties = records::channel_properties(self.c.b, pointer, records::Limits::default(), metadata, keep_going)?;
+            if let Some(stopped) = properties.stopped {
+                return Err(EffectMaskError::Metadata(stopped.reason));
+            }
+            let mut cursor = self.c.at(pointer);
+            let dimensions = (cursor.u32()?, cursor.u32()?);
+            let hierarchy = self.c.at(properties.end_offset).ptr()?;
+            let head = self.hierarchy_head(hierarchy, 1)?;
+            if dimensions != (head.width, head.height) {
+                return Err(invalid("effect mask dimensions do not match their hierarchy").into());
+            }
+            let bytes = (head.width as usize)
+                .checked_mul(head.height as usize)
+                .and_then(|pixels| pixels.checked_mul(head.bpp))
+                .ok_or_else(|| invalid("effect mask byte count overflow"))?;
+            if bytes > crate::MAX_PIXEL_BYTES {
+                return Err(invalid("effect mask exceeds the source pixel limit").into());
+            }
+            if !keep_going() {
+                return Err(Error::Cancelled.into());
+            }
+            let name = cursor.string()?;
+            self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
+            let channel = Channel { name, selection: properties.records.iter().any(|p| p.kind == 4) };
+            Ok(Some(EffectMaskHeader {
+                source: self.c.b,
+                version: self.image.version,
+                offset,
+                dimensions,
+                channel,
+                properties: properties.records,
+                hierarchy,
+            }))
+        })
     }
 
     /// Deliver exact one-component source samples with the same precision/order

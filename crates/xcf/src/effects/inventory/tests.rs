@@ -42,6 +42,7 @@ fn old_files_have_no_effect_table_and_new_files_keep_order_and_wire_identity() {
     for version in [3, 19, 20, 26] {
         let (bytes, owner, _) = fixture(version, &[u64::MAX, 8, 123]);
         let xcf = crate::Xcf::parse(&bytes).unwrap();
+        assert_eq!(xcf.image().layers[0].effects, if version >= 20 { 3 } else { 0 });
         let mut budget = Budget::default();
         let inventory = xcf.layer_effects(0, &mut budget, &|| true).unwrap();
         assert_eq!(inventory.owner, Owner { kind: OwnerKind::Layer, offset: owner as u64 });

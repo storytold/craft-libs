@@ -179,8 +179,8 @@ fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before
     assert_eq!(budget, 0);
     let mut huge = fixture(650, &[0; 8], 4, true);
     for at in [huge.mask, huge.hierarchy] {
-        huge.bytes[at..at + 4].copy_from_slice(&crate::MAX_SIDE.to_be_bytes());
-        huge.bytes[at + 4..at + 8].copy_from_slice(&crate::MAX_SIDE.to_be_bytes());
+        huge.bytes[at..at + 4].copy_from_slice(&16_385u32.to_be_bytes());
+        huge.bytes[at + 4..at + 8].copy_from_slice(&16_384u32.to_be_bytes());
     }
     let reader = Xcf::parse(&huge.bytes).unwrap();
     assert!(
@@ -203,4 +203,60 @@ fn repeated_empty_name_headers_spend_shared_work_and_stop_before_publishing() {
     assert!(matches!(xcf.effect_mask_header(&effect, &mut metadata, &|| true), Err(EffectMaskError::Metadata(records::StopReason::WorkLimit))));
     assert!(matches!(xcf.effect_mask_header(&effect, &mut metadata, &|| false), Err(EffectMaskError::Source(Error::Cancelled))));
     assert_eq!(metadata.work_remaining(), 0);
+}
+
+#[test]
+fn effect_mask_header_only_charges_retained_properties_on_success() {
+    let f = fixture(150, &[1, 2], 1, true);
+    let xcf = Xcf::parse(&f.bytes).unwrap();
+    let effect = record(&f);
+    let name_bytes = "Coverage".len();
+    xcf.meta_budget.set(name_bytes);
+
+    let one_property = 2 * std::mem::size_of::<records::Property<'_>>();
+    let mut limited = records::Budget::new(4096, one_property);
+    assert!(matches!(xcf.effect_mask_header(&effect, &mut limited, &|| true), Err(EffectMaskError::Metadata(records::StopReason::RetainedLimit))));
+    assert_eq!(limited.retained_remaining(), one_property);
+    assert!(limited.work_remaining() < 4096);
+    assert_eq!(xcf.meta_budget.get(), name_bytes);
+
+    let mut available = records::Budget::new(4096, 8 * one_property);
+    let polls = std::cell::Cell::new(0);
+    let header = xcf
+        .effect_mask_header(&effect, &mut available, &|| {
+            polls.set(polls.get() + 1);
+            true
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(header.properties().len(), 4);
+    assert!(available.retained_remaining() < 8 * one_property);
+    assert_eq!(xcf.meta_budget.get(), 0);
+
+    xcf.meta_budget.set(name_bytes);
+    let last_poll = polls.replace(0);
+    let mut cancelled = records::Budget::new(4096, 8 * one_property);
+    let result = xcf.effect_mask_header(&effect, &mut cancelled, &|| {
+        polls.set(polls.get() + 1);
+        polls.get() < last_poll
+    });
+    assert!(matches!(result, Err(EffectMaskError::Source(Error::Cancelled))));
+    assert_eq!(cancelled.retained_remaining(), 8 * one_property);
+    assert!(cancelled.work_remaining() < 4096);
+    assert_eq!(xcf.meta_budget.get(), name_bytes);
+}
+
+#[test]
+fn a_rejected_mask_hierarchy_does_not_keep_property_or_name_charges() {
+    let mut f = fixture(150, &[1, 2], 1, true);
+    f.bytes[f.hierarchy..f.hierarchy + 4].copy_from_slice(&3u32.to_be_bytes());
+    let xcf = Xcf::parse(&f.bytes).unwrap();
+    let mut metadata = records::Budget::new(4096, 4096);
+    let name_bytes = "Coverage".len();
+    xcf.meta_budget.set(name_bytes);
+    let error = xcf.effect_mask_header(&record(&f), &mut metadata, &|| true).unwrap_err();
+    assert!(error.to_string().contains("dimensions do not match"));
+    assert_eq!(metadata.retained_remaining(), 4096);
+    assert!(metadata.work_remaining() < 4096);
+    assert_eq!(xcf.meta_budget.get(), name_bytes);
 }

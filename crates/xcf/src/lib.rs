@@ -231,12 +231,15 @@ impl<'a> Cursor<'a> {
     }
 
     fn ptr(&mut self) -> Result<usize> {
+        usize::try_from(self.wire_ptr()?).map_err(|_| invalid("pointer does not fit in memory"))
+    }
+
+    fn wire_ptr(&mut self) -> Result<u64> {
         if self.wide {
             let s = self.take(8)?;
-            let v = s.first_chunk::<8>().map(|b| u64::from_be_bytes(*b)).unwrap_or(0);
-            usize::try_from(v).map_err(|_| invalid("pointer does not fit in memory"))
+            Ok(s.first_chunk::<8>().map(|b| u64::from_be_bytes(*b)).unwrap_or(0))
         } else {
-            self.u32().map(|v| v as usize)
+            self.u32().map(u64::from)
         }
     }
 
@@ -1031,7 +1034,9 @@ fn layer(mut c: Cursor<'_>, image: &Image, meta_budget: &mut usize) -> Result<La
     let effect_source = c.pos;
     let mut effects = 0usize;
     if image.version >= 20 {
-        while c.ptr()? != 0 {
+        // Counting does not dereference these pointers. Leave their full wire
+        // width available for the caller's optional effect inventory.
+        while c.wire_ptr()? != 0 {
             effects += 1;
             if effects > 1024 {
                 return Err(invalid("too many layer effects"));
