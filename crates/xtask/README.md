@@ -87,24 +87,29 @@ fn production_display_names_stay_neutral() {
 
 - `Input::rust` takes a Rust file or a folder, which is read recursively for `.rs` files that
   `Policy::skip` keeps, given their path below the folder (`test_path` by default: `tests.rs`,
-  `*_tests.rs` and files under a `tests` folder). Links to folders are not followed. A file input
-  is read whatever its name.
+  `*_tests.rs` and files under a `tests` folder). Links to folders are not followed, also when the
+  link is an input. A file input is read whatever its name.
 - `Input::manifest` reads the values at the key paths `package.description` and
   `workspace.package.description` of a `Cargo.toml`: the table header (`[package]`,
   `[workspace.package]`) joined with the key, which may be bare, quoted or dotted. Headers and keys
-  inside strings and arrays do not count, and a key inside an inline table is not read. A
-  `description` under any other table, or before the first header, is not read. A TOML string,
+  inside strings and arrays do not count, and a key inside an inline table is not read. Before the
+  first header, the dotted keys `package.description` and `workspace.package.description` are read,
+  and a bare `description` is not. A `description` under any other table is not read. A TOML string,
   single-line or multi-line, is decoded, and a comment after it is not read; any other value is
   read as the rest of its line. `Input::text` reads every line of a text file, and
   `Input::text_mark_above` also lets a `#` line with the marker exempt the line below it. Inputs
   must not include binary files.
 - In Rust, the scanner reads `"…"` and `r"…"` literals with any number of `#`, decodes every escape
   (`\n`, `\x7A`, `\u{…}`, a backslash before a line break) and reads CRLF as LF. `b"…"`, `br"…"`,
-  `c"…"` and `cr"…"` are read when `Policy::literals` asks for them. Comments, character, byte and
-  lifetime tokens, and the rest of a module after `#![cfg(test)]` are skipped. So is the code under
-  `#[cfg(test)]`, comments in the attribute included: a `const`, `static` or `let` up to its `;`,
-  another item up to the `}` that closes it or the `;` that ends it, and a field, argument, arm or
-  statement up to its `,` or `;`. A block expression (a block, a macro's braces, a labeled block, or
+  `c"…"` and `cr"…"` are read when `Policy::literals` asks for them; their `\x` escapes are decoded
+  together as UTF-8, and bytes that are not UTF-8 become U+FFFD. A shebang line, comments,
+  character, byte and lifetime tokens, and the rest of a module after `#![cfg(test)]` are skipped.
+  So is the code under `#[cfg(test)]`, comments in the attribute included: a `const`, `static` or
+  `let` up to its `;`, another item up to the `}` that closes it or the `;` that ends it, and a
+  field, argument, arm or statement up to its `,` or `;`. An item keyword counts only when nothing
+  but qualifiers (`pub`, `unsafe`, `extern "C"` and the like) comes before it, so the `fn` in
+  `f::<fn()>(…)` or in a field's type does not start an item, and the braces of a macro in an
+  item's header (`-> ty! { u8 }`) are not its body. A block expression (a block, a macro's braces, a labeled block, or
   `if`, `match`, `loop`, `while`, `for`, `unsafe`, `async` or `const`), as the whole statement or as
   an arm's expression after `=>`, ends at its `}`, or at the last `}` of an `if` with `else`
   branches. When a method call, field or `?` follows that `}`, it runs up to its `,` or `;`
@@ -116,6 +121,9 @@ fn production_display_names_stay_neutral() {
   description or trimmed text line, never part of one.
 - In Rust, the marker counts only inside a comment on a line the literal spans. In a manifest it
   counts anywhere on a line the description spans, and in a text file anywhere on the line.
+- `scan` identifies a file by its input path joined to the base folder, and joins a relative base
+  folder to the current folder first, so a relative and an absolute input for one file are read
+  once; `..` and links are not resolved.
 - `scan` reads each file once, in path order, and returns the findings in path order, then source
   order, then the order of `banned`. A `Finding` has the path, the first line of the literal or
   description, the word, the decoded text or text line and the kind; its `Display` text is
@@ -124,7 +132,8 @@ fn production_display_names_stay_neutral() {
 - `names::Error` is `Policy` (no banned words, an empty word or an empty marker), `Io` (with the
   path), `InvalidUtf8`, `FileTooLarge`, `TotalTooLarge`, `TooDeep`, `Conflict` (a file given as two
   kinds of input) or `Syntax` (with the path and line). `DEFAULT_LIMITS` is 8 MiB per file, 512 MiB
-  per scan and folders 64 deep; a file over the limit is rejected before it is read.
+  per scan and folders 64 deep; a file larger than the per-file limit, or than what is left of the
+  scan's limit, is rejected before it is read.
 
 The source copies differ in a few rules. An app that switches lists the results that change:
 
