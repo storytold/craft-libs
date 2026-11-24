@@ -390,18 +390,24 @@ impl Component for KeyCaps {
 
     fn style(cx: &StyleCx<'_>, _: Self::StyleKey) -> PaneStyle {
         let classes = [Class::Free, Class::App, Class::Scoped, Class::Both];
+        // The solid look of a tone: its fill and the ink that reads on it.
+        let solid = |tone: Tone| {
+            let look = cx.with_variant(Variant::look(Emphasis::Solid, tone)).variant_look();
+            (look.fill.off.rest, look.text.off.rest)
+        };
         PaneStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
             text: TextLook::new(TypeRole::Caption, craft_theme::Stateful::new(cx.ink(craft_ui::style::Ink::OnPanel))),
             step: cx.control().height,
             radius: cx.surface(craft_ui::style::SurfaceKind::Raised).radius,
-            // A free key is a raised cap (the neutral tone's soft fill is the sunken surface, which a dialog may share).
-            fills: classes.map(|c| if c == Class::Free { StyleColor(cx.surface(SurfaceKind::Raised).fill) } else { cx.tone_fill(c.tone()) }),
-            inks: classes.map(|c| if c == Class::Free { cx.ink(craft_ui::style::Ink::OnPanel) } else { cx.tone(c.tone()) }),
+            // A free key is a raised cap (the neutral tone's soft fill is the sunken surface, which a dialog may share); a
+            // held key is the solid fill of its tone, so the classes read at a glance.
+            fills: classes.map(|c| if c == Class::Free { StyleColor(cx.surface(SurfaceKind::Raised).fill) } else { solid(c.tone()).0 }),
+            inks: classes.map(|c| if c == Class::Free { cx.ink(craft_ui::style::Ink::OnPanel) } else { solid(c.tone()).1 }),
             edge: cx.color(cx.tokens.color.line.border),
-            on_fill: cx.tone_fill(Tone::Info),
-            on_ink: cx.tone(Tone::Info),
+            on_fill: solid(Tone::Info).0,
+            on_ink: solid(Tone::Info).1,
         }
     }
 
@@ -468,7 +474,9 @@ impl Component for KeyCaps {
             if view.marked && matches!(view.cap, Cap::Key(_)) {
                 draw.stroke(&shape, StrokeWidth::Thick, ink);
             }
-            let (top, bottom) = cell.split_top_bottom_at_fraction(0.5);
+            // The names stand off the cap's edges, so a long one is cut before it touches the next key.
+            let pad = (unit * 0.1).clamp(2.0, 4.0);
+            let (top, bottom) = cell.shrink2(vec2(pad, pad * 0.5)).split_top_bottom_at_fraction(0.5);
             if let Some(title) = &view.title {
                 draw.text(top, &TextRun::new(title.as_str()).role(style.text.role).color(ink).wrap(Wrap::Elide));
             }
@@ -646,14 +654,14 @@ pub(crate) fn show(ui: &mut Ui, _cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: 
                     toggled = Some(m);
                 }
             }
-            // The legend: each word on the soft fill its keys take.
+            // The legend: each word on the solid fill its keys take.
             for (tone, word) in [
                 (Tone::Accent, &words.application),
                 (Tone::Warn, &words.panel_or_context),
                 (Tone::Bad, &words.both),
                 (Tone::Info, &words.modifier_on),
             ] {
-                Badge::new(word.clone()).variant(Variant::look(Emphasis::Soft, tone)).id_salt(("shortcuts.legend", word.as_str())).show(ui);
+                Badge::new(word.clone()).variant(Variant::look(Emphasis::Solid, tone)).id_salt(("shortcuts.legend", word.as_str())).show(ui);
             }
         });
         // The keys take most of the width; the clicked key's shortcuts the rest, under the keys' own height.
