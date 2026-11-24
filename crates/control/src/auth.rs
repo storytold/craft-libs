@@ -143,7 +143,7 @@ impl App {
     /// Write `token` to `path`, readable and writable only by the user: the folder is made `0700`
     /// and the file `0600` on Unix; on Windows the file is created with an access list of the user
     /// and SYSTEM only and the token is written through the handle that created it
-    /// ([`create_for_user`]), so the file never has its folder's access list. A file left by an
+    /// (`create_for_user`), so the file never has its folder's access list. A file left by an
     /// earlier launch is replaced. The process file beside it ([`pid_path`]) records this process,
     /// best effort.
     pub fn write_token_file(&self, path: &Path, token: &str) -> Result<()> {
@@ -369,7 +369,7 @@ fn held_by_another(path: &Path, token: &str) -> bool {
 
 /// Create `path`, which must not exist yet, holding `contents`: mode `0600` on Unix. On Windows a
 /// file created this way has its folder's access list; the token file there is made by
-/// [`create_for_user`].
+/// `create_for_user`.
 fn create_new_file(path: &Path, contents: &[u8]) -> Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -423,8 +423,9 @@ fn not_waited_for(path: &Path, contents: &[u8], custom_folder: bool) -> Result<(
 /// (`.<name>.<process id>.<count>.tmp`), and the file takes the name `path` only once `private`
 /// has finished, so `path` never holds a file that is still being written: with `replace` by a
 /// rename that replaces a file another launch put there meanwhile, otherwise by [`place_new`],
-/// which leaves that file and fails. When
-/// the thread hasn't finished in time, [`not_waited_for`] gives the result, the thread removes its
+/// which leaves that file and fails. When `private` fails with [`ErrorKind::TimedOut`] (a tool
+/// `craft_platform::owner_only` ended after its own limit), [`not_waited_for`] gives the result.
+/// When the thread hasn't finished in time, [`not_waited_for`] gives the result, the thread removes its
 /// file whenever it does finish, and `stuck` counts it until then. While `stuck` counts any
 /// thread, no other thread is started and [`not_waited_for`] answers at once, so a computer that
 /// leaves new processes suspended holds at most the threads that were started together. The
@@ -484,7 +485,11 @@ fn create_within(
             }
         }
     };
-    let placed = made.and_then(|()| if replace { std::fs::rename(&staged, path) } else { place_new(&staged, path) });
+    let placed = match made {
+        // `owner_only` ended a tool that ran out of its own time: the same as not waiting.
+        Err(e) if e.kind() == ErrorKind::TimedOut => not_waited_for(path, contents, custom_folder),
+        made => made.and_then(|()| if replace { std::fs::rename(&staged, path) } else { place_new(&staged, path) }),
+    };
     let _ = std::fs::remove_file(&staged);
     (placed, Some(handle))
 }
@@ -529,7 +534,7 @@ mod tests {
     /// finishes and never takes the token file's name, even when a later write has put a file
     /// there. While it runs, the next create starts no thread of its own. A create that finishes in
     /// time puts its file in place unless a file already has the name, and one that fails leaves
-    /// nothing.
+    /// nothing. A create that fails as timed out by itself is taken as one not waited for.
     #[test]
     fn a_private_create_that_does_not_finish_in_time_is_not_waited_for() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -594,6 +599,21 @@ mod tests {
         assert!(made.is_err());
         handle.unwrap().join().unwrap();
         assert_eq!(names(), ["quick.token"]);
+        // A create whose tool was ended after its own limit, within this one, is taken as one
+        // that was not waited for.
+        let ended =
+            |_: &Path, _: &[u8]| -> Result<()> { Err(Error::new(ErrorKind::TimedOut, "powershell.exe did not finish within 10 s and was ended")) };
+        let path = dir.join("ended.token");
+        let (made, handle) = create_within(&path, b"ended\n", true, false, Duration::from_secs(600), &STUCK, ended);
+        assert_eq!(made.unwrap_err().kind(), ErrorKind::TimedOut);
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["quick.token"]);
+        let (made, handle) = create_within(&path, b"ended\n", false, false, Duration::from_secs(600), &STUCK, ended);
+        made.unwrap();
+        handle.unwrap().join().unwrap();
+        assert_eq!(names(), ["ended.token", "quick.token"]);
+        assert_eq!(read_token(&path).as_deref(), Some("ended"));
+        assert_eq!(STUCK.load(Ordering::Acquire), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
