@@ -78,8 +78,9 @@ fn count_text(ctx: &egui::Context) {
     let _ = ctx;
 }
 
-/// [`spec_text`] without the count, for a builder that counted its text already.
-fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
+/// [`spec_text`] without the count, for a builder that counted its text already, or one that is no tooltip (a
+/// component's `tooltip_text`).
+pub(crate) fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled: bool) -> String {
     let label = match (&spec.disabled_text, enabled) {
         (Some(disabled), false) => disabled,
         _ => &spec.text,
@@ -88,10 +89,11 @@ fn resolve_spec(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enab
 }
 
 /// The text the component's own tooltip shows, or `None` when it has none: its validity message when no container
-/// shows it (`message`); else the tooltip's text, or its disabled text while disabled, with the bound command's
-/// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
-/// label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a hint. A
-/// bound command's hint follows on a line of its own.
+/// shows it (`message`); else a base text with the bound command's chord, and the bound command's hint on a line
+/// after it; else, with no base text, the hint alone with the chord. The base is the tooltip's text, or its disabled
+/// text while disabled; else the full label when the paint cut it, or its own label when the component declares it
+/// paints no label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a
+/// hint that is not shown alone (`CommandState::hint_alone`).
 ///
 /// A canvas control (`canvas_control`) never shows its label: its rect is the canvas it is shown over, not a face of
 /// its own, so the label would show wherever the pointer rests on the page ("Rulers margins" over a whole page). Its
@@ -103,27 +105,28 @@ fn text_of(core: &super::CxCore<'_>, shows_label: bool, canvas_control: bool, me
     }
     let hint = core.command.as_deref().and_then(|command| command.hint.as_deref()).filter(|hint| !hint.is_empty());
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
-        Some(spec) => resolve_spec(&core.env, spec, core.resolved.enabled),
+        Some(spec) => Some(resolve_spec(&core.env, spec, core.resolved.enabled)),
         None if canvas_control => return None,
         None => {
             let paint = core.paint.borrow();
-            let unpainted = !shows_label || paint.label_dropped || hint.is_some();
-            match paint.elided.clone() {
-                Some(full) => full,
-                None if unpainted && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
-                None => return None,
-            }
+            // A hint shown alone (`CommandState::hint_alone`) does not bring the label that shows whole with it.
+            let alone = hint.is_some() && core.command.as_deref().is_some_and(|command| command.hint_alone);
+            let unpainted = !shows_label || paint.label_dropped || (hint.is_some() && !alone);
+            paint.elided.clone().or_else(|| (unpainted && !core.resolved.label.is_empty()).then(|| core.resolved.label.to_owned()))
         }
     };
+    let command = core.command.as_deref();
     let platform = crate::runtime::windows::os_of(&core.ctx);
-    let text = match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
-        Some(chord) => with_chord(&base, chord, platform),
-        None => base,
+    let chorded = |text: &str| match command.and_then(|command| command.chord.as_ref()) {
+        Some(chord) => with_chord(text, chord, platform),
+        None => text.to_owned(),
     };
-    Some(match hint {
-        Some(hint) => format!("{text}\n{hint}"),
-        None => text,
-    })
+    match (base, hint) {
+        (Some(base), Some(hint)) => Some(format!("{}\n{hint}", chorded(&base))),
+        (Some(base), None) => Some(chorded(&base)),
+        (None, Some(hint)) => Some(chorded(hint)),
+        (None, None) => None,
+    }
 }
 
 /// A tooltip's text followed by the chord that does the same, as every tooltip shows a key: "Hide Layers (⌘,)".
@@ -289,6 +292,8 @@ struct TipCall<'a> {
 fn show_tip(call: TipCall<'_>) {
     let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text: build, rich, spec, at_pointer, wants_input, pressed, subject, describes } =
         call;
+    // The host turned tooltips off: none shows, and one that was showing goes as it does when the pointer leaves.
+    let wants_input = wants_input && env.tooltips;
     let state_id = sub(id, "tip_state");
     let built = std::cell::OnceCell::new();
     let text = || built.get_or_init(build).as_deref();

@@ -103,41 +103,35 @@ pub struct ImeSeen {
 }
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
+/// `read` are pathless files dropped in the frame whose bytes the page reads after it, by name with the bytes the read
+/// gives. `given` are files dropped in the frame by a relative name with their bytes at hand, as a browser hands them over.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OsFiles {
     pub hovered: Vec<(String, String)>,
     pub dropped: Vec<String>,
+    pub read: Vec<(String, Vec<u8>)>,
+    pub given: Vec<(String, Vec<u8>)>,
 }
 
-/// A dropped file that exists only as a path.
-#[derive(Debug)]
-struct DroppedPath(std::path::PathBuf);
-
-impl egui::DroppedFile for DroppedPath {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn bytes(&self) -> Result<Vec<u8>, String> {
-        std::fs::read(&self.0).map_err(|error| error.to_string())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
-        Box::pin(std::future::ready(Err("there is no file system on the web".to_owned())))
-    }
-}
-
-/// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
-/// reports both, and the fact stays until the next such event. Before any event the focus is unknown.
-fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: Option<f32>) -> egui::ViewportIdMap<egui::ViewportInfo> {
+/// The viewport facts a frame reports: the root window's inner rect when the frame is the root's (`inner`), and its
+/// focus: a window-focus event also sets the root viewport's focus fact, as a host reports both, and the fact stays
+/// until the next such event. Before any event the focus is unknown.
+fn window_facts(
+    ctx: &Context,
+    events: &[Event],
+    native_pixels_per_point: Option<f32>,
+    inner: Option<Rect>,
+) -> egui::ViewportIdMap<egui::ViewportInfo> {
     let last = events.iter().rev().find_map(|event| if let Event::WindowFocused(focused) = event { Some(*focused) } else { None });
     let focused = Service::<WindowFocus>::run(ctx, |state| {
         state.0 = last.or(state.0);
         state.0
     });
-    std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { focused, native_pixels_per_point, ..egui::ViewportInfo::default() })).collect()
+    std::iter::once((
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { focused, native_pixels_per_point, inner_rect: inner, ..egui::ViewportInfo::default() },
+    ))
+    .collect()
 }
 
 /// The focus the fixture's window last reported; unset before any focus event.
@@ -248,9 +242,20 @@ pub(crate) fn run_frame(
 ) -> FrameResult {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
-    let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+    let dropped_files = files
+        .dropped
+        .iter()
+        .map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle)
+        .chain(
+            files.given.into_iter().map(|(name, bytes)| Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle),
+        )
+        .collect();
+    // The web drop of a pathless file: its reads open in the pass of the drop, and their bytes arrive after it.
+    if !files.read.is_empty() {
+        super::files::open_reads(ctx, viewport, files.read.len());
+    }
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
-    let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
+    let mut viewports = window_facts(ctx, &events, native_pixels_per_point, (viewport == egui::ViewportId::ROOT).then_some(screen));
     let children = open_children(ctx, viewport);
     for child in &children {
         viewports
@@ -268,6 +273,10 @@ pub(crate) fn run_frame(
     };
     let mut output = drive(|| run_ui(ctx, input, &children, ui));
     Service::<ImeResets>::run(ctx, |resets| resets.output(viewport, &output.platform_output));
+    for (name, bytes) in files.read {
+        let file = crate::runtime::drag::OsFile { name, path: None, mime: String::new(), bytes: Some(bytes.into()) };
+        super::files::post(ctx, viewport, Some(file));
+    }
     let mut flat = Vec::new();
     for clipped in &output.shapes {
         let mut shapes = Vec::new();
@@ -396,7 +405,7 @@ pub(crate) fn click_options(ctx: &Context) -> (f32, f64) {
 /// A fresh context with no plugin and AccessKit on.
 pub(crate) fn bare_context() -> Context {
     let ctx = Context::default();
-    ctx.set_fonts(test_fonts());
+    super::fonts::set_definitions(&ctx, test_fonts());
     ctx.enable_accesskit();
     ctx
 }

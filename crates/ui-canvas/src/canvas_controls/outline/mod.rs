@@ -9,13 +9,15 @@ pub(crate) mod stories;
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
 use crate::primitives::textures::{Revision, TextureStore, TextureStoreOptions, UNTINTED};
-use crate::primitives::{ContentPainterCx, Dashes, PaintShape, StrokeWidth};
+use crate::primitives::{ContentPainterCx, Dashes, PaintShape, dashed, outline_with};
 use crate::runtime::env::Label;
+use crate::runtime::memory::Remember as _;
 use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
-use craft_behavior::kurbo::{self, BezPath, PathEl, Rect};
+use craft_behavior::kurbo::{self, BezPath, PathEl, Point, Rect};
 use craft_behavior::{CanvasView, Input, Metrics};
 use egui::epaint::Vertex;
-use egui::{Color32, ColorImage, Mesh, Pos2, Response, Shape, Stroke, pos2};
+use egui::{Color32, ColorImage, Mesh, Pos2, Response, Shape, Stroke, Vec2, pos2};
+use std::sync::Arc;
 
 pub use hover::HoverMask;
 
@@ -55,6 +57,8 @@ pub enum SelectionOutlineLook {
     Solid,
     /// A medium line in dashes: a CAD app's selection effect.
     Dashed,
+    /// A thin line at the grid colour, with no halo: every editable object's outline in an edit mode.
+    Faint,
 }
 
 /// The style of the hover and selection outlines.
@@ -65,6 +69,9 @@ pub struct OutlineStyle {
     metrics: Metrics,
     /// The line colour of a shape the host gives no colour: the accent as a bare line.
     line: StyleColor,
+    /// The colour of the halo under that line, and its width.
+    halo: StyleColor,
+    thick: f32,
     /// The width of a hover line and of a dashed selection line.
     medium: f32,
     /// The width of a solid selection line.
@@ -72,6 +79,8 @@ pub struct OutlineStyle {
     /// The length of a dash and of the gap after it.
     dash: f32,
     gap: f32,
+    /// The line colour of a faint outline.
+    faint: StyleColor,
 }
 
 fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
@@ -79,10 +88,13 @@ fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
     OutlineStyle {
         metrics: Metrics::new(),
         line: cx.color(cx.tokens.color.overlay.line),
+        halo: cx.color(cx.tokens.color.overlay.halo),
+        thick: stroke.thick,
         medium: stroke.medium,
         thin: stroke.thin,
         dash: stroke.dash,
         gap: stroke.dash_gap,
+        faint: cx.color(cx.tokens.color.overlay.grid),
     }
 }
 
@@ -149,15 +161,25 @@ fn segment_hull(from: kurbo::Point, segment: PathEl) -> Vec<kurbo::Point> {
     }
 }
 
-/// Strokes one run: the kit's halo-and-line outline in the overlay colours, or a line of the host's `color` alone.
-fn stroke_run(painter: &ContentPainterCx<'_>, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) {
+/// The shapes of one run: the kit's halo-and-line outline in the overlay colours, or a line of the host's `color`
+/// alone.
+fn run_shapes(style: &OutlineStyle, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) -> Vec<Shape> {
     match color {
-        None => painter.outline(&if closed { PaintShape::Polygon(run) } else { PaintShape::Path(run) }),
+        None => outline_with(
+            Stroke::new(style.thick, style.halo.egui()),
+            Stroke::new(style.medium, style.line.egui()),
+            &[if closed { PaintShape::Polygon(run) } else { PaintShape::Path(run) }],
+        ),
         Some(color) => {
             let stroke = Stroke::new(width, color.0);
-            painter.painter.add(if closed { Shape::closed_line(run, stroke) } else { Shape::line(run, stroke) });
+            vec![if closed { Shape::closed_line(run, stroke) } else { Shape::line(run, stroke) }]
         }
     }
+}
+
+/// Strokes one run; see [`run_shapes`].
+fn stroke_run(painter: &ContentPainterCx<'_>, style: &OutlineStyle, run: Vec<Pos2>, closed: bool, color: Option<DataColor>, width: f32) {
+    painter.painter.extend(run_shapes(style, run, closed, color, width));
 }
 
 fn tint(mask: &HoverMask, color: Color32) -> ColorImage {
@@ -243,11 +265,11 @@ impl Component for HoverOutline {
                 let (half_y, half_x) = (view.doc_len(style.medium / 2.0), f64::from(style.medium / 2.0) / view.zoom_x());
                 let rect = rect.abs();
                 let grown = Rect::new(rect.x0 - half_x, rect.y0 - half_y, rect.x1 + half_x, rect.y1 + half_y);
-                stroke_run(&painter, view.quad(grown).to_vec(), true, self.color, style.medium);
+                stroke_run(&painter, style, view.quad(grown).to_vec(), true, self.color, style.medium);
             }
             HoverShape::Path(path) => {
                 for (points, closed) in path_runs(&view, path) {
-                    stroke_run(&painter, points, closed, self.color, style.medium);
+                    stroke_run(&painter, style, points, closed, self.color, style.medium);
                 }
             }
             HoverShape::Mask(mask) => paint_mask(&painter, cx.id, &view, mask, self.color.map_or(style.line.egui(), |color| color.0)),
@@ -276,17 +298,85 @@ pub struct SelectionOutline<'a> {
     /// The line colour (a layer's colour); the overlay line colour by default.
     #[prop]
     color: Option<DataColor>,
+    /// The key outline, stroked after the paths at `stroke.medium` in the outline colour.
+    #[prop]
+    key: Option<&'a BezPath>,
+    /// The revision of the paths and the key: while it holds, the view, the colour and the look, the stroked shapes
+    /// are kept in control memory and reused, and a pan by whole device pixels moves them instead of flattening the
+    /// paths again. The host changes it whenever a path changes. Without it the shapes are built every pass.
+    #[prop]
+    revision: Option<u64>,
+}
+
+/// What the shapes of a [`SelectionOutline`] are built from besides the view's centre: when none of it changed, the
+/// kept shapes are the shapes to paint. The paths themselves are covered by `revision`.
+#[derive(Clone, PartialEq)]
+struct OutlineKey {
+    revision: u64,
+    /// The view with its centre zeroed: a pan keeps the key.
+    view: CanvasView,
+    color: Color32,
+    look: SelectionOutlineLook,
+    has_key: bool,
+    style: OutlineStyle,
+    pixels_per_point: f32,
+}
+
+/// The shapes of a selection outline under the key they were built for, and the view centre they were built at.
+#[derive(Clone, Default)]
+struct OutlineShapes {
+    key: Option<OutlineKey>,
+    centre: Point,
+    shapes: Arc<Vec<Shape>>,
 }
 
 impl<'a> SelectionOutline<'a> {
     /// A solid outline of `paths` (document units), named `label`.
     pub fn solid(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
-        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None }.label(label)
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None, key: None, revision: None }.label(label)
+    }
+
+    /// A thin outline of `paths` (document units) with no halo, for every editable object in an edit mode, named
+    /// `label`.
+    pub fn faint(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Faint, color: None, key: None, revision: None }.label(label)
     }
 
     /// A dashed outline of `paths` (document units), named `label`.
     pub fn dashed(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
-        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None }.label(label)
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None, key: None, revision: None }.label(label)
+    }
+}
+
+impl SelectionOutline<'_> {
+    /// The shapes of the paths, then of the key path, under `view`.
+    fn build(&self, view: &CanvasView, style: &OutlineStyle) -> Vec<Shape> {
+        let mut shapes = Vec::new();
+        for path in self.paths {
+            for (mut points, closed) in path_runs(view, path) {
+                match self.look {
+                    SelectionOutlineLook::Solid => shapes.extend(run_shapes(style, points, closed, self.color, style.thin)),
+                    SelectionOutlineLook::Faint => {
+                        let color = self.color.map_or(style.line.egui(), |color| color.0);
+                        let stroke = egui::Stroke::new(style.thin, color);
+                        shapes.push(if closed { Shape::closed_line(points, stroke) } else { Shape::line(points, stroke) });
+                    }
+                    SelectionOutlineLook::Dashed => {
+                        if closed {
+                            points.extend(points.first().copied());
+                        }
+                        let color = self.color.map_or(style.line.egui(), |color| color.0);
+                        shapes.extend(dashed(&points, Dashes::new(style.dash, style.gap), style.medium, color));
+                    }
+                }
+            }
+        }
+        if let Some(key) = self.key {
+            for (points, closed) in path_runs(view, key) {
+                shapes.extend(run_shapes(style, points, closed, self.color, style.medium));
+            }
+        }
+        shapes
     }
 }
 
@@ -308,23 +398,51 @@ impl Component for SelectionOutline<'_> {
         egui::Vec2::ZERO
     }
 
+    /// Keeps the shapes in memory when the host gives a revision; without one `paint` builds them.
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let (Some(revision), Some(space)) = (self.revision, canvas_space(&cx.env)) else { return };
+        let style = cx.style.clone();
+        let pixels_per_point = cx.ctx.pixels_per_point();
+        let mut view = space.view;
+        view.center = Point::ZERO;
+        let key = OutlineKey {
+            revision,
+            view,
+            color: self.color.map_or(style.line.egui(), |color| color.0),
+            look: self.look,
+            has_key: self.key.is_some(),
+            style,
+            pixels_per_point,
+        };
+        let centre = space.view.center;
+        let kept = cx.memory::<OutlineShapes>();
+        if kept.key.as_ref() == Some(&key) {
+            // A pan moves every point of the picture by the same screen vector; it is exact only on whole device
+            // pixels, where the strokes' pixel alignment is the one a rebuild gives.
+            let shift = space.view.map_vec(kept.centre - centre);
+            let whole = |v: f32| (v * pixels_per_point - (v * pixels_per_point).round()).abs() < 1e-3;
+            if shift == Vec2::ZERO {
+                return;
+            }
+            if whole(shift.x) && whole(shift.y) {
+                let mut moved = (*kept.shapes).clone();
+                moved.iter_mut().for_each(|shape| shape.translate(shift));
+                kept.shapes = Arc::new(moved);
+                kept.centre = centre;
+                return;
+            }
+        }
+        let shapes = Arc::new(self.build(&space.view, &key.style));
+        *cx.memory::<OutlineShapes>() = OutlineShapes { key: Some(key), centre, shapes };
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         let painter = ui.content_painter(cx);
-        let style = &cx.style;
-        for path in self.paths {
-            for (mut points, closed) in path_runs(&space.view, path) {
-                match self.look {
-                    SelectionOutlineLook::Solid => stroke_run(&painter, points, closed, self.color, style.thin),
-                    SelectionOutlineLook::Dashed => {
-                        if closed {
-                            points.extend(points.first().copied());
-                        }
-                        let color = self.color.map_or(style.line.egui(), |color| color.0);
-                        painter.dashed(&points, Dashes::new(style.dash, style.gap), StrokeWidth::Medium, color);
-                    }
-                }
-            }
+        if self.revision.is_some() {
+            painter.painter.extend(cx.recall::<OutlineShapes>().shapes.iter().cloned());
+        } else {
+            painter.painter.extend(self.build(&space.view, cx.style));
         }
     }
 

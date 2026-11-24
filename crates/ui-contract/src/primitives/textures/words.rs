@@ -6,5 +6,8 @@ craft_ui::words! {
         missing: "textures.missing" = "The file is missing";
         unreadable: "textures.unreadable" = "The picture could not be read";
         panicked: "textures.panicked" = "The picture could not be made";
+        rendering: "thumbnails.rendering" = "Rendering…";
+        still_rendering: "thumbnails.stillRendering" = "Still rendering…";
+        failed: "thumbnails.failed" = "The thumbnail could not be made";
     }
 }

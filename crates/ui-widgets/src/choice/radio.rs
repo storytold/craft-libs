@@ -152,7 +152,7 @@ pub struct RadioStyle {
 }
 
 /// A member of a `RadioGroup`: selected when the group's pick is its value.
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 #[component(probe(Radio<u8>))]
 pub struct Radio<T: Value + 'static> {
     #[common]
@@ -160,12 +160,16 @@ pub struct Radio<T: Value + 'static> {
     value: T,
     checked: bool,
     invalid: bool,
+    /// A dimmed line after the label (the label's detail: muted text), inside the radio's hit area; it joins the
+    /// radio's description.
+    #[prop(into)]
+    detail: Option<crate::runtime::env::Label>,
 }
 
 impl<T: Value + 'static> Radio<T> {
     /// A radio button standing for `value`.
     pub fn new(value: T) -> Self {
-        Radio { common: Common::new(), value, checked: false, invalid: false }
+        Radio { common: Common::new(), value, checked: false, invalid: false, detail: None }
     }
 }
 
@@ -186,6 +190,10 @@ impl<T: Value + 'static> Component for Radio<T> {
             well: super::indicator(cx, CornerRadius::from(control.icon / 2.0)),
             dot: super::mark(cx),
         }
+    }
+
+    fn label_detail(&self) -> Option<crate::runtime::env::Label> {
+        self.detail.clone()
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

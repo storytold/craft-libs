@@ -487,7 +487,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -518,7 +518,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -544,7 +544,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -1193,7 +1193,7 @@ dependencies = [
  "io-lifetimes 3.0.1",
  "ipnet",
  "maybe-owned",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "rustix-linux-procfs",
  "windows-sys 0.61.2",
  "winx",
@@ -1208,7 +1208,7 @@ dependencies = [
  "cap-primitives",
  "io-extras",
  "io-lifetimes 3.0.1",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -1742,6 +1742,7 @@ dependencies = [
  "craft-affinity",
  "craft-ai",
  "craft-ai-core",
+ "craft-android-res",
  "craft-anicraft-format",
  "craft-assuan",
  "craft-atomic",
@@ -1752,6 +1753,7 @@ dependencies = [
  "craft-ber",
  "craft-browse",
  "craft-captions",
+ "craft-cdr",
  "craft-cfb",
  "craft-cloud",
  "craft-cloud-local",
@@ -1876,6 +1878,7 @@ dependencies = [
  "craft-platform",
  "craft-plist",
  "craft-plotter",
+ "craft-png",
  "craft-ppt-binary",
  "craft-pptx",
  "craft-prc",
@@ -1932,6 +1935,7 @@ dependencies = [
  "craft-vectordrawable",
  "craft-video",
  "craft-wasm",
+ "craft-wayland",
  "craft-web-api",
  "craft-web-host",
  "craft-webp",
@@ -2013,11 +2017,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-android-res"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-anicraft-format"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-appkit"
+version = "0.1.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -2032,7 +2053,7 @@ dependencies = [
 name = "craft-atomic"
 version = "0.1.0"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -2059,7 +2080,7 @@ version = "0.1.0"
 name = "craft-automation"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "craft-behavior",
  "craft-control",
  "craft-host",
@@ -2131,6 +2152,16 @@ dependencies = [
  "proptest",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-cdr"
+version = "0.1.0"
+dependencies = [
+ "craft-cdr",
+ "crc32fast",
+ "flate2",
+ "proptest",
 ]
 
 [[package]]
@@ -2330,8 +2361,11 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color",
  "craft-color-transform",
  "craft-develop-model",
+ "craft-geom",
+ "craft-raw",
  "craft-render-parity",
  "proptest",
  "rayon",
@@ -3261,6 +3295,7 @@ dependencies = [
  "craft-frame",
  "craft-media",
  "craft-time",
+ "craft-y4m",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3450,6 +3485,7 @@ dependencies = [
  "egui",
  "kurbo",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3619,6 +3655,7 @@ dependencies = [
  "craft-atomic",
  "craft-docpath",
  "craft-host",
+ "craft-i18n",
  "craft-theme",
  "fmv-macos-events",
  "futures-lite",
@@ -3655,6 +3692,14 @@ version = "0.1.0"
 dependencies = [
  "kurbo",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-png"
+version = "0.1.0"
+dependencies = [
+ "png 0.18.1",
  "thiserror 2.0.21",
 ]
 
@@ -3724,6 +3769,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-host",
+ "craft-theme",
  "craft-ui",
  "craft-winprint-gdi",
  "egui",
@@ -3803,6 +3849,8 @@ dependencies = [
  "egui",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -3848,6 +3896,7 @@ dependencies = [
 name = "craft-review"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "craft-behavior",
  "craft-host",
  "craft-i18n",
@@ -4169,6 +4218,7 @@ dependencies = [
 name = "craft-tga"
 version = "0.1.0"
 dependencies = [
+ "image",
  "thiserror 2.0.21",
 ]
 
@@ -4216,9 +4266,11 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 dependencies = [
+ "image",
  "proptest",
  "serde",
  "thiserror 2.0.21",
+ "tiff",
 ]
 
 [[package]]
@@ -4347,6 +4399,7 @@ dependencies = [
  "syn 2.0.119",
  "toml",
  "typeid",
+ "wasm-bindgen-futures",
  "web-time",
 ]
 
@@ -4460,6 +4513,7 @@ dependencies = [
  "egui",
  "raw-window-handle",
  "serde",
+ "serde_json",
  "web-time",
 ]
 
@@ -4481,12 +4535,14 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-keymap",
+ "craft-svg",
  "craft-theme",
  "craft-ui-contract",
  "craft-ui-macros",
  "craft-ui-test-kit",
  "craft-ui-widgets",
  "egui",
+ "log",
  "serde",
  "smallvec",
 ]
@@ -4505,7 +4561,7 @@ dependencies = [
  "image",
  "log",
  "plist",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "semver",
  "serde",
  "serde_json",
@@ -4581,6 +4637,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-wayland"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "wayland-backend",
+ "wayland-client",
+]
+
+[[package]]
 name = "craft-web-api"
 version = "0.1.0"
 dependencies = [
@@ -4595,7 +4660,10 @@ dependencies = [
 name = "craft-web-host"
 version = "0.1.0"
 dependencies = [
+ "craft-host",
+ "craft-platform",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
 ]
@@ -4620,6 +4688,7 @@ dependencies = [
 name = "craft-window"
 version = "0.1.0"
 dependencies = [
+ "craft-appkit",
  "craft-atomic",
  "craft-behavior",
  "craft-host",
@@ -4636,6 +4705,7 @@ dependencies = [
  "tempfile",
  "wayland-client",
  "winsafe",
+ "x11rb",
 ]
 
 [[package]]
@@ -5340,7 +5410,7 @@ dependencies = [
  "drm-ffi",
  "drm-fourcc",
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -5350,7 +5420,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51a91c9b32ac4e8105dec255e849e0d66e27d7c34d184364fb93e469db08f690"
 dependencies = [
  "drm-sys",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -5968,6 +6038,7 @@ dependencies = [
  "craft-timeline",
  "craft-ui-gallery",
  "craft-update",
+ "epaint_default_fonts",
 ]
 
 [[package]]
@@ -6264,7 +6335,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes 2.0.4",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.59.0",
 ]
 
@@ -6514,7 +6585,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -8213,7 +8284,7 @@ dependencies = [
  "libc",
  "libspa-sys",
  "nom 8.0.0",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "system-deps",
 ]
 
@@ -8252,7 +8323,7 @@ dependencies = [
  "image",
  "khronos-egl",
  "memmap2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "tracing",
  "wayland-backend",
@@ -9927,7 +9998,7 @@ dependencies = [
  "libspa",
  "libspa-sys",
  "pipewire-sys",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -10058,7 +10129,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -11135,9 +11206,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -11153,7 +11224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
 dependencies = [
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -12517,7 +12588,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -13796,7 +13867,7 @@ checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -13809,7 +13880,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.2",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -13858,7 +13929,7 @@ checksum = "0dde9c29be0f723a573977de51ee455bf3dfa03652730a74f9dd3b337e374d75"
 dependencies = [
  "bitflags 2.13.2",
  "downcast-rs",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -14487,7 +14558,7 @@ dependencies = [
  "libc",
  "log",
  "os_pipe",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "thiserror 2.0.21",
  "tree_magic_mini",
  "wayland-backend",
@@ -14604,7 +14675,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "x11rb-protocol",
 ]
 
@@ -14687,7 +14758,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix 1.1.5",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -14847,7 +14918,7 @@ dependencies = [
  "hex",
  "libc",
  "ordered-stream",
- "rustix 1.1.5",
+ "rustix 1.1.6",
  "serde",
  "serde_repr",
  "tracing",

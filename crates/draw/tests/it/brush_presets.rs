@@ -6,6 +6,7 @@ use craft_draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushPickerState,
 use craft_draw::ui::brush_settings::TipAngle;
 use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource};
+use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
@@ -15,9 +16,10 @@ use std::rc::Rc;
 
 const HARD: u32 = 2;
 
-/// Two presets, Soft Round and Hard Round, showing `parts`.
+/// Two presets, Soft Round and Hard Round, showing `parts`; their tip and stroke paint nothing, each face with a key of
+/// its own.
 fn two_rows(parts: &BrushCardParts, env: &Env) -> Vec<PresetRow<u32>> {
-    let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
+    let paint = BrushRowPaint::new(FacePaint::new(1, |_, _| {}), FacePaint::new(2, |_, _| {}));
     vec![brush_row(1, "Soft Round", 0, 45.0, *parts, env, &paint), brush_row(HARD, "Hard Round", 0, 12.0, *parts, env, &paint)]
 }
 

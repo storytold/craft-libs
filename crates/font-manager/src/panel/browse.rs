@@ -173,7 +173,7 @@ impl FontsPanel {
                 TabItem::new(label.clone()).detail(Label::from(format.integer(count as u64)))
             });
             for event in out.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(tab) = keys.into_iter().last()
                 {
                     self.set_tab(tab);
@@ -254,7 +254,7 @@ impl FontsPanel {
                     ListRow::new(if *key == 0 { any.clone() } else { Label::from(label(*key - 1)) })
                 });
             for event in listed.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     self.query.language = key.checked_sub(1);

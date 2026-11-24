@@ -1,7 +1,7 @@
 //! Built-in words of the preferences family.
 
 craft_ui::words! {
-    /// The words of the preferences window: its title, search, page list and buttons that are not shared words. OK and
+    /// The words of the preferences window: its title, search, page list or cards and buttons that are not shared words. OK and
     /// Cancel are `CommonWords`.
     pub struct PreferencesWords {
         title: "preferences.title" = "Preferences";
@@ -9,6 +9,9 @@ craft_ui::words! {
         search_placeholder: "preferences.searchPlaceholder" = "Search";
         clear_search: "preferences.clearSearch" = "Clear search";
         pages_label: "preferences.pagesLabel" = "Pages";
+        cards_label: "preferences.cardsLabel" = "Settings";
+        match_one: template "preferences.matchOne" = "{n} match";
+        match_other: template "preferences.matchOther" = "{n} matches";
         no_matches: "preferences.noMatches" = "No matching settings";
         empty_page: "preferences.emptyPage" = "These settings aren't available yet.";
         apply: "preferences.apply" = "Apply";

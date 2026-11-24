@@ -800,7 +800,7 @@ impl Header {
     /// where the `PaintUi` the hosting needs exists.
     pub(super) fn paint<C: Collection>(&self, ui: &mut Ui, cx: &Cx<'_, C>, comp: &mut C, env: &Env, id: Id, rtl: bool) {
         let ctx = ui.ctx().clone();
-        let group = crate::contract::steps::parts_group(id, env.roving.filter(|_| cx.core.roving_member));
+        let group = crate::contract::steps::parts_group(&ctx, id, env.roving.filter(|_| cx.core.roving_member));
         for cell in &self.cells {
             let spec = &self.specs[cell.spec];
             let hosted = self.hosted.contains(&spec.key);

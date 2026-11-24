@@ -15,6 +15,14 @@ pub struct Rename<K> {
     pub name: String,
 }
 
+impl<K> Rename<K> {
+    // PLAN: `Rename` is `#[non_exhaustive]` and had no constructor, so a control outside this crate (the pasteboard's page-name rename) could not build one.
+    /// The rename of `key` to `name`.
+    pub fn new(key: K, name: impl Into<String>) -> Self {
+        Rename { key, name: name.into() }
+    }
+}
+
 /// A reorder: the items `keys` move together, and the first of them lands at position `to`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReorderMove<K> {
@@ -24,7 +32,7 @@ pub struct ReorderMove<K> {
     pub keys: Vec<K>,
     /// The new position of the first of `keys`, counted in the order that remains once all of them are taken out.
     pub to: usize,
-    /// The drag was a copy (Alt held, `ReorderRule::copy_with_alt`): the item stays and a copy goes to `to`.
+    /// The drag was a copy (the copy keys of `ReorderRule::copy_with` held): the item stays and a copy goes to `to`.
     pub copy: bool,
     /// The group the items land in: `None` at the top level, and always `None` unless the rule has `into_groups`.
     pub parent: Option<K>,
@@ -125,7 +133,9 @@ impl<K> OpenChange<K> {
     }
 }
 
-/// A request for the context menu of an item. Collections never open menus: the app does.
+/// A request for the context menu of an item. Collections never open menus: the app does, hung from the collection's
+/// response (`Menu::context`). The collection keeps the request while that menu stays open and reports it in every
+/// such pass as `CollectionResponse::menu`, so the menu's rows read their item from there.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ContextMenuRequest<K> {
@@ -198,7 +208,23 @@ pub enum ColumnEvent {
 #[non_exhaustive]
 pub enum CollectionEvent<K, E> {
     /// The selection changed.
-    Selection(SelectionChange<K>),
+    Selection {
+        /// What changed.
+        change: SelectionChange<K>,
+        /// What made the change: `Pointer` for a pick on press or release, `Keys` for a key.
+        by: LeadSource,
+        /// The modifiers of the pick; `Mods::NONE` for a key.
+        mods: craft_keymap::Mods,
+    },
+    /// A click on an item that left the selection as it was: the click selects the item alone and it already was (a
+    /// click without Shift or Cmd/Ctrl on the sole selected item). A host that applies what a click picks (a preset, a
+    /// swatch) applies it again.
+    Picked {
+        /// The item.
+        key: K,
+        /// The modifiers of the click.
+        mods: craft_keymap::Mods,
+    },
     /// The lead moved, by keys or by the pointer.
     LeadMoved {
         /// The item that took the lead.
@@ -208,6 +234,8 @@ pub enum CollectionEvent<K, E> {
     },
     /// Enter or a double click on an item.
     Activate(K),
+    /// Enter on a disabled lead: nothing ran. A host that says why, or closes what the collection is in, reads it.
+    Refused(K),
     /// The pointer has rested on the hovered lead row for the tooltip delay, or the lead moved by a key: the row's
     /// key, once per lead change.
     Rested(K),
@@ -246,6 +274,9 @@ pub enum CollectionEvent<K, E> {
         /// The modifiers held at the click.
         mods: craft_keymap::Mods,
     },
+    /// A middle click on an item of a collection that senses `Sense::MIDDLE_CLICK` (a document tab strip closes the
+    /// tab), unless the middle button auto-scrolls (`MiddleButton::AutoScroll`). A middle drag is no click.
+    MiddleClick(K),
     /// Delete or Backspace at the lead of a `deletable` collection: the selected items when the lead is selected, else
     /// the lead alone, in display order.
     Delete(Vec<K>),

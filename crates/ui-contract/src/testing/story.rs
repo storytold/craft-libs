@@ -2,7 +2,7 @@
 
 use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
-use crate::runtime::commands::CommandStates;
+use crate::runtime::commands::{CommandRef, CommandStates};
 use craft_behavior::{EditEvent, EditEvents, Mixed, PartKey, PartRef, Value};
 use craft_tracked::{Revision, Tracked};
 use egui::{Id, Response, Ui, Vec2};
@@ -641,12 +641,16 @@ impl EditKind {
 pub enum CollectionKind {
     /// The selection changed.
     Selection,
+    /// A click picked the sole selected item again.
+    Picked,
     /// The lead moved.
     LeadMoved,
     /// The pointer rested on an item.
     Rested,
     /// Enter or a double click on an item.
     Activate,
+    /// Enter on a disabled lead.
+    Refused,
     /// A double click on the empty space.
     EmptyActivated,
     /// A secondary click on the empty space.
@@ -659,6 +663,8 @@ pub enum CollectionKind {
     ContextMenu,
     /// A Cmd/Ctrl click on an item of a `command_click` collection.
     CommandClick,
+    /// A middle click on an item.
+    MiddleClick,
     /// Delete was pressed on items.
     Delete,
     /// A tree row opened or closed.
@@ -685,9 +691,11 @@ impl CollectionKind {
     /// The kind of `event`, `None` for an edit event of a kind the runner does not know.
     pub fn of<K, E>(event: &CollectionEvent<K, E>) -> Option<CollectionKind> {
         Some(match event {
-            CollectionEvent::Selection(_) => CollectionKind::Selection,
+            CollectionEvent::Selection { .. } => CollectionKind::Selection,
+            CollectionEvent::Picked { .. } => CollectionKind::Picked,
             CollectionEvent::LeadMoved { .. } => CollectionKind::LeadMoved,
             CollectionEvent::Activate(_) => CollectionKind::Activate,
+            CollectionEvent::Refused(_) => CollectionKind::Refused,
             CollectionEvent::Rested(_) => CollectionKind::Rested,
             CollectionEvent::EmptyActivated => CollectionKind::EmptyActivated,
             CollectionEvent::EmptyContextMenu { .. } => CollectionKind::EmptyContextMenu,
@@ -695,6 +703,7 @@ impl CollectionKind {
             CollectionEvent::Preview(_) => CollectionKind::Preview,
             CollectionEvent::ContextMenu(_) => CollectionKind::ContextMenu,
             CollectionEvent::CommandClick { .. } => CollectionKind::CommandClick,
+            CollectionEvent::MiddleClick(_) => CollectionKind::MiddleClick,
             CollectionEvent::Delete(_) => CollectionKind::Delete,
             CollectionEvent::Open(_) => CollectionKind::Open,
             CollectionEvent::Reorder(edit) => CollectionKind::Reorder(EditKind::of(edit)?),
@@ -718,6 +727,9 @@ pub struct StoryOutput {
     pub edits: Vec<EditKind>,
     /// The pass reported a click, by pointer or by keyboard activation.
     pub clicked: bool,
+    /// The commands the story's pass fired, in order; the fixture that shows the story fills it in. A component bound
+    /// to a command reports its activation as the command it fires, not as a click.
+    pub fired: Vec<CommandRef>,
     /// The collection events' kinds, in drawing order.
     pub collection: Vec<CollectionKind>,
     /// The positions a collection showed.
@@ -735,6 +747,12 @@ impl StoryOutput {
     pub fn readout(mut self, text: impl Into<String>) -> Self {
         self.readout = Some(text.into());
         self
+    }
+
+    /// Whether the pass activated what the story shows: it reported a click, or it fired a command, as a component
+    /// bound to one does in place of the click.
+    pub fn activated(&self) -> bool {
+        self.clicked || !self.fired.is_empty()
     }
 
     pub(crate) fn from_response(response: &Response) -> Self {
@@ -774,6 +792,22 @@ where
     C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
 {
     crate::contract::show_item_in_flow(ui, row, crate::runtime::access::SetPosition::new(0).of(1))
+}
+
+/// Shows `row` as the only item of a collection across `span`, as a collection shows its rows across its columns: a
+/// row with column cells spans the cells it is given, where in the flow it would take its own width. The row is as
+/// high as it measures at the span's width, as a collection measures it.
+pub fn show_as_only_item_across<C>(ui: &mut Ui, mut row: C, span: egui::Rangef) -> C::Output
+where
+    C: crate::contract::Component + crate::contract::Props + crate::contract::Show,
+{
+    let at = crate::runtime::access::SetPosition::new(0).of(1);
+    let height = crate::contract::measure_item(ui, &mut row, at, craft_behavior::Proposal::Width(span.span())).y;
+    let top = ui.cursor().min.y;
+    let rect = egui::Rect::from_x_y_ranges(span, top..=top + height);
+    let shown = crate::contract::show_item(ui, rect, row, at);
+    ui.advance_cursor_after_rect(rect);
+    shown
 }
 
 /// A story value's place in its data, by its name and type, as the data keeps it: with the data's source it names the

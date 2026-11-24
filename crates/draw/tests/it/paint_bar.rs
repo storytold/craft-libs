@@ -1,17 +1,19 @@
-//! `PaintBar`: which members each tool disables, the smoothing options, the gestures, the combinations list and a
-//! click on the load swatch menu.
+//! `PaintBar`: which members each tool disables, the smoothing options, the gestures, the combinations list, what the
+//! load swatch shows and a click on its menu.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::EditEvent;
-use craft_draw::ui::{EraserMode, MIXER_COMBINATIONS, PaintBar, PaintTool, PaintValues};
+use craft_draw::ui::{EraserMode, MIXER_COMBINATIONS, MixerLoad, PaintBar, PaintTool, PaintValues};
+use craft_theme::Srgba;
 use craft_ui::bars::{Bar, BarKind};
+use craft_ui::choice::SwatchImage;
 use craft_ui::contract::{Entry, ShowContainer as _};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, Room, trial};
-use egui::{Key, Modifiers, Pos2};
+use egui::{Color32, ColorImage, Key, Modifiers, Pos2, Shape, TextureId};
 
 struct Host {
     values: PaintValues<u32>,
@@ -148,5 +150,41 @@ fn a_click_on_the_load_swatch_menus_clean_brush_row_reports_it_once() {
         click_at(&mut fixture, row.center(), one_pass);
         fixture.idle(3);
         assert_eq!(host.borrow().cleans, 1, "one pass: {one_pass}");
+    }
+}
+
+/// Every shape of the frame, groups opened.
+fn flat(shapes: Vec<Shape>) -> Vec<Shape> {
+    shapes.into_iter().flat_map(|shape| if let Shape::Vec(inner) = shape { flat(inner) } else { vec![shape] }).collect()
+}
+
+/// What the load swatch shows: its accessible value and the pictures painted in it (the checkerboard, a sampled image).
+fn load_swatch(fixture: &mut Fixture) -> (Option<String>, usize) {
+    let swatch = fixture.by_label("Current brush load").expect("the bar shows the load swatch");
+    let value = fixture.tree().value_of(swatch.node).map(str::to_owned);
+    let well = swatch.rect.expand(0.5);
+    let mut pictures: Vec<TextureId> = flat(fixture.frame_shapes())
+        .iter()
+        .filter(|shape| well.contains_rect(shape.visual_bounding_rect()))
+        .map(Shape::texture_id)
+        .filter(|texture| *texture != TextureId::default())
+        .collect();
+    pictures.sort_by_key(|texture| format!("{texture:?}"));
+    pictures.dedup();
+    (value, pictures.len())
+}
+
+/// The load swatch shows what the brush holds: a clean brush the checkerboard alone, a colour that colour, a sampled
+/// tip image that picture over the checkerboard.
+#[trial]
+fn the_load_swatch_shows_each_mixer_load() {
+    let green = Srgba::rgb(0.0, 1.0, 0.0);
+    let tip = SwatchImage::new(ColorImage::filled([64, 64], Color32::from_rgb(0, 0, 255)));
+    let cases =
+        [(MixerLoad::Clean, Some("Empty".to_owned()), 1), (MixerLoad::Color(green), Some(green.to_hex()), 0), (MixerLoad::Image(tip), None, 2)];
+    for (load, value, pictures) in cases {
+        let shown = load.clone();
+        let (mut fixture, _) = harness(PaintTool::MixerBrush, EraserMode::Brush, move |v| v.mixer.current_load = shown);
+        assert_eq!(load_swatch(&mut fixture), (value, pictures), "{load:?}");
     }
 }
