@@ -800,13 +800,19 @@ fn output(mut cmd: Command, command: &str, limit: usize, stderr_limit: usize) ->
     if status.success() {
         return Ok(stdout);
     }
-    let stderr = stderr.map(|head| head.finish((exit + DRAIN).saturating_duration_since(Instant::now()))).unwrap_or_default();
+    let stderr = stderr.map(|head| head.finish(drain_left(exit, Instant::now()))).unwrap_or_default();
     let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
     // An incomplete character at the end of the kept bytes decodes to a three-byte replacement.
     while stderr.len() > stderr_limit {
         stderr.pop();
     }
     Err(Error::Exit { command: command.into(), status, stderr: stderr.trim().to_owned() })
+}
+
+/// The part of [`DRAIN`] after a command's exit at `exit` that is left at `now`; zero once it has
+/// passed.
+fn drain_left(exit: Instant, now: Instant) -> Duration {
+    (exit + DRAIN).saturating_duration_since(now)
 }
 
 /// Everything `reader` gives, or `None` when that is more than `limit` bytes. The read stops one byte
@@ -1483,7 +1489,7 @@ mod tests {
 
     /// The commands run as children: the test binary itself, running [`fake_child`].
     mod process {
-        use super::super::{Error, Limits, TargetFeatures, Violation, host_target, metadata, run_target_features};
+        use super::super::{DRAIN, Error, Limits, TargetFeatures, Violation, drain_left, host_target, metadata, run_target_features};
         use std::io::{BufRead, BufReader, Read, Write};
         use std::process::{Command, Stdio};
 
@@ -1673,6 +1679,17 @@ mod tests {
                 }
                 other => panic!("expected Exit, got {other:?}"),
             }
+        }
+
+        #[test]
+        fn the_stderr_wait_ends_drain_after_the_exit() {
+            let exit = std::time::Instant::now();
+            let half = DRAIN / 2;
+            // Standard output closed half of DRAIN after the exit, so stderr gets only the other half.
+            assert_eq!(drain_left(exit, exit + half), DRAIN - half);
+            assert_eq!(drain_left(exit, exit), DRAIN);
+            assert_eq!(drain_left(exit, exit + DRAIN), std::time::Duration::ZERO);
+            assert_eq!(drain_left(exit, exit + DRAIN * 2), std::time::Duration::ZERO);
         }
 
         #[test]
