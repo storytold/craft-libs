@@ -4,9 +4,10 @@ use super::host::{Layer, LayerMemory};
 use super::props::Outside;
 use crate::contract::{Component, Cx};
 use crate::runtime::commands::FireSource;
+use crate::runtime::egui::pass;
 use crate::runtime::focus::{self, FocusPolicy, Initial};
 use crate::runtime::overlay::{self, CloseReason, Rank};
-use crate::runtime::{frame, keys, pointer};
+use crate::runtime::{frame, keys, pointer, sampler};
 use craft_behavior::CancelRule;
 use craft_keymap::Mods;
 use egui::{Context, Rect};
@@ -94,13 +95,15 @@ pub(super) fn popup_dismissal(
     (here || away || crate::runtime::windows::pressed_elsewhere(ctx, popup, appears)).then_some(CloseReason::Outside)
 }
 
-/// Whether a primary press landed outside the layer, its anchor and the layers opened from inside it.
+/// Whether a primary press landed outside the layer, its anchor and the layers opened from inside it. A press the
+/// canvas the layer keeps open took (a colour sampled under the Color Picker) is the canvas's, not one beside the layer.
 fn press_outside(ctx: &Context, layer: &Layer<'_>, rect: Rect, anchor: Rect) -> bool {
     let Some(press) = pointer::primary_press(ctx) else {
         return false;
     };
     let inside_family = overlay::family(ctx, layer.id).iter().filter_map(|id| overlay::entry(ctx, *id)).any(|entry| entry.rect.contains(press));
-    !rect.contains(press) && !anchor.contains(press) && !inside_family
+    let sampled = || sampler::through(ctx, pass::current_viewport(ctx), layer.id).is_some() && sampler::admitted_press(ctx, press);
+    !rect.contains(press) && !anchor.contains(press) && !inside_family && !sampled()
 }
 
 /// Whether the focused stop sits in no scope that belongs to a shown layer.

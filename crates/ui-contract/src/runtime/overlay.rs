@@ -292,7 +292,12 @@ pub(crate) struct TopModal {
 pub(crate) struct Persist {
     raised: IdMap<u64>,
     counter: u64,
-    modal: bool,
+    /// The viewport's place in the app's modal stack: the root frame its top live modal layer over the whole window
+    /// first showed in, as of its last finished pass, or `None` without one. A modal viewport blocks the viewports whose
+    /// top modal opened in an earlier frame and those with none (`modal_viewport`). Modals that open in the same frame
+    /// form one level and block none of each other: the screen picker opens a capture window over each monitor in one
+    /// pass, and each must take its click. When the top modal closes, the one under it keeps its own first frame.
+    modal: Option<u64>,
     /// The layers of the last pass, bottom to top, as `end_pass` handed them to egui.
     stack: Vec<Id>,
     /// A press the modal drop removed, for the window host to raise the modal's window.
@@ -866,6 +871,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     let (current, last_ids, raise) =
         with_pass(ctx, |pass| (pass.current.clone(), pass.last.iter().map(|entry| entry.id).collect::<Vec<_>>(), pass.raise.clone()));
     let pressed = pointer::frame_raw(ctx).press.map(|press| press.origin);
+    let now = pass::root_frame_nr(ctx);
     let order = with_persist(ctx, viewport, |persist| {
         let stamp = |id: Id, persist: &mut Persist| {
             persist.counter += 1;
@@ -915,9 +921,9 @@ pub(crate) fn end_pass(ctx: &Context) {
                 persist.stack.push(member.id);
             }
         }
-        persist.modal = current.iter().any(|entry| entry.blocks_window() && !entry.exiting);
-        persist.top_modal =
-            current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting).map(|entry| TopModal { id: entry.id, cover: entry.cover });
+        let top = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
+        persist.modal = top.map(|entry| persist.appeared.get(&entry.id).map_or(now, |(frame, _)| *frame));
+        persist.top_modal = top.map(|entry| TopModal { id: entry.id, cover: entry.cover });
         persist.popup_over_modal = current.iter().filter(|entry| entry.rank == Rank::Popup && !entry.exiting).any(|popup| {
             let mut at = popup.parent;
             while let Some(parent) = at.and_then(|id| current.iter().find(|entry| entry.id == id)) {
@@ -941,7 +947,6 @@ pub(crate) fn end_pass(ctx: &Context) {
     });
     areas::set_layer_order(ctx, &order);
     // An owner takes a close in the frame after the request at the latest; one nobody took is for a layer that is not shown.
-    let now = pass::root_frame_nr(ctx);
     pass_state::with::<Closes, _>(ctx, |closes| closes.0.retain(|(.., queued, carried)| *carried || queued + 1 >= now));
     let top_modal = current.iter().rev().find(|entry| entry.blocks_window() && !entry.exiting);
     if let Some(entry) = top_modal.filter(|entry| !entry.window) {
@@ -949,19 +954,15 @@ pub(crate) fn end_pass(ctx: &Context) {
     }
     let any = {
         let here = top_modal.is_some();
-        here || modal_in_other_viewports(ctx, viewport)
+        here || modal_elsewhere(ctx, viewport)
     };
     commands::set_modal_open(ctx, any, viewport, top_modal.map(|entry| entry.id));
 }
 
-fn modal_in_other_viewports(ctx: &Context, running: ViewportId) -> bool {
-    modal_viewport(ctx, running).is_some()
-}
-
-/// Whether a modal layer is open in a viewport other than `viewport`: the global open-modal fact the input hook
-/// reads (H3).
+/// Whether a modal layer in another viewport blocks `viewport` (`modal_viewport`): the app-modal fact the input hook
+/// (H3), key ownership and the command state read.
 pub(crate) fn modal_elsewhere(ctx: &Context, viewport: ViewportId) -> bool {
-    modal_in_other_viewports(ctx, viewport)
+    modal_viewport(ctx, viewport).is_some()
 }
 
 /// Records that the input hook dropped a press for `viewport` because a modal is open elsewhere.
@@ -1007,7 +1008,7 @@ pub(crate) fn key_layer(ctx: &Context, scopes: &[Id], below: Option<Id>) -> Laye
         (_, None, None) => true,
         _ => false,
     });
-    if above || modal_in_other_viewports(ctx, viewport) {
+    if above || modal_elsewhere(ctx, viewport) {
         return LayerKeys::Blocked;
     }
     inside.map_or(LayerKeys::Window, |entry| LayerKeys::Class(entry.keys))
@@ -1028,22 +1029,28 @@ pub(crate) fn beneath(ctx: &Context, layer: Id) -> (bool, Option<Id>) {
             .max_by_key(|(shown, _)| *shown)
             .map(|(_, id)| id)
     });
-    (root.is_some() || modal_in_other_viewports(ctx, viewport), root)
+    (root.is_some() || modal_elsewhere(ctx, viewport), root)
 }
 
-/// The live viewports with a modal layer open as of their last finished pass.
-fn modal_viewports(ctx: &Context) -> impl Iterator<Item = ViewportId> + '_ {
-    pass::live_viewports(ctx).into_iter().filter(|viewport| with_persist(ctx, *viewport, |persist| persist.modal))
+/// The live viewports with a modal layer open as of their last finished pass, each with its place in the modal stack
+/// (`Persist::modal`).
+fn modal_viewports(ctx: &Context) -> impl Iterator<Item = (ViewportId, u64)> + '_ {
+    pass::live_viewports(ctx).into_iter().filter_map(|viewport| with_persist(ctx, viewport, |persist| persist.modal).map(|opened| (viewport, opened)))
 }
 
-/// A viewport other than `viewport` that has a modal layer open: the window a blocked press raises.
+/// The viewport whose modal layer blocks `viewport`: of the other viewports whose top modal opened in a later frame
+/// than `viewport`'s own (any, when it has none), the one that opened last, the window a blocked press raises.
 pub(crate) fn modal_viewport(ctx: &Context, viewport: ViewportId) -> Option<ViewportId> {
-    modal_viewports(ctx).find(|other| *other != viewport)
+    let own = with_persist(ctx, viewport, |persist| persist.modal);
+    modal_viewports(ctx)
+        .filter(|(other, opened)| *other != viewport && own.is_none_or(|own| *opened > own))
+        .max_by_key(|(_, opened)| *opened)
+        .map(|(other, _)| other)
 }
 
-/// A viewport that has a modal layer open: the window that blocks the app's other windows.
+/// The viewport at the top of the modal stack: the window that blocks the app's other windows.
 pub(crate) fn app_modal_viewport(ctx: &Context) -> Option<ViewportId> {
-    modal_viewports(ctx).next()
+    modal_viewports(ctx).max_by_key(|(_, opened)| *opened).map(|(viewport, _)| viewport)
 }
 
 /// Whether a layer of key class `class` that is not fading out was shown last frame and the screen point `at` lies in
