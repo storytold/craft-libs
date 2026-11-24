@@ -183,11 +183,9 @@ pub(crate) mod windows {
     }
 
     /// The confirmed context and product code of `exe`'s copy, asking Windows Installer; `None`
-    /// for the launcher's own package. See [`super::resolve`].
-
+    /// for the launcher's own package. See [`super::resolve_reason`].
     pub(crate) fn resolve_reason(app: &App, exe: &Path) -> Result<Option<(MsiScope, String)>, Reason> {
-        let copy =
-            find(app, exe).ok_or_else(|| Reason::new("{arg0} isn't registered with the Windows Installer", &[("arg0", &(app.name).to_string())]))?;
+        let copy = find(app, exe).ok_or_else(|| Reason::new("{arg0} isn't registered with the Windows Installer", &[("arg0", app.name)]))?;
         let codes: Vec<String> = crate::detect::windows::msi_installs(app)
             .into_iter()
             .map(|m| m.product_code)

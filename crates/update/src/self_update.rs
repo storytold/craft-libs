@@ -279,18 +279,13 @@ pub fn prepare_update_with_options_reason(
         // Without that opt-in, a build from source requires a strictly higher release.
         return Err(Reason::new(
             "{arg0} {arg1} is not newer than currently running version {arg2}",
-            &[("arg0", &(app.name).to_string()), ("arg1", &(release.version_label()).to_string()), ("arg2", &(cur_v).to_string())],
+            &[("arg0", app.name), ("arg1", &release.version_label()), ("arg2", &(cur_v).to_string())],
         ));
     }
     let (asset, _) = pick_asset(release, &[app.id], platform, &[install.kind()]).ok_or_else(|| {
         Reason::new(
             "{arg0} {arg1} has no {arg2} for {arg3}",
-            &[
-                ("arg0", &(app.name).to_string()),
-                ("arg1", &(release.version_label()).to_string()),
-                ("arg2", &(install.kind().label()).to_string()),
-                ("arg3", &(platform.label()).to_string()),
-            ],
+            &[("arg0", app.name), ("arg1", &release.version_label()), ("arg2", install.kind().label()), ("arg3", &platform.label())],
         )
     })?;
     let asset = asset.clone();
@@ -364,10 +359,7 @@ pub fn prepare_update_with_options_reason(
                     // Re-read rather than trusting a stale guess: `--user` on a system copy
                     // would install a second one beside it.
                     None => {
-                        return Err(Reason::new(
-                            "this copy of {arg0} can't update itself; download the new version instead",
-                            &[("arg0", &(app.name).to_string())],
-                        ));
+                        return Err(Reason::new("this copy of {arg0} can't update itself; download the new version instead", &[("arg0", app.name)]));
                     }
                 };
                 let result = install::linux::update_flatpak_bundle_reason(&file, &app.bundle_id(), system, stop, phase);
@@ -379,12 +371,12 @@ pub fn prepare_update_with_options_reason(
             Install::Msi(exe) => windows_helper(app, paths, release, pid, exe, &msi_finish(&file, options.quiet_msi)?),
             #[cfg(windows)]
             Install::Portable(exe) => {
-                exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", &(app.name).to_string())]))?;
+                exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", app.name)]))?;
                 windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(windows)]
             Install::Standalone(exe) => {
-                exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", &(app.name).to_string())]))?;
+                exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", app.name)]))?;
                 windows_helper(app, paths, release, pid, exe, &Finish::Portable { zip: file, tmp: paths.cache.join(PORTABLE_STAGING) })
             }
             #[cfg(unix)]
@@ -397,7 +389,7 @@ pub fn prepare_update_with_options_reason(
             #[allow(unreachable_patterns)]
             _ => {
                 let _ = (pid, &file);
-                Err(Reason::new("this copy of {arg0} can't update itself; download the new version instead", &[("arg0", &(app.name).to_string())]))
+                Err(Reason::new("this copy of {arg0} can't update itself; download the new version instead", &[("arg0", app.name)]))
             }
         }
     })();

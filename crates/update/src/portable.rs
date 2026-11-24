@@ -454,7 +454,7 @@ fn replace_with(
         })
         .collect::<Result<Vec<_>, Reason>>()?;
     if !files.iter().any(|(_, inside)| inside == Path::new(executable)) {
-        return Err(Reason::new("the update doesn't contain {arg0}", &[("arg0", &(executable.to_string_lossy()).to_string())]));
+        return Err(Reason::new("the update doesn't contain {arg0}", &[("arg0", executable.to_string_lossy().as_ref())]));
     }
     for (relative, _) in &files {
         check(&unpacked.join(relative))?;

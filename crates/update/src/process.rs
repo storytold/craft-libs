@@ -140,7 +140,7 @@ pub fn run_command(cmd: Command, program: &str, timeout: Duration) -> Result<Str
     run_command_reason(cmd, program, timeout).map_err(|reason| reason.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn run_command_detailed(cmd: Command, program: &str, timeout: Duration) -> Result<String, HelperFailure> {
     run_command_detailed_reason(cmd, program, timeout).map_err(HelperFailureReason::into_legacy)
 }
@@ -186,10 +186,7 @@ fn run_command_until_reason(
     mut keep_waiting: impl FnMut(Pending) -> bool,
 ) -> Result<String, HelperFailureReason> {
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| {
-        HelperFailureReason::Unfinished(Reason::new(
-            "couldn't start {program} ({e})",
-            &[("program", &(program).to_string()), ("e", &(e).to_string())],
-        ))
+        HelperFailureReason::Unfinished(Reason::new("couldn't start {program} ({e})", &[("program", program), ("e", &(e).to_string())]))
     })?;
     // Read both pipes while it runs, so a chatty helper can't block on a full one.
     let readers = read_all(child.stdout.take()).and_then(|stdout| Ok((stdout, read_all(child.stderr.take())?)));
@@ -200,14 +197,14 @@ fn run_command_until_reason(
             let _ = child.wait();
             return Err(HelperFailureReason::Unfinished(Reason::new(
                 "couldn't read the output of {program} ({e})",
-                &[("program", &(program).to_string()), ("e", &(e).to_string())],
+                &[("program", program), ("e", &(e).to_string())],
             )));
         }
     };
     let timed_out = || {
         HelperFailureReason::Unfinished(Reason::new(
             "{program} didn't finish within {arg0} seconds",
-            &[("program", &(program).to_string()), ("arg0", &(timeout.as_secs()).to_string())],
+            &[("program", program), ("arg0", &(timeout.as_secs()).to_string())],
         ))
     };
     let status = loop {
@@ -235,7 +232,7 @@ fn run_command_until_reason(
     }
     let reason = err.trim();
     let reason = if reason.is_empty() {
-        Reason::new("{program} failed ({status})", &[("program", &(program).to_string()), ("status", &(status).to_string())])
+        Reason::new("{program} failed ({status})", &[("program", program), ("status", &(status).to_string())])
     } else {
         Reason::data(reason)
     };

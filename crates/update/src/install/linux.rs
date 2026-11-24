@@ -203,13 +203,12 @@ pub(crate) fn flatpak_bundle_error_reason(output: &std::process::Output) -> Resu
         Err(Reason::new("Flatpak couldn't install the bundle (it needs the Flathub remote for its runtime)", &[]))
     } else {
         let clean_err = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(&err);
-        Err(Reason::new("Flatpak couldn't install the bundle: {clean_err}", &[("clean_err", &(clean_err).to_string())]))
+        Err(Reason::new("Flatpak couldn't install the bundle: {clean_err}", &[("clean_err", clean_err)]))
     }
 }
 
 /// Puts a self-update's `.flatpak` bundle in place. `system` replaces the system-wide copy
 /// through `pkexec`. Per-user stays a normal `flatpak install --user`, which needs no password.
-
 pub(crate) fn update_flatpak_bundle_reason(file: &Path, id: &str, system: bool, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), Reason> {
     update_flatpak_bundle_via_reason(&SYSTEM, file, id, system, stop, phase)
 }
@@ -337,10 +336,7 @@ pub(crate) fn migrate_bundle_to_oci_reason(
         let end = kill_on_cancel(stop);
         let output = process::cancellable_output_reason(cmd, || if cancellable { end() } else { Ok(()) })?;
         if !output.status.success() {
-            return Err(Reason::new(
-                "Flatpak OCI migration failed: {arg0}",
-                &[("arg0", &(String::from_utf8_lossy(&output.stderr).trim()).to_string())],
-            ));
+            return Err(Reason::new("Flatpak OCI migration failed: {arg0}", &[("arg0", String::from_utf8_lossy(&output.stderr).trim())]));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     };
@@ -431,10 +427,10 @@ pub(crate) fn update_flatpak_app_reason(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let err = stderr.trim();
     if err.is_empty() {
-        Err(Reason::new("Flatpak couldn't update {arg0}", &[("arg0", &(app.name).to_string())]))
+        Err(Reason::new("Flatpak couldn't update {arg0}", &[("arg0", app.name)]))
     } else {
         let clean = err.strip_prefix("error: ").or_else(|| err.strip_prefix("Error: ")).unwrap_or(err);
-        Err(Reason::new("Flatpak couldn't update {arg0}: {clean}", &[("arg0", &(app.name).to_string()), ("clean", &(clean).to_string())]))
+        Err(Reason::new("Flatpak couldn't update {arg0}: {clean}", &[("arg0", app.name), ("clean", clean)]))
     }
 }
 
@@ -506,7 +502,7 @@ pub(crate) fn install_package_via_reason<E: Into<Reason>>(
     }
     match kind {
         PackageKind::Flatpak => install_flatpak_bundle_via(root, file, bundle, false, stop, phase),
-        other => Err(Reason::new("{arg0} isn't a system package", &[("arg0", &(other.label()).to_string())])),
+        other => Err(Reason::new("{arg0} isn't a system package", &[("arg0", other.label())])),
     }
 }
 
@@ -540,11 +536,11 @@ pub(crate) fn remove_package_reason(app: &App, installed: &Installed, stop: &Sto
                 if system.is_ok_and(|s| s.success()) {
                     return Ok(());
                 }
-                return Err(Reason::new("couldn't uninstall {id}", &[("id", &(id).to_string())]));
+                return Err(Reason::new("couldn't uninstall {id}", &[("id", &id)]));
             }
             remove(&["flatpak", "uninstall", "--system", "-y", "--noninteractive"], &id)
         }
-        other => Err(Reason::new("{arg0} isn't a system package", &[("arg0", &(other.label()).to_string())])),
+        other => Err(Reason::new("{arg0} isn't a system package", &[("arg0", other.label())])),
     }
 }
 
@@ -745,7 +741,7 @@ pub(crate) fn remove_tree_reason(app: &App, paths: &Paths) -> Result<(), Reason>
             removed = true;
         }
     }
-    if removed { Ok(()) } else { Err(Reason::new("{arg0} isn't installed in this folder", &[("arg0", &(app.name).to_string())])) }
+    if removed { Ok(()) } else { Err(Reason::new("{arg0} isn't installed in this folder", &[("arg0", app.name)])) }
 }
 
 /// Where menu entries and icons go: `$XDG_DATA_HOME`, else `~/.local/share`. Inside the

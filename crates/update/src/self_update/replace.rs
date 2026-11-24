@@ -156,7 +156,7 @@ pub(super) fn remove_staging(staging: &Path) {
 pub(super) fn replace_from_tree(app: &App, tree: &Path, exe: &Path) -> Result<(), Reason> {
     let new_exe = tree.join("bin").join(app.id);
     if !is_plain_file(&new_exe) {
-        return Err(Reason::new("release archive did not contain binary for {arg0}", &[("arg0", &(app.id).to_string())]));
+        return Err(Reason::new("release archive did not contain binary for {arg0}", &[("arg0", app.id)]));
     }
     // A `bin` that is a link would bring in programs from outside the release.
     let release_bin = tree.join("bin");

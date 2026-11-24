@@ -55,7 +55,6 @@ pub(crate) fn reinstall_reason(msi: &Path, context: &[&str], folder: Option<&Pat
 }
 
 /// [`reinstall`]; `quiet` hides the progress window of a per-user install.
-
 pub(crate) fn reinstall_with_ui_reason(msi: &Path, context: &[&str], folder: Option<&Path>, quiet: bool) -> Result<(), Reason> {
     use std::os::windows::process::CommandExt;
     let mut command = reinstall_command_ui(&msiexec(), msi, context, quiet)?;
@@ -83,7 +82,7 @@ pub fn remove_product(product_code: &str, log: &Path) -> Result<(), String> {
 
 pub(crate) fn remove_product_reason(product_code: &str, log: &Path) -> Result<(), Reason> {
     if !crate::msi_context::valid_product_code(product_code) {
-        return Err(Reason::new("{product_code} isn't a Windows Installer product code", &[("product_code", &(product_code).to_string())]));
+        return Err(Reason::new("{product_code} isn't a Windows Installer product code", &[("product_code", product_code)]));
     }
     let status = process::command(msiexec())
         .args(["/x", product_code, "/passive", "/norestart", "/l*v"])
@@ -102,7 +101,7 @@ pub fn uninstall_msi(app: &App, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) ->
 pub(crate) fn uninstall_msi_reason(app: &App, stop: &Stop, phase: &mut dyn FnMut(JobPhase)) -> Result<(), Reason> {
     let installs = crate::detect::windows::msi_installs(app);
     if installs.is_empty() {
-        return Err(Reason::new("{arg0} isn't registered with the Windows Installer", &[("arg0", &(app.name).to_string())]));
+        return Err(Reason::new("{arg0} isn't registered with the Windows Installer", &[("arg0", app.name)]));
     }
     in_turn(stop, phase, JobPhase::Removing, || {
         for m in installs {

@@ -91,7 +91,6 @@ fn is_within(path: &Path, root: &Path) -> bool {
 /// Moves a copy in the only safe order: `remove` the per-user copy (stop if that fails, nothing has
 /// changed), install `to_everyone`, and only if that fails `keep_log` of it and install
 /// `back_to_account`. The error says where the app is now.
-
 pub(crate) fn run_move_reason(
     remove: impl FnOnce() -> Result<(), Reason>,
     to_everyone: impl FnOnce() -> Result<(), Reason>,
@@ -105,7 +104,6 @@ pub(crate) fn run_move_reason(
 }
 
 /// The error a failed move reports, saying where the app now is.
-
 fn move_failure_reason(installed: Reason, rollback: Result<(), Reason>) -> Reason {
     match rollback {
         Ok(()) => installed.context("couldn't move the app to an install for everyone ({reason}); it was updated for your account instead", &[]),
@@ -130,11 +128,10 @@ pub(crate) mod windows {
     }
 
     /// The step for `exe`'s update, asking Windows Installer for its context.
-
     /// Structured counterpart retaining authored failure context.
     pub(crate) fn step_reason(app: &App, exe: &Path) -> Result<Step, Reason> {
         let resolved = crate::msi_copy::windows::resolve_reason(app, exe)?;
-        let dir = exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", &(app.name).to_string())]))?;
+        let dir = exe.parent().ok_or_else(|| Reason::new("{arg0} isn't in a folder", &[("arg0", app.name)]))?;
         let dir = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
         // Resolved like `dir`, whole path at a time, so a profile or a default folder reached
         // through a junction or a `subst` drive still matches.
@@ -151,7 +148,6 @@ pub(crate) mod windows {
     }
 
     /// Quiet is limited to in-place per-user updates; migrations retain their permission UI.
-
     /// Structured counterpart retaining authored failure context.
     pub(crate) fn run_with_ui_reason(msi: &Path, step: &Step, quiet: bool) -> Result<(), Reason> {
         if let Step::Update(context) = step {
@@ -161,7 +157,6 @@ pub(crate) mod windows {
     }
 
     /// Runs `step` with the downloaded package `msi`.
-
     /// Structured counterpart retaining authored failure context.
     pub(crate) fn run_reason(msi: &Path, step: &Step) -> Result<(), Reason> {
         match step {

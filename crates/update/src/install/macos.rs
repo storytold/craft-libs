@@ -136,6 +136,7 @@ pub fn install_dmg(
     install_dmg_reason(app, dmg, existing, destination, replace, paths, expect, wait).map_err(|reason| reason.to_string())
 }
 
+/// [`install_dmg`] with a structured failure for translation.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dmg_reason(
     app: &App,
@@ -203,7 +204,6 @@ pub fn install_dmg_reason(
 /// Detaches the image at `mount` through `detach` and removes the mount point. An image that
 /// stays attached is logged, and the error of a failed install says so after its reason. A
 /// later install detaches it.
-
 pub(crate) fn close_image_reason(
     result: Result<PathBuf, Reason>,
     mount: &Path,
@@ -306,7 +306,6 @@ pub(crate) fn place_checked_reason(
 /// Removes `staging` with whatever is still in it: the new copy when the install failed. A
 /// folder that can't be removed is logged, and the error of a failed install says so after
 /// its reason.
-
 pub(crate) fn remove_staging_reason(result: Result<PathBuf, Reason>, staging: tempfile::TempDir) -> Result<PathBuf, Reason> {
     let path = staging.path().to_path_buf();
     let Err(e) = staging.close() else { return result };
@@ -443,7 +442,6 @@ fn detach_unmounted(dmg: &Path) -> Result<(), Reason> {
 
 /// [`detach_unmounted`], with `running` checking for a program started with `dmg` in its
 /// arguments and `run` running `hdiutil`.
-
 pub(crate) fn detach_unmounted_with_reason(
     dmg: &Path,
     running: impl FnOnce(&Path) -> Result<bool, Reason>,

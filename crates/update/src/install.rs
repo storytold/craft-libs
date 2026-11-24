@@ -80,7 +80,7 @@ type RecordCommit<'a> = Option<&'a mut dyn FnMut(&Record) -> Result<(), String>>
 fn not_running(app: &App, answer: Result<bool, Reason>) -> Result<(), Reason> {
     match answer {
         Ok(false) => Ok(()),
-        Ok(true) => Err(Reason::new("{arg0} is running. Quit it, then try again.", &[("arg0", &(app.name).to_string())])),
+        Ok(true) => Err(Reason::new("{arg0} is running. Quit it, then try again.", &[("arg0", app.name)])),
         Err(reason) => Err(reason.context("couldn't check whether {app} is running ({reason}), so nothing was changed", &[("app", app.name)])),
     }
 }
@@ -142,7 +142,7 @@ pub fn install_at_reason(
     {
         return Err(Reason::new(
             "Cannot update {arg0} to {arg1}: installed version {arg2} is newer",
-            &[("arg0", &(app.name).to_string()), ("arg1", &(release.version_label()).to_string()), ("arg2", &(inst_v).to_string())],
+            &[("arg0", app.name), ("arg1", &release.version_label()), ("arg2", &(inst_v).to_string())],
         ));
     }
     check_download_link_reason(app, release, asset)?;
@@ -203,7 +203,7 @@ pub fn install_at_reason(
         }
         #[cfg(target_os = "linux")]
         PackageKind::TarGz => linux::install_tree_reason(app, &file, job.paths).map(|path| Some(record(&version, kind, path, Vec::new(), false))),
-        other => Err(Reason::new("{arg0} isn't supported on this system", &[("arg0", &(other.label()).to_string())])),
+        other => Err(Reason::new("{arg0} isn't supported on this system", &[("arg0", other.label())])),
     };
     match &result {
         Ok(_) => log::info!("{}: successfully installed/updated to {}", app.name, release.version_label()),
@@ -228,12 +228,8 @@ pub fn install_at_reason(
 /// release). We require the version encoded in the asset filename and the release tag embedded in
 /// the download URL to agree with the release version before any bytes are fetched.
 pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset) -> Result<(), Reason> {
-    let mismatch = || {
-        Reason::new(
-            "{arg0}'s download does not match the advertised version {arg1}.",
-            &[("arg0", &(app.name).to_string()), ("arg1", &(release.version_label()).to_string())],
-        )
-    };
+    let mismatch =
+        || Reason::new("{arg0}'s download does not match the advertised version {arg1}.", &[("arg0", app.name), ("arg1", &release.version_label())]);
     let release_version = release.version.as_ref();
 
     // The version in the asset filename (`<stem>-<version>-<os>-<arch>.<ext>`), when it carries one.
@@ -261,7 +257,7 @@ pub(crate) fn bind_artifact_version(app: &App, release: &Release, asset: &Asset)
         if !url_filename.is_empty() && url_filename != asset.name {
             return Err(Reason::new(
                 "{arg0}'s download URL filename does not match selected asset {arg1}.",
-                &[("arg0", &(app.name).to_string()), ("arg1", &(asset.name).to_string())],
+                &[("arg0", app.name), ("arg1", &asset.name)],
             ));
         }
     }
@@ -293,7 +289,7 @@ pub fn check_download_link_reason(app: &App, release: &Release, asset: &Asset) -
     }
     Err(Reason::new(
         "{arg0}'s download link isn't the one its release publishes ({arg1}), so it wasn't downloaded.",
-        &[("arg0", &(app.name).to_string()), ("arg1", &(asset.name).to_string())],
+        &[("arg0", app.name), ("arg1", &asset.name)],
     ))
 }
 
@@ -399,7 +395,7 @@ fn selected_folder(folder: &str, writable: bool) -> Result<PathBuf, Reason> {
 fn msi_folder_argument(path: &Path) -> Result<String, Reason> {
     let value = path.to_str().ok_or_else(|| Reason::new("unusual characters in a path", &[]))?;
     if value.chars().any(|c| c == '"' || c.is_control()) {
-        return Err(Reason::new("couldn't use install folder {value}: the path contains invalid characters", &[("value", &(value).to_string())]));
+        return Err(Reason::new("couldn't use install folder {value}: the path contains invalid characters", &[("value", value)]));
     }
     Ok(format!("INSTALLFOLDER=\"{value}\""))
 }
@@ -509,7 +505,7 @@ pub(crate) fn download(release: &Release, asset: &Asset, job: &mut Job<'_>) -> R
     let Some(sha) = sha else {
         return Err(Reason::new(
             "the release publishes no checksum for {arg0}, so it can't be verified and wasn't installed. Try again later, or report it on GitHub.",
-            &[("arg0", &(asset.name).to_string())],
+            &[("arg0", &asset.name)],
         ));
     };
     let dest = download_path(job.paths, asset);
@@ -570,24 +566,18 @@ fn managed_elsewhere_with_reason(app: &App, installed: &Installed, uninstall: bo
             };
             Some(Reason::new(
                 "{arg0} was installed from a Flatpak repository. Update it with flatpak update {scope} {pkg}",
-                &[("arg0", &(app.name).to_string()), ("scope", &(scope).to_string()), ("pkg", &(pkg).to_string())],
+                &[("arg0", app.name), ("scope", &scope), ("pkg", pkg)],
             ))
         }
-        InstallSource::Binary => Some(Reason::new(
-            "{arg0} was installed outside the launcher. Update or remove it the way it was installed.",
-            &[("arg0", &(app.name).to_string())],
-        )),
+        InstallSource::Binary => {
+            Some(Reason::new("{arg0} was installed outside the launcher. Update or remove it the way it was installed.", &[("arg0", app.name)]))
+        }
         _ => None,
     }
 }
 
 /// How to update an Arch package the launcher doesn't own: `repo` is the sync repository it
 /// comes from, or `None` for a foreign (AUR) package.
-#[cfg(test)]
-fn pacman_update_hint(app: &App, pkg: &str, repo: Option<&str>) -> String {
-    pacman_update_hint_reason(app, pkg, repo).to_string()
-}
-
 fn pacman_update_hint_reason(app: &App, pkg: &str, repo: Option<&str>) -> Reason {
     let helper = ["paru", "yay"].into_iter().find(|h| which(h).is_some());
     let cmd = match helper {
