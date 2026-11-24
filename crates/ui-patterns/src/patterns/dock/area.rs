@@ -15,8 +15,8 @@ use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_dra
 use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, GroupGrip,
-    HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea,
-    Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
+    GroupMenuButton, HidePanels, IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource,
+    SplitArea, Titles, WindowColumn, actions, dock_states, fit_widths, frame, move_actions,
 };
 use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
@@ -1093,7 +1093,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
                 .menu(move || panel_menu_rows(scene, &mut **panels.borrow_mut(), words, shown).0)
-                .panel_menu_shown(*hosted || scene.config.menu_button)
+                .panel_menu_shown(*hosted || scene.config.menu_button == GroupMenuButton::EveryGroup)
                 .command_states(states.clone());
             if look.in_window {
                 group = group.in_window();

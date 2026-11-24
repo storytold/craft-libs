@@ -5,7 +5,7 @@ use craft_behavior::Axis;
 use craft_behavior::PartKey;
 use craft_behavior::dock::{Action, Column, DockEdge, Group, Layout, Node, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Role, ShowContainer as _, Tracked};
-use craft_ui::docking::{DockConfig, DockPanels, PanelSpec, PanelSpecs, WindowMenuRows};
+use craft_ui::docking::{DockConfig, DockPanels, GroupMenuButton, PanelSpec, PanelSpecs, WindowMenuRows};
 use craft_ui::menu::{Menu, PanelRow};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
@@ -155,24 +155,25 @@ impl DockPanels<usize> for Bare {
     fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
 }
 
-/// With `DockConfig::menu_button`, a group whose panel has no host rows still shows the panel menu button, and its
-/// menu lists the dock's rows; without it the group shows none.
+/// With `GroupMenuButton::EveryGroup`, a group whose panel has no host rows still shows the panel menu button, and its
+/// menu lists the dock's rows; with the default `GroupMenuButton::HostRows` the group shows none.
 #[trial]
 fn the_menu_button_config_shows_the_panel_menu_without_host_rows() {
-    for on in [false, true] {
+    assert_eq!(DockConfig::default().menu_button, GroupMenuButton::HostRows, "by default only groups with host rows show the button");
+    for button in [GroupMenuButton::HostRows, GroupMenuButton::EveryGroup] {
         let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![2], 0));
         let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
         let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
         let mut fixture = Fixture::new(move |ui| {
             let mut shown = held.borrow().clone();
-            DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Bare, DockConfig::default().menu_button(on)).show(ui);
+            DockArea::new("Dock", Bind::bound(&mut shown), &specs, &mut Bare, DockConfig::default().menu_button(button)).show(ui);
             *held.borrow_mut() = shown;
         });
         fixture.room(Vec2::new(1200.0, 600.0)).settle();
         let buttons: Vec<_> =
             fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
-        if !on {
-            assert!(buttons.is_empty(), "without host rows and without the config, no group shows the button");
+        if button == GroupMenuButton::HostRows {
+            assert!(buttons.is_empty(), "without host rows and with only host-row groups showing it, no group shows the button");
             continue;
         }
         assert_eq!(buttons.len(), 2, "each group shows its panel menu button");

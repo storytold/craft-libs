@@ -99,10 +99,20 @@ pub struct DockConfig {
     /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
     /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
     pub iconic_mode: IconicMode,
-    /// Every group shows the panel menu button at the end of its tab strip, listing the dock's rows when the host has
-    /// none for its panel. Off: only a group whose shown panel has host rows (`DockPanels::panel_rows`) shows the
-    /// button, and the dock's rows open from a context request on a tab.
-    pub menu_button: bool,
+    /// Which groups show the panel menu button at the end of their tab strip.
+    pub menu_button: GroupMenuButton,
+}
+
+/// Which groups show the panel menu button at the end of their tab strip ([`DockConfig::menu_button`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GroupMenuButton {
+    /// Only a group whose shown panel has host rows (`DockPanels::panel_rows`) shows the button; the dock's rows open
+    /// from a context request on a tab.
+    #[default]
+    HostRows,
+    /// Every group shows the button, listing the dock's rows when the host has none for its panel.
+    EveryGroup,
 }
 
 impl Default for DockConfig {
@@ -125,7 +135,7 @@ impl Default for DockConfig {
             native_windows: true,
             group_order_items: false,
             iconic_mode: IconicMode::Flyouts,
-            menu_button: false,
+            menu_button: GroupMenuButton::HostRows,
         }
     }
 }
@@ -138,10 +148,10 @@ impl DockConfig {
         self
     }
 
-    /// The panel menu button on every group on or off.
+    /// Which groups show the panel menu button.
     #[must_use]
-    pub fn menu_button(mut self, on: bool) -> Self {
-        self.menu_button = on;
+    pub fn menu_button(mut self, shown: GroupMenuButton) -> Self {
+        self.menu_button = shown;
         self
     }
 
