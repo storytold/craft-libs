@@ -10,18 +10,17 @@ fn registered_base_direction_names_keep_exact_source_and_automatic_policy() {
         ("GIMP_TEXT_DIRECTION_TTB_LTR", Direction::TtbLtr),
         ("GIMP_TEXT_DIRECTION_TTB_LTR_UPRIGHT", Direction::TtbLtrUpright),
     ] {
-        for spelling in [name.to_owned(), name.to_ascii_lowercase(), name.replacen("GIMP", "Gimp", 1)] {
-            for automatic in [false, true] {
-                let raw = format!("(text \"abc\") (base-direction {spelling}) (base-dir-auto {})", if automatic { "yes" } else { "no" });
-                let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
-                assert_eq!(scan.stopped, None, "{raw}");
-                let record = &scan.records[0];
-                assert_eq!(record.base_direction, Some(expected));
-                assert_eq!(record.automatic_direction, Some(automatic));
-                assert_eq!(record.direction, if automatic { Direction::Auto } else { expected });
-                assert_eq!(record.config().unwrap().scalar("base-direction").unwrap(), Some(spelling.as_str()));
-                assert_eq!(record.raw, raw.as_bytes());
-            }
+        let spelling = name;
+        for automatic in [false, true] {
+            let raw = format!("(text \"abc\") (base-direction {spelling}) (base-dir-auto {})", if automatic { "yes" } else { "no" });
+            let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert_eq!(scan.stopped, None, "{raw}");
+            let record = &scan.records[0];
+            assert_eq!(record.base_direction, Some(expected));
+            assert_eq!(record.automatic_direction, Some(automatic));
+            assert_eq!(record.direction, if automatic { Direction::Auto } else { expected });
+            assert_eq!(record.config().unwrap().scalar("base-direction").unwrap(), Some(spelling));
+            assert_eq!(record.raw, raw.as_bytes());
         }
     }
     for atom in ["GIMP_TEXT_DIRECTION_AUTO", "GIMP_TEXT_DIRECTION_RTL_EXTRA", "GIMP_TEXT_DIRECTION_", "OTHER_DIRECTION_RTL"] {

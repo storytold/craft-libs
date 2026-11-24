@@ -1,6 +1,136 @@
 use super::*;
 
 #[test]
+fn checked_direction_recomputes_public_forms_instead_of_cached_fields() {
+    let raw = b"(base-direction rtl) (base-dir-auto no)";
+    let mut scan = gimp(raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    let record = &mut scan.records[0];
+    record.direction = Direction::Auto;
+    record.automatic_direction = Some(true);
+    assert_eq!(record.interpreted_direction(), Ok(Some(Direction::Rtl)));
+    let Source::Gimp(config) = &mut record.source else { panic!("modern config") };
+    let automatic = config.forms.pop().unwrap();
+    assert_eq!(record.interpreted_direction(), Ok(None));
+    let Source::Gimp(config) = &mut record.source else { panic!("modern config") };
+    config.forms.push(automatic);
+    assert_eq!(record.interpreted_direction(), Ok(Some(Direction::Rtl)));
+    let Source::Gimp(config) = &mut record.source else { panic!("modern config") };
+    let Value::List { values, .. } = &mut config.forms[0] else { panic!("form") };
+    let Value::Atom { bytes, .. } = &mut values[1] else { panic!("value") };
+    *bytes = Cow::Borrowed(b"sideways");
+    assert_eq!(record.interpreted_direction(), Err(FieldError::InvalidDirection));
+    let Source::Gimp(config) = &mut record.source else { panic!("modern config") };
+    let Value::List { values, .. } = &mut config.forms[0] else { panic!("source form") };
+    values[1] = Value::Atom { bytes: Cow::Borrowed(b"rtl"), quoted: false, span: Span::default() };
+    let Value::List { values, .. } = &mut config.forms[1] else { panic!("source form") };
+    values[1] = Value::Atom { bytes: Cow::Borrowed(b"maybe"), quoted: false, span: Span::default() };
+    assert_eq!(record.interpreted_direction(), Err(FieldError::InvalidDirection));
+}
+
+#[test]
+fn property_symbols_match_ascii_case_without_rewriting_source_or_hiding_duplicates() {
+    let raw = br#"(TEXT "abc") (BASE-DIRECTION rtl) (Base-Dir-Auto no) (FONT-SIZE 010)"#;
+    let scan = gimp(raw, 19, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    let record = &scan.records[0];
+    assert_eq!(record.text(), Ok(Some("abc")));
+    assert_eq!(record.interpreted_direction(), Ok(Some(Direction::Rtl)));
+    assert_eq!(record.config().unwrap().number("font-size"), Ok(Some(8.0)));
+    let names: Vec<_> = record.config().unwrap().forms.iter().map(|v| v.list().unwrap()[0].text().unwrap()).collect();
+    assert_eq!(names, ["TEXT", "BASE-DIRECTION", "Base-Dir-Auto", "FONT-SIZE"]);
+    assert_eq!(record.raw, raw);
+    for (raw, field) in [
+        (br#"(text "a") (TEXT "b")"#.as_slice(), "text"),
+        (b"(base-direction ltr) (BASE-DIRECTION rtl)", "base-direction"),
+        (b"(BASE-DIR-AUTO yes) (base-dir-auto no)", "base-dir-auto"),
+    ] {
+        let scan = gimp(raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None);
+        assert_eq!(scan.records[0].config().unwrap().field(field).unwrap_err(), FieldError::Duplicate);
+    }
+    let scan =
+        gimp(b"(BASE-DIRECTION sideways) (base-dir-auto yes) (BASE-DIR-AUTO no)", 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
+fn typed_markup_uses_nul_prefix_but_keeps_atom_and_following_font_forms() {
+    let raw = br#"(MARKUP "<markup>A</markup>\000\377suffix" (markupfont saved))"#;
+    let scan = gimp(raw, 7, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    let record = &scan.records[0];
+    let text = record.markup().unwrap().unwrap();
+    assert_eq!(text, "<markup>A</markup>");
+    let parsed = markup::tokenize(text, markup::Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(parsed.stopped, None);
+    let values = record.config().unwrap().field("markup").unwrap().unwrap();
+    assert_eq!(values.len(), 2);
+    assert_eq!(values[0].bytes().unwrap(), b"<markup>A</markup>\0\xffsuffix");
+    assert_eq!(values[1].list().unwrap()[0].text().unwrap(), "markupfont");
+    let span = values[0].span();
+    assert_eq!(&raw[span.start - 7..span.end - 7], br#""<markup>A</markup>\000\377suffix""#);
+    let scan = gimp(br#"(markup "\377\000tail")"#, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.records[0].markup(), Err(FieldError::InvalidUtf8));
+}
+
+#[test]
+fn gdyntext_decoded_nul_retains_lexical_field_and_uses_prefix_encoding() {
+    for (lexical, charset, expected, encoding) in [
+        ("A\\000B", "unknown", "A", LegacyEncoding::Utf8),
+        ("A\\000\\377", "unknown", "A", LegacyEncoding::Utf8),
+        ("caf\\351\\000tail", "iso8859", "caf\u{e9}", LegacyEncoding::Latin1),
+        ("caf\\303\\251\\000tail", "unknown", "caf\u{e9}", LegacyEncoding::Utf8),
+        ("\\000tail", "unknown", "", LegacyEncoding::Utf8),
+    ] {
+        let raw = super::tests::legacy_bytes(lexical, charset);
+        let scan = gdyntext(&raw, 41, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert_eq!(scan.stopped, None, "{lexical}");
+        let record = &scan.records[0];
+        assert_eq!(record.text(), Ok(Some(expected)));
+        let Source::Gdyntext(legacy) = &record.source else { panic!("legacy") };
+        assert_eq!(legacy.encoding, encoding);
+        assert_eq!(legacy.fields[0], lexical);
+        assert_eq!(legacy.fields.len(), 8);
+        let span = legacy.spans[0];
+        assert_eq!(&raw[span.start - 41..span.end - 41], lexical.as_bytes());
+        assert_eq!(record.raw, raw);
+    }
+    let raw = super::tests::legacy_bytes("bad\\377\\000tail", "unknown");
+    let scan = gdyntext(&raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert_eq!(scan.stopped.unwrap().reason, StopReason::Malformed);
+    let mut raw = super::tests::legacy_bytes("A?B", "iso8859");
+    raw[7] = 0;
+    assert_eq!(gdyntext(&raw, 0, Limits::default(), &mut Budget::default(), &|| true).unwrap().stopped.unwrap().reason, StopReason::Malformed);
+}
+
+#[test]
+fn case_folded_registered_direction_is_explicit_reader_leniency() {
+    // GIMP's registered enum names use exact spelling; these cases retain the
+    // reader's prior leniency without claiming native GIMP compatibility.
+    for (name, expected) in [
+        ("GIMP_TEXT_DIRECTION_LTR", Direction::Ltr),
+        ("GIMP_TEXT_DIRECTION_RTL", Direction::Rtl),
+        ("GIMP_TEXT_DIRECTION_TTB_RTL", Direction::TtbRtl),
+        ("GIMP_TEXT_DIRECTION_TTB_RTL_UPRIGHT", Direction::TtbRtlUpright),
+        ("GIMP_TEXT_DIRECTION_TTB_LTR", Direction::TtbLtr),
+        ("GIMP_TEXT_DIRECTION_TTB_LTR_UPRIGHT", Direction::TtbLtrUpright),
+    ] {
+        for spelling in [name.to_ascii_lowercase(), name.replacen("GIMP", "Gimp", 1)] {
+            for automatic in [false, true] {
+                let raw = format!("(text \"abc\") (base-direction {spelling}) (base-dir-auto {})", if automatic { "yes" } else { "no" });
+                let scan = gimp(raw.as_bytes(), 0, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+                assert_eq!(scan.stopped, None);
+                let record = &scan.records[0];
+                assert_eq!(record.base_direction, Some(expected));
+                assert_eq!(record.automatic_direction, Some(automatic));
+                assert_eq!(record.direction, if automatic { Direction::Auto } else { expected });
+                assert_eq!(record.interpreted_direction(), Ok(Some(if automatic { Direction::Auto } else { expected })));
+                assert_eq!(record.config().unwrap().scalar("base-direction"), Ok(Some(spelling.as_str())));
+                assert_eq!(record.raw, raw.as_bytes());
+            }
+        }
+    }
+}
+
+#[test]
 fn numeric_radices_preserve_source_and_decimal_fraction_interpretation() {
     for (literal, expected) in [
         ("010", 8.0),

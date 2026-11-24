@@ -49,6 +49,7 @@ pub enum FieldError {
     ExpectedScalar,
     InvalidUtf8,
     InvalidNumber,
+    InvalidDirection,
 }
 
 impl Value<'_> {
@@ -75,7 +76,8 @@ impl Value<'_> {
 }
 
 /// Ordered named source forms. Unknown and duplicate fields are retained;
-/// singular field access explicitly refuses duplicates instead of guessing.
+/// singular field access matches ASCII-insensitive property symbols and refuses
+/// duplicates instead of guessing. Exact source names and ordering stay intact.
 #[derive(Debug)]
 pub struct Config<'a> {
     pub forms: Vec<Value<'a>>,
@@ -86,7 +88,7 @@ impl Config<'_> {
         let mut found = None;
         for form in &self.forms {
             let values = form.list()?;
-            if values.first().ok_or(FieldError::ExpectedScalar)?.text()? == name {
+            if values.first().ok_or(FieldError::ExpectedScalar)?.text()?.eq_ignore_ascii_case(name) {
                 if found.is_some() {
                     return Err(FieldError::Duplicate);
                 }
@@ -213,11 +215,12 @@ impl TextRecord<'_> {
     /// assume. Saved writing/gravity direction remains in `base_direction`.
     pub fn interpreted_direction(&self) -> std::result::Result<Option<Direction>, FieldError> {
         if let Some(config) = self.config() {
+            // Config and the compatibility fields are public. Revalidate current
+            // forms rather than trusting cached interpretations after an edit.
+            let (policy, _, automatic) = direction(config, &|| true).map_err(|_| FieldError::InvalidDirection)?;
             config.field("base-direction")?;
             config.field("base-dir-auto")?;
-            if self.automatic_direction.is_none() {
-                return Ok(None);
-            }
+            return Ok(automatic.map(|_| policy));
         }
         Ok(Some(self.direction))
     }
@@ -232,11 +235,7 @@ impl TextRecord<'_> {
             Source::Gimp(config) => config
                 .field("text")?
                 .map(|values| match values {
-                    [value] => {
-                        let bytes = value.bytes()?;
-                        let prefix = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
-                        std::str::from_utf8(prefix).map_err(|_| FieldError::InvalidUtf8)
-                    }
+                    [value] => gimp_string(value),
                     _ => Err(FieldError::ExpectedScalar),
                 })
                 .transpose(),
@@ -247,10 +246,18 @@ impl TextRecord<'_> {
     /// `markup::tokenize` can expose inert contexts/runs; no native style is applied.
     pub fn markup(&self) -> std::result::Result<Option<&str>, FieldError> {
         self.config()
-            .map(|config| config.field("markup")?.map(|values| values.first().ok_or(FieldError::ExpectedScalar)?.text()).transpose())
+            .map(|config| config.field("markup")?.map(|values| gimp_string(values.first().ok_or(FieldError::ExpectedScalar)?)).transpose())
             .transpose()
             .map(Option::flatten)
     }
+}
+
+// GIMP string properties consume the decoded C-string prefix. Keep the whole
+// atom in Config: truncation belongs only to known typed string accessors.
+fn gimp_string<'a>(value: &'a Value<'_>) -> std::result::Result<&'a str, FieldError> {
+    let bytes = value.bytes()?;
+    let prefix = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
+    std::str::from_utf8(prefix).map_err(|_| FieldError::InvalidUtf8)
 }
 
 enum Failure {
@@ -472,8 +479,9 @@ fn base_direction_value(source: Option<&str>, quoted: bool, keep: &dyn Fn() -> b
         Some("ttb-rtl-upright") => Some(Direction::TtbRtlUpright),
         Some("ttb-ltr") => Some(Direction::TtbLtr),
         Some("ttb-ltr-upright") => Some(Direction::TtbLtrUpright),
-        // Public GimpConfig enum deserialization also accepts registered names
-        // case-insensitively. Keep the original atom in Config for round trips.
+        // Registered enum names are exact in GIMP. This reader also accepts
+        // ASCII case variants as explicit leniency; property-symbol case folding
+        // is separate. Keep every original value in Config for round trips.
         Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_LTR") => Some(Direction::Ltr),
         Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_RTL") => Some(Direction::Rtl),
         Some(value) if value.eq_ignore_ascii_case("GIMP_TEXT_DIRECTION_TTB_RTL") => Some(Direction::TtbRtl),
@@ -498,14 +506,14 @@ fn direction(config: &Config<'_>, keep: &dyn Fn() -> bool) -> ReadResult<(Direct
         }
         let values = form.list()?;
         let name = values.first().ok_or(FieldError::ExpectedScalar)?.text()?;
-        if !matches!(name, "base-direction" | "base-dir-auto") {
+        if !name.eq_ignore_ascii_case("base-direction") && !name.eq_ignore_ascii_case("base-dir-auto") {
             continue;
         }
         let [Value::Atom { bytes, quoted, .. }] = values.get(1..).unwrap_or_default() else {
             return Err(StopReason::Malformed.into());
         };
         let value = std::str::from_utf8(bytes).map_err(|_| FieldError::InvalidUtf8)?;
-        if name == "base-direction" {
+        if name.eq_ignore_ascii_case("base-direction") {
             let parsed = base_direction_value(Some(value), *quoted, keep)?;
             duplicate |= seen_base;
             seen_base = true;
@@ -695,9 +703,17 @@ pub fn gdyntext<'a>(
         let content = fields.first().copied().ok_or(Failure::Stop(StopReason::Malformed))?;
         let before = budget.retained_left;
         let mut parser = Parser { bytes: content, source_offset: 0, at: 0, checked_at: 0, nodes: 0, limits, budget, keep_going };
-        let decoded = parser.quoted(false)?;
-        if decoded.contains(&0) {
-            return Err(StopReason::Malformed.into());
+        let mut decoded = parser.quoted(false)?;
+        for (index, byte) in decoded.iter().enumerate() {
+            if index.is_multiple_of(256) {
+                parser.check()?;
+            }
+            if *byte == 0 {
+                // Keep the allocated bytes charged: only the typed value ends
+                // here, while raw/lexical fields and their spans remain complete.
+                decoded.truncate(index);
+                break;
+            }
         }
         let decoded_storage = before - parser.budget.retained_left;
         let (text, encoding) = match String::from_utf8(decoded) {
