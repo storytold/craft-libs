@@ -171,7 +171,7 @@ pub(crate) fn hyperlink_url(el: &Element) -> Option<String> {
         let mut first = String::new();
         let mut backslashes = 0usize;
         for ch in raw.chars() {
-            if ch == ';' && backslashes % 2 == 0 {
+            if ch == ';' && backslashes.is_multiple_of(2) {
                 break;
             }
             backslashes = if ch == '\\' { backslashes + 1 } else { 0 };
