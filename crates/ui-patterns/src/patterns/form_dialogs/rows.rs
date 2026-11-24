@@ -13,7 +13,7 @@ use super::words::ParamWords;
 use crate::buttons::{Button, IconButton, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Props as _, Remember as _, Sampler as _,
+    Bind, BodyCx, CanvasGesture, CaptionColumn, Entry, FieldLayout, LabelScheme, NoValue, Outcome, Pad, Props as _, Remember as _, Sampler as _,
     Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec, clicked,
 };
 use crate::display::Text;
@@ -26,6 +26,7 @@ use crate::pickers::{Select, UnitSelect};
 use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
 use crate::sections::{HeaderStrength, Section};
+use crate::style::SurfaceKind;
 use crate::text::{NumberField, RangeAlert, SelectableText, TextField, UnitPlacement};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
@@ -706,7 +707,14 @@ impl<'p> Pass<'p> {
     /// One section: its head, then its rows.
     fn section(&mut self, ui: &mut Ui, head: &Param, body: &[Param]) {
         let title = plain(&head.label);
+        let outer = self.heading.replace(title.as_str().to_owned());
         match head.option().head() {
+            // A document dialog's option group: a caption over its rows on a card.
+            Head::Fixed if self.shaded => {
+                Section::fixed(title).id_salt(head.key.as_str()).strength(HeaderStrength::Caption).show(ui, |ui, _| {
+                    Stack::new().fill_width().surface(SurfaceKind::Raised).pad(Pad::Control).show(ui, |ui, _| self.body(ui, body));
+                });
+            }
             Head::Fixed => {
                 Section::fixed(title).id_salt(head.key.as_str()).show(ui, |ui, _| self.body(ui, body));
             }
@@ -724,6 +732,7 @@ impl<'p> Pass<'p> {
                 });
             }
         }
+        self.heading = outer;
     }
 
     /// `param` as the pass shows it, `compact` in a pair.

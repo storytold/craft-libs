@@ -69,8 +69,8 @@ pub use container::InBar;
 pub use container::InMenu;
 pub use container::{
     BandFill, Bracket, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion,
-    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope,
-    WrapWidth,
+    LeastWidth, Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, SectionRhythm, ShellPane,
+    Sizing, ThemeScope, WrapWidth,
 };
 pub use craft_tracked::{PlainData, Revision, Tracked};
 pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
@@ -93,7 +93,8 @@ pub use items::{measure_item, show_item, show_item_in_flow};
 #[doc(hidden)]
 pub use label::colon_of;
 pub use label::{
-    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, Scrub, SideLabel,
+    CaptionColumn, CellWidth, FieldLabelRole, FieldLayout, GlyphColon, GlyphLabel, InsideLabel, LabelKind, LabelPress, LabelScheme, LinkLabelInk,
+    Scrub, SideLabel,
 };
 pub use lazy::Lazy;
 #[doc(hidden)]
@@ -124,7 +125,6 @@ use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "suite")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
@@ -424,6 +424,12 @@ pub trait Component: Meta + Sized {
     /// Steps 13 and 14 clip to the rect grown by this much; the paint-bounds suite case reads it.
     fn paint_outset(_tokens: &crate::style::UiTokens) -> f32 {
         0.0
+    }
+
+    /// The variant an instance that asks for none takes in `env`; `None` takes the style's first. A variant the caller
+    /// asks for always stands. Read only `#[env(style)]` values, which the style cache keys on.
+    fn default_variant(_env: &crate::runtime::env::Env) -> Option<craft_theme::Variant> {
+        None
     }
 
     /// Pure function of the resolved context and the key.
