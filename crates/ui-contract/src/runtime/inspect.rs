@@ -638,7 +638,7 @@ pub(crate) mod trials {
     /// facts reported again keep it, and a value the node states itself still wins.
     #[trial]
     fn a_text_value_is_listed_whichever_order_the_facts_arrive_in() {
-        let key = Id::new("trial.inspect.text_value_order");
+        let key = Id::NULL.with("trial.inspect.text_value_order");
         let (before, after, again, own) = (key.with("before"), key.with("after"), key.with("again"), key.with("own"));
         let seen = Rc::new(RefCell::new(None));
         let out = Rc::clone(&seen);
@@ -674,7 +674,7 @@ pub(crate) mod trials {
         });
         fixture.frame(Vec::new());
         let seen = seen.borrow();
-        let recorded = seen.as_deref().expect("the region ran");
+        let Some(recorded) = seen.as_deref() else { panic!("the region ran") };
         let value = |id: Id| {
             let element = recorded.elements.iter().find(|element| element.id == id && element.part.is_none());
             element.and_then(|element| element.facts.as_ref()).and_then(|facts| facts.value.clone())
