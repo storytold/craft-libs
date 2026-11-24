@@ -243,7 +243,8 @@ impl Reader {
                 let style = match w {
                     "brdrnone" | "brdrnil" | "brdrtbl" => BorderStyle::None,
                     "brdrth" => BorderStyle::Thick,
-                    "brdrdb" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrdb" => BorderStyle::Double,
+                    "brdrwavydb" => BorderStyle::DoubleWave,
                     "brdrtnthsg" => BorderStyle::ThinThickSmallGap,
                     "brdrthtnsg" => BorderStyle::ThickThinSmallGap,
                     "brdrtnthtnsg" => BorderStyle::ThinThickThinSmallGap,

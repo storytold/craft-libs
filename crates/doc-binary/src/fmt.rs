@@ -130,7 +130,8 @@ fn brc_style(t: u8) -> BorderStyle {
         0x11 => BorderStyle::ThinThickLargeGap,
         0x12 => BorderStyle::ThickThinLargeGap,
         0x13 => BorderStyle::ThinThickThinLargeGap,
-        0x14 | 0x15 => BorderStyle::Wave,
+        0x14 => BorderStyle::Wave,
+        0x15 => BorderStyle::DoubleWave,
         _ => BorderStyle::Single,
     }
 }

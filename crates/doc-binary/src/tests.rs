@@ -1391,7 +1391,7 @@ fn table_borders_read_border_types_as_paragraphs_do() {
     let want = [
         (S::Dotted, true, 1.0),
         (S::Triple, true, 1.0),
-        (S::Wave, true, 1.0),
+        (S::DoubleWave, true, 1.0),
         (S::None, false, 0.0),
         (S::Single, true, 12.0),
         (S::None, false, 0.25),
