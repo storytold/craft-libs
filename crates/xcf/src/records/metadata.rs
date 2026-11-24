@@ -201,7 +201,10 @@ impl Reader<'_> {
                 }
             }
             24 => {
-                if let Some(value) = user_unit(data, self.limits.records.string_bytes) {
+                if let Some((value, string_bytes)) = user_unit(data) {
+                    if string_bytes > self.limits.records.string_bytes {
+                        return Err(StopReason::StringLimit.into());
+                    }
                     output.user_unit = Some(Evidence { offset: property.offset, value });
                 } else {
                     self.issue(&mut output.issues, property, IssueKind::InvalidValue)?;
@@ -405,7 +408,7 @@ fn word(bytes: &[u8]) -> Option<u32> {
     Some(u32::from_be_bytes(*bytes.as_array::<4>()?))
 }
 
-fn user_unit(bytes: &[u8], string_limit: usize) -> Option<UserUnit<'_>> {
+fn user_unit(bytes: &[u8]) -> Option<(UserUnit<'_>, usize)> {
     let factor = f32::from_be_bytes(*bytes.first_chunk::<4>()?);
     let digits = u32::from_be_bytes(*bytes.get(4..8)?.as_array::<4>()?);
     if !factor.is_finite() || factor <= 0. {
@@ -414,21 +417,20 @@ fn user_unit(bytes: &[u8], string_limit: usize) -> Option<UserUnit<'_>> {
     let mut remaining = bytes.get(8..)?;
     let mut strings = [None; 5];
     let mut count = 0;
+    let mut string_bytes = 0;
     for slot in &mut strings {
         if remaining.is_empty() {
             break;
         }
         let length = u32::from_be_bytes(*remaining.first_chunk::<4>()?) as usize;
-        if length > string_limit {
-            return None;
-        }
+        string_bytes = string_bytes.max(length);
         remaining = remaining.get(4..)?;
         let (value, rest) = remaining.split_at_checked(length)?;
         *slot = Some(value.strip_suffix(&[0]).unwrap_or(value));
         remaining = rest;
         count += 1;
     }
-    (remaining.is_empty() && matches!(count, 3 | 5)).then_some(UserUnit { factor, digits, strings })
+    (remaining.is_empty() && matches!(count, 3 | 5)).then_some((UserUnit { factor, digits, strings }, string_bytes))
 }
 
 #[cfg(test)]

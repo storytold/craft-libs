@@ -116,3 +116,35 @@ fn saved_channel_property_access_is_bounded_and_does_not_decode_pixels() {
     assert!(raw.stopped.is_none());
     assert!(channel(&raw, Limits::default(), &mut budget, &|| true).unwrap().selected.is_some());
 }
+
+#[test]
+fn cancelled_channel_metadata_refunds_unreturned_issues_but_keeps_work() {
+    let bytes = [property(16, &[1, 2]), property(0, &[])].concat();
+    let raw = scan(&bytes);
+    let calls = std::cell::Cell::new(0);
+    let probe = channel(&raw, Limits::default(), &mut Budget::default(), &|| {
+        calls.set(calls.get() + 1);
+        true
+    })
+    .unwrap();
+    assert_eq!(probe.issues.len(), 1);
+    let final_check = calls.get();
+    calls.set(0);
+    let retained = 2 * std::mem::size_of::<Issue>();
+    let mut budget = Budget::new(1024, retained);
+    let result = channel(&raw, Limits::default(), &mut budget, &|| {
+        calls.set(calls.get() + 1);
+        calls.get() < final_check
+    });
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert_eq!(budget.retained_remaining(), retained);
+    assert!(budget.work_remaining() < 1024);
+    let work = budget.work_remaining();
+    let retry = channel(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(retry.complete());
+    assert_eq!(retry.issues.len(), 1);
+    assert_eq!(budget.retained_remaining(), 0);
+    assert!(budget.work_remaining() < work);
+    let full = channel(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert_eq!(full.stopped.unwrap().reason, StopReason::RetainedLimit);
+}

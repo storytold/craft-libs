@@ -64,6 +64,17 @@ impl Budget {
         result
     }
 
+    /// Dropped output owns no retained storage, even on a non-cancellation error.
+    /// Successful partial prefixes stay charged, and attempted work is never refunded.
+    pub(crate) fn retain_on_success<T, E>(&mut self, read: impl FnOnce(&mut Self) -> std::result::Result<T, E>) -> std::result::Result<T, E> {
+        let retained = self.retained_left;
+        let result = read(self);
+        if result.is_err() {
+            self.retained_left = retained;
+        }
+        result
+    }
+
     fn work(&mut self, bytes: usize) -> std::result::Result<(), StopReason> {
         self.work_left = self.work_left.checked_sub(bytes).ok_or(StopReason::WorkLimit)?;
         Ok(())
@@ -357,6 +368,16 @@ fn measured_string_payload(cursor: &mut Cursor<'_>, length: usize, string_limit:
 /// Read every parasite from one property payload without deduplicating names.
 /// `source_offset` is the payload's absolute position in the inflated XCF.
 pub fn parasites<'a>(
+    bytes: &'a [u8],
+    source_offset: usize,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<Scan<Parasite<'a>>> {
+    budget.retain_on_success(|budget| parasites_read(bytes, source_offset, limits, budget, keep_going))
+}
+
+fn parasites_read<'a>(
     bytes: &'a [u8],
     source_offset: usize,
     limits: Limits,
@@ -667,5 +688,25 @@ mod tests {
             assert_eq!(scan.records[0].payload, payload);
             assert_eq!(budget.work_remaining(), 0);
         }
+    }
+    #[test]
+    fn overflowing_parasite_offsets_drop_only_the_unreturned_retention() {
+        let bytes = parasite(b"name", 0, b"source");
+        let mut budget = Budget::new(bytes.len() * 4, 4 * std::mem::size_of::<Parasite<'_>>());
+        let held = parasites(&bytes, 0, Limits::default(), &mut budget, &|| true).unwrap();
+        assert_eq!(held.records.len(), 1);
+        let retained = budget.retained_remaining();
+        let work = budget.work_remaining();
+        let result = parasites(&bytes, usize::MAX - bytes.len() + 1, Limits::default(), &mut budget, &|| true);
+        assert!(matches!(result, Err(Error::Invalid(_))));
+        assert_eq!(budget.retained_remaining(), retained);
+        assert!(budget.work_remaining() < work);
+        let retry = parasites(&bytes, 0, Limits::default(), &mut budget, &|| true).unwrap();
+        assert!(retry.stopped.is_none());
+        assert_eq!(retry.records[0].payload, b"source");
+        assert_eq!(budget.retained_remaining(), 0);
+        let full = parasites(&bytes, 0, Limits::default(), &mut budget, &|| true).unwrap();
+        assert_eq!(full.stopped.unwrap().reason, StopReason::RetainedLimit);
+        assert_eq!(held.records[0].payload, b"source");
     }
 }

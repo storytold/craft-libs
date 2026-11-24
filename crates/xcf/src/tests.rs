@@ -1128,13 +1128,13 @@ fn a_user_unit_property_is_measured_not_trusted() {
     // The file version determines the layout; following properties do not identify
     // how many strings belong to a unit.
     let long = "s".repeat(70);
-    for strings in [3, 5] {
+    for (strings, singular) in [(3, "s"), (5, "s"), (5, long.as_str())] {
         let mut img = TestImage::rgb8(2, 2);
         img.version = if strings == 3 { 21 } else { 20 };
         let mut unit = W { out: Vec::new(), wide: true };
         unit.out.extend_from_slice(&25.4f32.to_be_bytes());
         unit.u32(2);
-        (0..strings).for_each(|i| unit.string(["id", "sym", "abbr", long.as_str(), "plural"][i]));
+        (0..strings).for_each(|i| unit.string(["id", "sym", "abbr", singular, "plural"][i]));
         img.image_props.push((24, unit.out));
         img.image_props.push((19, [96.0f32, 96.0].into_iter().flat_map(f32::to_be_bytes).collect()));
         img.layers.push(TestLayer::rgba("L", 2, 2, rgba(2, 2, |_, _| [4, 5, 6, 255])));

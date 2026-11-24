@@ -369,3 +369,39 @@ fn cancelled_layer_metadata_refunds_dropped_issues_but_not_returned_prefixes() {
     assert!(another.issues.is_empty());
     assert_eq!(another.stopped.unwrap().reason, StopReason::RetainedLimit);
 }
+
+#[test]
+fn a_later_valid_user_unit_beyond_the_typed_string_cap_is_incomplete_prefix_evidence() {
+    let unit = |name: &[u8]| {
+        let mut bytes = [1f32.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for value in [name, b"x\0", b"y\0"] {
+            bytes.extend((value.len() as u32).to_be_bytes());
+            bytes.extend(value);
+        }
+        bytes
+    };
+    let first = unit(b"a\0");
+    let later = unit(b"lengthy\0");
+    let bytes = [property(24, &first), property(24, &later), property(0, &[])].concat();
+    let raw = properties(&bytes);
+    assert!(raw.stopped.is_none());
+    let limits = Limits { records: RecordLimits { string_bytes: 4, ..Default::default() }, ..Default::default() };
+    let result = image(&raw, limits, &mut Budget::default(), &|| true).unwrap();
+    assert!(!result.complete());
+    assert_eq!(result.stopped, Some(Diagnostic { offset: raw.records[1].offset, ordinal: 1, reason: StopReason::StringLimit }));
+    assert_eq!(result.user_unit.unwrap().value.strings[0], Some(b"a".as_slice()));
+    assert!(result.issues.is_empty());
+    let complete = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(complete.complete());
+    assert_eq!(complete.user_unit.unwrap().value.strings[0], Some(b"lengthy".as_slice()));
+
+    // A malformed value within the allowance remains an ordinary invalid-value issue.
+    let mut invalid = first.clone();
+    invalid[..4].copy_from_slice(&f32::NAN.to_be_bytes());
+    let bytes = [property(24, &first), property(24, &invalid), property(0, &[])].concat();
+    let result = image(&properties(&bytes), limits, &mut Budget::default(), &|| true).unwrap();
+    assert!(result.complete());
+    assert_eq!(result.issues.len(), 1);
+    assert_eq!(result.issues[0].kind, IssueKind::InvalidValue);
+    assert_eq!(result.user_unit.unwrap().value.strings[0], Some(b"a".as_slice()));
+}

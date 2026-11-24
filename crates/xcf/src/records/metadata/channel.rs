@@ -36,6 +36,10 @@ impl ChannelMetadata {
 /// absent value becomes a native default; callers must require `complete()`
 /// before resolving float-over-byte precedence, selected targets or visibility.
 pub fn channel(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<ChannelMetadata> {
+    budget.cancel_safe(|budget| channel_read(properties, limits, budget, keep_going))
+}
+
+fn channel_read(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<ChannelMetadata> {
     let mut reader = Reader { limits, budget, keep_going };
     reader.check().map_err(|_| Error::Cancelled)?;
     let mut output = ChannelMetadata { source_stopped: properties.stopped, ..Default::default() };
