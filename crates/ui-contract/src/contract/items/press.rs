@@ -3,8 +3,8 @@
 use super::drag::SlowClick;
 use super::lead::PickBy;
 use super::{ItemsHooks, Placement, RowPress, SECTION};
-use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, RowPressed, SelectMode};
-use crate::contract::{Collection, Cx, ItemOpener};
+use crate::contract::collection::{ActivateOn, CollectionEvent, CollectionProps, ContextMenuRequest, LeadSource, OpenChange, RowPressed, SelectMode};
+use crate::contract::{Collection, Cx, ItemOpener, ItemOutput};
 use crate::runtime::egui::response;
 use crate::runtime::env::ArenaId;
 use crate::runtime::focus;
@@ -378,6 +378,20 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     pub(super) fn ask_menu(&mut self, request: ContextMenuRequest<C::Key>) {
         self.drags.menu = Some(request.clone());
         self.events.push(CollectionEvent::ContextMenu(request));
+    }
+
+    /// Reports what the shown item `key` asked for: opening or closing its children, its menu, and its event.
+    pub(super) fn report_item_output(&mut self, ctx: &Context, id: Id, key: &C::Key, output: impl ItemOutput<C::ItemEvent>) {
+        if let Some(ask) = output.open_request() {
+            self.events.push(CollectionEvent::Open(OpenChange { key: key.clone(), open: ask.open, all: ask.all }));
+        }
+        if let Some(rect) = output.menu_request() {
+            crate::runtime::keys::request_context(ctx, id, rect, None);
+            self.ask_menu(ContextMenuRequest { key: key.clone(), at: self.on_screen(rect.left_bottom()), column: None, part: None });
+        }
+        if let Some(event) = output.into_event() {
+            self.events.push(CollectionEvent::Item(key.clone(), event));
+        }
     }
 
     /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`).
