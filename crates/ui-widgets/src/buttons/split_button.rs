@@ -22,7 +22,7 @@ const ARROW: PartKey = PartKey::new("arrow");
 /// The style of a split button: one surface under both parts, each part's hover and pressed fill over it, and a
 /// divider between them.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
-#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
+#[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent), super::FILLED])]
 #[non_exhaustive]
 pub struct SplitButtonStyle {
     #[style(surface)]
@@ -141,6 +141,8 @@ impl<'a, T: Value + 'static> SplitButton<'a, T> {
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
+            chord: None,
+            detail: None,
         }
     }
 }
@@ -158,6 +160,10 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     const KEYS: crate::runtime::focus::KeyUse = crate::runtime::focus::KeyUse::of(crate::contract::Input::Pointer).with_moves();
     type Style = SplitButtonStyle;
     type Output = SplitOutput<T>;
+
+    fn default_variant(env: &crate::runtime::env::Env) -> Option<Variant> {
+        super::push_default(env)
+    }
 
     fn style(cx: &StyleCx<'_>, key: SplitButtonStyleKey<T>) -> SplitButtonStyle {
         let cx = &super::placed(cx);

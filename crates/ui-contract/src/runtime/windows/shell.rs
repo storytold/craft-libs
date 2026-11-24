@@ -118,7 +118,12 @@ pub(super) fn refresh(ctx: &Context, viewport: ViewportId, facts: viewports::Fac
         })
         .map(|inset| {
             let mut insets = EdgeInsets::all(0.0);
-            insets.left = inset.map_or(0.0, |inset| inset.leading);
+            // The lights' room is at the end AppKit lays them out from: the right one under a right-to-left titlebar.
+            match inset {
+                Some(inset) if inset.lights_right => insets.right = inset.leading,
+                Some(inset) => insets.left = inset.leading,
+                None => {}
+            }
             insets
         });
     PerViewport::<Record>::with(ctx, viewport, |record| {

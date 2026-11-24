@@ -12,14 +12,14 @@ pub use shell::{BodyMode, PageBandRoom, RevealEdge, ShellCx, ShellRegions, SlotK
 pub use units::{ColumnSize, LengthUnits, PointSize, UnitKind, UnitWords, Units};
 
 use crate::runtime::commands::CommandChain;
-use crate::runtime::egui::memory::FastMap;
+use crate::runtime::egui::memory::{self, FastMap};
 use crate::runtime::egui::{pass, repaint, scale, stack, style};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
 use crate::style::{EnvKey, GlyphRole, Ink, SurfaceKind, UiTokens};
 use craft_behavior::{CanvasTransform, MotionMode};
-use craft_host::Host;
 use craft_host::target::{Os, ShellInfo};
+use craft_host::{Host, Jobs};
 pub use craft_i18n::Direction;
 pub use craft_i18n::{AgeStyle, Count, Counted, WordRows, WordSet, WordTemplate, Words};
 use craft_i18n::{CalendarDate, DateFormat, Format};
@@ -36,6 +36,7 @@ mod app_values;
 mod host_words;
 mod overrides;
 mod root;
+mod scrub;
 pub(crate) mod system;
 pub(crate) mod tokens;
 mod values;
@@ -44,9 +45,10 @@ mod view;
 pub use app_values::{AppValues, EnvValue, StyleValue};
 pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, in_room, with_env};
 pub use root::{ResolvedRoot, RootEnv};
-pub use system::{SystemState, system_appearance};
+pub use scrub::ScrubDrags;
+pub use system::{SystemState, system_appearance, system_text_scale};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
@@ -90,6 +92,7 @@ pub(crate) struct Flow {
     unbounded: (bool, bool),
     cell_fills: bool,
     fits: bool,
+    egui_cell: bool,
 }
 
 /// The values of an env.
@@ -150,6 +153,10 @@ pub struct Scoped {
     /// The width a `Row` body was offered this pass, before its `End` or `Center` lead narrowed the block: the room
     /// its direct children share. Only the row's own children read it.
     pub(crate) row_room: Option<f32>,
+    /// How far the ranked units of the first `Row` body below give way before its other drops: the row drops them
+    /// until the kept units fit in its ideal width less this, an end region that joins its body's fit
+    /// (`EndRegion::fit`) giving up the body's shortfall. That row's children do not read it.
+    pub(crate) rank_short: Option<f32>,
     /// The line of the unwrapped `Row` body whose direct children the scope places in flow (`RowLine`).
     pub(crate) row_line: Option<RowLine>,
     /// Where the first child the scope places in flow reports its first line: a container's header or body
@@ -158,6 +165,9 @@ pub struct Scoped {
     /// The body whose flow places the scope's direct children: the flow start a child reads (`layout::flow_start`)
     /// and the one a child placed in flow closes.
     pub(crate) flow_body: Option<Id>,
+    /// The `Stack` body that places the scope's direct children in flow and the gap it leaves between them; it holds
+    /// only while that body is `flow_body`.
+    pub(crate) stack_gap: Option<(Id, f32)>,
     /// A rule precedes the start of the body this scope opens: its container draws one under its header, or draws
     /// nothing of its own and itself follows one. The body's layout opens its flow start with it.
     pub(crate) after_rule: bool,
@@ -197,6 +207,8 @@ pub struct Scoped {
     /// The innermost scrolling body that encloses the scope: a collection under it owns no scroll of its own, and
     /// page and end moves a component leaves untaken go to it.
     pub(crate) scroll_owner: Option<ScrollOwner>,
+    /// The enclosing region's fallback collection for unused moves.
+    pub(crate) fallback_collection: Option<Id>,
     /// The axes (horizontal, vertical) the innermost scrolling body scrolls on: the room along them is unbounded, so
     /// a child that fills there takes its content size, except the children that fill the main axis of a body that
     /// shares it: they share what the view shows, at least their content size (`layout::view_room`).
@@ -216,6 +228,12 @@ pub struct Scoped {
     /// The scope is the body of a beside label in an inspector (`LabelScheme::Inspector`): the control shown there
     /// fills the width the label leaves. Only that control sees it, as with `inside_label`.
     pub(crate) cell_fills: bool,
+    /// The scope lays out in a cell of an `egui::Grid` that egui code made below the body around it: the grid places
+    /// each child from its cell's left edge in any direction, and gives the column the width the child takes from the
+    /// next frame. `Env::of` sets it where the stack between a `Ui` and its entry holds a grid's `Ui`; a scope that
+    /// passes `Env::of` on (`with_env`, `Lazy`, a memoized view) keeps it, and a body (`start_room`) or a component's
+    /// children (`child_env`) end it.
+    pub(crate) egui_cell: bool,
 }
 
 /// The values of an env that a scope rarely changes: the resolved tokens, the platform, the language and the app's
@@ -250,6 +268,14 @@ pub struct Inherited {
     pub(crate) today: Option<CalendarDate>,
     /// `RootEnv::tab_toggles_chrome`.
     pub(crate) tab_toggles_chrome: bool,
+    /// `RootEnv::escape_leaves_fields`.
+    pub(crate) escape_leaves_fields: bool,
+    /// `RootEnv::shortcuts_repeat`: the key stage reads only it, so no view's key covers it.
+    pub(crate) shortcuts_repeat: bool,
+    /// `RootEnv::cursor_follows_zoom`: painted cursor images follow the interface zoom.
+    pub(crate) cursor_follows_zoom: bool,
+    /// `RootEnv::tooltips`: tooltips show.
+    pub(crate) tooltips: bool,
     /// `RootEnv::canvas_pattern`: the canvas surround shows the theme's pattern.
     #[doc(hidden)]
     pub canvas_pattern: bool,
@@ -291,7 +317,7 @@ pub(crate) enum Shrink {
     /// Each unit shows at most the width the measuring run of the row gave it (`layout::shrink_cap`), a levelled unit
     /// at the level the row gave it.
     Apply(Id),
-    /// A `Stack` body: each leaf shows at most the stack's room, never below its least.
+    /// A `Stack` body or a wrapping `Row`: each leaf shows at most the room (a whole line), never below its least.
     Fit,
 }
 
@@ -401,6 +427,7 @@ impl Scoped {
         self.roving = None;
         self.transform = None;
         self.scroll_owner = None;
+        self.fallback_collection = None;
         self.wheel = WheelScope::Plain;
         self.unbounded = (false, false);
         self.lazy = None;
@@ -416,7 +443,8 @@ impl Scoped {
 
     /// Ends the layout room of the enclosing body: its flow grid and content column. The axes the body sizes from its
     /// content stay (`content`): like `cell_fills` and `least`, they say what a child that fills takes there, its
-    /// measured size or the room, and the place of a memoized view holds them (`flow`).
+    /// measured size or the room, and the place of a memoized view holds them (`flow`). `has_room` checks the same set,
+    /// and `Env::of` ends it for a `Ui` below the one an entry was installed for.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
         self.grid_top = false;
@@ -432,10 +460,30 @@ impl Scoped {
         self.shrink = None;
         self.column = None;
         self.offered = None;
+        self.egui_cell = false;
+    }
+
+    /// Whether any of the facts `start_room` ends is set, besides `egui_cell`, which `Env::of` sets.
+    fn has_room(&self) -> bool {
+        self.grid.is_some()
+            || self.grid_top
+            || self.content_column
+            || self.given_column
+            || self.row_room.is_some()
+            || self.row_line.is_some()
+            || self.first_line.is_some()
+            || self.flow_body.is_some()
+            || self.column_row
+            || self.fill_body.is_some()
+            || self.fill_share.is_some()
+            || self.shrink.is_some()
+            || self.column.is_some()
+            || self.offered.is_some()
     }
 
     /// Starts the layout room of a memoized view's content (`start_room`), keeping whether the enclosing body is a
-    /// content-sized or a given column, as `start_room` keeps the content axes. The view's content then measures and
+    /// content-sized or a given column and whether the view lies in an egui grid's cell, as `start_room` keeps the
+    /// content axes. The view's content then measures and
     /// fills as it would shown without the view: a child that fills takes its measured size where the body sizes from
     /// content, never the open room. Where a leaf shown here would fit its room (`view_fits`), the leaves of the view's
     /// content fit the room the view is given (`Shrink::Fit`). A view that is a unit of a shrinking `Row` sizes from its
@@ -444,9 +492,14 @@ impl Scoped {
     pub(crate) fn start_view_room(&mut self) {
         let fits = self.view_fits();
         let row_unit = matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_)));
-        let (content_column, given_column) = (self.content_column, self.given_column);
+        let (content_column, given_column, egui_cell) = (self.content_column, self.given_column, self.egui_cell);
+        // The view stands on the line of the row around it only to fill it, as a levelled unit does: a fill-width row in
+        // it (a bar in a shell slot) takes the line's height and centres on it, as shown without the view; its children
+        // take no slots on the line (photocraft#16405).
+        let line = self.row_line.map(|line| RowLine { places: false, ..line });
         self.start_room();
-        (self.content_column, self.given_column) = (content_column, given_column);
+        (self.content_column, self.given_column, self.egui_cell) = (content_column, given_column, egui_cell);
+        self.row_line = line;
         if fits {
             self.shrink = Some(Shrink::Fit);
         }
@@ -455,9 +508,10 @@ impl Scoped {
         }
     }
 
-    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body,
-    /// whose leaves show at most its room, and as one of the units a shrinking `Row` narrows. In a `Grid` cell, a
-    /// wrapping `Row` or a `Ui` with no body around it a leaf keeps its measured width, and so does the view's content.
+    /// Whether a memoized view shown in flow here fits its content to its room, as a leaf here would: in a `Stack` body
+    /// and a wrapping `Row`, whose leaves show at most its room (a whole line), and as one of the units a shrinking
+    /// `Row` narrows. In a `Grid` cell or a `Ui` with no body around it a leaf keeps its measured width, and so does the
+    /// view's content.
     pub(crate) const fn view_fits(&self) -> bool {
         matches!(self.shrink, Some(Shrink::Count(_) | Shrink::Least(_) | Shrink::Apply(_) | Shrink::Fit))
     }
@@ -484,7 +538,13 @@ impl Scoped {
             for id in self.commands.ids() {
                 id.key(&mut key);
             }
-            key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
+            key.feed_hash(&(
+                std::mem::discriminant(&self.motion.mode),
+                self.canvas_pattern,
+                self.tab_toggles_chrome,
+                self.escape_leaves_fields,
+                self.today,
+            ));
             (&self.format, &self.dates, &self.host).key(&mut key);
             let value_bytes = self.values.key(&mut key);
             #[cfg(feature = "testing")]
@@ -505,6 +565,7 @@ impl Scoped {
             unbounded: self.unbounded,
             cell_fills: self.cell_fills,
             fits: self.view_fits(),
+            egui_cell: self.egui_cell,
         }
     }
 
@@ -608,6 +669,10 @@ impl Env {
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
                     tab_toggles_chrome: root.tab_toggles_chrome,
+                    escape_leaves_fields: root.escape_leaves_fields,
+                    shortcuts_repeat: root.shortcuts_repeat,
+                    cursor_follows_zoom: root.cursor_follows_zoom,
+                    tooltips: root.tooltips,
                     canvas_pattern: root.canvas_pattern,
                     host,
                     values: root.values.clone(),
@@ -634,9 +699,11 @@ impl Env {
                 given_column: false,
                 content: (false, false),
                 row_room: None,
+                rank_short: None,
                 row_line: None,
                 first_line: None,
                 flow_body: None,
+                stack_gap: None,
                 after_rule: false,
                 column_row: false,
                 bracket: None,
@@ -649,6 +716,7 @@ impl Env {
                 offered: None,
                 measure: None,
                 scroll_owner: None,
+                fallback_collection: None,
                 unbounded: (false, false),
                 lazy: None,
                 item: None,
@@ -656,6 +724,7 @@ impl Env {
                 item_facts: None,
                 inside_label: None,
                 cell_fills: false,
+                egui_cell: false,
             }),
         }
     }
@@ -663,14 +732,33 @@ impl Env {
     /// The env of `ui`: the nearest entry up the `Ui` stack, else the running viewport's root env, so the `Ui`
     /// of an egui `Area` or `Window` reads the app's root values. For app panels (layer 8) and caller closures only.
     ///
+    /// What a body sets up for the children it places in flow (`Scoped::start_room`: its `Grid` or spread row's cells,
+    /// its unwrapped row's line and shrink step, its flow start, its content column) is for its direct children, which
+    /// it shows in the `Ui` it installed its env for. A `Ui` egui code makes below that one (an `egui::Grid`,
+    /// `ui.horizontal`, `ui.push_id` in a caller's closure) lays out its own children: an entry found for an ancestor
+    /// of `ui` comes without those facts, so a component there takes no cell, line or shrink step of the body around it.
+    /// Where that stack holds an `egui::Grid`'s `Ui`, the env says the component lays out in the grid's cell
+    /// (`Scoped::egui_cell`).
+    ///
     /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
-        let found = PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| {
-            stack::nearest(ui, |node| envs.entries.get(&node).cloned()).or_else(|| envs.root.clone())
+        // The root env stands for an entry above the whole stack.
+        let (found, grid) = PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| {
+            let stack::Found { value, grid } = stack::nearest(ui, |node| envs.entries.get(&node).cloned());
+            (value.or_else(|| envs.root.clone().map(|env| (env, false))), grid)
         });
-        let env = found.unwrap_or_else(|| Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)));
+        let (env, own) = found.unwrap_or_else(|| (Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)), false));
+        let egui_cell = env.egui_cell || grid;
+        let env = if own || !(env.scoped.has_room() || egui_cell != env.egui_cell) {
+            env
+        } else {
+            env.derive_local(|scoped| {
+                scoped.start_room();
+                scoped.egui_cell = egui_cell;
+            })
+        };
         // egui's `invisible()` also disables the `Ui`, and a sizing `Ui` is invisible, not disabled: in a sizing pass
         // the env keeps the enabled state the real run has, so a memoized view keys alike in both.
         if style::is_enabled(ui) || ui.is_sizing_pass() { env } else { env.derive_local(|s| s.enabled = false) }
@@ -694,6 +782,15 @@ impl Env {
     /// The `Host` of the running viewport's root env.
     pub(crate) fn host_of(ctx: &Context) -> Option<Arc<Host>> {
         PerViewport::<ViewportEnvs>::with(ctx, pass::current_viewport(ctx), |envs| envs.root.as_ref().and_then(|env| env.host.clone()))
+    }
+
+    /// Where `ctx`'s background work runs: the host's jobs, else the jobs `install` was given, else
+    /// `craft_host::default_jobs()`.
+    pub(crate) fn jobs_of(ctx: &Context) -> Arc<dyn Jobs> {
+        if let Some(host) = Self::host_of(ctx) {
+            return Arc::clone(host.jobs_shared());
+        }
+        memory::with::<InstalledJobs, _>(ctx, |installed| installed.0.clone()).unwrap_or_else(craft_host::default_jobs)
     }
 
     /// A clone of the innermost app value, else `T::root()`. Large values hold an `Arc`.
@@ -772,6 +869,14 @@ impl Env {
         Installed { viewport, node, previous }
     }
 
+    /// Runs `body` in `ui` with `env` installed for it, and puts back what the install replaced, also when `body`
+    /// panics. A body runs its direct children this way in a `Ui` it makes for them.
+    pub(crate) fn run_in<R>(ui: &mut Ui, env: Env, body: impl FnOnce(&mut Ui) -> R) -> R {
+        let ctx = ui.ctx().clone();
+        let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(ui, env)) };
+        body(ui)
+    }
+
     /// Puts back the entry `install_for` replaced.
     pub(crate) fn restore(ctx: &Context, installed: Installed) {
         PerViewport::<ViewportEnvs>::with(ctx, installed.viewport, |envs| match installed.previous {
@@ -832,4 +937,14 @@ impl Drop for Restore<'_> {
 /// The mode the root runs animations at: the app's, and off while egui's animation time is zero.
 fn motion_mode(ctx: &Context, motion: MotionMode) -> MotionMode {
     if repaint::animation_time(ctx) > 0.0 { motion } else { motion.lowered_by(MotionMode::Off) }
+}
+
+/// The jobs `install` was given, for a context with no host.
+#[derive(Default)]
+struct InstalledJobs(Option<Arc<dyn Jobs>>);
+
+/// Keeps `jobs` as where `ctx`'s background work runs while no host is installed; `None` leaves
+/// `craft_host::default_jobs()`.
+pub(crate) fn install_jobs(ctx: &Context, jobs: Option<Arc<dyn Jobs>>) {
+    memory::with::<InstalledJobs, _>(ctx, |installed| installed.0 = jobs);
 }

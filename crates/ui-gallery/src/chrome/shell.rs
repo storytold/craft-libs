@@ -11,7 +11,7 @@ use crate::viewer::{Catalog, GalleryCommands, GallerySettings, PanelId, Viewer, 
 use craft_behavior::dock::{PanelState, Workspace as Dock};
 use craft_theme::AppSizes;
 use craft_theme_editor::{ThemeSubject, parse_sizes};
-use craft_ui::contract::{Bind, BodyCx, CommandSet as _, ShowContainer as _, Tracked};
+use craft_ui::contract::{Bind, BodyCx, CommandSet as _, Tracked};
 use craft_ui::docking::DockConfig;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
@@ -209,7 +209,7 @@ impl ShellApp for Gallery {
         };
         let dropped = if in_theme {
             let viewer = &mut self.viewer;
-            DropVeil::new("Drop an app's sizes.json to load it").show(ui, |ui, _| shell(ui, viewer)).dropped.clone()
+            DropVeil::new("Drop an app's sizes.json to load it").show_with_files(ui, |ui, _| shell(ui, viewer)).dropped.clone()
         } else {
             shell(ui, &mut self.viewer);
             None

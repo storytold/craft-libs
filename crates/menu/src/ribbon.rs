@@ -188,7 +188,7 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
         if let Some(strip) = strip {
             for event in &strip.response.events {
                 match event {
-                    CollectionEvent::Selection(SelectionChange::Set(keys)) => chosen = keys.last().cloned().or(chosen),
+                    CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => chosen = keys.last().cloned().or(chosen),
                     CollectionEvent::Activate(_) if strip.response.activation_clicks == 2 => toggle = true,
                     _ => {}
                 }

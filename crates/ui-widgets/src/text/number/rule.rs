@@ -10,16 +10,17 @@ use std::ops::RangeInclusive;
 
 /// The value one step from a value in a direction: the up arrow, the wheel and the Page keys of a field whose values
 /// lie on a ladder instead of a grid (`NumberField::stepper`). The direction is `1` up and `-1` down.
-pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32) -> f64 + 'a>);
+pub struct NumberStepper<'a>(Box<dyn Fn(f64, i32, f64) -> f64 + 'a>);
 
 impl<'a> NumberStepper<'a> {
-    /// The stepper that runs `next`.
-    pub fn new(next: impl Fn(f64, i32) -> f64 + 'a) -> Self {
+    /// The stepper that runs `next(from, direction, scale)`: `scale` is 1 for a plain arrow, wheel notch or AccessKit
+    /// step, `LARGE_STEPS` with Shift or a Page key, and a tenth with Alt where the field has one.
+    pub fn new(next: impl Fn(f64, i32, f64) -> f64 + 'a) -> Self {
         NumberStepper(Box::new(next))
     }
 
-    pub(super) fn next(&self, from: f64, direction: i32) -> f64 {
-        (self.0)(from, direction)
+    pub(super) fn next(&self, from: f64, direction: i32, scale: f64) -> f64 {
+        (self.0)(from, direction, scale)
     }
 }
 
@@ -109,8 +110,11 @@ pub(super) struct Ruled<V> {
     pub(super) snap: bool,
     pub(super) decimals: Option<usize>,
     pub(super) mixed: bool,
+    pub(super) positive_only: bool,
     pub(super) names: Vec<(u32, String)>,
-    pub(super) suffix: Option<String>,
+    /// The unit written before and after the number in the text itself (the status zoom's "100%", the inline look's
+    /// "720 pt"): shown, typed over and read back with the number.
+    pub(super) affixes: Option<(String, String)>,
     /// How many shown units make one stored unit (1 for a field that shows what it holds).
     pub(super) scale: f64,
     pub(super) value: PhantomData<fn() -> V>,
@@ -124,8 +128,9 @@ impl<V> Clone for Ruled<V> {
             snap: self.snap,
             decimals: self.decimals,
             mixed: self.mixed,
+            positive_only: self.positive_only,
             names: self.names.clone(),
-            suffix: self.suffix.clone(),
+            affixes: self.affixes.clone(),
             scale: self.scale,
             value: PhantomData,
         }
@@ -143,17 +148,20 @@ impl<V: NumberValue> Ruled<V> {
         v.number().filter(|number| number.is_finite()).map(|number| number * self.scale)
     }
 
-    fn with_suffix(&self, mut text: String) -> String {
-        if let Some(suffix) = &self.suffix
-            && !text.is_empty()
-        {
-            text.push_str(suffix);
+    /// `text` with the unit written around it; empty text stays empty.
+    fn written(&self, text: String) -> String {
+        match &self.affixes {
+            Some((before, after)) if !text.is_empty() => format!("{before}{text}{after}"),
+            _ => text,
         }
-        text
     }
 
-    fn without_suffix<'a>(&self, text: &'a str) -> &'a str {
-        self.suffix.as_deref().and_then(|suffix| text.trim_end().strip_suffix(suffix)).unwrap_or(text)
+    /// `text` without the unit written around it, where it is there.
+    fn unwritten<'a>(&self, text: &'a str) -> &'a str {
+        let Some((before, after)) = &self.affixes else { return text };
+        let text = text.trim();
+        let text = text.strip_prefix(before.trim()).unwrap_or(text);
+        text.strip_suffix(after.trim()).unwrap_or(text)
     }
 
     /// The name `text` spells, as a value of the field's type.
@@ -173,7 +181,7 @@ impl<V: NumberValue> Codec for Ruled<V> {
         }
         match v.named().and_then(|id| self.names.iter().find(|(name, _)| *name == id)) {
             Some((_, label)) => label.clone(),
-            None => self.with_suffix(self.inner.format(&self.shown(v))),
+            None => self.written(self.inner.format(&self.shown(v))),
         }
     }
 
@@ -190,9 +198,12 @@ impl<V: NumberValue> Codec for Ruled<V> {
         if text.trim().is_empty() && (self.mixed || V::blank().is_none()) {
             return Err(NotAValue);
         }
-        let (read, mut note) = self.inner.parse_tagged(self.without_suffix(text), &self.shown(start))?;
+        let (read, mut note) = self.inner.parse_tagged(self.unwritten(text), &self.shown(start))?;
         match read {
             Some(number) => {
+                if self.positive_only && number <= 0.0 {
+                    return Err(NotAValue);
+                }
                 note.held = (number < self.rule.low || number > self.rule.high).then_some(number);
                 Ok((V::of_number(self.held(number) / self.scale), note))
             }
@@ -201,7 +212,7 @@ impl<V: NumberValue> Codec for Ruled<V> {
     }
 
     fn applies_as_typed(&self, text: &str) -> bool {
-        !self.snap && !self.mixed && is_plain(text) && matches!(self.inner.parse(self.without_suffix(text), &None), Ok(Some(_)))
+        !self.snap && !self.mixed && is_plain(self.unwritten(text)) && matches!(self.inner.parse(self.unwritten(text), &None), Ok(Some(_)))
     }
 
     fn filter(&self, c: char) -> bool {
@@ -211,7 +222,7 @@ impl<V: NumberValue> Codec for Ruled<V> {
     fn normalise(&self, text: &str, v: &V) -> String {
         match v.named() {
             Some(_) => self.format(v),
-            None => self.with_suffix(self.inner.normalise(self.without_suffix(text), &self.shown(v))),
+            None => self.written(self.inner.normalise(self.unwritten(text), &self.shown(v))),
         }
     }
 
@@ -225,7 +236,7 @@ impl<V: NumberValue> Codec for Ruled<V> {
             // A field that rounds what it commits shows no more places than that.
             None if self.rule.low.is_finite() && self.rule.high.is_finite() => {
                 let codec = self.decimals.map_or_else(|| self.inner.clone(), |places| self.inner.clone().at_most(places));
-                Cow::Owned(self.with_suffix(codec.widest(&(self.rule.low..=self.rule.high))))
+                Cow::Owned(self.written(codec.widest(&(self.rule.low..=self.rule.high))))
             }
             None => Cow::Owned(self.format(current)),
         }

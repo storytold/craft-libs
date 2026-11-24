@@ -7,7 +7,7 @@ mod credits;
 pub(crate) mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
-pub use credits::{AboutInfo, AboutLicense, AboutLink, Contributor, Credits, ModelCredit};
+pub use credits::{AboutImage, AboutInfo, AboutLicense, AboutLink, Contributor, Credits, ModelCredit};
 
 use crate::buttons::{Button, IconButton, Link};
 use crate::choice::Segmented;
@@ -17,10 +17,10 @@ use crate::contract::{
     Show as _, ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
-use crate::display::{Divider, Shade, Text};
+use crate::display::{Divider, Picture, PictureSize, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
-use crate::list::ListRow;
+use crate::list::{ListRow, ThumbSize};
 use crate::pickers::Select;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
@@ -32,7 +32,7 @@ use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::text::SelectableText;
 use contributors::{Writer, sorted_indices};
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, SelectionChange, keyed};
-use craft_theme::Variant;
+use craft_theme::{Mode, Variant};
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -59,6 +59,7 @@ craft_ui::words! {
         sort: "aboutDialog.sort" = "Sort";
         reverse: "aboutDialog.reverse" = "Reverse the order";
         view: "aboutDialog.view" = "View";
+        part_of: "aboutDialog.partOf" = "Part of";
         grab_bag: "aboutDialog.grabBag" = "Grab bag";
         table: "aboutDialog.table" = "Table";
         counts: template "aboutDialog.counts" = "Contributors: {contributors} · Commits: {commits}";
@@ -120,7 +121,8 @@ pub enum AboutTab {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AboutLayout {
-    /// The blurb, the version, the community button and the link row centred, the built-with line faint; OK closes.
+    /// The mark and the app's name centred, the blurb and the version, then the community button and the link row
+    /// centred, then the built-with line faint, the blocks set apart by the section gap; OK closes.
     #[default]
     Centred,
     /// From the start edge, one item to a line: the app's name as a heading, the version, the blurb, the community
@@ -235,8 +237,9 @@ impl Outcome for AboutOutput {
 
 /// Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button.
 ///
-/// - **About.** The blurb, the version, the community button and the link row centred, the built-with line faint; or,
-///   with [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
+/// - **About.** The app's mark when it has one, the blurb, the version, the community button and the link row
+///   centred, then "Part of" with the suite's logo when it has one, the built-with line faint; or, with
+///   [`AboutLayout::Listed`], the name, version, blurb and links one to a line, and Close for OK.
 /// - **Contributors.** Show (Username, Display name, Real name), Sort (the list, with a button to reverse) and View
 ///   (Grab bag or Table). The grab bag flows the names as links: a click reports the contributor's profile URL as the
 ///   link (nothing for one without a profile), and the link's tooltip is the summary. The table has every figure; a
@@ -319,7 +322,7 @@ impl<'a> AboutDialog<'a> {
             }
             let before = kept.tab;
             *view.borrow_mut() = kept;
-            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).show(ui, |ui, _| {
+            Stack::new().header(|ui, _| shown.tabs(ui, &title, &app_titles, &view)).fill_width().show(ui, |ui, _| {
                 let tab = view.borrow().tab;
                 let app = match tab {
                     AboutTab::App(at) => app_tabs.as_deref_mut().and_then(|tabs| tabs.get_mut(usize::from(at))),
@@ -388,7 +391,7 @@ impl Shown<'_> {
                 Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
             });
         for event in out.response.events {
-            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+            if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                 && let Some(picked) = keys.last()
             {
                 view.borrow_mut().tab = *picked;
@@ -419,26 +422,51 @@ impl Shown<'_> {
             });
             return;
         }
-        Stack::new().show(ui, |ui, _| {
-            Text::new(info.blurb.clone()).show(ui);
-            Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                if let Some(community) = &info.community
-                    && clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui))
-                {
-                    *link.borrow_mut() = Some(community.url.clone());
-                }
+        let dark = Env::of(ui).view().mode() == Mode::Dark;
+        // Four blocks set apart by the section gap: the blurb and version at the start edge, the community button and
+        // the link row each centred across the body, the built-with line at the start edge. The app's mark, when it has
+        // one, is centred above them, and "Part of" with the suite's logo, when it has one, follows the link row.
+        Stack::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
+            if let Some(mark) = &info.mark {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    Picture::svg(mark.label.clone(), mark.source(dark)).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
+                });
+            }
+            Stack::new().show(ui, |ui, _| {
+                Text::new(info.blurb.clone()).show(ui);
+                Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
             });
-            Row::new().align(RowAlign::Center).show(ui, |ui, _| {
-                for (at, item) in info.links.iter().enumerate() {
-                    if at > 0 {
-                        Text::new("·").shade(Shade::Faint).show(ui);
+            if let Some(community) = &info.community {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    if clicked(&Button::new(community.label.clone()).variant(Variant::PRIMARY).id_salt("community").show(ui)) {
+                        *link.borrow_mut() = Some(community.url.clone());
                     }
-                    if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {
-                        *link.borrow_mut() = Some(item.url.clone());
+                });
+            }
+            if !info.links.is_empty() {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    for (at, item) in info.links.iter().enumerate() {
+                        // A dot sets apart two text links; a link with an icon is a button of its own.
+                        if at > 0 && item.icon.is_none() && info.links.get(at - 1).is_some_and(|previous| previous.icon.is_none()) {
+                            Text::new("·").shade(Shade::Faint).show(ui);
+                        }
+                        let activated = if let Some(icon) = &item.icon {
+                            clicked(&Button::new(item.label.clone()).icon(icon.clone()).variant(Variant::GHOST).id_salt(("link", at)).show(ui))
+                        } else {
+                            clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui))
+                        };
+                        if activated {
+                            *link.borrow_mut() = Some(item.url.clone());
+                        }
                     }
-                }
-            });
+                });
+            }
+            if let Some(logo) = &info.part_of {
+                Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
+                    Text::new(words.part_of.clone()).shade(Shade::Muted).show(ui);
+                    Picture::svg(logo.label.clone(), logo.source(dark)).show(ui);
+                });
+            }
             Text::new(info.built_with.clone()).shade(Shade::Faint).show(ui);
         });
     }
