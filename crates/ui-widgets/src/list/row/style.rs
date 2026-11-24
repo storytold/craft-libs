@@ -2,7 +2,7 @@
 
 use super::placement::Sizes;
 use crate::display::divider::SeparatorRule;
-use crate::style::{ComponentStyle, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
+use crate::style::{ComponentStyle, DataColor, Flags, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::Metrics;
 use craft_theme::{Contrast, Rgba, Stateful, States, contrast_ratio, identifiable_outline, over};
 
@@ -43,6 +43,7 @@ pub struct ListRowStyle {
     /// A text cell of a column that reads muted.
     #[style(text)]
     pub(super) cell_muted: TextLook,
+
     /// The frame at the edge of each thumbnail's slot, around its picture: `line.frame`, `stroke.thin` wide.
     pub(super) thumb_frame: StyleColor,
     pub(super) thumb_frame_width: f32,
@@ -60,6 +61,17 @@ pub(super) enum RowForm {
     Command,
     /// An option of a listbox: the chosen row keeps the selected fill, the lead row the hover fill.
     Option,
+}
+
+impl RowForm {
+    /// The form of a row that is an `option` and runs a `command` or not.
+    pub(super) fn of(option: bool, command: bool) -> RowForm {
+        match () {
+            _ if option && command => RowForm::Command,
+            _ if option => RowForm::Option,
+            _ => RowForm::List,
+        }
+    }
 }
 
 /// What the row fill depends on.
@@ -223,6 +235,13 @@ pub(super) fn quiet_row_ink(cx: &StyleCx<'_>, form: RowForm, rest: Rgba) -> Stat
     let mut ink = row_ink_of(cx, rest, form);
     ink.off = States { rest, ..cx.quiet_ink().off };
     ink
+}
+
+/// The ink of a part a colour from data inks (`ListRow::hue`): `color` read against `surface`, the row's own fill
+/// over what it sits on, pushed to the text contrast (`StyleCx::ink_of`). It pairs with the fills as `row_ink_of`
+/// pairs every base, so a selected row keeps the selection's ink and a disabled row `text.disabled`.
+pub(super) fn hued_ink(cx: &StyleCx<'_>, color: DataColor, surface: Rgba, form: RowForm) -> Stateful<StyleColor> {
+    row_ink_of(cx, cx.ink_of(color, surface), form)
 }
 
 /// `row_ink` for a base that is already a style colour (a tone). A disabled row's ink is `text.disabled`.

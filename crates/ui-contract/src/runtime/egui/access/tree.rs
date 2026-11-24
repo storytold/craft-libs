@@ -26,9 +26,13 @@ pub struct NodeKey(u64);
 
 impl NodeKey {
     /// The AccessKit node number.
-    #[cfg(feature = "testing")]
-    pub(crate) fn raw(self) -> u64 {
+    pub fn raw(self) -> u64 {
         self.0
+    }
+
+    /// The key of the node with AccessKit number `raw`.
+    pub fn from_raw(raw: u64) -> NodeKey {
+        NodeKey(raw)
     }
 
     /// The key of the node of `id`.
@@ -52,6 +56,8 @@ pub enum Declared {
     Focus,
     /// Click.
     Click,
+    /// Open the node's context menu.
+    ContextMenu,
     /// Increment.
     Increment,
     /// Decrement.
@@ -77,7 +83,7 @@ pub enum Declared {
 }
 
 impl Declared {
-    fn action(self) -> Action {
+    pub(crate) fn action(self) -> Action {
         match self {
             Declared::Focus => Action::Focus,
             Declared::Click => Action::Click,
@@ -88,6 +94,7 @@ impl Declared {
             Declared::Expand => Action::Expand,
             Declared::Collapse => Action::Collapse,
             Declared::Custom => Action::CustomAction,
+            Declared::ContextMenu => Action::ShowContextMenu,
             Declared::ScrollUp => Action::ScrollUp,
             Declared::ScrollDown => Action::ScrollDown,
             Declared::ScrollLeft => Action::ScrollLeft,

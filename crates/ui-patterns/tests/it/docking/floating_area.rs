@@ -741,3 +741,36 @@ fn a_settled_collapsed_window_runs_no_more_passes_than_an_expanded_one() {
     let (collapsed, expanded) = (passes(collapsed_at(WINDOW_AT)), passes(with_window(None)));
     assert!(collapsed <= expanded, "a still frame runs {collapsed} passes collapsed, {expanded} expanded");
 }
+
+/// A floating window at the top of the area sits below the top inset (the notice bars it floats over), and goes back up
+/// when the inset does.
+#[trial]
+fn a_floating_window_clears_the_top_inset_and_follows_it() {
+    let inset = Rc::new(Cell::new(0.0_f32));
+    let seen = Rc::clone(&inset);
+    let layout = Layout::new(
+        Some(Node::tabs(vec![DOCKED], 0)),
+        vec![Floating::single(103, vec![WINDOW], 0, Rect::from_min_size(Pos2::new(130.0, 0.0), Vec2::new(200.0, 120.0)))],
+    );
+    let held = Rc::new(RefCell::new(Arc::new(Workspace::new(layout))));
+    let (shown, specs) = (Rc::clone(&held), Tracked::new(Numbered));
+    let mut fixture = Fixture::new(move |ui| {
+        let given = shown.borrow().clone();
+        let mut panels = Panels;
+        let _ = DockArea::new("Inset dock", Bind::given(given), &specs, &mut panels, DockConfig::default()).top_inset(seen.get()).show(ui);
+    });
+    fixture.settle();
+    let window_top = |fixture: &Fixture| {
+        fixture.by_role(Role::TAB).iter().filter(|tab| tab.rect.left() >= 130.0).map(|tab| tab.rect.top()).fold(f32::INFINITY, f32::min)
+    };
+    let free = window_top(&fixture);
+    assert!(free < 60.0, "without an inset the window is at the top: {free}");
+    inset.set(60.0);
+    fixture.settle();
+    let clear = window_top(&fixture);
+    assert!(clear >= free + 59.0, "the window moves down by the 60 point inset: {free} to {clear}");
+    inset.set(0.0);
+    fixture.settle();
+    let back = window_top(&fixture);
+    assert!((back - free).abs() < 1.0, "the window goes back up when the notices close: {back}");
+}

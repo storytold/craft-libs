@@ -1371,6 +1371,10 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// The canvas background's press phase of this pass. A pass carries one phase, so a press that moved or
     /// released in the pass it began in starts here.
     fn phase(&mut self, press: &PressState, frame: &PointerFrame) {
+        // A right-click during the gesture asks for the menu where it came up; the gesture goes on.
+        if let Some(at) = press.context {
+            self.response.context = Some(ContextRequest { at, mods: press.mods, momentary: self.momentary, source: ContextSource::Pointer });
+        }
         if press.phase.is_press() {
             self.state.rehover = true;
         }
@@ -1448,10 +1452,10 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// The keys the canvas holds: intents routed to it while it has focus, the arrows, Enter and Escape while nothing
     /// in the window has focus, and the chords the tool claimed at the end of the last pass. A session control in the
     /// canvas body (`KeyUse::session`) has taken the arrows, Enter and Escape it acts on before this runs. The Escape
-    /// of the focused canvas reaches the tool once, through the window's intents (`with_window_intents` offers the
+    /// of the focused canvas reaches the tool once, through the window's intents (`with_canvas_window_intents` offers the
     /// focused document canvas's Escape); one the tool leaves stays the canvas's, for the scopes around it.
     fn keys(&mut self, ctx: &Context, canvas: Id, rtl: bool) {
-        keys::with_window_intents(ctx, rtl, |window| {
+        keys::with_canvas_window_intents(ctx, rtl, |window| {
             let mut taken = self.offer(window, take_nudge);
             taken |= self.offer(window, |intents| intents.take(Intent::Submit).then_some(ToolKey::Submit));
             if !self.cancelled {

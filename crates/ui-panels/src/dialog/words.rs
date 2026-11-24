@@ -18,6 +18,7 @@ craft_ui::words! {
         changed_on_disk_message: template "prompt.changedOnDiskMessage" = "“{name}” was changed by another app after it was opened or saved here.";
         changed_on_disk_detail: "prompt.changedOnDiskDetail" = "Replace it with this document, or cancel and use Save As to keep both.";
         replace: "prompt.replace" = "Replace";
+        save_as: "prompt.saveAs" = "Save As…";
         replace_file_title: "prompt.replaceFileTitle" = "Replace file";
         replace_file_message: template "prompt.replaceFileMessage" = "“{name}” already exists. Replace it?";
         replace_file_detail: template "prompt.replaceFileDetail" = "The name in the save dialog was “{answered}”.";
@@ -44,6 +45,7 @@ craft_ui::words! {
         recovery_message: template "recovery.message" = "“{name}” has unsaved changes from an earlier run, autosaved {age}.";
         recovery_recover: "recovery.recover" = "Recover";
         recovery_discard: "recovery.discard" = "Discard";
+        recovery_protected: "recovery.protected" = "Password-protected";
         job_progress_hide: "jobProgress.hide" = "Continue in Background";
         // full-window parts
         full_window_title_zoom: template "fullWindowTitle.zoomed" = "{name} ({subject}, {zoom})";

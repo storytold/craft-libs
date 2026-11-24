@@ -193,11 +193,14 @@ impl Fixture {
         let mut fixture = Fixture::new(move |ui| {
             let number = shared_pass.get() + 1;
             shared_pass.set(number);
-            let output = if shared_probed.get() {
+            // What fired before the story's code ran (a shortcut the input hook took) is not the story's.
+            crate::runtime::commands::observe_fired(ui.ctx());
+            let mut output = if shared_probed.get() {
                 probed_pass(ui, number, scope, show, &shared_data, &shared_delivers, &shared_impure)
             } else {
                 shown(ui, scope, show, &shared_data)
             };
+            output.fired = crate::runtime::commands::observe_fired(ui.ctx());
             shared_root.set(output.id);
             shared_outputs.borrow_mut().push(output);
         });
@@ -466,6 +469,11 @@ impl Fixture {
         self.frames.repaint_delay()
     }
 
+    /// The system cursor the latest frame's output asked for.
+    pub fn cursor_icon(&self) -> egui::CursorIcon {
+        self.frames.cursor_icon()
+    }
+
     /// The IME output of the latest frame.
     pub fn ime(&self) -> Option<&fixture::ImeSeen> {
         self.frames.ime()
@@ -495,6 +503,16 @@ impl Fixture {
         });
         self.tree = self.frames.tree();
         self
+    }
+
+    /// One frame whose pointer button events carry the modifiers held by the fixture.
+    pub fn frame_held(&mut self, mut events: Vec<Event>) -> &mut Self {
+        for event in &mut events {
+            if let Event::PointerButton { modifiers, .. } = event {
+                *modifiers = self.frames.held();
+            }
+        }
+        self.frame(events)
     }
 
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.

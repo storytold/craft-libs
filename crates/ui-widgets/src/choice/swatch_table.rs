@@ -3,12 +3,12 @@
 use super::swatch::hexagon;
 use super::{CellMarks, Swatch, SwatchMetrics, SwatchShape};
 use crate::contract::{
-    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, ListDrag, NoValue, Outcome,
-    Props, Remember as _, Role, SelectMode, ShowCollection as _, Sizing,
+    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, LeadOnOpen, ListDrag, NoValue,
+    Outcome, Props, Remember as _, Role, SelectMode, ShowCollection as _, Sizing,
 };
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{DisplayOrder, ItemLayout, ItemSource, Metrics, NavShape, Preview, ScrollPos, Selection, TileLayout};
+use craft_behavior::{DisplayOrder, IconId, ItemLayout, ItemSource, Metrics, NavShape, Preview, ScrollPos, Selection, TileLayout};
 use craft_theme::Srgba;
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
@@ -17,18 +17,29 @@ pub(crate) mod stories;
 
 /// The entries of a colour table as an item source: keyed by index, named for type-ahead.
 #[derive(Clone, Copy, Debug)]
-pub struct SwatchRows<'a>(&'a [(Label, Srgba)]);
+pub struct SwatchRows<'a> {
+    swatches: &'a [(Label, Srgba)],
+    /// The name of the one cell after the entries, keyed `swatches.len()`.
+    trailing: Option<&'a Label>,
+}
 
 impl<'a> SwatchRows<'a> {
     /// The entries of `swatches`.
     pub const fn new(swatches: &'a [(Label, Srgba)]) -> Self {
-        SwatchRows(swatches)
+        SwatchRows { swatches, trailing: None }
+    }
+
+    /// The entries with one more cell named `label` after them, keyed `swatches.len()`.
+    #[must_use]
+    pub const fn trailing(mut self, label: &'a Label) -> Self {
+        self.trailing = Some(label);
+        self
     }
 }
 
 impl DisplayOrder<usize> for SwatchRows<'_> {
     fn len(&self) -> usize {
-        self.0.len()
+        self.swatches.len() + usize::from(self.trailing.is_some())
     }
 
     fn key(&self, at: usize) -> usize {
@@ -36,11 +47,14 @@ impl DisplayOrder<usize> for SwatchRows<'_> {
     }
 
     fn index_of(&self, key: &usize) -> Option<usize> {
-        (*key < self.0.len()).then_some(*key)
+        (*key < self.len()).then_some(*key)
     }
 
     fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
-        self.0.get(at).map(|(name, _)| std::borrow::Cow::Borrowed(name.as_str()))
+        match self.swatches.get(at) {
+            Some((name, _)) => Some(std::borrow::Cow::Borrowed(name.as_str())),
+            None => self.trailing.filter(|_| at == self.swatches.len()).map(|name| std::borrow::Cow::Borrowed(name.as_str())),
+        }
     }
 }
 
@@ -355,6 +369,8 @@ impl ItemLayout for SwatchLayout {
 /// - The cell under the pointer is previewed ([`SwatchTableOutput::preview`]); the selection stays.
 /// - AccessKit: a list box named by the label; each cell a list box option named by its entry, with the hex colour as
 ///   its value.
+/// - A [`trailing`](Self::trailing) cell follows the entries at key `swatches.len()`: a well with a glyph, selected
+///   and opened by that key as an entry is, with no colour value.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(collection)]
 pub struct SwatchTable<'a> {
@@ -427,6 +443,8 @@ pub struct SwatchTable<'a> {
     /// `spacing` and `max_rows`: its rows follow the count of entries and its cells are `size.icon.md` wide.
     #[prop]
     arrangement: SwatchArrangement,
+    /// The icon cell after the entries: its name and glyph.
+    trailing: Option<(Label, IconId)>,
 }
 
 impl<'a> SwatchTable<'a> {
@@ -445,6 +463,7 @@ impl<'a> SwatchTable<'a> {
                 .select(SelectMode::Single)
                 .activate(ActivateOn::DoubleClick)
                 .arrows_select(false)
+                .lead_on_open(LeadOnOpen::First)
                 .natural_height(true)
                 .deletable(true),
             swatches,
@@ -457,6 +476,7 @@ impl<'a> SwatchTable<'a> {
             marks: None,
             max_rows: None,
             arrangement: SwatchArrangement::default(),
+            trailing: None,
         }
         .label(label)
     }
@@ -466,6 +486,19 @@ impl<'a> SwatchTable<'a> {
     pub fn drag_payload<P: Send + Sync + 'static>(mut self, map: impl Fn(&ListDrag<usize>) -> Option<P> + Send + Sync + 'static) -> Self {
         self.items = self.items.drag_payload(map);
         self
+    }
+
+    /// One icon cell after the entries, at key `swatches.len()`, in the same Tab stop and arrow walk: the Other… cell
+    /// of a palette.
+    #[must_use]
+    pub fn trailing(mut self, label: impl Into<Label>, icon: IconId) -> Self {
+        self.trailing = Some((label.into(), icon));
+        self
+    }
+
+    /// The number of cells: the entries and the trailing cell.
+    fn cells(&self) -> usize {
+        self.swatches.len() + usize::from(self.trailing.is_some())
     }
 
     /// The gap between two cells.
@@ -502,15 +535,26 @@ impl<'a> SwatchTable<'a> {
         let (swatches, tips, wells) = (self.swatches, self.tips, self.wells);
         let shape = if self.arrangement == SwatchArrangement::Honeycomb { SwatchShape::Hexagon } else { SwatchShape::Square };
         let marks = self.marks.take();
-        self.show_items(ui, &SwatchRows::new(swatches), &mut |key, _| {
-            let (name, color) = &swatches[*key];
-            let cell = Swatch::new(name.clone(), *color).cell().shape(shape);
+        // A clone, not a take: `ideal_width` reads the trailing cell while the table shows.
+        let trailing = self.trailing.clone();
+        let rows = match &trailing {
+            Some((name, _)) => SwatchRows::new(swatches).trailing(name),
+            None => SwatchRows::new(swatches),
+        };
+        self.show_items(ui, &rows, &mut |key, _| {
+            let (name, cell) = match (swatches.get(*key), &trailing) {
+                (Some((name, color)), _) => (name.clone(), Swatch::new(name.clone(), *color)),
+                (None, Some((name, icon))) => (name.clone(), Swatch::icon(name.clone(), icon.clone())),
+                // The rows name no key past the trailing cell; a mixed well keeps the closure total without a panic.
+                (None, None) => (Label::Empty, Swatch::new(Label::Empty, craft_behavior::Mixed::<Srgba>::Mixed)),
+            };
+            let cell = cell.cell().shape(shape);
             let cell = if wells { cell.well() } else { cell };
             let cell = match &marks {
                 Some(marks) => cell.marks(marks.of(key)),
                 None => cell,
             };
-            if tips { cell.tooltip(name.clone()) } else { cell }
+            if tips { cell.tooltip(name) } else { cell }
         })
     }
 }
@@ -583,10 +627,11 @@ impl Collection for SwatchTable<'_> {
     /// Where the table takes its width from its content it asks for every cell in one row, or its count per row: the
     /// room it is offered then wraps the cells, as it does where it is given the width.
     fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, cx: &StyleCx<'_>) -> f32 {
+        let cells = self.cells();
         if self.arrangement == SwatchArrangement::Honeycomb {
-            return HoneycombLayout::new(self.swatches.len(), self.cell(cx)).columns() as f32 * self.cell(cx) + 0.5;
+            return HoneycombLayout::new(cells, self.cell(cx)).columns() as f32 * self.cell(cx) + 0.5;
         }
-        let columns = self.per_row.map_or(self.swatches.len(), |columns| columns.max(1).min(self.swatches.len()));
+        let columns = self.per_row.map_or(cells, |columns| columns.max(1).min(cells));
         // Half a point over, so the division that counts the columns back never rounds below `columns`.
         columns as f32 * self.cell(cx) + columns.saturating_sub(1) as f32 * self.gap(cx) + 0.5
     }

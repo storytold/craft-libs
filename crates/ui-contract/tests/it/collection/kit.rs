@@ -202,6 +202,12 @@ impl<'a> List<'a> {
         self
     }
 
+    /// Reordering, where a drag with `keys` held copies.
+    pub fn reorder_copying(mut self, keys: craft_behavior::CopyKeys) -> Self {
+        self.items = self.items.reorder(craft_ui::contract::ReorderRule::new().copy_with(keys));
+        self
+    }
+
     /// `seen` takes the rect of the empty state.
     pub fn on_empty(mut self, seen: &'a Cell<Rect>) -> Self {
         self.on_empty = Some(seen);

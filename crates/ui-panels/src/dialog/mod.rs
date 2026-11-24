@@ -25,7 +25,7 @@ mod words;
 
 pub use alert::{Alert, AlertOutput, HostedAlert};
 pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
-pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks};
+pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks, close_button, set_close_button};
 pub use held::{HeldAnswer, HeldOk, HoldsOk};
 #[doc(hidden)]
 pub use host::dialog_probe;
@@ -34,7 +34,7 @@ pub use job_progress::{JobAnswer, JobProgress, JobProgressOutput};
 pub use modal::{ButtonPlace, Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};
-pub use recovery::{RecoveredDocument, RecoveryAnswer, RecoveryDialog, RecoveryOutput};
+pub use recovery::{RecoveredDocument, RecoveryAnswer, RecoveryChoice, RecoveryDialog, RecoveryOutput};
 pub use serde_fields::{serde_fields, set_serde_field};
 pub use stack::{DialogId, DialogStack, dialog_id};
 pub use unsaved::{UnsavedAnswer, UnsavedChangesDialog, UnsavedChangesOutput};

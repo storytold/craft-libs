@@ -110,6 +110,7 @@ pub(super) struct Ruled<V> {
     pub(super) snap: bool,
     pub(super) decimals: Option<usize>,
     pub(super) mixed: bool,
+    pub(super) positive_only: bool,
     pub(super) names: Vec<(u32, String)>,
     pub(super) suffix: Option<String>,
     /// How many shown units make one stored unit (1 for a field that shows what it holds).
@@ -125,6 +126,7 @@ impl<V> Clone for Ruled<V> {
             snap: self.snap,
             decimals: self.decimals,
             mixed: self.mixed,
+            positive_only: self.positive_only,
             names: self.names.clone(),
             suffix: self.suffix.clone(),
             scale: self.scale,
@@ -194,6 +196,9 @@ impl<V: NumberValue> Codec for Ruled<V> {
         let (read, mut note) = self.inner.parse_tagged(self.without_suffix(text), &self.shown(start))?;
         match read {
             Some(number) => {
+                if self.positive_only && number <= 0.0 {
+                    return Err(NotAValue);
+                }
                 note.held = (number < self.rule.low || number > self.rule.high).then_some(number);
                 Ok((V::of_number(self.held(number) / self.scale), note))
             }

@@ -20,7 +20,7 @@ use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
 use web_time::Instant;
 
-use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotRequest, screenshot_reply};
+use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotParams, ScreenshotRequest, screenshot_reply};
 use crate::synthetic::TARGET_CHANGED;
 
 /// A reply: the JSON object the transport writes as one line.
@@ -112,13 +112,16 @@ pub enum Reply {
     /// Reply with this JSON now.
     Done(Value),
     /// A `ui.screenshot`: admit `token` to the queue; `path` is where the app's write authority
-    /// puts the PNG, `None` inlines it as base64 in the reply.
+    /// puts the PNG, `None` inlines it as base64 in the reply; `region` is refused at admission
+    /// when it lies outside the window.
     #[non_exhaustive]
     Screenshot {
         /// Identifies the capture; must differ from every pending token.
         token: u64,
         /// File to write the PNG to, or `None` to inline it.
         path: Option<String>,
+        /// The part of the window to capture, in points; `None` captures the whole window.
+        region: Option<egui::Rect>,
         /// The viewport to capture.
         viewport: egui::ViewportId,
     },
@@ -138,10 +141,10 @@ impl Reply {
         Reply::AccessTree
     }
 
-    /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
-    /// when `None`.
-    pub fn screenshot(token: u64, path: Option<String>, viewport: egui::ViewportId) -> Self {
-        Self::Screenshot { token, path, viewport }
+    /// A `ui.screenshot` reply for `token` of `viewport` with what [`ScreenshotParams::from_params`] read: the PNG
+    /// goes to `params.path` or is inlined when `None`, and shows `params.region` or the whole window.
+    pub fn screenshot(token: u64, params: ScreenshotParams, viewport: egui::ViewportId) -> Self {
+        Self::Screenshot { token, path: params.path, region: params.region, viewport }
     }
 
     /// `Done` with the [`result_reply`] of a method's result.
@@ -207,8 +210,9 @@ impl ControlChannel {
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::AccessTree => self.tree_waiters.push(reply),
-            Reply::Screenshot { token, path, viewport } => {
-                if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
+            Reply::Screenshot { token, path, region, viewport } => {
+                let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
+                if let Err((reply, e)) = self.captures.admit(request, motion::now()) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }
@@ -316,7 +320,7 @@ impl ControlChannel {
     pub fn finish_captures(&mut self, finished: Vec<Finished>, write: &mut crate::screenshot::PngWriter<'_>) {
         for f in finished {
             let reply = match f.result {
-                Ok(image) => screenshot_reply(f.token, image, f.path.as_deref(), write),
+                Ok(image) => screenshot_reply(f.token, image, f.region, f.geometry, f.path.as_deref(), write),
                 Err(e) => json!({"ok": false, "error": e}),
             };
             if let Some(tx) = f.reply {

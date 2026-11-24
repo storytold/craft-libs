@@ -104,6 +104,27 @@ fn show(
     }
 }
 
+/// The window losing focus while a value is typed keeps the draft and commits nothing; back in the window, typing
+/// goes on from the draft. The draft is a sum, which applies only on commit (a plain number applies as typed), so
+/// the value tells whether the blur committed it.
+#[trial]
+fn a_window_blur_mid_typing_keeps_the_typed_draft() {
+    let mut rig = Rig::new(5.0, None);
+    rig.focus();
+    rig.key(Key::A, Modifiers::COMMAND);
+    rig.frame(vec![Event::Text("1+1".into())]);
+    rig.idle(1);
+    rig.frame(vec![Event::WindowFocused(false)]);
+    rig.idle(2);
+    assert_eq!(rig.value(), Some(5.0), "the blur commits nothing");
+    assert!(rig.frames.texts().iter().any(|text| text.text == "1+1"), "the field still shows the typed draft");
+    rig.frame(vec![Event::WindowFocused(true)]);
+    rig.idle(1);
+    rig.frame(vec![Event::Text("0".into())]);
+    rig.key(Key::Enter, Modifiers::NONE);
+    assert_eq!(rig.value(), Some(11.0), "typing went on from the draft");
+}
+
 /// An arrow goes to the next multiple of the step in its direction, Shift moves ten steps, and the range holds.
 #[trial]
 fn arrows_step_to_the_next_multiple_and_stay_in_range() {
@@ -330,7 +351,7 @@ fn the_unit_keeps_its_place_at_the_end_of_the_field() {
         v.clear();
         for (at, value) in [5.0, 100.0].into_iter().enumerate() {
             let mut shown = Some(value);
-            let field = NumberField::new("N", Bind::bound(&mut shown)).range(0.0..=100.0).unit_kind(UnitKind::Percent).id_salt(at);
+            let field = NumberField::new("N", Bind::bound(&mut shown)).range(0.0..=100.0).unit_kind(UnitKind::Points).id_salt(at);
             v.push(field.show(ui).response.rect);
         }
     });
@@ -738,4 +759,19 @@ fn alt_down_opens_the_presets_enter_picks_without_the_dialog_and_escape_returns(
     assert!(picked.take().is_none(), "and picks nothing");
     assert_eq!(fixture.tree().value(id.get()), Some("5"), "the draft stays in the field");
     assert_eq!(fixture.focused_stop(), focus, "and the field keeps the focus");
+}
+
+/// A percent field shows one decimal and its sign right after the number ("100.0%"), not the sign apart at the end of
+/// the field.
+#[trial]
+fn a_percent_field_reads_one_decimal_then_the_sign() {
+    let mut fixture = craft_ui::testing::Fixture::new(|ui| {
+        NumberField::new("Scale", Bind::bound(&mut Some(100.0f64))).unit_kind(UnitKind::Percent).range(1.0..=1000.0).show(ui);
+    });
+    fixture.settle();
+    let painted = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let number = painted("100.0")
+        .unwrap_or_else(|| panic!("the value shows one decimal: {:?}", fixture.texts().iter().map(|r| r.text.clone()).collect::<Vec<_>>()));
+    let sign = painted("%").unwrap_or_else(|| panic!("the field shows the sign"));
+    assert!(sign.min.x - number.max.x <= 5.0, "the sign follows the number closely: {number:?} {sign:?}");
 }

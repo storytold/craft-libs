@@ -57,6 +57,8 @@ pub enum SelectionOutlineLook {
     Solid,
     /// A medium line in dashes: a CAD app's selection effect.
     Dashed,
+    /// A thin line at the grid colour, with no halo: every editable object's outline in an edit mode.
+    Faint,
 }
 
 /// The style of the hover and selection outlines.
@@ -77,6 +79,8 @@ pub struct OutlineStyle {
     /// The length of a dash and of the gap after it.
     dash: f32,
     gap: f32,
+    /// The line colour of a faint outline.
+    faint: StyleColor,
 }
 
 fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
@@ -90,6 +94,7 @@ fn outline_style(cx: &StyleCx<'_>) -> OutlineStyle {
         thin: stroke.thin,
         dash: stroke.dash,
         gap: stroke.dash_gap,
+        faint: cx.color(cx.tokens.color.overlay.grid),
     }
 }
 
@@ -331,6 +336,12 @@ impl<'a> SelectionOutline<'a> {
         SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Solid, color: None, key: None, revision: None }.label(label)
     }
 
+    /// A thin outline of `paths` (document units) with no halo, for every editable object in an edit mode, named
+    /// `label`.
+    pub fn faint(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
+        SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Faint, color: None, key: None, revision: None }.label(label)
+    }
+
     /// A dashed outline of `paths` (document units), named `label`.
     pub fn dashed(label: impl Into<Label>, paths: &'a [BezPath]) -> Self {
         SelectionOutline { common: Common::new(), paths, look: SelectionOutlineLook::Dashed, color: None, key: None, revision: None }.label(label)
@@ -345,6 +356,11 @@ impl SelectionOutline<'_> {
             for (mut points, closed) in path_runs(view, path) {
                 match self.look {
                     SelectionOutlineLook::Solid => shapes.extend(run_shapes(style, points, closed, self.color, style.thin)),
+                    SelectionOutlineLook::Faint => {
+                        let color = self.color.map_or(style.line.egui(), |color| color.0);
+                        let stroke = egui::Stroke::new(style.thin, color);
+                        shapes.push(if closed { Shape::closed_line(points, stroke) } else { Shape::line(points, stroke) });
+                    }
                     SelectionOutlineLook::Dashed => {
                         if closed {
                             points.extend(points.first().copied());

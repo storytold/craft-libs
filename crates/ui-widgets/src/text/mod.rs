@@ -9,6 +9,7 @@ pub(crate) mod linked;
 pub(crate) mod number;
 pub(crate) mod selectable_text;
 pub(crate) mod text_field;
+pub(crate) mod word_run;
 mod words;
 pub(crate) mod zoom_field;
 
@@ -22,8 +23,9 @@ pub use number::{
 };
 pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
+pub use word_run::{RunWord, WordRun, WordRunOutput, WordRunStyle, WordState};
 pub use words::TextWords;
-pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput};
+pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput, ZoomScale};
 
 use crate::contract::Bind;
 use crate::primitives::TextKey;

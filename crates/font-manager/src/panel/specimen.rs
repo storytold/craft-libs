@@ -35,6 +35,8 @@ pub(crate) struct FontSampleStyle {
 pub(crate) enum SampleFace<'a> {
     /// A face of `catalog`, which the document-face registry loads when the sample is measured or painted.
     Face { catalog: &'a Arc<Catalog>, owner: Owner, face: &'a FaceInfo },
+    /// A face the host gives, ready as it is (a host row of the picker).
+    Font(&'a FontRef),
     /// No face is here to draw with: the sample keeps its band and shows nothing.
     Missing,
 }
@@ -49,6 +51,7 @@ impl SampleFace<'_> {
                 Shown::Ready(font) => Some(font),
                 _ => None,
             },
+            SampleFace::Font(font) => Some((*font).clone()),
             SampleFace::Missing => None,
         }
     }

@@ -315,11 +315,11 @@ fn drive_fixture(in_modal: bool) -> (craft_ui::testing::Fixture, std::rc::Rc<Ref
         let body = |ui: &mut egui::Ui| {
             let mut text = query.borrow().clone();
             TextField::search("Search", Bind::bound(&mut text)).drives(list_id).show(ui);
-            let out = List::new("Names").id(list_id).select(SelectMode::Single).filter(&text, |key: &usize| Label::from(NAMES[*key])).show_items(
-                ui,
-                &Names,
-                &mut |key, _| ListRow::new(NAMES[*key]),
-            );
+            let out = List::new("Names")
+                .id(list_id)
+                .select(SelectMode::Single)
+                .filter(&text, |key: &usize| vec![Label::from(NAMES[*key])])
+                .show_items(ui, &Names, &mut |key, _| ListRow::new(NAMES[*key]));
             sink.borrow_mut().extend(out.events.iter().filter_map(|event| match event {
                 CollectionEvent::Activate(key) => Some(*key),
                 _ => None,

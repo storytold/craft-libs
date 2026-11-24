@@ -368,6 +368,24 @@ impl DropTarget<OsFiles> for OnRow {
 /// A drop of files anywhere in the window; it takes them under a modal layer when it holds `true`.
 struct OnWindow(bool);
 
+struct OnPositionalWindow;
+
+impl WindowDropTarget<OsFiles> for OnPositionalWindow {
+    type Drop = Vec<String>;
+
+    fn requires_pointer(&self) -> bool {
+        true
+    }
+
+    fn accept(&self, files: &OsFiles, _: DropOperation) -> Option<Self::Drop> {
+        Some(names(files))
+    }
+
+    fn mark(&self, _: &Self::Drop) -> DropMark {
+        DropMark::Into(WINDOW)
+    }
+}
+
 impl WindowDropTarget<OsFiles> for OnWindow {
     type Drop = Vec<String>;
 
@@ -392,6 +410,169 @@ struct FileList<'a> {
     landed: &'a RefCell<Landed>,
     /// The targets take files under a modal layer.
     under_modal: bool,
+}
+
+#[derive(Component)]
+struct RowOnly<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Landed>,
+}
+
+#[derive(Component)]
+struct WindowOnly<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Landed>,
+}
+
+#[derive(Component)]
+struct PositionalWindow<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Landed>,
+}
+
+impl Component for PositionalWindow<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: PositionalWindowStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        WINDOW.size()
+    }
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(files) = cx.window_drop_target(&OnPositionalWindow) {
+            self.landed.borrow_mut().window.push(files);
+        }
+    }
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn positional_window_waits_for_pointer_to_choose_a_row() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        PositionalWindow { common: Common::new(), landed: &landed }.id_salt("window").show_at(ui, WINDOW);
+        RowOnly { common: Common::new(), landed: &landed }.id_salt("rows").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.idle(2, &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.idle(2, &mut show);
+    assert!(landed.borrow().window.is_empty(), "the window waits while the pointer is unknown");
+    frames.frame(vec![moved(LIST.center())], &mut show);
+    frames.idle(3, &mut show);
+    assert_eq!(landed.borrow().rows.len(), 1, "the row under the pointer takes the drop");
+    assert!(landed.borrow().window.is_empty());
+}
+
+impl Component for WindowOnly<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: WindowOnlyStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        WINDOW.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(files) = cx.window_drop_target(&OnWindow(false)) {
+            self.landed.borrow_mut().window.push(files);
+        }
+    }
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Component for RowOnly<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: RowOnlyStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        LIST.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(row) = cx.drop_target(&OnRow(false)) {
+            self.landed.borrow_mut().rows.push(row);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn file_drop_uses_the_target_under_the_final_pointer() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        WindowOnly { common: Common::new(), landed: &landed }.id_salt("window").show_at(ui, WINDOW);
+        RowOnly { common: Common::new(), landed: &landed }.id_salt("rows").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(Pos2::new(400.0, 400.0))], &mut show);
+    frames.idle(1, &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![moved(LIST.center())], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(landed.borrow().rows.len(), 1, "the positional target takes the drop");
+    assert!(landed.borrow().window.is_empty(), "the previous window target must not take it");
+}
+
+#[trial]
+fn file_drop_without_pointer_waits_for_its_target() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        RowOnly { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    assert!(landed.borrow().rows.is_empty(), "the position is not known yet");
+    frames.frame(vec![moved(LIST.center())], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(landed.borrow().rows.len(), 1, "the drop reaches the row once its position arrives");
+    assert!(landed.borrow().window.is_empty(), "the row takes the drop");
+}
+
+#[trial]
+fn window_file_drop_without_hover_or_pointer_does_not_wait_for_pointer() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        FileList { common: Common::new(), landed: &landed, under_modal: false }.id_salt("files").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.idle(3, &mut show);
+    assert_eq!(landed.borrow().window.len(), 1, "the window receives the drop without a pointer");
 }
 
 impl Component for FileList<'_> {
@@ -520,6 +701,122 @@ fn files_dropped_under_a_modal_land_only_on_targets_that_take_them_there() {
     let taken = landed_under_a_modal(true);
     assert_eq!(taken.rows, vec![(0, vec!["a.png".to_owned()])], "the row below the modal takes its file");
     assert_eq!(taken.window, vec![vec!["b.png".to_owned()]], "the window takes the file dropped beside the row");
+}
+
+/// A drop of files anywhere in the window, with each file's content.
+struct ReadOnWindow;
+
+impl WindowDropTarget<OsFiles> for ReadOnWindow {
+    type Drop = Vec<(String, Option<Vec<u8>>)>;
+
+    fn accept(&self, files: &OsFiles, _: DropOperation) -> Option<Self::Drop> {
+        Some(files.files.iter().map(|file| (file.name.clone(), file.bytes.as_deref().map(<[u8]>::to_vec))).collect())
+    }
+
+    fn mark(&self, _: &Self::Drop) -> DropMark {
+        DropMark::Into(WINDOW)
+    }
+}
+
+/// The drops a window took: the pass each landed in, with each file's name and content.
+type Drops = Vec<(usize, Vec<(String, Option<Vec<u8>>)>)>;
+
+/// A window that takes dropped files with their content, and the pass of its frame each drop landed in.
+#[derive(Component)]
+struct ReadDrop<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Drops>,
+    pass: usize,
+}
+
+impl Component for ReadDrop<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: ReadDropStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        LIST.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(files) = cx.window_drop_target(&ReadOnWindow) {
+            self.landed.borrow_mut().push((self.pass, files));
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// L-54: a web page reads a dropped file's bytes only after the drop, so the drop used to reach its target with no
+/// bytes. The drag waits for the read: the drop frame delivers nothing, and the file arrives once, with its bytes, in
+/// the first pass of the frame after its bytes came; a rerun pass of that frame and the next frame deliver nothing.
+#[trial]
+fn a_pathless_drop_is_delivered_once_its_bytes_are_read() {
+    let landed = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let pass = std::cell::Cell::new(0);
+    let mut show = |ui: &mut Ui| {
+        ReadDrop { common: Common::new(), landed: &landed, pass: pass.get() }.id_salt("window").show_at(ui, LIST);
+        pass.set(pass.get() + 1);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["scan.pdf"]);
+    frames.idle(2, &mut show);
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_some(), "the hovering file is the active payload");
+
+    frames.read_dropped("scan.pdf", b"%PDF-1.7");
+    pass.set(0);
+    frames.idle(1, &mut show);
+    assert!(landed.borrow().is_empty(), "the drop frame delivers nothing while the file is read");
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_some(), "the drag waits for the read");
+
+    pass.set(0);
+    let mut first = true;
+    let passes = frames.frame(Vec::new(), |ui| {
+        if std::mem::take(&mut first) {
+            craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
+        }
+        show(ui);
+    });
+    assert_eq!(passes, 2, "the frame after the read reruns");
+    let delivered = vec![(0, vec![("scan.pdf".to_owned(), Some(b"%PDF-1.7".to_vec()))])];
+    assert_eq!(*landed.borrow(), delivered, "the file arrives once, with its bytes, in the first pass after the read");
+
+    frames.idle(2, &mut show);
+    assert_eq!(*landed.borrow(), delivered, "later frames deliver nothing more");
+    assert!(drag::active::<OsFiles>(&frames.ctx).is_none(), "the drop ends the drag");
+}
+
+/// A browser hands a dropped file over by a relative name, which locates no file, with its bytes. The drop used to keep
+/// only that name as a path, so nothing could be opened; it lands with the bytes in the frame of the drop.
+#[trial]
+fn a_drop_by_relative_name_lands_with_its_bytes() {
+    let landed = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let pass = std::cell::Cell::new(0);
+    let mut show = |ui: &mut Ui| {
+        ReadDrop { common: Common::new(), landed: &landed, pass: pass.get() }.id_salt("window").show_at(ui, LIST);
+        pass.set(pass.get() + 1);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["scan.pdf"]);
+    frames.idle(2, &mut show);
+
+    frames.drop_with_bytes("scan.pdf", b"%PDF-1.7");
+    pass.set(0);
+    frames.idle(1, &mut show);
+    assert_eq!(
+        *landed.borrow(),
+        vec![(0, vec![("scan.pdf".to_owned(), Some(b"%PDF-1.7".to_vec()))])],
+        "the file lands once, with its bytes, in the drop frame"
+    );
 }
 
 /// Where the window's inner rect sits on the desktop in the desktop-pointer trial.

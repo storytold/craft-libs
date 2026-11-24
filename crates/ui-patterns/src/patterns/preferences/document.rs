@@ -29,10 +29,14 @@ pub use texts::setting_label;
 /// live outside the struct (the appearance page writes the suite's theme selection). Every method has a default, so `()`
 /// is a document without any.
 pub trait CustomSettings<T> {
-    /// Draws a [`RuleKind::Custom`] row's control; edits go into `draft`.
-    fn row(&mut self, _ui: &mut Ui, _key: &str, _draft: &mut SettingsDraft) {}
-    /// Draws a page listed with [`SettingsDocument::custom_page`].
-    fn page(&mut self, _ui: &mut Ui, _page: &str, _draft: &mut SettingsDraft) {}
+    /// Draws a [`RuleKind::Custom`] row's control; return whether its own external state changed.
+    fn row(&mut self, _ui: &mut Ui, _key: &str, _draft: &mut SettingsDraft) -> bool {
+        false
+    }
+    /// Draws a custom page; return whether its own external state changed.
+    fn page(&mut self, _ui: &mut Ui, _page: &str, _draft: &mut SettingsDraft) -> bool {
+        false
+    }
     /// Dialogs opened from a custom row (a colour picker), drawn last in the window's viewport. A dialog's answer goes
     /// into `draft`.
     fn nested(&mut self, _ui: &mut Ui, _draft: &mut SettingsDraft) {}

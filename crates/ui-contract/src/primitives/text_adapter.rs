@@ -3,7 +3,7 @@
 
 mod completion;
 
-use crate::primitives::{TabKey, TextLayout, TextOptions};
+use crate::primitives::{SubmitKey, TabKey, TextLayout, TextOptions};
 use crate::runtime::access::text::{Line, Run};
 use crate::runtime::egui::{clipboard, focus as egui_focus, input as egui_input, memory as egui_memory, repaint, text_edit};
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// How a typing run ended, as the adapter saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum End {
-    /// Enter, or Cmd/Ctrl+Enter in a multi-line field that submits.
+    /// Enter, or the `TextOptions::submit_key` chord in a multi-line field that submits.
     Submit,
     /// A commit-on character was typed.
     Separator,
@@ -480,7 +480,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
     // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
-    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
+    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first. In any modal dialog
+    // a draft leaves Escape to the dialog's Cancel, which discards it with the dialog's other edits.
     let closes_dialog = focused_before
         && state.preedit.is_none()
         && !input.options.clear_on_escape
@@ -488,10 +489,11 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && crate::runtime::focus::escape_closes_dialog(ctx);
     let dialog_escape = closes_dialog && state.draft.is_some();
     if dialog_escape {
-        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
-        state.end = Some(End::Escape);
+        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog. A dialog that keeps
+        // typing on Escape (`FocusPolicy::escape_keeps_typing`) commits the draft as leaving the field does.
+        state.end = Some(if crate::runtime::focus::escape_keeps_typing(ctx) { End::Blur } else { End::Escape });
     }
-    let draft_takes = state.draft.is_some() && !dialog_escape;
+    let draft_takes = state.draft.is_some() && !dialog_escape && !(focused_before && keys::focus_in_modal_dialog(ctx));
     // With `RootEnv::escape_leaves_fields` a field takes Escape with nothing to revert too, and gives up the focus;
     // in a dialog that Escape closes, the Escape stays the dialog's.
     let leaves = !input.options.clear_on_escape && !closes_dialog && crate::runtime::env::Env::of(input.ui).escape_leaves_fields;
@@ -562,11 +564,13 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         preedit: preedit.clone(),
         rtl: input.rtl,
         centred: input.options.centred,
+        end_aligned: input.options.end_aligned,
         caret_visible: input.caret_visible,
         underline: input.underline,
         galley: None,
         baseline,
         scroll,
+        line_break: line_break(input.options.submit_key),
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
@@ -614,8 +618,17 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
         && state.preedit.is_none()
         && state.draft.is_some()
         && egui_input::step_key_pressed(ctx);
-    let submitted =
-        (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| !input.options.multiline() || (input.options.submits && mods.cmd));
+    // `entered` is any Enter; which chord submits a multi-line text is decided here, from the held modifiers. Under
+    // `Enter` the widget broke no line on a submitting chord (`text_edit::show` gives it Shift+Enter alone).
+    let submit_key = input.options.submit_key;
+    let submitted = (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| {
+        !input.options.multiline()
+            || (input.options.submits
+                && match submit_key {
+                    SubmitKey::CommandEnter => mods.cmd,
+                    SubmitKey::Enter => !mods.shift,
+                })
+    });
     if let Some(mods) = submitted {
         state.end = Some(End::Submit);
         state.submit_mods = mods;
@@ -688,15 +701,27 @@ pub(crate) fn show_selectable(ui: &mut Ui, text: Selectable<'_>) {
             preedit: None,
             rtl: false,
             centred: false,
+            end_aligned: false,
             caret_visible: false,
             underline: 0.0,
             galley: Some(layout.galley.clone()),
             baseline: None,
             scroll: 0.0,
+            line_break: line_break(SubmitKey::default()),
         },
     );
     crate::runtime::pointer::record_text_widget(&ctx, widget, owner);
     if crate::runtime::egui::access::enabled(&ctx, widget) {
         crate::runtime::egui::access::fold_widget(&ctx, widget, owner);
+    }
+}
+
+/// The modifiers of the Enter chord that breaks the line under `submit_key`. egui inserts the line break itself before
+/// the adapter sees the Enter, so the chord that submits must not be the one egui breaks the line on: under `Enter` the
+/// line break is Shift+Enter and plain Enter reaches `entered` untaken.
+fn line_break(submit_key: SubmitKey) -> egui::Modifiers {
+    match submit_key {
+        SubmitKey::Enter => egui::Modifiers::SHIFT,
+        SubmitKey::CommandEnter => egui::Modifiers::NONE,
     }
 }

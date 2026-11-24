@@ -414,7 +414,7 @@ impl Component for LabelLeaf {
 /// a text label's, and in a bar a glyph text's as well ("X:"). An inspector's labels draw none. The label's node and
 /// the control keep the name as given.
 pub(super) fn colon(env: &Env, input: &LabelIn<'_>) -> Option<String> {
-    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() != LabelScheme::Form {
+    if input.side.layout != FieldLayout::Beside || env.values.get::<LabelScheme>() == LabelScheme::Inspector {
         return None;
     }
     let text = match &input.side.kind {

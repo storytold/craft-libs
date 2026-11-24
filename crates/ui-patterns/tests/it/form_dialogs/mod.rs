@@ -3,13 +3,16 @@
 
 pub(crate) mod about;
 pub(crate) mod dialog;
+pub(crate) mod document_layout;
 pub(crate) mod export;
 pub(crate) mod files;
 pub(crate) mod hosted;
 pub(crate) mod image_unit_order;
 pub(crate) mod list_manager;
+pub(crate) mod long_value;
 pub(crate) mod new_document;
 pub(crate) mod new_document_orientation;
+pub(crate) mod param_tabs;
 pub(crate) mod params;
 pub(crate) mod password;
 pub(crate) mod pdf_export;

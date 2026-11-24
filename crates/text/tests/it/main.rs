@@ -6,7 +6,12 @@ pub(crate) mod editor;
 #[cfg(feature = "find")]
 pub(crate) mod find;
 #[cfg(feature = "find")]
+pub(crate) mod find_bar;
+#[cfg(feature = "find")]
 pub(crate) mod find_dialog;
+#[cfg(feature = "find")]
+pub(crate) mod find_matches;
+pub(crate) mod format_text;
 pub(crate) mod hyperlink;
 pub(crate) mod notes;
 pub(crate) mod paragraph;

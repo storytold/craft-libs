@@ -24,6 +24,26 @@ fn with_matches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     FindBar::new(&mut query, &mut options, &mut found).show(ui).response.into()
 }
 
+/// The bar with its replace row open; the readout shows the last Replace or Replace All.
+#[story(FindBar<'static>, covers = [], drive = Drive::Never)]
+fn with_replace(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut query = data.value("query", "craft".to_owned()).clone();
+    let mut with = data.value("with", "Craft".to_owned()).clone();
+    let mut open = *data.value("open", true);
+    let mut options = FindOptions::default();
+    let mut found = matches("craft makes craft apps with craft", &query);
+    let out = FindBar::new(&mut query, &mut options, &mut found).replace(&mut with, &mut open).show(ui);
+    *data.value("query", String::new()) = query;
+    *data.value("with", String::new()) = with;
+    *data.value("open", true) = open;
+    let last = data.note("last", None::<String>);
+    if let Some(request) = out.request {
+        *last = Some(format!("{request:?}"));
+    }
+    let readout = last.as_ref().map_or_else(|| "No event yet".to_owned(), |event| format!("Last event: {event}"));
+    StoryOutput::from(out.response).readout(readout)
+}
+
 #[story(FindBar<'static>, covers = [], drive = Drive::Never)]
 fn searching(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut query = data.value("query", "craft".to_owned()).clone();

@@ -24,7 +24,7 @@ use craft_ui::primitives::textures::{Priority, Revision, ThumbPaint, ThumbRender
 use craft_ui::runtime::commands::{CommandState, Commands as _};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{DataColor, SurfaceKind};
-use craft_ui::tile_grid::{CaptionPlace, ThumbnailSlider, Tile, TileGrid, TilePartEvent, TileZoom};
+use craft_ui::tile_grid::{CaptionPlace, GridZoom, ThumbnailSlider, Tile, TileGrid, TilePartEvent, TileZoom};
 use egui::{ColorImage, Context, Rect, Response, Ui};
 use serde::{Deserialize, Serialize};
 
@@ -266,7 +266,7 @@ const RECENT_LIMIT: usize = 25;
 /// The cell size of the grid and its zoom: factors of the medium thumbnail.
 pub const ZOOM: TileZoom = TileZoom::bounded(1.0, 2.625, 0.125, 1.25);
 /// The cells of the recents strip, as a factor of the medium thumbnail.
-const RECENT_ZOOM: f32 = 0.75;
+const RECENT_ZOOM: f64 = 0.75;
 /// The room round a glyph in its cell, as a fraction of the cell.
 const GLYPH_INSET_RATIO: f32 = 0.1;
 /// The most columns the alternates popup lays its cells in.
@@ -552,7 +552,7 @@ impl<'a> GlyphsPanel<'a> {
             let mut activated: Option<GlyphCell> = None;
             let strip = TileGrid::<usize>::new(words.recent.clone())
                 .thumb_size(ThumbSize::Medium)
-                .zoom(RECENT_ZOOM)
+                .zoom(GridZoom::Fixed(RECENT_ZOOM))
                 .caption(CaptionPlace::None)
                 .select(SelectMode::Single)
                 .activate(ActivateOn::Click)
@@ -586,7 +586,7 @@ impl<'a> GlyphsPanel<'a> {
                 _ => {
                     let mut grid = TileGrid::<usize>::new(words.grid.clone())
                         .thumb_size(ThumbSize::Medium)
-                        .zoom(size as f32)
+                        .zoom(GridZoom::Fixed(size))
                         .caption(CaptionPlace::None)
                         .select(SelectMode::Single)
                         .selection(Bind::bound(&mut marked.0));
@@ -601,7 +601,7 @@ impl<'a> GlyphsPanel<'a> {
                             tile = tile.dimmed();
                         }
                         if info.has_alternates {
-                            tile = tile.corner_action(IconId::new(ALTERNATES_ICON), GlyphsCommand::Alternates);
+                            tile = tile.action(IconId::new(ALTERNATES_ICON), GlyphsCommand::Alternates);
                         }
                         match info.note {
                             Some(note) => tile.tooltip(note),
@@ -611,7 +611,7 @@ impl<'a> GlyphsPanel<'a> {
                     for event in shown_grid.response.events {
                         match event {
                             CollectionEvent::Activate(key) => activated = cells.get(key).copied().or(activated),
-                            CollectionEvent::Item(key, TilePartEvent::CornerAction) => {
+                            CollectionEvent::Item(key, TilePartEvent::Action(0)) => {
                                 if let Some(&cell) = cells.get(key) {
                                     *cx.memory::<Popup>() = Popup { open: true, cell: Some(cell), cells: source.alternates(face.0, face.1, cell) };
                                 }

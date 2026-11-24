@@ -8,7 +8,7 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DragPreview, DropMark, DropOperation, DropTarget, Edit as _, EditResponse, Focus as _, MeasureCx,
     Meta as _, Outcome, Overlay, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{Glyph, IconSpec, PaintShape, StrokeWidth};
+use craft_ui::primitives::{Glyph, IconSpec, PaintShape, StrokeWidth, WellFill};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, Flags, FocusLook, GlyphRole, StyleColor, StyleCx, SurfaceEdge, SurfaceStyle, UiTokens};
@@ -606,7 +606,7 @@ impl<P: Clone + Send + Sync + 'static> Component for SwatchPair<'_, P> {
                         };
                         paint_well(ui, cx, at, paint, &look);
                     }
-                    None => ui.draw().swatch_well(at, style.radius, None),
+                    None => ui.draw().swatch_well(at, style.radius, WellFill::Mixed),
                 }
                 // A ring well draws its own outlines.
                 if shown.paint.same().is_none() || !shown.ring {

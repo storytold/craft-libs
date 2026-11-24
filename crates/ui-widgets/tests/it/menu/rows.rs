@@ -202,6 +202,24 @@ fn a_letter_no_row_takes_while_a_menu_is_open_does_not_reach_the_text_field_unde
     assert_eq!(*text.borrow(), "hello", "the letter does not reach the field");
 }
 
+/// A radio row that is not the choice shows an empty ring in its mark column, so the choices read as a group; the
+/// chosen one shows the dot.
+#[trial]
+fn an_unchosen_radio_row_shows_an_empty_ring() {
+    let mut fixture = Fixture::new(|ui| {
+        Menu::inline("Zoom").show(ui, |ui, _| {
+            MenuItem::new("Fit").radio_mark(false).show(ui);
+        });
+    });
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let ring = shapes.iter().any(|shape| match shape {
+        egui::Shape::Circle(circle) => circle.stroke.width > 0.0 && circle.fill == egui::Color32::TRANSPARENT,
+        _ => false,
+    });
+    assert!(ring, "an unchosen radio row paints a ring");
+}
+
 /// The fills painted as rects inside `row`, a row's highlight among them.
 fn fills_in(shapes: &[egui::Shape], row: egui::Rect) -> Vec<egui::Color32> {
     shapes

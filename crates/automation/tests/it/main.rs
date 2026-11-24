@@ -7,5 +7,7 @@ pub(crate) mod actions;
 pub(crate) mod agents;
 pub(crate) mod control;
 pub(crate) mod dialogs;
+pub(crate) mod dock;
+pub(crate) mod files;
 pub(crate) mod screenshot;
 pub(crate) mod synthetic;

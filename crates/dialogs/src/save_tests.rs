@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use craft_host::{FileError, FileFilter, Files, PickId, PickRequest, Picked};
+use craft_host::{FileError, FileFilter, Files, PickId, PickRequest, Picked, WriteIntent};
 use craft_platform::watch::FileWatch;
 
-use crate::save::{SaveDocument, SaveFlow, SaveStep, SaveTarget};
+use crate::save::{SaveDocument, SaveFlow, SaveStep, SaveTarget, save_dialog_folder};
 
 /// Records every request; the test answers tickets by hand.
 #[derive(Default)]
@@ -55,7 +55,7 @@ impl Files for ScriptedFiles {
         Err(FileError::Unsupported)
     }
 
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
     }
 
@@ -195,4 +195,51 @@ fn a_late_write_does_not_free_another_save() {
     );
     flow.written(&mut watch, 8, Path::new("/x/b.pdf"));
     assert!(!flow.is_busy());
+}
+
+// An email attachment's temporary copy (Outlook's cache, Apple Mail's downloads) is no place to
+// keep work: Save asks where, as for a new document, and the picker does not start in that folder.
+// The paths need not exist: the mail check comes before any look at the disk.
+#[trial]
+fn mail_attachment_copies_always_ask_where_to_save() {
+    let (files, watch, mut flow) = (ScriptedFiles::default(), watch(), SaveFlow::new());
+    for copy in [
+        r"C:\Users\me\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\AB12CD34\Quote.pdf",
+        "/Users/me/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/6F1C2A9E/booking.pdf",
+    ] {
+        assert_eq!(flow.start(&files, &watch, document(Some(Path::new(copy)), "Quote.pdf"), SaveTarget::InPlace), SaveStep::Picking, "{copy}");
+        assert_eq!(files.last_request().directory, None, "{copy}");
+        assert_eq!(flow.cancel(&files), Some(SaveStep::Cancelled { key: 7 }));
+    }
+    let ordinary = Path::new("/home/me/Documents/Quote.pdf");
+    assert_eq!(
+        flow.start(&files, &watch, document(Some(ordinary), "Quote.pdf"), SaveTarget::InPlace),
+        SaveStep::Write { key: 7, path: ordinary.to_path_buf(), target: SaveTarget::InPlace, file_type: None }
+    );
+}
+
+// Save As starts in the folder of the document's own file; a new document, a bare name, the root
+// and a mail attachment's copy give the picker no folder.
+#[trial]
+fn the_save_picker_opens_in_the_documents_own_folder() {
+    let (files, watch, mut flow) = (ScriptedFiles::default(), watch(), SaveFlow::new());
+    let mut folder_of = |path: Option<&str>| {
+        assert_eq!(flow.start(&files, &watch, document(path.map(Path::new), "f.pdf"), SaveTarget::As), SaveStep::Picking);
+        let folder = files.last_request().directory;
+        flow.cancel(&files);
+        assert_eq!(folder, save_dialog_folder(path.map(Path::new)), "the picker starts where save_dialog_folder says");
+        folder
+    };
+    assert_eq!(folder_of(Some("/home/a/plans/f.pdf")), Some(PathBuf::from("/home/a/plans")));
+    assert_eq!(folder_of(None), None);
+    assert_eq!(folder_of(Some("f.pdf")), None);
+    assert_eq!(folder_of(Some("/")), None);
+    assert_eq!(folder_of(Some(r"C:\Users\a\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\AB12\f.pdf")), None);
+    assert_eq!(folder_of(Some("/Users/a/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/UUID/f.pdf")), None);
+    // Network shares follow the Windows rules for `Path::parent`, which only apply on Windows.
+    #[cfg(windows)]
+    {
+        assert_eq!(folder_of(Some(r"\\server\share\plans\f.pdf")), Some(PathBuf::from(r"\\server\share\plans")));
+        assert_eq!(folder_of(Some(r"\\server\share\")), None);
+    }
 }

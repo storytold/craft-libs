@@ -12,6 +12,8 @@ pub(crate) mod focus;
 pub(crate) mod frame;
 pub(crate) mod latch;
 pub(crate) mod memory;
+pub(crate) mod part_request;
+pub(crate) mod paste;
 pub(crate) mod pen;
 pub(crate) mod pointer;
 pub(crate) mod repeats;

@@ -2,6 +2,7 @@
 
 pub(crate) mod caption;
 pub(crate) mod footer_keys;
+pub(crate) mod footer_order;
 pub(crate) mod footer_row;
 pub(crate) mod layout;
 pub(crate) mod panel_header;

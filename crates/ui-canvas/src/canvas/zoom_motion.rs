@@ -6,7 +6,7 @@
 //! start it through [`ease`].
 
 use super::frame_step;
-use super::navigate::WheelNavigation;
+use super::navigate::{TouchpadGlide, WheelNavigation};
 use crate::runtime::frame;
 use crate::runtime::memory::{global, with_session};
 use craft_behavior::canvas::zoom;
@@ -130,8 +130,79 @@ pub(crate) struct ViewMotion {
     pub(crate) animation: ZoomAnimation,
     /// What the tool host or the Navigator asked of the ease since the canvas's last pass.
     pub(crate) steer: Option<Steer>,
+    /// The touchpad's glide after the fingers lift.
+    pub(crate) glide: TouchpadGlide,
     /// The middle button's autoscroll, with the pass clock of its last step: gesture state, as the ease is.
     pub(crate) autoscroll: super::navigate::MiddleAutoscroll,
+    /// The frame of the autoscroll's last pass: an autoscroll whose canvas missed a frame (another tab showed) ends.
+    pub(crate) scrolled_in: Option<u64>,
+    /// The wheel zoom still owed under `NavigationOptions::eased_wheel_zoom`.
+    pub(crate) wheel_zoom: WheelZoomEase,
+}
+
+/// A wheel zoom paid out over the passes after its notch (`NavigationOptions::eased_wheel_zoom`), as egui eases the
+/// wheel: each pass pays the part of what is owed that reaches 90% in a tenth of a second, by the pass clock, so a
+/// later pass of the same frame pays nothing, and the last sliver is paid whole.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct WheelZoomEase {
+    /// The zoom still owed, as the natural log of its factor.
+    owed: f64,
+    /// The screen point the zoom keeps still: the pointer of the latest notch.
+    anchor: Pos2,
+    /// The pass clock of the last payment.
+    paid_at: f64,
+}
+
+impl WheelZoomEase {
+    /// The owed zoom paid whole: one point of egui's default wheel zoom speed.
+    const SLIVER: f64 = 0.005;
+    /// The longest time one payment counts, in seconds, as egui caps its wheel's frame time.
+    const LONGEST_STEP: f64 = 0.1;
+
+    /// Adds a notch's `factor` about `anchor` at the pass clock `now`. An ease that owed nothing starts one frame
+    /// (`frame_dt` seconds) back, so the notch's own pass pays its first part, as egui's wheel does.
+    pub(crate) fn feed(&mut self, factor: f64, anchor: Pos2, now: f64, frame_dt: f64) {
+        let log = factor.ln();
+        if !log.is_finite() || log == 0.0 {
+            return;
+        }
+        if self.owed == 0.0 {
+            let back = if frame_dt.is_finite() { frame_dt.clamp(0.0, Self::LONGEST_STEP) } else { 0.0 };
+            self.paid_at = now - back;
+        }
+        self.owed += log;
+        if !self.owed.is_finite() {
+            self.owed = 0.0;
+        }
+        self.anchor = anchor;
+    }
+
+    /// This pass's payment at the clock `now`: the factor to zoom by and the point it keeps still, if any.
+    pub(crate) fn step(&mut self, now: f64) -> Option<(f64, Pos2)> {
+        if self.owed == 0.0 {
+            return None;
+        }
+        let dt = if (now - self.paid_at).is_finite() { (now - self.paid_at).clamp(0.0, Self::LONGEST_STEP) } else { 0.0 };
+        self.paid_at = now;
+        let pay = if self.owed.abs() < Self::SLIVER { self.owed } else { self.owed * (1.0 - 0.1_f64.powf(dt / Self::LONGEST_STEP)) };
+        if pay == 0.0 || !pay.is_finite() {
+            return None;
+        }
+        self.owed -= pay;
+        Some((pay.exp(), self.anchor))
+    }
+
+    /// Whether zoom is still owed.
+    pub(crate) fn owes(&self) -> bool {
+        self.owed != 0.0
+    }
+
+    /// Drops what is owed when `stop`.
+    pub(crate) fn stop_if(&mut self, stop: bool) {
+        if stop {
+            self.owed = 0.0;
+        }
+    }
 }
 
 impl ViewMotion {

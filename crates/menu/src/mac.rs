@@ -174,8 +174,9 @@ fn lower_nodes(nodes: &[Node], targets: &mut HashMap<String, Target>, headings: 
         .iter()
         .map(|n| match n {
             Node::Separator => native::Node::Separator,
-            Node::Submenu { label, children, .. } => {
-                native::Node::Submenu { label: label.clone(), children: lower_nodes(children, targets, headings) }
+            // A native submenu is disabled while it has no children: a disabled one goes over empty.
+            Node::Submenu { label, children, enabled, .. } => {
+                native::Node::Submenu { label: label.clone(), children: if *enabled { lower_nodes(children, targets, headings) } else { Vec::new() } }
             }
             // A disabled item with no target: it shows the caption and nothing reports it. It has no command for
             // `native_id` to key on, so its id is its place among the bar's headings.

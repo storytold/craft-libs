@@ -7,7 +7,7 @@ use crate::runtime::drag::{self, DragPreview, DropTarget, DropZone, Typed, Windo
 use crate::runtime::egui::areas;
 use crate::runtime::{cursor, frame, pointer, wheel};
 use craft_behavior::{Cursor, CursorPriority, DropOperation, MultiTap, PartKey, PartRef, PressCancel, PressState, Wheel};
-use egui::{Id, Pos2};
+use egui::{Id, Pos2, Vec2};
 use std::any::{Any, TypeId};
 use std::ops::Range;
 use std::sync::Arc;
@@ -40,6 +40,14 @@ pub trait Pointer {
     /// This pass's tap, once, when it lies in this component's rect and this component (an arena root with its members)
     /// wins a press there.
     fn take_multi_tap(&mut self) -> Option<MultiTap>;
+    /// Marks the wheel gesture this component owns, while it runs, as moved (its view changed): later shares of the
+    /// gesture report `Wheel::moved`.
+    fn mark_wheel_moved(&mut self);
+    /// Feeds `pan`, the line pan this pass gave, to this component's wheel ease and returns the eased step for this
+    /// pass. `Vec2::ZERO` on a pass with no line pan lets owed motion keep paying.
+    fn ease_wheel(&mut self, pan: Vec2) -> Vec2;
+    /// Drops this component's wheel ease and the motion it owes.
+    fn stop_wheel_ease(&mut self);
     /// Requests `cursor` at `priority`; the highest priority of the pass wins.
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority);
     /// Ends every captured press of this viewport.
@@ -61,9 +69,8 @@ pub trait Pointer {
     /// pass, when it was the topmost accepting target under the pointer last pass and accepts now.
     fn drop_target<P: Send + Sync + 'static, T: DropTarget<P>>(&mut self, target: &T) -> Option<T::Drop>;
     /// Registers `target` over the whole window of the running viewport for this pass, in `update`; a target over a
-    /// component beats it wherever that accepts. The payload is read without a pointer position, so files hovered
-    /// before the pointer has a position reach it. OS file drops (`OsFiles`) land on it wherever no other target
-    /// takes them.
+    /// component beats it wherever that accepts. By default the payload is read without a pointer position; a target
+    /// that requires one waits for it so the target at that position can take the drop.
     fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop>;
     /// The operation of a drop of this component's payload, in the pass after the drop; `None` while dragging, when the
     /// drag was cancelled and when no target took it.
@@ -135,6 +142,18 @@ impl Pointer for CxCore<'_> {
         Some(MultiTap::new(tap.fingers, to_layer(tap.at)))
     }
 
+    fn mark_wheel_moved(&mut self) {
+        wheel::mark_moved(&self.ctx, self.id);
+    }
+
+    fn ease_wheel(&mut self, pan: Vec2) -> Vec2 {
+        wheel::ease(&self.ctx, self.id, pan)
+    }
+
+    fn stop_wheel_ease(&mut self) {
+        wheel::stop_ease(&self.ctx, self.id);
+    }
+
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority) {
         if self.cursor.as_ref().is_none_or(|(_, held)| priority > *held) {
             self.cursor = Some((cursor.into(), priority));
@@ -170,12 +189,15 @@ impl Pointer for CxCore<'_> {
     }
 
     fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop> {
+        if target.requires_pointer() && self.dragging::<P>().is_none() {
+            return None;
+        }
         // A target under the pointer in another window takes the drop of a drag that left this one.
         let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx) && !drag::held_elsewhere(&self.ctx))?;
-        let op = drag::current_operation(&self.ctx);
+        let op = drag::current_operation(&self.ctx, craft_behavior::CopyKeys::Alt);
         let drop = target.accept(&payload, op)?;
         let ordinal = drag::next_ordinal(&self.ctx, self.id);
-        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), self.env.shared_tokens(), true, target.under_modal());
+        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), op, self.env.shared_tokens(), true, target.under_modal());
         drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
     }
 
@@ -238,6 +260,18 @@ impl<C: Component> Pointer for Cx<'_, C> {
 
     fn take_multi_tap(&mut self) -> Option<MultiTap> {
         self.core.take_multi_tap()
+    }
+
+    fn mark_wheel_moved(&mut self) {
+        self.core.mark_wheel_moved();
+    }
+
+    fn ease_wheel(&mut self, pan: Vec2) -> Vec2 {
+        self.core.ease_wheel(pan)
+    }
+
+    fn stop_wheel_ease(&mut self) {
+        self.core.stop_wheel_ease();
     }
 
     fn cursor(&mut self, cursor: impl Into<Cursor>, priority: CursorPriority) {

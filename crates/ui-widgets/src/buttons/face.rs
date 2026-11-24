@@ -385,7 +385,7 @@ pub(super) fn on_surface(cx: &StyleCx<'_>, off: &VariantParts, on: &VariantParts
 }
 
 /// The look of a button that shows only its icon: an icon button, or a toggle button that is `icon_only`.
-pub(super) struct IconFace {
+pub(crate) struct IconFace {
     pub surface: SurfaceLook,
     pub metrics: Metrics,
     /// The glyph at the side of the scope's glyph role, in the on look's text colour while on.
@@ -395,7 +395,7 @@ pub(super) struct IconFace {
 /// The icon-only look of the instance's variant: a square of the control height with control corners, as a ghost
 /// button of the old look (a capsule would round the on plate), showing the on look while on. The scope's glyph role
 /// sets the glyph's side and, in a rail, the quieter ink it rests in.
-pub(super) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
+pub(crate) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
     let (off, on) = (cx.variant_look(), on_parts(cx));
     let (icon, text) = (&cx.tokens.size.icon, &cx.tokens.color.text);
     let (side, rest) = match cx.glyph_role() {

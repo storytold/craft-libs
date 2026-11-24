@@ -410,6 +410,9 @@ pub struct AppShell<'a, S> {
     /// Whether the drop-down slot of a Focus window is shown. A body press edge or a mode change clears it.
     #[prop]
     dropped: Bind<'a, bool>,
+    /// The bottom alignment of notices in the body; without one they use its trailing bottom corner.
+    #[prop]
+    toast_alignment: Option<egui::Align2>,
     /// Whether the Tab reveal and the edge reveal work in body-only mode. Off for a presentation.
     #[prop]
     allow_reveal: bool,
@@ -419,6 +422,13 @@ pub struct AppShell<'a, S> {
     /// The host's flag for the document tabs, read back through `ShellCx::tabs_visible`.
     #[prop]
     document_tabs: bool,
+    /// Whether the title slot mirrors with the window's macOS traffic lights when AppKit lays them out from the right
+    /// end (`MacInset::lights_right`: a right-to-left system language, whatever the app's language): the slot's flow
+    /// runs from the right, so what starts the title bar sits beside the lights and its document tabs read from the
+    /// right, their overflow at the other end. Text keeps the interface's direction. Off, the bar keeps its order and
+    /// only the lights' room moves to the right end.
+    #[prop]
+    title_follows_lights: bool,
     /// The window's title: the shell sends `WindowAction::SetTitle` every pass and the window host drops a title equal
     /// to the last one it set. Not in an embedded shell.
     #[prop(into)]
@@ -451,9 +461,11 @@ impl<'a, S> AppShell<'a, S> {
             screen_mode: Bind::kept(),
             mode_set: ScreenModeSet::default(),
             dropped: Bind::kept(),
+            toast_alignment: None,
             allow_reveal: true,
             edge_reveal: true,
             document_tabs: true,
+            title_follows_lights: false,
             window_title: None,
             body_label: None,
             title: None,
@@ -581,9 +593,11 @@ impl<'a, S> AppShell<'a, S> {
             mut place,
             mode_set,
             mut dropped,
+            toast_alignment,
             allow_reveal,
             edge_reveal,
             document_tabs,
+            title_follows_lights,
             window_title,
             body_label,
             title,
@@ -705,6 +719,9 @@ impl<'a, S> AppShell<'a, S> {
 
             let chrome = ChromeState::of(&kept.reveal);
             let tabs = mode.tabs_visible() && document_tabs;
+            // The title slot reads from the right while the lights sit there; a right-to-left window already does.
+            let mirror_title =
+                title_follows_lights && !embedded && !rtl && matches!(WindowHost::of(&ctx).frame(), super::Frame::Inset(inset) if inset.lights_right);
             let mut shell = ShellCx::new(window.clone(), if only { BodyMode::Only } else { BodyMode::Normal }, regions.clone())
                 .with_tabs(tabs)
                 .with_tab_reveal(kept.reveal.tab())
@@ -782,6 +799,7 @@ impl<'a, S> AppShell<'a, S> {
                         if !*shown || if floats { !covering } else { covers(&placed.slot, only) != covering } {
                             continue;
                         }
+                        let mirrored = placed.title && mirror_title;
                         let by_content = placed.sized_by_content();
                         let along_x = placed.along_x();
                         let extent = placed.extent(&tokens, &measured_before);
@@ -813,7 +831,7 @@ impl<'a, S> AppShell<'a, S> {
                         let key = slot.key();
                         // The slot runs every pass; the app memoizes inside it.
                         if !by_content {
-                            region.show(ui, |ui, bcx| add(ui, bcx, app));
+                            region.show(ui, |ui, bcx| in_lights_flow(ui, mirrored, |ui| add(ui, bcx, app)));
                             continue;
                         }
                         // The slot's extent along its edge is the pane's: its content's, with what the pane keeps
@@ -823,7 +841,7 @@ impl<'a, S> AppShell<'a, S> {
                         // what shows.
                         let shown = region.show(ui, |ui, bcx| {
                             let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
-                            stack.show(ui, |ui, _| add(ui, bcx, app));
+                            stack.show(ui, |ui, _| in_lights_flow(ui, mirrored, |ui| add(ui, bcx, app)));
                             !ui.is_sizing_pass()
                         });
                         let pane = shown.output.response.rect;
@@ -888,9 +906,9 @@ impl<'a, S> AppShell<'a, S> {
                 outer.note_dialog();
             }
 
-            // The window's toasts sit at the end-bottom corner of its body; an embedded shell's in the part of it in view.
+            // The window's toasts sit in its body; an embedded shell's in the part of it in view.
             let body = if embedded { regions.body.intersect(region) } else { regions.body };
-            ToastStack::show(ui, &window, body);
+            ToastStack::show_at(ui, &window, body, toast_alignment);
 
             let mut edges: Vec<(RevealEdge, Rect)> = regions
                 .slots
@@ -932,4 +950,19 @@ impl<'a, S> AppShell<'a, S> {
             },
         }
     }
+}
+
+/// Runs `body` with its flow from the right when `mirrored` (the title slot following traffic lights at the right end),
+/// else as it is. Only the flow turns: text keeps the interface's direction.
+fn in_lights_flow<R>(ui: &mut Ui, mirrored: bool, body: impl FnOnce(&mut Ui) -> R) -> R {
+    if !mirrored {
+        return body(ui);
+    }
+    // The slot's room is the bar's own: a bar that fills takes it all, whatever the flow of the body around it.
+    let room = ui.max_rect();
+    crate::runtime::env::with_env(
+        ui,
+        |overrides| overrides.flow = Some(craft_i18n::Direction::Rtl),
+        |ui| crate::runtime::env::in_room(ui, room, body),
+    )
 }

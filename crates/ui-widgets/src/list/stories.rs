@@ -1,13 +1,15 @@
 //! Stories of the row types of the list family: `ListRow`.
 
-use super::{LabelUnderline, ListRow, RowInk, RowRun, ThumbSize, TrailingFace, TrailingPart};
+use super::{CellStatus, HueTarget, LabelUnderline, ListRow, RowInk, RowRun, ThumbSize, TrailingFace, TrailingPart};
 use crate::contract::{SetPosition, Show as _, ShowContainer as _, show_item_in_flow};
 use crate::layout_components::Stack;
 use crate::primitives::{ContentPainterCx, IconSpec, Span, StrokeWidth};
+use crate::runtime::env::Env;
 use crate::style::{Corners, DataColor, SurfaceKind};
-use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
+use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, show_as_only_item_across, story};
 use craft_behavior::{ColumnKey, IconId};
-use egui::{Color32, Pos2, Rect, Ui};
+use craft_theme::variant::Tone;
+use egui::{Color32, Pos2, Rangef, Rect, Ui};
 
 #[story(ListRow<'static>, covers = [Default], drive = Drive::Activate)]
 fn list_row(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -40,7 +42,7 @@ fn list_row_text_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         (NAME, Rect::from_min_max(Pos2::new(left, 0.0), Pos2::new(split, height))),
         (SIZE, Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(left + width, height))),
     ];
-    show_as_only_item(ui, ListRow::new("report.pdf").cells(&cells).cell(SIZE, "2.4 MB")).into()
+    show_as_only_item_across(ui, ListRow::new("report.pdf").cells(&cells).cell(SIZE, "2.4 MB"), Rangef::new(left, left + width)).into()
 }
 
 /// A search result: the match in the label reads in the highlight look.
@@ -159,4 +161,42 @@ fn list_row_thumb_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             ListRow::new("Large").thumb_height(ThumbSize::Large).icon(icon()),
         ]
     })
+}
+
+/// A colour from the document's data: a bookmark's or a tag's own colour.
+const DATA_RED: DataColor = DataColor::new(egui::Color32::from_rgb(0xd0, 0x30, 0x30));
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_icon_hue(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let row = ListRow::new("Chapter 2").icon(IconSpec::svg(IconId::new("bookmark"))).hue(DATA_RED, HueTarget::Icon);
+    show_as_only_item(ui, row).into()
+}
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_label_hue(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    show_as_only_item(ui, ListRow::new("Chapter 2").hue(DATA_RED, HueTarget::Label)).into()
+}
+
+#[story(ListRow<'static>, covers = [], drive = Drive::Never)]
+fn list_row_status_cell(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    const NAME: ColumnKey = ColumnKey::new("name");
+    const WARNINGS: ColumnKey = ColumnKey::new("warnings");
+    let (left, width, height) = (ui.cursor().min.x, ui.available_width(), ui.spacing().interact_size.y);
+    let split = left + width * 0.4;
+    let mut cells = [
+        (NAME, Rect::from_min_max(Pos2::new(left, 0.0), Pos2::new(split, height))),
+        (WARNINGS, Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(left + width, height))),
+    ];
+    // The columns are screen rects: under right-to-left the name column is at the right.
+    if Env::of(ui).view().direction().is_rtl() {
+        for (_, cell) in &mut cells {
+            *cell =
+                Rect::from_min_max(Pos2::new(2.0 * left + width - cell.max.x, cell.min.y), Pos2::new(2.0 * left + width - cell.min.x, cell.max.y));
+        }
+    }
+    let status = CellStatus::new(Tone::Warn, "2 warnings")
+        .tip("The file has form fields that will be flattened.\nIts bookmarks point to pages that are not kept.")
+        .action("Details");
+    // The row spans its columns, as a list's row does: the reflection of its cells is the reflection in the row.
+    show_as_only_item_across(ui, ListRow::new("report.pdf").cells(&cells).cell_status(WARNINGS, status), Rangef::new(left, left + width)).into()
 }

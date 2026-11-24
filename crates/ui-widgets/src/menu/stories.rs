@@ -1,8 +1,8 @@
 //! Stories of the menu rows and the menu.
 
-use super::{Alternate, Menu, MenuItem, PanelMenu, PanelRow};
+use super::{Alternate, Menu, MenuIcon, MenuIconRow, MenuItem, PanelMenu, PanelRow};
 use crate::buttons::{Button, IconButton};
-use crate::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::fonts::FontRef;
 use crate::layout_components::{Row, Stack};
@@ -325,6 +325,32 @@ fn context_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             ran |= MenuItem::new("Show Guides (stays open)").check(true).keep_open(true).show(ui).ran;
         });
         let mut output = StoryOutput::from(shown.output);
+        output.clicked |= ran;
+        output
+    })
+}
+
+/// An open context menu with a row of alignment icons between two rows, its middle icon disabled.
+#[story(MenuIconRow<'static>, covers = [Default], drive = Drive::Never)]
+fn menu_icon_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let icons = [
+        MenuIcon::new(IconId::new("align_edge_left"), "Align Left Edges"),
+        MenuIcon::new(IconId::new("align_edge_hcenter"), "Align Centres").enabled(false),
+        MenuIcon::new(IconId::new("align_edge_right"), "Align Right Edges"),
+    ];
+    in_row(ui, |ui| {
+        let target = Button::new("Right-click, or focus and press Shift+F10").show(ui);
+        let mut ran = false;
+        let shown = Menu::context("Arrange", &target).open(Bind::bound(data.value("open", true))).show(ui, |ui, _| {
+            ran |= MenuItem::new("Group").shortcut("Ctrl+G").show(ui).ran;
+            let row = MenuIconRow::new("Align", &icons).show(ui);
+            ran |= MenuItem::new("Ungroup").shortcut("Ctrl+Shift+G").show(ui).ran;
+            StoryOutput::from(row)
+        });
+        let mut output = match shown.inner {
+            Some(row) => row,
+            None => StoryOutput::from(shown.output),
+        };
         output.clicked |= ran;
         output
     })

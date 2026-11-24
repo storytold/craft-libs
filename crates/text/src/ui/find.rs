@@ -26,6 +26,7 @@ craft_ui::words! {
         whole_words_only: "find.wholeWordsOnly" = "Whole words only";
         case_sensitive: "find.caseSensitive" = "Case-sensitive";
         close: "find.close" = "Close (Esc)";
+        show_replace: "find.showReplace" = "Show replace";
         title: "find.title" = "Find and Replace";
         find_tab: "find.findTab" = "Find";
         replace_tab: "find.replaceTab" = "Replace";

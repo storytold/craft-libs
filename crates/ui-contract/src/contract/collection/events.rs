@@ -32,7 +32,7 @@ pub struct ReorderMove<K> {
     pub keys: Vec<K>,
     /// The new position of the first of `keys`, counted in the order that remains once all of them are taken out.
     pub to: usize,
-    /// The drag was a copy (Alt held, `ReorderRule::copy_with_alt`): the item stays and a copy goes to `to`.
+    /// The drag was a copy (the copy keys of `ReorderRule::copy_with` held): the item stays and a copy goes to `to`.
     pub copy: bool,
     /// The group the items land in: `None` at the top level, and always `None` unless the rule has `into_groups`.
     pub parent: Option<K>,
@@ -133,7 +133,9 @@ impl<K> OpenChange<K> {
     }
 }
 
-/// A request for the context menu of an item. Collections never open menus: the app does.
+/// A request for the context menu of an item. Collections never open menus: the app does, hung from the collection's
+/// response (`Menu::context`). The collection keeps the request while that menu stays open and reports it in every
+/// such pass as `CollectionResponse::menu`, so the menu's rows read their item from there.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ContextMenuRequest<K> {
@@ -272,6 +274,9 @@ pub enum CollectionEvent<K, E> {
         /// The modifiers held at the click.
         mods: craft_keymap::Mods,
     },
+    /// A middle click on an item of a collection that senses `Sense::MIDDLE_CLICK` (a document tab strip closes the
+    /// tab), unless the middle button auto-scrolls (`MiddleButton::AutoScroll`). A middle drag is no click.
+    MiddleClick(K),
     /// Delete or Backspace at the lead of a `deletable` collection: the selected items when the lead is selected, else
     /// the lead alone, in display order.
     Delete(Vec<K>),

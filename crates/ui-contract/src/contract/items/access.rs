@@ -74,9 +74,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
-    /// moves the lead to the row and key focus to the collection; Click does that and picks an item (and activates it
-    /// in a collection that activates on a click) or activates a section, as a press does; Expand and Collapse open and close a row that has children.
-    pub(super) fn node_by_access(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: Placement) {
+    /// moves the lead to the row and key focus to the collection; Click also picks an item and activates it when the
+    /// collection activates on click, or activates a section; Expand and Collapse open and close rows with children.
+    pub(super) fn node_by_access(
+        &mut self,
+        comp: &C,
+        cx: &mut Cx<'_, C>,
+        props: &crate::contract::CollectionProps,
+        layout: &C::ItemLayout,
+        place: Placement,
+    ) {
         use craft_behavior::AccessAction;
         let (_, built) = self.built(layout, place.rect, place.offset);
         let rows: Vec<(u64, usize)> = built
@@ -109,7 +116,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
                             self.click_pick(comp, at, false, false, craft_keymap::Mods::NONE);
-                            if comp.items().activate == ActivateOn::Click {
+                            if props.activate == ActivateOn::Click {
                                 self.activation_clicks = 1;
                                 self.events.push(CollectionEvent::Activate(key));
                             }

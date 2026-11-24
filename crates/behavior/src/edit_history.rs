@@ -1,6 +1,6 @@
 //! `EditHistory<T>`: the undo and redo of a dialog, a tool session or the keymap editor, fed by edit events.
 
-use crate::value::{EditEvent, GestureId, Value};
+use crate::value::{EditEvent, GestureId, Mixed, Value};
 use std::sync::Arc;
 
 /// Most steps a history keeps.
@@ -78,14 +78,15 @@ impl<T: Value> EditHistory<T> {
         self.undo.drain(..gone);
     }
 
-    /// Takes in one event. Events of a gesture other than the open one are ignored.
+    /// Takes in one event. Events of a gesture other than the open one are ignored. A concrete
+    /// before value captures changes made outside history since the preceding edit.
     pub fn record(&mut self, event: &EditEvent<T>) {
         match event {
             EditEvent::Begin { id, label, .. } => self.open = Some(Open { id: *id, name: label.clone() }),
             EditEvent::Update { .. } => {}
-            EditEvent::Commit { id, after, .. } => {
+            EditEvent::Commit { id, before, after } => {
                 if let Some(open) = self.open.take_if(|open| open.id == *id) {
-                    self.push(after, open.name);
+                    self.push(before, after, open.name);
                 }
             }
             EditEvent::Cancel { id, .. } => {
@@ -93,9 +94,9 @@ impl<T: Value> EditHistory<T> {
                     self.open = None;
                 }
             }
-            EditEvent::Set { after, label, .. } => {
+            EditEvent::Set { before, after, label, .. } => {
                 self.open = None;
-                self.push(after, label.clone());
+                self.push(before, after, label.clone());
             }
         }
     }
@@ -105,17 +106,21 @@ impl<T: Value> EditHistory<T> {
         self.open.is_some()
     }
 
-    fn push(&mut self, after: &T, name: Arc<str>) {
-        if *after == self.settled {
+    fn push(&mut self, before: &Mixed<T>, after: &T, name: Arc<str>) {
+        let weight = match before.same() {
+            Some(value) => self.budget.map_or(0, |(_, weigh)| weigh(value)),
+            None => self.settled_weight,
+        };
+        let before = before.same().unwrap_or(&self.settled).clone();
+        self.settled = after.clone();
+        self.settled_weight = self.budget.map_or(0, |(_, weigh)| weigh(after));
+        if *after == before {
             return;
         }
         if self.undo.len() >= LIMIT {
             self.undo.remove(0);
         }
-        let weight = self.budget.map_or(0, |(_, weigh)| weigh(after));
-        let value = std::mem::replace(&mut self.settled, after.clone());
-        let weight = std::mem::replace(&mut self.settled_weight, weight);
-        self.undo.push(Entry { value, name, weight });
+        self.undo.push(Entry { value: before, name, weight });
         self.redo.clear();
         self.trim();
     }
@@ -168,6 +173,17 @@ mod tests {
 
     fn set(before: i32, after: i32) -> EditEvent<i32> {
         EditEvent::set(Mixed::Same(before), after, "Fill".into(), None)
+    }
+
+    #[test]
+    fn undo_restores_selection_changed_between_edits() {
+        let mut history = EditHistory::new(&(0, 0));
+        history.record(&EditEvent::set(Mixed::Same((0, 1)), (1, 0), "Remove".into(), None));
+        let mut now = (1, 0);
+        assert!(history.step(&mut now, Step::Undo));
+        assert_eq!(now, (0, 1));
+        assert!(history.step(&mut now, Step::Redo));
+        assert_eq!(now, (1, 0));
     }
 
     #[test]

@@ -36,7 +36,7 @@ fn reset_panel_puts_the_shown_tabs_keys_back_to_their_defaults() {
     let (shown, pressed) = (Rc::clone(&values), Rc::new(Cell::new(false)));
     let seen = Rc::clone(&pressed);
     let mut fixture = Fixture::new(move |ui| {
-        let out = PropertiesDialog::new("Properties", tabs(), Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        let out = PropertiesDialog::new("properties", "Properties", tabs(), Bind::bound(&mut *shown.borrow_mut())).show(ui);
         if out.tab_reset {
             seen.set(true);
         }
@@ -86,7 +86,8 @@ fn the_shown_tab_and_the_values_are_json_fields() {
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
     fixture.room(Vec2::new(900.0, 700.0));
     let ctx = fixture.ctx().clone();
-    let dialog = HostedPropertiesDialog::new("properties", DialogFields::new(), |values| PropertiesDialog::new("Properties", tabs(), values));
+    let dialog =
+        HostedPropertiesDialog::new("properties", DialogFields::new(), |values| PropertiesDialog::new("properties", "Properties", tabs(), values));
     let id = host.borrow_mut().open(dialog.previews());
     fixture.idle(10);
     let set = |field: &str, value: Value| host.borrow_mut().set_json_field(&ctx, id, field, value);

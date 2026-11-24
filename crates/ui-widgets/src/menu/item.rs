@@ -46,6 +46,57 @@ fn with_marker(label: &str, letter: char) -> String {
     }
 }
 
+/// Closes the menus out from the one a picked row runs in. Focus leaves them first, so a command the row fires after
+/// this reaches the stop focus returns to. Every row that runs on a pick (`MenuItem`, `MenuIconRow`) closes through
+/// this one path.
+pub(crate) fn close_on_pick(ctx: &Context) {
+    if let Some(menu) = crate::runtime::focus::running_menu(ctx) {
+        crate::runtime::focus::return_from_pick(ctx, crate::runtime::focus::PickedIn::Menus(menu));
+    }
+}
+
+/// What the pointer and the keyboard did to a menu row in this pass. Every row that can be the level's active row
+/// (`MenuItem`, `MenuIconRow`) reads it through [`RowInput::of`] and makes itself active by [`RowInput::activate`], so
+/// the rule lives once.
+pub(crate) struct RowInput {
+    /// The pointer moved in this pass.
+    pub moving: bool,
+    /// The pointer is over the row.
+    pub hovered: bool,
+    /// The row holds the focus.
+    pub focused: bool,
+    keyboard: bool,
+    gained: bool,
+    started: bool,
+}
+
+impl RowInput {
+    /// The row's input in this pass; the row's memory keeps the focus and keyboard facts of the pass before, to see
+    /// when focus lands on the row or the keyboard starts driving the menu.
+    pub(crate) fn of<C: Component>(cx: &mut Cx<'_, C>, level: &MenuLevel) -> RowInput {
+        let moving = cx.core.ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
+        let hovered = cx.response.hovered();
+        let focused = cx.is_focused();
+        let keyboard = level.keyboard();
+        let rest = cx.memory::<Rest>();
+        let gained = focused && !rest.focused;
+        rest.focused = focused;
+        let started = keyboard && !rest.keyboard;
+        rest.keyboard = keyboard;
+        RowInput { moving, hovered, focused, keyboard, gained, started }
+    }
+
+    /// Makes the row `id` the level's active row when it `runs` and the keyboard landed on it. The pointer's row is
+    /// made active by its `Menu` before the rows run (`MenuLevel::follow_pointer`); the focused row of a menu the
+    /// pointer opened is not active until the keyboard lands on it.
+    pub(crate) fn activate(&self, ctx: &Context, id: Id, level: &MenuLevel, runs: bool) {
+        let landed = self.focused && self.keyboard && (self.gained || self.started);
+        if runs && landed && level.activate_row(id) {
+            frame::request_repaint(ctx);
+        }
+    }
+}
+
 /// The mark a row shows in its mark column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mark {
@@ -189,6 +240,13 @@ pub struct MenuItem<'a> {
     /// An icon before the label.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
+    /// The row shows no icon, not even the one its command names: a text-only menu's row, which is also a line shorter.
+    #[prop]
+    no_icon: bool,
+    /// The row is its label's line plus the menu's padding, not a control's height: a dense classic menu.
+    #[style_key]
+    #[prop]
+    compact: bool,
     /// A check mark, shown while the value is true; the row reserves the mark column either way.
     #[prop]
     check: Option<bool>,
@@ -235,6 +293,8 @@ impl<'a> MenuItem<'a> {
             submenu: false,
             heading: false,
             icon: None,
+            no_icon: false,
+            compact: false,
             check: None,
             radio_mark: None,
             mnemonic: None,
@@ -296,6 +356,9 @@ impl<'a> MenuItem<'a> {
     }
 
     fn lead_icon(&self, command: Option<&ResolvedCommand>) -> Option<IconSpec<'_>> {
+        if self.no_icon {
+            return None;
+        }
         self.icon.clone().or_else(|| MenuItem::command_icon(command))
     }
 
@@ -436,6 +499,10 @@ impl Component for MenuItem<'_> {
         // A row's content sits `space.pad.regular` in from the popup's own padding, so a label starts clear of the edge.
         let mut metrics = control.metrics();
         metrics.padding = Insets::new(tokens.space.pad.regular, tokens.space.pad.regular, metrics.padding.top, metrics.padding.bottom);
+        if key.compact {
+            // The text line sets the height, as in a classic menu: no control height floor.
+            metrics.min_size.y = 0.0;
+        }
         MenuItemStyle {
             surface,
             metrics,
@@ -522,35 +589,27 @@ impl Component for MenuItem<'_> {
             frame::request_repaint(&ctx);
         }
         let now = frame::clock(&ctx);
-        let moving = ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
-        let hovered = cx.response.hovered();
-        let focused = cx.is_focused();
+        let input = RowInput::of(cx, &level);
+        let (moving, hovered, focused) = (input.moving, input.hovered, input.focused);
         // The pointer's last move headed for the open submenu of another row: this row is one it crosses on the way.
         let heading = level.aimed(cx.id);
-        let keyboard = level.keyboard();
-        let (rested, focus_gained, key_started) = {
+        let rested = {
             let rest = cx.memory::<Rest>();
-            let gained = focused && !rest.focused;
-            rest.focused = focused;
-            let started = keyboard && !rest.keyboard;
-            rest.keyboard = keyboard;
             // The rest starts at the pointer's last move over the row.
             if hovered && moving {
                 rest.since = Some(now);
-                (0.0, gained, started)
+                0.0
             } else if hovered {
-                (now - *rest.since.get_or_insert(now), gained, started)
+                now - *rest.since.get_or_insert(now)
             } else {
                 rest.since = None;
-                (0.0, gained, started)
+                0.0
             }
         };
         let takes_over = hovered && (!heading || rested >= AIM_REST);
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
-        if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
-            frame::request_repaint(&ctx);
-        }
+        input.activate(&ctx, cx.id, &level, enabled);
         // A disabled row is never active.
         self.active = enabled && level.is_active(cx.id);
         // A crossed row waits for the rest to end: one pass when it does.
@@ -582,13 +641,8 @@ impl Component for MenuItem<'_> {
         if takes_over && level.clear_submenu() {
             frame::request_repaint(&ctx);
         }
-        // The run closes the menus out from the one this row runs in: focus leaves them first, so the command reaches
-        // the stop focus returns to.
-        if asked
-            && !self.keep_open
-            && let Some(menu) = crate::runtime::focus::running_menu(&ctx)
-        {
-            crate::runtime::focus::return_from_pick(&ctx, crate::runtime::focus::PickedIn::Menus(menu));
+        if asked && !self.keep_open {
+            close_on_pick(&ctx);
         }
         // Every activation of a menu row reaches its command as `FireSource::Menu`, whether it was typed, clicked or keyed.
         // A typed letter also runs a row that has no command: the injected activation closes the menu.
@@ -639,6 +693,7 @@ impl Component for MenuItem<'_> {
             let square = Rect::from_center_size(Flow::new(placed.mark, rtl).take_start(side).0.center(), Vec2::splat(side));
             match mark {
                 Some(Mark::Radio(true)) => draw.fill(&glyph::dot(square.center(), side), ink),
+                Some(Mark::Radio(false)) => draw.stroke(&glyph::ring(square.center(), side), StrokeWidth::Thin, ink),
                 Some(Mark::Check(true)) => draw.stroke(&glyph::check(square), StrokeWidth::Medium, ink),
                 _ => {}
             }

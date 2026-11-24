@@ -11,7 +11,7 @@ use craft_ui::contract::{
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::primitives::textures::{Priority, TextureKey, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails};
-use craft_ui::tile_grid::{CaptionPlace, Tile, TileGrid, TilePartEvent};
+use craft_ui::tile_grid::{CaptionPlace, GridZoom, Tile, TileGrid, TilePartEvent};
 use egui::{Rect, Ui};
 
 use super::list::{drop_items, inside_any, item_of, open_event, rename_event, reorder_event, sort_entries, stack_event};
@@ -172,7 +172,7 @@ where
         .caption(CaptionPlace::Below)
         .detail_line()
         .aspect(ASPECT)
-        .zoom(state.settings.zoom as f32)
+        .zoom(GridZoom::Fixed(state.settings.zoom))
         .rename(true)
         .deletable(true)
         .rows_stamp(stamp_of(state.shown.as_ref(), &state.search, state.settings.icon_sort.as_ref()))

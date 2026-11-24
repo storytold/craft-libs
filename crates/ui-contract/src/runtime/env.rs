@@ -45,10 +45,10 @@ mod view;
 pub use app_values::{AppValues, EnvValue, StyleValue};
 pub use craft_platform::appearance::SystemReader;
 use host_words::{host_dates, host_format, host_words};
-pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, with_env};
+pub use overrides::{Overrides, ThemeScope, WheelScope, WordsOverride, in_room, with_env};
 pub use root::{ResolvedRoot, RootEnv};
 pub use scrub::ScrubDrags;
-pub use system::{SystemState, system_appearance};
+pub use system::{SystemState, system_appearance, system_text_scale};
 pub(crate) use tokens::TokenInputs;
 #[cfg(feature = "testing")]
 pub(crate) use tokens::root_token_resolves;
@@ -200,6 +200,8 @@ pub struct Scoped {
     /// The innermost scrolling body that encloses the scope: a collection under it owns no scroll of its own, and
     /// page and end moves a component leaves untaken go to it.
     pub(crate) scroll_owner: Option<ScrollOwner>,
+    /// The enclosing region's fallback collection for unused moves.
+    pub(crate) fallback_collection: Option<Id>,
     /// The axes (horizontal, vertical) the innermost scrolling body scrolls on: the room along them is unbounded, so
     /// a child that fills there takes its content size, except the children that fill the main axis of a body that
     /// shares it: they share what the view shows, at least their content size (`layout::view_room`).
@@ -418,6 +420,7 @@ impl Scoped {
         self.roving = None;
         self.transform = None;
         self.scroll_owner = None;
+        self.fallback_collection = None;
         self.wheel = WheelScope::Plain;
         self.unbounded = (false, false);
         self.lazy = None;
@@ -704,6 +707,7 @@ impl Env {
                 offered: None,
                 measure: None,
                 scroll_owner: None,
+                fallback_collection: None,
                 unbounded: (false, false),
                 lazy: None,
                 item: None,

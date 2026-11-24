@@ -1,10 +1,12 @@
 //! The wheel service: the begin hook splits the pass's wheel input among last pass's takers.
 
 use craft_behavior::overlay::{Align, Side};
-use craft_behavior::{GESTURE_GAP, Sense, Wheel, WheelPhase, WheelTaker};
+use craft_behavior::{GESTURE_GAP, Sense, Wheel, WheelNotch, WheelPhase, WheelTaker, WheelUnit};
 use craft_host::target::Os;
 use craft_ui::contract::overlay::{Anchor, Place};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{
+    Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Pointer as _, Props as _, Role, Show as _, ShowContainer as _, Sizing,
+};
 use craft_ui::runtime::env::{RootEnv, WheelSpeed};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer;
@@ -380,4 +382,205 @@ fn the_users_wheel_speed_scales_each_delta_once_and_leaves_zoom_alone() {
             "{os:?}: a second window's delta is scaled too: {fast_secondary:?} against {secondary:?}"
         );
     }
+}
+
+/// The points of one wheel line for the takers below.
+const NOTCH: f32 = 25.0;
+
+/// A wheel taker that reads its share each pass, eases the share's line scroll as a canvas eases its line pan, and
+/// marks its gesture moved when asked: the `Pointer` methods, called as a component calls them. Each pass logs the
+/// share it took and the step its ease paid.
+#[derive(craft_ui::contract::Component)]
+struct Easer<'a> {
+    #[common]
+    common: Common,
+    mark: bool,
+    passes: &'a RefCell<Vec<(Option<Wheel>, Vec2)>>,
+}
+
+impl Component for Easer<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: EaserStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(200.0, 120.0))
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let share = cx.take_wheel();
+        if self.mark {
+            cx.mark_wheel_moved();
+        }
+        let pan = share.filter(|share| share.unit == WheelUnit::Line).map_or(Vec2::ZERO, |share| share.scroll);
+        let step = cx.ease_wheel(pan);
+        self.passes.borrow_mut().push((share, step));
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// A scroll of `dy` points from `source` in device phase `phase`.
+fn swipe(dy: f32, phase: TouchPhase, source: MouseWheelSource) -> Event {
+    Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::new(0.0, dy), phase, modifiers: Modifiers::NONE, source }
+}
+
+/// The shares logged since the last call.
+fn shares(log: &RefCell<Vec<(Option<Wheel>, Vec2)>>) -> Vec<Wheel> {
+    log.borrow_mut().drain(..).filter_map(|(share, _)| share).collect()
+}
+
+/// Two frames with no events, through the trial's own frame runner.
+fn idle(frames: &mut Frames, wheel: &mut impl FnMut(&mut Frames, Vec<Event>) -> Vec<Wheel>) {
+    for _ in 0..2 {
+        wheel(frames, Vec::new());
+    }
+}
+
+/// The steps logged since the last call, one per pass.
+fn steps(log: &RefCell<Vec<(Option<Wheel>, Vec2)>>) -> Vec<Vec2> {
+    log.borrow_mut().drain(..).map(|(_, step)| step).collect()
+}
+
+#[trial]
+fn a_wheel_gesture_keeps_its_gathered_scroll_across_a_momentum_run_and_starts_again_on_a_new_gesture() {
+    let (seen, other) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
+    let (mark, mark_other, rerun) = (Cell::new(false), Cell::new(false), Cell::new(false));
+    let at = Cell::new(Pos2::ZERO);
+    let mut show_frame = |ui: &mut egui::Ui| {
+        if rerun.take() {
+            ui.ctx().request_discard("the trial reruns the pass");
+        }
+        ui.horizontal(|ui| {
+            let owner = Easer { common: Common::new(), mark: mark.get(), passes: &seen }.id_salt("owner").show(ui);
+            let beside = Easer { common: Common::new(), mark: mark_other.get(), passes: &other }.id_salt("beside").show(ui);
+            for view in [&owner, &beside] {
+                register(ui.ctx(), WheelTaker::new(view.id, view.rect).vertical(true).notch(WheelNotch::Points(NOTCH)));
+            }
+            at.set(owner.rect.center());
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    frames.frame(vec![pointer::moved(at.get())], &mut show_frame);
+    let mut wheel = |frames: &mut Frames, events: Vec<Event>| -> Vec<Wheel> {
+        frames.frame(events, &mut show_frame);
+        shares(&other);
+        shares(&seen)
+    };
+    wheel(&mut frames, Vec::new());
+
+    // A line is the owner's notch in points, and the first share of a gesture gathers itself. The frame runs a second
+    // pass, which has no input and gathers nothing again.
+    rerun.set(true);
+    let first = wheel(&mut frames, vec![pointer::wheel_lines(-1.0)]);
+    assert_eq!(first.len(), 1, "one share, in the first pass: {first:?}");
+    let one = first[0];
+    assert_eq!(one.scroll.y.abs(), NOTCH, "a line is the owner's notch: {one:?}");
+    assert_eq!((one.gathered, one.moved), (one.scroll, false), "a gesture's first share gathers itself: {one:?}");
+
+    // Later shares gather on; another taker's mark leaves the gesture alone, the owner's marks it.
+    mark_other.set(true);
+    let two = wheel(&mut frames, vec![pointer::wheel_lines(-1.0)])[0];
+    mark_other.set(false);
+    mark.set(true);
+    let three = wheel(&mut frames, vec![pointer::wheel_lines(-1.0)])[0];
+    mark.set(false);
+    let four = wheel(&mut frames, vec![pointer::wheel_lines(-1.0)])[0];
+    assert_eq!(two.gathered, one.scroll + two.scroll, "the gesture gathers in its owner's points: {two:?}");
+    assert_eq!(three.gathered, two.gathered + three.scroll);
+    assert!(!two.moved && !three.moved, "another taker's mark is not the owner's: {three:?}");
+    assert!(four.moved && four.gathered == three.gathered + four.scroll, "the owner's mark holds for the gesture: {four:?}");
+
+    // The gap starts a new gesture.
+    frames.advance(GESTURE_GAP);
+    idle(&mut frames, &mut wheel);
+    let five = wheel(&mut frames, vec![pointer::wheel_lines(-1.0)])[0];
+    assert_eq!((five.gathered, five.moved), (five.scroll, false), "a new gesture after the gap starts again: {five:?}");
+
+    // So does a press, well within the gap.
+    mark.set(true);
+    wheel(&mut frames, vec![pointer::wheel_lines(-1.0)]);
+    mark.set(false);
+    wheel(&mut frames, vec![pointer::press(at.get())]);
+    wheel(&mut frames, vec![pointer::release(at.get())]);
+    let six = wheel(&mut frames, vec![pointer::wheel_lines(-1.0)])[0];
+    assert_eq!((six.gathered, six.moved), (six.scroll, false), "a press starts a new gesture: {six:?}");
+
+    // A momentum run right after its swipe's device end goes on with the swipe's gathered scroll and mark.
+    frames.advance(GESTURE_GAP);
+    idle(&mut frames, &mut wheel);
+    wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Start, MouseWheelSource::Trackpad)]);
+    mark.set(true);
+    wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Move, MouseWheelSource::Trackpad)]);
+    mark.set(false);
+    wheel(&mut frames, vec![swipe(0.0, TouchPhase::End, MouseWheelSource::Trackpad)]);
+    let run = wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Move, MouseWheelSource::Momentum)]);
+    assert!(run.first().is_some_and(|share| share.gathered.y == -30.0 && share.moved), "the momentum run continues its swipe: {run:?}");
+
+    // A momentum run that comes after the gap is a gesture of its own.
+    frames.advance(GESTURE_GAP);
+    idle(&mut frames, &mut wheel);
+    wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Start, MouseWheelSource::Trackpad)]);
+    wheel(&mut frames, vec![swipe(0.0, TouchPhase::End, MouseWheelSource::Trackpad)]);
+    frames.advance(GESTURE_GAP);
+    let late = wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Move, MouseWheelSource::Momentum)]);
+    assert!(late.first().is_some_and(|share| share.gathered == share.scroll && !share.moved), "a late momentum run starts again: {late:?}");
+}
+
+#[trial]
+fn direct_precise_input_cancels_only_older_motion_on_its_axis() {
+    let seen = RefCell::new(Vec::new());
+    let rerun = Cell::new(false);
+    let at = Cell::new(Pos2::ZERO);
+    let mut show_frame = |ui: &mut egui::Ui| {
+        if rerun.take() {
+            ui.ctx().request_discard("the trial reruns the pass");
+        }
+        let view = Easer { common: Common::new(), mark: false, passes: &seen }.id_salt("eased").show(ui);
+        register(ui.ctx(), WheelTaker::new(view.id, view.rect).horizontal(true).vertical(true).notch(WheelNotch::Points(NOTCH)));
+        at.set(view.rect.center());
+    };
+    let line = |dx: f32, dy: f32| Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: Vec2::new(dx, dy),
+        phase: TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+        source: MouseWheelSource::Wheel,
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    frames.frame(vec![pointer::moved(at.get())], &mut show_frame);
+    steps(&seen);
+
+    // A diagonal notch owes motion on both axes; the pass that fed it pays a first part, a second pass of the same
+    // frame pays nothing, and the next frame pays more.
+    rerun.set(true);
+    let passes = frames.frame(vec![line(-1.0, -1.0)], &mut show_frame);
+    let fed = steps(&seen);
+    assert_eq!((passes, fed.len()), (2, 2), "the frame ran two passes: {fed:?}");
+    assert!(fed[0].x < 0.0 && fed[0].y < 0.0 && fed[0].y > -NOTCH, "the notch pays part at once on both axes: {fed:?}");
+    assert_eq!(fed[1], Vec2::ZERO, "a second pass of the frame pays nothing");
+    let mut step = |frames: &mut Frames, events: Vec<Event>| -> Vec2 {
+        frames.frame(events, &mut show_frame);
+        steps(&seen).first().copied().unwrap_or(Vec2::ZERO)
+    };
+    let tail = step(&mut frames, Vec::new());
+    assert!(tail.x < 0.0 && tail.y < 0.0, "the owed motion keeps paying: {tail:?}");
+
+    // A trackpad scroll on y drops y's owed tail and only y's: x's keeps paying.
+    let cut = step(&mut frames, vec![swipe(-3.0, TouchPhase::Move, MouseWheelSource::Trackpad)]);
+    assert!(cut.x < 0.0 && cut.y == 0.0, "the point scroll stops the y tail and leaves the x tail: {cut:?}");
+    let after = step(&mut frames, Vec::new());
+    assert!(after.x < 0.0 && after.y == 0.0, "the y tail stays gone: {after:?}");
+
+    // Motion fed after the point scroll is newer than it, and pays.
+    let again = step(&mut frames, vec![line(0.0, -1.0)]);
+    assert!(again.y < 0.0, "a later notch eases again: {again:?}");
+
+    // A press drops every ease.
+    assert_eq!(step(&mut frames, vec![pointer::press(at.get())]), Vec2::ZERO, "a press stops the owed motion");
+    assert_eq!(step(&mut frames, vec![pointer::release(at.get())]), Vec2::ZERO);
 }

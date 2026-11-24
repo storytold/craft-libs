@@ -114,6 +114,9 @@ pub struct FrameOutput {
     /// press landed, in order: each as the key would have fired its first such command. The app says why it did not
     /// run (`commands::resolve`'s hint), as it does for a disabled menu row.
     pub dimmed: Vec<Fired>,
+    /// The app-scope commands a key press fired while only the app's own command state disabled them, in order.
+    /// Refusals by the gate or the modal rule are not listed.
+    pub declined: Vec<Fired>,
     /// Text for the live announcement region.
     pub announcements: Vec<String>,
     /// The chrome toggles the windows asked for since the last call, in order: each names its viewport and whether the
@@ -151,6 +154,8 @@ pub(crate) struct FrameState {
     root_passes_hooked: u64,
     prunes: HashMap<TypeId, fn(&Context, &[ViewportId])>,
     sweeps: HashMap<TypeId, fn(&Context)>,
+    /// What a layer above the runtime reads at the begin hook, after the pointer snapshot and before any component runs.
+    begins: HashMap<TypeId, fn(&Context)>,
     frame_layers: Option<fn(&Context)>,
 }
 
@@ -345,6 +350,14 @@ pub(crate) fn register_end_sweep(ctx: &Context, key: TypeId, sweep: fn(&Context)
     });
 }
 
+/// Registers a hook the begin hook runs for each viewport's pass after the pointer snapshot, once per service type:
+/// a service of a layer above the runtime reads its state there before any component runs.
+pub(crate) fn register_begin_hook(ctx: &Context, key: TypeId, hook: fn(&Context)) {
+    pass_state::with::<FrameState, _>(ctx, |state| {
+        state.begins.entry(key).or_insert(hook);
+    });
+}
+
 /// Before the pass: from eframe's `App::raw_input_hook`, or before `run_ui` in tests. A call during a pass,
 /// or after a pass whose plugin hooks did not run, is a debug assertion.
 pub fn set_input(ctx: &Context, input: FrameInput) {
@@ -432,6 +445,7 @@ pub fn take_output(ctx: &Context) -> FrameOutput {
     output.fired = commands::take_fired(ctx);
     output.delivered = commands::take_delivered(ctx);
     output.dimmed = commands::take_dimmed(ctx);
+    output.declined = commands::take_declined(ctx);
     // The menu, palette and automation fires of the chrome and nav commands reach the app as ordinary fires with no
     // window: the focused window's shell takes a toggle, and its focus service a pane move, in the next pass. A key fire
     // already acted in the key stage.
@@ -723,6 +737,10 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     // H5: the pointer snapshot, before any component runs.
     let input = frame_input.unwrap_or_else(|| FrameInput::new(RootEnv::fallback(&ctx)));
     pointer::begin(&ctx, frame_hit(&ctx), input.latched);
+    let begins: Vec<fn(&Context)> = pass_state::with::<FrameState, _>(&ctx, |state| state.begins.values().copied().collect());
+    for hook in begins {
+        hook(&ctx);
+    }
     drag::begin(&ctx);
     // H5: install the root `Env` and the theme styles' direction from `FrameInput.root`.
     let env = Env::from_root(&ctx, &input.root, input.host, scale::pixels_per_point(&ctx));

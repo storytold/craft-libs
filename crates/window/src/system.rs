@@ -88,14 +88,16 @@ impl WindowSystem for NoWindows {
 }
 
 /// The running platform's services. AppKit tells the pointer, the primary button and Cmd on macOS (with the
-/// `appkit` feature); elsewhere none is told. It warps no pointer and lists no monitors.
+/// `appkit` feature); Windows tells the pointer; elsewhere none is told. It warps no pointer and lists no monitors.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemWindows;
 
 impl WindowSystem for SystemWindows {
     /// AppKit measures from the bottom-left of the primary screen (the one with the menu bar, first in
     /// `NSScreen::screens`), y up; winit flips window positions against that screen's height, whichever screen a
-    /// window is on, so the pointer is flipped the same way.
+    /// window is on, so the pointer is flipped the same way. Windows tells physical pixels, and winit gives a window's
+    /// position as its physical pixels over the window's own scale, so the pointer is divided by the scale of the
+    /// window under it: the app's window wherever the pointer is over one.
     fn desktop_pointer(&self) -> Option<[f32; 2]> {
         #[cfg(all(feature = "appkit", target_os = "macos"))]
         {
@@ -106,7 +108,16 @@ impl WindowSystem for SystemWindows {
             let at = NSEvent::mouseLocation();
             Some([at.x as f32, (primary.frame().size.height - at.y) as f32])
         }
-        #[cfg(not(all(feature = "appkit", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            // Physical pixels whatever this thread's DPI awareness.
+            let at = winsafe::GetPhysicalCursorPos().ok()?;
+            let dpi = winsafe::HWND::WindowFromPhysicalPoint(at)?.GetDpiForWindow();
+            // 0 is an invalid window; 96 DPI is a scale of 1.
+            let scale = (dpi > 0).then(|| dpi as f32 / 96.0)?;
+            Some([at.x as f32 / scale, at.y as f32 / scale])
+        }
+        #[cfg(not(any(all(feature = "appkit", target_os = "macos"), windows)))]
         {
             None
         }

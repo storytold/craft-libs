@@ -42,7 +42,7 @@ fn a_zoom_command_ends_the_fit_and_fit_returns_to_it() {
 pub(crate) mod canvas_navigation {
     use craft_behavior::PixelSize;
     use craft_behavior::kurbo::Point;
-    use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource};
+    use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource, WheelScheme};
     use craft_ui::contract::Bind;
     use craft_ui::dialog::{FullWindowCanvas, FullWindowView};
     use craft_ui::primitives::Revision;
@@ -112,7 +112,7 @@ pub(crate) mod canvas_navigation {
         assert_eq!(plain.zoom(), fitted, "the plain wheel does not zoom by default");
 
         let mut navigation = NavigationOptions::default();
-        navigation.zoom_with_wheel = true;
+        navigation.wheel = WheelScheme::Zoom;
         navigation.animated_zoom = false;
         // Overscroll on: the fit leaves room around the image, and with Overscroll off an image still smaller than the
         // canvas after one notch is centred again, whatever the pointer.

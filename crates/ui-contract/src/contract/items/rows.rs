@@ -140,17 +140,17 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Whether the row at position `at` is selected.
     pub(super) fn holds(&self, at: usize) -> bool {
         let key = self.source.key(at);
-        self.selection.contains(RowAt::new(&key, at, self.source))
+        self.selection.contains(RowAt::new(&key, at, &*self.source))
     }
 
     /// The selection placed once in the source's order; the reads of a pass go by position.
     pub(super) fn placed(&self) -> PlacedSelection {
-        self.selection.placed(self.source)
+        self.selection.placed(&*self.source)
     }
 
     /// The keys of the selected rows of `selection`, in the display order.
     pub(super) fn selected_keys(&self, selection: &C::Selection) -> Vec<C::Key> {
-        selection.placed(self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
+        selection.placed(&*self.source).rows().into_iter().map(|at| self.source.key(at)).collect()
     }
 
     /// The positions a gesture on the row at `at` (a drag, a stacking key, Delete) acts on, in the display order: the
@@ -173,10 +173,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// of the layout), active and anchored at its first cell.
     pub(super) fn select_rows(&mut self, comp: &C, from: usize, to: usize) {
         let Some(mut cells) = self.selection.cells().cloned() else { return };
-        let source = self.source;
-        let space = comp.cell_space(CellSpace::new(source, self.columns));
-        let range = space.keyed_range(space.whole_rows(from as u32, to as u32));
-        if cells.select_range(range, &space) {
+        // The space borrows the source the hooks own: it ends before the change takes the hooks mutably.
+        let picked = {
+            let space = comp.cell_space(CellSpace::new(&*self.source, self.columns));
+            let range = space.keyed_range(space.whole_rows(from as u32, to as u32));
+            cells.select_range(range, &space)
+        };
+        if picked {
             self.change(cells.change());
         }
     }
@@ -184,7 +187,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Runs `f` with the grid of the collection's cells (17.7): the source's rows, the layout's columns with the rows
     /// and columns it hides left out, and what the collection adds (`Collection::cell_space`).
     fn with_cell_space<R>(&self, comp: &C, layout: &C::ItemLayout, f: impl FnOnce(&CellSpace<'_, C::Key>) -> R) -> R {
-        let source = self.source;
+        let source = &*self.source;
         let row_hidden = |row: u32| !layout.shown(row as usize);
         let column_hidden = |column: u32| !layout.column_shown(column as usize);
         let space = comp.cell_space(CellSpace::new(source, layout.column_count() as u32).hidden_rows(&row_hidden).hidden_columns(&column_hidden));

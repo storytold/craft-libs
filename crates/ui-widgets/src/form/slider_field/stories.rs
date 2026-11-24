@@ -28,6 +28,12 @@ fn slider_field_log(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     SliderField::new("Brush size", data.bind("size", 8.0), 1.0..=200.0).scale(SliderScale::Log).step(1.0).show(ui).into()
 }
 
+/// A whole-step slider whose field keeps finer typed values.
+#[story(SliderField<'static>, covers = [], drive = Drive::Never)]
+fn slider_field_typed_precision(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    SliderField::new("Size", data.bind("precise_size", 36.1231), 1.0..=100.0).step(1.0).typed_decimals(4).show(ui).into()
+}
+
 #[story(SliderField<'static>, covers = [Mixed], drive = Drive::Never)]
 fn slider_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     SliderField::new("Opacity", data.bind_mixed("mixed", Mixed::Mixed), PERCENT).show(ui).into()

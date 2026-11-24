@@ -17,6 +17,7 @@ pub(crate) mod drop_session;
 
 pub(crate) mod floating;
 pub(crate) mod floating_area;
+pub(crate) mod floating_rail;
 pub(crate) mod hidden;
 
 pub(crate) mod columns;

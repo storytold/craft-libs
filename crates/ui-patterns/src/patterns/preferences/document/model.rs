@@ -108,12 +108,14 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         insert(&mut self.draft.table, key, new);
     }
 
-    fn custom_row(&mut self, ui: &mut Ui, key: &str) {
-        self.custom.row(ui, key, &mut self.draft);
+    fn custom_row(&mut self, ui: &mut Ui, key: &str) -> bool {
+        let before = self.draft.clone();
+        self.custom.row(ui, key, &mut self.draft) || self.draft != before
     }
 
-    fn custom_page(&mut self, ui: &mut Ui, page: &str) {
-        self.custom.page(ui, page, &mut self.draft);
+    fn custom_page(&mut self, ui: &mut Ui, page: &str) -> bool {
+        let before = self.draft.clone();
+        self.custom.page(ui, page, &mut self.draft) || self.draft != before
     }
 
     fn reset_page(&mut self, page: &str) {

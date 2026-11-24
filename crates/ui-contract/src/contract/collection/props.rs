@@ -6,7 +6,7 @@ use crate::contract::{Notch, ScrollAnchor};
 pub use crate::runtime::env::RowPressed;
 use crate::runtime::env::{Counted, Label};
 use crate::style::StyleCx;
-use craft_behavior::{Axis, ColumnKey};
+use craft_behavior::{Axis, ColumnKey, CopyKeys, MiddleButton, ReorderKeys};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -25,21 +25,42 @@ pub enum SelectMode {
     Cells,
 }
 
+/// Where Delete and Backspace can target a deletable collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeleteTarget {
+    /// Only while the collection has keyboard focus.
+    #[default]
+    Focus,
+    /// Also while the pointer is over the collection and no text editor or modal owns the keys. Delete acts on the
+    /// picked rows, or on the current row when none are picked, falling back to the lead.
+    FocusOrHover,
+}
+
 /// How the user may reorder items.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReorderRule {
-    /// Alt turns a drag into a copy (8.4).
-    pub copy_with_alt: bool,
+    /// The held key that turns a drag into a copy (8.4); `None`: a drag only moves.
+    pub copy: Option<CopyKeys>,
     /// In a tree, a drop or a stacking-key move may land inside a group, and `ReorderMove::parent` names the group. A row
     /// that `has_children` is a group; an open group without visible children takes items through the middle of its row.
     pub into_groups: bool,
+    /// The key scheme that reorders the collection's items; default `Stacking`.
+    pub keys: ReorderKeys,
 }
 
 impl ReorderRule {
     /// A rule that only moves.
     pub const fn new() -> Self {
-        ReorderRule { copy_with_alt: false, into_groups: false }
+        ReorderRule { copy: None, into_groups: false, keys: ReorderKeys::Stacking }
+    }
+
+    /// The key scheme that reorders the items.
+    #[must_use]
+    pub const fn keys(mut self, keys: ReorderKeys) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// Items may land inside the groups of a tree.
@@ -49,10 +70,11 @@ impl ReorderRule {
         self
     }
 
-    /// Alt copies.
+    /// A drag with `keys` held copies: [`CopyKeys::Alt`] in a design app's layers, [`CopyKeys::Platform`] (Ctrl off
+    /// macOS) in a file or page grid.
     #[must_use]
-    pub const fn copy_with_alt(mut self) -> Self {
-        self.copy_with_alt = true;
+    pub const fn copy_with(mut self, keys: CopyKeys) -> Self {
+        self.copy = Some(keys);
         self
     }
 }
@@ -219,12 +241,16 @@ pub struct CollectionProps {
     pub marquee: bool,
     /// Delete and Backspace at the lead report `CollectionEvent::Delete`.
     pub deletable: bool,
+    /// Where a deletable collection takes Delete and Backspace.
+    pub delete_target: DeleteTarget,
     /// Map a row drag to the payloads that other drop targets take (8.4), one per type. A map starts row drags by
     /// itself, with or without a reorder rule.
     pub drag_payloads: Vec<DragPayload>,
     /// The count word the drag badge shows for the dragged items, one item included ("1 page", "3 pages"); `None`
     /// shows the number of items for several and the item's text for one.
     pub drag_count: Option<Counted>,
+    /// Whether a row drag shows its badge by the pointer. Off, the drag carries no preview.
+    pub drag_badge: bool,
     /// The collection takes the full height of its rows and owns no scroll, so it can sit inside a scrolling page:
     /// every row is built, the wheel and the keys that move past an end act on the page's scroll owner, and moving
     /// the lead scrolls the page to keep the row in view. For short collections only; a long one keeps its own
@@ -243,6 +269,13 @@ pub struct CollectionProps {
     pub command_click: bool,
     /// The distance one wheel notch scrolls the rows; unset, the default notch.
     pub notch: Option<Notch>,
+    /// What a middle press does: pan or latched auto-scroll.
+    pub middle_button: MiddleButton,
+    /// Only a primary press picks an item: a secondary click asks for the item's menu and leaves the selection, and a
+    /// middle press picks nothing. Off, every button's press picks the item under it.
+    pub primary_picks: bool,
+    /// Flip the direction of middle-button pan and auto-scroll.
+    pub invert_middle: bool,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
     /// that does not scroll along it too: a strip of tabs (`Axis::X`) sits in a page that scrolls vertically.
     pub overflow: Axis,
@@ -252,6 +285,10 @@ pub struct CollectionProps {
     /// The key of the current item (the page a document shows, the slide on screen). It is not the lead or the
     /// selection: the item shows the current mark and its access node reports itself as the current one of its set.
     pub current: Option<Arc<dyn Any + Send + Sync>>,
+    /// The selection is a pick kept beside the current item (Acrobat's Pages panel): a plain click on an item moves
+    /// the lead there and empties the selection, and Cmd/Ctrl- and Shift-clicks pick without moving the lead, counting
+    /// the current item as picked while nothing is. Off, a plain click selects the item it lands on.
+    pub picks_beside_current: bool,
     /// While a drag whose payload is neither the collection's own nor one of its drop kinds rests over an item that is
     /// not selected, the item becomes the lead and the selection in that pass.
     pub select_under_drag: bool,
@@ -329,17 +366,23 @@ impl CollectionProps {
             item_keys: ItemKeys::Own,
             marquee: false,
             deletable: false,
+            delete_target: DeleteTarget::Focus,
             drag_payloads: Vec::new(),
             drag_count: None,
+            drag_badge: true,
             natural_height: false,
             min_rows: 0,
             max_rows: None,
             row_height: RowHeight::Control,
             command_click: false,
             notch: None,
+            middle_button: MiddleButton::Pan,
+            primary_picks: false,
+            invert_middle: false,
             overflow: Axis::Y,
             pages: false,
             current: None,
+            picks_beside_current: false,
             select_under_drag: false,
             scroll_anchor: ScrollAnchor::Start,
         }
@@ -378,6 +421,13 @@ impl CollectionProps {
     #[must_use]
     pub fn carry(mut self, payload: DragPayload) -> Self {
         self.drag_payloads.push(payload);
+        self
+    }
+
+    /// Whether a row drag shows its badge by the pointer (on by default).
+    #[must_use]
+    pub const fn drag_badge(mut self, on: bool) -> Self {
+        self.drag_badge = on;
         self
     }
 
@@ -550,6 +600,13 @@ impl CollectionProps {
         self
     }
 
+    /// Sets where a deletable collection takes Delete and Backspace.
+    #[must_use]
+    pub const fn delete_target(mut self, target: DeleteTarget) -> Self {
+        self.delete_target = target;
+        self
+    }
+
     /// The collection takes its full content height and owns no scroll (see [`CollectionProps::natural_height`]).
     #[must_use]
     pub const fn natural_height(mut self, on: bool) -> Self {
@@ -592,6 +649,27 @@ impl CollectionProps {
         self
     }
 
+    /// What a middle press does: pan, or latched auto-scroll (see [`CollectionProps::middle_button`]).
+    #[must_use]
+    pub const fn middle_button(mut self, button: MiddleButton) -> Self {
+        self.middle_button = button;
+        self
+    }
+
+    /// Whether only a primary press picks an item (see [`CollectionProps::primary_picks`]).
+    #[must_use]
+    pub const fn primary_picks(mut self, on: bool) -> Self {
+        self.primary_picks = on;
+        self
+    }
+
+    /// Flips the direction of middle-button pan and auto-scroll (see [`CollectionProps::invert_middle`]).
+    #[must_use]
+    pub const fn invert_middle(mut self, on: bool) -> Self {
+        self.invert_middle = on;
+        self
+    }
+
     /// The wheel distance of one notch, with a text line `line` points high: the set notch, else the default.
     pub fn wheel_notch(&self, line: f32) -> craft_behavior::WheelNotch {
         self.notch.map_or(craft_behavior::WheelNotch::DEFAULT, |notch| notch.wheel(line))
@@ -609,6 +687,13 @@ impl CollectionProps {
     #[must_use]
     pub fn current<K: Send + Sync + 'static>(mut self, key: Option<K>) -> Self {
         self.current = key.map(|key| Arc::new(key) as Arc<dyn Any + Send + Sync>);
+        self
+    }
+
+    /// Keeps the selection a pick beside the current item (see [`CollectionProps::picks_beside_current`]).
+    #[must_use]
+    pub const fn picks_beside_current(mut self, on: bool) -> Self {
+        self.picks_beside_current = on;
         self
     }
 

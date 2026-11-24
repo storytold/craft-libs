@@ -1,5 +1,5 @@
 //! Trials of `ToolRail`: its columns for a width, its measure, a short room, its glyph role, its captions and its grid
-//! in a scope of its own.
+//! in a scope of its own; and the search of its drawer.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::super::FlyoutButton;
@@ -221,6 +221,58 @@ fn a_rail_with_a_compact_scope_of_its_own_fills_the_rail_grid_of_that_scope() {
         assert!(near(rail.width(), scoped.width(steps)), "{steps} steps: the rail is as wide as its compact columns: {rail:?}");
         assert!(button.width() < root_button.width(), "{steps} steps: a compact button {button:?} is smaller than a root one {root_button:?}");
     }
+}
+
+/// A searchable drawer over the Drawing (Move, Brush, Pencil) and Retouching (Eraser, Clone Stamp) groups, with the
+/// clone stamp titled "Klonstempel" as a translation would show it, after typing `query` into its search field.
+fn searched(query: &str) -> Fixture {
+    use crate::rails::drawer::{DrawerGroup, DrawerKind, ToolbarDrawer};
+    let mut fixture = Fixture::new(|ui| {
+        let groups = [DrawerGroup::new("Drawing", tools(&[0, 1, 2])), DrawerGroup::new("Retouching", tools(&[3, 4]))];
+        let rail = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(40.0, 400.0));
+        ToolbarDrawer::new(rail, &groups, &[], None).kind(DrawerKind::Searchable).show(ui);
+    });
+    fixture.command_state(super::stories::StoryTools::Stamp, crate::runtime::commands::CommandState::new().title("Klonstempel"));
+    fixture.room(Vec2::new(800.0, 600.0)).settle();
+    if !query.is_empty() {
+        let field = fixture.by_label("Search Tools").expect("the drawer shows its search field");
+        fixture.click(&field).type_text(query).settle();
+    }
+    fixture
+}
+
+/// The drawer finds a tool by its shown label, its English label or its command id, and keeps a group's heading only
+/// while one of the group's tools matches; an empty query shows every row.
+#[trial]
+fn a_searchable_drawer_keeps_a_heading_only_with_a_matching_tool() {
+    let shown = |fixture: &Fixture, label: &str| fixture.by_label(label).is_some();
+
+    let all = searched("");
+    for label in ["Drawing", "Move", "Brush", "Pencil", "Retouching", "Eraser", "Klonstempel"] {
+        assert!(shown(&all, label), "an empty query shows {label}");
+    }
+
+    let eraser = searched("eraser");
+    assert!(shown(&eraser, "Eraser") && shown(&eraser, "Retouching"), "the matching tool and its heading stay");
+    for label in ["Klonstempel", "Drawing", "Move", "Brush", "Pencil"] {
+        assert!(!shown(&eraser, label), "\"eraser\" hides {label}");
+    }
+
+    // Neither the shown label nor the command id (`railStory.stamp`) holds "clone": only the English label does.
+    let english = searched("clone");
+    assert!(shown(&english, "Klonstempel") && shown(&english, "Retouching"), "the English label finds the retitled stamp and keeps its heading");
+    for label in ["Move", "Brush", "Pencil", "Drawing", "Eraser"] {
+        assert!(!shown(&english, label), "\"clone\" hides {label}");
+    }
+
+    let titled = searched("klonstempel");
+    assert!(shown(&titled, "Klonstempel") && shown(&titled, "Retouching"), "the shown label finds the stamp");
+    assert!(!shown(&titled, "Drawing"), "\"klonstempel\" hides the other group's heading");
+
+    let id = tools(&[3])[0].command.id.clone();
+    let by_id = searched(&id);
+    assert!(shown(&by_id, "Eraser") && shown(&by_id, "Retouching"), "the command id {id} finds the eraser");
+    assert!(!shown(&by_id, "Drawing") && !shown(&by_id, "Brush"), "the command id {id} hides the other group");
 }
 
 /// What a rail scene saw: the footer's runs, the rail's reports and the Edit Toolbar response, per frame.

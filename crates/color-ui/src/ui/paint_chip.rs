@@ -20,7 +20,6 @@ use craft_ui::contract::{
     Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Meta as _, Outcome, Overlay, OverlayUi,
     Overlays as _, Pages, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
-use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetRowMenu, PresetState};
 use craft_ui::primitives::textures::CachedTexture;
@@ -217,7 +216,7 @@ pub struct PaintChipStyle {
     radius: egui::CornerRadius,
     /// The ring on the chip's outline.
     edge: StyleColor,
-    /// The fill of an empty chip: the field's.
+    /// The fill of a picture chip with no texture yet: the field's.
     none_fill: StyleColor,
     /// The No Color diagonal.
     none_mark: StyleColor,
@@ -594,7 +593,7 @@ impl Component for PaintChip<'_> {
         let solid = cx.memory::<LastSolid>().0.unwrap_or(self.fallback);
         let current = FillKind::of(&paint);
         let sampled = self.sampled;
-        let recent_cells: Vec<(Label, Srgba)> = self.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
+        let recent = self.recent;
         let full_picker = self.full_picker;
         let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
         let solid_now = if let Paint::Solid(color) = &paint { Some(*color) } else { None };
@@ -624,11 +623,12 @@ impl Component for PaintChip<'_> {
                             compact_picker(name.clone(), Bind::given(PickedColor::rgb(*color)), sampled).alpha(true).eyedropper(true).show(ui);
                         shown.edit = picked.events;
                         shown.screen_pick = picked.screen_pick;
-                        if !recent_cells.is_empty() {
-                            Text::new(words.recent.clone()).shade(Shade::Faint).show(ui);
+                        if !recent.is_empty() {
+                            // A palette of no swatches: the recent row alone, under its caption.
                             let mut chosen = *color;
-                            let recent = SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &recent_cells).show(ui);
-                            shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
+                            let row =
+                                SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &[]).recent(words.recent.clone(), recent).show(ui);
+                            shown.picked = row.picked;
                         }
                         if let Some((groups, state)) = swatches.as_mut() {
                             let groups: &[SwatchGroup] = groups;

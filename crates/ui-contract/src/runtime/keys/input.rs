@@ -56,6 +56,8 @@ struct Strip<'a> {
     label_selection: bool,
     /// A tool host claimed the lone Alt tap: it goes to the claimer on every OS, not to the menu bar.
     alt_claimed: bool,
+    /// The focus is in a menu (`FocusedRecord::menu`).
+    in_menu: bool,
     /// An Alt release in this input ended an Alt+numpad code (`raw_input::take_alt_code_ended`): the code's digits
     /// never reach this stage, so without this the release would read as a lone Alt.
     alt_code_ended: bool,
@@ -201,19 +203,30 @@ impl Strip<'_> {
                 batch.egui_texts += 1;
                 true
             }
-            KeyEvent::Clip { command, text, mods } if (self.edits)(command) && clip_is_edit(mods) => {
+            KeyEvent::Clip { command, pasted, mods } if (self.edits)(command) && clip_is_edit(mods) => {
                 batch.clips.push((command, batch.place));
-                if text.is_some() {
-                    batch.paste = text;
+                // A paste of text and one of an image in the same pass are one paste of both.
+                if let Some(pasted) = pasted {
+                    let content = batch.paste.get_or_insert_default();
+                    content.text = pasted.text.or(content.text.take());
+                    content.image = pasted.image.or(content.image.take());
                 }
                 false
             }
             KeyEvent::Clip { .. } if self.foreign => true,
             KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
-            KeyEvent::Clip { command, mods, .. } => {
-                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The web
-                // sends the chord's press as well.
+            // A clipboard event behind an open menu reaches nothing: the menu keeps it, as a platform menu does. The
+            // chord's own key press still runs its command, which closes the menu.
+            KeyEvent::Clip { .. } if self.in_menu => false,
+            KeyEvent::Clip { command, pasted, mods } => {
+                // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
+                // web sends the chord's press as well. A paste's content goes with the command the chord fires.
+                if let Some(pasted) = pasted.filter(|_| command == EditCommand::Paste) {
+                    let content = batch.app_paste.get_or_insert_default();
+                    content.text = pasted.text.or(content.text.take());
+                    content.image = pasted.image.or(content.image.take());
+                }
                 let (key, input) = clip_chord(command, mods);
                 let sent = batch
                     .shortcuts
@@ -629,6 +642,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = &input.latin_layout_chars;
+    let requested_paste = commands::board::has_pending_paste(ctx, viewport);
+    let mut requested_content = None::<commands::ClipContent>;
     // S-L177: an Alt chord's text is withheld only when the press can run its command; a bound command that is
     // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
     let bound = |chord: &Chord| commands::runs_now(ctx, viewport, chord);
@@ -659,6 +674,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             no_stops,
             label_selection: record.label_selection,
             alt_claimed: !stage.alt_claims.is_empty(),
+            in_menu: record.menu.is_some(),
             alt_code_ended,
             bound: &bound,
             repeats,
@@ -666,6 +682,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let mut batch = Batch::default();
         let mut visible = None;
         let mut later = Vec::new();
+        let mut released = false;
         stage.keyed = false;
         stage.stirred = false;
         stage.textless_paste = false;
@@ -679,17 +696,33 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             batch.place = place;
             place += 1;
             let read = raw_input::key_event(&arrived.event, os, latin, stage.alt.last.unwrap_or(Mods::NONE));
-            if !later.is_empty() || strip.ends_pass(&batch, &read) {
+            // Sensing commits a release during the pass, after the key stage. Let it finish before a later Escape;
+            // otherwise Escape would cancel a gesture that the user had already released.
+            let escape_after_release =
+                released && matches!(&read, KeyEvent::Press { key, input, .. } if matches!(strip.use_of(*key, input), PressUse::Escape));
+            if !later.is_empty() || escape_after_release || strip.ends_pass(&batch, &read) {
                 later.push(arrived.clone());
                 return false;
             }
+            released |= matches!(arrived.event, egui::Event::PointerButton { pressed: false, .. });
             // Read from the event the pass applies, so a held-back one is not read twice.
             batch.focus_lost |= matches!(arrived.event, egui::Event::WindowFocused(false));
+            if requested_paste && let KeyEvent::Clip { command: EditCommand::Paste, pasted: Some(content), .. } = &read {
+                let combined = requested_content.get_or_insert_default();
+                combined.text = content.text.clone().or(combined.text.take());
+                combined.image = content.image.clone().or(combined.image.take());
+                return false;
+            }
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             stage.stirred |= matches!(arrived.event, egui::Event::Key { repeat: false, .. });
-            stage.textless_paste |= matches!(read, KeyEvent::Clip { command: EditCommand::Paste, text: None, .. });
+            stage.textless_paste |=
+                matches!(&read, KeyEvent::Clip { command: EditCommand::Paste, pasted, .. } if pasted.as_ref().is_none_or(|c| c.text.is_none()));
             visible = match &read {
                 KeyEvent::PointerPress => Some(false),
+                // An accessibility activation is not the preceding key: a menu it opens must wait for its own navigation.
+                KeyEvent::Access(action) if matches!(action.kind(), raw_input::ActionKind::Click | raw_input::ActionKind::ShowContextMenu) => {
+                    Some(false)
+                }
                 KeyEvent::Press { .. } | KeyEvent::Text(_) => Some(true),
                 _ => visible,
             };
@@ -707,6 +740,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         }
         (batch, visible, later)
     });
+    if let Some(content) = requested_content {
+        commands::board::deliver_requested_paste(ctx, viewport, content);
+    }
     if let Some(visible) = visible {
         focus::set_visible(ctx, viewport, visible);
     }

@@ -562,7 +562,7 @@ impl<'a> ListManager<'a> {
                         list = list.empty(empty.clone());
                     }
                     if searchable {
-                        list = list.filter(text.as_str(), |at| Label::from(entries[*at].name.clone()));
+                        list = list.filter(text.as_str(), |at| vec![Label::from(entries[*at].name.clone())]);
                     }
                     if let Some(kind) = renames {
                         list = list.rename(true).can_rename(move |at| entries[*at].kind == kind);

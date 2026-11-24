@@ -1,7 +1,10 @@
 //! Stories of the buttons.
 
-use super::{Arrangement, Button, ButtonChord, ControlPlace, GroupLevel, IconButton, Link, PopupMark, SplitButton, SplitMenu, ToggleButton};
-use crate::contract::{BodyCx, Entry, LeastWidth, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger, Validity};
+use super::{
+    Arrangement, Button, ButtonChord, CommandSearch, ControlPlace, GroupLevel, IconButton, Link, PopupMark, PressFocus, SplitButton, SplitMenu,
+    ToggleButton,
+};
+use crate::contract::{Bind, BodyCx, Entry, LeastWidth, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger, Validity};
 use crate::display::{Picture, Shade, Text};
 use crate::layout_components::{Grid, Row, Stack};
 use crate::list::ThumbAspect;
@@ -74,6 +77,40 @@ fn button_loading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::new("Saving").icon(IconId::new("save")).loading(true).show(ui).into()
 }
 
+/// The command the search opener stories fire: an app command, so it is enabled in a story with no focused field. Its
+/// set is registered in every test binary that links the stories, so its chord keeps clear of the chords trials bind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
+#[command(prefix = "buttonStory", story)]
+enum SearchStoryCommand {
+    #[command(label = "Search", default = "Cmd+Shift+F")]
+    Open,
+}
+
+/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end.
+#[story(CommandSearch, covers = [Default])]
+fn command_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
+}
+
+/// In a narrow room the chord keeps its width and the placeholder is cut; the tooltip shows it whole.
+#[story(CommandSearch, covers = [LongText], drive = Drive::Never, title = "Narrow")]
+fn command_search_narrow(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    ui.set_max_width(ui.available_width() * 0.3);
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").show(ui).into()
+}
+
+#[story(CommandSearch, covers = [], drive = Drive::Never, title = "Disabled")]
+fn command_search_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "Search commands and settings").enabled(false).show(ui).into()
+}
+
+/// A right-to-left placeholder: the glyph at the reading start and the chord, which keeps its left-to-right order, at
+/// the reading end.
+#[story(CommandSearch, covers = [], drive = Drive::Never, group = "Right to left", title = "Right to left")]
+fn command_search_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CommandSearch::new(SearchStoryCommand::Open, "חיפוש פקודות והגדרות").show(ui).into()
+}
+
 #[story(IconButton<'static>, covers = [Default])]
 fn icon_button(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     IconButton::new(IconId::new("settings")).label("Settings").show(ui).into()
@@ -99,6 +136,16 @@ fn icon_button_choice(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
     });
     button.into()
+}
+
+/// A button whose press leaves the editor focused.
+#[story(IconButton<'static>, covers = [], drive = Drive::Never, title = "Keep focus")]
+fn icon_button_keep_focus(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        crate::text::TextField::new("Text", Bind::bound(data.value("focus_text", String::new()))).show(ui);
+        IconButton::new(IconId::new("close")).label("Close").press_focus(PressFocus::Keep).show(ui);
+    });
+    shown.into()
 }
 
 /// A tool strip: the first tool selected, as the gallery card shows it.

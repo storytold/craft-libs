@@ -173,6 +173,22 @@ fn arrows_move_through_a_radio_group_without_picking_and_enter_picks() {
     assert_eq!(picked.get(), 2, "Enter picks the focused radio");
 }
 
+/// A quiet check box (a thumbnail tile's) is a smaller box than the standard one.
+#[trial]
+fn a_quiet_check_box_is_smaller_than_the_standard_one() {
+    let side = |quiet: bool| {
+        let mut frames = Frames::new();
+        let shown = Cell::new(Rect::NOTHING);
+        let mut show = |ui: &mut Ui| {
+            shown.set(in_region(ui, REGION, |ui| Checkbox::new(Bind::given(false)).quiet(quiet).show(ui).response.rect));
+        };
+        frames.frame(vec![], &mut show);
+        frames.frame(vec![], &mut show);
+        shown.get().height()
+    };
+    assert!(side(true) < side(false), "quiet {} against standard {}", side(true), side(false));
+}
+
 /// A click on a field's label focuses its one control when the control sits in an unlabelled row beside text that
 /// takes no focus (a unit after a number field). The row makes its node by its type's role but reports none, so the
 /// label scope must still see the number field. Before that, the scope saw no control and the click did nothing.

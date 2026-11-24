@@ -190,7 +190,7 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
 
     fn with_cx<'a>(&mut self, core: &'a mut CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool) {
         let mut cx = self.cx(core, style);
-        let real = rest(&mut TypedPass { comp: self.comp.get(), hooks: &mut *self.hooks, cx: &mut cx });
+        let real = rest(&mut TypedPass { comp: self.comp.get(), hooks: &mut *self.hooks, cx: &mut cx, parts_value: None });
         self.finish(cx, real);
     }
 
@@ -264,6 +264,7 @@ struct TypedPass<'r, 'a, C: Component> {
     comp: &'r mut C,
     hooks: &'r mut dyn ShapeHooks<C>,
     cx: &'r mut Cx<'a, C>,
+    parts_value: Option<Arc<ValueOf<C>>>,
 }
 
 impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
@@ -313,6 +314,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool) {
+        self.parts_value = self.cx.shown.clone();
         let id = self.cx.core.id;
         let last = self.cx.core.memory.shown::<steps::Shown<ValueOf<C>>>(id).state.last_state;
         let measure = steps::measure_cx::<C>(input, self.cx.style, self.cx.core.resolved, self.cx.shown.as_deref());
@@ -332,6 +334,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         };
         self.comp.parts(rect, &mut pcx);
         self.hooks.parts(self.comp, rect, &mut pcx);
+    }
+
+    fn parts_value_changed(&self) -> bool {
+        self.parts_value.as_deref() != self.cx.shown.as_deref()
     }
 
     fn text(&mut self, ui: &mut Ui, step: &mut crate::contract::text::TextStep, keys: focus::KeyUse, rtl: bool, ink: egui::Color32, underline: f32) {
@@ -622,14 +628,14 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     Some(output)
 }
 
+/// The item step reads the collection's view of `source` (`Collection::filtered`) itself, so the view keeps the row
+/// whose rename runs.
 pub(crate) fn show_items<'r, C: Collection>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     source: &dyn ItemSource<C::Key>,
     item: &mut ItemFn<'r, C>,
 ) -> C::Output {
-    let view = held(slot).filtered(source, &Env::of(ui));
-    let source = view.as_deref().unwrap_or(source);
     let mut hooks = crate::contract::items::ItemsHooks::<C>::new(source, item);
     let mut typed = Typed::owned(slot, &mut hooks);
     super::run(&mut typed, ui, ShowAt::Flow, None);

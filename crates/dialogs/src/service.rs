@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use craft_host::{FileError, FileFilter, Files, PendingPick, PickAnswer, PickId, PickRequest, Wake};
+use craft_host::{FileError, FileFilter, Files, PendingPick, PickAnswer, PickId, PickRequest, Wake, WriteIntent};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 #[cfg(feature = "ui")]
@@ -294,6 +294,8 @@ struct Inner {
     pending: HashMap<PickId, Pending>,
     answered: VecDeque<PickAnswer>,
     last_folder: HashMap<String, PathBuf>,
+    /// The answers `Files::answer_next` gave, which the panels answer the next requests with.
+    forced: VecDeque<Answer>,
 }
 
 impl Inner {
@@ -308,7 +310,13 @@ impl FileService {
     // pc: apps/photocraft/src/services.rs:203 show_file_dialog; crates/ui-egui/src/file_dialog.rs:310 poll_file_dialog
     pub fn new(wake: Wake) -> (Self, FilePanels) {
         probe::start();
-        let inner = Arc::new(Mutex::new(Inner { next: 0, pending: HashMap::new(), answered: VecDeque::new(), last_folder: HashMap::new() }));
+        let inner = Arc::new(Mutex::new(Inner {
+            next: 0,
+            pending: HashMap::new(),
+            answered: VecDeque::new(),
+            last_folder: HashMap::new(),
+            forced: VecDeque::new(),
+        }));
         let (to_panels, requests) = std::sync::mpsc::channel();
         let panels = FilePanels {
             inner: inner.clone(),
@@ -398,7 +406,12 @@ impl FilePanels {
     /// the answer becomes a [`PickAnswer`].
     // pc: crates/ui-egui/src/file_dialog.rs:310 poll_file_dialog, :349 finish_file_dialog, :365 saved_path
     pub fn pump<W: HasWindowHandle + HasDisplayHandle>(&mut self, parent: Option<&W>) {
-        self.start_requests();
+        // Forced answers settle first, with no panel.
+        for (id, answer) in self.start_requests() {
+            if let Some(question) = self.finish(id, answer, false) {
+                self.dialogs.ask_message(self.replace_message(&question.settled), id);
+            }
+        }
         self.cancel_forgotten();
         // A replace question queued by `finish` shows in the same pass, so the loop runs until no
         // answer is left to settle.
@@ -433,7 +446,11 @@ impl FilePanels {
         self.collect_prompt_answers(dialogs);
         self.collect_chooser_answers(dialogs);
         while let Ok((id, request)) = self.requests.try_recv() {
-            if request.fallback {
+            if let Some(answer) = self.forced_answer(id) {
+                if let Some(question) = self.finish(id, answer, false) {
+                    self.prompts.push(AskedPrompt { id, question, dialog: None });
+                }
+            } else if request.fallback {
                 self.choosers.push(AskedChooser { id, request, cause: None, dialog: None });
             } else {
                 self.ask_panel(id, &request);
@@ -576,11 +593,28 @@ impl FilePanels {
         }
     }
 
-    /// Drains the requests the service queued into the native panels' queue.
-    fn start_requests(&mut self) {
+    /// Drains the requests the service queued into the native panels' queue. A request that finds
+    /// a forced answer waiting takes it instead of a panel; those answers are returned for the
+    /// caller to settle.
+    fn start_requests(&mut self) -> Vec<(PickId, Answer)> {
+        let mut forced = Vec::new();
         while let Ok((id, request)) = self.requests.try_recv() {
-            self.ask_panel(id, &request);
+            match self.forced_answer(id) {
+                Some(answer) => forced.push((id, answer)),
+                None => self.ask_panel(id, &request),
+            }
         }
+        forced
+    }
+
+    /// The oldest answer [`Files::answer_next`] gave, taken for pick `id`. A ticket forgotten
+    /// before it got here takes none, which leaves the answer for the next request.
+    fn forced_answer(&self, id: PickId) -> Option<Answer> {
+        let mut inner = lock(&self.inner);
+        if !inner.pending.contains_key(&id) {
+            return None;
+        }
+        inner.forced.pop_front()
     }
 
     /// Queues the native panel of pick `id`.
@@ -675,7 +709,8 @@ impl FilePanels {
     /// cause. A Save that needs the replace
     /// question stays pending and returns the question for the caller to ask. The answer of a
     /// forgotten pick is dropped. `from_panel` says a native panel answered, not the fallback
-    /// chooser, whose Cancel is always the user's.
+    /// chooser, whose Cancel is always the user's, nor a forced answer ([`Files::answer_next`]),
+    /// whose Cancel is the caller's.
     fn finish(&mut self, id: PickId, answer: Answer, from_panel: bool) -> Option<ReplaceQuestion> {
         let Pending { request, forgotten, awaiting_replace, bytes } = lock(&self.inner).pending.remove(&id)?;
         if forgotten {
@@ -697,7 +732,20 @@ impl FilePanels {
                 Picked::Saved { path: settled, file_type: filter }
             }
             (Answer::Paths(paths), _) if paths.is_empty() => Picked::Cancelled,
-            (Answer::Paths(paths), _) => Picked::Paths(paths),
+            (Answer::Paths(mut paths), _) => {
+                if request.kind == PickKind::Save && paths.len() == 1 {
+                    let path = paths.remove(0);
+                    let settled = Self::settled_save_path(self.extension_policy, &path, &request, None);
+                    if self.replace_guard == ReplaceGuard::AskWhenUnasked && Self::replaces_unasked(&path, &settled) {
+                        let question = ReplaceQuestion { answered: path, settled, file_type: None };
+                        lock(&self.inner).pending.insert(id, Pending { request, forgotten: false, awaiting_replace: Some(question.clone()), bytes });
+                        return Some(question);
+                    }
+                    Picked::Paths(vec![settled])
+                } else {
+                    Picked::Paths(paths)
+                }
+            }
             (Answer::Unavailable(why), _) => Picked::Unavailable(why),
             // A panel that answers nothing on a system without a dialog backend did not get
             // cancelled; the probe knows why.
@@ -794,8 +842,14 @@ impl Files for FileService {
         std::fs::read(path).map_err(|e| file_error(e, path))
     }
 
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        write_file(path, bytes)
+    // A desktop app has no host page: every intent writes the path, and no page took the bytes.
+    fn write(&self, path: &Path, bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
+        write_file(path, bytes)?;
+        Ok(false)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
     }
 
     /// Queues a Save pick, then writes `bytes` to the settled path and answers `Saved` or
@@ -814,6 +868,22 @@ impl Files for FileService {
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).last_folder.get(purpose).cloned()
+    }
+
+    /// Answers the next pick with `picked` instead of showing a panel, through the settling a native answer passes.
+    /// `Picked::Contents`, `Failed` and `Downloaded` have no `Answer` form: they are `Err(FileError::Unsupported)`.
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let answer = match picked {
+            Picked::Paths(paths) => Answer::Paths(paths),
+            Picked::Saved { path, .. } => Answer::Saved { path, filter: None },
+            Picked::Cancelled => Answer::Cancelled,
+            Picked::Unavailable(why) => Answer::Unavailable(why),
+            // A native service reads paths; it has no file contents to hand over, and a write's
+            // outcome is its own to report.
+            Picked::Contents(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(FileError::Unsupported),
+        };
+        lock(&self.inner).forced.push_back(answer);
+        Ok(())
     }
 }
 
@@ -916,6 +986,40 @@ pub(crate) mod service_tests {
         let add_only = ExtensionPolicy { lowercase: false, add_suggested: true, picked_type: false };
         assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.PNG"), "adding does not lowercase");
         assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.png"));
+    }
+
+    // A forced answer answers the next pick with no panel, through the same settling: the folder
+    // is remembered and a Save gets the extension policy. The pick after it reaches the panel, and
+    // a forced cancel stays a cancel on a system without a dialog backend.
+    #[trial]
+    fn a_forced_answer_answers_the_next_pick_without_a_panel() {
+        let (service, mut panels, log) = service_with(vec![]);
+        let dir = PathBuf::from("/x/forced");
+        assert_eq!(service.answer_next(Picked::Paths(vec![dir.join("a.pdf")])), Ok(()));
+        let forced = service.pick(PickRequest::open("document"));
+        panels.pump(NONE);
+        assert_eq!(answered(&service, forced), Picked::Paths(vec![dir.join("a.pdf")]));
+        assert!(log.borrow().is_empty(), "no request reached a panel");
+        assert!(service.pending_pick().is_none());
+        assert_eq!(service.last_folder("document"), Some(dir.clone()));
+
+        let shown = service.pick(PickRequest::open("document"));
+        panels.pump(NONE);
+        assert_eq!(log.borrow().len(), 1, "the next pick reaches the panel");
+        assert_eq!(answered(&service, shown), Picked::Cancelled);
+
+        assert_eq!(service.answer_next(Picked::Paths(vec![dir.join("Report")])), Ok(()));
+        let saved = service.pick(PickRequest::save("export").suggested_extension("pdf"));
+        panels.pump(NONE);
+        assert_eq!(answered(&service, saved), Picked::Paths(vec![dir.join("Report.pdf")]), "the extension policy completes it");
+        assert_eq!(log.borrow().len(), 1);
+
+        panels.backend_problem = || Some("no dialog backend".into());
+        assert_eq!(service.answer_next(Picked::Cancelled), Ok(()));
+        let cancelled = service.pick(PickRequest::open("document"));
+        panels.pump(NONE);
+        assert_eq!(answered(&service, cancelled), Picked::Cancelled);
+        assert_eq!(service.answer_next(Picked::Contents(vec![])), Err(FileError::Unsupported));
     }
 
     // The panel asked about the file it answered; the extension change can name another existing
@@ -1139,6 +1243,23 @@ pub(crate) mod service_tests {
         assert_eq!((asked.request.kind, asked.sheet), (PickKind::Save, cfg!(target_os = "macos")), "a Save is a sheet on macOS only");
         assert!(service.pending_pick().is_none(), "answered");
         assert_eq!(answered(&service, id), Picked::Cancelled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // `FileService::exists` checks the real file system, so batch writers on desktop see files already on disk.
+    #[trial]
+    fn exists_checks_the_file_system() {
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-exists-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let present = dir.join("present.pdf");
+        let missing = dir.join("missing.pdf");
+        let _ = std::fs::remove_file(&present);
+        let _ = std::fs::remove_file(&missing);
+        let (service, _panels) = FileService::new(Wake::none());
+        assert!(!service.exists(&present));
+        assert_eq!(service.write(&present, b"data", WriteIntent::SaveAs), Ok(false));
+        assert!(service.exists(&present));
+        assert!(!service.exists(&missing));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

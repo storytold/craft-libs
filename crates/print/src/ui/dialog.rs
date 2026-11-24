@@ -5,40 +5,46 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use craft_behavior::{CursorIcon, EditEvent, EditEvents, IconId, Metrics, Mixed, PartKey, PointerButton, PressPhase, Sense, Value, keyed};
-use craft_ui::buttons::IconButton;
+use craft_theme::variant::Tone;
+use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
-    Props as _, Remember as _, Role, Show as _, ShowContainer as _, Validity, WordSetCx as _, clicked,
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Input, LabelScheme, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx,
+    Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Validity, WordSetCx as _, clicked,
 };
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
+use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ListRow;
+use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, FormDialog, HostRequests, Param, ParamRows, SectionList, set_color_field, set_param_field,
+    DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamKind, ParamRows, SectionList, set_color_field,
+    set_param_field,
 };
 use craft_ui::patterns::presets::{
     NameCheck, NameRefuses, NamedPresetEvent, NamedPresetRow, Naming, PickerField, PresetError, PresetPicker, PresetRow, PresetSource, PresetState,
     PresetWords,
 };
+use craft_ui::primitives::{ContentPainterCx, TextRun, Wrap, fill_polygon};
 use craft_ui::runtime::env::{Env, Label, Message};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::requests::HostAnswer;
-use craft_ui::sections::{DialogRole, FooterButton, Section};
-use craft_ui::style::{ComponentStyle, Corners, RuleKind, StyleCx, SurfaceKind, TypeRole};
+use craft_ui::sections::{DialogRole, FooterButton, HeaderStrength, Section};
+use craft_ui::style::{ComponentStyle, Corners, RuleKind, StyleColor, StyleCx, SurfaceKind, TypeRole};
 use craft_ui::text::TextField;
 use egui::load::SizedTexture;
-use egui::{Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
+use egui::{Color32, Mesh, Pos2, Rect, Response, Shape, TextureId, Ui, Vec2, pos2, vec2};
 
-use super::panel::{MOST_COPIES, PrintPanel, PrintPanelLayout};
-use super::{Duplex, Printer, Settings, State};
+use super::panel::{Destinations, DriverControls, MOST_COPIES, PrintPanel, PrintPanelLayout, PrintWords};
+use super::{Destination, Duplex, Printer, Settings, State};
 
 craft_ui::words! {
     /// The words of the print dialog.
     pub struct PrintDialogWords {
         title: "printDialog.title" = "Print Settings";
+        title_document: "printDialog.titleDocument" = "Print";
         print: "printDialog.print" = "Print";
         done: "printDialog.done" = "Done";
         preview: "printDialog.preview" = "Print preview image";
@@ -55,11 +61,17 @@ craft_ui::words! {
     }
 }
 
-/// The index `FormOutput::picked` gives the Done button: Print is 0, Cancel 1, and the extra buttons start at 2.
+/// The index `FormOutput::picked` gives the Print button: Print is 0, Cancel 1, and the extra buttons start at 2.
+const PRINT_BUTTON: usize = 0;
+
+/// The index `FormOutput::picked` gives the Done button of the `Image` layout, its one extra button.
 const DONE_BUTTON: usize = 2;
 
 /// The image box of the preview.
 const IMAGE: PartKey = PartKey::new("image");
+
+/// The message a preview shows instead of a sheet.
+const MESSAGE: PartKey = PartKey::new("message");
 
 /// How far a crop or registration mark stands from the image box, and how long it is, in screen points.
 const MARK_GAP: f32 = 4.0;
@@ -81,6 +93,68 @@ pub struct PrintMarks {
     pub labels: bool,
 }
 
+/// How the print dialog is arranged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintLayout {
+    /// The preview at the start edge, the printer panel and the sections at the end edge.
+    #[default]
+    Image,
+    /// Printer Setup and the app's sections in a scrolling column, then the sheet preview, its pager, the readout and
+    /// the notes at the end edge; no Done button.
+    Document,
+    /// The preset row, the printer row and the header rows above a list of sections beside the shown one, with the
+    /// preview under the list.
+    Sections,
+}
+
+/// What the sheet preview shows on the paper.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum SheetContent {
+    /// One image box holding a picture; the box can be dragged.
+    #[non_exhaustive]
+    Image {
+        /// The image box on the paper.
+        image: egui::Rect,
+        /// The picture of the document.
+        picture: SizedTexture,
+    },
+    /// The pages placed on the sheet, clipped to the paper.
+    Pages(Vec<SheetPage>),
+    /// A message centred in the preview, with no paper.
+    Message(Label),
+}
+
+/// One page placed on a sheet.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SheetPage {
+    /// The page's corners on the paper, in paper points.
+    pub corners: [Pos2; 4],
+    /// The page's picture; none draws a muted stand-in with `number` centred.
+    pub picture: Option<TextureId>,
+    /// The part of the picture to draw.
+    pub uv: egui::Rect,
+    /// The page's number, shown on the stand-in.
+    pub number: String,
+}
+
+impl SheetPage {
+    /// A page at `corners` with no picture, numbered `number`.
+    pub fn new(corners: [Pos2; 4], number: impl Into<String>) -> Self {
+        SheetPage { corners, picture: None, uv: Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), number: number.into() }
+    }
+
+    /// The page's picture `id` and the part `uv` of it to draw.
+    #[must_use]
+    pub fn picture(mut self, id: TextureId, uv: egui::Rect) -> Self {
+        self.picture = Some(id);
+        self.uv = uv;
+        self
+    }
+}
+
 /// What the app's layout says for this pass, in points.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -89,11 +163,7 @@ pub struct PrintSheet {
     pub paper: egui::Vec2,
     /// The printable area of the paper, when the printer says.
     pub printable: Option<egui::Rect>,
-    /// The image box on the paper.
-    pub image: egui::Rect,
-    /// The picture of the document.
-    pub picture: SizedTexture,
-    /// The marks to draw.
+    /// The marks to draw, around the image box or the pages.
     pub marks: PrintMarks,
     /// The readout under the preview.
     pub readout: Label,
@@ -101,13 +171,77 @@ pub struct PrintSheet {
     pub count: usize,
     /// The outline of each sheet on the paper, in paper points, for a document that prints on several.
     pub outlines: Vec<egui::Rect>,
+    /// What the sheet shows on the paper.
+    pub content: SheetContent,
+    /// The borders drawn around the pages, in paper points.
+    pub borders: Vec<egui::Rect>,
+    /// The cut lines, in paper points.
+    pub cuts: Vec<[Pos2; 2]>,
+    /// The notes under the readout.
+    pub notes: Vec<Label>,
 }
 
 impl PrintSheet {
     /// A sheet of `paper` with the image box `image` holding `picture`, `readout` under the preview, no printable area
     /// and no marks.
     pub fn new(paper: egui::Vec2, image: egui::Rect, picture: SizedTexture, readout: Label) -> Self {
-        PrintSheet { paper, printable: None, image, picture, marks: PrintMarks::default(), readout, count: 1, outlines: Vec::new() }
+        Self::of(paper, SheetContent::Image { image, picture }, readout)
+    }
+
+    /// A sheet of `paper` holding `pages`, with `readout` under the preview.
+    pub fn pages(paper: Vec2, pages: Vec<SheetPage>, readout: Label) -> Self {
+        Self::of(paper, SheetContent::Pages(pages), readout)
+    }
+
+    /// A preview showing `message` instead of a sheet, with `readout` under it. `paper` keeps the preview the size the
+    /// sheets around it take.
+    pub fn message(paper: Vec2, message: Label, readout: Label) -> Self {
+        Self::of(paper, SheetContent::Message(message), readout)
+    }
+
+    /// A sheet of `paper` showing `content`, with no printable area, no marks, borders, cuts or notes.
+    fn of(paper: Vec2, content: SheetContent, readout: Label) -> Self {
+        PrintSheet {
+            paper,
+            printable: None,
+            marks: PrintMarks::default(),
+            readout,
+            count: 1,
+            outlines: Vec::new(),
+            content,
+            borders: Vec::new(),
+            cuts: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    /// The image box of an `Image` sheet; none for pages or a message.
+    pub(super) fn image_box(&self) -> Option<Rect> {
+        match &self.content {
+            SheetContent::Image { image, .. } => Some(*image),
+            SheetContent::Pages(_) | SheetContent::Message(_) => None,
+        }
+    }
+
+    /// The borders drawn around the pages.
+    #[must_use]
+    pub fn borders(mut self, borders: Vec<egui::Rect>) -> Self {
+        self.borders = borders;
+        self
+    }
+
+    /// The cut lines.
+    #[must_use]
+    pub fn cuts(mut self, cuts: Vec<[Pos2; 2]>) -> Self {
+        self.cuts = cuts;
+        self
+    }
+
+    /// The notes under the readout.
+    #[must_use]
+    pub fn notes(mut self, notes: Vec<Label>) -> Self {
+        self.notes = notes;
+        self
     }
 
     /// The printable area of the paper.
@@ -137,17 +271,6 @@ impl PrintSheet {
         self.outlines = outlines;
         self
     }
-}
-
-/// How the print dialog arranges its sections.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PrintLayout {
-    /// Every section stacked under the printer panel.
-    #[default]
-    Stacked,
-    /// A list of sections beside the shown section.
-    Sections,
 }
 
 /// What the print dialog is for.
@@ -188,12 +311,79 @@ pub struct PrintSection {
     pub title: Label,
     /// Its rows.
     pub params: Vec<Param>,
+    /// Whether the section can fold, and whether it starts open; `None` is a fixed section.
+    folded: Option<bool>,
+    /// The title-row buttons: the id a press files, the label and whether the button is enabled.
+    buttons: Vec<(String, Label, bool)>,
+    /// The rows stand without the section's heading in a document dialog (`PrintLayout::Document`).
+    untitled: bool,
 }
 
 impl PrintSection {
     /// The section titled `title` with its `params` rows.
     pub fn new(title: impl Into<Label>, params: Vec<Param>) -> Self {
-        Self { title: title.into(), params }
+        Self { title: title.into(), params, folded: None, buttons: Vec::new(), untitled: false }
+    }
+
+    /// Collapses the section when `open` is false, through `Section::initially_open`.
+    #[must_use]
+    pub fn folded(mut self, open: bool) -> Self {
+        self.folded = Some(open);
+        self
+    }
+
+    /// In a document dialog (`PrintLayout::Document`) the section's rows follow the ones above with no heading of their
+    /// own, as production's Paper rows follow Two-sided.
+    #[must_use]
+    pub fn untitled(mut self) -> Self {
+        self.untitled = true;
+        self
+    }
+
+    /// A title-row button; a press is filed as `HostRequests::request_action(id)`.
+    #[must_use]
+    pub fn button(mut self, id: impl Into<String>, label: impl Into<Label>, enabled: bool) -> Self {
+        self.buttons.push((id.into(), label.into(), enabled));
+        self
+    }
+
+    /// Shows the section with its rows over `values`. Its rows' requests and a title button's press go into `requests`.
+    fn show(&self, ui: &mut Ui, at: usize, inline: bool, values: &mut DialogFields, requests: &mut HostRequests) {
+        // Declared before `section`, whose controls closure borrows it.
+        let mut pressed = None;
+        // A document dialog's rows: the captions at the row start, the heading a small caption over them.
+        let rows = |ui: &mut Ui, values: &mut DialogFields, requests: &mut HostRequests| {
+            let rows = ParamRows::new(self.title.clone(), &self.params, Bind::bound(&mut *values)).heading(self.title.clone());
+            let mut rows = if inline { rows.labels(LabelScheme::Inline) } else { rows }.show(ui);
+            requests.absorb(&mut rows);
+        };
+        if inline && self.untitled && self.buttons.is_empty() {
+            rows(ui, values, requests);
+            return;
+        }
+        let mut section = match self.folded {
+            Some(open) => Section::new(self.title.clone()).initially_open(open),
+            None => Section::fixed(self.title.clone()),
+        };
+        if !self.buttons.is_empty() {
+            let buttons = &self.buttons;
+            let pressed = &mut pressed;
+            section = section.controls(move |ui, _| {
+                for (id, label, enabled) in buttons {
+                    let button = Button::new(label.clone()).enabled(*enabled).id_salt(id.as_str()).show(ui);
+                    if clicked(&button) {
+                        *pressed = Some(id.clone());
+                    }
+                }
+            });
+        }
+        if inline {
+            section = section.strength(HeaderStrength::Overline);
+        }
+        section.id_salt(("section", at)).show(ui, |ui, _| rows(ui, values, requests));
+        if let Some(id) = pressed {
+            requests.request_action(id);
+        }
     }
 }
 
@@ -207,6 +397,9 @@ pub enum PrintFinish {
     Done,
 }
 
+/// The margin round the paper in the preview's well, as a share of the well's width (production's is about 4%).
+const PAPER_INSET: f32 = 0.04;
+
 /// Where the paper stands in the preview's room: the paper's top-left corner and the screen points per paper point.
 #[derive(Clone, Copy)]
 struct Placement {
@@ -217,16 +410,65 @@ struct Placement {
 impl Placement {
     /// The screen rect of `paper`, a rect in paper points.
     fn rect(self, paper: Rect) -> Rect {
-        Rect::from_min_size(self.origin + paper.min.to_vec2() * self.scale, paper.size() * self.scale)
+        Rect::from_min_size(self.point(paper.min), paper.size() * self.scale)
+    }
+
+    /// The screen point of `at`, a point in paper points.
+    fn point(self, at: Pos2) -> Pos2 {
+        self.origin + at.to_vec2() * self.scale
     }
 }
 
-/// The style of the preview: the room it asks for.
+/// The style of the preview: the room it asks for, the stand-in of a page with no picture and the text it shows.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub(super) struct PrintPreviewStyle {
     #[style(metrics)]
     metrics: Metrics,
+    /// The fill of a page with no picture.
+    stand_in: StyleColor,
+    /// A stand-in's number and the message shown instead of a sheet.
+    ink: StyleColor,
+}
+
+/// What a grayscale job's pictures are multiplied by: the light grey of production's preview. The vertex colour only
+/// scales the picture's channels; the picture itself is rendered grey by the app.
+const GRAYSCALE_TINT: Color32 = Color32::from_gray(235);
+
+/// The textured quad of a page: `corners` (screen points) are the picture's top-left, top-right, bottom-right and
+/// bottom-left, paired in that order with `uv`'s corners, so a turned placement turns the picture with it.
+fn page_quad(texture: TextureId, corners: [Pos2; 4], uv: Rect, tint: Color32) -> Mesh {
+    let mut mesh = Mesh::with_texture(texture);
+    let uvs = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
+    for (pos, uv) in corners.into_iter().zip(uvs) {
+        // White leaves the picture's own colours: the vertex colour multiplies the texture.
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: tint });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    mesh
+}
+
+/// Paints `run` centred on `centre`.
+fn centred_text(painter: &ContentPainterCx<'_>, run: &TextRun<'_>, centre: Pos2, width: f32) {
+    painter.with_draw(|draw| {
+        let layout = draw.layout(run, width);
+        draw.galley(centre - layout.size() / 2.0, &layout);
+    });
+}
+
+/// Paints `page` at `place`: its picture as a textured quad, or a stand-in with its number centred.
+fn paint_page(painter: &ContentPainterCx<'_>, style: &PrintPreviewStyle, place: Placement, page: &SheetPage, tint: Color32) {
+    let corners = page.corners.map(|corner| place.point(corner));
+    match page.picture {
+        Some(texture) => painter.data_shapes([Shape::mesh(page_quad(texture, corners, page.uv, tint))]),
+        None => {
+            painter.data_shapes([Shape::mesh(fill_polygon(&corners, style.stand_in.egui(), 0.0))]);
+            let centre = Pos2::ZERO + corners.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
+            let run = TextRun::new(page.number.as_str()).role(TypeRole::Caption).color(style.ink);
+            centred_text(painter, &run, centre, f32::INFINITY);
+        }
+    }
 }
 
 /// The paper, its printable area, the picture in its box and the marks. The value is where the image box's top-left
@@ -240,19 +482,29 @@ pub(super) struct PrintPreview<'a> {
     sheet: &'a PrintSheet,
     /// The image box's top-left corner on the paper, in paper points.
     position: Bind<'a, Pos2>,
+    /// The preview of a job that prints in grayscale (`on`): the pictures stand tinted grey, as production's do.
+    #[prop(vis = "pub(super)")]
+    grayscale: bool,
 }
 
 impl<'a> PrintPreview<'a> {
     pub(super) fn new(label: impl Into<Label>, sheet: &'a PrintSheet, position: Bind<'a, Pos2>) -> Self {
-        PrintPreview { common: Common::new(), sheet, position }.label(label)
+        PrintPreview { common: Common::new(), sheet, position, grayscale: false }.label(label)
     }
 
-    /// The paper fitted in `room`, centred; none while the paper has no area.
+    /// The colour the pictures are multiplied by.
+    fn tint(&self) -> Color32 {
+        // design: allow[raw-colour/const](a white tint leaves the page picture's own colours unchanged)
+        if self.grayscale { GRAYSCALE_TINT } else { Color32::WHITE }
+    }
+
     fn place(&self, room: Rect) -> Option<Placement> {
         let paper = self.sheet.paper;
         if !(paper.x > 0.0 && paper.y > 0.0) {
             return None;
         }
+        // The paper stands inset in its well, as production's does: a margin of the well's own colour round the sheet.
+        let room = room.shrink(room.width() * PAPER_INSET);
         let scale = (room.width() / paper.x).min(room.height() / paper.y);
         if !(scale.is_finite() && scale > 0.0) {
             return None;
@@ -270,15 +522,23 @@ impl Component for PrintPreview<'_> {
     type Style = PrintPreviewStyle;
     type Output = PrintPreviewOutput;
 
-    fn style(_: &StyleCx<'_>, _: PrintPreviewStyleKey) -> PrintPreviewStyle {
-        PrintPreviewStyle { metrics: Metrics::new() }
+    fn style(cx: &StyleCx<'_>, _: PrintPreviewStyleKey) -> PrintPreviewStyle {
+        let tokens = cx.tokens;
+        PrintPreviewStyle { metrics: Metrics::new(), stand_in: cx.color(tokens.color.surface.sunken), ink: cx.color(tokens.color.text.muted) }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let width = cx.tokens.size.plot.width;
         let paper = self.sheet.paper;
         let aspect = if paper.x > 0.0 && paper.y > 0.0 { paper.y / paper.x } else { 1.0 };
-        Vec2::new(width, width * aspect)
+        // A message takes the lines it wraps to at this width, so a larger text size grows the part instead of
+        // overflowing it.
+        let message = match &self.sheet.content {
+            SheetContent::Message(message) => cx.layout_at(&TextRun::new(cx.env.resolve(message).as_str()).wrap(Wrap::Wrap), width).size().y,
+            _ => 0.0,
+        };
+        let inner = width * (1.0 - 2.0 * PAPER_INSET);
+        Vec2::new(width, (inner * aspect + width * 2.0 * PAPER_INSET).max(message))
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, Pos2>> {
@@ -286,10 +546,11 @@ impl Component for PrintPreview<'_> {
     }
 
     /// The image box stays where the sheet puts it while it is dragged: the picture follows the pointer, the part does
-    /// not, so the press keeps its hit.
+    /// not, so the press keeps its hit. Only an `Image` sheet has the part: pages and a message are not dragged.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        let Some(image) = self.sheet.image_box() else { return };
         let Some(place) = self.place(rect) else { return };
-        let part = cx.part(IMAGE, place.rect(self.sheet.image)).sense(Sense::DRAG).pointer_only("the Position and Size rows place the image");
+        let part = cx.part(IMAGE, place.rect(image)).sense(Sense::DRAG).pointer_only("the Position and Size rows place the image");
         part.cursor(CursorIcon::Move);
     }
 
@@ -323,16 +584,77 @@ impl Component for PrintPreview<'_> {
         }
     }
 
+    /// The image box is a button; a message standing in for the sheet is a text node with the message.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if let SheetContent::Message(message) = &self.sheet.content {
+            let node = access.node(MESSAGE, Role::LABEL);
+            node.name = Name::Text(cx.env.resolve(message).as_str().to_owned());
+            node.bounds(cx.rect);
+            return;
+        }
+        if self.sheet.image_box().is_none() {
+            return;
+        }
         let words = cx.words::<PrintDialogWords>();
         let node = access.node(IMAGE, Role::BUTTON);
         node.name = Name::Text(words.image_box.as_str().to_owned());
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let Some(place) = self.place(cx.rect) else { return };
         let sheet = self.sheet;
-        let position = cx.value().copied().unwrap_or(sheet.image.min);
+        let style = &cx.style;
+        // A message stands in for the whole sheet: no paper, the text centred in the room the sheets take.
+        if let SheetContent::Message(message) = &sheet.content {
+            let painter = ui.content_painter(cx);
+            painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
+            let shown = cx.env.resolve(message);
+            let run = TextRun::new(shown.as_str()).wrap(Wrap::Wrap).color(style.ink);
+            centred_text(&painter, &run, cx.rect.center(), cx.rect.width());
+            return;
+        }
+        let Some(place) = self.place(cx.rect) else { return };
+        let tint = self.tint();
+        let paper = place.rect(Rect::from_min_size(Pos2::ZERO, sheet.paper));
+        {
+            let painter = ui.content_painter(cx);
+            painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
+            // Paper is white in every theme: the pages' own pictures are white pages, and the gaps between them are paper.
+            // design: allow[raw-colour/const](the colour of printed paper, not of the interface)
+            painter.data_shapes([Shape::rect_filled(paper, 0.0, Color32::WHITE)]);
+        }
+        // The box the marks stand around: the image box, or the pages' extent.
+        let marked = match &sheet.content {
+            SheetContent::Image { image, picture } => {
+                let position = cx.value().copied().unwrap_or(image.min);
+                let image = place.rect(Rect::from_min_size(position, image.size()));
+                let visible = image.intersect(paper);
+                if image.width() > 0.0 && image.height() > 0.0 && visible.width() > 0.0 && visible.height() > 0.0 {
+                    let uv = Rect::from_min_max(
+                        pos2((visible.min.x - image.min.x) / image.width(), (visible.min.y - image.min.y) / image.height()),
+                        pos2((visible.max.x - image.min.x) / image.width(), (visible.max.y - image.min.y) / image.height()),
+                    );
+                    ui.content_painter(cx).data_shapes([Shape::mesh(page_quad(
+                        picture.id,
+                        [visible.left_top(), visible.right_top(), visible.right_bottom(), visible.left_bottom()],
+                        uv,
+                        tint,
+                    ))]);
+                }
+                Some(image)
+            }
+            SheetContent::Pages(pages) => {
+                // A page placed past the paper's edge prints cut there, so the preview cuts it too.
+                ui.clipped(paper, |ui| {
+                    let painter = ui.content_painter(cx);
+                    for page in pages {
+                        paint_page(&painter, style, place, page, tint);
+                    }
+                });
+                let corners = pages.iter().flat_map(|page| page.corners.map(|corner| place.point(corner)));
+                Some(Rect::from_points(&corners.collect::<Vec<_>>()).intersect(paper)).filter(|extent| extent.is_positive())
+            }
+            SheetContent::Message(_) => None,
+        };
         let painter = ui.content_painter(cx);
         let rule = |kind: RuleKind, from: Pos2, to: Pos2| painter.with_draw(|draw| draw.rule(kind, from, to));
         let outline = |kind: RuleKind, rect: Rect| {
@@ -341,17 +663,11 @@ impl Component for PrintPreview<'_> {
             rule(kind, rect.right_bottom(), rect.left_bottom());
             rule(kind, rect.left_bottom(), rect.left_top());
         };
-        let paper = place.rect(Rect::from_min_size(Pos2::ZERO, sheet.paper));
-        painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
-        painter.surface(paper, SurfaceKind::Canvas, Corners::None);
-        let image = place.rect(Rect::from_min_size(position, sheet.image.size()));
-        let visible = image.intersect(paper);
-        if image.width() > 0.0 && image.height() > 0.0 && visible.width() > 0.0 && visible.height() > 0.0 {
-            let uv = Rect::from_min_max(
-                pos2((visible.min.x - image.min.x) / image.width(), (visible.min.y - image.min.y) / image.height()),
-                pos2((visible.max.x - image.min.x) / image.width(), (visible.max.y - image.min.y) / image.height()),
-            );
-            painter.picture(sheet.picture.id, visible, uv, 0.0);
+        for border in &sheet.borders {
+            outline(RuleKind::Edge, place.rect(*border));
+        }
+        for [from, to] in &sheet.cuts {
+            rule(RuleKind::Grid, place.point(*from), place.point(*to));
         }
         if let Some(area) = sheet.printable {
             outline(RuleKind::Grid, place.rect(area));
@@ -360,7 +676,10 @@ impl Component for PrintPreview<'_> {
             outline(RuleKind::Grid, place.rect(*sheet_outline));
         }
         outline(RuleKind::Edge, paper);
-        outline(RuleKind::DropMark, image);
+        let Some(image) = marked else { return };
+        if sheet.image_box().is_some() {
+            outline(RuleKind::DropMark, image);
+        }
 
         let marks = sheet.marks;
         let sides = [
@@ -404,7 +723,16 @@ impl Component for PrintPreview<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PrintPreviewOutput {
-        PrintPreviewOutput { edit: cx.edit_response() }
+        let scale = cx.env.scale().0;
+        let paper_px = match &self.sheet.content {
+            SheetContent::Message(_) => None,
+            _ => self.place(cx.rect).map(|place| {
+                let size = place.rect(Rect::from_min_size(Pos2::ZERO, self.sheet.paper)).size();
+                // A float to integer cast saturates and maps NaN to zero, so an odd size cannot wrap.
+                [(size.x * scale).round() as u32, (size.y * scale).round() as u32]
+            }),
+        };
+        PrintPreviewOutput { edit: cx.edit_response(), paper_px }
     }
 }
 
@@ -414,6 +742,9 @@ pub(super) struct PrintPreviewOutput {
     /// The image box drag: `Begin` at the first move past the click slop, `Update` with the image box's position on the
     /// paper in paper points, `Commit` at the release.
     edit: EditResponse<Pos2>,
+    /// The page box as drawn this pass, in physical pixels (its rect times `pixels_per_point`, rounded, saturating).
+    /// `None` before the preview is drawn, while the paper has no area, and for a message in place of a sheet.
+    paper_px: Option<[u32; 2]>,
 }
 
 impl Outcome for PrintPreviewOutput {
@@ -483,7 +814,8 @@ fn preview_room(
         }
         return;
     };
-    let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(sheet.image.min)).show(ui);
+    let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
+    let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).show(ui);
     moved.extend(preview.edit.events);
     Text::new(sheet.readout.clone()).show(ui);
     if sheet.count > 1 {
@@ -578,6 +910,12 @@ fn param_rows(ui: &mut Ui, requests: &mut HostRequests, title: &Label, params: &
 /// marks, readout), the printer panel and the sections at the end edge, and Print, Cancel and Done
 /// in the footer. With [`PrintLayout::Sections`] the preset row, the printer row and the header rows
 /// stand above a list of sections beside the shown one, and the preview sits under the list.
+///
+/// - [`PrintLayout::Document`] puts Printer Setup and the sections in a scrolling column, then the sheet preview with
+///   the pager centred under it, the readout and the notes at the end edge. It has no Done button, the printer list
+///   ends with Save as PDF, and Print reads Save as PDF while that is chosen. A pager press is filed with
+///   `HostRequests::request_preview_step`.
+/// - A section's title buttons and its custom rows' buttons are filed with `HostRequests::request_action`.
 #[must_use = "show the dialog with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct PrintDialog<'a> {
@@ -611,7 +949,7 @@ pub struct PrintDialog<'a> {
     /// A line of the host's under the preview.
     #[prop(into)]
     message: Option<Label>,
-    /// How the sections are arranged.
+    /// How the dialog is arranged.
     #[prop]
     layout: PrintLayout,
     /// Binds the shown section, with [`PrintLayout::Sections`].
@@ -632,16 +970,27 @@ pub struct PrintDialog<'a> {
     /// Whether a typed preset name may be used, in the preset editor.
     #[prop(boxed = "Fn(&str) -> Option<PresetError> + 'a")]
     check_name: Option<Box<NameRefuses<'a>>>,
-    /// The driver's Setup… button is shown, with [`PrintLayout::Sections`].
+    /// The printer-driver controls the panel offers.
     #[prop]
-    driver: bool,
-    /// OK keeps the dialog open and reports `finish`: the host answers it and closes the dialog.
-    // PLAN: not in the contract rows; a held OK needs the form to stay open until the host answers (export-w20's request).
+    driver: DriverControls,
+    /// The layout sets two-sided printing: the Two-sided row is left out.
     #[prop]
-    hold: bool,
-    /// The host's refusal of the held OK, shown under the sections.
-    #[prop(into)]
-    refusal: Option<Label>,
+    duplex_by_layout: bool,
+    /// The pager under the sheet preview in the `Document` layout.
+    #[prop]
+    preview_pager: Option<PanePager>,
+    /// The printer list searches a long fleet ([`PrintPanel::printer_search`]).
+    #[prop]
+    printer_search: bool,
+    /// Makes Print keep the dialog open and report its press in `PrintDialogOutput::held`.
+    #[prop(vis = "pub(crate)")]
+    hold_ok: bool,
+    /// Closes the dialog as Print in this pass: the host accepted the held answer.
+    #[prop(vis = "pub(crate)")]
+    finish_held: bool,
+    /// Shows the reason under the rows while the settings and the values are the refused ones.
+    #[prop(vis = "pub(crate)")]
+    refusal: Option<(Label, Settings, DialogFields)>,
 }
 
 /// What [`PrintDialog::show`] returns.
@@ -659,6 +1008,8 @@ pub struct PrintDialogOutput {
     pub moved: EditEvents<egui::Pos2>,
     /// The panel's Refresh was pressed.
     pub refresh: bool,
+    /// The panel's Properties… was pressed.
+    pub(crate) settings_clicked: bool,
     /// The dialog's requests of the host.
     pub requests: HostRequests,
     /// What the user did to the print presets this pass (Create, Rename, Delete).
@@ -667,6 +1018,15 @@ pub struct PrintDialogOutput {
     pub sheet: Option<usize>,
     /// Print Settings… was pressed this pass: the host opens the driver's own dialog.
     pub setup: bool,
+    /// The preview's page box as drawn this pass, in physical pixels: the size to render previews at. `None` before it
+    /// is drawn.
+    pub paper_px: Option<[u32; 2]>,
+    /// The pager press made this pass.
+    pub preview_step: Option<PagerStep>,
+    /// The destination the user picked in the panel this pass.
+    pub(crate) printer_chosen: Option<Destination>,
+    /// Print was pressed on a dialog that holds its OK: the host files the answer.
+    pub(crate) held: bool,
 }
 
 impl Outcome for PrintDialogOutput {
@@ -700,14 +1060,19 @@ impl<'a> PrintDialog<'a> {
             mode: PrintMode::default(),
             preset_name: None,
             check_name: None,
-            driver: false,
-            hold: false,
+            driver: DriverControls::None,
+            duplex_by_layout: false,
+            preview_pager: None,
+            printer_search: false,
+            hold_ok: false,
+            finish_held: false,
             refusal: None,
         }
     }
 
-    /// Draws the dialog. The body reports the drag events, the Refresh and Setup presses, the preset events and the sheet
-    /// step of its last run only, so a measuring run adds none; a second pass of a frame has no new input and reports none.
+    /// Draws the dialog. The body reports the drag events, the Refresh, Setup, pager and section button presses, the
+    /// preset events, the sheet step and the destination picked of its last run only, so a measuring run adds none; a
+    /// second pass of a frame has no new input and reports none.
     pub fn show(self, ui: &mut Ui) -> PrintDialogOutput {
         let PrintDialog {
             mut settings,
@@ -730,19 +1095,33 @@ impl<'a> PrintDialog<'a> {
             mut preset_name,
             check_name,
             driver,
-            hold,
+            duplex_by_layout,
+            preview_pager,
+            printer_search,
+            hold_ok,
+            finish_held,
             refusal,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintDialogWords>();
         let editor = mode == PrintMode::PresetEditor;
+        let document = layout == PrintLayout::Document;
+        let grayscale = matches!(settings.reborrow().get(), Some(Mixed::Same(Settings { grayscale: true, .. })));
+        let to_file = matches!(settings.reborrow().get(), Some(Mixed::Same(Settings { destination: Destination::File, .. })));
+        let title = if document { words.title_document.clone() } else { words.title.clone() };
+        let ok = if editor {
+            words.save_preset.clone()
+        } else if document && to_file {
+            env.words::<PrintWords>().save_as_pdf.clone()
+        } else {
+            words.print.clone()
+        };
+        let destinations = if document { Destinations::PrintersAndFile } else { Destinations::Printers };
         let titles: Vec<String> = sections.iter().map(|section| section.title.as_str().to_owned()).collect();
-        let mut form = FormDialog::new(words.title.clone(), fields)
-            .ok_label(if editor { words.save_preset.clone() } else { words.print.clone() })
-            .ok_enabled(editor || (ready && !busy))
-            .extra_buttons((!editor).then(|| FooterButton::new(words.done.clone(), DialogRole::Other)))
-            .accept_stays_open(hold)
-            .answers(answers);
+        let mut form = FormDialog::new(title, fields).ok_label(ok).ok_enabled(editor || (ready && !busy)).accept_stays_open(hold_ok).answers(answers);
+        if !editor && !document {
+            form = form.extra_buttons([FooterButton::new(words.done.clone(), DialogRole::Other)]);
+        }
         if let Some(opened) = opened {
             form = form.opened(opened);
         }
@@ -751,12 +1130,24 @@ impl<'a> PrintDialog<'a> {
         let mut setup = false;
         let mut preset_events: Vec<NamedPresetEvent<String>> = Vec::new();
         let mut stepped = None;
+        let mut settings_clicked = false;
+        let mut paper_px = None;
+        let mut preview_step = None;
+        let mut printer_chosen = None;
         let shown = form.show(ui, |ui, form, values| {
             moved = EditEvents::new();
             refresh = false;
             setup = false;
             preset_events.clear();
             stepped = None;
+            settings_clicked = false;
+            paper_px = None;
+            preview_step = None;
+            printer_chosen = None;
+            // A measuring run closes nothing: the real run of the same pass makes the close.
+            if finish_held && !craft_ui::runtime::measure::active(ui.ctx()) {
+                form.request_close_as(CloseReason::Activated);
+            }
             for answer in form.take_answers() {
                 match answer {
                     HostAnswer::Color { key, color } | HostAnswer::Eyedropper { key, color } => {
@@ -777,25 +1168,81 @@ impl<'a> PrintDialog<'a> {
                 if editor {
                     name_row(ui, &words, check_name.as_deref(), &mut name_bind)
                 } else {
-                    let mut preview = |ui: &mut Ui| preview_room(ui, &words, sheet, message.as_ref(), &mut index_bind, &mut moved, &mut stepped);
+                    // Printer Setup and the app's sections.
+                    let mut printer_setup = |ui: &mut Ui, values: &mut DialogFields, requests: &mut HostRequests| {
+                        let mut printer = |ui: &mut Ui| {
+                            let panel = PrintPanel::new(settings.reborrowed(), printers)
+                                .discovering(discovering)
+                                .busy(busy)
+                                .driver(driver)
+                                .destinations(destinations)
+                                .duplex_by_layout(duplex_by_layout)
+                                .inline(document)
+                                .printer_search(printer_search)
+                                .show(ui);
+                            refresh |= panel.refresh;
+                            settings_clicked |= panel.settings_clicked;
+                            if panel.printer_chosen.is_some() {
+                                printer_chosen = panel.printer_chosen;
+                            }
+                        };
+                        // A document dialog's printer rows head the dialog with no heading of their own, as production's.
+                        if document {
+                            printer(ui);
+                        } else {
+                            Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| printer(ui));
+                        }
+                        for (at, section) in sections.iter().enumerate() {
+                            section.show(ui, at, document, values, requests);
+                        }
+                    };
+                    // The sheet preview, the pager under it in the `Document` layout, the readout and the notes.
+                    let mut sheet_column = |ui: &mut Ui, moved: &mut EditEvents<Pos2>| {
+                        let Some(sheet) = sheet else {
+                            if let Some(message) = message.as_ref() {
+                                Text::new(message.clone()).show(ui);
+                            }
+                            return None;
+                        };
+                        let position = sheet.image_box().map_or(Pos2::ZERO, |image| image.min);
+                        let preview = PrintPreview::new(words.preview.clone(), sheet, Bind::given(position)).grayscale(grayscale).show(ui);
+                        moved.extend(preview.edit.events);
+                        paper_px = preview.paper_px;
+                        let mut step = None;
+                        if let Some(pager) = preview_pager.as_ref().filter(|_| document) {
+                            Row::new().align(RowAlign::Center).fill_width().show(ui, |ui, _| step = pager.clone().show(ui));
+                        }
+                        Text::new(sheet.readout.clone()).show(ui);
+                        for note in &sheet.notes {
+                            Text::new(note.clone()).shade(Shade::Muted).show(ui);
+                        }
+                        if let Some(message) = message.as_ref() {
+                            Text::new(message.clone()).show(ui);
+                        }
+                        step
+                    };
                     match layout {
-                        PrintLayout::Stacked => {
+                        PrintLayout::Image => {
                             Row::new().show(ui, |ui, _| {
-                                Stack::new().show(ui, |ui, _| preview(ui));
                                 Stack::new().show(ui, |ui, _| {
-                                    Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| {
-                                        let panel = PrintPanel::new(settings.reborrowed(), printers).discovering(discovering).busy(busy).show(ui);
-                                        refresh |= panel.refresh;
-                                    });
-                                    for (at, section) in sections.iter().enumerate() {
-                                        Section::fixed(section.title.clone()).id_salt(("section", at)).show(ui, |ui, _| {
-                                            param_rows(ui, form.requests(), &section.title, &section.params, values);
-                                        });
+                                    if preview_pager.is_none() && sheet.is_some_and(|s| s.count > 1) {
+                                        preview_room(ui, &words, sheet, message.as_ref(), &mut index_bind, &mut moved, &mut stepped);
+                                    } else {
+                                        preview_step = sheet_column(ui, &mut moved);
                                     }
                                 });
+                                Stack::new().show(ui, |ui, _| printer_setup(ui, values, form.requests()));
+                            });
+                        }
+                        PrintLayout::Document => {
+                            Row::new().show(ui, |ui, _| {
+                                Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| printer_setup(ui, values, form.requests()));
+                                Stack::new().show(ui, |ui, _| preview_step = sheet_column(ui, &mut moved));
                             });
                         }
                         PrintLayout::Sections => {
+                            let mut preview =
+                                |ui: &mut Ui| preview_room(ui, &words, sheet, message.as_ref(), &mut index_bind, &mut moved, &mut stepped);
                             Stack::new().show(ui, |ui, _| {
                                 if let Some(presets) = &presets {
                                     preset_row(ui, &words, presets, check_name.as_deref(), picker, &mut preset_events);
@@ -833,8 +1280,16 @@ impl<'a> PrintDialog<'a> {
                             });
                         }
                     }
-                    if let Some(reason) = &refusal {
-                        Text::new(reason.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                    if let Some(step) = preview_step {
+                        form.requests().request_preview_step(step);
+                    }
+                    // The host's refusal of the held OK stays until a setting or a value changes.
+                    let now = settings.reborrow().get();
+                    let refused = refusal
+                        .as_ref()
+                        .filter(|(_, refused, fields)| *fields == *values && matches!(&now, Some(Mixed::Same(now)) if now == refused));
+                    if let Some((reason, ..)) = refused {
+                        Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
                     }
                     ready && !busy
                 }
@@ -844,21 +1299,28 @@ impl<'a> PrintDialog<'a> {
         });
         let finish = if shown.accepted.is_some() {
             Some(PrintFinish::Print)
-        } else if shown.picked == Some(DONE_BUTTON) {
+        } else if !document && shown.picked == Some(DONE_BUTTON) {
             Some(PrintFinish::Done)
         } else {
             None
         };
+        // `picked` is this pass's press: a second pass of the frame has none, so a held Print is reported once.
+        let held = hold_ok && shown.picked == Some(PRINT_BUTTON);
         PrintDialogOutput {
             response: shown.response,
             closed: shown.closed,
             finish,
             moved,
             refresh,
+            settings_clicked,
             requests: shown.requests,
             presets: preset_events,
             sheet: stepped,
             setup,
+            paper_px,
+            preview_step,
+            printer_chosen,
+            held,
         }
     }
 }
@@ -888,6 +1350,11 @@ type NameFn = dyn Fn(&str) -> Option<PresetError> + Send;
 /// The print dialog owned by a `DialogHost` (not registered). It polls its [`State`] each pass,
 /// asks the app for a printer list with [`take_refresh`](Self::take_refresh) and takes the list
 /// with [`listen`](Self::listen).
+///
+/// With [`held_ok`](Self::held_ok), Print files its answer for the app ([`take_ok`](Self::take_ok)) and waits disabled
+/// until [`answer_ok`](Self::answer_ok): `Ok` closes the dialog with the held answer at the next pass, `Err` shows the
+/// reason under the rows until a setting or a value changes, and [`release_ok`](Self::release_ok) takes the held answer
+/// back without a reason.
 pub struct HostedPrint {
     id: DialogId,
     state: State,
@@ -896,6 +1363,10 @@ pub struct HostedPrint {
     sheet: Option<PrintSheet>,
     moves: Vec<EditEvent<egui::Pos2>>,
     refresh: bool,
+    /// The panel's Properties… press, not taken yet.
+    settings_clicked: bool,
+    /// The page box the preview drew, in physical pixels, not taken yet.
+    paper_px: Option<[u32; 2]>,
     requests: HostRequests,
     json_form: Option<Box<JsonForm>>,
     layout: PrintLayout,
@@ -909,14 +1380,22 @@ pub struct HostedPrint {
     section: String,
     sheet_index: usize,
     preset_name: String,
-    driver: bool,
+    driver: DriverControls,
     setup: bool,
+    duplex_by_layout: bool,
+    preview_pager: Option<PanePager>,
+    printer_search: bool,
+    /// The destination the user picked, or automation set, not taken yet.
+    printer_chosen: Option<Destination>,
     /// `choice: "done"` came in: the next `confirm` answers Done.
     done_chosen: bool,
-    /// OK files its answer for the host to take instead of closing.
+    /// Whether Print files its answer for the app instead of closing.
     hold: bool,
-    /// The OK the host holds back until it answers `answer_ok`, and its refusal.
+    /// The Print the app holds back until it answers, and its refusal.
     held: HeldAnswer<PrintAnswer>,
+    /// The app's say on whether the settings can print (a page range that names no page cannot): Print is disabled while
+    /// it is false, on top of the state's own readiness.
+    settings_valid: bool,
 }
 
 /// Adds the app's own keys to the automation listing of the sections' values.
@@ -933,6 +1412,8 @@ impl HostedPrint {
             sheet: None,
             moves: Vec::new(),
             refresh: true,
+            settings_clicked: false,
+            paper_px: None,
             requests: HostRequests::new(),
             json_form: None,
             layout: PrintLayout::default(),
@@ -945,19 +1426,17 @@ impl HostedPrint {
             section: String::new(),
             sheet_index: 0,
             preset_name: String::new(),
-            driver: false,
+            driver: DriverControls::None,
             setup: false,
+            duplex_by_layout: false,
+            preview_pager: None,
+            printer_search: false,
+            printer_chosen: None,
             done_chosen: false,
             hold: false,
             held: HeldAnswer::new(),
+            settings_valid: true,
         }
-    }
-
-    /// How the sections are arranged.
-    #[must_use]
-    pub fn layout(mut self, layout: PrintLayout) -> Self {
-        self.layout = layout;
-        self
     }
 
     /// What the dialog is for.
@@ -981,9 +1460,9 @@ impl HostedPrint {
         self
     }
 
-    /// Shows the driver's Setup… button in the printer row; [`take_setup`](Self::take_setup) reports its press.
+    /// Shows the driver's controls in the printer row.
     #[must_use]
-    pub fn driver(mut self, driver: bool) -> Self {
+    pub fn driver(mut self, driver: DriverControls) -> Self {
         self.driver = driver;
         self
     }
@@ -1029,23 +1508,10 @@ impl HostedPrint {
         std::mem::take(&mut self.setup)
     }
 
-    /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
-    /// [`answer_ok`](HostedPrint::answer_ok). OK stays disabled until then.
-    #[must_use]
-    pub fn held_ok(mut self) -> Self {
-        self.hold = true;
-        self
-    }
-
-    /// The OK filed by a held dialog, once.
-    pub fn take_ok(&mut self) -> Option<PrintAnswer> {
-        self.held.take()
-    }
-
-    /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
-    /// OK again and shows the label until a value changes.
-    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        self.held.answer(answer);
+    /// Tells the dialog whether the settings the app owns are valid (they are until told otherwise). While they are not,
+    /// Print is disabled and Enter prints nothing.
+    pub fn set_settings_valid(&mut self, valid: bool) {
+        self.settings_valid = valid;
     }
 
     /// Lists keys the sections' values do not show as they are: `form` gets the values and the listing, and may replace or
@@ -1062,6 +1528,19 @@ impl HostedPrint {
         std::mem::take(&mut self.refresh)
     }
 
+    /// Whether the panel's Properties… was pressed since the last call: the app opens the driver's options. The press is
+    /// filed in the pass that receives it and taken once.
+    pub fn take_settings_clicked(&mut self) -> bool {
+        std::mem::take(&mut self.settings_clicked)
+    }
+
+    /// The page box the preview drew, in physical pixels (width, height), for the app to render the preview at. It is
+    /// filed in the pass that drew the preview and taken once: `None` until the next pass that draws it, and while the
+    /// preview shows a message or a paper with no area.
+    pub fn take_paper_px(&mut self) -> Option<[u32; 2]> {
+        self.paper_px.take()
+    }
+
     /// Asks for a printer list again on the next pass, as Refresh does: the list the app sent was not the system's
     /// (its spooler was busy).
     pub fn request_refresh(&mut self) {
@@ -1074,8 +1553,8 @@ impl HostedPrint {
     }
 
     /// This pass's layout, from the app; `None` shows the dialog without a preview, and the message in its place.
-    pub fn set_sheet(&mut self, sheet: Option<PrintSheet>) {
-        self.sheet = sheet;
+    pub fn set_sheet(&mut self, sheet: impl Into<Option<PrintSheet>>) {
+        self.sheet = sheet.into();
     }
 
     /// The image box drags since the last call.
@@ -1091,6 +1570,92 @@ impl HostedPrint {
     /// The colour, Browse and eyedropper requests the sections filed, and where the app answers them.
     pub fn requests_mut(&mut self) -> &mut HostRequests {
         &mut self.requests
+    }
+
+    /// The dialog's arrangement.
+    #[must_use]
+    pub fn layout(mut self, layout: PrintLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// Replaces the app's sections.
+    pub fn set_sections(&mut self, sections: Vec<PrintSection>) {
+        self.sections = sections;
+    }
+
+    /// The printer state.
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    /// The printer state, for the app to change.
+    pub fn state_mut(&mut self) -> &mut State {
+        &mut self.state
+    }
+
+    /// The printer-driver controls the panel offers.
+    pub fn set_driver(&mut self, driver: DriverControls) {
+        self.driver = driver;
+    }
+
+    /// Whether the layout sets two-sided printing, leaving out the Two-sided row.
+    pub fn set_duplex_by_layout(&mut self, on: bool) {
+        self.duplex_by_layout = on;
+    }
+
+    /// The pager under the sheet preview in the `Document` layout.
+    pub fn set_preview_pager(&mut self, pager: Option<PanePager>) {
+        self.preview_pager = pager;
+    }
+
+    /// Whether the printer list searches a long fleet ([`PrintPanel::printer_search`]).
+    pub fn set_printer_search(&mut self, on: bool) {
+        self.printer_search = on;
+    }
+
+    /// The pager press since the last call.
+    pub fn take_preview_step(&mut self) -> Option<PagerStep> {
+        self.requests.take_preview_step()
+    }
+
+    /// The id of the section button pressed since the last call.
+    pub fn take_action(&mut self) -> Option<String> {
+        self.requests.take_action()
+    }
+
+    /// The destination the user picked in the panel, or a `set_json_field("printer", ..)` write, once; `State::poll`'s
+    /// replacement of an unlisted name is not reported.
+    pub fn take_printer_chosen(&mut self) -> Option<Destination> {
+        self.printer_chosen.take()
+    }
+
+    /// Withdraws a held OK: OK is enabled again, the values are kept and no refusal line shows.
+    pub fn release_ok(&mut self) {
+        self.held.withdraw();
+    }
+
+    /// The dialog holds OK until the app answers it with `answer_ok`.
+    #[must_use]
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
+    }
+
+    /// Holds OK until the app answers it with `answer_ok`.
+    pub fn hold_ok(&mut self) {
+        self.hold = true;
+    }
+
+    /// The held OK's answer when OK was pressed, once.
+    pub fn take_ok(&mut self) -> Option<PrintAnswer> {
+        self.held.take()
+    }
+
+    /// Answers the held OK: `Ok` closes the dialog, `Err` keeps it open and shows the refusal. Without a held OK it does
+    /// nothing.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        self.held.answer(answer);
     }
 
     /// The answer of the dialog as it stands.
@@ -1172,33 +1737,30 @@ impl StackDialog for HostedPrint {
     }
 
     /// Polls the state, shows the dialog over the sheet the app set (the message without one), and keeps the drags, the
-    /// presses, the preset events and the sections' requests for the app. A held OK the app accepted closes the dialog
-    /// in the pass after, never in a measuring run.
+    /// Refresh, pager, Setup and button presses, the preset events, the destination picked and the sections' requests
+    /// for the app.
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<PrintAnswer>> {
         self.state.poll(ui.ctx());
-        let measuring = craft_ui::runtime::measure::active(ui.ctx());
-        if !measuring && let Some(answer) = self.held.finish() {
-            return Some(DialogResult::Ok(answer));
-        }
-        let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
-        let (busy, discovering, ready) = (self.state.busy(), self.state.discovering(), self.state.ready());
-        let waiting = self.held.is_waiting();
-        let refusal = self
-            .held
-            .refusal()
-            .filter(|(_, refused)| refused.fields == self.fields && refused.settings == self.state.settings)
-            .map(|(reason, _)| reason.clone());
+        let answers = if craft_ui::runtime::measure::active(ui.ctx()) { Vec::new() } else { self.requests.take_answers() };
+        let finish_held = self.held.is_accepted();
+        // Print waits for the app's answer: a second press cannot file over the held one.
+        let ready = self.state.ready() && self.settings_valid && !self.held.is_waiting();
+        let (busy, discovering) = (self.state.busy(), self.state.discovering());
+        let refusal = self.held.refusal().map(|(reason, refused)| (reason.clone(), refused.settings.clone(), refused.fields.clone()));
         let mut dialog = PrintDialog::new(Bind::bound(&mut self.state.settings), &self.state.printers, Bind::bound(&mut self.fields))
             .sections(&self.sections)
             .busy(busy)
             .discovering(discovering)
-            .ready(ready && !waiting)
+            .ready(ready)
             .answers(answers)
             .layout(self.layout)
             .mode(self.mode)
             .header(&self.header)
             .driver(self.driver)
-            .hold(self.hold)
+            .duplex_by_layout(self.duplex_by_layout)
+            .printer_search(self.printer_search)
+            .hold_ok(self.hold)
+            .finish_held(finish_held)
             .sheet_index(Bind::bound(&mut self.sheet_index))
             .section(Bind::bound(&mut self.section))
             .preset_name(Bind::bound(&mut self.preset_name));
@@ -1208,8 +1770,11 @@ impl StackDialog for HostedPrint {
         if let Some(message) = &self.message {
             dialog = dialog.message(message.clone());
         }
-        if let Some(reason) = refusal {
-            dialog = dialog.refusal(reason);
+        if let Some(pager) = self.preview_pager.clone() {
+            dialog = dialog.preview_pager(pager);
+        }
+        if let Some(refusal) = refusal {
+            dialog = dialog.refusal(refusal);
         }
         if let Some(held) = &self.presets {
             dialog = dialog.presets(PrintPresets::new(&held.rows, held.held.clone(), &held.built_in));
@@ -1218,25 +1783,29 @@ impl StackDialog for HostedPrint {
             dialog = dialog.check_name(move |name| check(name));
         }
         let shown = dialog.show(ui);
-        let PrintDialogOutput { closed, finish, moved, refresh, mut requests, presets, setup, .. } = shown;
+        let PrintDialogOutput { closed, finish, moved, refresh, settings_clicked, paper_px, requests, presets, setup, printer_chosen, held, .. } =
+            shown;
         self.moves.extend(moved);
+        if paper_px.is_some() {
+            self.paper_px = paper_px;
+        }
         self.refresh |= refresh;
         self.setup |= setup;
         self.preset_events.extend(presets);
-        if let Some(request) = requests.take_color() {
-            self.requests.request_color(request);
+        self.settings_clicked |= settings_clicked;
+        if printer_chosen.is_some() {
+            self.printer_chosen = printer_chosen;
         }
-        if let Some(request) = requests.take_path() {
-            self.requests.request_path(request);
+        if self.held.refusal().is_some_and(|(_, refused)| refused.settings != self.state.settings || refused.fields != self.fields) {
+            self.held.clear_refusal();
         }
-        if let Some(request) = requests.take_eyedropper() {
-            self.requests.request_eyedropper(request);
+        if held {
+            self.held.file(self.answer(PrintFinish::Print));
         }
-        if let Some(point) = requests.take_preview_click() {
-            self.requests.request_preview_click(point);
-        }
+        self.requests.extend(requests);
         match (finish, closed) {
-            (Some(finish), _) => self.conclude(finish).map(DialogResult::Ok),
+            (Some(finish), _) => Some(DialogResult::Ok(self.answer(finish))),
+            (None, Some(CloseReason::Activated)) if finish_held => Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok)),
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }
@@ -1247,14 +1816,18 @@ impl StackDialog for HostedPrint {
     }
 
     /// Answers Done after `choice: "done"`, else Print as the button does: none while a job cannot start (in the preset
-    /// editor, while the name cannot be saved), and none while the host still holds an answer.
+    /// editor, while the name cannot be saved). A held dialog files the answer for the app, as its button does, and
+    /// answers none; once the app accepted the held answer, it answers that.
     fn confirm(&mut self, _: &egui::Context) -> Option<PrintAnswer> {
+        if self.held.is_accepted() {
+            return self.held.finish();
+        }
         if self.held.is_waiting() {
             return None;
         }
         let finish = if std::mem::take(&mut self.done_chosen) {
             PrintFinish::Done
-        } else if self.can_answer() {
+        } else if self.settings_valid && self.can_answer() {
             PrintFinish::Print
         } else {
             return None;
@@ -1262,29 +1835,46 @@ impl StackDialog for HostedPrint {
         self.conclude(finish)
     }
 
-    /// The `Settings` keys (`printer`, `copies`, `duplex`, `grayscale`), each section parameter's value as
-    /// [`DialogFields`] serializes it, and the dialog's own: `section` (the shown section), `sheet`, `preset` (the held
-    /// preset) and, in the preset editor, `name`. A `Settings` key an app's row shows in the sections layout lists the
-    /// row's value.
+    /// The `Settings` keys (`printer`, `copies`, `duplex`, `grayscale`, `collate`), each section parameter's value as
+    /// [`DialogFields`] serializes it, and the dialog's own: `section` (the shown section), `sheet`, `sheets`, `notes`,
+    /// `preset` (the held preset) and, in the preset editor, `name`. A `Settings` key an app's row shows in the
+    /// sections layout lists the row's value.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut map = match serde_json::to_value(&self.fields).ok()? {
             serde_json::Value::Object(map) => map,
             _ => serde_json::Map::new(),
         };
         let settings = &self.state.settings;
-        map.insert("printer".to_owned(), settings.printer.clone().into());
-        for (key, value) in [("copies", settings.copies.into()), ("duplex", duplex_json(settings.duplex)), ("grayscale", settings.grayscale.into())] {
+        let printer = match &settings.destination {
+            Destination::Printer(name) => name.clone().into(),
+            Destination::File => serde_json::Value::Null,
+        };
+        map.insert("printer".to_owned(), printer);
+        for (key, value) in [
+            ("copies", settings.copies.into()),
+            ("duplex", duplex_json(settings.duplex)),
+            ("grayscale", settings.grayscale.into()),
+            ("collate", settings.collate.into()),
+        ] {
             if row_of_setting(self.layout, &self.sections, &self.header, key).is_none() {
                 map.insert(key.to_owned(), value);
             }
         }
         map.insert("section".to_owned(), self.shown_section().map_or(serde_json::Value::Null, Into::into));
-        map.insert("sheet".to_owned(), self.sheet_index.into());
+        if let Some(pager) = &self.preview_pager {
+            map.insert("sheet".to_owned(), pager.shown.into());
+            map.insert("sheets".to_owned(), pager.count.into());
+        } else {
+            map.insert("sheet".to_owned(), self.sheet_index.into());
+        }
         let held = self.presets.as_ref().and_then(|presets| presets.held.clone());
         map.insert("preset".to_owned(), held.map_or(serde_json::Value::Null, Into::into));
         if self.mode == PrintMode::PresetEditor {
             map.insert("name".to_owned(), self.preset_name.clone().into());
         }
+        let notes = self.sections.iter().flat_map(|section| &section.params);
+        let notes = notes.filter(|param| matches!(param.kind, ParamKind::ReadOnlyText { .. }) && param.visible(&self.fields));
+        map.insert("notes".to_owned(), notes.map(|param| serde_json::Value::from(param.key.clone())).collect());
         if let Some(form) = &self.json_form {
             form(&self.fields, &mut map);
         }
@@ -1293,16 +1883,25 @@ impl StackDialog for HostedPrint {
 
     /// Sets a `Settings` key, the dialog's own (`section`, `sheet`, `name`, `preset`, and `choice` = `"done"`), or a
     /// section parameter through the shared parameter-field rule. A `Settings` key an app's row shows in the sections
-    /// layout sets the row.
+    /// layout sets the row. `printer` takes a listed printer's name, or `null` for Save as PDF where the layout offers
+    /// it; the write is a choice the app takes with [`take_printer_chosen`](HostedPrint::take_printer_chosen). A
+    /// section parameter's set is recorded as an edit of its row, as the user's is ([`HostRequests::set_field`]).
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
         if let Some(params) = row_of_setting(self.layout, &self.sections, &self.header, field) {
             return set_param_field(params, &mut self.fields, field, value);
         }
         match field {
             "printer" => {
-                let name = value.as_str().filter(|name| self.state.printers.iter().any(|printer| printer.name == *name));
-                let name = name.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
-                self.state.settings.printer = name.to_owned();
+                let destination = match &value {
+                    serde_json::Value::Null if self.layout == PrintLayout::Document => Some(Destination::File),
+                    serde_json::Value::String(name) if self.state.printers.iter().any(|printer| printer.name == *name) => {
+                        Some(Destination::Printer(name.clone()))
+                    }
+                    _ => None,
+                };
+                let destination = destination.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                self.state.settings.destination = destination.clone();
+                self.printer_chosen = Some(destination);
             }
             "copies" => {
                 let copies = value.as_u64().and_then(|copies| u32::try_from(copies).ok()).filter(|copies| (1..=MOST_COPIES).contains(copies));
@@ -1310,6 +1909,7 @@ impl StackDialog for HostedPrint {
             }
             "duplex" => self.state.settings.duplex = duplex_from_json(&value).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             "grayscale" => self.state.settings.grayscale = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
+            "collate" => self.state.settings.collate = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             "choice" => {
                 if self.mode != PrintMode::Print {
                     return Err(FieldRefusal::Inactive.message(field));
@@ -1355,7 +1955,7 @@ impl StackDialog for HostedPrint {
                 let section =
                     self.sections.iter().find(|section| section.params.iter().any(|param| param.key == field || param.unit_key() == Some(field)));
                 let section = section.ok_or_else(|| FieldRefusal::Unknown.message(field))?;
-                return set_param_field(&section.params, &mut self.fields, field, value);
+                return self.requests.set_field(&section.params, &mut self.fields, field, value);
             }
         }
         Ok(())

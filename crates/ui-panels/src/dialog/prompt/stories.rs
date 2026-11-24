@@ -2,7 +2,7 @@
 
 use super::super::stories::{hosted, opener};
 use super::super::{
-    Alert, DialogHost, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
+    Alert, DialogHost, HostedAlert, Prompt, PromptChoice, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
 };
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _};
@@ -110,6 +110,23 @@ fn standard_prompt_without_apply(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     StandardPrompt::trash_mask().can_apply(!alternate_form).show(ui).into()
 }
 
+/// A link prompt whose safe answer is the default: Enter cancels.
+#[story(StandardPrompt, covers = [], drive = Drive::Never)]
+fn standard_prompt_default_cancel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    StandardPrompt::custom("Open the link “https://example.com/report”?")
+        .title("Open Link")
+        .button(PromptChoice::Proceed, "Open")
+        .button(PromptChoice::Cancel, "Cancel")
+        .default_choice(PromptChoice::Cancel)
+        .show(ui)
+        .into()
+}
+
+#[story(StandardPrompt, covers = [], drive = Drive::Never)]
+fn standard_prompt_changed_on_disk(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    StandardPrompt::changed_on_disk("poster.pdf").show(ui).into()
+}
+
 #[story(UnsavedChangesDialog, covers = [], drive = Drive::Never)]
 fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let remaining = if *data.value("several_documents", true) { 3 } else { 1 };
@@ -124,6 +141,10 @@ fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn recovery_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let age = *data.choice("age", AGES[1].1, &AGES);
     let blocked = *data.value("recover_blocked", false);
+    let remaining = if *data.value("several_documents", false) { 3 } else { 1 };
+    let protected = *data.value("protected", false);
     let document = RecoveredDocument::new("poster", "poster.psd", age);
-    RecoveryDialog::new(if blocked { document.blocked("Stop recording first") } else { document }).show(ui).into()
+    let document = if blocked { document.blocked("Stop recording first") } else { document };
+    let document = if protected { document.protected() } else { document };
+    RecoveryDialog::new(document).remaining(remaining).show(ui).into()
 }

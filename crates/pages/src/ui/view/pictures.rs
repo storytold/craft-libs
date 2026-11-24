@@ -10,11 +10,23 @@ use craft_ui::canvas::DetailPlan;
 use craft_ui::canvas::PixelRect;
 use craft_ui::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, NoValue, Outcome, PaintUi, Role};
 use craft_ui::primitives::textures::{
-    Priority, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side,
+    Priority, StateLook, TextureState, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side,
 };
-use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::{ComponentStyle, DataColor, StyleCx};
-use egui::{Rect, Response, Vec2, pos2};
+use egui::{Context, Id, Rect, Response, Vec2, pos2};
+
+/// The options of the page view's picture stores: textures up to the context's side, kept as pages are.
+pub(super) fn picture_options(ctx: &Context) -> ThumbnailOptions {
+    ThumbnailOptions::new().max_side(texture_side(ctx)).store(TextureStoreOptions::pages())
+}
+
+/// The page view's two picture stores, the one place their keys are made: the page store, of each page's own
+/// picture, and the detail store, of the part in view of a page larger than the texture side (a store of its own, so
+/// a page's two regions never share a key). `owner` is the page view's body; the pass asks the page store for the
+/// pages' states and `PagePictures` paints from both.
+pub(super) fn page_stores(ctx: &Context, owner: Id, options: ThumbnailOptions) -> (Thumbnails<usize>, Thumbnails<usize>) {
+    (Thumbnails::in_context(ctx, owner.with("pictures"), options.clone()), Thumbnails::in_context(ctx, owner.with("detail"), options))
+}
 
 /// Productivity inter-page gap as a multiple of `space.gap.section`: 18 pt in Compact (Word's gap) and 24 pt in
 /// Comfortable.
@@ -80,6 +92,18 @@ impl Component for PageMetrics {
     fn style(cx: &StyleCx<'_>, _: PageMetricsStyleKey) -> PageMetricsStyle {
         let tokens = cx.tokens;
         match cx.set() {
+            // With `PageInsets::Theme` (PdfCraft's page view) the creative set's spacing is the theme's page insets.
+            ComponentSet::Creative if cx.env::<super::PageInsets>() == super::PageInsets::Theme => {
+                let inset = tokens.space.inset;
+                PageMetricsStyle {
+                    metrics: Metrics::new(),
+                    gap: inset.page_gap,
+                    margin: inset.page_margin,
+                    side: inset.page_side,
+                    white_space_pad: tokens.space.gap.inline,
+                    seam: tokens.stroke.thin,
+                }
+            }
             ComponentSet::Creative => PageMetricsStyle {
                 metrics: Metrics::new(),
                 gap: tokens.space.gap.section,
@@ -131,9 +155,9 @@ pub struct PagePicturesStyle {
     metrics: Metrics,
 }
 
-/// The pictures of the pages on screen, over their frames: each page's own picture and, for a page larger than the
-/// texture side, a second picture of the part in view. The pages one row either side are asked for at the lowest
-/// priority, so they are ready when scrolled to. Paint only; the describer adds the text under the pages to the
+/// The pictures of the pages on screen, over their frames: each page's own picture, in the state the pass found it
+/// (`PlacedPage::picture`, captioned while it renders or when it failed), and, for a page larger than the texture
+/// side, a second picture of the part in view. Paint only; the describer adds the text under the pages to the
 /// accessibility tree.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control, content_painter)]
@@ -142,22 +166,22 @@ pub(super) struct PagePictures<'a> {
     common: Common,
     source: &'a dyn PageSource,
     pages: &'a [PlacedPage],
-    near: &'a [(usize, Vec2)],
-    /// The pages whose pictures the stores keep, sorted; every other page's are dropped.
-    keep: &'a [usize],
+    /// The page view's body, whose picture stores these are (`page_stores`).
+    owner: Id,
     /// The document's paper under each picture.
     paper: DataColor,
-    /// Sharp renders wait: a zoom is under way.
+    /// Sharp renders of the part in view wait: the view zooms or pans.
+    // The page store's hold is set where its requests are, in the view's pass, so only the detail hold is a prop.
     #[prop]
-    hold: bool,
+    hold_detail: bool,
     /// The description of the text under the pages.
     #[prop]
     describer: Option<&'a dyn AccessDescriber>,
 }
 
 impl<'a> PagePictures<'a> {
-    pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], near: &'a [(usize, Vec2)], keep: &'a [usize], paper: DataColor) -> Self {
-        PagePictures { common: Common::new(), source, pages, near, keep, paper, hold: false, describer: None }
+    pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], owner: Id, paper: DataColor) -> Self {
+        PagePictures { common: Common::new(), source, pages, owner, paper, hold_detail: false, describer: None }
     }
 }
 
@@ -171,7 +195,7 @@ impl Component for PagePictures<'_> {
     const SHOWS_LABEL: bool = false;
     const OVERLAYS: bool = false;
     type Style = PagePicturesStyle;
-    type Output = PagePicturesOutput;
+    type Output = Response;
 
     fn style(_: &StyleCx<'_>, _: PagePicturesStyleKey) -> PagePicturesStyle {
         PagePicturesStyle { metrics: Metrics::new() }
@@ -191,19 +215,16 @@ impl Component for PagePictures<'_> {
         let base = painter.painter.clone();
         let inside = base.clip_rect();
         let side = texture_side(&ctx);
-        let PictureStores { thumbs, details } = PictureStores::of(&ctx, cx);
-        thumbs.hold(self.hold);
-        details.hold(self.hold);
+        let (thumbs, details) = page_stores(&ctx, self.owner, picture_options(&ctx));
+        details.hold(self.hold_detail);
         let ppp = painter.pixels_per_point();
-        let paint = ThumbPaint::default().paper(self.paper);
+        let paint = ThumbPaint::default().paper(self.paper).states(StateLook::Captioned);
         for placed in self.pages {
-            let request = ThumbRequest::for_cell(placed.rect.width().max(placed.rect.height()), ppp);
-            let state = thumbs.state(&ctx, self.source, &placed.page, &request, Priority::VISIBLE);
             let (top, bottom) = placed.band;
             let band = Rect::from_min_max(pos2(placed.rect.min.x, placed.rect.min.y + top), pos2(placed.rect.max.x, placed.rect.min.y + bottom))
                 .intersect(inside);
             painter.painter = base.with_clip_rect(band);
-            thumbs.paint(&painter, placed.rect, &state, &paint);
+            thumbs.paint(&painter, placed.rect, &placed.picture, &paint);
             if let Some(detail) = Detail::of(placed.rect, band, side, ppp) {
                 let state = details.state(&ctx, self.source, &placed.page, &detail.request, Priority::VISIBLE);
                 // Only a picture of this region: another region's stand-in would sit in the wrong place.
@@ -212,16 +233,6 @@ impl Component for PagePictures<'_> {
                 }
             }
         }
-        for &(page, size) in self.near {
-            let request = ThumbRequest::for_cell(size.x.max(size.y), ppp);
-            thumbs.state(&ctx, self.source, &page, &request, Priority::NEAR);
-        }
-        // Pages scrolled out of reach give their pictures back (#811: a long scroll held every page it had shown);
-        // a part-in-view picture is only of use while its page shows.
-        let keep = self.keep;
-        thumbs.retain(&ctx, |page| keep.binary_search(page).is_ok());
-        let shown = self.pages;
-        details.retain(&ctx, |page| shown.iter().any(|p| p.page == *page));
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
@@ -234,45 +245,8 @@ impl Component for PagePictures<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> PagePicturesOutput {
-        let ctx = cx.response.ctx.clone();
-        let PictureStores { thumbs, details } = PictureStores::of(&ctx, &cx);
-        let resident = thumbs.cache().statistics(&ctx).entries + details.cache().statistics(&ctx).entries;
-        PagePicturesOutput { response: cx.response.clone(), resident }
-    }
-}
-
-/// What the pictures report: how many page pictures their stores hold.
-#[derive(Debug)]
-pub(super) struct PagePicturesOutput {
-    response: Response,
-    /// The entries of both stores: the pages' own pictures and the detail pictures.
-    pub(super) resident: usize,
-}
-
-impl Outcome for PagePicturesOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
-}
-
-/// The two stores of the page pictures, kept in the context under the component's id: the pages' own pictures, and
-/// the pictures of the part in view of a page larger than the texture side (a store of their own, so a page's two
-/// regions never share a key).
-struct PictureStores {
-    thumbs: Thumbnails<usize>,
-    details: Thumbnails<usize>,
-}
-
-impl PictureStores {
-    fn of(ctx: &egui::Context, cx: &Cx<'_, PagePictures<'_>>) -> Self {
-        let options = ThumbnailOptions::new().max_side(texture_side(ctx)).store(TextureStoreOptions::pages());
-        PictureStores {
-            thumbs: Thumbnails::in_context(ctx, cx.key("pictures"), options.clone()),
-            details: Thumbnails::in_context(ctx, cx.key("detail"), options),
-        }
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
     }
 }
 

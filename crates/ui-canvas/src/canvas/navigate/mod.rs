@@ -17,7 +17,7 @@ mod wheel;
 pub(crate) use autoscroll::{MiddleAutoscroll, paint_mark};
 pub use bar::{NavigateBar, NavigateBarOutput};
 pub use keys::PageKey;
-pub use options::{MiddleButton, NavigationOptions, WheelScheme};
+pub use options::{MiddleAutoscrollFeel, MiddleButton, NavigationOptions, WheelScheme};
 pub use wheel::{WheelAction, WheelInput, WheelNavigation};
 
 use super::frame_step;
@@ -134,11 +134,10 @@ impl FlickPan {
 }
 
 /// Touchpad momentum where the platform leaves it to the app (Wayland, which reports a lift as the end of the
-/// scroll): a two-finger swipe keeps gliding after the fingers lift. The app creates it enabled only on a platform
-/// that sends no momentum of its own.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TouchpadGlide {
-    enabled: bool,
+/// scroll): a two-finger swipe keeps gliding after the fingers lift. A canvas runs one under Touchpad Glide
+/// ([`NavigationOptions::touchpad_glide`]), which an app turns on only on a platform that sends no momentum of its own.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct TouchpadGlide {
     samples: Vec<(f64, Vec2)>,
     /// The glide's speed in points per second, or zero.
     velocity: Vec2,
@@ -162,13 +161,14 @@ impl TouchpadGlide {
     /// A pass this long after the last one (the view was hidden, the app stalled) ends a glide.
     const STALE: f64 = 0.1;
 
-    /// A glide that runs when `enabled`.
-    pub fn new(enabled: bool) -> Self {
-        Self { enabled, samples: Vec::new(), velocity: Vec2::ZERO, at: 0.0 }
+    /// Stops a glide (the view hit a limit, a press, a key move, a zoom, a view command).
+    pub(crate) fn stop(&mut self) {
+        self.velocity = Vec2::ZERO;
     }
 
-    fn halt(&mut self) {
-        self.velocity = Vec2::ZERO;
+    /// Whether a glide runs: the canvas keeps passes coming while it does.
+    pub(crate) fn gliding(&self) -> bool {
+        self.velocity != Vec2::ZERO
     }
 
     fn push(&mut self, now: f64, delta: Vec2) {
@@ -202,9 +202,9 @@ impl TouchpadGlide {
     }
 
     /// Reads the pass's wheel share at `now`; any wheel input stops a glide, a touchpad gesture's end may start one.
-    /// `glide` is false where the view must not glide this pass (a zoom, a dialog).
-    pub fn read(&mut self, wheel: &Wheel, now: f64, glide: bool) {
-        self.halt();
+    /// `glide` is false where the view must not glide this pass (Touchpad Glide off, a zoom, a dialog).
+    pub(crate) fn read(&mut self, wheel: &Wheel, now: f64, glide: bool) {
+        self.stop();
         // Zooming, a mouse wheel and sideways Shift scrolling never glide.
         if wheel.unit != WheelUnit::Point || wheel.mods.cmd || wheel.mods.ctrl || wheel.mods.shift || wheel.zoom != 1.0 {
             self.samples.clear();
@@ -217,7 +217,7 @@ impl TouchpadGlide {
             }
             WheelPhase::Move => self.push(now, wheel.scroll),
             WheelPhase::End => {
-                if glide && self.enabled {
+                if glide {
                     self.velocity = self.lift_velocity(now);
                     self.at = now;
                 }
@@ -227,14 +227,15 @@ impl TouchpadGlide {
         }
     }
 
-    /// The scroll this pass at `now`, in points; zero once stopped.
-    pub fn step(&mut self, now: f64) -> Vec2 {
+    /// The scroll this pass at `now`, in points; zero once stopped, and zero in a later pass of the same frame, which
+    /// reads the same `now`.
+    pub(crate) fn step(&mut self, now: f64) -> Vec2 {
         if self.velocity == Vec2::ZERO {
             return Vec2::ZERO;
         }
         let dt = now - self.at;
         if !(0.0..=Self::STALE).contains(&dt) {
-            self.halt();
+            self.stop();
             return Vec2::ZERO;
         }
         self.at = now;
@@ -242,16 +243,16 @@ impl TouchpadGlide {
         let moved = self.velocity * Self::TAU * (1.0 - decay);
         self.velocity *= decay;
         if self.velocity.length() < Self::STOP_SPEED {
-            self.halt();
+            self.stop();
         }
         moved
     }
 
-    /// Whether the view moved in the pass of the last [`step`](Self::step): a pass that left it where it was (the
-    /// edge clamp) stops the glide.
-    pub fn moved(&mut self, moved: bool) {
+    /// Whether the view moved in the pass of the last [`step`](Self::step) that moved: a pass that left it where it
+    /// was (the edge clamp) stops the glide.
+    pub(crate) fn moved(&mut self, moved: bool) {
         if !moved {
-            self.halt();
+            self.stop();
         }
     }
 }

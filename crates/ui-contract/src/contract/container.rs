@@ -132,6 +132,8 @@ pub enum Pad {
     /// No padding.
     #[default]
     None,
+    /// `space.gap.tight`: a hairline frame around a compact group, as a small floating action bar's.
+    Tight,
     /// `space.pad.control`.
     Control,
     /// `space.pad.regular`.
@@ -212,6 +214,8 @@ pub enum LeastWidth {
     /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
     /// band beside the page, not as buttons cut to their labels.
     SideMenu,
+    /// `size.dock.column`: a fixed side pane is as wide as a dock column.
+    DockColumn,
 }
 
 impl LeastWidth {
@@ -225,6 +229,7 @@ impl LeastWidth {
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
             LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
             LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
+            LeastWidth::DockColumn => tokens.size.dock.column,
         }
     }
 }
@@ -813,6 +818,8 @@ pub struct ContainerProps {
     /// `Focus::take_reveal`). A container with a `scroll` region is one already. The body is clipped to its body
     /// region, the view, so what it shows never paints over the container's padding (a canvas's rulers).
     pub scroll_owner: bool,
+    /// A collection that receives moves the focused control in this region leaves unused.
+    pub fallback_collection: Option<egui::Id>,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]
     pub gates: bool,
@@ -918,6 +925,7 @@ impl ContainerProps {
             child_glyphs: None,
             arena: false,
             scroll_owner: false,
+            fallback_collection: None,
             gates: false,
             transform: None,
             theme: None,
@@ -1106,6 +1114,12 @@ impl ContainerProps {
     /// Makes the container its body's scroll owner with a view of its own (`ContainerProps::scroll_owner`).
     pub const fn scroll_owner(mut self, on: bool) -> Self {
         self.scroll_owner = on;
+        self
+    }
+
+    /// Sends unused moves from this region's focused control to the named collection.
+    pub fn fallback_collection(mut self, collection: egui::Id) -> Self {
+        self.fallback_collection = Some(collection);
         self
     }
 

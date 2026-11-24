@@ -70,6 +70,9 @@ pub fn hosted_with<D: StackDialog, K: PartialEq + 'static>(
 /// The opener of the Grid options dialogs.
 const GRID_OPTIONS: &str = "Grid Options…";
 
+/// The opener of the dialog with a title note.
+const COMMENT_PROPERTIES: &str = "Comment Properties…";
+
 /// The open state a story's dialog binds, behind the button that opens it: dialogs start closed, and the button opens
 /// the real one.
 pub(super) fn opener<'d>(ui: &mut Ui, data: &'d mut StoryData, label: &'static str) -> &'d mut bool {
@@ -110,6 +113,19 @@ fn dialog_with_footer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .footer(|ui, _| {
             Checkbox::new(Bind::given(false)).label("Don't ask again").show(ui);
         })
+        .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+/// Dialog with a title note.
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_with_title_note(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let shown: StoryOutput = Dialog::new("Comment Properties")
+        .title_note("3 comments selected")
+        .opened(Bind::bound(opener(ui, data, COMMENT_PROPERTIES)))
         .show(ui, |ui, _| body(ui, &mut checks))
         .into();
     *data.value("checks", [true, false]) = checks;

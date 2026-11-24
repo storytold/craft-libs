@@ -4,7 +4,7 @@
 use super::dialog::{ResetFooter, ResetPick, apply_answers, set_param_field};
 use super::form::{read_bind, write_bind};
 use super::param::fill_defaults;
-use super::{DialogFields, FormDialog, HostRequests, Param, ParamRows, ParamRowsOutput, SectionList, open_fields};
+use super::{DialogFields, FormDialog, HostRequests, Param, ParamDialog, ParamRows, ParamRowsOutput, ParamTab, SectionList, SharedRows, open_fields};
 use crate::buttons::Button;
 use crate::contract::{Bind, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowCollection as _, clicked};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id};
@@ -100,12 +100,16 @@ pub struct PropertiesTab {
     pub key: Option<String>,
     /// The footer's Reset Panel button is enabled while this tab shows.
     pub resettable: bool,
+    /// A note shown above the rows of a read-only tab.
+    pub note: Option<Label>,
+    /// Whether the rows show their values without controls.
+    pub read_only: bool,
 }
 
 impl PropertiesTab {
     /// A tab titled `title` with `rows`.
     pub fn new(title: impl Into<Label>, rows: Vec<PropertyRow>) -> Self {
-        PropertiesTab { title: title.into(), rows, key: None, resettable: false }
+        PropertiesTab { title: title.into(), rows, key: None, resettable: false, note: None, read_only: false }
     }
 
     /// Names the tab for automation and for the host.
@@ -123,47 +127,37 @@ impl PropertiesTab {
         self
     }
 
-    /// The parameters the rows are: a value is a read-only text row, a heading is a section.
+    /// The parameters this tab's rows are; `at` keys the rows that hold no value of their own.
     fn params(&self, at: usize) -> Vec<Param> {
-        self.rows
-            .iter()
-            .enumerate()
-            .map(|(row, entry)| match entry {
-                PropertyRow::Value { label, text } => Param::read_only_text(format!("properties.{at}.{row}"), label.clone(), text.clone()),
-                PropertyRow::Field(param) => (**param).clone(),
-                PropertyRow::Heading(label) => Param::section(label.clone()),
-                PropertyRow::Space => Param::custom(format!("properties.{at}.{row}"), Label::Empty, |ui, _, _| Text::new(Label::Empty).show(ui)),
-            })
-            .collect()
+        params(&self.rows, &format!("properties.{at}"))
+    }
+
+    /// The tab as a read-only one, with `note` above its rows.
+    #[must_use]
+    pub fn read_only(self, note: Option<Label>) -> Self {
+        PropertiesTab { note, read_only: true, ..self }
+    }
+
+    /// The tab as a tab of a [`ParamDialog`]; `at` keys the rows that hold no value of their own.
+    fn param_tab(&self, at: usize) -> ParamTab {
+        let tab = ParamTab::new(self.title.clone(), params(&self.rows, &format!("properties.{at}")));
+        if self.read_only { tab.read_only(self.note.clone()) } else { tab }
     }
 }
 
-/// The tab titles as an item source, keyed by position.
-struct Titles<'t>(&'t [PropertiesTab]);
-
-impl DisplayOrder<usize> for Titles<'_> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn key(&self, at: usize) -> usize {
-        at
-    }
-
-    fn index_of(&self, key: &usize) -> Option<usize> {
-        (*key < self.0.len()).then_some(*key)
-    }
-
-    fn text(&self, at: usize) -> Option<Cow<'_, str>> {
-        self.0.get(at).map(|tab| Cow::Borrowed(tab.title.as_str()))
-    }
+/// The parameters `rows` are: a value is a read-only text row, a heading is a section. The rows that hold no value of
+/// their own are keyed `{prefix}.{row}`.
+fn params(rows: &[PropertyRow], prefix: &str) -> Vec<Param> {
+    rows.iter()
+        .enumerate()
+        .map(|(row, entry)| match entry {
+            PropertyRow::Value { label, text } => Param::read_only_text(format!("{prefix}.{row}"), label.clone(), text.clone()),
+            PropertyRow::Field(param) => (**param).clone(),
+            PropertyRow::Heading(label) => Param::section(label.clone()),
+            PropertyRow::Space => Param::custom(format!("{prefix}.{row}"), Label::Empty, |ui, _, _| Text::new(Label::Empty).show(ui)),
+        })
+        .collect()
 }
-
-impl ItemSource<usize> for Titles<'_> {}
-
-/// The tab the dialog shows while it is open.
-#[derive(Clone, Default)]
-struct OpenTab(usize);
 
 /// What a properties dialog reports.
 #[derive(Debug)]
@@ -181,6 +175,8 @@ pub struct PropertiesOutput {
     pub tab_reset: bool,
     /// The answer OK filed this pass while `hold_ok` is on; the host accepts or refuses it.
     pub held: Option<DialogFields>,
+    /// The id of the extra footer button or custom row button pressed this pass (`PropertiesDialog::extra_buttons`).
+    pub action: Option<String>,
 }
 
 impl Outcome for PropertiesOutput {
@@ -191,16 +187,17 @@ impl Outcome for PropertiesOutput {
     }
 }
 
-/// A properties dialog: a `TabStrip` over the tabs (none with one tab) and the rows of the shown tab as one
-/// `ParamRows` over the values of all of them.
+/// A properties dialog: a builder over a tabbed [`ParamDialog`] ([`into_param_dialog`](PropertiesDialog::into_param_dialog)),
+/// a `TabStrip` over the tabs (none with one tab) and the rows of the shown tab over the values of all of them.
 ///
 /// - Keys: Tab walks the rows of the shown tab, arrows on the strip switch tabs, Enter is OK, Escape cancels.
 /// - Read-only: the dialog has one button, and every row shows its value without a control; whichever way it closes
-///   it answers with empty values.
+///   it answers with empty values. A [`PropertiesTab::read_only`] tab shows its values only, under its note.
 /// - Values: the `values` binding holds them; the first pass fills the rows' defaults for keys it lacks. Alt turns
 ///   Cancel into Reset, which restores the values from when the dialog opened.
-/// - Tab: the shown tab is kept while the dialog is open; with [`TabLayout::List`] the tabs stand as a list of sections
-///   at the start edge instead of a strip.
+/// - Shared rows: the [`shared`](PropertiesDialog::shared) rows show with every tab, where `shared_rows` puts them.
+/// - Tab: the `tab` binding says which tab shows; without it the shown tab is kept while the dialog is open; with
+///   [`TabLayout::List`] the tabs stand as a list of sections at the start edge instead of a strip.
 /// - Reset Panel: a footer button, enabled while the shown tab is [`resettable`](PropertiesTab::resettable); it puts
 ///   that tab's keys back to their rows' defaults, and Alt on Cancel still restores the values from when the dialog
 ///   opened.
@@ -209,6 +206,7 @@ impl Outcome for PropertiesOutput {
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct PropertiesDialog<'a> {
+    key: String,
     title: Label,
     tabs: Cow<'a, [PropertiesTab]>,
     values: Bind<'a, DialogFields>,
@@ -245,12 +243,23 @@ pub struct PropertiesDialog<'a> {
     /// The host refused the held answer for the reason, which shows under the rows until the values change.
     #[prop]
     refusal: Option<(Label, DialogFields)>,
+    /// Extra footer buttons after OK and Cancel, each an id and a label; a press comes back as
+    /// `PropertiesOutput::action`.
+    #[prop]
+    extra_buttons: Vec<(String, Label)>,
+    /// The rows shown with every tab.
+    #[prop]
+    shared: Vec<PropertyRow>,
+    /// Where the shared rows go: above the tab strip, or under the shown tab's rows.
+    #[prop]
+    shared_rows: SharedRows,
 }
 
 impl<'a> PropertiesDialog<'a> {
-    /// A dialog titled `title` over `tabs`, editing `values`.
-    pub fn new(title: impl Into<Label>, tabs: impl Into<Cow<'a, [PropertiesTab]>>, values: Bind<'a, DialogFields>) -> Self {
+    /// A dialog answering for `key`, titled `title` over `tabs`, editing `values`.
+    pub fn new(key: impl Into<String>, title: impl Into<Label>, tabs: impl Into<Cow<'a, [PropertiesTab]>>, values: Bind<'a, DialogFields>) -> Self {
         PropertiesDialog {
+            key: key.into(),
             title: title.into(),
             tabs: tabs.into(),
             values,
@@ -265,11 +274,63 @@ impl<'a> PropertiesDialog<'a> {
             hold_ok: false,
             finish_held: false,
             refusal: None,
+            extra_buttons: Vec::new(),
+            shared: Vec::new(),
+            shared_rows: SharedRows::default(),
         }
+    }
+
+    /// The dialog as a tabbed [`ParamDialog`] over the same values.
+    ///
+    /// A host owns a properties dialog as it owns any parameter dialog:
+    ///
+    /// ```ignore
+    /// host.open(HostedParamDialog::new(ctx, "file.properties", DialogFields::new(), move |fields| {
+    ///     PropertiesDialog::new("file.properties", "Properties", tabs.clone(), Bind::bound(fields)).into_param_dialog()
+    /// }));
+    /// ```
+    pub fn into_param_dialog(self) -> ParamDialog<'a> {
+        let PropertiesDialog { key, title, tabs, values, read_only, open, tab, extra_buttons, shared, shared_rows, .. } = self;
+        let tabs: Vec<ParamTab> = tabs.iter().enumerate().map(|(at, tab)| tab.param_tab(at)).collect();
+        let extra_buttons = extra_buttons.into_iter().map(|(id, label)| (id, FooterButton::new(label, DialogRole::Other))).collect();
+        let mut dialog = ParamDialog::new(key, title, params(&shared, "properties.shared"))
+            .tabs(tabs)
+            .shared_rows(shared_rows)
+            .read_only(read_only)
+            .values(values)
+            .extra_buttons(extra_buttons);
+        if let Some(open) = open {
+            dialog = dialog.opened(open);
+        }
+        if let Some(tab) = tab {
+            dialog = dialog.tab(tab);
+        }
+        dialog
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PropertiesOutput {
+        let use_form_dialog = self.tab_layout == TabLayout::List
+            || self.hold_ok
+            || self.finish_held
+            || self.refusal.is_some()
+            || self.preview.is_some()
+            || !self.answers.is_empty()
+            || !self.ok_enabled
+            || self.ok_reason.is_some()
+            || self.tabs.iter().any(|tab| tab.resettable);
+        if !use_form_dialog {
+            let shown = self.into_param_dialog().show(ui);
+            return PropertiesOutput {
+                response: shown.response,
+                closed: shown.closed,
+                result: shown.result.map(|result| result.fields),
+                rows: shown.rows,
+                tab_reset: false,
+                held: None,
+                action: shown.action,
+            };
+        }
         let PropertiesDialog {
             title,
             tabs,
@@ -285,6 +346,7 @@ impl<'a> PropertiesDialog<'a> {
             hold_ok,
             finish_held,
             refusal,
+            ..
         } = self;
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
@@ -393,7 +455,7 @@ impl<'a> PropertiesDialog<'a> {
             (Some(ResetPick::Accept), Some(fields)) if result.is_none() => Some(fields),
             _ => None,
         };
-        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner(), tab_reset, held }
+        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner(), tab_reset, held, action: None }
     }
 
     /// Puts the keys of `tab` (the tab at position `at`) back to their rows' defaults, as the Reset Panel button does;
@@ -700,3 +762,26 @@ impl HoldsOk for HostedPropertiesDialog {
         HostedPropertiesDialog::answer_ok(self, answer);
     }
 }
+
+/// The position of the shown tab, kept in the dialog's memory while it is open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct OpenTab(usize);
+
+/// The tab positions as an `ItemSource` for `TabStrip` and `SectionList`.
+struct Titles<'a>(&'a [PropertiesTab]);
+
+impl DisplayOrder<usize> for Titles<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn key(&self, at: usize) -> usize {
+        at
+    }
+
+    fn text(&self, at: usize) -> Option<std::borrow::Cow<'_, str>> {
+        Some(std::borrow::Cow::Borrowed(self.0[at].title.as_str()))
+    }
+}
+
+impl ItemSource<usize> for Titles<'_> {}

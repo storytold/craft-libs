@@ -322,8 +322,9 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
         self.scope
     }
 
-    fn focus(&self, _: &C) -> Option<crate::runtime::focus::FocusPolicy> {
-        (C::FOCUS_SCOPE != crate::runtime::focus::FocusPolicy::NONE).then_some(C::FOCUS_SCOPE)
+    fn focus(&self, comp: &C) -> Option<crate::runtime::focus::FocusPolicy> {
+        let scope = comp.focus_scope();
+        (scope != crate::runtime::focus::FocusPolicy::NONE).then_some(scope)
     }
 
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
@@ -562,6 +563,7 @@ pub(crate) trait ErasedPass<'a> {
     fn padding(&self, rect: Rect) -> craft_behavior::Insets;
     /// Step 7: the component's parts, then the shape's.
     fn parts(&mut self, rect: Rect, flow: Flow, content_rect: Rect, parts: &mut PartsStep, input: &MeasureIn<'_>, rtl: bool);
+    fn parts_value_changed(&self) -> bool;
     /// Step 8b for a text part.
     fn text(&mut self, ui: &mut Ui, step: &mut super::text::TextStep, keys: focus::KeyUse, rtl: bool, ink: egui::Color32, underline: f32);
     /// Step 8b for an editor part.
@@ -765,9 +767,11 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
         parts,
         group: env.roving.filter(|_| e.core_ref().roving_member),
         body: env.roving,
+        arena: env.arena.map(|arena| arena.0).filter(|arena| *arena != id),
         row: env.row,
         item: env.item == Some(id),
         default_stop: resolved.default_stop,
+        focus_request: resolved.focus_request,
         doc_key: resolved.doc_key,
     });
 }
@@ -918,6 +922,9 @@ struct HostStep {
     holder_widget: Option<Id>,
     text_keys: Option<focus::KeyUse>,
     own: Sense,
+    /// The sense the access node reports: an item's own, with the click the collection takes for it, so the node
+    /// still offers the redirected action.
+    report_sense: Sense,
     member: Option<crate::runtime::env::ArenaId>,
     /// The bar line whose rules wait for this member.
     line: Option<Id>,
@@ -963,6 +970,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     p.real = true;
     let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
     let e = &mut *p.p;
+    // An inert run skips the parts step and leaves early, so it declares no parts: its parts read idle.
     e.core().parted = !inert;
     // 7 parts
     p.trace.mark(Step::Parts);
@@ -992,10 +1000,13 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     let keys = e.keys();
     let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, keys, &mut *e.core().memory);
     let own = own_sense(e, resolved, inert);
+    // The collection handles a row's click, but its access node must still offer the redirected action.
+    let unnarrowed = own;
     // An item never senses the whole row for a press: the collection's root takes the click and the focus (17.2). It
     // does sense the pointer over it, so `PartsCx::hovered` and the state step read the row's hover from the same
     // arena outcome whether the item stands alone or in a collection.
     let own = if env.item == Some(id) { own.difference(Sense::CLICK | Sense::FOCUS) | Sense::HOVER } else { own };
+    let report_sense = own | (unnarrowed & Sense::CLICK);
     let arena = e.arena();
     let member = if arena || facts.text() { None } else { env.arena };
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
@@ -1121,6 +1132,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         holder_widget,
         text_keys,
         own,
+        report_sense,
         member,
         line,
         cut,
@@ -1308,6 +1320,20 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
     let edit = e.settle_values();
     let leaf = e.shape() == ShapeKind::Leaf;
     steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
+    // Sensing used the parts before the edit. Report their new bounds alongside the value painted in this pass. An
+    // inert run never reaches this step.
+    if (facts.parts || e.declares_parts()) && e.parts_value_changed() {
+        let flow = Flow::new(h.rect, h.rtl);
+        let content_rect = flow.inset(steps::padding(e.padding(h.rect), resolved.pad));
+        let mut current = PartsStep { decls: Default::default(), rovings: Vec::new(), scrolls: Vec::new(), text: super::text::TextStep::default() };
+        let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: p.room };
+        e.parts(h.rect, flow, content_rect, &mut current, &input, h.rtl);
+        for decl in current.decls.parts() {
+            if let Some(result) = e.core().results.get_mut(&(decl.key, decl.index)) {
+                result.rect = decl.shape.bounds();
+            }
+        }
+    }
     // 16 report, then the tooltip.
     p.trace.mark(Step::Report);
     let message = steps::report(
@@ -1315,7 +1341,7 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         facts,
         &steps::ReportIn {
             decls: &h.parts.decls,
-            sense: h.own,
+            sense: h.report_sense,
             live: e.live(),
             scrolls: e.scrolls(),
             expanded: e.expanded(),

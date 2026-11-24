@@ -13,12 +13,58 @@ pub struct AboutLink {
     pub label: Label,
     /// The target URL, reported in the output for the app to open.
     pub url: String,
+    /// An icon to show beside the link text.
+    pub icon: Option<craft_behavior::IconId>,
 }
 
 impl AboutLink {
     /// A link showing `label` to `url`.
     pub fn new(label: impl Into<Label>, url: impl Into<String>) -> Self {
-        AboutLink { label: label.into(), url: url.into() }
+        AboutLink { label: label.into(), url: url.into(), icon: None }
+    }
+
+    /// Shows this link with an icon beside its label.
+    #[must_use]
+    pub fn icon(mut self, icon: craft_behavior::IconId) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+}
+
+/// A picture on the About tab: an SVG asset drawn through `Picture::svg`.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct AboutImage {
+    /// The picture's accessible name.
+    pub label: Label,
+    /// The SVG source.
+    pub svg: &'static [u8],
+    /// The SVG source that replaces `svg` when the theme mode is dark.
+    pub dark: Option<&'static [u8]>,
+}
+
+impl AboutImage {
+    /// The picture `svg` draws, named `label`.
+    pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
+        AboutImage { label: label.into(), svg, dark: None }
+    }
+
+    /// The SVG that replaces the picture when the theme mode is dark.
+    #[must_use]
+    pub fn dark(mut self, svg: &'static [u8]) -> Self {
+        self.dark = Some(svg);
+        self
+    }
+
+    /// The SVG source to draw: `dark` in a dark theme mode when there is one, else `svg`.
+    pub(super) fn source(&self, dark: bool) -> &'static [u8] {
+        self.dark.filter(|_| dark).unwrap_or(self.svg)
+    }
+}
+
+impl PartialEq for AboutImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label && self.svg == other.svg && self.dark == other.dark
     }
 }
 
@@ -26,6 +72,10 @@ impl AboutLink {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct AboutInfo {
+    /// The application's mark, centred above the blurb.
+    pub mark: Option<AboutImage>,
+    /// The suite's logo on the centred "Part of" line above the built-with line.
+    pub part_of: Option<AboutImage>,
     /// The application's name, in the dialog title.
     pub app_name: Label,
     /// One sentence about the application.
@@ -46,6 +96,8 @@ impl AboutInfo {
     /// An About tab for `app_name` with its `blurb` and `version`, without links.
     pub fn new(app_name: impl Into<Label>, blurb: impl Into<Label>, version: impl Into<Label>) -> Self {
         AboutInfo {
+            mark: None,
+            part_of: None,
             app_name: app_name.into(),
             blurb: blurb.into(),
             version: version.into(),
@@ -54,6 +106,20 @@ impl AboutInfo {
             built_with: Label::Empty,
             icon: None,
         }
+    }
+
+    /// The application's mark, centred above the blurb.
+    #[must_use]
+    pub fn mark(mut self, image: AboutImage) -> Self {
+        self.mark = Some(image);
+        self
+    }
+
+    /// The suite's logo on a centred "Part of" line above the built-with line.
+    #[must_use]
+    pub fn part_of(mut self, logo: AboutImage) -> Self {
+        self.part_of = Some(logo);
+        self
     }
 
     /// The prominent button under the blurb.

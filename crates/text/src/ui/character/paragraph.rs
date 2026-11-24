@@ -267,6 +267,7 @@ impl<'a> ParagraphControls<'a> {
                     value: values.start_indent,
                     range: INDENT_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, start);
                 edits.extend(number_change(event, ParagraphChange::StartIndent));
@@ -276,6 +277,7 @@ impl<'a> ParagraphControls<'a> {
                     value: values.end_indent,
                     range: INDENT_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, end);
                 edits.extend(number_change(event, ParagraphChange::EndIndent));
@@ -285,6 +287,7 @@ impl<'a> ParagraphControls<'a> {
                     value: values.first_line_indent,
                     range: INDENT_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, first);
                 edits.extend(number_change(event, ParagraphChange::FirstLineIndent));
@@ -296,6 +299,7 @@ impl<'a> ParagraphControls<'a> {
                     value: values.space_before,
                     range: SPACE_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, before);
                 edits.extend(number_change(event, ParagraphChange::SpaceBefore));
@@ -305,6 +309,7 @@ impl<'a> ParagraphControls<'a> {
                     value: values.space_after,
                     range: SPACE_RANGE,
                     presets: &[],
+                    disabled: None,
                 };
                 let (event, _) = lengths.row(ui, after);
                 edits.extend(number_change(event, ParagraphChange::SpaceAfter));

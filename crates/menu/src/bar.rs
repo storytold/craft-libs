@@ -82,6 +82,8 @@ pub struct MenuBarUi<'a> {
     preferred: &'a [(&'a str, char)],
     keyboard: Option<bool>,
     help_search: bool,
+    icons: bool,
+    compact: bool,
 }
 
 /// Every input of the bar's view.
@@ -93,12 +95,14 @@ struct BarProps<'a> {
     keyboard: bool,
     help: Option<usize>,
     label: Label,
+    icons: bool,
+    compact: bool,
 }
 
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
     pub fn new(bar: &'a Tracked<MenuBar>) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: None, preferred: &[], keyboard: None, help_search: false }
+        MenuBarUi { bar, target: None, preferred: &[], keyboard: None, help_search: false, icons: true, compact: false }
     }
 }
 
@@ -133,6 +137,19 @@ impl<'a> MenuBarUi<'a> {
         self
     }
 
+    /// Whether the rows show their commands' icons (on by default). Off, the menus are text only and their rows a
+    /// line shorter, as a classic menu bar's.
+    pub fn icons(mut self, on: bool) -> MenuBarUi<'a> {
+        self.icons = on;
+        self
+    }
+
+    /// Whether the rows are a line of text tall instead of a control's height (off by default): a dense classic menu.
+    pub fn compact(mut self, on: bool) -> MenuBarUi<'a> {
+        self.compact = on;
+        self
+    }
+
     /// Draws the bar and its open menu. Disabled rows never run. A chosen item is a fired command in the frame's
     /// output; [`Builtin::Quit`] and [`Builtin::Minimize`] act on
     /// the root window instead.
@@ -147,6 +164,8 @@ impl<'a> MenuBarUi<'a> {
             keyboard: self.keyboard.unwrap_or(target != Target::Mac),
             help,
             label: env.words::<BarWords>().label.clone(),
+            icons: self.icons,
+            compact: self.compact,
         };
         MemoView::new("menu-bar", props, show_bar).show(ui).unwrap_or(MenuBarOutput { titles: Rect::NOTHING, opened: false })
     }
@@ -154,7 +173,7 @@ impl<'a> MenuBarUi<'a> {
 
 /// The bar's view: the titles through [`craft_ui::menu::MenuBar`], each menu's rows as command rows.
 fn show_bar(props: &mut BarProps<'_>, ui: &mut Ui) -> MenuBarOutput {
-    let rows = Rows::new(props.target).preferred(props.preferred);
+    let rows = Rows::new(props.target).preferred(props.preferred).icons(props.icons).compact(props.compact);
     let env = Env::of(ui);
     let os = env.view().shell().os;
     // The text of every menu is worked out once for these inputs and kept: a pass that shows an open menu again writes none of it.

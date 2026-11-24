@@ -112,6 +112,25 @@ fn configured(
     })
 }
 
+/// A frame low on the story document: the canvas has no room below it, so a fixed bar hangs above it.
+fn low_frame() -> [Point; 4] {
+    [(120.0, 290.0), (520.0, 290.0), (520.0, 390.0), (120.0, 390.0)].map(|(x, y)| Point::new(x, y))
+}
+
+/// A fixed bar: no grip and no More menu, hung above its frame where there is no room below it.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn fixed_bar(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
+    let corners = low_frame();
+    on_canvas(ui, |ui, area, _| {
+        TaskBar::fixed("Signature", &corners)
+            .show(ui, area, |ui, _| {
+                let _ = Button::new("Cancel").show(ui);
+                let _ = Button::new("Place").show(ui);
+            })
+            .output
+    })
+}
+
 fn open_more(fixture: &mut Fixture) {
     if let Some(more) = fixture.by_label("More options") {
         fixture.click(&more).settle();
@@ -151,6 +170,19 @@ fn resting_above(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
 fn wrapped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     configured(ui, data, &turned_frame(), Some(200.0), |bar| bar)
+}
+
+/// A fixed bar at the canvas view's top edge, at its end in reading direction: it takes no anchor.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn edge_bar(ui: &mut Ui, _data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, |ui, area, _| {
+        TaskBar::at_edge("Camera", Align::End)
+            .show(ui, area, |ui, _| {
+                let _ = Button::new("Capture").show(ui);
+                let _ = Button::new("Done").show(ui);
+            })
+            .output
+    })
 }
 
 /// A bar the user moved and pinned: it keeps its place near the canvas's top left while the frame stays where it is.

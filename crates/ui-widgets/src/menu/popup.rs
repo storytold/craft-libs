@@ -295,7 +295,8 @@ impl<'a> Menu<'a> {
     }
 
     /// A context menu named `label`, hanging from where the pointer was when it opened, with `opener` getting the
-    /// focus back when it closes by key.
+    /// focus back when it closes by key. An item's menu hangs from its collection's response and shows while the
+    /// collection reports the item's request (`CollectionResponse::menu`), whose key its rows act on.
     pub fn context(label: impl Into<Label>, opener: &Response) -> Self {
         let mut menu = Menu::new(label);
         menu.opener = Some(opener.id);
