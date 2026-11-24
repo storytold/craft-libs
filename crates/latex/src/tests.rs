@@ -797,3 +797,33 @@ fn includegraphics_loader_calls_are_bounded() {
     let _ = parse_with(&src, Some(&load));
     assert!(calls.get() <= crate::limits::MAX_IMAGE_PROBES);
 }
+
+#[test]
+fn includegraphics_follows_latex_scoping_and_braced_values() {
+    let png = std::sync::Arc::new(craft_flow::base64_decode(PNG_B64).unwrap_or_default());
+    let load = |_: &str| Some(png.clone());
+    // `width={4cm}` sizes the picture as `width=4cm` does.
+    let w = |opts: &str| {
+        let src = format!("\\begin{{document}}\\includegraphics[{opts}]{{a.png}}\\end{{document}}");
+        pictures(&parse_with(&src, Some(&load))).first().map(|p| p.w)
+    };
+    assert!(w("width={4cm}").is_some_and(|b| w("width=4cm").is_some_and(|p| (b - p).abs() < 0.01)));
+    // A `\graphicspath` inside a group or an environment ends with it, and one in a macro's
+    // definition never applies. This loader has nothing, so every folder in effect is asked.
+    let folders = |src: &str| {
+        let asked = std::cell::RefCell::new(Vec::<String>::new());
+        let record = |p: &str| {
+            asked.borrow_mut().push(p.to_string());
+            None
+        };
+        let _ = parse_with(src, Some(&record));
+        asked.into_inner().into_iter().filter(|a| a.ends_with("b.png")).collect::<Vec<_>>()
+    };
+    let scoped = folders(
+        "\\graphicspath{{out/}}\\begin{document}{\\graphicspath{{in/}}\\includegraphics{a.png}}\\begin{center}\\graphicspath{{env/}}\\end{center}\\includegraphics{b.png}\\end{document}",
+    );
+    assert_eq!(scoped, vec!["b.png".to_string(), "out/b.png".to_string()]);
+    let defined =
+        folders("\\graphicspath{{real/}}\\newcommand{\\unused}{\\graphicspath{{other/}}}\\begin{document}\\includegraphics{b.png}\\end{document}");
+    assert_eq!(defined, vec!["b.png".to_string(), "real/b.png".to_string()]);
+}

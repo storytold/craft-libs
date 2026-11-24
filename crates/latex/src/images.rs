@@ -46,10 +46,21 @@ impl<'a> Images<'a> {
         *self.paths.borrow_mut() = paths;
     }
 
+    /// The `\graphicspath` folders in effect, to restore when a group or environment ends
+    /// (`\graphicspath` is local to it, as in LaTeX).
+    pub(super) fn saved_paths(&self) -> Vec<String> {
+        self.paths.borrow().clone()
+    }
+
+    pub(super) fn restore_paths(&self, paths: Vec<String>) {
+        *self.paths.borrow_mut() = paths;
+    }
+
     /// The picture `\includegraphics[options]{file}` shows, if the loader has it.
     pub(super) fn picture(&self, options: Option<&str>, file: &str) -> Option<Img> {
         let file = file.trim();
-        if file.is_empty() {
+        // Once the loader calls are spent nothing more is looked up, or even prepared.
+        if file.is_empty() || self.probes.get() == 0 {
             return None;
         }
         let mut dirs = vec![String::new()];
@@ -84,6 +95,8 @@ fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
     let (mut w, mut h, mut scale, mut keep) = (None, None, None, false);
     for opt in options.split(',') {
         let (k, v) = opt.split_once('=').map_or((opt.trim(), ""), |(k, v)| (k.trim(), v.trim()));
+        // `width={4cm}` is `width=4cm`.
+        let v = v.strip_prefix('{').and_then(|v| v.strip_suffix('}')).map_or(v, str::trim);
         match k {
             "width" => w = length(v),
             "height" | "totalheight" => h = length(v),

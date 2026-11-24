@@ -398,6 +398,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let saved_fmt = self.fmt.clone();
+        let saved_paths = self.images.map(Images::saved_paths);
         f(&mut self.fmt);
         let (saved_t, saved_pos) = (self.t, self.pos);
         self.t = toks;
@@ -409,6 +410,9 @@ impl<'a> Parser<'a> {
         self.t = saved_t;
         self.pos = saved_pos;
         self.fmt = saved_fmt;
+        if let (Some(i), Some(paths)) = (self.images, saved_paths) {
+            i.restore_paths(paths);
+        }
     }
 
     /// Skip a dropped command's arguments, as its `DROP_WITH_ARGS` entry lists them.
@@ -526,7 +530,13 @@ impl<'a> Parser<'a> {
                 }
                 // Too deep: the environment's content goes on at this level.
                 Tok::Begin(_) if self.depth >= MAX_NEST => {}
-                Tok::Begin(name) => self.environment(name),
+                Tok::Begin(name) => {
+                    let saved_paths = self.images.map(Images::saved_paths);
+                    self.environment(name);
+                    if let (Some(i), Some(paths)) = (self.images, saved_paths) {
+                        i.restore_paths(paths);
+                    }
+                }
                 Tok::End(name) => {
                     if env == Some(name.as_str()) {
                         return;
@@ -1009,6 +1019,8 @@ pub fn parse_with(src: &str, images: Option<ImageLoader<'_>>) -> Flow {
                         i.set_paths(&source);
                     }
                 }
+                // A definition's body is not run: a `\graphicspath` inside it doesn't apply.
+                n if DROP_WITH_ARGS.iter().any(|(d, _)| *d == n) => pre.drop_args(n),
                 _ => {}
             }
         }
