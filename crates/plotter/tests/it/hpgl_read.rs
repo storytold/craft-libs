@@ -73,7 +73,7 @@ fn pens_pick_colors_widths_and_are_kept() {
     let d = plot("IN;SP1;PW1;PD0,0,10,0;PU;PW2,2;SP2;PD0,10,10,10;PU;SP1;PD0,20,10,20;PU;IN;SP1;PD0,30,10,30;");
     let widths: Vec<f64> = d.shapes.iter().map(|s| s.stroke.as_ref().expect("stroked").width).collect();
     let want = [MM, 2.0 * MM, MM, 0.35 * MM];
-    assert!(widths.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{widths:?}");
+    assert!(widths.len() == want.len() && widths.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{widths:?}");
 }
 
 #[test]
@@ -187,6 +187,13 @@ fn line_types_become_dash_patterns() {
     let d = plot("IN;SP1;LA1,4,2,4,3,9;PD0,0,100,0;");
     let s = d.shapes[0].stroke.as_ref().expect("stroked");
     assert_eq!((s.cap, s.join, s.miter), (LineCap::Round, LineJoin::Round, 9.0));
+    // Each LA value keeps its own kind.
+    let d = plot("IN;SP1;LA1,3,2,6;PD0,0,100,0;");
+    let s = d.shapes[0].stroke.as_ref().expect("stroked");
+    assert_eq!((s.cap, s.join), (LineCap::Triangular, LineJoin::None));
+    let d = plot("IN;SP1;LA2,2;PD0,0,100,0;PU;LA2,3;PD0,10,100,10;PU;LA2,5;PD0,20,100,20;");
+    let joins: Vec<LineJoin> = d.shapes.iter().map(|s| s.stroke.as_ref().expect("stroked").join).collect();
+    assert_eq!(joins, [LineJoin::MiterBevel, LineJoin::Triangular, LineJoin::Bevel]);
 }
 
 #[test]
@@ -278,6 +285,8 @@ fn only_plot_files_are_taken_for_hpgl() {
         b"SP1PD0,0,10,10PU",
         b"CO\"made by hand\";IN;",
         b"\x1b%-12345X@PJL ENTER LANGUAGE=HPGL2\nIN;SP1;",
+        // IN gives back ETX as the label terminator: the label doesn't end at the comment's `*`.
+        b"DT*;IN;SP1;LBx\x03PD10,0;CO\"*\";",
     ] {
         assert!(is_hpgl(f), "{:?}", String::from_utf8_lossy(f));
     }
@@ -289,6 +298,8 @@ fn only_plot_files_are_taken_for_hpgl() {
         b"\x89PNG\r\n\x1a\n",
         b"IN;SP1;PD0,0;hello world",
         b"\x1b%-12345X@PJL ENTER LANGUAGE=PCL\n\x1bE\x1b*r1A",
+        // Only CO takes a quoted string.
+        b"IN\"not a plot\";",
     ] {
         assert!(!is_hpgl(f), "{:?}", String::from_utf8_lossy(f));
         assert_eq!(read(f).err(), Some(ReadError::NotHpgl), "{:?}", String::from_utf8_lossy(f));

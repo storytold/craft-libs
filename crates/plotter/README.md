@@ -110,11 +110,14 @@ for shape in &drawing.shapes {
 Shapes come in paint order, in plotter units (40 to the millimetre, y up), already turned by RO.
 Each keeps the pen that drew it and the RO angle in force, so an importer can put pens on layers
 and turn a plot a driver rotated for its media back upright. Units, layers and clipping are the
-caller's. What the reader leaves out (labels, symbol marks, raster images, `IW` clipping, pages
-after the first, hatched fills, which come back solid, and anything past its budgets) is listed in
-`Drawing::warnings`.
+caller's. What the reader leaves out or approximates (labels, symbol marks, raster images, `IW`
+clipping, hatched fills, which come back solid, and anything past its budgets) is listed in
+`Drawing::warnings`. Later pages (after `PG`) are not left out: their shapes are drawn over the
+first page's, in `Drawing::shapes`, with a warning.
 
 The reader (`hpgl/read.rs`, `hpgl/plot.rs`) and its tests are VectorCraft's
 `crates/cad/src/hpgl.rs`, `crates/cad/src/hpgl/plot.rs` and `crates/cad/src/hpgl/tests.rs` by
 dotCooCoo, as of commit `cd1388444831995b6438e98a5699c6b54752e2d8` (MIT OR Apache-2.0), with
-VectorCraft's document types taken out.
+VectorCraft's document types taken out. The state types at the top of `hpgl/plot.rs` (`Stroke`,
+`LinePattern`, `FillRule`, `LineCap`, `LineJoin`) are the ones already here (#2295);
+`LinePattern` gains VectorCraft's `adaptive`.

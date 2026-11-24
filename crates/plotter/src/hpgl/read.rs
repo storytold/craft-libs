@@ -22,9 +22,10 @@ pub enum ReadError {
 
 /// Does `bytes` start like an HP-GL file? After any printer escapes and PJL lines (however long),
 /// it must hold nothing but instructions the reader knows, the first one of those a plot file
-/// starts with, up to the eighth instruction or 4 KB past the first. Their parameters must be
+/// starts with, up to the eighth instruction; none starting more than 4 KB past the first is
+/// checked, though the text of one starting before may reach further. Their parameters must be
 /// numbers, but for a comment's quoted string and the text, characters and encoded data of LB, BL,
-/// WD, DT, SM and PE. An instruction the reader doesn't know counts when its numbers end with a
+/// WD, DT, SM and PE; IN and DF give back the default label terminator. An instruction the reader doesn't know counts when its numbers end with a
 /// semicolon.
 pub fn is_hpgl(bytes: &[u8]) -> bool {
     holds_instructions(bytes, true)
@@ -88,7 +89,15 @@ fn holds_instructions(bytes: &[u8], strict: bool) -> bool {
                 let _ = lex.char();
             }
             b"PE" => lex.skip_pe(),
-            _ if known => lex.params(),
+            // IN and DF give back the default label terminator, as playback does.
+            b"IN" | b"DF" => {
+                terminator = ETX;
+                lex.closed_params();
+            }
+            // Numbers only: a quoted string belongs to CO alone.
+            _ if known => {
+                lex.closed_params();
+            }
             // An instruction the reader doesn't know (of an older or a device's own set) counts
             // when numbers and a semicolon follow it.
             _ => {

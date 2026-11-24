@@ -58,7 +58,7 @@ const LINE_TYPES: [&[f64]; 8] = [
     &[50.0, 10.0, 0.0, 10.0, 10.0, 10.0, 0.0, 10.0],
 ];
 
-/// Which areas FP fills: by odd crossings (FP0) or by winding (FP1).
+/// Fill rule for polygon mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FillRule {
     #[default]
@@ -66,22 +66,26 @@ pub enum FillRule {
     NonZero,
 }
 
-/// How a line ends (LA 1).
+/// Line cap style (`LA` kind 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LineCap {
     #[default]
     Butt,
     Square,
+    Triangular,
     Round,
 }
 
-/// How lines meet (LA 2).
+/// Line join style (`LA` kind 2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LineJoin {
     #[default]
     Miter,
+    MiterBevel,
+    Triangular,
     Round,
     Bevel,
+    None,
 }
 
 /// A stroke as the pen draws it (lengths in plotter units).
@@ -583,6 +587,10 @@ impl Plot {
 
     /// A dot (a vector one plotter unit long) at `at`, drawn with the selected pen.
     fn dot(&mut self, at: Point) {
+        // Its two path elements count against the budget like any other path's.
+        if self.full || !self.spend(2) {
+            return;
+        }
         if let Some(stroke) = self.stroke() {
             let mut path = BezPath::new();
             path.move_to(at);
@@ -976,10 +984,14 @@ impl Plot {
                     match (pair[0].round() as i32, value) {
                         (1, 1) => self.cap = LineCap::Butt,
                         (1, 2) => self.cap = LineCap::Square,
-                        (1, 3 | 4) => self.cap = LineCap::Round,
-                        (2, 1 | 2) => self.join = LineJoin::Miter,
+                        (1, 3) => self.cap = LineCap::Triangular,
+                        (1, 4) => self.cap = LineCap::Round,
+                        (2, 1) => self.join = LineJoin::Miter,
+                        (2, 2) => self.join = LineJoin::MiterBevel,
+                        (2, 3) => self.join = LineJoin::Triangular,
                         (2, 4) => self.join = LineJoin::Round,
-                        (2, 3 | 5 | 6) => self.join = LineJoin::Bevel,
+                        (2, 5) => self.join = LineJoin::Bevel,
+                        (2, 6) => self.join = LineJoin::None,
                         (3, _) => self.miter = pair[1].clamp(1.0, 32767.0),
                         _ => {}
                     }
@@ -1122,7 +1134,9 @@ impl Plot {
                 self.three_point_arc(a, b, c);
             }
             b"BZ" | b"BR" => {
-                while let Some(x) = lex.number() {
+                while !self.full
+                    && let Some(x) = lex.number()
+                {
                     let mut p = [x, 0.0, 0.0, 0.0, 0.0, 0.0];
                     for slot in &mut p[1..] {
                         let Some(n) = lex.number() else { return };
@@ -1299,8 +1313,9 @@ impl Plot {
         let mut st = Pe::default();
         let (mut rect, mut corner) = (false, false);
         while let Some(item) = lex.pe(&mut st) {
+            // Reading stops once the budget is spent, so the rest of PE needn't be decoded.
             if self.full {
-                continue;
+                break;
             }
             match item {
                 PeItem::Pen(n) => {
