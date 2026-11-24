@@ -283,6 +283,11 @@ pub struct DockGroupOutput {
     /// The host may add the size
     /// the dragged unit floats at with `drag::amend` in this pass.
     pub drag_started: bool,
+    /// The tabs the strip shows this pass, each with its rect and the id of its accessibility node; none for a
+    /// [`titled`](DockGroup::titled) group.
+    pub tabs: Vec<(PanelKey, Rect, Id)>,
+    /// The band the group is dragged by this pass, with the id of its accessibility node.
+    pub grip: Option<(Rect, Id)>,
 }
 
 impl Outcome for DockGroupOutput {
@@ -315,6 +320,7 @@ struct Reported {
     drag_started: bool,
     /// A drag started on the strip's empty room, which `finish` starts as a drag of the group.
     empty_drag: bool,
+    tabs: Vec<(PanelKey, Rect, Id)>,
 }
 
 /// A group of panels: a header of tab strip and panel menu button, dragged by its empty part, over the active panel's
@@ -580,8 +586,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
         if let Some(request) = &self.reported.menu {
             cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0 = Some(request.at);
         }
-        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, .. } = self.reported;
-        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started }
+        let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
+        let Reported { picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, .. } = self.reported;
+        DockGroupOutput { response: cx.response.clone(), picked, closed, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, grip }
     }
 }
 
@@ -681,8 +688,11 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             .inner;
         self.extra = extra;
         // A press on the group's empty body focuses its panel, as in Photoshop.
-        if surface_pressed && let Some(strip) = strip {
-            focus::request(ui.ctx(), FocusTarget::Id(strip));
+        if surface_pressed && let Some((strip, _)) = &strip {
+            focus::request(ui.ctx(), FocusTarget::Id(*strip));
+        }
+        if let Some((strip, tabs)) = &strip {
+            self.reported.tabs = tabs.iter().map(|(key, rect)| (*key, *rect, crate::contract::item_node(*strip, key))).collect();
         }
         let size = self.size;
         let reported = &mut self.reported;
@@ -761,8 +771,9 @@ fn tab_marks(ctx: &egui::Context, panels: &[PanelTitle]) -> Vec<(PanelKey, Optio
         .collect()
 }
 
-/// A group's tab strip with its tab insertion spots. Returns the strip's id.
-fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> Id {
+/// A group's tab strip with its tab insertion spots. Returns the strip's id and the rect of each tab it shows, which a
+/// replay returns again, moved with the row.
+fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mut TabRow<'_, P>, ui: &mut Ui) -> (Id, Vec<(PanelKey, Rect)>) {
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
@@ -831,7 +842,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     if strip.empty_double {
         row.sent.send(TabEvent::EmptyDouble);
     }
-    strip.response.response.id
+    (strip.response.response.id, strip.tab_rects)
 }
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before

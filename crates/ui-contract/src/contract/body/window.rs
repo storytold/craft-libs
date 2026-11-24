@@ -273,6 +273,31 @@ fn edge_of(dx: i8, dy: i8) -> ResizeEdge {
     }
 }
 
+/// The move band and the resize grips the body step declared for a container this pass, for a host that names them
+/// (an automation interface that drives a window by its grips). Each comes with the id of its accessibility node, the
+/// id [`focused_node`](crate::runtime::access::focused_node) reports while it holds focus.
+impl<C: Container> Cx<'_, C> {
+    /// The band the container is moved by, `None` when it has none this pass (no header, not movable).
+    pub fn move_band(&self) -> Option<(Rect, Id)> {
+        let band = self.core.results.get(&(MOVE_BAND, None))?;
+        Some((band.rect, crate::runtime::access::sub_node_id(self.core.id, MOVE_BAND.into())))
+    }
+
+    /// The edge and corner grips the container is resized by, each with the edge or corner it moves; none when it does
+    /// not resize this pass (minimized, maximized, or a window the platform resizes from its own frame).
+    pub fn resize_grips(&self) -> Vec<(ResizeEdge, Rect, Id)> {
+        GRIPS
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, (dx, dy, _))| {
+                let part = GRIP.at(index as u64);
+                let grip = self.core.results.get(&(GRIP, Some(index as u64)))?;
+                Some((edge_of(dx, dy), grip.rect, crate::runtime::access::sub_node_id(self.core.id, part)))
+            })
+            .collect()
+    }
+}
+
 /// The arrow chords, with and without Shift, a window mode holds, with the direction each moves.
 const MODE_ARROWS: [(Key, [i8; 2]); 4] = [(Key::Left, [-1, 0]), (Key::Right, [1, 0]), (Key::Up, [0, -1]), (Key::Down, [0, 1])];
 
