@@ -544,6 +544,30 @@ pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
 }
 
+/// The size of one entry of [`host_popup_list`], as an app's popup list entry.
+#[cfg(feature = "suite")]
+const HOST_LIST_ENTRY: Vec2 = Vec2::new(104.0, 22.0);
+
+/// A host's own popup list `id` at `at`, as an app draws one: an egui foreground area with one clickable entry per id
+/// in `entries`, stacked from the top. It leaves arrow keys to egui's directional focus. Returns the entries' rects.
+#[cfg(feature = "suite")]
+pub(crate) fn host_popup_list(ctx: &Context, id: Id, at: Pos2, entries: &[Id]) -> Vec<Rect> {
+    egui::Area::new(id)
+        .order(Order::Foreground)
+        .fixed_pos(at)
+        .show(ctx, |ui| {
+            let mut rects = Vec::new();
+            for (row, &entry) in entries.iter().enumerate() {
+                let rect = Rect::from_min_size(at + Vec2::Y * (HOST_LIST_ENTRY.y * row as f32), HOST_LIST_ENTRY);
+                ui.allocate_rect(rect, Sense::hover());
+                let _ = ui.interact(rect, entry, Sense::click());
+                rects.push(rect);
+            }
+            rects
+        })
+        .inner
+}
+
 /// Opens the host's egui popup `id`.
 #[cfg(feature = "suite")]
 pub(crate) fn open_host_popup(ctx: &Context, id: egui::Id) {

@@ -424,6 +424,28 @@ fn arrows_and_tab_move_egui_focus_among_host_buttons() {
     assert_eq!(egui_focused(&frames.ctx), Some(named_id("button")), "egui's arrows leave a framework stop's focus alone");
 }
 
+/// Arrows from an entry of the app's own popup list stay in the list: the app's button under the list, a host stop as
+/// an app's tool slot is, is no arrow target while the list covers it, though it lies nearer below the first entry
+/// than the second entry does.
+#[trial]
+fn arrows_in_an_app_popup_list_skip_the_widget_it_covers() {
+    let (button, popup, first, second) = (named_id("host tool"), named_id("host popup"), named_id("host entry 1"), named_id("host entry 2"));
+    let mut show = move |ui: &mut Ui| {
+        fixture::host_button(ui, button, Rect::from_min_max(Pos2::new(228.0, 31.0), Pos2::new(254.0, 57.0)));
+        host_stop(ui.ctx(), button, KeyUse::of(Input::Pointer));
+        areas::host_popup_list(ui.ctx(), popup, Pos2::new(201.0, 18.0), &[first, second]);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    fixture::host_focus(&frames.ctx, first);
+    frames.idle(2, &mut show);
+    assert_eq!(egui_focused(&frames.ctx), Some(first));
+    press_key(&mut frames, &mut show, Key::ArrowDown);
+    assert_eq!(egui_focused(&frames.ctx), Some(second), "ArrowDown goes to the list's next entry, not to the button under it");
+    press_key(&mut frames, &mut show, Key::ArrowUp);
+    assert_eq!(egui_focused(&frames.ctx), Some(first), "ArrowUp comes back to the first entry");
+}
+
 /// What the window shows before the app's own egui buttons.
 #[derive(Clone, Copy)]
 enum Before {
