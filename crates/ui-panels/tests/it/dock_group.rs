@@ -65,6 +65,29 @@ fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
     assert!(fixture.by_label("2 replies").is_none(), "Comments' caption goes with it");
 }
 
+// Beside pill tabs (VectorCraft's) the panel menu button stands in the strip's middle, level with the shown tab's pill;
+// beside plain tabs it keeps to the strip's top.
+#[trial]
+fn the_panel_menu_button_stands_level_with_pill_tabs() {
+    use craft_ui::menu::PanelRow;
+    use craft_ui::tabs::PanelTabLook;
+    let middles = |look: PanelTabLook| {
+        let panels = vec![PanelTitle::new(PanelKey::new(1), "Layers"), PanelTitle::new(PanelKey::new(2), "Pages")];
+        let mut fixture = Fixture::new(move |ui| {
+            let group = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).menu(Vec::<PanelRow>::new).tab_look(look);
+            let _ = group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), |_, _| ());
+        });
+        fixture.settle();
+        let Some(tab) = fixture.by_label("Layers") else { panic!("the shown tab shows") };
+        let Some(menu) = fixture.by_label("Panel Menu") else { panic!("the panel menu button shows") };
+        (tab.rect.center().y, menu.rect)
+    };
+    let (tab, menu) = middles(PanelTabLook::Pill);
+    assert!((menu.center().y - tab).abs() <= 0.5, "the menu button {menu:?} is level with the pill tab's middle {tab}");
+    let (_, plain) = middles(PanelTabLook::Plain);
+    assert!(menu.top() > plain.top() + 0.5, "beside plain tabs the button {plain:?} keeps to the strip's top, above {menu:?}");
+}
+
 // A titled group shows the shown panel's name as a heading with its count and a close button, not a tab strip: the
 // panel's name is not cut to a tab's width, and the close button closes the shown panel.
 #[trial]
