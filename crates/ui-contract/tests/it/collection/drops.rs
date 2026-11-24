@@ -137,13 +137,15 @@ fn rows_from_another_list_drop_into_a_gap_only_where_a_kind_takes_them() {
 }
 
 /// A list's copy keys decide which held key makes its own row drag a copy, and the pointer over it shows the copy
-/// while they are held: off macOS Ctrl for the platform's keys, Alt for Alt; the other key moves.
+/// while they are held: the platform's keys copy with Ctrl off macOS and Option on it, Alt copies with Alt; the other
+/// key moves.
 #[trial]
 fn a_lists_copy_keys_pick_the_key_that_copies_its_rows() {
     use craft_behavior::{CopyKeys, Cursor, CursorIcon};
     use egui::Modifiers;
     let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
-    for (keys, copies, moves) in [(CopyKeys::Platform, ctrl, Modifiers::ALT), (CopyKeys::Alt, Modifiers::ALT, ctrl)] {
+    let platform = if cfg!(target_os = "macos") { (Modifiers::ALT, ctrl) } else { (ctrl, Modifiers::ALT) };
+    for (keys, copies, moves) in [(CopyKeys::Platform, platform.0, platform.1), (CopyKeys::Alt, Modifiers::ALT, ctrl)] {
         for (held, copy) in [(copies, true), (moves, false)] {
             let words = Words::flat(&["a", "b", "c", "d"]);
             let run = Run::default();

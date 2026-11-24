@@ -84,6 +84,13 @@ impl<'a> BodyCx<'a> {
         self.field_message.clone()
     }
 
+    /// Whether a drag of the container's move band (`DragBand::Move`) moves its layer in this pass, from the pass the
+    /// drag starts to the one before its release: a grip in the body shows the move.
+    pub fn moving(&self) -> bool {
+        let band = crate::primitives::sensing::part_press(self.memory.ctx(), self.resolved.id, crate::contract::MOVE_BAND.into());
+        matches!(band.press.phase, craft_behavior::PressPhase::DragStart { .. } | craft_behavior::PressPhase::Drag { .. })
+    }
+
     /// Whether the body is open.
     pub fn is_open(&self) -> bool {
         *self.open

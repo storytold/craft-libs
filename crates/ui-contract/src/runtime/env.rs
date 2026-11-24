@@ -153,6 +153,10 @@ pub struct Scoped {
     /// The width a `Row` body was offered this pass, before its `End` or `Center` lead narrowed the block: the room
     /// its direct children share. Only the row's own children read it.
     pub(crate) row_room: Option<f32>,
+    /// How far the ranked units of the first `Row` body below give way before its other drops: the row drops them
+    /// until the kept units fit in its ideal width less this, an end region that joins its body's fit
+    /// (`EndRegion::fit`) giving up the body's shortfall. That row's children do not read it.
+    pub(crate) rank_short: Option<f32>,
     /// The line of the unwrapped `Row` body whose direct children the scope places in flow (`RowLine`).
     pub(crate) row_line: Option<RowLine>,
     /// Where the first child the scope places in flow reports its first line: a container's header or body
@@ -161,6 +165,9 @@ pub struct Scoped {
     /// The body whose flow places the scope's direct children: the flow start a child reads (`layout::flow_start`)
     /// and the one a child placed in flow closes.
     pub(crate) flow_body: Option<Id>,
+    /// The `Stack` body that places the scope's direct children in flow and the gap it leaves between them; it holds
+    /// only while that body is `flow_body`.
+    pub(crate) stack_gap: Option<(Id, f32)>,
     /// A rule precedes the start of the body this scope opens: its container draws one under its header, or draws
     /// nothing of its own and itself follows one. The body's layout opens its flow start with it.
     pub(crate) after_rule: bool,
@@ -699,9 +706,11 @@ impl Env {
                 given_column: false,
                 content: (false, false),
                 row_room: None,
+                rank_short: None,
                 row_line: None,
                 first_line: None,
                 flow_body: None,
+                stack_gap: None,
                 after_rule: false,
                 column_row: false,
                 bracket: None,
