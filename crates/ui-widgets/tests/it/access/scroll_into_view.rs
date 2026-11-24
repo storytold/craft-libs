@@ -2,11 +2,15 @@
 
 use craft_behavior::{Selection, keyed};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowCollection as _};
+use craft_ui::contract::{Bind, Props as _, Scroll, Show as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
 use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::layout::Block;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Id, Key, Modifiers, Rect, Vec2};
+use std::cell::Cell;
+use std::rc::Rc;
 
 #[trial]
 fn scroll_into_view_moves_no_focus() {
@@ -55,4 +59,33 @@ fn scroll_into_view_on_a_list_row_scrolls_the_list_to_it() {
     fixture.access(AccessActionKind::ScrollIntoView, &near).settle();
     let after = fixture.by_label("Row 150").expect("row 150's node").rect;
     assert!((after.min - shown.min).length() <= 0.5, "Scroll Into View on a row in view moved nothing: {after:?}, was {shown:?}");
+}
+
+/// A screen reader's Scroll Into View on a button below a scrolling stack's view scrolls the stack until the button
+/// shows, as Tab to it does. `room_height` caps the room a container offers its children, not the container itself, so
+/// the 100 points go on a host around the scrolling stack: the stack takes at most that room and scrolls the 300-point
+/// block and the button under it, as a small window's dialog column does.
+#[trial]
+fn scroll_into_view_on_a_button_below_a_stacks_view_scrolls_the_stack_to_it() {
+    let view = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().fill_width().room_height(100.0).show(ui, |ui, _| {
+            Stack::new().fill_width().scroll(Scroll::vertical()).show(ui, |ui, cx| {
+                if !ui.is_sizing_pass() {
+                    seen.set(cx.rect);
+                }
+                Block::new(Vec2::new(100.0, 300.0)).show(ui);
+                Button::new("Far").show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    let button = fixture.by_label("Far").expect("the button's node");
+    assert!(view.get().height() <= 100.5, "the stack takes at most its host's room: {:?}", view.get());
+    assert!(!shows(view.get(), button.rect), "the button starts out of view: {:?} in {:?}", button.rect, view.get());
+    fixture.access(AccessActionKind::ScrollIntoView, &button).settle();
+    let shown = fixture.by_label("Far").expect("the button's node").rect;
+    assert!(shows(view.get(), shown), "Scroll Into View brought the button into the stack's view: {shown:?} in {:?}", view.get());
 }
