@@ -64,6 +64,9 @@ pub struct SurfaceColors {
     pub raised: Rgba,
     /// Fields and wells.
     pub sunken: Rgba,
+    /// The resting fill of a filled control (`Emphasis::Filled`): a neutral tile with no edge. Follows
+    /// `state.hover` unless pinned.
+    pub control: Rgba,
     /// The face of a knob that rides on a track: slider and switch thumbs. Light in both modes.
     pub knob: Rgba,
     /// Translucent cover behind modal surfaces.
@@ -112,6 +115,8 @@ pub struct LineColors {
     pub border: Rgba,
     /// The boundary of a control that must be seen to be used (fields, checkboxes).
     pub control_edge: Rgba,
+    /// The edge of an outlined neutral control (an outline or soft button); follows `text.muted` unless pinned.
+    pub outline: Rgba,
     /// The outline of a `surface.knob` face; clear where the face stands out on its own (dark
     /// mode).
     pub knob_edge: Rgba,
@@ -321,13 +326,14 @@ impl ColorTokens {
                 chrome: c,
                 raised: c,
                 sunken: c,
+                control: c,
                 knob: c,
                 scrim: c,
                 inverse: c,
                 shadow: c,
             },
             text: TextColors { normal: c, muted: c, faint: c, disabled: c, on_accent: c, on_strong: c, on_status: c, on_selected: c, on_inverse: c },
-            line: LineColors { divider: c, border: c, control_edge: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
+            line: LineColors { divider: c, border: c, control_edge: c, outline: c, knob_edge: c, frame: c, mark: c, grip: c, focus: c },
             accent: AccentColors {
                 solid: c,
                 hover: c,
@@ -438,6 +444,8 @@ color_tokens! {
     SurfaceRaised = "surface.raised" => surface.raised;
     /// `surface.sunken`
     SurfaceSunken = "surface.sunken" => surface.sunken;
+    /// `surface.control`
+    SurfaceControl = "surface.control" => surface.control;
     /// `surface.knob`
     SurfaceKnob = "surface.knob" => surface.knob;
     /// `surface.scrim`
@@ -470,6 +478,8 @@ color_tokens! {
     LineBorder = "line.border" => line.border;
     /// `line.control_edge`
     LineControlEdge = "line.control_edge" => line.control_edge;
+    /// `line.outline`
+    LineOutline = "line.outline" => line.outline;
     /// `line.knob_edge`
     LineKnobEdge = "line.knob_edge" => line.knob_edge;
     /// `line.frame`

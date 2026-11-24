@@ -368,6 +368,9 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// Whether the panel menu button shows beside the tabs; a context request on a tab opens the menu either way.
     #[prop]
     panel_menu_shown: bool,
+    /// The panel menu button's icon: `more` unless the dock gives another (`DockConfig::panel_menu_icon`).
+    #[prop]
+    panel_menu_icon: IconId,
     /// The state of each panel command for the shown panel, published in the group's scope every pass.
     #[prop]
     command_states: Vec<(DockCommands, CommandState)>,
@@ -405,6 +408,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             in_window: false,
             menu: None,
             panel_menu_shown: true,
+            panel_menu_icon: IconId::new("more"),
             command_states: Vec::new(),
             extra: None,
             footer: None,
@@ -429,8 +433,8 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
     }
 
     /// The panel menu button's face.
-    fn menu_face(name: Label) -> IconButton<'static> {
-        IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
+    fn menu_face(&self, name: Label) -> IconButton<'static> {
+        IconButton::new(self.panel_menu_icon.clone()).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
     /// Starts a drag of the whole group: its drop region shows the group's name.
@@ -523,7 +527,7 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
     /// tabs meet it.
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if cx.part_if_declared(MENU).is_some() {
-            ui.face(MENU, Self::menu_face(cx.words::<DockWords>().panel_menu.clone()));
+            ui.face(MENU, self.menu_face(cx.words::<DockWords>().panel_menu.clone()));
         }
         ui.draw().surface(cx.rect, SurfaceKind::Frame, Corners::None);
     }
@@ -588,7 +592,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         let band = grip_width(cx.tokens);
         let button = if self.shows_menu_button() {
-            cx.tokens.space.gap.item + cx.face(Self::menu_face(cx.words::<DockWords>().panel_menu.clone())).x
+            cx.tokens.space.gap.item + cx.face(self.menu_face(cx.words::<DockWords>().panel_menu.clone())).x
         } else {
             0.0
         };
