@@ -554,12 +554,17 @@ enum PressUse {
 
 /// The chords the focused component of `record` claims: its stop's, the state-dependent ones (`keys::claim`) of the
 /// component, its arena root and its menu level, and a bare End where it declares `EndKey::EndMode`. With nothing
-/// focused and no modal layer open, the window's document canvas's state-dependent claims hold instead.
+/// focused and no modal layer open, the window's document canvas's state-dependent claims hold instead, except Tab and
+/// Shift+Tab.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
     let canvas = record.canvas.filter(|_| !record.foreign);
-    let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar, canvas].contains(&Some(owner));
-    claims.extend(stage.claims.iter().filter(|(owner, _)| holds(*owner)).map(|(_, chord)| *chord));
+    let holds = |owner: Id| [record.focused, record.root, record.menu, record.menu_bar].contains(&Some(owner));
+    // The unfocused canvas's tool never takes Tab or Shift+Tab: with nothing focused they move focus into the window,
+    // so a tool that claims the plain keys cannot trap keyboard navigation.
+    let canvas_holds =
+        |owner: Id, chord: &Chord| Some(owner) == canvas && !(chord.key == Key::Tab && (chord.mods == Mods::NONE || chord.mods == Mods::SHIFT));
+    claims.extend(stage.claims.iter().filter(|(owner, chord)| holds(*owner) || canvas_holds(*owner, chord)).map(|(_, chord)| *chord));
     // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
     // mode, so no collection navigation or scroll owner takes it as a move to the end.
     if record.keys.is_some_and(|keys| keys.end == EndKey::EndMode) {
