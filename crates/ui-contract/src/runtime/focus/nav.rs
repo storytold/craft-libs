@@ -262,7 +262,9 @@ impl State {
         let stop = &rec.stop;
         let roving = stop.group.is_some();
         let keys = stop.keys;
-        let escape = keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
+        // An app's own widget (`Stop::host`) reads its Escape from egui, as a stop that claims it does: egui keeps its
+        // focus on it.
+        let escape = stop.host || keys.claims.iter().any(|chord| chord.key == craft_keymap::Key::Escape);
         let filter = egui_focus::filter(
             keys.keep == super::KeepKeys::Tab,
             roving || matches!(keys.keep, super::KeepKeys::InlineArrows | super::KeepKeys::BlockArrows),
@@ -571,29 +573,44 @@ impl State {
         Some(self.focus_stop(member))
     }
 
-    /// The focus move when the focused stop was not registered this pass: a removed child of a collection row hands
-    /// focus back to the row, as Escape does; any other removed stop leaves focus nowhere, whatever stops are left
-    /// around it.
+    /// The focus move when the focused stop was not registered this pass, or only inside a layer that plays its exit
+    /// (`fading`): a removed child of a collection row hands focus back to the row, as Escape does; any other removed
+    /// stop leaves focus nowhere, whatever stops are left around it.
     fn removed_focus(&mut self, focused: Option<Id>) -> Option<Vec<Act>> {
         let root = focused?;
         let key = *self.focused.get(&root)?;
-        if self.stops.iter().any(|rec| rec.stop.key() == key) {
+        let live = |rec: &&StopRec| !self.fading(rec.scope);
+        if self.stops.iter().filter(live).any(|rec| rec.stop.key() == key) {
             return None;
         }
-        let gone = self.last_stops.iter().find(|rec| rec.stop.key() == key)?;
+        let gone = self.find_stop(key)?;
         let row = gone.stop.group.and_then(|group| self.group(group)).filter(|group| group.row);
-        let owner = row.and_then(|group| self.row_owner(&group)).filter(|owner| self.stops.iter().any(|rec| rec.stop.key() == owner.stop.key()));
+        let owner =
+            row.and_then(|group| self.row_owner(&group)).filter(|owner| self.stops.iter().filter(live).any(|rec| rec.stop.key() == owner.stop.key()));
         // A removed stop in an arena (an editor or control in a canvas body) hands focus back to the arena root's own
         // stop (the canvas).
-        let target = owner
-            .or_else(|| gone.stop.arena.and_then(|arena| self.stops.iter().find(|rec| rec.stop.id == arena && rec.stop.part.is_none()).cloned()));
+        let target = owner.or_else(|| {
+            gone.stop.arena.and_then(|arena| self.stops.iter().filter(live).find(|rec| rec.stop.id == arena && rec.stop.part.is_none()).cloned())
+        });
         Some(match target {
             Some(target) => self.focus_stop_from(target, FocusOrigin::Removal),
             None => vec![Act::Surrender(root)],
         })
     }
 
-    /// The opener of a scope that went away while focus was inside it.
+    /// Whether the scope `scope` of this pass, or one around it, is a layer playing its exit: its stops take no focus.
+    fn fading(&self, scope: Option<Id>) -> bool {
+        let mut at = scope;
+        while let Some(rec) = at.and_then(|id| self.scopes.get(&id)) {
+            if rec.closing {
+                return true;
+            }
+            at = rec.parent;
+        }
+        false
+    }
+
+    /// The opener of a scope that went away, or plays its exit, while focus was inside it.
     fn restored_focus(&self, focused: Option<Id>) -> Option<StopRec> {
         let root = focused?;
         let key = *self.focused.get(&root).unwrap_or(&(root, None));
@@ -847,6 +864,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
     state.record = super::FocusedRecord {
         claims: keys.map(|keys| keys.claims.to_vec()).unwrap_or_default(),
         focused: stop.as_ref().map(|stop| stop.id),
+        host: stop.as_ref().is_some_and(|stop| stop.host),
         root: stop.as_ref().filter(|stop| stop.root != stop.id && !stop.text).map(|stop| stop.root),
         menu: state.focused_menu_level(),
         pages: stop.as_ref().is_some_and(|stop| stop.role.pages),

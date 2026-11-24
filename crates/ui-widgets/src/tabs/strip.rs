@@ -21,7 +21,8 @@ use crate::buttons::IconButton;
 use crate::contract::{
     Access, Animate as _, Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps,
     ContextMenuRequest, Cx, DropKind, DropMark, Entry, ListDrag, Meta, Name, NoValue, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Pointer as _, PopupKind, Props as _, Role, RowState, SelectMode, ShowContainer as _, ShowShape, Sizing, WindowDropTarget, WordSetCx as _, spec,
+    Pointer as _, PopupKind, Props as _, Remember as _, Role, RowState, SelectMode, ShowContainer as _, ShowShape, Sizing, WindowDropTarget,
+    WordSetCx as _, spec,
 };
 use crate::list::{DropTest, RowTest};
 use crate::menu::Menu;
@@ -184,6 +185,19 @@ struct Reserved {
 enum Lane {
     Tab(usize),
     Ghost(usize),
+}
+
+/// The wheel scroll a strip has taken but not yet turned into a step, and the tab the strip left shown.
+#[derive(Clone)]
+struct WheelCarry<K> {
+    owed: f32,
+    left: Option<K>,
+}
+
+impl<K> Default for WheelCarry<K> {
+    fn default() -> Self {
+        Self { owed: 0.0, left: None }
+    }
 }
 
 /// What the fit reads besides the tabs' widths: the shown tab, the kind's rule, the tabs kept ahead of the others and
@@ -516,6 +530,9 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// The strip's taller form with the body type.
     #[prop(flag)]
     large: bool,
+    /// The look of a panel strip's tabs ([`TabKind::Panel`]).
+    #[prop]
+    panel_look: super::PanelTabLook,
     /// The tab the host shows. A click, Space, Enter or a drop reports the new one in the output.
     #[prop]
     shown: Option<K>,
@@ -586,6 +603,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
                 .primary_picks(TabKind::Document.primary_shows()),
             kind: TabKind::Document,
             large: false,
+            panel_look: super::PanelTabLook::Plain,
             shown: None,
             tear_off: false,
             wheel_selects: false,
@@ -609,6 +627,14 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         .label(label)
     }
 
+    /// A pointer press on a tab (primary or secondary, a drag's press too) leaves key focus where it is; the keyboard
+    /// still reaches the strip by Tab. A dock's panel tabs: clicking one leaves the document's keys working.
+    #[must_use]
+    pub fn keeps_focus(mut self) -> Self {
+        self.items = self.items.focus_on_press(false);
+        self
+    }
+
     /// A tab drag carries `map` of it, for the drop targets of type `P`; a tab the map gives `None` for does not drag
     /// unless a reorder rule is set. The drag stays one session with one ghost.
     #[must_use]
@@ -625,24 +651,40 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     }
 
     /// With `wheel_selects`, the wheel's whole notches step the shown tab through the tabs in the source's order:
-    /// down to later tabs, up to earlier ones.
+    /// down to later tabs, up to earlier ones. The scroll short of a notch is kept for the next pass, so a trackpad's
+    /// small deltas add up; it is dropped when the scroll reverses, when the strip stops at an end, and when the
+    /// shown tab is not the one the last step left.
     fn wheel_step(&mut self, cx: &mut Cx<'_, Self>) {
         if !self.wheel_selects {
             return;
         }
         let Some(wheel) = cx.take_wheel().filter(|wheel| !wheel.mods.cmd && !wheel.mods.ctrl) else { return };
         let notch = self.items.wheel_notch(cx.style.line).points(cx.rect.height());
-        let steps = if notch > 0.0 { (wheel.scroll.y / notch).trunc() } else { 0.0 };
-        if steps == 0.0 || !steps.is_finite() {
+        if !notch.is_finite() || notch <= 0.0 || !wheel.scroll.y.is_finite() {
             return;
         }
-        let texts = self.texts.borrow();
-        let Some(at) = self.shown.as_ref().and_then(|shown| texts.iter().position(|(key, _)| key == shown)) else { return };
-        let last = texts.len().saturating_sub(1) as i64;
-        let to = (at as i64 - steps as i64).clamp(0, last) as usize;
-        if to != at {
-            self.wheeled = Some(texts[to].0.clone());
+        let mut carry = cx.memory::<WheelCarry<K>>().clone();
+        if carry.left != self.shown || carry.owed * wheel.scroll.y < 0.0 {
+            carry.owed = 0.0;
         }
+        carry.owed += wheel.scroll.y;
+        let steps = (carry.owed / notch).trunc();
+        carry.owed -= steps * notch;
+        let texts = self.texts.borrow();
+        let at = self.shown.as_ref().and_then(|shown| texts.iter().position(|(key, _)| key == shown));
+        if let Some(at) = at
+            && steps != 0.0
+        {
+            let last = texts.len().saturating_sub(1) as i64;
+            let to = (at as i64 - steps as i64).clamp(0, last) as usize;
+            if to == at {
+                carry.owed = 0.0;
+            } else {
+                self.wheeled = Some(texts[to].0.clone());
+            }
+        }
+        carry.left = self.wheeled.clone().or_else(|| self.shown.clone());
+        *cx.memory::<WheelCarry<K>>() = carry;
     }
 
     fn report(&self) -> Report {
@@ -1023,9 +1065,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         StripLayout::new(count, Vec2::new(width, cx.tokens.size.bar.tab), tab_gap, fitting, self.report.clone(), cx.frame_ctx().clone())
     }
 
-    /// Every tab takes the strip's kind and size.
+    /// Every tab takes the strip's kind, panel look and size.
     fn dress<'r>(&self, tab: Self::Item<'r>, _: &RowState) -> Self::Item<'r> {
-        let tab = tab.kind(self.kind);
+        let tab = tab.kind(self.kind).panel_look(self.panel_look);
         if self.large { tab.large() } else { tab }
     }
 

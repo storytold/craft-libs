@@ -186,6 +186,32 @@ fn reference_cycles_are_errors() {
     assert_eq!(e.len(), 1, "{e:?}");
 }
 
+/// `shape.locator` sets the reference point's squares: left out, a value is the Size preset's handle size; set, the
+/// tokens take it and the file writes it back; a value of the wrong kind or out of range is an error at its key.
+#[test]
+fn the_locator_shape_is_read_resolved_written_and_checked() {
+    let appearance = super::semantic_tests::app(Mode::Dark, Contrast::Standard);
+    let plain = crate::resolve(&parse_value(&full()).unwrap().theme, appearance, None).tokens;
+    let handle = plain.size.handle;
+    assert_eq!((plain.shape.locator.cell, plain.shape.locator.square), (handle.md, handle.sm), "no locator: the preset's handles");
+
+    let mut v = full();
+    v["shape"]["locator"] = json!({ "square": 5 });
+    let file = parse_value(&v).unwrap();
+    let locator = crate::resolve(&file.theme, appearance, None).tokens.shape.locator;
+    assert_eq!((locator.cell, locator.square), (handle.md, 5.0), "a set value over the preset's");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/shape/locator/square"), Some(&json!(5.0)));
+    assert_eq!(written.pointer("/shape/locator/cell"), None, "an unset value is not written");
+
+    for (key, bad) in [("cell", json!(0)), ("cell", json!(33)), ("square", json!("small")), ("square", json!(17))] {
+        let mut v = full();
+        v["shape"]["locator"] = json!({ key: bad });
+        let found = errors(&v);
+        assert!(found.iter().any(|e| e.contains(&format!("shape.locator.{key}"))), "{key} = {bad}: {found:?}");
+    }
+}
+
 /// photocraft#16426: `shape.grip` sets the dock grips' marks. Each value is optional and keeps the default's when
 /// left out; the theme's tokens take them, the file writes them back, and a value of the wrong kind or out of range
 /// is an error at its key.

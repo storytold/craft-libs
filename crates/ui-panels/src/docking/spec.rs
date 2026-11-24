@@ -3,6 +3,7 @@
 use super::DockSizes;
 use crate::contract::SizeLimits;
 use crate::primitives::IconSpec;
+use crate::rails::RailDensity;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use craft_host::target::WindowKind;
@@ -71,8 +72,8 @@ enum GridWidths {
     /// `first`: the content's width at one column, a cell and the content's own padding on both sides; `step`: the
     /// width each further column adds, a cell and the gap before it.
     Content { first: f32, step: f32 },
-    /// A tool rail's cells, sized by the dock's style.
-    Rail,
+    /// A tool rail's cells at a density, sized by the dock's style.
+    Rail(RailDensity),
 }
 
 impl DockGrid {
@@ -84,14 +85,25 @@ impl DockGrid {
     /// The grid of a tool rail of `cells` cells: a rail button and the control padding on both sides at one column,
     /// a button and the tight gap for each further column, in the style the dock shows it in.
     pub fn rail(cells: usize) -> Self {
-        DockGrid { widths: GridWidths::Rail, most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+        DockGrid { widths: GridWidths::Rail(RailDensity::Regular), most: u16::try_from(cells).unwrap_or(u16::MAX).max(1) }
+    }
+
+    /// A [`rail`](Self::rail) grid whose cells are the buttons of a rail at `density`, as the rail shows them
+    /// ([`ToolRail::density`](crate::rails::ToolRail::density)); a content grid is left as it is.
+    #[must_use]
+    pub fn density(mut self, density: RailDensity) -> Self {
+        if let GridWidths::Rail(at) = &mut self.widths {
+            *at = density;
+        }
+        self
     }
 
     /// The grid with its widths in points: a [`rail`](Self::rail) grid takes the rail widths of `sizes`.
     pub fn resolved(self, sizes: &DockSizes) -> Self {
         match self.widths {
             GridWidths::Content { .. } => self,
-            GridWidths::Rail => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Regular) => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
+            GridWidths::Rail(RailDensity::Dense) => DockGrid::new(sizes.dense_rail_first, sizes.dense_rail_step, self.most),
         }
     }
 
@@ -100,7 +112,7 @@ impl DockGrid {
     fn first_step(self) -> (f32, f32) {
         match self.widths {
             GridWidths::Content { first, step } => (first, step),
-            GridWidths::Rail => (0.0, 0.0),
+            GridWidths::Rail(_) => (0.0, 0.0),
         }
     }
 
@@ -179,6 +191,13 @@ pub struct PanelSpec {
     pub count: Option<usize>,
     /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
     pub caption: Option<Label>,
+    /// The panel's body is the app's own egui code: the dock hands `DockPanels::body`, `footer`, `group_header`,
+    /// `rail_footer` and the group's `group_view` (while the panel is the one its group shows) a `Ui` with the style
+    /// of the `Ui` the dock was shown in, so the code lays out as it does outside the dock, and runs them once per pass,
+    /// in the pass's real run (a measuring run takes the size they last took). Other bodies lay out with
+    /// the group's spacing, which framework components expect. An app moves onto the framework panel by panel by
+    /// clearing it on each panel it ports.
+    pub host_body: bool,
 }
 
 impl PanelSpec {
@@ -198,6 +217,7 @@ impl PanelSpec {
             footer: false,
             count: None,
             caption: None,
+            host_body: false,
         }
     }
 
@@ -275,6 +295,13 @@ impl PanelSpec {
     #[must_use]
     pub fn canvas(mut self) -> Self {
         self.canvas = true;
+        self
+    }
+
+    /// The panel's body is the app's own egui code (`host_body`).
+    #[must_use]
+    pub fn host_body(mut self) -> Self {
+        self.host_body = true;
         self
     }
 
