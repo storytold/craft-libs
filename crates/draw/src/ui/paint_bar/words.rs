@@ -55,12 +55,22 @@ craft_ui::words! {
         combination: "paintBar.combination" = "Useful mixer brush combinations";
         /// The Wet field's caption.
         wet: "paintBar.wet" = "Wet";
+        /// The tooltip of the Mixer Brush's Wet field.
+        wet_tip: "paintBar.wetTip" = "Set the amount of paint picked up from the Canvas";
         /// The Load field's caption.
         load: "paintBar.load" = "Load";
+        /// The tooltip of the Mixer Brush's Load field.
+        load_tip: "paintBar.loadTip" = "Set the amount of paint on the brush";
         /// The Mix field's caption.
         mix: "paintBar.mix" = "Mix";
+        /// The tooltip of the Mixer Brush's Mix field.
+        mix_tip: "paintBar.mixTip" = "Set the color mixing ratio for stroke";
+        /// The tooltip of the Mixer Brush's Flow field; the other tools' Flow field carries no tooltip here.
+        mixer_flow_tip: "paintBar.mixerFlowTip" = "Set flow rate for stroke";
         /// The Sample All Layers toggle.
         sample_all_layers: "paintBar.sampleAllLayers" = "Sample All Layers";
+        /// The tooltip of the Mixer Brush's Sample All Layers toggle.
+        sample_all_layers_tip: "paintBar.sampleAllLayersTip" = "Pick up wet paint from all layers";
         /// The names of the mixer combinations, in [`MIXER_COMBINATIONS`](super::MIXER_COMBINATIONS) order.
         combinations: array [
         "paintBar.combination0" = "Custom",

@@ -1,6 +1,7 @@
 //! [`PaintBar`]: the options bar members of the Brush, Pencil, Eraser and Mixer Brush tools after the preset picker.
 
 use std::cell::RefCell;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
@@ -201,6 +202,25 @@ pub const MIXER_COMBINATIONS: [Option<(f64, f64, f64)>; 13] = [
 /// The index of the first combination of each group (Dry, Moist, Wet, Very Wet); a separator goes above each.
 pub const MIXER_GROUP_STARTS: [usize; 4] = [1, 4, 7, 10];
 
+/// How one percent field of the bar holds its value: the range, in shown percent, that typed, stepped and scrubbed
+/// values stay in; the tooltip over the control; and whether a disabled field shows an empty field instead of its
+/// value, which the Mixer Brush's Mix does while Wet is 0.
+#[derive(Clone)]
+struct PercentRules<'w> {
+    /// The lowest and highest percent the field keeps a value to.
+    range: RangeInclusive<f64>,
+    /// The tooltip over the control; `None` where the control has none.
+    tip: Option<&'w Label>,
+    /// Show an empty field while the field is disabled, and keep the value it holds.
+    blank_when_disabled: bool,
+}
+
+impl PercentRules<'static> {
+    /// What every percent field of the Brush, Pencil and Eraser bars does today: 0 to 100 %, no tooltip, and its value
+    /// shown even while it is disabled.
+    const PLAIN: PercentRules<'static> = PercentRules { range: 0.0..=100.0, tip: None, blank_when_disabled: false };
+}
+
 /// Whether the smoothing options popover is open.
 #[derive(Clone, Default)]
 struct SmoothingOpen(bool);
@@ -208,7 +228,8 @@ struct SmoothingOpen(bool);
 /// The bar's members for one painting tool, after the preset picker that carries the size and the hardness: a rule,
 /// Mode, Opacity and the pressure-for-opacity toggle, Flow and the build-up toggle (not the Pencil), Smoothing and its
 /// options (the Pencil's Auto Erase in their place), Erase to History for the Eraser, a rule and the
-/// pressure-for-size toggle. The Mixer Brush shows its load, combinations and mix values instead.
+/// pressure-for-size toggle. The Mixer Brush shows its load, combinations and mix values instead: its Load and Flow
+/// fields keep 1 to 100 %, its Mix field closes and shows empty while Wet is 0, and its five controls carry tooltips.
 #[must_use = "show the bar with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 #[pattern(probe(PaintBar<'static, u32>))]
@@ -269,11 +290,23 @@ impl<'a, M: Value> PaintBar<'a, M> {
                 pass.check(ui, &words.load_after_stroke, true, None, pass.values.mixer.load_after_stroke, |v, x| v.mixer.load_after_stroke = x);
                 pass.check(ui, &words.clean_after_stroke, true, None, pass.values.mixer.clean_after_stroke, |v, x| v.mixer.clean_after_stroke = x);
                 pass.combination(ui, &words);
-                pass.percent(ui, "mixer-wet", &words.wet, true, pass.values.mixer.wet, |v, x| v.mixer.wet = x);
-                pass.percent(ui, "mixer-load", &words.load, true, pass.values.mixer.load, |v, x| v.mixer.load = x);
-                pass.percent(ui, "mixer-mix", &words.mix, true, pass.values.mixer.mix, |v, x| v.mixer.mix = x);
-                pass.percent(ui, "mixer-flow", &words.flow, true, pass.values.mixer.flow, |v, x| v.mixer.flow = x);
-                pass.check(ui, &words.sample_all_layers, true, None, pass.values.mixer.sample_all_layers, |v, x| v.mixer.sample_all_layers = x);
+                // Measured on the reference application: Wet and Mix keep 0 as their lowest value while Load and Flow
+                // refuse anything below 1 %, and Mix is greyed out with an empty field while Wet is 0. The lowest Load
+                // a combination offers is 5 %, so a pick stays inside these ranges.
+                let wet_rules = PercentRules { range: 0.0..=100.0, tip: Some(&words.wet_tip), blank_when_disabled: false };
+                let load_rules = PercentRules { range: 1.0..=100.0, tip: Some(&words.load_tip), blank_when_disabled: false };
+                let mix_rules = PercentRules { range: 0.0..=100.0, tip: Some(&words.mix_tip), blank_when_disabled: true };
+                let flow_rules = PercentRules { range: 1.0..=100.0, tip: Some(&words.mixer_flow_tip), blank_when_disabled: false };
+                pass.percent_in(ui, "mixer-wet", &words.wet, true, pass.values.mixer.wet, wet_rules, |v, x| v.mixer.wet = x);
+                pass.percent_in(ui, "mixer-load", &words.load, true, pass.values.mixer.load, load_rules, |v, x| v.mixer.load = x);
+                // Mix takes input only while Wet is above 0; the read comes after the Wet field, so a gesture that
+                // lifts Wet opens Mix in the same pass.
+                let mix_open = pass.values.mixer.wet > 0.0;
+                pass.percent_in(ui, "mixer-mix", &words.mix, mix_open, pass.values.mixer.mix, mix_rules, |v, x| v.mixer.mix = x);
+                pass.percent_in(ui, "mixer-flow", &words.flow, true, pass.values.mixer.flow, flow_rules, |v, x| v.mixer.flow = x);
+                pass.check(ui, &words.sample_all_layers, true, Some(&words.sample_all_layers_tip), pass.values.mixer.sample_all_layers, |v, x| {
+                    v.mixer.sample_all_layers = x
+                });
                 return;
             }
             // The preset picker before the bar carries the size and the hardness.
@@ -361,18 +394,39 @@ impl<M: Value> Pass<'_, M> {
         }
     }
 
-    /// A percent field over a fraction 0..1.
+    /// A percent field over a fraction 0..1: 0 to 100 %, no tooltip, and its value shown even while it is disabled.
     fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, enabled: bool, current: f64, set: fn(&mut PaintValues<M>, f64)) {
+        self.percent_in(ui, salt, caption, enabled, current, PercentRules::PLAIN, set);
+    }
+
+    /// A percent field over a fraction 0..1: `rules` gives the range its values stay in (in shown percent), the tooltip
+    /// over the control and what a disabled field shows.
+    fn percent_in(
+        &mut self,
+        ui: &mut Ui,
+        salt: &'static str,
+        caption: &Label,
+        enabled: bool,
+        current: f64,
+        rules: PercentRules<'_>,
+        set: fn(&mut PaintValues<M>, f64),
+    ) {
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
+        // The rules give the range in shown percent; the values themselves are fractions 0..1.
+        let (low, high) = (*rules.range.start() / 100.0, *rules.range.end() / 100.0);
+        // A field that shows empty when disabled keeps its stored value: only what the field paints changes.
+        let shown = if enabled || !rules.blank_when_disabled { Some(current * 100.0) } else { None };
+        let tip = rules.tip.cloned();
         let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(ui, |ui, _| {
-            let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
-                .unit_kind(UnitKind::Percent)
-                .range(0.0..=100.0)
-                .commit_decimals(0)
-                .scrub_by_label()
-                .show(ui);
+            let field =
+                NumberField::new(caption.clone(), Bind::given(shown)).unit_kind(UnitKind::Percent).range(rules.range.clone()).commit_decimals(0);
+            let field = match &tip {
+                Some(tip) => field.tooltip(tip.clone()),
+                None => field,
+            };
+            let field = field.scrub_by_label().show(ui);
             let mut sink = collected.borrow_mut();
             for event in field.edit.events.clone() {
                 sink.0.push(event);
@@ -387,7 +441,7 @@ impl<M: Value> Pass<'_, M> {
         }
         self.emit(events, move |v, shown: Option<f64>| {
             if let Some(percent) = shown {
-                set(v, (percent / 100.0).clamp(0.0, 1.0));
+                set(v, (percent / 100.0).clamp(low, high));
             }
         });
     }
