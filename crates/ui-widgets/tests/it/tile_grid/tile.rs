@@ -324,19 +324,28 @@ fn flat_thumbnail_with_paper_keeps_standard_icon_and_no_paper_surface() {
             });
         }
         // No white paper fill painted
-        assert!(!shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::WHITE)), "{mode:?} {contrast:?}: no paper fill painted on flat thumbnail");
+        assert!(
+            !shapes.iter().any(|s| matches!(s, Shape::Rect(r) if r.fill == Color32::WHITE)),
+            "{mode:?} {contrast:?}: no paper fill painted on flat thumbnail"
+        );
         // Standard icon is clamped to tokens.size.icon.lg (22 pt max side)
         let glyphs: Vec<Rect> = shapes.iter().filter(|s| matches!(s, Shape::Mesh(_))).map(Shape::visual_bounding_rect).collect();
         assert!(!glyphs.is_empty(), "{mode:?} {contrast:?}: icon glyph is painted");
         let icon_bounds = glyphs.into_iter().fold(Rect::NOTHING, |a, b| a.union(b));
-        assert!(icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0, "{mode:?} {contrast:?}: icon bounds {icon_bounds:?} <= 22 pt on flat thumbnail");
+        assert!(
+            icon_bounds.width() <= 22.0 && icon_bounds.height() <= 22.0,
+            "{mode:?} {contrast:?}: icon bounds {icon_bounds:?} <= 22 pt on flat thumbnail"
+        );
 
         // In dark mode, icon ink must NOT be dark text chosen against white paper; it must be light against the dark surface
         if mode == Mode::Dark {
-            let icon_colors: Vec<Color32> = shapes.iter().filter_map(|s| match s {
-                Shape::Mesh(m) if !m.vertices.is_empty() => Some(m.vertices[0].color),
-                _ => None,
-            }).collect();
+            let icon_colors: Vec<Color32> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Mesh(m) if !m.vertices.is_empty() => Some(m.vertices[0].color),
+                    _ => None,
+                })
+                .collect();
             for color in icon_colors {
                 let lum = f32::from(color.r()) * 0.2126 + f32::from(color.g()) * 0.7152 + f32::from(color.b()) * 0.0722;
                 assert!(lum > 100.0, "{mode:?} {contrast:?}: icon color {color:?} on flat thumbnail should be light in dark mode (lum {lum})");
