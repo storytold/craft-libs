@@ -1461,14 +1461,12 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 /// name to the muda crate, and whether one binds it to something else.
 type CrateBindings<'a> = BTreeMap<(&'a str, Option<usize>), (bool, bool)>;
 
-/// Each `extern crate c;` or `extern crate c as n;` in a file: whether `c` is muda, the name it binds, and
-/// the index of that name. A declaration in an item that `never` marks (see [`Cover::Never`]) is left out,
-/// and so are the tokens of a macro's input in parentheses or brackets, `m!(...)` or `m![...]`, of an
-/// attribute, `#[...]` or `#![...]`, and the whole body of a `macro_rules!` definition, whose templates are
-/// not expanded where they are written. A
-/// declaration in a block inside other parentheses or brackets, such as a call's argument, is kept.
-fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, usize)> {
-    let mut externs = Vec::new();
+/// For each token, whether it is in a macro's input in parentheses or brackets, `m!(...)` or `m![...]`, in an
+/// attribute, `#[...]` or `#![...]`, or in the body of a `macro_rules!` definition, whose templates are not
+/// expanded where they are written. Tokens in a block inside other parentheses or brackets, such as a call's
+/// argument, are not marked.
+fn macro_tokens(toks: &[Token]) -> Vec<bool> {
+    let mut marked = Vec::with_capacity(toks.len());
     // For each open delimiter, whether it starts a macro's input, an attribute or a `macro_rules!` body; and
     // how many of those are open.
     let mut open = Vec::new();
@@ -1486,7 +1484,19 @@ fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, u
         } else if (toks[i].is_punct(')') || toks[i].is_punct(']') || toks[i].is_punct('}')) && open.pop() == Some(true) {
             in_macro = in_macro.saturating_sub(1);
         }
-        if in_macro == 0
+        marked.push(in_macro > 0);
+    }
+    marked
+}
+
+/// Each `extern crate c;` or `extern crate c as n;` in a file: whether `c` is muda, the name it binds, and
+/// the index of that name. A declaration in an item that `never` marks (see [`Cover::Never`]) is left out,
+/// and so is one in a macro's input, an attribute or a `macro_rules!` body (see [`macro_tokens`]).
+fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, usize)> {
+    let mut externs = Vec::new();
+    let in_macro = macro_tokens(toks);
+    for i in 0..toks.len() {
+        if !in_macro[i]
             && !never.get(i).copied().unwrap_or(false)
             && toks[i].is_ident("extern")
             && toks.get(i + 1).is_some_and(|t| t.is_ident("crate"))
@@ -1506,7 +1516,8 @@ fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, u
 /// For each of `paths`, the names that an `extern crate muda as m;` outside any braces of its crate root adds
 /// to the crate's extern prelude, so that a path starting with `::m` names muda anywhere in the crate.
 ///
-/// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`; each file that [`cargo_target`]
+/// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`, except one below another package's
+/// `src` folder that a declaration names; each file that [`cargo_target`]
 /// accepts; another `build.rs`, `lib.rs` or `main.rs` when no `mod` declaration in another of the files names
 /// it, plainly or through a `#[path]` attribute; and each other file directly in a `bin`, `examples`, `tests`
 /// or `benches` folder other than `mod.rs` when no package folder holds it and no declaration without a
@@ -1526,7 +1537,9 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
         let toks = lex_rust(content);
         // A declaration in an item that is never compiled loads no file, and its alias is not in the prelude.
         let never = cfg_covered(&toks, Cover::Never);
-        decls.push(module_decls(&toks, &never).into_iter().filter(|decl| !decl.native).collect());
+        // Nor does one in a macro's input, an attribute or a `macro_rules!` body.
+        let skip: Vec<bool> = macro_tokens(&toks).into_iter().zip(&never).map(|(in_macro, &never)| in_macro || never).collect();
+        decls.push(module_decls(&toks, &skip).into_iter().filter(|decl| !decl.native).collect());
         let (around, _) = brace_scopes(&toks);
         aliases.push(
             extern_crates(&toks, &never)
@@ -1560,13 +1573,21 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
         })
         .collect();
     let packages = package_folders(paths);
+    // Whether `path` is below the `src` folder of a package, other than directly in it.
+    let in_package_src = |path: &str| {
+        packages.iter().any(|package| {
+            let src = if package.is_empty() { "src/".to_owned() } else { format!("{package}/src/") };
+            path.strip_prefix(src.as_str()).is_some_and(|rest| rest.contains('/'))
+        })
+    };
     let root = |file: usize| {
         if cargo_target(&paths[file], &packages) {
             return true;
         }
         let mut segments = paths[file].rsplit('/');
         match (segments.next(), segments.next()) {
-            (Some("lib.rs" | "main.rs"), Some("src")) => true,
+            // A `src/lib.rs` that a declaration in a package's `src` folder loads is a module there.
+            (Some("lib.rs" | "main.rs"), Some("src")) => !(named[file] && in_package_src(&paths[file])),
             (Some("lib.rs" | "main.rs" | "build.rs"), _) => !named[file],
             // In a known package, `cargo_target` has already placed the target folders.
             (Some(name), Some("bin" | "examples" | "tests" | "benches")) => {

@@ -716,6 +716,20 @@ fn predefined_quit_reads_target_folders_below_the_package_folder_only() {
     let lib = "extern crate other_menu as menu;\n#[path = \"foo/tests/helper.rs\"]\nmod helper;\n";
     let found = predefined_quit([("src/lib.rs", lib), ("src/foo/tests/helper.rs", local)]);
     assert!(found.is_empty(), "{found:?}");
+    // So is a `src/lib.rs` below the package's `src` folder that a `#[path]` attribute loads.
+    let lib = "extern crate other_menu as menu;\n#[path = \"nested/src/lib.rs\"]\nmod nested;\n";
+    let found = predefined_quit([("src/lib.rs", lib), ("src/nested/src/lib.rs", local)]);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn predefined_quit_does_not_follow_a_mod_declaration_in_a_macro_input() {
+    let call = "fn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
+    for lib in ["extern crate muda as menu;\nignore!(mod child;);\n", "extern crate muda as menu;\n#[attr(mod child;)]\nfn h() {}\n"] {
+        assert!(predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)]).is_empty(), "{lib}");
+    }
+    let lib = "extern crate muda as menu;\nmod child;\n";
+    assert_eq!(lines(&predefined_quit([("src/lib.rs", lib), ("src/child.rs", call)])), vec![1]);
 }
 
 #[test]
