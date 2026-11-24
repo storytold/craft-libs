@@ -299,8 +299,8 @@ where
 /// The drop target of one dock over one layout, for a tab drag ([`PanelDrag`]) and a group drag ([`GroupDrag`]).
 ///
 /// It accepts a move only. A release over a spot docks the unit there. With `placing`, the mark over a spot is the
-/// region the unit takes once dropped, laid out in the room the dock registered ([`placed_rect`]), with the tab line
-/// of a tab insertion; a reorder inside the unit's own group, and a drop whose panels get no rect of their own, mark
+/// region the unit takes once dropped, laid out in the room the dock registered ([`placed_rect`]); a tab insertion
+/// marks the group it joins as shown now, with its tab line; a reorder inside the unit's own group, and a drop whose panels get no rect of their own, mark
 /// the spot ([`DockSpot::mark`]). Ctrl or Cmd held at the release floats it
 /// instead (Photoshop: the key prevents docking), and with `float_on_empty` a release that no spot takes floats it;
 /// both float it into `space` under the pointer. A floating window dragged by its title bar moves itself and never
@@ -365,13 +365,20 @@ impl<P: Clone + Eq + Hash + Send + 'static> DockDropTarget<'_, P> {
         self.float(&unit, at, drag.source(), drag.strip(), drag.press())
     }
 
-    /// The rect the panels of `unit` take in `after`, the layout once dropped on `spot`; `None` without `placing` or
-    /// a registered room, for a reorder inside the unit's own group, which marks only its tab line, and where the
-    /// panels get no rect of their own.
+    /// The region a drop of `unit` on `spot` marks: for a tab join, the group it joins as shown now (production's
+    /// mark: the group under the pointer, not the size it grows to); else the rect the panels of `unit` take in
+    /// `after`, the layout once dropped. `None` without `placing` or a registered room, for a reorder inside the
+    /// unit's own group, which marks only its tab line, and where the panels get no rect of their own.
     fn region(&self, spot: &DockSpot<P>, unit: &DragUnit<P>, after: &Layout<P>) -> Option<Rect> {
         let placing = self.placing.as_ref()?;
-        if matches!(spot, DockSpot::Tab { .. }) && on_unit(self.layout, spot, unit) {
-            return None;
+        if let DockSpot::Tab { anchor, .. } = spot {
+            if on_unit(self.layout, spot, unit) {
+                return None;
+            }
+            let group = members(self.layout, anchor);
+            if let Some(rect) = DockTargets::<P>::group_rect(self.ctx, self.dock, |panel| group.contains(panel)) {
+                return Some(rect);
+            }
         }
         let room = DockTargets::<P>::room(self.ctx, self.dock)?;
         placed_rect(after, &moving_panels(self.layout, unit), room, placing, self.rtl)

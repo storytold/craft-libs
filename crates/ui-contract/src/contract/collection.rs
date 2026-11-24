@@ -13,7 +13,7 @@ pub use events::{
 };
 pub use props::{
     ActivateOn, CollectionProps, DeleteTarget, DragPayload, HoverLead, ItemKeys, LeadOnOpen, LeadSource, ReorderRule, RowHeight, RowPressed,
-    RowState, SelectMode, SpaceAction,
+    RowPreview, RowState, SelectMode, SpaceAction,
 };
 pub(crate) use response::Gestures;
 pub(crate) use response::ItemsOut;
