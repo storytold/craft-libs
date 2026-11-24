@@ -174,6 +174,22 @@ impl<R: Read + Seek> SeekableArchive<R> {
         Ok(Some(name.into_owned()))
     }
 
+    /// Display the indexed name, using replacement characters when its encoding is invalid.
+    ///
+    /// This reads only the checked central-directory index. The result is for diagnostics,
+    /// not name lookup, path validation, or identity: distinct byte names can display alike.
+    pub fn entry_name_lossy(&self, index: usize) -> Option<String> {
+        let entry = self.zip.by_index_data(index).ok()?;
+        const UTF8_NAME: u16 = 1 << 11;
+        // zip 9.8.2 can fall back to CP437 even when the producer explicitly set UTF-8.
+        let name = if entry.flags().as_u16() & UTF8_NAME != 0 {
+            String::from_utf8_lossy(entry.name_raw()).into_owned()
+        } else {
+            entry.name().map_or_else(|_| String::from_utf8_lossy(entry.name_raw()).into_owned(), Cow::into_owned)
+        };
+        Some(name)
+    }
+
     /// Whether the entry at `index` is a directory according to ZIP filename conventions.
     pub fn entry_is_dir(&mut self, index: usize) -> Result<Option<bool>, Error> {
         if index >= self.zip.len() {
@@ -240,7 +256,7 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if index >= self.zip.len() {
             return Ok(None);
         }
-        let name = self.entry_name(index)?.unwrap_or_default();
+        let Some(name) = self.entry_name_lossy(index) else { return Ok(None) };
         self.open_entry_index_named(index, &name, max)
     }
 
@@ -267,7 +283,7 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if index >= self.zip.len() {
             return Ok(None);
         }
-        let name = self.entry_name(index)?.unwrap_or_default();
+        let Some(name) = self.entry_name_lossy(index) else { return Ok(None) };
         self.read_index_named(index, &name, max)
     }
 
@@ -448,6 +464,41 @@ mod tests {
         assert!(reader.read_to_end(&mut sink).is_err());
         drop(reader);
         assert_eq!(bad_archive.budget().used(), 0);
+    }
+
+    #[test]
+    fn distinct_indexed_entries_can_have_the_same_lossy_display_name() {
+        let mut writer = crate::Writer::new();
+        writer.add("a?.txt", b"first", crate::Compression::Stored).unwrap();
+        writer.add("a!.txt", b"second", crate::Compression::Stored).unwrap();
+        let mut bytes = writer.finish().unwrap();
+        // Flag both local and central names as UTF-8 and substitute two different invalid bytes.
+        for offset in 0..bytes.len().saturating_sub(46) {
+            let (flags, filename) = match bytes.get(offset..offset + 4) {
+                Some(b"PK\x03\x04") => (offset + 7, offset + 30),
+                Some(b"PK\x01\x02") => (offset + 9, offset + 46),
+                _ => continue,
+            };
+            match bytes.get(filename..filename + 6) {
+                Some(b"a?.txt") => bytes[filename + 1] = 0xfe,
+                Some(b"a!.txt") => bytes[filename + 1] = 0xff,
+                _ => continue,
+            }
+            bytes[flags] |= 8; // General purpose bit 11.
+        }
+        let limits = SeekableLimits { max_entries: 2, max_metadata_bytes: 4096, max_total_bytes: 11 };
+        let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
+        assert_eq!(archive.entry_name_lossy(0).as_deref(), Some("a�.txt"));
+        assert_eq!(archive.entry_name_lossy(1), archive.entry_name_lossy(0));
+        assert_eq!(archive.entry_name_lossy(2), None);
+        assert!(!archive.contains("a�.txt"));
+        assert!(matches!(archive.open_entry_index(0, 4), Err(Error::EntryTooLarge { .. })));
+        assert_eq!(archive.read_index(0, 5).unwrap().as_deref(), Some(b"first".as_slice()));
+        let mut out = Vec::new();
+        archive.open_entry_index(1, 6).unwrap().unwrap().read_to_end(&mut out).unwrap();
+        assert_eq!(out, b"second");
+        assert_eq!(archive.budget().used(), 11);
+        assert!(matches!(archive.open_entry_index(0, 5), Err(Error::BudgetSpent { .. })));
     }
 
     #[test]
