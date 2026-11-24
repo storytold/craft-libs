@@ -1150,9 +1150,19 @@ pub(crate) mod browser_tests {
         assert!(result.is_ok(), "{result:?}");
         let running = dir.path().join("running");
         std::fs::create_dir(&running).unwrap();
-        let running = fake_wrapper(&running, "sleep 3");
-        let started = Instant::now();
-        assert!(open_with_wrapper(&browser, url, &running, Duration::from_millis(100)).is_ok());
-        assert!(started.elapsed() < Duration::from_secs(3), "it stops watching when the window ends");
+        // The wrapper keeps running until the test releases it (or a generous safety cap passes),
+        // and records `finished` when it ends. Watching must stop when the window ends, so the
+        // call returns while the wrapper is still alive: no `finished` marker, whatever the speed
+        // of the machine.
+        let release = dir.path().join("release");
+        let finished = dir.path().join("finished");
+        let body =
+            format!("i=0; while [ ! -e '{}' ] && [ $i -lt 600 ]; do i=$((i+1)); sleep 0.05; done; touch '{}'", release.display(), finished.display());
+        let running = fake_wrapper(&running, &body);
+        let result = open_with_wrapper(&browser, url, &running, Duration::from_millis(100));
+        let finished_early = finished.exists();
+        std::fs::write(&release, "").unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert!(!finished_early, "it stops watching when the window ends, not when the wrapper does");
     }
 }
