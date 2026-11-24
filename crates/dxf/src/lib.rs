@@ -597,11 +597,7 @@ fn parse_binary_pass(b: &[u8], max_tags: usize, text: &mut codepage::BinaryText)
             Kind::Str => Value::Str(unescape_unicode(&text.string(code, c.cstr()?))),
             Kind::Real => {
                 let r = c.f64()?;
-                if r.is_finite() {
-                    Value::Real(r)
-                } else {
-                    Value::Invalid(r.to_string())
-                }
+                if r.is_finite() { Value::Real(r) } else { Value::Invalid(r.to_string()) }
             }
             Kind::Int16 => Value::Int(i64::from(c.i16()?)),
             Kind::Int32 => Value::Int(i64::from(c.i32()?)),
@@ -1409,12 +1405,7 @@ mod tests {
 
     #[test]
     fn invalid_reals_roundtrip_in_ascii_and_binary() {
-        let tags = vec![
-            Tag::invalid(10, "NaN"),
-            Tag::invalid(20, "inf"),
-            Tag::invalid(30, "malformed"),
-            Tag::s(0, "EOF"),
-        ];
+        let tags = vec![Tag::invalid(10, "NaN"), Tag::invalid(20, "inf"), Tag::invalid(30, "malformed"), Tag::s(0, "EOF")];
         let ascii_out = write_ascii(&tags);
         let back_ascii = parse(ascii_out.as_bytes()).unwrap();
         assert_eq!(back_ascii[0], Tag::invalid(10, "NaN"));
