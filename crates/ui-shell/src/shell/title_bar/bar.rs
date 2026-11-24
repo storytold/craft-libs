@@ -11,6 +11,7 @@ use crate::contract::{
     PartsCx, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::layout::{Placed, arrange};
+use crate::layout_components::Row;
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
@@ -67,7 +68,8 @@ impl Outcome for TitleBarOutput {
 /// In an embedded shell (an app preview, a story) the bar is a picture of a window: it acts on no window and reads
 /// none. The captions show hover and report their clicks, but send no window command, and the bar has no move band. The body is the leading content; the
 /// trailing content ([`trailing`](TitleBar::trailing)) sits before the end's captions. [`show_titled`](TitleBar::show_titled)
-/// adds the title in the gap between them. Close never closes the window; see [`TitleBarOutput`].
+/// adds the title in the gap between them; [`show_fitted`](TitleBar::show_fitted) puts the trailing content on the
+/// body's line, after the leading content. Close never closes the window; see [`TitleBarOutput`].
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct TitleBar<'a> {
@@ -244,6 +246,25 @@ impl<'a> TitleBar<'a> {
             .output;
         out.title_activated = activated;
         out
+    }
+
+    /// Shows the bar with `leading` content at its start and `trailing` content after it on the same line, at the end
+    /// edge before the end's captions. The trailing content gets the room the leading content's natural width leaves:
+    /// when the line is short, its members that carry a `fit_rank` leave whole, lowest rank first, before the leading
+    /// content narrows (an app bar whose menus stay whole while its end controls go).
+    pub fn show_fitted(
+        self,
+        ui: &mut Ui,
+        mut leading: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+        mut trailing: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a,
+    ) -> TitleBarOutput {
+        self.show(ui, |ui, cx| {
+            leading(ui, cx);
+            // An empty row that fills the line takes what the members leave, so the trailing content sits at the end.
+            let _ = Row::new().fill_width().show(ui, |_, _| {});
+            trailing(ui, cx);
+        })
+        .output
     }
 
     /// Shows one end of the bar and records its clicked caption: Close is reported, never acted on.

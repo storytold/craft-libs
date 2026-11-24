@@ -353,3 +353,52 @@ fn the_lights_room_follows_the_lights_without_mirroring_the_bar() {
     assert!(rect("Home").left() >= lights - 0.5, "Home {:?} after the lights at the left", rect("Home"));
     assert!(rect("Preferences").right() >= width - 20.0, "Preferences {:?} at the right end", rect("Preferences"));
 }
+
+/// What a fitted bar `width` wide shows: the leading button's rect, and whether the trailing buttons ranked 1 and 2
+/// are there.
+fn fitted(width: f32) -> (Rect, [bool; 2]) {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{Show as _, ShowContainer as _};
+    use craft_ui::layout_components::Row;
+    let mut fixture = Fixture::new(|ui| {
+        let _ = TitleBar::new().frame(Frame::Native).show_fitted(
+            ui,
+            |ui, _| {
+                Button::new("File Edit Object Type Select Effect View Window Help").show(ui);
+            },
+            |ui, _| {
+                let _ = Row::new().fit_rank(1).show(ui, |ui, _| {
+                    Button::new("Community").show(ui);
+                });
+                let _ = Row::new().fit_rank(2).show(ui, |ui, _| {
+                    Button::new("Learn").show(ui);
+                });
+            },
+        );
+    });
+    fixture.room(vec2(width, 80.0)).settle();
+    let leading = fixture.by_label("File Edit Object Type Select Effect View Window Help").expect("the leading button").rect;
+    (leading, ["Community", "Learn"].map(|label| fixture.by_label(label).is_some()))
+}
+
+/// The trailing content of a fitted bar takes what the leading content leaves: as the bar narrows, the trailing
+/// members leave by rank, lowest first, while the leading content keeps its width.
+#[trial]
+fn a_fitted_bar_drops_its_trailing_members_by_rank_before_the_leading_content_narrows() {
+    let (whole, all) = fitted(1400.0);
+    assert_eq!(all, [true; 2], "a wide bar shows every trailing member");
+    let shown: Vec<(f32, Rect, [bool; 2])> = (300..=800)
+        .step_by(20)
+        .map(|width| {
+            let (leading, trailing) = fitted(width as f32);
+            (width as f32, leading, trailing)
+        })
+        .collect();
+    for (width, leading, [low, high]) in &shown {
+        assert!(!(*low && !*high), "rank 2 left before rank 1 at {width}");
+        if *low || *high {
+            assert!(leading.width() >= whole.width() - 0.5, "the leading content narrowed to {leading:?} at {width} while a trailing member stayed");
+        }
+    }
+    assert!(shown.iter().any(|(_, _, [low, high])| !low && *high), "rank 1 never left alone: {shown:?}");
+}
