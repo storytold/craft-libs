@@ -575,6 +575,20 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     pub fn resolve(ctx: &Context, dock: Id, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
         Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.at(at))).flatten()
     }
+
+    /// The rect of a group in the dock `dock` as the previous pass showed it, by the side spots it registered (a
+    /// [`DockSpot::Group`] applies to its group's rect); `in_group` tells the group's panels. `None` outside a pass
+    /// and for a group that registered no side spots, such as a minimized one.
+    pub(crate) fn group_rect(ctx: &Context, dock: Id, in_group: impl Fn(&P) -> bool) -> Option<Rect> {
+        Self::with_pass(ctx, |pass| {
+            let (_, targets) = pass.before.iter().find(|(id, _)| *id == dock)?;
+            targets.targets.iter().find_map(|target| match &target.spot {
+                DockSpot::Group { anchor, .. } if in_group(anchor) => Some(target.applies),
+                _ => None,
+            })
+        })
+        .flatten()
+    }
 }
 
 /// The registrations of a pass. A settled memoized view's run record keeps each one to make it again and compares it

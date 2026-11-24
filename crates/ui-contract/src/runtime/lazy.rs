@@ -160,14 +160,16 @@ struct Entry {
 }
 
 /// What a run that showed a child measured: the extent it took, the key of the content it showed, the room it was
-/// offered (`Rect::NOTHING` for a collection row, whose extent its collection reports) and the flow of the body around
-/// it (the default for a collection row).
+/// offered (`Rect::NOTHING` for a collection row, whose extent its collection reports), the flow of the body around
+/// it (the default for a collection row) and the axis that body shares which a memoized view's content filled, which
+/// makes the view one of the children that fill the body (`layout::fill_size`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Measured {
     pub(crate) size: Vec2,
     pub(crate) key: Key,
     pub(crate) room: Rect,
     pub(crate) flow: Flow,
+    pub(crate) fills: Option<craft_behavior::Axis>,
 }
 
 /// Where a memoized view ran: it replays only at a place of the same size, layer, layout, opacity, flow and environment,
@@ -457,6 +459,13 @@ pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, meas
     });
 }
 
+/// The axis the content of the memoized view `id` filled in its last run of this kind (`sizing`), else of the other
+/// kind: the run of this pass once one ran, else the kept one. `None` before any run showed it.
+pub(crate) fn fills(ctx: &Context, id: Id, sizing: bool) -> Option<craft_behavior::Axis> {
+    let (own, other) = (usize::from(!sizing), usize::from(sizing));
+    with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.sizes[own].or(entry.sizes[other])).and_then(|measured| measured.fills))
+}
+
 /// The extent the child `id` took in the last measuring or real run that showed it (this pass's measuring run once it
 /// ran), at whatever room it had; `None` before any run showed it.
 pub(crate) fn last_extent(ctx: &Context, id: Id) -> Option<Vec2> {
@@ -740,7 +749,7 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
 pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
     write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(Some(owner), id, frame);
-        entry.sizes[1] = Some(Measured { size, key: Key::None, room: Rect::NOTHING, flow: Flow::default() });
+        entry.sizes[1] = Some(Measured { size, key: Key::None, room: Rect::NOTHING, flow: Flow::default(), fills: None });
         entry.measured_in = Some(pass_nr);
     });
 }

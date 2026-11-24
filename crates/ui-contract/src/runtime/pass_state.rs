@@ -95,6 +95,7 @@ pass_state! {
         bar_rules: crate::contract::BarRules,
         surface_frames: crate::primitives::SurfaceFrames,
         fill_counts: crate::layout::body::FillCounts,
+        view_fills: crate::layout::body::ViewFills,
         held_widths: crate::layout::body::HeldWidths,
         first_lines: crate::layout::body::FirstLines,
         row_lines: crate::layout::body::RowLines,

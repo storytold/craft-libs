@@ -812,6 +812,8 @@ pub struct ContainerProps {
     /// The help line the footer shows under the control column of a label-scoped container; its text joins the
     /// control's description.
     pub help: Option<Label>,
+    /// The accessible name of each resize grip of a window or layer mount; its grips report no node without one.
+    pub resize_name: Option<Label>,
     /// The container's place in its set, reported on its node.
     pub position: Option<SetPosition>,
     /// The focus scope of an `Inline`, `Pane` or `FullWindow` mount.
@@ -937,6 +939,7 @@ impl ContainerProps {
             footer: None,
             end: None,
             help: None,
+            resize_name: None,
             position: None,
             focus: FocusPolicy::NONE,
             collapse: None,
@@ -1053,6 +1056,12 @@ impl ContainerProps {
     /// label scope names, as a validity message does; the footer draws the visible line.
     pub fn help(mut self, help: impl Into<Label>) -> Self {
         self.help = Some(help.into());
+        self
+    }
+
+    /// The accessible name of every resize grip of the container's window or layer.
+    pub fn resize_name(mut self, name: impl Into<Label>) -> Self {
+        self.resize_name = Some(name.into());
         self
     }
 
