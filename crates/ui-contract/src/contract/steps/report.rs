@@ -11,7 +11,7 @@ use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
 use crate::runtime::{inspect, keys, pass_state};
 use crate::style::Flags;
-use craft_behavior::Sense;
+use craft_behavior::{PartRef, Sense};
 use egui::Id;
 
 /// What step 16 reads that the pass computed before: the part declarations, the sense and the container facts.
@@ -275,6 +275,16 @@ pub(crate) fn report_parts(core: &CxCore<'_>, decls: &Decls, nodes: &[SubNode], 
     }
     for face in faces.iter().filter(|face| !seen.contains(&face.part)) {
         report_sub(core, decls, &SubNode::new(face.part, face.role), Some(face), parent);
+    }
+    for (decl, extras) in decls {
+        let part = PartRef { key: decl.key, index: decl.index };
+        let Some((role, name)) = &extras.node else { continue };
+        if seen.contains(&part) || faces.iter().any(|face| face.part == part) {
+            continue;
+        }
+        let mut node = SubNode::new(part, *role);
+        node.name = access::Name::Text(name.clone());
+        report_sub(core, decls, &node, None, parent);
     }
 }
 
