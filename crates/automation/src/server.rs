@@ -90,7 +90,9 @@ pub fn serve_with_deadline(
             let Some(permit) = limiter.try_acquire() else {
                 let _ = configure_stream(&stream);
                 let _ = writeln!(stream, "{}", json!({"id": null, "ok": false, "error": "connection limit reached"}));
-                // Closed on the closer thread, so the accept loop never waits; with that thread busy, at once.
+                // The end goes out now; the rest of the close (reading what the client still sends) happens on
+                // the closer thread, so the accept loop never waits. With that thread's queue full, at once.
+                let _ = stream.shutdown(Shutdown::Write);
                 if let Some(closer) = &closer {
                     let _ = closer.try_send(stream);
                 }
@@ -200,7 +202,8 @@ const REFUSAL_DRAIN_BYTES: usize = 64 * 1024;
 /// input makes the system reset the connection, and a reset can discard the refusal before the client reads it: a
 /// client that wrote its request before reading the answer would see the connection reset instead. So the write side
 /// is shut first (the client reads the refusal and then the end), and what the client still sends is read and thrown
-/// away for at most [`REFUSAL_DRAIN`] and [`REFUSAL_DRAIN_BYTES`].
+/// away for at most [`REFUSAL_DRAIN`] and [`REFUSAL_DRAIN_BYTES`]. A client that keeps sending past those bounds,
+/// or a refusal at the limit while the closer thread's queue is full, still ends with a reset; that is the bound.
 fn close_after_refusal(stream: &TcpStream) {
     let _ = stream.shutdown(Shutdown::Write);
     let started = Instant::now();
