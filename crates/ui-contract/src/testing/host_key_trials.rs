@@ -533,7 +533,7 @@ fn navigation_keys_with_canvas(focus_field: bool) -> (Vec<Key>, bool) {
     }
     reached.borrow_mut().clear();
     let caret = |frames: &Frames| {
-        // design: allow[contract/egui-widget](the trial reads the caret of the app's own egui text field, the host widget it is about)
+        // design: allow[contract/egui-widget](the trial reads the caret of the app's own egui TextEdit, which is what it checks)
         egui::TextEdit::load_state(&frames.ctx, field()).and_then(|state| state.cursor.char_range()).map(|range| range.primary.index)
     };
     let at_end = caret(&frames);

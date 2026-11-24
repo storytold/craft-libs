@@ -6,7 +6,7 @@
 //! user did; the dock decides what a drop changes.
 
 use super::divider::{self, Divider, Drag};
-use super::{DividerKind, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
+use super::{CardInset, DividerKind, DockSizes, DockSpot, DockTargets, DockWords, DragUnit, PanelKey, PanelSpec, Splitter};
 use crate::contract::{
     Access, BodyCx, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Pad, PaintUi, PartsCx, Pointer as _, Props as _, Role,
     ShowContainer as _, Sizing, WordSetCx as _,
@@ -200,11 +200,11 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
-    /// The column's place from the window edge inwards, when it shows as a card
-    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards)): its bar and groups sit inside the card, inset on
-    /// its outer side by [`DockSizes::card_outer`] at that place and by [`DockSizes::card`] on its top and bottom.
+    /// Which inset the outer side of the column's card takes, when it shows as one
+    /// ([`DockConfig::column_cards`](super::DockConfig::column_cards), [`DockSizes::card_place`]): its bar and groups
+    /// sit inside the card, inset by that on its outer side and by [`DockSizes::card`] on its top and bottom.
     #[prop]
-    card: Option<usize>,
+    card: Option<CardInset>,
     /// The plan `parts` laid out this pass, which update, paint and access read.
     laid: Option<Plan>,
     resized: Vec<(P, f32)>,
@@ -294,7 +294,7 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
     /// on top.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
         let (least, most) = sizes.shown_bounds(self.column, self.spec);
-        let inset = self.card.map_or(0.0, |at| sizes.card_outer(at));
+        let inset = self.card.map_or(0.0, |place| sizes.inset(place));
         let (least, most) = (least + inset, most + inset);
         Divider::column_edge(rect, self.edge, (least, most.min((self.within.width() - sizes.least_pane).max(rect.width()))), sizes.reach)
     }
@@ -317,11 +317,11 @@ impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
     }
 }
 
-/// The card of a docked column in `rect`, the column's rect in a dock on the window edge `edge`: `rect` inset on its
-/// outer side, the one towards `edge`, by the card's outer inset at `card`, the column's place from the window edge
-/// ([`DockSizes::card_outer`]), and by [`DockSizes::card`] on its top and bottom; `rect` for a column that is no card.
-pub(crate) fn card_rect(rect: Rect, card: Option<usize>, sizes: &DockSizes, edge: DockEdge, rtl: bool) -> Rect {
-    let Some(outer) = card.map(|at| sizes.card_outer(at)) else { return rect };
+/// The card of a docked column in `rect`, the column's rect in a dock on the window edge `edge`: `rect` inset by
+/// the card's outer inset at `card` ([`DockSizes::inset`]) on its outer side, the one towards `edge`, and by
+/// [`DockSizes::card`] on its top and bottom; `rect` for a column that is no card.
+pub(crate) fn card_rect(rect: Rect, card: Option<CardInset>, sizes: &DockSizes, edge: DockEdge, rtl: bool) -> Rect {
+    let Some(outer) = card.map(|place| sizes.inset(place)) else { return rect };
     let inner = rect.shrink2(egui::vec2(0.0, sizes.card));
     if (edge == DockEdge::Start) != rtl { inner.with_min_x(inner.left() + outer) } else { inner.with_max_x(inner.right() - outer) }
 }

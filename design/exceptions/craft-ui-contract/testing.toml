@@ -17,9 +17,9 @@ reason = "The 4,000-point run is drawn at the font atlas's cap, which is in devi
 count = 1
 
 [[exception]]
-name = "host-key-trial-host-caret"
+name = "host-key-trial-app-text-edit"
 kind = "marker"
 rule = "contract/egui-widget"
 path = "crates/ui-contract/src/testing/host_key_trials.rs"
-reason = "The trial is about the app's own egui text field, a host widget, and reads its caret to see which keys reached it."
+reason = "The trial reads the caret of the app's own egui TextEdit, which is what it checks."
 count = 1
