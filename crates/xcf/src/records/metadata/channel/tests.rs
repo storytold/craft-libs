@@ -148,3 +148,24 @@ fn cancelled_channel_metadata_refunds_unreturned_issues_but_keeps_work() {
     let full = channel(&raw, Limits::default(), &mut budget, &|| true).unwrap();
     assert_eq!(full.stopped.unwrap().reason, StopReason::RetainedLimit);
 }
+
+#[test]
+fn borrowed_channel_properties_keep_source_stops_without_rescanning() {
+    let bytes = [property(16, &[1, 2, 3]), property(0, &[])].concat();
+    let mut raw = scan(&bytes);
+    let source_stop = Diagnostic { offset: 99, ordinal: 4, reason: StopReason::Malformed };
+    raw.stopped = Some(source_stop);
+    let mut borrowed_budget = Budget::default();
+    let mut wrapper_budget = Budget::default();
+    let borrowed = channel_from_properties(&raw.records, raw.stopped, Limits::default(), &mut borrowed_budget, &|| true).unwrap();
+    let wrapped = channel(&raw, Limits::default(), &mut wrapper_budget, &|| true).unwrap();
+    assert!(!borrowed.complete());
+    assert_eq!(borrowed.source_stopped, Some(source_stop));
+    assert_eq!(borrowed.byte_color, wrapped.byte_color);
+    assert_eq!(borrowed.byte_color.unwrap().value, [1, 2, 3]);
+    assert_eq!(borrowed.stopped, wrapped.stopped);
+    assert_eq!(borrowed.issues, wrapped.issues);
+    assert_eq!(borrowed_budget.work_remaining(), wrapper_budget.work_remaining());
+    assert_eq!(borrowed_budget.retained_remaining(), wrapper_budget.retained_remaining());
+    assert!(matches!(channel_from_properties(&raw.records, raw.stopped, Limits::default(), &mut borrowed_budget, &|| false), Err(Error::Cancelled)));
+}

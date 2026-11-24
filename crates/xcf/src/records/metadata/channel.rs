@@ -36,14 +36,33 @@ impl ChannelMetadata {
 /// absent value becomes a native default; callers must require `complete()`
 /// before resolving float-over-byte precedence, selected targets or visibility.
 pub fn channel(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<ChannelMetadata> {
-    budget.cancel_safe(|budget| channel_read(properties, limits, budget, keep_going))
+    channel_from_properties(&properties.records, properties.stopped, limits, budget, keep_going)
 }
 
-fn channel_read(properties: &Scan<Property<'_>>, limits: Limits, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Result<ChannelMetadata> {
+/// Decode an already checked property slice, including an effect-mask header's properties,
+/// without allocating a record vector or rescanning the source. Pass its source stop
+/// diagnostic: partial source evidence cannot establish final duplicate precedence.
+pub fn channel_from_properties(
+    properties: &[Property<'_>],
+    source_stopped: Option<Diagnostic>,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<ChannelMetadata> {
+    budget.cancel_safe(|budget| channel_read(properties, source_stopped, limits, budget, keep_going))
+}
+
+fn channel_read(
+    properties: &[Property<'_>],
+    source_stopped: Option<Diagnostic>,
+    limits: Limits,
+    budget: &mut Budget,
+    keep_going: &dyn Fn() -> bool,
+) -> Result<ChannelMetadata> {
     let mut reader = Reader { limits, budget, keep_going };
     reader.check().map_err(|_| Error::Cancelled)?;
-    let mut output = ChannelMetadata { source_stopped: properties.stopped, ..Default::default() };
-    for (ordinal, property) in properties.records.iter().enumerate() {
+    let mut output = ChannelMetadata { source_stopped, ..Default::default() };
+    for (ordinal, property) in properties.iter().enumerate() {
         reader.check().map_err(|_| Error::Cancelled)?;
         let reason = if ordinal >= limits.records.records {
             Some(StopReason::RecordLimit)

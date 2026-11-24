@@ -405,3 +405,82 @@ fn a_later_valid_user_unit_beyond_the_typed_string_cap_is_incomplete_prefix_evid
     assert_eq!(result.issues[0].kind, IssueKind::InvalidValue);
     assert_eq!(result.user_unit.unwrap().value.strings[0], Some(b"a".as_slice()));
 }
+
+#[test]
+fn a_nested_parasite_stop_keeps_both_property_and_parasite_source_locations() {
+    let first = property(22, &1u32.to_be_bytes());
+    let ignored = parasite(b"unknown", b"ignored");
+    let profile = parasite(b"icc-profile", b"valid prefix");
+    let payload = [ignored.clone(), profile.clone(), vec![0, 0, 0]].concat();
+    let bytes = [first.clone(), property(21, &payload), property(0, &[])].concat();
+    let raw = properties(&bytes);
+    let mut budget = Budget::default();
+    let retained = budget.retained_remaining();
+    let work = budget.work_remaining();
+    let result = image(&raw, Limits::default(), &mut budget, &|| true).unwrap();
+    assert!(!result.complete());
+    assert_eq!(result.source_stopped, None);
+    assert_eq!(result.stopped, Some(Diagnostic { offset: first.len(), ordinal: 1, reason: StopReason::Malformed }));
+    assert_eq!(
+        result.parasite_stopped,
+        Some(Diagnostic { offset: first.len() + 8 + ignored.len() + profile.len(), ordinal: 2, reason: StopReason::Malformed })
+    );
+    assert_eq!(result.profile.unwrap(), Evidence { offset: first.len() + 8 + ignored.len(), value: b"valid prefix".as_slice() });
+    assert!(result.issues.is_empty());
+    assert_eq!(budget.retained_remaining(), retained);
+    assert!(budget.work_remaining() < work);
+}
+
+#[test]
+fn unterminated_user_unit_fields_do_not_replace_prior_valid_evidence() {
+    let unit = |fields: &[&[u8]], factor: f32| {
+        let mut bytes = [factor.to_be_bytes(), 2u32.to_be_bytes()].concat();
+        for field in fields {
+            bytes.extend((field.len() as u32).to_be_bytes());
+            bytes.extend(*field);
+        }
+        bytes
+    };
+    for count in [3, 5] {
+        let fields = vec![b"ok\0".as_slice(); count];
+        let first = unit(&fields, 2.);
+        for bad in 0..count {
+            let mut later = fields.clone();
+            later[bad] = b"mm";
+            let bytes = [property(24, &first), property(24, &unit(&later, 3.)), property(0, &[])].concat();
+            let raw = super::super::properties_with_version(
+                &bytes,
+                0,
+                if count == 5 { 20 } else { 26 },
+                RecordLimits::default(),
+                &mut Budget::default(),
+                &|| true,
+            )
+            .unwrap();
+            assert!(raw.stopped.is_none());
+            let result = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+            assert!(result.complete());
+            assert_eq!(result.user_unit.unwrap().value.factor, 2.);
+            assert_eq!(result.issues, [Issue { offset: raw.records[1].offset, property_kind: 24, kind: IssueKind::InvalidValue }]);
+        }
+        // Both the zero-length spelling and a sole NUL remain valid empty STRINGs.
+        let empty = (0..count).map(|i| if i % 2 == 0 { b"".as_slice() } else { b"\0".as_slice() }).collect::<Vec<_>>();
+        let bytes = [property(24, &unit(&empty, 4.)), property(0, &[])].concat();
+        let raw = super::super::properties_with_version(
+            &bytes,
+            0,
+            if count == 5 { 20 } else { 26 },
+            RecordLimits::default(),
+            &mut Budget::default(),
+            &|| true,
+        )
+        .unwrap();
+        let result = image(&raw, Limits::default(), &mut Budget::default(), &|| true).unwrap();
+        assert!(result.complete());
+        assert!(result.issues.is_empty());
+        let value = result.user_unit.unwrap().value;
+        assert_eq!(value.factor, 4.);
+        assert_eq!(value.strings.iter().flatten().count(), count);
+        assert!(value.strings.iter().flatten().all(|value| value.is_empty()));
+    }
+}

@@ -5,7 +5,7 @@
 //! completeness before treating them as final in the presence of duplicates.
 
 mod channel;
-pub use channel::{ChannelColorIndicates, ChannelMetadata, channel};
+pub use channel::{ChannelColorIndicates, ChannelMetadata, channel, channel_from_properties};
 
 use super::{Budget, Diagnostic, Limits as RecordLimits, Property, Scan, StopReason};
 use crate::{Error, Guide, Orientation, Result};
@@ -101,6 +101,9 @@ pub struct ImageMetadata<'a> {
     pub has_modern_sample_points: bool,
     /// Nonempty `icc-profile` bytes only; ICC validity and color policy are not inferred.
     pub profile: Option<Evidence<&'a [u8]>>,
+    /// Stop within the enclosing parasite property. `stopped` still identifies its
+    /// outer property/ordinal; this diagnostic identifies the first unretained parasite.
+    pub parasite_stopped: Option<Diagnostic>,
     pub packets: Vec<Evidence<Packet<'a>>>,
     pub issues: Vec<Issue>,
     pub source_stopped: Option<Diagnostic>,
@@ -274,6 +277,7 @@ impl Reader<'_> {
                     Error::Invalid(_) => Failure::Stop(StopReason::Malformed),
                 })?;
                 let scan_charge = retained - self.budget.retained_left;
+                output.parasite_stopped = scan.stopped;
                 let result: ReadResult<()> = (|| {
                     for record in &scan.records {
                         self.check()?;
@@ -426,7 +430,7 @@ fn user_unit(bytes: &[u8]) -> Option<(UserUnit<'_>, usize)> {
         string_bytes = string_bytes.max(length);
         remaining = remaining.get(4..)?;
         let (value, rest) = remaining.split_at_checked(length)?;
-        *slot = Some(value.strip_suffix(&[0]).unwrap_or(value));
+        *slot = Some(if value.is_empty() { value } else { value.strip_suffix(&[0])? });
         remaining = rest;
         count += 1;
     }
