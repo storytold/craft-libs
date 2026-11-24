@@ -164,6 +164,34 @@ fn auxiliary_absence_bad_headers_budget_and_cancellation_never_decode_unadmitted
 }
 
 #[test]
+fn auxiliary_header_requires_a_complete_first_level_header() {
+    for available in [0, 7, 8, 15] {
+        let mut fixture = fixture(150, &[1, 2], 1, true);
+        let level = fixture.bytes.len() - available;
+        fixture.bytes[fixture.hierarchy + 12..fixture.hierarchy + 20].copy_from_slice(&(level as u64).to_be_bytes());
+        let xcf = Xcf::parse(&fixture.bytes).unwrap();
+        let mut metadata = records::Budget::new(4096, 4096);
+        assert!(xcf.effect_mask_header(&record(&fixture), &mut metadata, &|| true).is_err(), "{available} bytes at first level");
+        assert_eq!(metadata.retained_remaining(), 4096);
+    }
+}
+
+#[test]
+fn auxiliary_header_rejects_an_unterminated_name_without_retaining_metadata() {
+    let mut fixture = fixture(150, &[1, 2], 1, true);
+    let terminator = fixture.mask + 12 + "Coverage".len();
+    assert_eq!(fixture.bytes[terminator], 0);
+    fixture.bytes[terminator] = b'X';
+    let xcf = Xcf::parse(&fixture.bytes).unwrap();
+    let name_budget = xcf.meta_budget.get();
+    let mut metadata = records::Budget::new(4096, 4096);
+    let error = xcf.effect_mask_header(&record(&fixture), &mut metadata, &|| true).unwrap_err();
+    assert!(error.to_string().contains("terminating NUL"), "{error}");
+    assert_eq!(metadata.retained_remaining(), 4096);
+    assert_eq!(xcf.meta_budget.get(), name_budget);
+}
+
+#[test]
 fn auxiliary_zero_level_is_delivered_as_zero_and_large_header_is_rejected_before_tiles() {
     let mut f = fixture(150, &[1, 2], 1, true);
     let level = u64::from_be_bytes(f.bytes[f.hierarchy + 12..f.hierarchy + 20].try_into().unwrap()) as usize;

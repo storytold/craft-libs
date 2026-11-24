@@ -53,6 +53,7 @@ impl<'a> EffectMaskHeader<'a> {
     }
     /// Original ordered source properties from the same bounded header scan.
     /// Payloads remain borrowed and uninterpreted; no additional scan is performed.
+    /// Use [`records::metadata::channel_from_properties`] for typed channel evidence.
     pub fn properties(&self) -> &[records::Property<'a>] {
         &self.properties
     }
@@ -96,10 +97,19 @@ impl<'a> Xcf<'a> {
             if bytes > crate::MAX_PIXEL_BYTES {
                 return Err(invalid("effect mask exceeds the source pixel limit").into());
             }
+            self.validate_first_level(&head)?;
             if !keep_going() {
                 return Err(Error::Cancelled.into());
             }
-            let name = cursor.string()?;
+            // The property scan already bounded the counted name. Require the
+            // terminator before copying it, while accepting the wire empty string.
+            let name_length = cursor.u32()? as usize;
+            let name_bytes = match cursor.take(name_length)?.split_last() {
+                None => &[][..],
+                Some((&0, name)) => name,
+                Some(_) => return Err(invalid("effect mask name has no terminating NUL").into()),
+            };
+            let name = String::from_utf8_lossy(name_bytes).into_owned();
             self.meta_budget.set(self.meta_budget.get().checked_sub(name.len()).ok_or_else(|| invalid("channel metadata exceeds the budget"))?);
             let channel = Channel { name, selection: properties.records.iter().any(|p| p.kind == 4) };
             Ok(Some(EffectMaskHeader {
