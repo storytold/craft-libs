@@ -526,13 +526,11 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
             }
             Value::Number(value)
         }
-        Some(FieldType::Integer) => Value::Integer(literal.parse().map_err(|_| invalid("graph value is not an exact signed integer"))?),
-        Some(FieldType::UnsignedInteger) => Value::UnsignedInteger(literal.parse().map_err(|_| invalid("graph value is not an exact u32 integer"))?),
-        Some(FieldType::Boolean) => Value::Boolean(match literal {
-            "true" => true,
-            "false" => false,
-            _ => return Err(invalid("graph boolean must be true or false")),
-        }),
+        Some(FieldType::Integer) => Value::Integer(signed_integer(literal)?),
+        Some(FieldType::UnsignedInteger) => Value::UnsignedInteger(unsigned_integer(literal)?),
+        // GEGL 0.4.62's public chain API uses this explicit true set, not general
+        // case folding (for example, "on" is true but "ON" is false).
+        Some(FieldType::Boolean) => Value::Boolean(matches!(literal, "true" | "True" | "TRUE" | "1" | "yes" | "Yes" | "YES" | "on" | "y" | "Y")),
         Some(FieldType::Text) => Value::Text,
         Some(FieldType::Configuration) => Value::Configuration,
         Some(FieldType::Input) => return Err(invalid("graph input pad requires an auxiliary block")),
@@ -560,6 +558,40 @@ fn typed_value(literal: &str, kind: Option<FieldType<'_>>, budget: &mut Budget) 
             None => Value::Color(color(literal)?),
         },
     })
+}
+
+/// GEGL parses decimal/scientific integer spellings through a double and truncates
+/// toward zero. Exact integer text keeps its full source precision before that fallback.
+/// Reject nonfinite/overflow values rather than reproducing platform-dependent C casts.
+fn integer_scalar(literal: &str) -> Result<f64> {
+    let value = literal.parse::<f64>().map_err(|_| invalid("graph integer is not a finite number"))?;
+    if !value.is_finite() {
+        return Err(invalid("graph integer is not finite"));
+    }
+    Ok(value.trunc())
+}
+
+fn signed_integer(literal: &str) -> Result<i64> {
+    if let Ok(value) = literal.parse() {
+        return Ok(value);
+    }
+    let value = integer_scalar(literal)?;
+    // i64::MAX rounds up to 2^63 as f64, so the upper comparison must be exclusive.
+    if !(i64::MIN as f64..-(i64::MIN as f64)).contains(&value) {
+        return Err(invalid("graph signed integer exceeds i64 range"));
+    }
+    Ok(value as i64)
+}
+
+fn unsigned_integer(literal: &str) -> Result<u32> {
+    if let Ok(value) = literal.parse() {
+        return Ok(value);
+    }
+    let value = integer_scalar(literal)?;
+    if !(0.0..=f64::from(u32::MAX)).contains(&value) {
+        return Err(invalid("graph unsigned integer exceeds u32 range"));
+    }
+    Ok(value as u32)
 }
 
 fn cmyk_color(literal: &str) -> Result<Option<Value>> {

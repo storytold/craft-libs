@@ -65,9 +65,7 @@ fn declarations_preserve_signedness_exact_literals_and_property_order() {
     assert_eq!(properties[3].value, Value::Boolean(true));
     assert_eq!(properties[4].value, Value::Choice(7));
     assert_eq!((properties[5].literal.as_str(), &properties[5].value), ("hello world", &Value::Text));
-    for invalid in
-        ["gain n=NaN", "gain n=inf", "gain signed=1.5", "gain seed=-1", "gain seed=4294967296", "gain enabled=1", "gain mode=missing", "gain n=1 n=2"]
-    {
+    for invalid in ["gain n=NaN", "gain n=inf", "gain seed=-1", "gain seed=4294967296", "gain mode=missing", "gain n=1 n=2"] {
         assert!(parse(invalid, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{invalid}");
     }
 }
@@ -338,7 +336,7 @@ fn scalar_delimiters_do_not_consume_auxiliary_block_boundaries() {
         assert!(graph.diagnostics.is_empty());
         check_edges(&graph);
     }
-    for source in ["over aux=[]", "over aux=[gain text=a[b]c", "gain n=a=b", "gain enabled="] {
+    for source in ["over aux=[]", "over aux=[gain text=a[b]c", "gain n=a=b"] {
         assert!(parse(source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{source}");
     }
 }
@@ -368,4 +366,66 @@ fn cmyk_components_are_retained_without_rgb_conversion_or_unit_normalization() {
         let source = format!("color value='{literal}'");
         assert!(parse(&source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{source}");
     }
+}
+
+#[test]
+fn boolean_spellings_match_the_public_gegl_0462_chain_api() {
+    for literal in ["true", "True", "TRUE", "1", "yes", "Yes", "YES", "on", "y", "Y"] {
+        let raw = format!("gain enabled='{literal}'");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Boolean(true), "{literal}");
+        assert!(graph.diagnostics.is_empty());
+    }
+    for literal in
+        ["false", "False", "FALSE", "0", "no", "off", "n", "N", "ON", "On", "t", "T", "2", "-1", "", "TrUe", "yEs", "true-ish", "true ", " true"]
+    {
+        let raw = format!("gain enabled='{literal}'");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Boolean(false), "{literal}");
+        assert!(graph.diagnostics.is_empty());
+    }
+}
+
+#[test]
+fn finite_integer_spellings_truncate_without_losing_exact_integer_source_precision() {
+    for (literal, expected) in [("1.5", 1), ("-1.5", -1), ("1e1", 10), ("3.9e0", 3), ("-.5", 0), (".5", 0), ("1.0", 1), ("-1.999", -1)] {
+        let raw = format!("gain signed={literal}");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Integer(expected));
+        assert!(graph.diagnostics.is_empty());
+    }
+    for value in [i64::MIN, i64::MAX, 9_007_199_254_740_993] {
+        let raw = format!("gain signed={value}");
+        assert_eq!(read(&raw).nodes[0].properties[0].value, Value::Integer(value));
+    }
+    for (literal, expected) in [("1.5", 1), ("1e1", 10), (".5", 0), ("-.5", 0), ("4294967295.9", u32::MAX)] {
+        let raw = format!("gain seed={literal}");
+        let graph = read(&raw);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::UnsignedInteger(expected));
+    }
+    for value in [0, u32::MAX] {
+        let raw = format!("gain seed={value}");
+        assert_eq!(read(&raw).nodes[0].properties[0].value, Value::UnsignedInteger(value));
+    }
+    for raw in [
+        "gain signed=NaN",
+        "gain signed=inf",
+        "gain signed=-inf",
+        "gain signed=1e999",
+        "gain signed=9223372036854775808.0",
+        "gain signed=-1e20",
+        "gain signed=junk",
+        "gain seed=NaN",
+        "gain seed=inf",
+        "gain seed=-1.5",
+        "gain seed=4294967296.0",
+        "gain seed=1e999",
+    ] {
+        assert!(parse(raw, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{raw}");
+    }
+    assert_eq!(read("gain signed=1.5rel").nodes[0].properties[0].value, Value::RelativeNumber(1.5), "relative units remain unevaluated");
 }
