@@ -304,7 +304,14 @@ impl Xcf<'_> {
         if (cursor.u32()?, cursor.u32()?) != (owner.width, owner.height) {
             return Err(invalid("mask dimensions do not match their owner"));
         }
-        cursor.string_bytes()?; // Validate declared name bytes without an owned copy.
+        let name_length = cursor.u32()? as usize;
+        if name_length > crate::MAX_STRING {
+            return Err(invalid("mask name exceeds the source limit"));
+        }
+        let name = cursor.take(name_length)?;
+        if !name.is_empty() && name.last() != Some(&0) {
+            return Err(invalid("mask name is not NUL terminated"));
+        }
         for count in 0..=4096 {
             if !keep_going() {
                 return Err(Error::Cancelled);
@@ -315,8 +322,8 @@ impl Xcf<'_> {
                 if length != 0 {
                     return Err(invalid("mask property terminator has a payload"));
                 }
-                cursor.ptr()?;
-                self.channel_effects_tail(&mut cursor, keep_going, None)?;
+                let hierarchy = cursor.ptr()?;
+                self.channel_effects_tail(&mut cursor, hierarchy, keep_going, None)?;
                 return Ok(());
             }
             if count == 4096 || length > crate::MAX_PAYLOAD {
@@ -398,7 +405,7 @@ impl Xcf<'_> {
                 return Err(invalid("selection dimensions do not match the canvas"));
             }
             let hierarchy = cursor.ptr()?;
-            self.channel_effects_tail(&mut cursor, keep_going, None)?;
+            self.channel_effects_tail(&mut cursor, hierarchy, keep_going, None)?;
             // Fresh selections default to linear coverage. Nonlinear-U8 saved
             // selections may instead retain an ordinary channel's buffer, with
             // no wire marker distinguishing that provenance. Preserve samples
@@ -435,16 +442,43 @@ impl Xcf<'_> {
     pub(super) fn channel_effects_tail(
         &self,
         cursor: &mut crate::Cursor<'_>,
+        hierarchy: usize,
         keep_going: &dyn Fn() -> bool,
         mut budget: Option<&mut crate::records::Budget>,
     ) -> std::result::Result<(), ChannelTailError> {
+        let width = if self.c.wide { 8 } else { 4 };
         if self.image.version < 26 {
+            // Older documented files put the hierarchy directly after its
+            // pointer. A later writer may insert one zero terminator there:
+            // recognize only exact adjacency, never scan an arbitrary gap.
+            if cursor.pos.checked_add(width) == Some(hierarchy) {
+                if !keep_going() {
+                    return Err(Error::Cancelled.into());
+                }
+                if let Some(budget) = budget.as_deref_mut() {
+                    budget.work(width).map_err(ChannelTailError::Metadata)?;
+                }
+                if cursor.b.get(cursor.pos..hierarchy).is_some_and(|bytes| bytes.iter().all(|byte| *byte == 0)) {
+                    if let Some(budget) = budget.as_deref_mut() {
+                        budget.work(12).map_err(ChannelTailError::Metadata)?;
+                    }
+                    let mut header = cursor.at(hierarchy);
+                    let plausible = matches!((header.u32(), header.u32(), header.u32()), (Ok(w), Ok(h), Ok(bpp))
+                        if w != 0 && h != 0 && w <= crate::MAX_SIDE && h <= crate::MAX_SIDE && bpp as usize == self.image.precision.bytes);
+                    if plausible {
+                        cursor.take(width)?;
+                    }
+                }
+            }
             return Ok(());
         }
-        let width = if self.c.wide { 8 } else { 4 };
+        let forward_boundary = (hierarchy != 0 && hierarchy >= cursor.pos).then_some(hierarchy);
         for count in 0..=1024 {
             if !keep_going() {
                 return Err(Error::Cancelled.into());
+            }
+            if forward_boundary.is_some_and(|end| cursor.pos.checked_add(width).is_none_or(|next| next > end)) {
+                return Err(invalid("channel effects overlap their hierarchy").into());
             }
             if let Some(budget) = budget.as_deref_mut() {
                 budget.work(width).map_err(ChannelTailError::Metadata)?;

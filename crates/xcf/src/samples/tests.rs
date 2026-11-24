@@ -1419,7 +1419,7 @@ fn public_drawable_visitors_exclude_their_complete_source_records_and_preserve_a
                     cursor.string().unwrap();
                     props(&mut cursor).unwrap();
                     let hierarchy = cursor.ptr().unwrap();
-                    reader.channel_effects_tail(&mut cursor, GO, None).unwrap();
+                    reader.channel_effects_tail(&mut cursor, hierarchy, GO, None).unwrap();
                     (cursor.pos, hierarchy)
                 };
                 let record = file.out[start..end].to_vec();
@@ -1558,9 +1558,19 @@ fn inert_dummy_pointer_is_ignored_only_inside_a_complete_contiguous_raw_tile() {
 fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_header() {
     use crate::tests::{TestImage, TestLayer};
     for version in [10, 11, 26] {
-        for state in
-            ["valid", "oversized", "short", "dangling", "mismatched", "short-name", "short-properties", "short-hierarchy", "short-tail", "bad-end"]
-        {
+        for state in [
+            "valid",
+            "oversized",
+            "short",
+            "dangling",
+            "mismatched",
+            "short-name",
+            "short-properties",
+            "short-hierarchy",
+            "short-tail",
+            "bad-end",
+            "bad-name-end",
+        ] {
             if state == "short-tail" && version < 26 {
                 continue;
             }
@@ -1625,6 +1635,7 @@ fn floating_mask_transfer_requires_an_exact_target_and_an_available_matching_hea
                 "short-hierarchy" => file.out.truncate(hierarchy_slot + width - 1),
                 "short-tail" => file.out.truncate(tail + width - 1),
                 "bad-end" => file.out[properties + 4..properties + 8].copy_from_slice(&4u32.to_be_bytes()),
+                "bad-name-end" => file.out[properties - 1] = 1,
                 _ => {}
             }
             let mut reader = Xcf::parse(&file.out).unwrap();
@@ -1666,22 +1677,22 @@ fn channel_effect_tail_is_bounded_metered_and_cancellable_including_the_terminat
     let data = [1u64.to_be_bytes(), 0u64.to_be_bytes()].concat();
     let cursor = crate::Cursor { b: &data, pos: 0, wide: true };
     let mut work = crate::records::Budget::new(16, 0);
-    reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)).unwrap();
+    reader.channel_effects_tail(&mut cursor.at(0), 0, GO, Some(&mut work)).unwrap();
     assert_eq!(work.work_remaining(), 0);
     assert!(matches!(
-        reader.channel_effects_tail(&mut cursor.at(0), GO, Some(&mut work)),
+        reader.channel_effects_tail(&mut cursor.at(0), 0, GO, Some(&mut work)),
         Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
     ));
-    assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), &|| false, Some(&mut work)), Err(ChannelTailError::Source(Error::Cancelled))));
+    assert!(matches!(reader.channel_effects_tail(&mut cursor.at(0), 0, &|| false, Some(&mut work)), Err(ChannelTailError::Source(Error::Cancelled))));
     let mut short = crate::records::Budget::new(15, 0);
     let mut position = cursor.at(0);
     assert!(matches!(
-        reader.channel_effects_tail(&mut position, GO, Some(&mut short)),
+        reader.channel_effects_tail(&mut position, 0, GO, Some(&mut short)),
         Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
     ));
     assert_eq!(position.pos, 8, "the terminator is not read before admission");
     assert_eq!(short.work_remaining(), 7);
-    assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &data[..15], pos: 0, wide: true }, GO, None).is_err());
+    assert!(reader.channel_effects_tail(&mut crate::Cursor { b: &data[..15], pos: 0, wide: true }, 0, GO, None).is_err());
 }
 
 #[test]
@@ -1691,14 +1702,14 @@ fn channel_effect_tail_count_limit_is_independent_of_eof() {
     let mut maximum = vec![1; 1024 * 8];
     maximum.extend([0; 8]);
     let mut cursor = crate::Cursor { b: &maximum, pos: 0, wide: true };
-    reader.channel_effects_tail(&mut cursor, GO, None).unwrap();
+    reader.channel_effects_tail(&mut cursor, 0, GO, None).unwrap();
     assert_eq!(cursor.pos, maximum.len());
 
     let mut too_many = vec![1; 1025 * 8];
     too_many.extend([0; 8]);
     let mut cursor = crate::Cursor { b: &too_many, pos: 0, wide: true };
     assert!(matches!(
-        reader.channel_effects_tail(&mut cursor, GO, None),
+        reader.channel_effects_tail(&mut cursor, 0, GO, None),
         Err(ChannelTailError::Source(Error::Invalid(ref problem))) if problem == "too many channel effects"
     ));
 }
@@ -1835,3 +1846,191 @@ fn mask_role_framing_polls_cancellation_without_retaining_metadata() {
 }
 
 mod selection_roles;
+
+#[test]
+fn mask_confirmation_keeps_zero_length_names_and_rejects_tail_crossing_forward_hierarchy() {
+    for missing_tail in [false, true] {
+        let mut source = Source::gray(650, 4, [0.25f32, 0.75].into_iter().flat_map(f32::to_be_bytes).collect());
+        source.kind = 3;
+        source.channels = 2;
+        source.floating = true;
+        let mut file = W { out: source.write(), wide: true };
+        let reader = Xcf::parse(&file.out).unwrap();
+        let layer = reader.layer_sources[0];
+        let mut cursor = reader.c.at(layer);
+        cursor.take(12).unwrap();
+        cursor.string_bytes().unwrap();
+        let target_slot = loop {
+            let kind = cursor.u32().unwrap();
+            let len = cursor.u32().unwrap() as usize;
+            assert_ne!(kind, 0);
+            if kind == 5 {
+                let at = cursor.pos;
+                cursor.take(len).unwrap();
+                break at;
+            }
+            cursor.take(len).unwrap();
+        };
+        props(&mut cursor).unwrap();
+        cursor.ptr().unwrap();
+        let mask_slot = cursor.pos;
+        let mask = file.out.len();
+        file.patch(target_slot, mask);
+        file.patch(mask_slot, mask);
+        file.u32(1);
+        file.u32(1);
+        file.u32(0);
+        file.end();
+        let hierarchy_slot = file.slot();
+        if !missing_tail {
+            file.ptr(0);
+        }
+        let hierarchy = hierarchy(&mut file, 1, 1, 4, &0f32.to_be_bytes(), Compression::None);
+        file.patch(hierarchy_slot, hierarchy);
+        let reader = Xcf::parse(&file.out).unwrap();
+        let info = reader
+            .visit_layer_tiles(0, SampleOptions::default(), &mut 8, GO, |tile| {
+                assert_eq!(tile.sample(0)?, SourceSample::F32(0.25));
+                Ok(())
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.transfer_is_assumed, missing_tail);
+        assert_eq!(info.precision.transfer, if missing_tail { Transfer::Nonlinear } else { Transfer::Linear });
+        let visit = reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut 4, GO, |tile| {
+            assert_eq!(tile.sample(0)?, SourceSample::F32(0.0));
+            Ok(())
+        });
+        if missing_tail {
+            assert!(visit.is_err());
+        } else {
+            assert!(visit.unwrap().is_some());
+        }
+    }
+}
+
+#[test]
+fn channel_tail_forward_boundary_is_checked_before_work_and_keeps_typed_work_refusals() {
+    let bytes = Source::gray(150, 1, vec![22]).write();
+    let reader = Xcf::parse(&bytes).unwrap();
+    let data = [1u64.to_be_bytes(), 0u64.to_be_bytes()].concat();
+    for (hierarchy, expected_spent) in [(4, 0), (8, 8), (16, 16)] {
+        let mut cursor = crate::Cursor { b: &data, pos: 0, wide: true };
+        let mut budget = crate::records::Budget::new(16, 0);
+        let result = reader.channel_effects_tail(&mut cursor, hierarchy, GO, Some(&mut budget));
+        assert_eq!(16 - budget.work_remaining(), expected_spent);
+        if hierarchy == 16 {
+            result.unwrap();
+        } else {
+            assert!(matches!(result, Err(ChannelTailError::Source(_))));
+        }
+        assert!(cursor.pos <= hierarchy);
+    }
+    let mut cursor = crate::Cursor { b: &data, pos: 0, wide: true };
+    let mut budget = crate::records::Budget::new(7, 0);
+    assert!(matches!(
+        reader.channel_effects_tail(&mut cursor, 16, GO, Some(&mut budget)),
+        Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+    ));
+    assert_eq!(cursor.pos, 0);
+}
+
+#[test]
+fn pre26_channel_tail_recognizes_only_one_adjacent_zero_and_keeps_direct_and_gap_layouts() {
+    for version in [10, 11, 22] {
+        for (gap, zero, consumed) in [(0, true, 0), (1, true, 1), (1, false, 0), (2, true, 0)] {
+            let mut source = Source::gray(150, 1, vec![22]);
+            source.version = version;
+            let bytes = source.write();
+            let reader = Xcf::parse(&bytes).unwrap();
+            let width = if version >= 11 { 8 } else { 4 };
+            let mut data = vec![if zero { 0 } else { 1 }; gap * width];
+            data.extend([1u32.to_be_bytes(), 1u32.to_be_bytes(), 1u32.to_be_bytes()].concat());
+            let hierarchy = gap * width;
+            let mut cursor = crate::Cursor { b: &data, pos: 0, wide: version >= 11 };
+            reader.channel_effects_tail(&mut cursor, hierarchy, GO, None).unwrap();
+            assert_eq!(cursor.pos, consumed * width);
+            if gap == 1 && zero {
+                let mut short = crate::records::Budget::new(width + 11, 0);
+                let mut cursor = crate::Cursor { b: &data, pos: 0, wide: version >= 11 };
+                assert!(matches!(
+                    reader.channel_effects_tail(&mut cursor, hierarchy, GO, Some(&mut short)),
+                    Err(ChannelTailError::Metadata(crate::records::StopReason::WorkLimit))
+                ));
+                assert_eq!(cursor.pos, 0);
+                let mut invalid = data.clone();
+                invalid[hierarchy..hierarchy + 4].copy_from_slice(&0u32.to_be_bytes());
+                let mut cursor = crate::Cursor { b: &invalid, pos: 0, wide: version >= 11 };
+                reader.channel_effects_tail(&mut cursor, hierarchy, GO, None).unwrap();
+                assert_eq!(cursor.pos, 0, "a zero gap without plausible hierarchy framing remains a gap");
+            }
+        }
+    }
+}
+
+#[test]
+fn pre26_public_channel_visitors_exclude_only_the_corroborated_adjacent_terminator() {
+    for version in [10, 11, 23] {
+        for (gap, zero) in [(0, true), (1, true), (1, false), (2, true)] {
+            for points_to_gap in [false, true] {
+                if gap == 0 && points_to_gap {
+                    continue;
+                }
+                let mut source = Source::gray(150, 1, vec![22, 44]);
+                source.width = 2;
+                source.version = version;
+                source.channel = Some(vec![22, 44]);
+                source.mask = Some(vec![22, 44]);
+                for role in ["channel", "mask"] {
+                    let mut file = W { out: source.write(), wide: version >= 11 };
+                    let reader = Xcf::parse(&file.out).unwrap();
+                    let pointer = if role == "channel" { reader.channels[0] } else { reader.image.layers[0].mask };
+                    let mut cursor = reader.c.at(pointer);
+                    cursor.take(8).unwrap();
+                    cursor.string_bytes().unwrap();
+                    props(&mut cursor).unwrap();
+                    let hierarchy_slot = cursor.pos;
+                    let hierarchy = cursor.ptr().unwrap();
+                    let old_end = cursor.pos;
+                    let width = if version >= 11 { 8 } else { 4 };
+                    // Insert only this record's local gap and relocate its hierarchy
+                    // pointers; other recorded source offsets all precede the insertion.
+                    file.out.splice(old_end..old_end, std::iter::repeat_n(if zero { 0 } else { 77 }, gap * width));
+                    let new_hierarchy = hierarchy + gap * width;
+                    file.patch(hierarchy_slot, new_hierarchy);
+                    let reader = Xcf::parse(&file.out).unwrap();
+                    let mut head_cursor = reader.c.at(new_hierarchy + 12);
+                    let old_level = head_cursor.ptr().unwrap();
+                    let new_level = old_level + gap * width;
+                    file.patch(new_hierarchy + 12, new_level);
+                    let reader = Xcf::parse(&file.out).unwrap();
+                    let mut tile_cursor = reader.c.at(new_level + 8);
+                    let old_tile = tile_cursor.ptr().unwrap();
+                    file.patch(new_level + 8, if points_to_gap { old_end } else { old_tile + gap * width });
+                    let reader = Xcf::parse(&file.out).unwrap();
+                    let mut seen = Vec::new();
+                    let visit = |tile: SourceTile<'_>| {
+                        seen.extend_from_slice(tile.data);
+                        Ok(())
+                    };
+                    let result = if role == "channel" {
+                        reader.visit_channel_tiles(0, SampleOptions::default(), &mut 2, GO, visit).map(|_| ())
+                    } else {
+                        reader.visit_layer_mask_tiles(0, SampleOptions::default(), &mut 2, GO, visit).map(|_| ())
+                    };
+                    let legacy =
+                        if role == "channel" { reader.channel(0, &mut 8, GO).map(|_| ()) } else { reader.layer_mask(0, &mut 8, GO).map(|_| ()) };
+                    if points_to_gap && gap == 1 && zero {
+                        assert!(result.is_err());
+                        assert!(legacy.is_err());
+                        assert!(seen.is_empty());
+                    } else {
+                        result.unwrap();
+                        legacy.unwrap();
+                        assert_eq!(seen, if points_to_gap { vec![if zero { 0 } else { 77 }; 2] } else { vec![22, 44] });
+                    }
+                }
+            }
+        }
+    }
+}

@@ -851,7 +851,7 @@ impl<'a> Xcf<'a> {
         let result = (|| {
             let selection = props(&mut c)?.iter().any(|p| p.kind == 4);
             let hptr = c.ptr()?;
-            self.channel_effects_tail(&mut c, keep_going, None)?;
+            self.channel_effects_tail(&mut c, hptr, keep_going, None)?;
             // Channels are always one plain sample per pixel, even in indexed images.
             let px = self.hierarchy_excluding(hptr, 1, false, Some(&(ptr..c.pos)), budget, keep_going)?;
             Ok((Channel { name, selection }, px))
