@@ -6,7 +6,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::overlay::{Align, Side};
 use craft_ui::buttons::Button;
-use craft_ui::canvas_controls::{TaskBar, TaskBarDismiss, TaskBarPlace};
+use craft_ui::canvas_controls::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarPlace};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::menu::PanelRow;
 use craft_ui::runtime::commands::{CommandRef, EditCommands};
@@ -522,4 +522,35 @@ fn a_compact_task_bar_is_smaller_and_shows_every_member_whole() {
     for button in buttons {
         assert!(button.is_positive() && compact.expand(SLACK).contains_rect(button), "each member shows whole in {compact:?}: {button:?}");
     }
+}
+
+/// The fill of the bar grip painted inside `grip` among `shapes`.
+fn grip_ink(shapes: &[egui::Shape], grip: Rect) -> Option<egui::Color32> {
+    shapes.iter().find_map(|shape| match shape {
+        egui::Shape::Rect(rect) if grip.contains_rect(rect.rect) => Some(rect.fill),
+        _ => None,
+    })
+}
+
+/// The bar grip lights under the pointer and while the bar moves, and goes back to its rest ink after the drop.
+#[trial]
+fn the_bar_grip_lights_under_the_pointer_and_while_the_bar_moves() {
+    let scene = scene();
+    let mut fixture = fixture_with(&scene, |bar| bar.grip(TaskBarGrip::Bar));
+    fixture.settle();
+    let grip = fixture.by_label("Move bar").expect("the grip is named");
+    let rest = grip_ink(&fixture.frame_shapes(), grip.rect).expect("the grip paints its bar");
+
+    fixture.frame(vec![moved(grip.center())]).idle(8);
+    let hovered = grip_ink(&fixture.frame_shapes(), grip.rect);
+    assert!(hovered.is_some_and(|ink| ink != rest), "the grip lights under the pointer: {hovered:?} against {rest:?}");
+
+    let by = Vec2::new(-60.0, 30.0);
+    fixture.drag_hold_at(grip.center(), by);
+    let moving = grip_ink(&fixture.frame_shapes(), grip.rect.translate(by));
+    assert!(moving.is_some_and(|ink| ink != rest), "the grip is lit while the bar moves: {moving:?} against {rest:?}");
+
+    fixture.release_at(grip.center() + by).frame(vec![moved(grip.center() + by + Vec2::new(0.0, 200.0))]).idle(8);
+    let dropped = fixture.by_label("Move bar").expect("the grip is named");
+    assert_eq!(grip_ink(&fixture.frame_shapes(), dropped.rect), Some(rest), "the grip is back to rest once dropped and left");
 }

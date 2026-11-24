@@ -1,6 +1,6 @@
 //! Stories of `TaskBar`.
 
-use super::{TaskBar, TaskBarDismiss, TaskBarPlace};
+use super::{TaskBar, TaskBarDismiss, TaskBarGrip, TaskBarPlace};
 use crate::buttons::{Button, IconButton};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
 use crate::contract::{Props as _, Show as _};
@@ -197,4 +197,37 @@ fn placed_and_pinned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             })
             .output
     })
+}
+
+/// Points the pointer at the grip.
+fn hover_grip(fixture: &mut Fixture) {
+    if let Some(grip) = fixture.by_label("Move bar") {
+        fixture.frame(vec![crate::testing::pointer::moved(grip.center())]);
+        fixture.idle(8);
+    }
+}
+
+/// Drags the bar by its grip and holds it there, the button down.
+fn drag_grip(fixture: &mut Fixture) {
+    if let Some(grip) = fixture.by_label("Move bar") {
+        fixture.drag_hold_at(grip.center(), egui::vec2(-40.0, 30.0));
+    }
+}
+
+/// The bar grip: one rounded upright bar in the line colour.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
+fn bar_grip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
+}
+
+/// The bar grip under the pointer: muted text.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Custom(hover_grip))]
+fn bar_grip_hovered(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
+}
+
+/// The bar grip while the bar moves: muted text.
+#[story(TaskBar<'static>, covers = [], drive = Drive::Custom(drag_grip))]
+fn bar_grip_dragged(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    configured(ui, data, &turned_frame(), None, |bar| bar.grip(TaskBarGrip::Bar))
 }
