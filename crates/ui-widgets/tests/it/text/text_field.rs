@@ -1,12 +1,13 @@
 //! `TextField`: the search form's clear part empties the text; a multi-line field grows to `max_lines` or fills its
-//! room and scrolls its text inside; a bound caret goes both ways.
+//! room and scrolls its text inside; a bound caret goes both ways; the wheel over a focused field scrolls the form
+//! around it.
 
 use craft_behavior::PartKey;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Stack;
 use craft_ui::testing::{Fixture, pointer, trial};
-use craft_ui::text::TextField;
-use egui::{Id, Key, Modifiers, Rect, Vec2};
+use craft_ui::text::{NumberField, TextField};
+use egui::{Id, Key, Modifiers, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -296,4 +297,57 @@ fn the_clear_part_empties_the_field_in_the_pass_of_its_click() {
     fixture.access(AccessActionKind::Click, &clear);
     assert_eq!(text.borrow().as_str(), "", "the click emptied the text");
     assert_eq!(fixture.tree().value(id.get()), Some(""), "the field reads empty in the pass of the click");
+}
+
+/// A 200 × 120 form: `first`, then twenty text fields, in a scrolling stack a 100-point room caps, so the fields
+/// overflow it.
+fn scrolling_form(mut first: impl FnMut(&mut Ui) + 'static) -> Fixture {
+    let texts = Rc::new(RefCell::new(vec![String::new(); 20]));
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().fill_width().room_height(100.0).show(ui, |ui, _| {
+            Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
+                first(ui);
+                for (row, text) in texts.borrow_mut().iter_mut().enumerate() {
+                    TextField::new(format!("Field {row}"), Bind::bound(text)).id_salt(row).show(ui);
+                }
+            });
+        });
+    });
+    fixture.room(Vec2::new(200.0, 120.0)).settle();
+    fixture
+}
+
+/// The wheel over a focused single-line text field, which has nothing to scroll or step, scrolls the form around it,
+/// as native fields do; a focused number field under the pointer still steps by the wheel and keeps the form still.
+#[trial]
+fn the_wheel_over_a_focused_text_field_scrolls_the_form_around_it() {
+    let name = Rc::new(RefCell::new(String::new()));
+    let shown = Rc::clone(&name);
+    let mut fixture = scrolling_form(move |ui| {
+        TextField::new("Name", Bind::bound(&mut *shown.borrow_mut())).id_salt("name").show(ui);
+    });
+    let field = fixture.by_label("Name").expect("the Name field");
+    fixture.click(&field).settle();
+    assert!(fixture.focused_stop().is_some(), "the click focuses the Name field");
+    fixture.frame(vec![pointer::moved(field.center())]);
+    fixture.frame(vec![pointer::wheel(-40.0)]);
+    fixture.idle(3);
+    let moved = fixture.by_label("Name").expect("the Name field").rect;
+    assert!(moved.top() < field.rect.top() - 1.0, "the wheel scrolls the form, moving the Name field up: {:?} to {moved:?}", field.rect);
+
+    let value = Rc::new(Cell::new(Some(10.0)));
+    let held = Rc::clone(&value);
+    let mut fixture = scrolling_form(move |ui| {
+        let mut current = held.get();
+        NumberField::new("Size", Bind::bound(&mut current)).id_salt("size").range(0.0..=100.0).show(ui);
+        held.set(current);
+    });
+    let field = fixture.by_label("Size").expect("the Size field");
+    fixture.click(&field).settle();
+    fixture.frame(vec![pointer::moved(field.center())]);
+    fixture.frame(vec![pointer::wheel_lines(1.0)]);
+    fixture.idle(3);
+    assert_ne!(value.get(), Some(10.0), "the wheel steps the focused number field");
+    let still = fixture.by_label("Size").expect("the Size field").rect;
+    assert!((still.top() - field.rect.top()).abs() <= SNAP, "and the form stays put: {:?} to {still:?}", field.rect);
 }
