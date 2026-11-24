@@ -668,7 +668,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let space_releases = events
             .iter()
             .filter(|arrived| {
-                matches!(&raw_input::key_event(&arrived.event, os, latin), KeyEvent::Release { input }
+                matches!(&raw_input::key_event(&arrived.event, os, latin, stage.alt.last.unwrap_or(Mods::NONE)), KeyEvent::Release { input }
                 if input.physical.or(input.typed) == Some(Key::Space) && !input.mods.shift && !input.mods.alt)
             })
             .count()

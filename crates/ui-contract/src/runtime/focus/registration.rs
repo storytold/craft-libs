@@ -128,8 +128,6 @@ impl Stop {
         self.arena = arena;
         self
     }
-        self
-    }
 
     /// Marks the stop as the app's own egui widget.
     pub fn host(mut self) -> Self {
