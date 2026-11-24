@@ -293,3 +293,40 @@ fn a_press_on_an_app_drag_widget_in_the_body_is_no_surface_press() {
     fixture.click_at(Pos2::new(rect.center().x, rect.bottom() + 80.0)).settle();
     assert!(surface.get(), "a press on the empty body is the group's surface press");
 }
+
+// Closable panel tabs stay panel tabs: in a group too narrow for their whole names every tab keeps its place in the
+// strip, the shown one its whole name, and each shows a close button. A middle click closes an inactive tab without
+// showing it first.
+#[trial]
+fn closable_panel_tabs_shrink_and_close_on_a_middle_click() {
+    let (picked, closed) = (Rc::new(Cell::new(None::<PanelKey>)), Rc::new(Cell::new(None::<PanelKey>)));
+    let (picks, closes) = (Rc::clone(&picked), Rc::clone(&closed));
+    let names = ["Character", "Paragraph", "Glyphs"];
+    let panels: Vec<PanelTitle> = (0..3).map(|at| PanelTitle::new(PanelKey::new(at as u64 + 1), names[at]).closable(true)).collect();
+    let keys: Vec<PanelKey> = panels.iter().map(|panel| panel.key).collect();
+    let group_rect = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 200.0));
+    let mut fixture = Fixture::new(move |ui| {
+        let out = DockGroup::new(1usize, Titles::from_content(panels.clone()), panels[0].key).closable().show_at(ui, group_rect, |_, _| ());
+        if let Some(key) = out.output.picked {
+            picks.set(Some(key));
+        }
+        if let Some(key) = out.output.closed.first() {
+            closes.set(Some(*key));
+        }
+    });
+    fixture.settle();
+    let tabs: Vec<_> = names.iter().map(|name| fixture.by_label(name).unwrap_or_else(|| panic!("the {name} tab stays in the strip"))).collect();
+    for (name, tab) in names.iter().zip(&tabs) {
+        assert!(group_rect.contains_rect(tab.rect), "the {name} tab {:?} lies inside the group", tab.rect);
+        assert!(fixture.by_label(&format!("Close {name}")).is_some(), "the {name} tab shows a close button");
+    }
+    // Paragraph's name is as long as Character's: shrunk beside the shown tab, which keeps its whole name.
+    assert!(tabs[1].rect.width() < tabs[0].rect.width() - 0.5, "the other tabs shrink and the shown tab keeps its whole name");
+    assert!(fixture.by_label("More tabs").is_none(), "no tab goes to the overflow menu while its first letters fit");
+    let at = tabs[2].center();
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::middle(at, true)]);
+    fixture.frame(vec![pointer::middle(at, false)]).settle();
+    assert_eq!(closed.get(), Some(keys[2]), "the middle click closes the tab");
+    assert_eq!(picked.get(), None, "the middle click does not show the tab first");
+}

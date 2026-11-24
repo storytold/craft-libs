@@ -625,8 +625,9 @@ impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for 
             cx.core.memory.shown::<MenuAsked>(sub(cx.core.id, MENU_ASKED)).0 = Some(request.at);
         }
         let grip = cx.part_if_declared(GRIP).map(|grip| (grip.rect, crate::runtime::access::sub_node_id(cx.core.id, GRIP.into())));
-        let Reported { picked, closed, picked_document, closed_documents, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, .. } =
-            self.reported;
+        let Reported {
+            picked, closed, picked_document, closed_documents, menu, item, commands, toggle_minimized, torn_off, drag_started, tabs, ..
+        } = self.reported;
         DockGroupOutput {
             response: cx.response.clone(),
             picked,
@@ -898,12 +899,13 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let drags = crate::runtime::drag::started(ui.ctx());
     let tabs = strip_tabs(panels, closable);
     let source = keyed(&tabs, |tab: &StripTab<'_>| tab.key).with_text(|tab| Cow::Borrowed(tab.title.as_str()));
-    let kind = if tabs.iter().any(|tab| tab.closes) { TabKind::Document } else { TabKind::Panel };
     let tabs = &tabs;
     let documents: Vec<PanelKey> = tabs.iter().filter(|tab| tab.document).map(|tab| tab.key).collect();
     // A press on a panel tab leaves key focus where it is, as in Photoshop: the document's keys keep working.
     let mut strip = TabStrip::new(name)
-        .kind(kind)
+        // Panel tabs whether or not they close: they shrink to their first letters, and the closable ones show a close
+        // button.
+        .kind(TabKind::Panel)
         .keeps_focus()
         .panel_look(row.look)
         .shown(shown_tab(panels, active))
