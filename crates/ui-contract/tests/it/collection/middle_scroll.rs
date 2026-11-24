@@ -68,7 +68,7 @@ impl Rig {
         self.events
             .borrow()
             .iter()
-            .filter(|event| matches!(event, CollectionEvent::Selection(_) | CollectionEvent::LeadMoved { .. } | CollectionEvent::Activate(_)))
+            .filter(|event| matches!(event, CollectionEvent::Selection { .. } | CollectionEvent::LeadMoved { .. } | CollectionEvent::Activate(_)))
             .count()
     }
 }

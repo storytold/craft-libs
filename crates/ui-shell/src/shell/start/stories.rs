@@ -74,6 +74,9 @@ fn plain_templates() -> Vec<Template> {
     ]
 }
 
+/// An app section a story adds: its title and its body.
+type AppSection<'a> = (&'a str, &'a mut dyn FnMut(&mut Ui));
+
 /// A pinned folder at `path`, named by its last component, not listed.
 fn pinned_folder(path: &str) -> PinnedFolder {
     let name = Path::new(path).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -98,6 +101,7 @@ struct Extras<'a> {
     source: Option<&'a FakeThumbSource<ThumbKey>>,
     links: &'a [StartLink],
     drop_hint: Option<&'a str>,
+    section: Option<AppSection<'a>>,
     /// New is left out (`offers_new(false)`).
     without_new: bool,
     /// A host section before Recent and one after the built-in sections.
@@ -127,6 +131,9 @@ fn screen(
     if let Some(hint) = extras.drop_hint {
         start = start.drop_hint(Label::from(hint.to_owned()));
     }
+    if let Some((title, body)) = extras.section {
+        start = start.app_section(Label::from(title.to_owned()), body);
+    }
     if extras.host_sections {
         start = start
             .section(StartPlace::BeforeRecent, |ui, _| {
@@ -143,6 +150,18 @@ fn screen(
 fn start_screen(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let pinned = [pinned_folder("/home/user/Pictures"), pinned_folder("/home/user/Projects")];
     screen(ui, data, Choice::default(), &plain_files(), &pinned, &plain_templates(), Extras::default())
+}
+
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_with_app_section(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let pinned = [pinned_folder("/home/user/Pictures")];
+    let mut buttons = |ui: &mut Ui| {
+        let _ = Button::new(Label::from("Browse Tutorials".to_owned())).id_salt("tutorials").show(ui);
+        let _ = Button::new(Label::from("What's New".to_owned())).id_salt("whats-new").show(ui);
+    };
+    let body: &mut dyn FnMut(&mut Ui) = &mut buttons;
+    let extras = Extras { section: Some(("Learn", body)), ..Extras::default() };
+    screen(ui, data, Choice::default(), &plain_files(), &pinned, &plain_templates(), extras)
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]

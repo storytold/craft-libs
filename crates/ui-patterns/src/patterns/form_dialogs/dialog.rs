@@ -2,7 +2,9 @@
 //! owned by a `DialogHost`. A command form is a `ParamDialog` without a preview.
 
 use super::fields::{DialogFields, FieldValue};
-use crate::patterns::presets::{PresetKind, PresetRow, PresetSource};
+use crate::patterns::presets::{
+    NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetError, PresetKind, PresetPicker, PresetRow, PresetSource,
+};
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 
 use super::form::{FormDialog, FormDialogWords};
@@ -18,7 +20,7 @@ use crate::contract::{
 };
 
 use crate::dialog::{
-    Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id,
+    Alert, ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, HoldsOk, StackDialog, dialog_id,
 };
 
 use crate::display::{Shade, Text};
@@ -34,7 +36,7 @@ use crate::runtime::env::{Env, Label};
 use crate::text::RangeAlert;
 use craft_behavior::{CanvasTransform, DisplayOrder, EditEvent, ItemSource, Mixed, SelectionChange};
 
-use crate::runtime::memory::MemoryStage;
+use crate::runtime::memory::{Lifetime, MemoryStage, with_session};
 
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
@@ -56,6 +58,7 @@ craft_ui::words! {
     /// The words of the parameter dialog beside the common OK and Cancel.
     pub struct ParamDialogWords {
         reset: "paramDialog.reset" = "Reset";
+        presets: "paramDialog.presets" = "Preset";
     }
 }
 
@@ -203,15 +206,19 @@ pub struct ParamResult {
     /// The id of the dialog that filed the result, instance ids included, so a family's step names the dialog that
     /// answered. `HostedParamDialog` sets it; a `ParamDialog` shown on its own has no host id and leaves `Id::NULL`.
     pub id: DialogId,
-    remember: Option<(SaveKey, DialogFields)>,
+    remember: Option<(SaveKey, Lifetime, DialogFields)>,
 }
 
 impl ParamResult {
     /// Stores the values of a dialog built with [`ParamDialog::remember`] for the next open. The app calls it after
     /// its command succeeds, so a failed command leaves the previous values; without a remember key it does nothing.
     pub fn remember(&self, ctx: &Context) {
-        if let Some((key, values)) = &self.remember {
-            crate::runtime::memory::set_saved_value::<Option<DialogFields>>(ctx, key, Some(values.clone()));
+        if let Some((key, lifetime, values)) = &self.remember {
+            let values = Some(values.clone());
+            match lifetime {
+                Lifetime::Run => crate::runtime::memory::set_run_value::<Option<DialogFields>>(ctx, key, values),
+                _ => crate::runtime::memory::set_saved_value::<Option<DialogFields>>(ctx, key, values),
+            }
         }
     }
 }
@@ -249,6 +256,10 @@ pub struct ParamDialogOutput {
     /// The id of the extra footer button or the custom row's button pressed this pass (`ParamDialog::extra_buttons`,
     /// `CustomContext::request_action`).
     pub action: Option<String>,
+    /// The preset edits of this pass: Apply, Create, Rename and Delete from the presets row (`ParamDialog::presets`).
+    pub presets: Vec<NamedPresetEvent<String>>,
+    /// The help link a row's button reported in this pass.
+    pub help_link: Option<String>,
     /// The step the preview pager took this pass (`ParamDialog::preview_pager`).
     pub preview_step: Option<PagerStep>,
     /// The picture point at the centre of the view the preview pane drew this pass; `None` without a preview.
@@ -316,6 +327,12 @@ pub struct ParamDialog<'a> {
     /// Saves the values under `key` when the app calls [`ParamResult::remember`], and opens with them.
     #[prop]
     remember: Option<SaveKey>,
+    /// How long the values `remember` keeps live; without `remember` it does nothing.
+    #[prop]
+    remember_for: Lifetime,
+    /// The named presets row above the rows.
+    #[prop]
+    presets: Option<ParamPresets<'a>>,
     /// Whether OK can be pressed; Enter does nothing while it cannot.
     #[prop]
     ok_enabled: bool,
@@ -393,10 +410,10 @@ pub struct ParamDialog<'a> {
     /// passes (`Sampler::pass_canvas_gesture`): the app centres the pane on the point under it.
     #[prop]
     canvas: Option<egui::Id>,
-    /// Extra footer buttons after OK and Cancel (Color Table's Load… and Save…), each an id and a label. They keep the
+    /// Extra footer buttons after OK and Cancel (Color Table's Load… and Save…), each an id and a button. They keep the
     /// dialog open; a press comes back as `ParamDialogOutput::action`.
     #[prop]
-    extra_buttons: Vec<(String, Label)>,
+    extra_buttons: Vec<(String, FooterButton)>,
     /// The patterns the dialog's [`ParamKind::Pattern`] rows offer. A hosted dialog's build gives a source over
     /// owned inputs.
     #[prop]
@@ -434,6 +451,34 @@ struct Shaped<'a>(Box<dyn FnOnce(Dialog<'a>) -> Dialog<'a> + 'a>);
 
 type BelowRowsFn<'a> = Box<dyn Fn(&mut Ui, &DialogFields) + 'a>;
 
+/// The named presets a [`ParamDialog`] offers above its rows: the preset rows, the values each applies, and the names
+/// the user cannot rename or delete.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ParamPresets<'a> {
+    /// The listed presets, by name.
+    pub rows: &'a [PresetRow<String>],
+    /// The values each preset applies, by name.
+    pub values: &'a [(String, DialogFields)],
+    /// The names of the built-in presets, which `check_name` refuses.
+    pub built_in: &'a [String],
+}
+
+impl<'a> ParamPresets<'a> {
+    /// The presets `rows`, applying `values`, of which `built_in` cannot be renamed or deleted.
+    pub fn new(rows: &'a [PresetRow<String>], values: &'a [(String, DialogFields)], built_in: &'a [String]) -> Self {
+        ParamPresets { rows, values, built_in }
+    }
+}
+
+/// The footer rows of a [`ParamDialog`] between passes: whether each was on when the last pass ended, which its
+/// button label shows, and the key of the row whose button was pressed, which the next pass flips.
+#[derive(Clone, Debug, Default)]
+struct FooterRows {
+    on: Vec<bool>,
+    flip: Option<String>,
+}
+
 /// What `ParamDialog::below` draws under the rows.
 pub struct BelowRows<'a>(BelowRowsFn<'a>);
 
@@ -459,6 +504,8 @@ impl<'a> ParamDialog<'a> {
             bound: None,
             open: None,
             remember: None,
+            remember_for: Lifetime::default(),
+            presets: None,
             ok_enabled: true,
             ok_reason: None,
             ok_label: None,
@@ -503,8 +550,8 @@ impl<'a> ParamDialog<'a> {
     }
 
     /// The answer OK gives with `fields`: with `remember`, it keeps the part of them the dialog saves.
-    fn result(key: String, params: &[Param], remember: Option<SaveKey>, fields: DialogFields) -> ParamResult {
-        let remember = remember.map(|save| (save, Self::remembered(params, &fields)));
+    fn result(key: String, params: &[Param], remember: Option<SaveKey>, remember_for: Lifetime, fields: DialogFields) -> ParamResult {
+        let remember = remember.map(|save| (save, remember_for, Self::remembered(params, &fields)));
         ParamResult { key, fields, remember, id: DialogId::NULL }
     }
 
@@ -531,6 +578,7 @@ impl<'a> ParamDialog<'a> {
     pub fn remembered(params: &[Param], fields: &DialogFields) -> DialogFields {
         let kept = |param: &Param| {
             param.is_remembered()
+                && param.footer_on().is_none()
                 && matches!(
                     param.kind,
                     ParamKind::Range { .. }
@@ -573,6 +621,8 @@ impl<'a> ParamDialog<'a> {
             bound,
             open,
             remember,
+            remember_for,
+            presets,
             ok_enabled,
             ok_reason,
             ok_label,
@@ -637,13 +687,7 @@ impl<'a> ParamDialog<'a> {
             form = form.held(held);
         }
         if let Some(reset_to) = reset_to {
-            form = form.reset_with(move |_, opened| {
-                let mut values = opened.clone();
-                for (name, value) in reset_to.iter() {
-                    values.set(name, value.clone());
-                }
-                values
-            });
+            form = form.reset_with(move |_, opened, _| reset_target(opened, Some(&reset_to)));
         }
         if let Some(reason) = ok_reason {
             form = form.ok_reason(reason);
@@ -666,9 +710,23 @@ impl<'a> ParamDialog<'a> {
         }
         // The pane shows only in a dialog that previews.
         let preview = preview.filter(|_| previews);
-        if !extra_buttons.is_empty() {
-            form = form.extra_buttons(extra_buttons.iter().map(|(_, label)| FooterButton::new(label.clone(), DialogRole::Other)));
+        // The footer rows' buttons follow the extra buttons. A button's label cannot change inside the pass that
+        // draws it, so it shows the state the previous pass left.
+        let footer_rows: Vec<&Param> = params.iter().filter(|param| param.footer_on().is_some()).collect();
+        let footer_id = crate::runtime::memory::unique(("paramDialog.footer", key.as_str()));
+        let footer_states: Vec<bool> =
+            if footer_rows.is_empty() { Vec::new() } else { with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on.clone()) };
+        let footer_buttons = footer_rows.iter().enumerate().map(|(at, param)| {
+            let on = footer_states.get(at).copied().unwrap_or(false);
+            let label = param.footer_on().filter(|_| on).unwrap_or_else(|| param.label.clone());
+            FooterButton::new(label, DialogRole::Other).stays_open(true)
+        });
+        let buttons: Vec<FooterButton> = extra_buttons.iter().map(|(_, button)| button.clone()).chain(footer_buttons).collect();
+        if !buttons.is_empty() {
+            form = form.extra_buttons(buttons);
         }
+        let presets_label = Env::of(ui).words::<ParamDialogWords>().presets.clone();
+        let mut preset_events = Vec::new();
         if let Some(note) = footer_note {
             form = form.footer_extra(move |ui| {
                 Text::new(note.clone()).shade(Shade::Muted).show(ui);
@@ -711,7 +769,7 @@ impl<'a> ParamDialog<'a> {
         };
         let shown = form.show(ui, |ui, cx, values| {
             if cx.first() && !host_opened {
-                let saved = remember.as_ref().and_then(|key| cx.saved::<Option<DialogFields>>(key).clone());
+                let saved = remember.as_ref().and_then(|key| remembered_values(ui.ctx(), key, remember_for));
                 let offered = patterns.as_ref().map(|source| source.rows(ui.ctx(), &Env::of(ui))).unwrap_or_default();
                 Self::open_values(&every, &offered, saved.as_ref(), values);
             }
@@ -736,6 +794,17 @@ impl<'a> ParamDialog<'a> {
                 if let Some(param) = answered {
                     param.drop_dependents(held.as_ref(), values);
                 }
+            }
+            // A footer row pressed in the previous pass flips once; a measuring run leaves it for the real one.
+            if !footer_rows.is_empty()
+                && !crate::runtime::measure::active(ui.ctx())
+                && let Some(flip) = with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip.take())
+            {
+                let on = values.bool(&flip).unwrap_or(false);
+                values.set(flip, FieldValue::Bool(!on));
+            }
+            if let Some(presets) = &presets {
+                show_presets(ui, &presets_label, presets, values, &mut preset_events);
             }
             if let Some(canvas) = canvas {
                 cx.keep_view_open(canvas);
@@ -805,7 +874,12 @@ impl<'a> ParamDialog<'a> {
                 }
             }
             *cx.memory::<Live>() = live.clone();
-            true
+            if !footer_rows.is_empty() {
+                let states: Vec<bool> = footer_rows.iter().map(|param| values.bool(&param.key).unwrap_or(false)).collect();
+                with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.on = states);
+            }
+            // OK and Enter wait while a row's text does not parse.
+            rows.as_ref().is_none_or(|rows| !rows.unparsed)
         });
 
         // `picked` is this pass's press: a second pass of the frame has none, so a press is reported once.
@@ -814,14 +888,21 @@ impl<'a> ParamDialog<'a> {
             Some(ResetPick::Extra(at)) => extra_buttons.get(at).map(|(id, _)| id.clone()),
             _ => None,
         };
+        if let Some(ResetPick::Extra(at)) = pick
+            && let Some(param) = at.checked_sub(extra_buttons.len()).and_then(|at| footer_rows.get(at))
+        {
+            with_session(ui.ctx(), footer_id, |footer: &mut FooterRows| footer.flip = Some(param.key.clone()));
+            crate::runtime::frame::request_repaint(ui.ctx());
+        }
         // Footer and row buttons share one channel. The rows' own slot is emptied, so a host that absorbs the rows
         // files the press once.
         let action = rows.as_mut().and_then(|rows: &mut ParamRowsOutput| rows.action.take()).or(pressed);
+        let help_link = rows.as_ref().and_then(|rows| rows.help_link.clone());
         // A read-only dialog answers with no values, whichever way it closes.
         let result = if read_only {
-            shown.closed.is_some().then(|| Self::result(key, &every, None, DialogFields::new()))
+            shown.closed.is_some().then(|| Self::result(key, &every, None, remember_for, DialogFields::new()))
         } else {
-            shown.accepted.map(|fields| Self::result(key, &every, remember, fields))
+            shown.accepted.map(|fields| Self::result(key, &every, remember, remember_for, fields))
         };
         ParamDialogOutput {
             response: shown.response,
@@ -833,8 +914,92 @@ impl<'a> ParamDialog<'a> {
             comparing: shown.comparing,
             preview_click: shown_preview.clicked,
             action,
+            presets: preset_events,
+            help_link,
             preview_step: shown_preview.step,
             preview_centre: shown_preview.centre,
+        }
+    }
+}
+
+/// The values Reset restores: those from when the dialog opened, with `reset_to`'s over them. The one rule for the
+/// Alt footer and for a host's reset.
+fn reset_target(opened: &DialogFields, reset_to: Option<&DialogFields>) -> DialogFields {
+    let mut values = opened.clone();
+    for (name, value) in reset_to.into_iter().flat_map(DialogFields::iter) {
+        values.set(name, value.clone());
+    }
+    values
+}
+
+/// The presets row above the rows: a pick writes the preset's values over `values` as one edit, and the presets made,
+/// renamed or deleted come back in `events` for the host to store.
+fn show_presets(ui: &mut Ui, label: &Label, presets: &ParamPresets<'_>, values: &mut DialogFields, events: &mut Vec<NamedPresetEvent<String>>) {
+    let current = presets.values.iter().find(|(_, preset)| preset_applies(preset, values)).map(|(name, _)| name.clone());
+    let source = PresetSource::listed(presets.rows);
+    let picker = PresetPicker::new(label.clone(), Bind::given(current), &source, Bind::kept()).field(PickerField::Name);
+    let taken: Vec<&str> = presets.built_in.iter().map(String::as_str).chain(presets.rows.iter().map(|row| row.label.as_str())).collect();
+    let check = NameCheck::new(taken, |taken, name| {
+        let name = name.to_lowercase();
+        taken.iter().any(|other| other.to_lowercase() == name).then_some(PresetError::NameTaken)
+    });
+    let shown = NamedPresetRow::new(label.clone(), picker).check_name(check).built_in(|name: &String| presets.built_in.contains(name)).show(ui);
+    for event in shown.events {
+        match event {
+            NamedPresetEvent::Apply(name) => {
+                if let Some((_, preset)) = presets.values.iter().find(|(preset, _)| *preset == name) {
+                    apply_preset(preset, values);
+                }
+            }
+            event @ (NamedPresetEvent::Create { .. } | NamedPresetEvent::Rename { .. } | NamedPresetEvent::Delete(_)) => events.push(event),
+            _ => {}
+        }
+    }
+}
+
+/// Whether `values` hold every value `preset` sets.
+fn preset_applies(preset: &DialogFields, values: &DialogFields) -> bool {
+    preset.iter().all(|(key, value)| values.get(key) == Some(value))
+}
+
+/// Writes the values of `preset` over `values`.
+fn apply_preset(preset: &DialogFields, values: &mut DialogFields) {
+    for (key, value) in preset.iter() {
+        values.set(key, value.clone());
+    }
+}
+
+/// The values `ctx` remembers under `key` for `lifetime`: the saved tier for `Saved`, the session tier for `Run`.
+fn remembered_values(ctx: &Context, key: &SaveKey, lifetime: Lifetime) -> Option<DialogFields> {
+    match lifetime {
+        Lifetime::Run => crate::runtime::memory::run_value::<Option<DialogFields>>(ctx, key),
+        _ => MemoryStage::peek_saved::<Option<DialogFields>>(ctx, key),
+    }
+}
+
+/// Applies the host's `answers` to `values` for `params`: a colour, path or eyedropper answer writes its row, and a
+/// row that resets other rows drops them.
+pub(crate) fn apply_answers(params: &[Param], values: &mut DialogFields, answers: Vec<HostAnswer>) {
+    for answer in answers {
+        let answered = match &answer {
+            HostAnswer::Color { key, .. } | HostAnswer::Eyedropper { key, .. } | HostAnswer::Path { key, .. } => {
+                params.iter().find(|param| param.key == *key)
+            }
+            HostAnswer::Listing { .. } => None,
+        };
+        let held = answered.and_then(|param| values.get(&param.key).cloned());
+        match answer {
+            HostAnswer::Color { key, color } | HostAnswer::Eyedropper { key, color } => set_color_field(params, values, &key, color),
+            HostAnswer::Path { key, path } => values.set(&key, FieldValue::Text(path.to_string_lossy().into_owned())),
+            HostAnswer::Listing { key, files } => {
+                let files = files.into_iter().map(|file| FieldValue::Text(file.to_string_lossy().into_owned())).collect();
+                if let Some(param) = params.iter().find(|param| param.key == key) {
+                    values.set(param.folder_files_key(), FieldValue::List(files));
+                }
+            }
+        }
+        if let Some(param) = answered {
+            param.drop_dependents(held.as_ref(), values);
         }
     }
 }
@@ -1036,7 +1201,7 @@ impl DialogRows<'_> {
                 .shown(*shown)
                 .show_items(ui, &Titles(tabs), &mut |key, _| Tab::new(tabs.get(*key).map_or_else(Label::default, |tab| tab.title.clone())));
             for event in strip.response.events {
-                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                if let CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } = event
                     && let Some(key) = keys.into_iter().last()
                 {
                     *shown = key.min(last);
@@ -1231,6 +1396,17 @@ pub struct HostedParamDialog {
     held: HeldAnswer<DialogFields>,
     /// The picture point the next pass centres the preview on ([`centre_preview`](HostedParamDialog::centre_preview)).
     centre: Option<Pos2>,
+    /// The named presets the presets row lists ([`set_presets`](HostedParamDialog::set_presets)).
+    presets: Option<HeldPresets>,
+    /// The preset edits of the dialog's passes, until the host takes them.
+    preset_events: Vec<NamedPresetEvent<String>>,
+}
+
+/// The presets a hosted dialog lists: the rows, the values each applies and the built-in names.
+struct HeldPresets {
+    rows: Vec<PresetRow<String>>,
+    values: Vec<(String, DialogFields)>,
+    built_in: Vec<String>,
 }
 
 /// What a [`HostedParamDialog`] showed in its last pass: whether the Preview check box is held for comparing, and the
@@ -1290,11 +1466,11 @@ impl HostedParamDialog {
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-        let ParamDialog { params, tabs, remember, patterns, previews, .. } = build(&mut fields);
+        let ParamDialog { params, tabs, remember, remember_for, patterns, previews, .. } = build(&mut fields);
         // No pass runs here: the rows are built in the root scope, whose words name them; only their keys are read.
         let patterns = patterns.map(|source| source.rows(ctx, &Env::of_root(ctx))).unwrap_or_default();
         let params = every_param(params, &tabs).into_owned();
-        let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
+        let saved = remember.and_then(|key| remembered_values(ctx, &key, remember_for));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
         let id = dialog_id(key.as_str());
         HostedParamDialog {
@@ -1320,6 +1496,8 @@ impl HostedParamDialog {
             hold: false,
             held: HeldAnswer::new(),
             centre: None,
+            presets: None,
+            preset_events: Vec::new(),
         }
     }
 
@@ -1350,11 +1528,6 @@ impl HostedParamDialog {
         &self.fields
     }
 
-    /// The colour parameter whose button was pressed, once.
-    pub fn pick_color(&mut self) -> Option<ColorRequest> {
-        self.requests.take_color()
-    }
-
     /// The Browse button that was pressed, once.
     pub fn pick_path(&mut self) -> Option<PathRequest> {
         self.requests.take_path()
@@ -1363,11 +1536,6 @@ impl HostedParamDialog {
     /// The point of the preview picture the last click landed on (`ParamDialogOutput::preview_click`), once.
     pub fn take_preview_click(&mut self) -> Option<Pos2> {
         self.requests.take_preview_click()
-    }
-
-    /// Answers the colour request `key`: the dialog writes the colour into its values in its next pass.
-    pub fn answer_color(&mut self, key: impl Into<String>, color: craft_theme::Srgba) {
-        self.requests.answer_color(key, color);
     }
 
     /// Answers the Browse request `key` with the chosen path.
@@ -1467,6 +1635,18 @@ impl HostedParamDialog {
         self.requests.take_eyedropper()
     }
 
+    /// The Preview check box starts off.
+    #[must_use]
+    pub fn preview_off(mut self) -> Self {
+        self.preview_on = false;
+        self
+    }
+
+    /// The ids of the actions the custom rows requested since the last call (`CustomContext::request_action`).
+    pub fn take_actions(&mut self) -> Vec<String> {
+        self.requests.take_actions()
+    }
+
     /// Makes OK file its answer for the host to take instead of closing: the host checks it and answers with
     /// [`answer_ok`](HostedParamDialog::answer_ok). OK stays disabled until then.
     #[must_use]
@@ -1492,16 +1672,53 @@ impl HostedParamDialog {
         self.held.answer(answer);
     }
 
+    /// `Some`: the host refuses the current values, and OK stays off with `reason` shown under the rows until the values
+    /// change; `None` ends the refusal.
+    pub fn refuse(&mut self, reason: Option<Label>) {
+        match reason {
+            Some(reason) => self.held.refuse(reason, self.fields.clone()),
+            None => self.held.clear_refusal(),
+        }
+    }
+
+    /// Sets the named presets the dialog's presets row lists (`ParamDialog::presets`): the rows, the values each
+    /// applies and the built-in names, which `check_name` refuses.
+    pub fn set_presets(&mut self, rows: Vec<PresetRow<String>>, values: Vec<(String, DialogFields)>, built_in: Vec<String>) {
+        self.presets = Some(HeldPresets { rows, values, built_in });
+    }
+
+    /// The preset edits of the last pass (Create, Rename, Delete), once.
+    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
+        std::mem::take(&mut self.preset_events)
+    }
+
+    /// Whether an Escape ended a row's sampling in the last pass, once; the next Escape cancels as usual.
+    pub fn take_sampling_ended(&mut self) -> bool {
+        self.requests.take_sampling_ended()
+    }
+
+    /// The help link a row's button reported in the last pass, once.
+    pub fn take_help_link(&mut self) -> Option<String> {
+        self.requests.take_help_link()
+    }
+
+    /// What the Reset footer restores: the opening values with the dialog's `reset_to` over them.
+    fn reset_goal(&self) -> DialogFields {
+        let mut fields = self.fields.clone();
+        let reset_to = (self.build)(&mut fields).reset_to;
+        reset_target(&self.opening, reset_to.as_ref())
+    }
+
     /// The answer OK gives with `fields`: the key, the part a remembering dialog saves and this dialog's id, as the
     /// dialog's own build says them.
     /// A read-only dialog answers with no values, as its OK does.
     fn result_of(&mut self, fields: DialogFields) -> ParamResult {
-        let ParamDialog { key, params, tabs, remember, read_only, .. } = (self.build)(&mut self.fields);
+        let ParamDialog { key, params, tabs, remember, remember_for, read_only, .. } = (self.build)(&mut self.fields);
         let params = every_param(params, &tabs).into_owned();
         let mut result = if read_only {
-            ParamDialog::result(key, &params, None, DialogFields::new())
+            ParamDialog::result(key, &params, None, remember_for, DialogFields::new())
         } else {
-            ParamDialog::result(key, &params, remember, fields)
+            ParamDialog::result(key, &params, remember, remember_for, fields)
         };
         result.id = self.id;
         result
@@ -1578,7 +1795,8 @@ impl HostedParamDialog {
 /// Checks `value` against the row `field` of `params` and sets it in `fields`, as the user editing the row would; `Err`
 /// says why the row refused (`FieldRefusal`). The field is a row's key, its unit key or a custom row's companion key
 /// ([`Param::companions`]); a Files row takes a `{files, folder, useFolder}` object and sets its two companion keys with
-/// it. Every dialog built on `Param`s sets its fields through this one rule.
+/// it. A custom row with a set-time rule ([`Param::on_set`]) writes its key and companions through that rule instead.
+/// Every dialog built on `Param`s sets its fields through this one rule.
 pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
     let companion = |param: &Param| matches!(&param.kind, ParamKind::Custom(row) if row.has_companion(field));
     let Some(param) = params.iter().find(|param| param.key == field || param.unit_key() == Some(field) || companion(param)) else {
@@ -1587,7 +1805,23 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
     if !param.visible(fields) || !param.enabled(fields) {
         return Err(FieldRefusal::Inactive.message(field));
     }
-    let writes = if companion(param) {
+    let held = fields.get(&param.key).cloned();
+    let rule = match &param.kind {
+        ParamKind::Custom(row) => row.on_set(),
+        _ => None,
+    };
+    match rule {
+        Some(set) => set(fields, field, value)?,
+        None => write_param_field(param, fields, field, value, companion(param))?,
+    }
+    param.drop_dependents(held.as_ref(), fields);
+    Ok(())
+}
+
+/// `set_param_field`'s write of `value` under `field` when the row has no set-time rule: the row's own key, its
+/// unit, a Files row's keys or a custom row's companion (`companion`), each checked with `Param::accepts`.
+fn write_param_field(param: &Param, fields: &mut DialogFields, field: &str, value: Value, companion: bool) -> Result<(), String> {
+    let writes = if companion {
         Some(vec![(field.to_owned(), (!value.is_null()).then_some(FieldValue::Json(value.clone())))])
     } else if param.key != field {
         value.as_str().map(|unit| vec![(field.to_owned(), Some(FieldValue::Text(unit.to_owned())))])
@@ -1601,7 +1835,6 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
     let Some(writes) = writes else {
         return Err(FieldRefusal::Rejects(&value).message(field));
     };
-    let held = fields.get(&param.key).cloned();
     for (key, read) in writes {
         match read {
             Some(read) => fields.set(key, read),
@@ -1610,7 +1843,6 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
             }
         }
     }
-    param.drop_dependents(held.as_ref(), fields);
     Ok(())
 }
 
@@ -1648,6 +1880,22 @@ fn read_value(kind: &ParamKind, value: Value) -> Option<FieldValue> {
     })
 }
 
+impl HoldsOk for HostedParamDialog {
+    type Answer = ParamResult;
+
+    fn held_ok(self) -> Self {
+        HostedParamDialog::held_ok(self)
+    }
+
+    fn take_ok(&mut self) -> Option<ParamResult> {
+        HostedParamDialog::take_ok(self)
+    }
+
+    fn answer_ok(&mut self, answer: Result<(), Label>) {
+        HostedParamDialog::answer_ok(self, answer);
+    }
+}
+
 impl StackDialog for HostedParamDialog {
     type Result = ParamResult;
 
@@ -1668,7 +1916,16 @@ impl StackDialog for HostedParamDialog {
             .values_opened(self.opening.clone())
             .answers(answers)
             .preview_colors(self.requests.previewed_colors().to_vec());
-        if self.hold {
+        // A refusal the host keeps holds OK off with its reason whatever the values are.
+        if let Some((reason, _)) = self.held.refusal().filter(|_| self.held.refusal_blocks()) {
+            dialog = dialog.ok_enabled(false).ok_reason(reason.clone());
+        }
+        if let Some(presets) = &self.presets {
+            dialog = dialog.presets(ParamPresets::new(&presets.rows, &presets.values, &presets.built_in));
+        }
+        // The held answer also carries a refusal the host keeps on a dialog without a held OK: its notice shows the reason
+        // under the rows, and OK is off meanwhile, so nothing is filed.
+        if self.hold || self.held.refusal_blocks() {
             dialog = dialog.held(&mut self.held);
         }
         if let Some(point) = centre {
@@ -1712,6 +1969,7 @@ impl StackDialog for HostedParamDialog {
             self.requests.request_preview_step(step);
         }
         self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre };
+        self.preset_events.extend(shown.presets);
         match (shown.result, shown.closed) {
             (Some(mut result), _) => {
                 result.id = self.id;
@@ -1734,6 +1992,55 @@ impl StackDialog for HostedParamDialog {
         self.held.state()
     }
 
+    fn take_color_request(&mut self) -> Option<ColorRequest> {
+        self.requests.take_color()
+    }
+
+    fn answer_color(&mut self, key: &str, color: craft_theme::Srgba) {
+        self.requests.answer_color(key, color);
+    }
+
+    /// Sets the fields on a clone of the values and commits the clone only when every field is accepted.
+    fn set_json_fields(&mut self, _: &Context, fields: &[(String, Value)]) -> Result<(), String> {
+        let params = (self.build)(&mut self.fields).params.into_owned();
+        let mut staged = self.fields.clone();
+        let mut preview = self.preview_on;
+        for (field, value) in fields {
+            match (field.as_str(), &self.presets) {
+                ("preview", _) if self.previews => {
+                    preview = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(value).message(field))?;
+                }
+                ("preset", Some(presets)) => {
+                    let preset = value.as_str().and_then(|name| presets.values.iter().find(|(preset, _)| preset == name));
+                    let (_, preset) = preset.ok_or_else(|| FieldRefusal::Rejects(value).message(field))?;
+                    apply_preset(preset, &mut staged);
+                }
+                _ => set_param_field(&params, &mut staged, field, value.clone())?,
+            }
+        }
+        for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
+            if let Some(request) = param.listing_after(&self.fields, &staged) {
+                self.requests.request_listing(request);
+            }
+        }
+        self.fields = staged;
+        self.preview_on = preview;
+        Ok(())
+    }
+
+    /// Whether the Reset footer's restore would change the values.
+    fn can_reset(&self) -> bool {
+        self.fields != self.reset_goal()
+    }
+
+    /// Runs the restore the Reset footer runs: the opening values with `reset_to` over them.
+    fn reset(&mut self, _: &Context) -> bool {
+        let target = self.reset_goal();
+        let changed = self.fields != target;
+        self.fields = target;
+        changed
+    }
+
     /// Answers OK as the button does: none while OK is disabled. The result keeps what a remembering dialog saves. A
     /// held dialog files the answer for the host, as its button does, and answers none; once the host accepted the
     /// held answer, it answers that.
@@ -1745,7 +2052,8 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             return None;
         }
-        let ok_enabled = (self.build)(&mut self.fields).ok_enabled;
+        // OK is off while the dialog says so, a refusal the host keeps holds it, or the host is not ready.
+        let ok_enabled = (self.build)(&mut self.fields).ok_enabled && !self.held.refusal_blocks();
         if !ok_enabled || self.ready.is_err() {
             return None;
         }
@@ -1757,24 +2065,26 @@ impl StackDialog for HostedParamDialog {
         Some(self.result_of(fields))
     }
 
-    /// The values by parameter key, as [`DialogFields`] serializes them.
+    /// The values by parameter key, as [`DialogFields`] serializes them, with the Preview check box under `preview`
+    /// for a dialog that previews and the preset the values equal under `preset` for one with presets.
     fn json_fields(&self) -> Option<Value> {
-        serde_json::to_value(&self.fields).ok()
+        let mut fields = serde_json::to_value(&self.fields).ok()?;
+        if let Some(map) = fields.as_object_mut() {
+            if self.previews {
+                map.insert("preview".to_owned(), Value::Bool(self.preview_on));
+            }
+            if let Some(presets) = &self.presets {
+                let current = presets.values.iter().find(|(_, preset)| preset_applies(preset, &self.fields));
+                map.insert("preset".to_owned(), current.map_or(Value::Null, |(name, _)| Value::String(name.clone())));
+            }
+        }
+        Some(fields)
     }
 
     /// Keeps `value` when the row `field` names (a parameter or its unit choice) is shown, takes input, and takes
     /// the value ([`set_param_field`]).
-    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
-        let (params, read_only) = {
-            let mut dialog = (self.build)(&mut self.fields);
-            self.rows.apply(&mut dialog);
-            let ParamDialog { params, tabs, read_only, .. } = dialog;
-            (every_param(params, &tabs).into_owned(), read_only)
-        };
-        if read_only {
-            return Err(FieldRefusal::Inactive.message(field));
-        }
-        self.requests.set_field(&params, &mut self.fields, field, value)
+    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
+        self.set_json_fields(ctx, &[(field.to_owned(), value)])
     }
 
     /// Shows a child picker's live colour in the colour row `key`, as [`HostedParamDialog::preview_color`] does.

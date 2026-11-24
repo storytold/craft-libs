@@ -14,6 +14,7 @@ pub(crate) mod number_length;
 pub(crate) mod number_scrub_step;
 pub(crate) mod rtl_paragraph;
 pub(crate) mod selectable;
+pub(crate) mod step_arrows;
 pub(crate) mod submit_key;
 pub(crate) mod text_field;
 pub(crate) mod widths;

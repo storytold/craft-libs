@@ -45,8 +45,13 @@ pub struct FieldLabel {
     pub detail: Option<String>,
     /// The label was clicked or activated this pass: focus goes to its control.
     pub activated: bool,
+    /// The label is a link and was clicked this pass: the control's host is told (`Cx::link_activated`), focus stays.
+    pub link: bool,
     /// The container shows its control's validity message as its status line (`FooterRegion::status`).
     pub status: bool,
+    /// The label shows as a node of its own. A hidden label and one drawn inside its control have none: they name
+    /// their control by their text alone.
+    pub shown: bool,
 }
 
 impl FieldLabel {
@@ -61,8 +66,17 @@ impl FieldLabel {
             role: FieldLabelRole::Names,
             detail: None,
             activated: false,
+            link: false,
             status: false,
+            shown: true,
         }
+    }
+
+    /// Whether the label shows as a node of its own.
+    #[must_use]
+    pub fn shown(mut self, shown: bool) -> Self {
+        self.shown = shown;
+        self
     }
 
     /// Whether the label names or describes the controls.
@@ -90,6 +104,13 @@ impl FieldLabel {
     #[must_use]
     pub fn activated(mut self, activated: bool) -> Self {
         self.activated = activated;
+        self
+    }
+
+    /// Whether the label is a link that was clicked this pass.
+    #[must_use]
+    pub fn linked(mut self, link: bool) -> Self {
+        self.link = link;
         self
     }
 
@@ -484,13 +505,14 @@ pub(crate) struct Merged {
 /// One change a label scope makes to a node, decided here and written by `runtime::egui::access`.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LabelPatch {
-    /// The label's own node: made with the role `Label` and the label's text where no component wrote it (a hidden
-    /// label), and disabled when every control it labels is.
+    /// The label's own node, which its leaf wrote: made with the role `Label` and the label's text where the leaf wrote
+    /// none this pass, and disabled when every control it labels is.
     Label { id: Id, text: String, disabled: bool },
     /// `node` keeps its name and is described by `label`.
     DescribedBy { node: Id, label: Id },
-    /// `node` is named `text`, the label's text, and keeps `label` as the node that labels it.
-    LabelledBy { node: Id, label: Id, text: String },
+    /// `node` is named `text`, the label's text, and keeps `label` as the node that labels it; `None` for a label with
+    /// no node of its own.
+    LabelledBy { node: Id, label: Option<Id>, text: String },
     /// `container` is labelled by `label`: it holds several controls.
     GroupLabelledBy { container: Id, label: Id },
     /// `text` joins the description of `node`.
@@ -499,12 +521,17 @@ pub(crate) enum LabelPatch {
 
 /// What `label` does to the `nodes` registered in the scope of `container`: one control is labelled by it
 /// (described by it when the control keeps its own name or the label describes), several make the container's node
-/// labelled by it, none leaves everything alone.
+/// labelled by it, none, or a label without text, leaves everything alone. A label with no node of its own names its
+/// one control by its text, or joins the control's description, and leaves the container its own name.
 pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNode]) -> Vec<LabelPatch> {
     if nodes.is_empty() {
         return Vec::new();
     }
-    let mut patches = vec![LabelPatch::Label { id: label.id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }];
+    // A label without text has nothing to name or describe: the controls keep their own names.
+    let named = !label.text.is_empty();
+    let own = label.shown.then_some(label.id).filter(|_| named);
+    let mut patches: Vec<LabelPatch> =
+        own.map(|id| LabelPatch::Label { id, text: label.text.clone(), disabled: nodes.iter().all(|node| node.disabled) }).into_iter().collect();
     // The label is about one control only when that control sits directly in the scope. One in an unlabelled row is
     // part of the field's arrangement: the label names the group, as for several controls, and the control keeps the
     // name its own content gives it (a link's file name, a command button's words).
@@ -512,12 +539,17 @@ pub(crate) fn label_patches(container: Id, label: &FieldLabel, nodes: &[ScopeNod
         [only] if !only.arranged => Some(only),
         _ => None,
     };
-    match single {
-        Some(only) if label.role == FieldLabelRole::Describes || only.keeps_name => {
-            patches.push(LabelPatch::DescribedBy { node: only.id, label: label.id });
+    match (single, own) {
+        _ if !named => {}
+        (Some(only), Some(own)) if label.role == FieldLabelRole::Describes || only.keeps_name => {
+            patches.push(LabelPatch::DescribedBy { node: only.id, label: own });
         }
-        Some(only) => patches.push(LabelPatch::LabelledBy { node: only.id, label: label.id, text: label.text.clone() }),
-        None => patches.push(LabelPatch::GroupLabelledBy { container, label: label.id }),
+        (Some(only), None) if label.role == FieldLabelRole::Describes || only.keeps_name => {
+            patches.push(LabelPatch::Detail { node: only.id, text: label.text.clone() });
+        }
+        (Some(only), _) => patches.push(LabelPatch::LabelledBy { node: only.id, label: own, text: label.text.clone() }),
+        (None, Some(own)) => patches.push(LabelPatch::GroupLabelledBy { container, label: own }),
+        (None, None) => {}
     }
     if let Some(text) = &label.detail {
         patches.push(LabelPatch::Detail { node: single.map_or(container, |only| only.id), text: text.clone() });
@@ -607,7 +639,7 @@ pub(crate) fn finish(ctx: &Context, container: Id, merged: Option<Merged>) {
             }
             for patch in &patches {
                 adapter::write_label_patch(ctx, patch);
-                if let LabelPatch::LabelledBy { node, label, .. } = patch
+                if let LabelPatch::LabelledBy { node, label: Some(label), .. } = patch
                     && crate::runtime::inspect::recording(ctx)
                 {
                     crate::runtime::inspect::labelled(ctx, *node, *label);

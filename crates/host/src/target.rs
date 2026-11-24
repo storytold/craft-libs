@@ -146,7 +146,9 @@ bitflags::bitflags! {
         const THREADS = 1 << 3;
         /// Screen capture.
         const SCREEN_CAPTURE = 1 << 4;
-        /// The app sets the system cursor.
+        /// The app sets the system cursor. A host that cannot (Wayland with no cursor theme, where winit sets no
+        /// pointer and a hidden one never comes back) leaves it out: the system pointer stays, and no painted cursor
+        /// shows in its place.
         const SYSTEM_CURSOR = 1 << 5;
         /// A native menu bar.
         const NATIVE_MENU_BAR = 1 << 6;

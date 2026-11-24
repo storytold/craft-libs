@@ -220,7 +220,7 @@ pub(super) fn effect_list(
                 EffectRow::Absent(kind) => Some(ListAction::Add(*kind)),
                 other => other.page().map(ListAction::Select),
             },
-            CollectionEvent::Selection(SelectionChange::Set(keys)) => {
+            CollectionEvent::Selection { change: SelectionChange::Set(keys), .. } => {
                 keys.last().and_then(EffectRow::page).filter(|page| *page != draft.page).map(ListAction::Select)
             }
             _ => None,

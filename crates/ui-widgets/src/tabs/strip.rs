@@ -51,7 +51,8 @@ const ENDS: &str = "ends";
 /// is painted on.
 const GHOST: PartKey = PartKey::new("ghost");
 
-/// A tab dragged away from every strip and released: the tabs the drag carried and where the pointer was.
+/// A tab dragged away from every strip and released: the tabs the drag carried and where the pointer was. A tool rail
+/// reports a group torn off a flyout as one too, its slot as both `keys` and `grabbed`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TornOff<K> {
@@ -61,6 +62,14 @@ pub struct TornOff<K> {
     pub grabbed: K,
     /// The pointer when the drag was released, in screen points.
     pub pointer: Pos2,
+}
+
+impl<K> TornOff<K> {
+    /// A tear-off of `keys`, the tab `grabbed` among them, released with the pointer at `pointer`. The struct is
+    /// `#[non_exhaustive]`, so this is how another crate (a tool rail) reports one.
+    pub fn new(keys: Vec<K>, grabbed: K, pointer: Pos2) -> Self {
+        TornOff { keys, grabbed, pointer }
+    }
 }
 
 /// What a `TabStrip` reports.
@@ -952,7 +961,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
                 other => kept.push(other),
             }
         }
-        kept.extend(wheeled.map(|key| CollectionEvent::Selection(SelectionChange::Set(vec![key]))));
+        kept.extend(wheeled.map(|key| CollectionEvent::Selection {
+            change: SelectionChange::Set(vec![key]),
+            by: crate::contract::LeadSource::Pointer,
+            mods: craft_keymap::Mods::NONE,
+        }));
         response.events = kept;
         TabStripOutput { response, closed, menu, picked, torn_off: torn, tab_rects, empty_drag, empty_double }
     }

@@ -385,12 +385,6 @@ fn size_row(cx: &Cx<'_, CropOverlay<'_>>, space: &CanvasSpace, (w, h): (f64, f64
     vec![(Label::from(words.crop_width.as_str().to_owned()), text(x, w)), (Label::from(words.crop_height.as_str().to_owned()), text(y, h))]
 }
 
-fn angle_row(cx: &Cx<'_, CropOverlay<'_>>, degrees: f64) -> Vec<(Label, String)> {
-    let words = cx.words::<CanvasWords>();
-    let number = cx.env.units().number_ungrouped(degrees, 1..=1);
-    vec![(Label::from(words.crop_angle.as_str().to_owned()), format!("{number}°"))]
-}
-
 impl CropOverlay<'_> {
     /// Starts the drag of `grab` pressed at screen point `origin`; `None` for a press that is taken and moves nothing.
     fn begin(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, frame: &CropBox, grab: Grab, origin: Pos2, mods: Mods) -> Option<Drag> {
@@ -424,11 +418,12 @@ impl CropOverlay<'_> {
             *to = rules.snap_screen(&view, pos, mods);
             self.report.dragging = true;
             if let Some(degrees) = gesture::line_degrees(*from, *to) {
-                readout(cx, pos, &angle_row(cx, degrees));
+                readout(cx, pos, &readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), degrees));
             }
             return;
         }
-        let held_space = crate::runtime::keys::down(&cx.ctx).contains(&Key::Space);
+        // PLAN: pl.F1's `held` is typed `Vec<egui::Key>` at the stub; shortcuts-w2 must return `craft_keymap::Key` for this compare.
+        let held_space = crate::runtime::keys::held(&cx.ctx).contains(&Key::Space);
         let to = drag.press_view.as_ref().unwrap_or(&view).to_doc(pos);
         let (to, lines) = rules.snapped(drag, &view, to, mods, held_space);
         self.report.snapped = lines;
@@ -451,7 +446,7 @@ impl CropOverlay<'_> {
             _ => {}
         }
         let rows = match drag.kind {
-            Kind::Turn { .. } => angle_row(cx, gesture::turn_degrees(&drag.last, self.image_mode)),
+            Kind::Turn { .. } => readout::angle_row(&cx.words::<CanvasWords>(), &cx.env.units(), gesture::turn_degrees(&drag.last, self.image_mode)),
             Kind::Draw { .. } | Kind::Resize(_) => drag.last.crop_size().map(|size| size_row(cx, space, size)).unwrap_or_default(),
             _ => Vec::new(),
         };

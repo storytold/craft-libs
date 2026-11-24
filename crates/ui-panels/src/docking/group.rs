@@ -93,8 +93,8 @@ pub(crate) fn grip_strip(tokens: &Tokens) -> f32 {
     tokens.size.hit.target.max(marks + 2.0 * tokens.space.gap.tight) + GRIP_ABOVE
 }
 
-/// What a group grip reports: its response, the second press of a double click and whether it started a group
-/// drag this pass.
+/// What a group grip reports: its response, the second press of a double click and where the press of a group drag
+/// it started this pass went down.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct GroupGripOutput {
@@ -788,7 +788,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         }
     });
     for event in strip.response.events {
-        if let crate::contract::CollectionEvent::Selection(craft_behavior::SelectionChange::Set(keys)) = event
+        if let crate::contract::CollectionEvent::Selection { change: craft_behavior::SelectionChange::Set(keys), .. } = event
             && let Some(key) = keys.last()
         {
             row.sent.send(TabEvent::Picked(*key));
