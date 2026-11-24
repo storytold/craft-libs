@@ -233,6 +233,12 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             check(keep_going)?;
             next_check = at.saturating_add(1024);
         }
+        // Remove an unquoted continuation before deciding whether the value begins
+        // an auxiliary block. Escaped/quoted brackets are still handled by the word lexer.
+        if raw.get(at..).is_some_and(|tail| tail.starts_with("\\\n")) {
+            at += 2;
+            continue;
+        }
         if ch.is_ascii_whitespace() {
             if expect_value {
                 token(&mut tokens, Token::Word(String::new()), budget)?;
@@ -241,7 +247,7 @@ fn tokenize(raw: &str, budget: &mut Budget, keep_going: &dyn Fn() -> bool) -> Re
             at += ch.len_utf8();
             continue;
         }
-        if ch == '#' && (at == 0 || raw.as_bytes().get(at - 1).is_some_and(u8::is_ascii_whitespace)) {
+        if !expect_value && ch == '#' && (at == 0 || raw.as_bytes().get(at - 1).is_some_and(u8::is_ascii_whitespace)) {
             while next(at).is_some_and(|ch| ch != '\n') {
                 if at >= next_check {
                     check(keep_going)?;
@@ -592,9 +598,19 @@ fn integer_scalar(literal: &str) -> Result<f64> {
     Ok(value.trunc())
 }
 
+fn exact_integer_spelling(literal: &str) -> bool {
+    let digits = literal.strip_prefix('+').or_else(|| literal.strip_prefix('-')).unwrap_or(literal);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn signed_integer(literal: &str) -> Result<i64> {
     if let Ok(value) = literal.parse() {
         return Ok(value);
+    }
+    // A rejected exact integer must not round back into range through f64. Decimal
+    // and scientific spellings still use their separately checked numeric fallback.
+    if exact_integer_spelling(literal) {
+        return Err(invalid("graph exact signed integer exceeds i64 range"));
     }
     let value = integer_scalar(literal)?;
     // i64::MAX rounds up to 2^63 as f64, so the upper comparison must be exclusive.
@@ -608,6 +624,11 @@ fn unsigned_integer(literal: &str) -> Result<u32> {
     if let Ok(value) = literal.parse() {
         return Ok(value);
     }
+    if !literal.starts_with('-') && exact_integer_spelling(literal) {
+        return Err(invalid("graph exact unsigned integer exceeds u32 range"));
+    }
+    // Preserve the existing checked negative-zero/fractional fallback; negative
+    // values whose truncated result is below zero remain unsupported.
     let value = integer_scalar(literal)?;
     if !(0.0..=f64::from(u32::MAX)).contains(&value) {
         return Err(invalid("graph unsigned integer exceeds u32 range"));
@@ -615,13 +636,21 @@ fn unsigned_integer(literal: &str) -> Result<u32> {
     Ok(value as u32)
 }
 
+/// GEGL color functions have an ASCII-case-insensitive name and may separate it
+/// from '(' with ASCII whitespace. Keep component parsing and source units separate.
+fn color_function(literal: &str) -> Option<(&str, &str)> {
+    let (name, arguments) = literal.split_once('(')?;
+    let name = name.trim_end_matches(|ch: char| ch.is_ascii_whitespace());
+    Some((name, arguments.strip_suffix(')')?))
+}
+
 fn cmyk_color(literal: &str) -> Result<Option<Value>> {
-    let Some((parts, count)) = literal
-        .strip_prefix("cmyka(")
-        .and_then(|value| value.strip_suffix(')'))
-        .map(|parts| (parts, 5))
-        .or_else(|| literal.strip_prefix("cmyk(").and_then(|value| value.strip_suffix(')')).map(|parts| (parts, 4)))
-    else {
+    let Some((name, parts)) = color_function(literal) else { return Ok(None) };
+    let count = if name.eq_ignore_ascii_case("cmyka") {
+        5
+    } else if name.eq_ignore_ascii_case("cmyk") {
+        4
+    } else {
         return Ok(None);
     };
     let mut components: [f64; 5] = [0., 0., 0., 0., 1.];
@@ -642,12 +671,15 @@ fn cmyk_color(literal: &str) -> Result<Option<Value>> {
 }
 
 fn color(value: &str) -> Result<Color> {
-    if let Some(parts) = value
-        .strip_prefix("rgba(")
-        .and_then(|value| value.strip_suffix(')'))
-        .map(|parts| (parts, 4))
-        .or_else(|| value.strip_prefix("rgb(").and_then(|value| value.strip_suffix(')')).map(|parts| (parts, 3)))
-    {
+    if let Some(parts) = color_function(value).and_then(|(name, parts)| {
+        if name.eq_ignore_ascii_case("rgba") {
+            Some((parts, 4))
+        } else if name.eq_ignore_ascii_case("rgb") {
+            Some((parts, 3))
+        } else {
+            None
+        }
+    }) {
         let mut rgba = [0., 0., 0., 1.];
         let mut count = 0;
         for (index, item) in parts.0.split(',').enumerate() {

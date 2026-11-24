@@ -481,3 +481,84 @@ fn integer_fallback_does_not_hide_relative_structural_or_strict_number_errors() 
     assert!(budget.remaining_work() < 1 << 20);
     assert!(matches!(parse("gain signed=0x10", SCHEMA, &mut Budget::default(), &|| false), Err(Error::Source(crate::Error::Cancelled))));
 }
+
+#[test]
+fn value_boundary_continuations_preserve_auxiliary_dispatch_and_literal_escaping() {
+    for source in [
+        "over aux=\\\n[ invert-linear ]",
+        "over aux=\\\n[invert-linear]",
+        "over aux=\\\n\\\n[invert-linear]",
+        "over aux=[over aux=\\\n[invert-linear]]",
+    ] {
+        let graph = read(source);
+        assert_eq!(graph.nodes[0].operation, "invert-linear");
+        assert_eq!(graph.nodes.last().unwrap().operation, "over");
+        assert!(graph.diagnostics.is_empty());
+        check_edges(&graph);
+    }
+    for source in ["gain text=\\\n'[kept]'", "gain text=\\\n\\[kept\\]"] {
+        let graph = read(source);
+        assert_eq!(graph.nodes[0].properties[0].literal, "[kept]");
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Text);
+    }
+    assert_eq!(read("gain text=\\\n").nodes[0].properties[0].literal, "");
+    assert_eq!(
+        read("color value=\\\n#abc").nodes[0].properties[0].value,
+        Value::Color(Color { rgba: [170. / 255., 187. / 255., 204. / 255., 1.], space: ColorSpace::Srgb })
+    );
+    for source in ["over aux=\\\n'[invert-linear]'", "over aux=\\\n\\[invert-linear\\]"] {
+        assert!(parse(source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "quoted/escaped brackets must not become a block: {source:?}");
+    }
+}
+
+#[test]
+fn overflowing_exact_integers_remain_unsupported_without_floating_point_rounding() {
+    for literal in ["-9223372036854775809", "+9223372036854775808", "9223372036854775808", "-09223372036854775809"] {
+        let source = format!("gain signed={literal}");
+        let graph = read(&source);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Unknown, "{literal}");
+        assert_eq!(graph.diagnostics, [Diagnostic::UnsupportedInteger { source_ordinal: 0, property: 0 }]);
+    }
+    for literal in ["4294967296", "+4294967296", "18446744073709551616"] {
+        let source = format!("gain seed={literal}");
+        let graph = read(&source);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Unknown);
+        assert_eq!(graph.diagnostics, [Diagnostic::UnsupportedInteger { source_ordinal: 0, property: 0 }]);
+    }
+    for (literal, expected) in
+        [("-9223372036854775808", i64::MIN), ("9223372036854775807", i64::MAX), ("-1.5", -1), ("18446744073709551615e-10", 1_844_674_407)]
+    {
+        let source = format!("gain signed={literal}");
+        let graph = read(&source);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Integer(expected));
+        assert!(graph.diagnostics.is_empty());
+    }
+    assert_eq!(read("gain seed=-0").nodes[0].properties[0].value, Value::UnsignedInteger(0));
+    assert_eq!(read("gain seed=4294967295.9").nodes[0].properties[0].value, Value::UnsignedInteger(u32::MAX));
+}
+
+#[test]
+fn color_function_names_accept_ascii_case_and_separating_whitespace_without_conversion() {
+    for literal in ["RGB (1,0,0)", "rGb(1,0,0)", "RGB\t(1,0,0)", "RGB\n(1,0,0)"] {
+        let source = format!("color value='{literal}'");
+        let graph = read(&source);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::Color(Color { rgba: [1., 0., 0., 1.], space: ColorSpace::LinearRgb }));
+    }
+    for (literal, cmyk, alpha) in [("CMYK (0,25,100,0)", [0., 25., 100., 0.], 1.), ("cMyKa\t(0,25,100,0,0.5)", [0., 25., 100., 0.], 0.5)] {
+        let source = format!("color value='{literal}'");
+        let graph = read(&source);
+        assert_eq!(graph.nodes[0].properties[0].literal, literal);
+        assert_eq!(graph.nodes[0].properties[0].value, Value::CmykColor { cmyk, alpha });
+    }
+    assert_eq!(
+        read("color value='RGBA (1,0,0,0.5)'").nodes[0].properties[0].value,
+        Value::Color(Color { rgba: [1., 0., 0., 0.5], space: ColorSpace::LinearRgb })
+    );
+    assert_eq!(read("color value='#ff0000'").nodes[0].properties[0].value, Value::Color(Color { rgba: [1., 0., 0., 1.], space: ColorSpace::Srgb }));
+    for literal in ["RGBX (1,0,0)", "RGB junk (1,0,0)", "RGB (1,0)", "RGBA (1,0,0,2)", "CMYK (0,25,100)", "CMYKA (0,25,100,0,NaN)"] {
+        let source = format!("color value='{literal}'");
+        assert!(parse(&source, SCHEMA, &mut Budget::default(), &|| true).is_err(), "{literal}");
+    }
+}
