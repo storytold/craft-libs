@@ -1,9 +1,11 @@
 //! The GLB writer's skins, morph targets and extension data, read back with the glTF reader and
 //! checked against the rules of the Khronos glTF 2.0 specification.
 
+use std::cell::Cell;
+
 use serde_json::{Map, Value, json};
 
-use crate::gltf::{glb_container, read, split_glb, write_glb};
+use crate::gltf::{Writer, extension_names, glb_container, read, split_glb, write_glb};
 use crate::{Corner, Error, IDENTITY, Image, Limits, Mat4, Material, Mesh, MorphTarget, Node, Part, Scene, Skin, TextureRef, Wrap, no_external};
 
 fn parse(bytes: &[u8]) -> crate::Result<Scene> {
@@ -242,6 +244,70 @@ fn extension_data_is_written_and_listed() {
     assert_eq!(j["meshes"][0]["extras"], json!({ "kind": "face", "targetNames": ["old"] }));
 }
 
+/// A name that counts how often it is compared.
+struct Counted<'a> {
+    name: &'a str,
+    count: &'a Cell<usize>,
+}
+
+impl PartialEq for Counted<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.count.set(self.count.get() + 1);
+        self.name == other.name
+    }
+}
+
+impl Eq for Counted<'_> {}
+
+impl PartialOrd for Counted<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Counted<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.count.set(self.count.get() + 1);
+        self.name.cmp(other.name)
+    }
+}
+
+/// `n` extensions at the top of the file, each holding an object in an array that uses itself
+/// again and one extension every one of them shares, so `3 * n` names are found and `n + 1` differ.
+fn many_extensions(n: usize) -> Map<String, Value> {
+    (0..n)
+        .map(|i| {
+            let name = format!("EXT_{i:05}");
+            let inner = json!({ "nested": [{ "extensions": { name.clone(): {}, "SHARED": {} } }] });
+            (name, inner)
+        })
+        .collect()
+}
+
+// A `Counted` orders by its name only; its counter is not part of the key.
+#[allow(clippy::mutable_key_type)]
+#[test]
+fn many_extension_names_are_listed_once_in_n_log_n_comparisons() {
+    const N: usize = 5000;
+    let mut scene = rig();
+    scene.extensions = many_extensions(N);
+    // Extension keys inside the application's extras are not listed.
+    scene.extras = Some(json!({ "extensions": { "IN_EXTRAS": {} } }));
+    let j = json_of(&write_glb(&scene, &Limits::default()).unwrap());
+    let mut expected: Vec<String> = (0..N).map(|i| format!("EXT_{i:05}")).collect();
+    expected.push("SHARED".into());
+    assert_eq!(j["extensionsUsed"], json!(expected));
+
+    let root = Map::from_iter([("extensions".to_string(), Value::Object(many_extensions(N)))]);
+    let count = Cell::new(0);
+    let names = extension_names(&root, |name| Counted { name, count: &count });
+    assert_eq!(names.len(), N + 1);
+    // 3 * N insertions into a set of at most N + 1 names: about 13 comparisons each. A search of
+    // every name found so far takes on the order of N * N.
+    let limit = 3 * N * 32;
+    assert!(count.get() <= limit, "{} comparisons for {} names (limit {limit})", count.get(), 3 * N);
+}
+
 #[test]
 fn a_texture_left_out_for_want_of_an_image_is_named() {
     // The first texture has no image the reader reads, so the second one becomes the first.
@@ -358,4 +424,46 @@ fn writer_refuses_rigging_that_is_not_gltf() {
     let bin = split_glb(&glb).unwrap().1.unwrap().len();
     assert!(write_glb(&rig(), &Limits { max_data_bytes: bin, ..Limits::default() }).is_ok());
     assert!(matches!(write_glb(&rig(), &Limits { max_data_bytes: bin - 4, ..Limits::default() }), Err(Error::TooLarge(_))));
+}
+
+#[test]
+fn the_data_limit_stops_the_writer_before_the_binary_chunk_passes_it() {
+    // 1,024 vertices and 64 targets that move each of them: 12 KiB of positions and 768 KiB of
+    // target offsets.
+    let mut mesh = rig().meshes.swap_remove(0);
+    let n = 1024u32;
+    mesh.positions = (0..n).map(|i| [f64::from(i), 0.0, 0.0]).collect();
+    mesh.normals.clear();
+    mesh.joints.clear();
+    mesh.weights.clear();
+    mesh.parts[0].face_sizes = vec![3; n as usize / 3];
+    mesh.parts[0].corners = (0..n / 3 * 3).map(|i| Corner { position: i, normal: crate::NONE, uv: crate::NONE }).collect();
+    mesh.morph_targets = (0..64).map(|_| MorphTarget { positions: vec![[0.0, 0.0, 1.0]; n as usize], ..MorphTarget::default() }).collect();
+    mesh.morph_weights.clear();
+    let limits = Limits { max_data_bytes: 64 * 1024, ..Limits::default() };
+    let mut w = Writer::new(&limits);
+    assert!(matches!(w.mesh(&mesh), Err(Error::TooLarge(_))));
+    assert!(w.bin.len() <= limits.max_data_bytes, "{} bytes written past a limit of {}", w.bin.len(), limits.max_data_bytes);
+    // The limit holds for sparse accessors too: each target now moves one vertex in four, 4 KiB
+    // of sparse indices and values a target.
+    for t in &mut mesh.morph_targets {
+        t.positions.iter_mut().enumerate().filter(|(i, _)| i % 4 != 0).for_each(|(_, p)| *p = [0.0; 3]);
+    }
+    let mut w = Writer::new(&limits);
+    assert!(matches!(w.mesh(&mesh), Err(Error::TooLarge(_))));
+    assert!(w.bin.len() <= limits.max_data_bytes, "{} bytes written past a limit of {}", w.bin.len(), limits.max_data_bytes);
+    assert!(w.accessors.iter().any(|a| a.get("sparse").is_some()));
+    // A mesh with more morph targets than the reader reads is refused before any target is
+    // written: only the POSITION accessor is.
+    let limits = Limits { max_morph_targets: 63, ..Limits::default() };
+    let mut w = Writer::new(&limits);
+    assert!(matches!(w.mesh(&mesh), Err(Error::TooLarge(_))));
+    assert_eq!(w.accessors.len(), 1);
+    let mut scene = rig();
+    scene.meshes[0] = mesh;
+    scene.nodes[0].morph_weights.clear();
+    scene.nodes[0].skin = None;
+    scene.nodes[1].skin = None;
+    assert!(write_glb(&scene, &Limits { max_morph_targets: 64, ..Limits::default() }).is_ok());
+    assert!(matches!(write_glb(&scene, &limits), Err(Error::TooLarge(_))));
 }

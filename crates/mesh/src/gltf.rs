@@ -58,6 +58,7 @@
 //! tangents (and so the tangent offsets of morph targets) are not written.
 
 use std::cell::Cell;
+use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
@@ -1063,15 +1064,31 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
 }
 
 /// The binary chunk and the buffer views and accessors over it, as they are written.
-#[derive(Default)]
-struct Writer {
-    bin: Vec<u8>,
+pub(crate) struct Writer {
+    pub(crate) bin: Vec<u8>,
     views: Vec<Value>,
-    accessors: Vec<Value>,
+    pub(crate) accessors: Vec<Value>,
+    /// Most bytes the binary chunk may hold ([`Limits::max_data_bytes`]).
+    max_bytes: usize,
+    /// Most morph targets of one mesh ([`Limits::max_morph_targets`]).
+    max_targets: usize,
 }
 
 impl Writer {
-    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> usize {
+    pub(crate) fn new(limits: &Limits) -> Writer {
+        Writer { bin: Vec::new(), views: Vec::new(), accessors: Vec::new(), max_bytes: limits.max_data_bytes, max_targets: limits.max_morph_targets }
+    }
+
+    /// [`Error::TooLarge`] when `bytes` more would take the binary chunk past its limit.
+    fn room(&self, bytes: usize) -> Result<()> {
+        match self.bin.len().next_multiple_of(4).checked_add(bytes) {
+            Some(total) if total <= self.max_bytes => Ok(()),
+            _ => Err(too_large("GLB", format!("more than {} bytes of data", self.max_bytes))),
+        }
+    }
+
+    fn view(&mut self, bytes: &[u8], target: Option<u32>) -> Result<usize> {
+        self.room(bytes.len())?;
         self.bin.resize(self.bin.len().next_multiple_of(4), 0);
         let mut view = json!({ "buffer": 0, "byteOffset": self.bin.len(), "byteLength": bytes.len() });
         if let (Some(t), Some(v)) = (target, view.as_object_mut()) {
@@ -1079,22 +1096,23 @@ impl Writer {
         }
         self.bin.extend_from_slice(bytes);
         self.views.push(view);
-        self.views.len() - 1
+        Ok(self.views.len() - 1)
     }
 
     /// A float accessor of `N` components per row of vertex data; with the bounds glTF wants
     /// for positions.
-    fn floats<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool) -> usize {
+    fn floats<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool) -> Result<usize> {
         self.floats_in(rows, kind, bounds, Some(34962))
     }
 
     /// [`Writer::floats`] in a buffer view with the given `target` (`None` for data that is not
     /// per vertex).
-    fn floats_in<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool, target: Option<u32>) -> usize {
+    fn floats_in<const N: usize>(&mut self, rows: impl Iterator<Item = [f32; N]>, kind: &str, bounds: bool, target: Option<u32>) -> Result<usize> {
         let mut bytes = Vec::new();
         let (mut lo, mut hi, mut count) = ([f32::INFINITY; N], [f32::NEG_INFINITY; N], 0usize);
         for row in rows {
             count += 1;
+            self.room(bytes.len() + 4 * N)?;
             for (k, x) in row.iter().enumerate() {
                 bytes.extend_from_slice(&x.to_le_bytes());
                 if let (Some(l), Some(h)) = (lo.get_mut(k), hi.get_mut(k)) {
@@ -1103,57 +1121,58 @@ impl Writer {
                 }
             }
         }
-        let view = self.view(&bytes, target);
+        let view = self.view(&bytes, target)?;
         let mut acc = json!({ "bufferView": view, "componentType": 5126, "count": count, "type": kind });
         if let (true, Some(a)) = (bounds && count > 0, acc.as_object_mut()) {
             a.insert("min".into(), json!(lo.to_vec()));
             a.insert("max".into(), json!(hi.to_vec()));
         }
         self.accessors.push(acc);
-        self.accessors.len() - 1
+        Ok(self.accessors.len() - 1)
     }
 
-    fn indices(&mut self, triangles: &[[u32; 3]]) -> usize {
+    fn indices(&mut self, triangles: &[[u32; 3]]) -> Result<usize> {
+        self.room(triangles.len().saturating_mul(12))?;
         let bytes: Vec<u8> = triangles.iter().flatten().flat_map(|i| i.to_le_bytes()).collect();
-        let view = self.view(&bytes, Some(34963));
+        let view = self.view(&bytes, Some(34963))?;
         self.accessors.push(json!({ "bufferView": view, "componentType": 5125, "count": triangles.len() * 3, "type": "SCALAR" }));
-        self.accessors.len() - 1
+        Ok(self.accessors.len() - 1)
     }
 
     /// The glTF mesh of `mesh` and the highest joint its written vertices name, or `None` when
     /// it has no triangle.
-    fn mesh(&mut self, mesh: &Mesh) -> Option<(Value, Option<u16>)> {
+    pub(crate) fn mesh(&mut self, mesh: &Mesh) -> Result<Option<(Value, Option<u16>)>> {
         let u = mesh.unified();
         if u.parts.iter().all(Vec::is_empty) {
-            return None;
+            return Ok(None);
         }
         let mut attrs = Map::new();
-        attrs.insert("POSITION".into(), json!(self.floats(u.positions.iter().map(|p| p.map(|x| x as f32)), "VEC3", true)));
+        attrs.insert("POSITION".into(), json!(self.floats(u.positions.iter().map(|p| p.map(|x| x as f32)), "VEC3", true)?));
         if !u.normals.is_empty() {
-            attrs.insert("NORMAL".into(), json!(self.floats(u.normals.iter().map(|n| n.map(|x| x as f32)), "VEC3", false)));
+            attrs.insert("NORMAL".into(), json!(self.floats(u.normals.iter().map(|n| n.map(|x| x as f32)), "VEC3", false)?));
         }
         if !u.uvs.is_empty() {
             for (k, set) in mesh.uv_sets.iter().enumerate() {
                 let rows = u.corners.iter().map(|c| set.get(c.uv as usize).copied().unwrap_or_default());
-                attrs.insert(format!("TEXCOORD_{k}"), json!(self.floats(rows, "VEC2", false)));
+                attrs.insert(format!("TEXCOORD_{k}"), json!(self.floats(rows, "VEC2", false)?));
             }
         }
         if !u.colors.is_empty() {
-            attrs.insert("COLOR_0".into(), json!(self.floats(u.colors.iter().copied(), "VEC4", false)));
+            attrs.insert("COLOR_0".into(), json!(self.floats(u.colors.iter().copied(), "VEC4", false)?));
         }
         let mut top = None;
         if !mesh.joints.is_empty() && !mesh.weights.is_empty() {
             let joints: Vec<[u16; 4]> = u.corners.iter().map(|c| mesh.joints.get(c.position as usize).copied().unwrap_or_default()).collect();
             top = joints.iter().flatten().max().copied();
-            attrs.insert("JOINTS_0".into(), json!(self.joints(joints.into_iter())));
+            attrs.insert("JOINTS_0".into(), json!(self.joints(joints.into_iter())?));
             let weights = u.corners.iter().map(|c| mesh.weights.get(c.position as usize).copied().unwrap_or_default());
-            attrs.insert("WEIGHTS_0".into(), json!(self.floats(weights, "VEC4", false)));
+            attrs.insert("WEIGHTS_0".into(), json!(self.floats(weights, "VEC4", false)?));
         }
-        let targets = self.targets(mesh, &u);
+        let targets = self.targets(mesh, &u)?;
         let mut primitives = Vec::new();
         for (part, triangles) in mesh.parts.iter().zip(&u.parts).filter(|(_, t)| !t.is_empty()) {
             let mut p =
-                Map::from_iter([("attributes".to_string(), Value::Object(attrs.clone())), ("indices".into(), json!(self.indices(triangles)))]);
+                Map::from_iter([("attributes".to_string(), Value::Object(attrs.clone())), ("indices".into(), json!(self.indices(triangles)?))]);
             if let Some(m) = part.material {
                 p.insert("material".into(), json!(m));
             }
@@ -1176,44 +1195,49 @@ impl Writer {
         if let Some(extras) = mesh_extras(mesh) {
             out.insert("extras".into(), extras);
         }
-        Some((Value::Object(out), top))
+        Ok(Some((Value::Object(out), top)))
     }
 
     /// `JOINTS_0`: four joint indices per vertex, as unsigned shorts.
-    fn joints(&mut self, rows: impl Iterator<Item = [u16; 4]>) -> usize {
+    fn joints(&mut self, rows: impl Iterator<Item = [u16; 4]>) -> Result<usize> {
         let mut bytes = Vec::new();
         let mut count = 0usize;
         for row in rows {
             count += 1;
+            self.room(bytes.len() + 8)?;
             bytes.extend(row.iter().flat_map(|j| j.to_le_bytes()));
         }
-        let view = self.view(&bytes, Some(34962));
+        let view = self.view(&bytes, Some(34962))?;
         self.accessors.push(json!({ "bufferView": view, "componentType": 5123, "count": count, "type": "VEC4" }));
-        self.accessors.len() - 1
+        Ok(self.accessors.len() - 1)
     }
 
     /// The mesh's morph targets over the vertices of `u`: a POSITION for each, and a NORMAL
     /// where the target moves normals and the normals are written. glTF wants at least one
-    /// attribute in a target, so a target that moves nothing gets a POSITION of zeros.
-    fn targets(&mut self, mesh: &Mesh, u: &Unified) -> Vec<Value> {
+    /// attribute in a target, so a target that moves nothing gets a POSITION of zeros. A mesh
+    /// with more targets than [`Limits::max_morph_targets`] is [`Error::TooLarge`].
+    fn targets(&mut self, mesh: &Mesh, u: &Unified) -> Result<Vec<Value>> {
+        if mesh.morph_targets.len() > self.max_targets {
+            return Err(too_large("GLB", format!("mesh `{}` has more than {} morph targets", mesh.name, self.max_targets)));
+        }
         let pick = |offsets: &[[f64; 3]], i: u32| offsets.get(i as usize).map_or([0.0; 3], |o| o.map(|x| x as f32));
         let mut out = Vec::with_capacity(mesh.morph_targets.len());
         for t in &mesh.morph_targets {
             let rows: Vec<[f32; 3]> = u.corners.iter().map(|c| pick(&t.positions, c.position)).collect();
-            let mut target = Map::from_iter([("POSITION".to_string(), json!(self.offsets(&rows)))]);
+            let mut target = Map::from_iter([("POSITION".to_string(), json!(self.offsets(&rows)?))]);
             if !t.normals.is_empty() && !u.normals.is_empty() {
                 let rows: Vec<[f32; 3]> = u.corners.iter().map(|c| pick(&t.normals, c.normal)).collect();
-                target.insert("NORMAL".into(), json!(self.offsets(&rows)));
+                target.insert("NORMAL".into(), json!(self.offsets(&rows)?));
             }
             out.push(Value::Object(target));
         }
-        out
+        Ok(out)
     }
 
     /// The `VEC3` accessor of one attribute of a morph target, with the bounds glTF wants for a
     /// target's POSITION. When fewer than three quarters of the rows move, only those are
     /// written, as a sparse accessor over zeros (no buffer view), which takes fewer bytes.
-    fn offsets(&mut self, rows: &[[f32; 3]]) -> usize {
+    fn offsets(&mut self, rows: &[[f32; 3]]) -> Result<usize> {
         let moved: Vec<u32> = (0u32..).zip(rows).filter(|(_, r)| **r != [0.0; 3]).map(|(i, _)| i).collect();
         // A sparse row is a 4-byte index and 12 bytes of values; a dense one, 12 bytes.
         if moved.len().saturating_mul(4) >= rows.len().saturating_mul(3) {
@@ -1234,28 +1258,31 @@ impl Writer {
             ("max".into(), json!(hi)),
         ]);
         if !moved.is_empty() {
+            // The index and value views, 16 bytes a row. The index view ends on a 4-byte
+            // boundary, so no padding goes between them.
+            self.room(moved.len().saturating_mul(16))?;
             let indices: Vec<u8> = moved.iter().flat_map(|i| i.to_le_bytes()).collect();
             let values: Vec<u8> = moved.iter().filter_map(|i| rows.get(*i as usize)).flatten().flat_map(|x| x.to_le_bytes()).collect();
-            let (indices, values) = (self.view(&indices, None), self.view(&values, None));
+            let (indices, values) = (self.view(&indices, None)?, self.view(&values, None)?);
             let sparse =
                 json!({ "count": moved.len(), "indices": { "bufferView": indices, "componentType": 5125 }, "values": { "bufferView": values } });
             acc.insert("sparse".into(), sparse);
         }
         self.accessors.push(Value::Object(acc));
-        self.accessors.len() - 1
+        Ok(self.accessors.len() - 1)
     }
 
     /// A skin: its joints, and its inverse bind matrices when it has them (none means identity).
-    fn skin(&mut self, s: &Skin) -> Value {
+    fn skin(&mut self, s: &Skin) -> Result<Value> {
         let mut out = Map::from_iter([("joints".to_string(), json!(s.joints))]);
         if !s.name.is_empty() {
             out.insert("name".into(), json!(s.name));
         }
         if !s.inverse_bind.is_empty() {
             let rows = s.inverse_bind.iter().map(|m| m.map(|x| x as f32));
-            out.insert("inverseBindMatrices".into(), json!(self.floats_in(rows, "MAT4", false, None)));
+            out.insert("inverseBindMatrices".into(), json!(self.floats_in(rows, "MAT4", false, None)?));
         }
-        Value::Object(out)
+        Ok(Value::Object(out))
     }
 }
 
@@ -1487,14 +1514,20 @@ fn material_json(m: &Material, textures: &mut Textures) -> Value {
 /// `extensions` object in it, at any depth, sorted. The application's `extras` are not
 /// searched.
 fn extensions_used(root: &Map<String, Value>) -> Vec<Value> {
-    let mut used = std::collections::BTreeSet::new();
+    extension_names(root, |name| name).into_iter().map(|name| json!(name)).collect()
+}
+
+/// The keys of every `extensions` object in `root`, at any depth, each made into a `K` by `key`
+/// and kept once. Each name takes a number of comparisons logarithmic in the names found so far.
+pub(crate) fn extension_names<'a, K: Ord>(root: &'a Map<String, Value>, key: impl Fn(&'a str) -> K) -> BTreeSet<K> {
+    let mut used = BTreeSet::new();
     let mut stack: Vec<(&str, &Value)> = root.iter().map(|(k, v)| (k.as_str(), v)).collect();
-    while let Some((key, v)) = stack.pop() {
-        match (key, v) {
+    while let Some((name, v)) = stack.pop() {
+        match (name, v) {
             ("extras", _) => {}
             ("extensions", Value::Object(o)) => {
                 for (name, inner) in o {
-                    used.insert(name.as_str());
+                    used.insert(key(name));
                     stack.push((name, inner));
                 }
             }
@@ -1504,7 +1537,7 @@ fn extensions_used(root: &Map<String, Value>) -> Vec<Value> {
             _ => {}
         }
     }
-    used.into_iter().map(|name| json!(name)).collect()
+    used
 }
 
 /// JSON has no number for these, and a file with them is not glTF.
@@ -1624,7 +1657,9 @@ pub struct GlbWriteOptions {
 /// [`Mesh::unified`] vertices: positions, normals, UV sets, colours, joints and weights, with
 /// the mesh's morph targets), skins and materials, with images that have bytes embedded and
 /// the others named by their URI, and the kept `extensions` and `extras` (see the module
-/// documentation). The binary chunk is limited to `limits.max_data_bytes`. A value that is not
+/// documentation). The binary chunk is limited to `limits.max_data_bytes`, and each mesh to
+/// `limits.max_morph_targets` morph targets; past either, the writer stops with
+/// [`Error::TooLarge`] before it writes more. A value that is not
 /// finite, a skin without joints or whose inverse bind matrices do not match its joints, a mesh
 /// with joints but no weights (or weights but no joints), a joint of a written vertex outside
 /// the skin of a node that places the mesh, and a node with more morph weights than its mesh has targets are
@@ -1639,21 +1674,21 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
     scene.instances(limits)?;
     check_finite(scene)?;
     check_rigging(scene)?;
-    let mut w = Writer::default();
+    let mut w = Writer::new(limits);
     let mut meshes = Vec::new();
     let mut top = Vec::with_capacity(scene.meshes.len());
     let mesh_map: Vec<Option<usize>> = scene
         .meshes
         .iter()
         .map(|m| {
-            let written = w.mesh(m);
+            let written = w.mesh(m)?;
             top.push(written.as_ref().and_then(|(_, j)| *j));
-            written.map(|(v, _)| {
+            Ok(written.map(|(v, _)| {
                 meshes.push(v);
                 meshes.len() - 1
-            })
+            }))
         })
-        .collect();
+        .collect::<Result<_>>()?;
     check_joints(scene, &top)?;
     let mut textures = Textures::default();
     for image in &scene.images {
@@ -1664,7 +1699,7 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
         let mime = match (&image.data, &image.uri) {
             (Some(bytes), _) => {
                 let mime = image.mime_type.clone().unwrap_or_else(|| sniff(bytes).into());
-                out.insert("bufferView".into(), json!(w.view(bytes, None)));
+                out.insert("bufferView".into(), json!(w.view(bytes, None)?));
                 out.insert("mimeType".into(), json!(mime));
                 mime
             }
@@ -1694,7 +1729,7 @@ pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWrite
             node_json(n, mesh)
         })
         .collect();
-    let skins: Vec<Value> = scene.skins.iter().map(|s| w.skin(s)).collect();
+    let skins: Vec<Value> = scene.skins.iter().map(|s| w.skin(s)).collect::<Result<_>>()?;
     if w.bin.len() > limits.max_data_bytes {
         return Err(too_large("GLB", format!("more than {} bytes of data", limits.max_data_bytes)));
     }
