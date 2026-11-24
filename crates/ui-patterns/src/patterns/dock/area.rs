@@ -1302,8 +1302,15 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             return None;
         };
-        let tabs =
-            output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(SourceKind::Tab(scene.panel(*key)?.clone()), *rect, *node)));
+        // A tab key is a panel's or one of its documents' (`Titles::document_of`).
+        let kind_of = |key: PanelKey| match scene.panel(key) {
+            Some(panel) => Some(SourceKind::Tab(panel.clone())),
+            None => {
+                let (panel, document) = parts_of().titles.document_of(key)?;
+                Some(SourceKind::Document(scene.panel(panel)?.clone(), document))
+            }
+        };
+        let tabs = output.tabs.iter().filter_map(|(key, rect, node)| Some(DockSource::new(kind_of(*key)?, *rect, *node)));
         self.report.sources.extend(tabs);
         if let Some((rect, node)) = output.grip {
             self.report.sources.push(DockSource::new(SourceKind::GroupBar(anchor.clone()), rect, node));

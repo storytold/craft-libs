@@ -33,6 +33,9 @@ impl<P> DockSource<P> {
 pub enum SourceKind<P> {
     /// The tab of a panel: a click shows it, a drag moves it.
     Tab(P),
+    /// The tab of a panel's document ([`PanelSpec::documents`](super::PanelSpec::documents)), named by the panel and
+    /// the document's id: a click shows the panel and picks the document. It is not dragged.
+    Document(P, u64),
     /// The bar a group is dragged by, named by the group's first panel.
     GroupBar(P),
     /// The band a floating window is moved by, named by the window's first panel.
