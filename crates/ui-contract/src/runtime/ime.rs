@@ -53,6 +53,10 @@ struct Engine {
     editor: Option<EditorFacts>,
     /// The app's own editor that wrote the IME output of the last pass while no framework editor owned the IME.
     host: Option<HostIme>,
+    /// The reset requests the app's own editor wrote in its IME output, unanswered yet: their completions and
+    /// retirements are the app's and stay in egui's input for it, fence or not. One of them is the fence's `reset`
+    /// when the app asked for its reset in the pass the engine interrupted its composition.
+    host_resets: Vec<egui::ImeResetId>,
 }
 
 /// An app's own editor holding the IME: the owner and context generation of the IME output it wrote, and whether it
@@ -197,6 +201,20 @@ impl Engine {
         self.discard = true;
     }
 
+    /// Notes an answer to one of the app's own reset requests: the request is answered, and a completion of the one the
+    /// fence waits for ends the fence; a retirement leaves the end hook to ask again.
+    fn host_answered(&mut self, event: &Event) {
+        let (Event::ImeResetCompleted { request_id: id } | Event::ImeResetRetired { request_id: id }) = event else { return };
+        let Some(at) = self.host_resets.iter().position(|own| own == id) else { return };
+        self.host_resets.remove(at);
+        if self.reset == Some(*id) {
+            self.reset = None;
+            if matches!(event, Event::ImeResetCompleted { .. }) {
+                self.stale = false;
+            }
+        }
+    }
+
     /// Follows the composition of the app's own editor through the IME events left to it in egui's input, and
     /// interrupts it at a pointer press, as a press ends a framework editor's composition. The one-press rule (H0)
     /// holds the events after the press for the next frame, where the fence drops the composition's late deletions and
@@ -230,23 +248,37 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
 /// The input hook: takes the IME events out of raw input while a framework editor owns the IME, or while the reset
 /// the engine asked for is pending (the late events of the interrupted composition, and the OS's answer), and removes
 /// the keys that would end the composition. With no framework editor, the events after the reset's completion are
-/// the app's own editor's again, and the hook follows that editor's composition (`Engine::watch_host`).
+/// the app's own editor's again, and the hook follows that editor's composition (`Engine::watch_host`). The answers to
+/// the app's own reset requests always stay in egui's input for it; when the fence waits for one of them, its
+/// completion ends the fence too.
 pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: ViewportId) {
     with(ctx, viewport, |engine| {
         let take = engine.owner.is_some() || engine.reset.is_some();
+        let host_resets = engine.host_resets.clone();
+        let host_answer = |event: &Event| match event {
+            Event::ImeResetCompleted { request_id } | Event::ImeResetRetired { request_id } => host_resets.contains(request_id),
+            _ => false,
+        };
         let completed =
             |id: egui::ImeResetId| move |arrived: &Arrived| matches!(arrived.event, Event::ImeResetCompleted { request_id } if request_id == id);
+        // The events after the completion are the app's; the completion too when it answers the app's own request.
         let mut after = match engine.reset {
-            Some(id) if engine.owner.is_none() => events.iter().position(completed(id)).map(|at| events.split_off(at + 1)),
+            Some(id) if engine.owner.is_none() => {
+                let own = host_resets.contains(&id);
+                events.iter().position(completed(id)).map(|at| events.split_off(if own { at } else { at + 1 }))
+            }
             _ => None,
         };
         let guarded = engine.composing || engine.guard > 0;
         let ends_composition = |event: &Event| {
             matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. })
         };
-        let taken = os::take_events(events, take, |event| guarded && ends_composition(event));
+        let taken = os::take_events(events, |event| take && !host_answer(event), |event| guarded && ends_composition(event));
         engine.queue.extend(taken);
         engine.guard = engine.guard.saturating_sub(1);
+        for arrived in events.iter().chain(after.iter().flatten()) {
+            engine.host_answered(&arrived.event);
+        }
         if engine.owner.is_none() {
             match &mut after {
                 Some(after) => engine.watch_host(after),
@@ -458,7 +490,8 @@ pub(crate) fn note_caret(ctx: &Context, owner: Id, field: Rect, caret: Rect, pas
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let (frame_nr, pass_nr) = (ctx.cumulative_frame_nr_for(viewport), ctx.cumulative_pass_nr_for(viewport));
-    let app_wrote = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation)));
+    let app_ime = ctx.output(|output| output.ime.as_ref().map(|ime| (ime.owner, ime.context_generation, ime.reset_request)));
+    let app_wrote = app_ime.map(|(owner, generation, _)| (owner, generation));
     let (owner, interrupt, caret, update, published, host) = with(ctx, viewport, |engine| {
         let ran = std::mem::take(&mut engine.ran);
         if !ran {
@@ -477,6 +510,11 @@ pub(crate) fn end_pass(ctx: &Context) {
         let last_host = engine.host;
         let kept = engine.host.filter(|host| app_wrote.is_some_and(|(owner, _)| owner == host.owner)).is_some_and(|host| host.composing);
         engine.host = app_wrote.filter(|_| engine.owner.is_none()).map(|(owner, generation)| HostIme { owner, generation, composing: kept });
+        if let Some(id) = app_ime.filter(|_| engine.owner.is_none()).and_then(|(.., reset)| reset)
+            && !engine.host_resets.contains(&id)
+        {
+            engine.host_resets.push(id);
+        }
         // The fence has no request the integration can answer: the owner's output asks again, a framework editor's
         // or the app's own.
         if engine.stale
