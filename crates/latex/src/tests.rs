@@ -761,6 +761,9 @@ fn includegraphics_sizes_follow_the_options() {
     // A square stays square when only the width is given.
     assert!((big.h - big.w).abs() < 0.5);
     let (Some(x4), Some(x8)) = (pic("scale=4"), pic("scale=8")) else { panic!("every picture loads") };
+    // A box with `keepaspectratio` fits a picture smaller than a point as it fits any other.
+    let (Some(boxed), Some(wide)) = (pic("width=100pt,height=100pt,keepaspectratio"), pic("width=100pt")) else { panic!("every picture loads") };
+    assert!((boxed.w - wide.w).abs() < 0.5 && (boxed.h - wide.h).abs() < 0.5);
     assert!(x8.w > x4.w * 1.9 && x8.w < x4.w * 2.1);
 }
 

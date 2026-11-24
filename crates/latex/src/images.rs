@@ -93,7 +93,7 @@ impl<'a> Images<'a> {
 /// A picture from `data` sized as graphicx's `width`, `height`, `scale` and `keepaspectratio`
 /// say; `None` when the bytes aren't a picture.
 fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
-    let natural = model::image_px(&data).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75));
+    let natural = model::image_px(&data).filter(|&(w, h)| w > 0 && h > 0).map(|(w, h)| (w as f32 * 0.75, h as f32 * 0.75));
     let (mut w, mut h, mut scale, mut keep) = (None, None, None, false);
     for opt in options.split(',') {
         let (k, v) = opt.split_once('=').map_or((opt.trim(), ""), |(k, v)| (k.trim(), v.trim()));
@@ -109,7 +109,7 @@ fn sized(data: Arc<Vec<u8>>, options: &str, alt: &str) -> Option<Img> {
     }
     if let (Some(bw), Some(bh), true, Some((nw, nh))) = (w, h, keep, natural) {
         // Fit inside the box, keeping the shape.
-        let k = (bw / nw.max(1.0)).min(bh / nh.max(1.0));
+        let k = (bw / nw).min(bh / nh);
         (w, h) = (Some(nw * k), Some(nh * k));
     }
     if let (None, None, Some(s), Some((nw, nh))) = (w, h, scale, natural) {
