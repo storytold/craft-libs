@@ -229,7 +229,7 @@ fn warnings_match_actual_roundtrip_behaviour() {
         for l in ChannelLayout::ALL {
             for s in SampleType::ALL {
                 index += 1;
-                if (index - 1) % step != 0 {
+                if !(index - 1).is_multiple_of(step) {
                     continue;
                 }
                 let img = test_image(l, s);

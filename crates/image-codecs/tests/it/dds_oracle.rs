@@ -490,7 +490,7 @@ fn digests() -> Vec<(String, String)> {
             for compression in COMPRESSIONS {
                 for mipmaps in [false, true] {
                     index += 1;
-                    if (index - 1) % step != 0 {
+                    if !(index - 1).is_multiple_of(step) {
                         continue;
                     }
                     let name = format!("{layout:?}-{w}x{h}-{}-mips{}", compression.name(), u8::from(mipmaps));
@@ -505,7 +505,7 @@ fn digests() -> Vec<(String, String)> {
     }
     for (name, file) in foreign_files() {
         index += 1;
-        if (index - 1) % step != 0 {
+        if !(index - 1).is_multiple_of(step) {
             continue;
         }
         let back = decode(&file).unwrap_or_else(|e| panic!("{name}: {e}"));

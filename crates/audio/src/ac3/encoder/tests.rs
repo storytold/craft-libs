@@ -110,7 +110,7 @@ fn actual_decoder_positions_satisfy_all_three_ac3_bit_budgets() -> Result<(), Bo
     let step = craft_media_testkit::hostile::divisor();
     for (ri, rate) in [32000, 44100, 48000].into_iter().enumerate() {
         for (bi, bitrate) in super::super::BITRATES.into_iter().enumerate() {
-            if (bi + ri) % step != 0 {
+            if !(bi + ri).is_multiple_of(step) {
                 continue;
             }
             for mode in [CodingMode::Mono, CodingMode::ThreeFrontTwoSurround] {
