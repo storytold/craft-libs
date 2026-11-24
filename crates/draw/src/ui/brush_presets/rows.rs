@@ -44,9 +44,10 @@ fn scaled_key(tip: u64, scale: f32) -> u64 {
     hasher.finish()
 }
 
-/// A preset row for the picker: `name` at `depth`, its size as the caption and in the accessible name
-/// ("{name}, {size}"), and its picture by `parts`: the stroke band while the stroke shows, else the tip drawn at
-/// [`tip_thumb_scale`] of `diameter`.
+/// A preset row for the picker: `name` at `depth`, its size in the accessible name ("{name}, {size}"), and its
+/// picture by `parts`: the stroke band while the stroke shows, else the tip drawn at [`tip_thumb_scale`] of
+/// `diameter`. A list row has the size as its caption; the tip alone (the grid) has no caption, so the tiles pack
+/// square and close, and the name and size show as the tile's tooltip.
 pub fn brush_row<K>(
     key: K,
     name: impl Into<String>,
@@ -59,8 +60,9 @@ pub fn brush_row<K>(
     let name = name.into();
     let words = env.words::<BrushPresetWords>();
     let size = env.units().pixels(if diameter.is_finite() { diameter.round() } else { 0.0 });
-    let row =
-        PresetRow::item(key, name.clone(), depth).caption(size.clone()).accessible_name(words.preset_size.fill(&[("name", &name), ("size", &size)]));
+    let named = words.preset_size.fill(&[("name", &name), ("size", &size)]);
+    let row = PresetRow::item(key, name.clone(), depth).accessible_name(named.clone());
+    let row = if parts.normalised().tip_only() { row.tooltip(named) } else { row.caption(size) };
     if parts.normalised().stroke {
         row.preview_face(ThumbAspect::new(STROKE_ASPECT.0, STROKE_ASPECT.1), paint.stroke.clone())
     } else {

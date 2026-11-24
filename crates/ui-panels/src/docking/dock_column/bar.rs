@@ -66,16 +66,22 @@ fn points_right(edge: DockEdge, towards_edge: bool, rtl: bool) -> bool {
     at_left != towards_edge
 }
 
-/// The chevron's slot at the bar's outer end, the window edge the dock is on, as high and wide as the bar is high; and
-/// the band in the rest of the bar.
-pub(in crate::docking) fn bar_slots(bar: Rect, edge: DockEdge, rtl: bool) -> (Rect, Rect) {
-    let side = bar.height().min(bar.width());
+/// The chevron's slot near the bar's outer end, the window edge the dock is on, as high as the bar and at least `least`
+/// wide (the least hit size), so a click meant for the chevron does not land on the band beside it; and the band in the
+/// rest of the bar. The slot stands half of `least` in from that edge, where the window's own resize border is, so a
+/// press meant for the chevron does not resize the window and the other way round; that gap belongs to neither. A narrow
+/// bar (an iconic column's) keeps at least half of itself for the band and gives the gap only what is left.
+pub(in crate::docking) fn bar_slots(bar: Rect, edge: DockEdge, rtl: bool, least: f32) -> (Rect, Rect) {
+    let side = bar.height().max(least.min(bar.width() / 2.0)).min(bar.width());
+    let gap = (least / 2.0).min((bar.width() / 2.0 - side).max(0.0));
     if (edge == DockEdge::End) != rtl {
-        let split = bar.right() - side;
-        (Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()), Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()))
+        let outer = bar.right() - gap;
+        let split = outer - side;
+        (Rect::from_x_y_ranges(split..=outer, bar.y_range()), Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()))
     } else {
-        let split = bar.left() + side;
-        (Rect::from_x_y_ranges(bar.left()..=split, bar.y_range()), Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()))
+        let outer = bar.left() + gap;
+        let split = outer + side;
+        (Rect::from_x_y_ranges(outer..=split, bar.y_range()), Rect::from_x_y_ranges(split..=bar.right(), bar.y_range()))
     }
 }
 
@@ -93,7 +99,8 @@ pub(in crate::docking) fn describe_chevron(access: &mut Access, name: &Label) {
 
 /// The band of the column bar `bar` of a column that keeps to `edge`: the bar beside the chevron's slot.
 pub(in crate::docking) fn bar_band(ui: &Ui, bar: Rect, edge: DockEdge) -> Rect {
-    bar_slots(bar, edge, crate::runtime::env::Env::of(ui).direction.is_rtl()).1
+    let env = crate::runtime::env::Env::of(ui);
+    bar_slots(bar, edge, env.direction.is_rtl(), env.tokens.size.hit.target).1
 }
 
 /// Shows a column's bar in `band`: the band of a column bar ([`bar_band`]) and the column menu, as a memoized view
@@ -194,4 +201,38 @@ pub(in crate::docking) fn bar_name<P>(column: &Column<P>, spec: &dyn Fn(&P) -> P
 pub(super) fn panel_names<P>(column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> String {
     let names: Vec<String> = column.groups.iter().flat_map(|group| group.panels.iter()).map(|panel| spec(panel).label.as_str().to_owned()).collect();
     names.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::pos2;
+
+    #[test]
+    fn a_thin_bar_gives_the_chevron_the_least_hit_size() {
+        let bar = Rect::from_min_max(pos2(0.0, 0.0), pos2(300.0, 8.0));
+        for (edge, rtl) in [(DockEdge::End, false), (DockEdge::Start, false), (DockEdge::End, true)] {
+            let (chevron, band) = bar_slots(bar, edge, rtl, 24.0);
+            assert!(chevron.width() >= 24.0, "wider than the bar is high: {chevron:?}");
+            assert!(!chevron.intersects(band.shrink2(egui::vec2(0.5, 0.0))), "the band starts where the chevron ends");
+            assert!((chevron.width() + band.width() + 12.0 - bar.width()).abs() < 0.01, "the two and the gap fill the bar");
+        }
+    }
+
+    #[test]
+    fn the_chevron_stands_off_the_window_edge() {
+        let bar = Rect::from_min_max(pos2(0.0, 0.0), pos2(300.0, 8.0));
+        let (chevron, _) = bar_slots(bar, DockEdge::End, false, 24.0);
+        assert!(bar.right() - chevron.right() >= 12.0, "half the hit size from the right edge: {chevron:?}");
+        let (chevron, _) = bar_slots(bar, DockEdge::Start, false, 24.0);
+        assert!(chevron.left() - bar.left() >= 12.0, "half the hit size from the left edge: {chevron:?}");
+    }
+
+    #[test]
+    fn a_narrow_bar_keeps_half_for_the_band() {
+        let bar = Rect::from_min_max(pos2(0.0, 0.0), pos2(30.0, 8.0));
+        let (chevron, band) = bar_slots(bar, DockEdge::End, false, 24.0);
+        assert!(band.width() >= chevron.width(), "the band keeps at least half: {chevron:?} {band:?}");
+        assert!(chevron.width() > bar.height(), "still wider than the bar is high");
+    }
 }

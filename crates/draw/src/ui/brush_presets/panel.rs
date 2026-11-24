@@ -24,6 +24,13 @@ const SCALE_STEP: f64 = 0.05;
 pub(super) const BRUSH_THUMBS: TileZoom =
     TileZoom::bounded(*BrushPickerSettings::SCALE_RANGE.start() as f64, *BrushPickerSettings::SCALE_RANGE.end() as f64, SCALE_STEP, 1.0);
 
+/// The Brushes panel's range: the picker's, starting smaller, since the panel shows the whole library at once.
+pub(super) const PANEL_THUMBS: TileZoom =
+    TileZoom::bounded(*BrushPickerSettings::SCALE_RANGE.start() as f64, *BrushPickerSettings::SCALE_RANGE.end() as f64, SCALE_STEP, PANEL_SCALE);
+
+/// The Brushes panel's starting thumbnail scale.
+const PANEL_SCALE: f64 = 0.8;
+
 /// The Brushes panel: a Size field over a [`PresetBrowser`] of the brush presets, with Import as the footer's one
 /// action.
 #[must_use = "show the panel with `show`"]
@@ -93,7 +100,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> BrushesPanel<
             let mut browser = PresetBrowser::new(label.clone(), state.reborrowed(), source)
                 .toolbar(true)
                 .reorder(PresetReorder::items_and_groups())
-                .thumb_range(BRUSH_THUMBS)
+                .thumb_range(PANEL_THUMBS)
                 .footer(footer);
             if let Some(key) = selected.take() {
                 browser = browser.selection(Bind::given(Selection::single(key)));

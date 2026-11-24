@@ -604,7 +604,16 @@ pub fn split<O: Copy + PartialEq>(
     if !running {
         *gesture = WheelGesture::default();
     }
-    let field = focus.taker.filter(|focused| !focus.by_position && takers.iter().any(|taker| taker.field && taker.owner == *focused));
+    // A focused field yields the wheel while the pointer is over a scroll region outside it: the list under a
+    // popup's search field scrolls as soon as it opens, before any click in it.
+    let over_region = |focused: O| {
+        let inside_field = takers.iter().any(|taker| taker.owner == focused && taker.rect.contains(at));
+        !inside_field && takers.iter().any(|taker| taker.owner != focused && taker.scrolls && !taker.value && taker.rect.contains(at))
+    };
+    let field = focus
+        .taker
+        .filter(|focused| !focus.by_position && takers.iter().any(|taker| taker.field && taker.owner == *focused))
+        .filter(|focused| !over_region(*focused));
     let app_field = focus.app_field && !focus.by_position;
     // A value control keeps its gesture only while the pointer is over it: once the pointer leaves, the gesture goes
     // on by position as a running one (value controls excluded) and the control hears its end now, so its edit run

@@ -41,6 +41,49 @@ pub(crate) fn placement_id(id: Id) -> Id {
     sub(id, "placement")
 }
 
+/// Where a grip moved a hung layer's top left, and the anchor it hung from then ([`shift`]).
+#[derive(Clone, Copy)]
+struct Shift {
+    pos: Pos2,
+    from: Rect,
+}
+
+fn shift_id(id: Id) -> Id {
+    sub(id, "shift")
+}
+
+fn hung_id(id: Id) -> Id {
+    sub(id, "hung_from")
+}
+
+/// Notes the screen rect the hung layer `id` hangs from in this pass, for [`shift`] and [`shifted`].
+pub(crate) fn note_hung_from(ctx: &Context, id: Id, anchor: Rect) {
+    ctx.data_mut(|data| data.insert_temp(hung_id(id), anchor));
+}
+
+/// Keeps the hung layer `id`'s top left at `pos` while it hangs from the anchor it hangs from now (none: back to its
+/// anchor), for a grip that moved its left or top edge: a hung layer otherwise places itself from its anchor at the
+/// size it keeps, which would hold that edge where it was.
+pub(super) fn shift(ctx: &Context, id: Id, pos: Option<Pos2>) {
+    let from = ctx.data(|data| data.get_temp::<Rect>(hung_id(id)));
+    ctx.data_mut(|data| match (pos, from) {
+        (Some(pos), Some(from)) => {
+            data.insert_temp(shift_id(id), Shift { pos, from });
+        }
+        _ => {
+            data.remove::<Shift>(shift_id(id));
+        }
+    });
+}
+
+/// Where a grip left the hung layer `id`'s top left, while it still hangs from `anchor`: an opening from another
+/// point or a moved field hangs it from its anchor again.
+pub(crate) fn shifted(ctx: &Context, id: Id, anchor: Rect) -> Option<Pos2> {
+    let shift = ctx.data(|data| data.get_temp::<Shift>(shift_id(id)))?;
+    let same = (shift.from.min - anchor.min).abs().max_elem() < 0.5 && (shift.from.max - anchor.max).abs().max_elem() < 0.5;
+    same.then_some(shift.pos)
+}
+
 /// The one store of a layer's placement: the saved tier when `save` is set, else shown memory. A layer whose overlay
 /// is `placed` has the caller's rect instead: the slot reads it and writes nothing, since the caller owns the
 /// placement and learns of the user's changes from `PlacementChange` reports. A layer hung from its anchor keeps only

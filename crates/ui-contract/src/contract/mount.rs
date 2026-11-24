@@ -243,7 +243,14 @@ impl Host for LayerHost {
             overlay = mapped;
         }
         let screen = overlay::screen_for(&ctx, env, &overlay);
-        let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, self.moving, screen, env.tokens.space.inset.screen);
+        let mut placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, self.moving, screen, env.tokens.space.inset.screen);
+        // A hung layer whose left or top edge a grip moved keeps that corner while it hangs from the same anchor.
+        if matches!(overlay.place, Place::Anchored { .. }) && placement.pos.is_none() {
+            let own = Rect::from_min_max(parent.cursor().min, parent.cursor().min);
+            let hung = overlay::resolve_anchor(&ctx, id, &overlay, own, to_screen);
+            crate::contract::body::note_hung_from(&ctx, id, hung);
+            placement.pos = crate::contract::body::shifted(&ctx, id, hung).map(Into::into);
+        }
         // An anchored resizable layer has no position to seed: its default size is held as its minimum until the
         // user resizes it.
         if overlay.fit == overlay::OverlayFit::Resizable

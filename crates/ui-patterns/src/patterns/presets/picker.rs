@@ -234,7 +234,7 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + MemoProps + 'static> {
     /// The columns of the popover's grid: the popover is as wide as this many tiles, at least its field.
     #[prop]
     columns: u16,
-    /// Edge grips resize the popover, and the size the user leaves it at is saved under this key.
+    /// Grips on every edge and corner resize the popover, and the size the user leaves it at is saved under this key.
     #[prop]
     resizable: Option<SaveKey>,
     opened_at: Option<(Pos2, Bind<'a, bool>)>,
@@ -462,7 +462,8 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
             };
             let popover = popover.collection_body().initial_focus(Initial::Default);
             let popover = match resizable.clone() {
-                Some(key) => popover.resizable(true).remember(key),
+                // Movable, so no edge is held to the point or field it hangs from: every edge and corner resizes it.
+                Some(key) => popover.resizable(true).overlay(|overlay| overlay.movable(true)).remember(key),
                 None => popover,
             };
             let popup = popover.show(ui, |ui, body| {

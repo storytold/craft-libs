@@ -47,6 +47,9 @@ pub enum ThumbSize {
     Medium,
     /// `size.thumb.lg`.
     Large,
+    /// `size.thumb.md` scaled by this many hundredths: a size a slider sets smoothly (a preset browser's zoom), not
+    /// one a user picks from a menu.
+    Scaled(u16),
 }
 
 impl ThumbSize {
@@ -54,12 +57,13 @@ impl ThumbSize {
     pub const ALL: [ThumbSize; 4] = [ThumbSize::None, ThumbSize::Small, ThumbSize::Medium, ThumbSize::Large];
 
     /// The side the setting takes from the small, medium and large sides; 0 for `None`.
-    pub(crate) const fn pick(self, sides: [f32; 3]) -> f32 {
+    pub(crate) fn pick(self, sides: [f32; 3]) -> f32 {
         match self {
             ThumbSize::None => 0.0,
             ThumbSize::Small => sides[0],
             ThumbSize::Medium => sides[1],
             ThumbSize::Large => sides[2],
+            ThumbSize::Scaled(hundredths) => (sides[1] * f32::from(hundredths) / 100.0).round().max(1.0),
         }
     }
 
@@ -70,6 +74,7 @@ impl ThumbSize {
             ThumbSize::Small => words.thumb_small.clone(),
             ThumbSize::Medium => words.thumb_medium.clone(),
             ThumbSize::Large => words.thumb_large.clone(),
+            ThumbSize::Scaled(_) => words.thumb_medium.clone(),
         }
     }
 }

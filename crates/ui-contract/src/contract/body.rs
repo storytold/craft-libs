@@ -26,7 +26,7 @@ pub(crate) use size::EnvFacts;
 mod window;
 
 pub(crate) use open::unshown;
-pub(crate) use placement::shown_placement;
+pub(crate) use placement::{note_hung_from, shifted, shown_placement};
 #[doc(hidden)]
 pub(crate) use regions::HeaderSlots;
 pub use regions::pad_of;
