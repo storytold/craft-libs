@@ -216,7 +216,7 @@ fn unencrypted_metadata_is_left_readable() {
 /// silent skip would cost the most -- see `oracle.rs`, which makes absence loud.
 #[test]
 fn qpdf_agrees() {
-    let qpdf = crate::oracle::or_skip!(crate::oracle::qpdf());
+    let qpdf = super::oracle::or_skip!(super::oracle::qpdf());
     let dir = private_temp_dir("pdfcraft-enc");
     for alg in ALL {
         let path = dir.join(format!("{alg:?}.pdf"));

@@ -3,9 +3,8 @@
 use std::sync::Arc;
 
 use craft_behavior::{PointerButton, PointerEvent, PressPhase, PressStart};
-use egui::{Context, Id, IdSet, LayerId, Pos2, Rect};
+use egui::{Context, Id, IdSet, Pos2, Rect};
 
-use crate::contract::{CxCore, Pointer as _};
 use crate::runtime::egui::{areas, pass};
 use crate::runtime::frame::{PerViewport, Stored};
 use crate::runtime::pointer::{self, PassPointer};
@@ -143,50 +142,56 @@ impl Record {
     }
 }
 
-pub(crate) fn value(cx: &CxCore<'_>, group: Id, on: Option<bool>) -> Option<bool> {
-    let ctx = &cx.ctx;
+pub(crate) struct ToggleTarget {
+    pub id: Id,
+    pub layer: areas::Layer,
+    pub visible: Rect,
+    pub enabled: bool,
+    pub press: PressPhase,
+}
+
+pub(crate) fn value(ctx: &Context, target: ToggleTarget, group: Id, on: Option<bool>) -> Option<bool> {
+    let ToggleTarget { id, layer, visible, enabled, press } = target;
     let viewport = pass::current_viewport(ctx);
     let pass = pointer::pass_of(ctx);
     let input = pointer::pass_pointer(ctx);
     let cancelled = pointer::cancel_of_pass(ctx).is_some();
-    let layer = cx.response.layer_id;
-    let enabled = cx.resolved.enabled && !cx.resolved.read_only;
     let eligible = |sweep: &Sweep| enabled && sweep.group == group && sweep.travel.dragging;
     let completed = PerViewport::<Record>::with(ctx, viewport, |record| {
         record.advance(pass, &input, cancelled);
         let finished = record.completed.as_ref().filter(|finished| eligible(&finished.sweep))?;
         let sweep = &finished.sweep;
-        if sweep.owner == cx.id {
+        if sweep.owner == id {
             return Some((sweep.on, None));
         }
-        (!sweep.visited.contains(&cx.id)).then(|| (sweep.on, Some(Arc::clone(&finished.path))))
+        (!sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&finished.path))))
     })
     .and_then(|(on, path)| {
         if let Some(path) = path {
-            if !crosses_visible(ctx, layer, cx.visible, &path) {
+            if !crosses_visible(ctx, layer, visible, &path) {
                 return None;
             }
             PerViewport::<Record>::with(ctx, viewport, |record| {
                 if let Some(finished) = &mut record.completed {
-                    finished.sweep.visited.insert(cx.id);
+                    finished.sweep.visited.insert(id);
                 }
             });
         }
         Some(on)
     });
     let ready = PerViewport::<Record>::with(ctx, viewport, |record| {
-        match cx.press().phase {
+        match press {
             PressPhase::Down { start, .. } if start.button == PointerButton::Primary && enabled => {
-                record.start(cx.id, group, start, !completed.or(on).unwrap_or(false), &input);
+                record.start(id, group, start, !completed.or(on).unwrap_or(false), &input);
             }
-            PressPhase::Cancel { .. } if record.sweep.as_ref().is_some_and(|sweep| sweep.owner == cx.id) => record.sweep = None,
+            PressPhase::Cancel { .. } if record.sweep.as_ref().is_some_and(|sweep| sweep.owner == id) => record.sweep = None,
             _ => {}
         }
         let sweep = record.sweep.as_ref().filter(|sweep| eligible(sweep))?;
-        if sweep.owner == cx.id {
+        if sweep.owner == id {
             return Some((sweep.on, None, record.replay_first_path));
         }
-        (!record.path.is_empty() && !sweep.visited.contains(&cx.id)).then(|| (sweep.on, Some(Arc::clone(&record.path)), false))
+        (!record.path.is_empty() && !sweep.visited.contains(&id)).then(|| (sweep.on, Some(Arc::clone(&record.path)), false))
     });
     let Some(ready) = ready else { return completed };
     let (on, path, replay) = ready;
@@ -194,12 +199,12 @@ pub(crate) fn value(cx: &CxCore<'_>, group: Id, on: Option<bool>) -> Option<bool
         ctx.request_repaint();
     }
     if let Some(path) = path {
-        if !crosses_visible(ctx, layer, cx.visible, &path) {
+        if !crosses_visible(ctx, layer, visible, &path) {
             return completed;
         }
         PerViewport::<Record>::with(ctx, viewport, |record| {
             if let Some(sweep) = &mut record.sweep {
-                sweep.visited.insert(cx.id);
+                sweep.visited.insert(id);
             }
         });
     }
@@ -227,7 +232,7 @@ fn clipped((from, to): Segment, rect: Rect) -> Option<Segment> {
     (start <= end).then(|| (from + delta * start, from + delta * end))
 }
 
-pub(crate) fn crosses_visible(ctx: &Context, layer: LayerId, rect: Rect, path: &[Segment]) -> bool {
+pub(crate) fn crosses_visible(ctx: &Context, layer: areas::Layer, rect: Rect, path: &[Segment]) -> bool {
     let map = areas::layer_map(ctx, layer);
     let rect = map.map_or(rect, |map| Rect::from_min_max(map.to_screen(rect.min), map.to_screen(rect.max)));
     path.iter().copied().filter_map(|segment| clipped(segment, rect)).any(|(from, to)| areas::layer_between(ctx, layer, from, to))

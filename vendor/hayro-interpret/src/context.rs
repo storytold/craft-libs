@@ -38,9 +38,10 @@ std::thread_local! {
     // `InterpreterWarning::ContentTruncated`.
     static CONTENT_TRUNCATED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
     // PdfCraft patch (89): the form XObjects being drawn on this page, outermost first, across
-    // the contexts of the tiling patterns, Type 3 glyphs, soft masks and groups painted while
-    // they draw. A form already on it draws itself and is skipped. Its length is bounded by the
-    // nesting limits: every form on it is nested in the ones before it.
+    // the contexts of the tiling patterns, Type 3 glyphs and groups painted while they draw; a
+    // soft mask's group draws within the forms where the mask was set (`drawing_within`). A form
+    // already on it draws itself and is skipped. Its length is bounded by the nesting limits:
+    // every form on it is nested in the ones before it.
     static FORMS_DRAWING: RefCell<Vec<hayro_syntax::object::ObjectIdentifier>> =
         const { RefCell::new(Vec::new()) };
 }
@@ -136,6 +137,39 @@ pub(crate) fn hold_content(len: usize) -> Option<HeldContent> {
 /// PdfCraft patch: count `len` bytes held for the rest of the page (its own contents).
 pub(crate) fn charge_content(len: usize) {
     CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
+}
+
+/// PdfCraft patch (89): the forms being drawn now, outermost first.
+pub(crate) fn forms_drawing() -> Vec<hayro_syntax::object::ObjectIdentifier> {
+    FORMS_DRAWING.with(|forms| forms.try_borrow().map(|f| f.clone()).unwrap_or_default())
+}
+
+/// PdfCraft patch (89): runs `draw` with `forms` as the forms being drawn, then puts back the
+/// ones it replaced. A soft mask draws its group where the masked content paints, inside forms
+/// that only use the mask; it is nested in the forms drawing where it was set.
+pub(crate) fn drawing_within<R>(
+    forms: &[hayro_syntax::object::ObjectIdentifier],
+    draw: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Vec<hayro_syntax::object::ObjectIdentifier>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let outer = std::mem::take(&mut self.0);
+            FORMS_DRAWING.with(|forms| {
+                if let Ok(mut forms) = forms.try_borrow_mut() {
+                    *forms = outer;
+                }
+            });
+        }
+    }
+    let outer = FORMS_DRAWING.with(|current| {
+        current
+            .try_borrow_mut()
+            .map(|mut current| std::mem::replace(&mut *current, forms.to_vec()))
+    });
+    // Restored on unwind too, so a caught panic leaves the stack of the forms still drawing.
+    let _restore = outer.ok().map(Restore);
+    draw()
 }
 
 /// PdfCraft patch (18): whether content was skipped because the page's budget ran out.

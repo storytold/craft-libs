@@ -153,6 +153,49 @@ fn the_cap_drops_a_card_that_would_leave_by_itself_and_reports_it() {
     assert!(ends.borrow().contains(&NoticeEnd::Dropped(notice)), "the center reports its notice dropped: {:?}", ends.borrow());
 }
 
+/// Past the cap a progress card stays: with only sticky cards beside it the oldest sticky card goes, and with only
+/// progress cards earlier the new card is queued past the cap. `set_progress` moves the live card's fraction and
+/// message, and its Cancel action ends it as an action.
+#[trial]
+fn the_cap_never_drops_a_progress_card() {
+    use craft_ui::runtime::toast::{ToastAction, ToastEnd};
+
+    let window = WindowKey::new("toast-progress-shell");
+    let shell = window.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        AppShell::embedded(shell.clone()).body(|_, _, _| {}).show(ui, &mut ());
+    });
+    fixture.room(egui::Vec2::new(800.0, 600.0));
+    fixture.settle();
+    let ctx = fixture.ctx().clone();
+    let ids = |ctx: &egui::Context, window: &WindowKey| toast::cards(ctx, window).iter().map(|card| card.id).collect::<Vec<_>>();
+    let job = toast::post(&ctx, &window, Toast::new("Page 1 of 4").title("Exporting").progress(0.25).action(ToastAction::new("Cancel")));
+    let first = toast::post(&ctx, &window, Toast::new("The disk is full.").timeout(None));
+    let second = toast::post(&ctx, &window, Toast::new("The font is missing.").timeout(None));
+    let newest = toast::post(&ctx, &window, Toast::new("The profile is missing.").timeout(None));
+    fixture.settle();
+    assert_eq!(ids(&ctx, &window), vec![job, second, newest], "the oldest sticky card made room; the progress card stays");
+    assert_eq!(toast::end(&ctx, first), Some(ToastEnd::Dropped), "the oldest plain card was dropped");
+    assert_eq!(toast::end(&ctx, job), None, "the progress card has not ended");
+
+    let jobs = WindowKey::new("toast-progress-only");
+    let posted: Vec<_> = (0..=toast::MAX_CARDS).map(|n| toast::post(&ctx, &jobs, Toast::new(format!("Job {n}")).progress(0.0))).collect();
+    assert_eq!(ids(&ctx, &jobs), posted, "with only progress cards none is dropped, past the cap");
+
+    toast::set_progress(&ctx, job, 0.5, Some("Page 2 of 4".into()));
+    fixture.settle();
+    let card = toast::cards(&ctx, &window).into_iter().find(|card| card.id == job).expect("the progress card is queued");
+    assert_eq!(card.toast.progress, Some(0.5), "the fraction moved");
+    assert_eq!(card.toast.message, Toast::new("Page 2 of 4").message, "the message moved");
+    assert!(fixture.texts().iter().any(|painted| painted.text == "Page 2 of 4"), "the card shows the new message");
+
+    let cancel = fixture.texts().iter().find(|painted| painted.text == "Cancel").map(|painted| painted.rect.center()).expect("Cancel shows");
+    fixture.click_at(cancel);
+    fixture.settle();
+    assert!(!ids(&ctx, &window).contains(&job), "Cancel ended the card");
+    assert_eq!(toast::end(&ctx, job), Some(ToastEnd::Action(0)), "it ended by its first action");
+}
+
 /// A card the pointer rests on for longer than its timeout, with no pass running meanwhile, gets its whole timeout
 /// again when the pointer leaves: the pass that sees the pointer go, run twice in its frame, counts none of the hover
 /// against it. It expires one full timeout after the leave.
@@ -203,4 +246,21 @@ fn a_card_left_after_a_long_still_hover_gets_its_whole_delay() {
     fixture.advance(f64::from(TIMEOUT) * 0.5).frame(Vec::new());
     assert!(!queued(&fixture), "a full timeout after the leave the card is gone");
     assert_eq!(toast::end(fixture.ctx(), card), Some(ToastEnd::Expired), "it expired");
+}
+
+/// A shell can keep transient notices clear of controls at its trailing edge.
+#[trial]
+fn a_shell_can_center_its_toasts() {
+    let window = WindowKey::new("centered-toast-shell");
+    let mut fixture = Fixture::new(move |ui| {
+        if toast::cards(ui.ctx(), &window).is_empty() {
+            toast::post(ui.ctx(), &window, Toast::new("Saved document").timeout(None));
+        }
+        AppShell::new(window.clone()).toast_alignment(egui::Align2::CENTER_BOTTOM).body(|_, _, _| {}).show(ui, &mut ());
+    });
+    fixture.room(egui::vec2(900.0, 500.0)).settle();
+    let text = fixture.texts().iter().find(|painted| painted.text == "Saved document").expect("the toast is drawn").rect;
+    let layers = craft_ui::testing::snapshot::layer_rects(fixture.ctx());
+    let card = layers.iter().find(|rect| rect.contains(text.center())).expect("the toast layer contains its text");
+    assert!((card.center().x - fixture.shown().center().x).abs() < 1.0, "the notice is centred: {card:?}");
 }

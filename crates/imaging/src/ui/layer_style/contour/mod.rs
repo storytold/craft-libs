@@ -5,13 +5,15 @@ mod editor;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+
 use craft_behavior::{EditEvents, Mixed};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, EditResponse, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::ThumbAspect;
 use craft_ui::patterns::presets::{PickerField, PresetEvent, PresetFns, PresetFooterEvent, PresetPicker, PresetRow, PresetSource, PresetState};
-use craft_ui::primitives::ContentPainterCx;
+use craft_ui::primitives::{ContentPainterCx, FacePaint};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Rect, Response, Ui};
 
@@ -176,11 +178,22 @@ fn contour_rows(inputs: &ContourInputs<'_>, env: &Env) -> Vec<PresetRow<ContourK
     let row = |key: ContourKey, contour: &Contour| {
         let name = words.contour_name(&contour.name).to_owned();
         let curve = to_curve(contour);
-        PresetRow::item(key, name, 0).preview(ThumbAspect::SQUARE, move |painter, rect| paint_thumbnail(painter, rect, &curve, sampler))
+        let face = FacePaint::new(thumbnail_key(contour, sampler), move |painter, rect| paint_thumbnail(painter, rect, &curve, sampler));
+        PresetRow::item(key, name, 0).preview_face(ThumbAspect::SQUARE, face)
     };
     let presets = inputs.presets.iter().enumerate().map(|(i, contour)| row(ContourKey::Preset(i), contour));
     let user = inputs.user.iter().enumerate().map(|(i, contour)| row(ContourKey::User(i), contour));
     presets.chain(user).collect()
+}
+
+/// The identity of a contour's thumbnail: its points and the sampler that draws them.
+fn thumbnail_key(contour: &Contour, sampler: Option<ContourSampler>) -> u64 {
+    let mut key = DefaultHasher::new();
+    for point in &contour.points {
+        (point.input.to_bits(), point.output.to_bits(), point.corner).hash(&mut key);
+    }
+    sampler.hash(&mut key);
+    key.finish()
 }
 
 /// A thumbnail of a contour: its curve in the curve preview's look (plot, quarter grid, diagonal).

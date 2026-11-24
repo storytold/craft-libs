@@ -40,6 +40,12 @@ fn section_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 #[story(Section<'static>, covers = [], drive = Drive::Never)]
+fn section_subheading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Section::fixed("Shape modes").strength(HeaderStrength::Subheading).show(ui, |ui, _| body(ui));
+    shown.output.into()
+}
+
+#[story(Section<'static>, covers = [], drive = Drive::Never)]
 fn section_with_menu_and_reorder(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Section::new("Layers").open(data.bind("open", true)).actions([HeaderAction::Menu]).reorder(true).show(ui, |ui, _| body(ui));
     shown.output.into()

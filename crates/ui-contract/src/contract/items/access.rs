@@ -1,7 +1,7 @@
 //! AccessKit nodes and requests of item rows, section rows and toggle cells.
 
 use super::{ITEM_NODE, ItemsHooks, Placement, SECTION, TOGGLE_CELL, key_hash, section_part};
-use crate::contract::collection::{CollectionEvent, LeadSource, OpenChange};
+use crate::contract::collection::{ActivateOn, CollectionEvent, LeadSource, OpenChange};
 use crate::contract::cx::Pointer as _;
 use crate::contract::{Collection, Cx};
 use crate::runtime::access::{self, Role};
@@ -74,9 +74,16 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
-    /// moves the lead to the row and key focus to the collection; Click does that and picks an item or activates a
-    /// section, as a press does; Expand and Collapse open and close a row that has children.
-    pub(super) fn node_by_access(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: Placement) {
+    /// moves the lead to the row and key focus to the collection; Click also picks an item and activates it when the
+    /// collection activates on click, or activates a section; Expand and Collapse open and close rows with children.
+    pub(super) fn node_by_access(
+        &mut self,
+        comp: &C,
+        cx: &mut Cx<'_, C>,
+        props: &crate::contract::CollectionProps,
+        layout: &C::ItemLayout,
+        place: Placement,
+    ) {
         use craft_behavior::AccessAction;
         let (_, built) = self.built(layout, place.rect, place.offset);
         let rows: Vec<(u64, usize)> = built
@@ -108,7 +115,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         if self.source.section_stop(at) {
                             self.events.push(CollectionEvent::Activate(key));
                         } else {
-                            self.pick(comp, at, false, false);
+                            self.click_pick(comp, at, false, false, craft_keymap::Mods::NONE);
+                            if props.activate == ActivateOn::Click {
+                                self.activation_clicks = 1;
+                                self.events.push(CollectionEvent::Activate(key));
+                            }
                         }
                     }
                 }

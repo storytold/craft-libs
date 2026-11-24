@@ -46,6 +46,11 @@ craft-text = { workspace = true, features = ["suite", "find"] }
 craft-theme-store = { workspace = true, features = ["suite"] }
 craft-timeline = { workspace = true, features = ["suite", "xml", "otio"] }
 
+# craft-ui-contract's tests ask for the bundled monochrome emoji faces (their font oracle); asked here, every build has
+# them, so those tests share egui and the framework with the rest. The feature only adds two byte constants, which
+# nothing else reads; egui's emoji fallback is epaint's own feature of the same name, not this one.
+epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-dialogs = { workspace = true, features = ["suite"] }
 craft-font-manager = { workspace = true, features = ["suite"] }

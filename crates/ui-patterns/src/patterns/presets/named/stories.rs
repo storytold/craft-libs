@@ -3,6 +3,7 @@
 use super::{NameCheck, NamedPresetRow, NamedPresetStyle, PresetError};
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PickerField, PresetExport, PresetFiles, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState};
+use crate::primitives::FacePaint;
 use crate::runtime::env::Env;
 use crate::testing::pictures::paint_contour;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -17,7 +18,10 @@ fn taken<const N: usize>(names: &[&str; N], name: &str) -> Option<PresetError> {
 /// The four contours.
 fn contour_rows(_: &(), _: &Env) -> Vec<PresetRow<u32>> {
     (1..=4_u32)
-        .map(|n| PresetRow::item(n, format!("Contour {n}"), 0).preview(ThumbAspect::SQUARE, move |cx, rect| paint_contour(cx, rect, n)))
+        .map(|n| {
+            PresetRow::item(n, format!("Contour {n}"), 0)
+                .preview_face(ThumbAspect::SQUARE, FacePaint::new(n.into(), move |cx, rect| paint_contour(cx, rect, n)))
+        })
         .collect()
 }
 
