@@ -40,8 +40,10 @@ pub(crate) mod stories;
 
 pub use paint_list::{PaintLink, PaintLinkKind, PaintList, PaintListEvent, PaintListOptions, PaintListOutput, PaintRow};
 
-/// The chip is this many control heights wide.
+/// A regular chip is this many control heights wide.
 const CHIP_WIDTH_IN_HEIGHTS: f32 = 1.5;
+/// A swatch chip's side is a rail button's over this, so three to a row fill a one-column rail's cell.
+const SWATCHES_PER_RAIL_BUTTON: f32 = 3.0;
 /// The most tiles a pattern chip draws; a tile so small that more would fit is drawn as one stretched image.
 const MAX_TILES: f32 = 4096.0;
 /// The No Color diagonal stops this many control heights short of the chip's edges.
@@ -203,6 +205,21 @@ impl<T> PaintEditor<'_, T> {
     }
 }
 
+/// How large a [`PaintChip`] is; every size paints the same well.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PaintChipSize {
+    /// A control high and 1.5 times as wide: a panel's or an options bar's chip.
+    #[default]
+    Regular,
+    /// A square well of `size.icon.md` in a slot a control high and `space.gap.item` wider than the well: a chip among
+    /// a bar's buttons, as a contextual task bar's Fill and Stroke.
+    Compact,
+    /// A square a third of `size.rail.button` on a side that opens no popover: a tool rail's Color, Gradient and None,
+    /// three to a row.
+    Swatch,
+}
+
 /// The style of a paint chip.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -211,8 +228,10 @@ pub struct PaintChipStyle {
     metrics: Metrics,
     #[style(focus)]
     focus: FocusLook,
-    /// The chip's height.
-    height: f32,
+    /// The well's size.
+    well: egui::Vec2,
+    /// The chip's size before the room of its mark: the well's, or for a compact chip the slot round it.
+    slot: egui::Vec2,
     /// The chip's corners.
     radius: egui::CornerRadius,
     /// The ring on the chip's outline.
@@ -238,7 +257,7 @@ impl PaintChipStyle {
             none_fill: self.none_fill,
             none_mark: self.none_mark,
             edge: self.edge,
-            height: self.height,
+            height: self.well.y,
             radius: self.radius,
             ring,
             swatch: self.swatch.clone(),
@@ -359,7 +378,8 @@ pub(crate) fn paint_well(ui: &mut PaintUi<'_>, cx: &Cx<'_, impl craft_ui::contra
     }
 }
 
-/// A paint chip, a control high and 1.5 times as wide, with the room of its [`popup_mark`](Self::popup_mark) after it.
+/// A paint chip as large as its [`chip_size`](Self::chip_size) (by default a control high and 1.5 times as wide), with the
+/// room of its [`popup_mark`](Self::popup_mark) after it.
 ///
 /// - Look: a solid paint fills the chip over the checkerboard (alpha shows); a gradient is a
 ///   start-to-end ramp through its stops; No Color is the field fill with a `status.bad` diagonal
@@ -412,6 +432,10 @@ pub struct PaintChip<'a> {
     /// [`PopupMark::ToolGroup`] draws none.
     #[prop]
     popup_mark: PopupMark,
+    /// How large the chip is; [`PaintChipSize::Regular`] by default.
+    #[style_key]
+    #[prop]
+    chip_size: PaintChipSize,
     /// The request of the Color Picker… button, for this pass.
     pick_color: Option<ColorRequest>,
     /// The modifiers of this pass's click on a chip without a popover.
@@ -439,6 +463,7 @@ impl<'a> PaintChip<'a> {
             popover: true,
             ring: false,
             popup_mark: PopupMark::None,
+            chip_size: PaintChipSize::Regular,
             pick_color: None,
             clicked: None,
         }
@@ -503,6 +528,19 @@ impl<'a> PaintChip<'a> {
         if self.popup_mark == PopupMark::Menu { style.arrow_room } else { 0.0 }
     }
 
+    /// Whether a click opens the popover: on unless [`popover`](Self::popover) is off or the chip is a swatch.
+    fn opens(&self) -> bool {
+        self.popover && self.chip_size != PaintChipSize::Swatch
+    }
+
+    /// The well and the mark's room in the chip's `rect`: a compact chip's well is centred in its slot, every other
+    /// fills it.
+    fn layout(&self, rect: Rect, style: &PaintChipStyle, rtl: bool) -> (Rect, Rect) {
+        let (slot, mark) = split_mark(rect, self.mark_room(style), rtl);
+        let well = if self.chip_size == PaintChipSize::Compact { Rect::from_center_size(slot.center(), style.well) } else { slot };
+        (well, mark)
+    }
+
     /// The paint a switch to `kind` sets.
     fn switched(&self, kind: FillKind, solid: Srgba) -> Paint {
         match kind {
@@ -551,14 +589,29 @@ impl Component for PaintChip<'_> {
     type Style = PaintChipStyle;
     type Output = PaintChipOutput;
 
-    fn style(cx: &StyleCx<'_>, _: PaintChipStyleKey) -> PaintChipStyle {
+    fn style(cx: &StyleCx<'_>, key: PaintChipStyleKey) -> PaintChipStyle {
         let colors = &cx.tokens.color;
         let metrics = craft_ui::choice::SwatchMetrics::of(cx);
         let arrow = cx.tokens.size.icon.glyph_sm;
+        let (well, slot) = match key.chip_size {
+            PaintChipSize::Regular => {
+                let well = vec2(metrics.side * CHIP_WIDTH_IN_HEIGHTS, metrics.side);
+                (well, well)
+            }
+            PaintChipSize::Compact => {
+                let well = egui::Vec2::splat(cx.tokens.size.icon.md);
+                (well, vec2(well.x + cx.tokens.space.gap.item, metrics.side))
+            }
+            PaintChipSize::Swatch => {
+                let well = egui::Vec2::splat(cx.tokens.size.rail.button / SWATCHES_PER_RAIL_BUTTON);
+                (well, well)
+            }
+        };
         PaintChipStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            height: metrics.side,
+            well,
+            slot,
             radius: metrics.radius,
             edge: cx.color(colors.line.control_edge),
             none_fill: cx.color(colors.surface.sunken),
@@ -575,13 +628,13 @@ impl Component for PaintChip<'_> {
     }
 
     fn measure(&mut self, cx: &craft_ui::contract::MeasureCx<'_, Self>) -> egui::Vec2 {
-        vec2(cx.style.height * CHIP_WIDTH_IN_HEIGHTS + self.mark_room(cx.style), cx.style.height)
+        cx.style.slot + vec2(self.mark_room(cx.style), 0.0)
     }
 
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let (well, _) = split_mark(rect, self.mark_room(cx.style), cx.flow.is_rtl());
+        let (well, _) = self.layout(rect, cx.style, cx.flow.is_rtl());
         let part = cx.part(WELL, well);
-        if self.popover {
+        if self.opens() {
             let _ = part.toggles("picker");
         }
     }
@@ -597,7 +650,7 @@ impl Component for PaintChip<'_> {
             cx.memory::<LastSolid>().0 = Some(color);
         }
         let activation = cx.activation().filter(|_: &Activation| cx.resolved.enabled);
-        if !self.popover {
+        if !self.opens() {
             self.clicked = activation.map(|activation| activation.mods);
             return;
         }
@@ -613,7 +666,7 @@ impl Component for PaintChip<'_> {
     }
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
-        if !self.popover {
+        if !self.opens() {
             return;
         }
         let popup = cx.popup("picker");
@@ -724,13 +777,13 @@ impl Component for PaintChip<'_> {
             Some(paint) => access.value(value_text(&words, paint)),
             None => access.value(cx.words::<ChoiceWords>().swatch_mixed.as_str()),
         };
-        if self.popover {
+        if self.opens() {
             access.has_popup(PopupKind::Dialog);
         }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let (well, mark) = split_mark(cx.rect, self.mark_room(&cx.style), cx.flow.is_rtl());
+        let (well, mark) = self.layout(cx.rect, &cx.style, cx.flow.is_rtl());
         if self.popup_mark == PopupMark::Menu {
             let mut arrow = DisclosureGlyph::dropdown_of(cx.env.get());
             arrow.color = Some(cx.style.arrow_color);

@@ -1,13 +1,13 @@
 //! Stories of the paint chip and the paint list.
 
-use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintLink, PaintLinkKind, PaintList, PaintListOptions, PaintRow};
+use super::{GradientPreview, ImagePreview, Paint, PaintChip, PaintChipSize, PaintLink, PaintLinkKind, PaintList, PaintListOptions, PaintRow};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
 use craft_ui::buttons::PopupMark;
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
 use craft_ui::display::{Shade, Text};
-use craft_ui::layout_components::Stack;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::PresetState;
 use craft_ui::primitives::FacePaint;
 use craft_ui::runtime::env::Message;
@@ -98,6 +98,39 @@ fn paint_chip_menu_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Stack::new().show(ui, |ui, _| {
         for (index, (label, paint)) in ["Fill", "Stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
             let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(index == 1).popup_mark(PopupMark::Menu).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// Compact Fill and Stroke chips in a row, as among a task bar's buttons: a small well in a control-high slot.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Solid(Srgba::rgb(0.1, 0.1, 0.1))]);
+    let mut first = None;
+    Row::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Fill", "Stroke"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).ring(index == 1).chip_size(PaintChipSize::Compact).popover(false).show(ui);
+            if index == 0 {
+                first = Some(StoryOutput::from(shown));
+            }
+        }
+    });
+    first.unwrap_or_default()
+}
+
+/// A tool rail's Color, Gradient and None as swatch chips, three in a row; a click opens nothing.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
+fn paint_chip_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let gradient = GradientPreview::new(vec![(0.0, Srgba::rgb(1.0, 1.0, 1.0)), (1.0, Srgba::rgb(0.0, 0.0, 0.0))]);
+    let paints = data.value("paints", [Paint::Solid(BLUE), Paint::Gradient(gradient), Paint::None]);
+    let mut first = None;
+    Row::new().show(ui, |ui, _| {
+        for (index, (label, paint)) in ["Color", "Gradient", "None"].into_iter().zip(paints.iter_mut()).enumerate() {
+            let shown = PaintChip::new(label, Bind::bound(paint), BLUE).chip_size(PaintChipSize::Swatch).show(ui);
             if index == 0 {
                 first = Some(StoryOutput::from(shown));
             }
