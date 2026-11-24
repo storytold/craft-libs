@@ -177,6 +177,14 @@ impl<'a> Bar<'a> {
         self
     }
 
+    /// Spaces the members `gap` apart in place of the kind's spacing: a canvas's task bar can set its members the bar's
+    /// control gap (`Gap::Item`) apart.
+    #[must_use]
+    pub fn gap(mut self, gap: Gap) -> Self {
+        self.props = self.props.body_gap(gap);
+        self
+    }
+
     /// Paints `kind` behind the bar instead of the chrome: a bar that floats on its own, as a canvas's task bar does,
     /// is a floating surface with its corners and shadow.
     #[must_use]
