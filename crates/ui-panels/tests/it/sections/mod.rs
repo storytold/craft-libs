@@ -7,4 +7,5 @@ pub(crate) mod footer_row;
 pub(crate) mod layout;
 pub(crate) mod panel_header;
 pub(crate) mod reorderable;
+pub(crate) mod rhythm;
 pub(crate) mod stack;

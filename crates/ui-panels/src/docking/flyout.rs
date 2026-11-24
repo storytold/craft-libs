@@ -90,13 +90,18 @@ impl Flyout {
         let bounded = self.within.is_finite();
         let least = if bounded { self.least.min(self.within.size().max(Vec2::ZERO)) } else { self.least };
         // A float place as well as the caller's position: the placement pins no edge, so the edge set alone decides
-        // the grips.
+        // the grips. The host's binding opens and closes the flyout, so a command leaves it open.
         let overlay = Overlay::popover()
             .place(Place::Float(FloatPlace::at(top_left)))
             .placed_at(top_left)
             .size_limits(SizeLimits::at_least(least))
             .resize_edges(free.union(ResizeEdges::TOP).union(ResizeEdges::BOTTOM))
-            .dismiss(Dismiss::new().outside(if self.auto_collapse { Outside::Close } else { Outside::Keep }).focus_left(self.auto_collapse))
+            .dismiss(
+                Dismiss::new()
+                    .outside(if self.auto_collapse { Outside::Close } else { Outside::Keep })
+                    .focus_left(self.auto_collapse)
+                    .commands(false),
+            )
             .body_scroll(false);
         if bounded { overlay.bounds(self.within) } else { overlay }
     }

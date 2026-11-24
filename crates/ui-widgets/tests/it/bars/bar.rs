@@ -651,3 +651,58 @@ fn a_tool_bar_reports_set_positions_from_its_first_pass() {
     let joined = places(&fixture);
     assert!(joined.len() == 4 && joined.iter().all(|(_, held)| *held == size + 1), "the set counts the new tool in the frame it joins: {joined:?}");
 }
+
+/// The painted rects of a status bar `width` wide that ends as production's did: the zoom and the message in the body,
+/// then the pointer's position (rank 2) and the timings (rank 1) in the trailing group. In that order, `None` for one
+/// not shown, and the bar's rect last.
+fn end_group(width: f32) -> ([Option<Rect>; 4], Rect) {
+    const TEXTS: [&str; 4] = ["93.5 %", "Saved recovery data for Untitled-1", "X: 120 pt  Y: 48 pt", "render 0.6 ms"];
+    let seen = Rc::new(Cell::new((None, Rect::NOTHING)));
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let bar = Bar::new("Status", BarKind::Status)
+            .trailing(|ui, _| {
+                Row::new().fit_rank(2).show(ui, |ui, _| {
+                    Text::new(TEXTS[2]).show(ui);
+                });
+                Row::new().fit_rank(1).show(ui, |ui, _| {
+                    Text::new(TEXTS[3]).show(ui);
+                });
+            })
+            .show(ui, |ui, _| {
+                Text::new(TEXTS[0]).show(ui);
+                StatusMessage::new(TEXTS[1]).show(ui).map(|message| message.rect)
+            });
+        shown.set((bar.inner.flatten(), bar.output.response.rect));
+    });
+    fixture.room(Vec2::new(width, 80.0)).settle();
+    let rect_of = |text: &str| fixture.texts().iter().find(|run| run.text == text).map(|run| run.rect);
+    let (message, bar) = seen.get();
+    ([rect_of(TEXTS[0]), message.filter(|rect| rect.width() > 0.0), rect_of(TEXTS[2]), rect_of(TEXTS[3])], bar)
+}
+
+/// A status bar's trailing group joins the body's fit: on a wide bar the timings end at the bar's end with the position
+/// before them; a narrowing bar drops the timings first, then the position, while the message keeps its whole width,
+/// and only then cuts the message.
+#[trial]
+fn a_narrow_status_bar_drops_its_ranked_trailing_members_before_it_cuts_its_message() {
+    let ([zoom, message, position, timings], bar) = end_group(1200.0);
+    let [zoom, message, position, timings] = [zoom, message, position, timings].map(|rect| rect.expect("a wide bar shows every member"));
+    assert!(bar.right() - timings.right() < bar.width() / 20.0, "the timings end at the bar's end: {timings:?} in {bar:?}");
+    assert!(position.right() <= timings.left() && message.right() <= position.left() && zoom.right() <= message.left(), "in reading order");
+    let whole = message.width();
+    let shown: Vec<(u32, [Option<Rect>; 4])> = (150..=1200).step_by(10).map(|width| (width, end_group(width as f32).0)).collect();
+    for (width, [zoom, message, position, timings]) in &shown {
+        assert!(zoom.is_some() && message.is_some(), "the body's members stay at {width}: {zoom:?} {message:?}");
+        assert!(!(timings.is_some() && position.is_none()), "the timings leave before the position at {width}");
+        if position.is_some() || timings.is_some() {
+            let message = message.expect("the message shows");
+            assert!(message.width() > whole - SLACK, "the message is cut to {} of {whole} at {width} while a ranked member stays", message.width());
+        }
+    }
+    assert!(shown.iter().any(|(_, [.., position, timings])| position.is_some() && timings.is_none()), "the timings leave alone first");
+    assert!(
+        shown.iter().any(|(_, [_, message, position, _])| position.is_none() && message.is_some_and(|rect| rect.width() < whole - SLACK)),
+        "a narrow bar drops the position, then cuts the message"
+    );
+}
